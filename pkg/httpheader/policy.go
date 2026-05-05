@@ -46,6 +46,7 @@ var SensitiveInbound = []string{
 	"Authorization",
 	"Proxy-Authorization",
 	"X-OpenAI-*",
+	"X-Relay-Metadata",
 }
 
 // StripInbound removes credential and provider-private headers from

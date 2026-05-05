@@ -133,3 +133,17 @@ func TestSafeUpstreamError_RedactsURL(t *testing.T) {
 		t.Errorf("provider name missing: %q", msg)
 	}
 }
+
+func TestStripInbound_RemovesXRelayMetadata(t *testing.T) {
+	h := http.Header{
+		"X-Relay-Metadata": {"env=prod,team=backend"},
+		"Content-Type":     {"application/json"},
+	}
+	StripInbound(h)
+	if h.Get("X-Relay-Metadata") != "" {
+		t.Error("X-Relay-Metadata should be stripped from inbound headers")
+	}
+	if h.Get("Content-Type") == "" {
+		t.Error("Content-Type should be preserved")
+	}
+}

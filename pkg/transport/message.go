@@ -11,12 +11,13 @@ import (
 // flags (no Model, no provider-specific field). Anything OpenAI-shape
 // or Ollama-shape is extracted by handlers from Body into locals.
 type Message struct {
-	ID         string
-	ParentID   string
-	Body       []byte
-	Headers    map[string]string
-	Labels     map[string]string
-	ReceivedAt time.Time
+	ID          string
+	ParentID    string
+	Body        []byte
+	Headers     map[string]string
+	Labels      map[string]string
+	Attribution map[string]string
+	ReceivedAt  time.Time
 }
 
 // Channel is a transport-agnostic processing context. One Channel

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 const (
@@ -20,6 +21,7 @@ type ctxKey int
 const (
 	ctxKeyID ctxKey = iota
 	ctxKeyLogger
+	ctxKeyAttribution
 )
 
 var (
@@ -58,9 +60,17 @@ func Middleware(base *slog.Logger) func(http.Handler) http.Handler {
 			ctx := r.Context()
 			ctx = context.WithValue(ctx, ctxKeyID, id)
 			ctx = context.WithValue(ctx, ctxKeyLogger, logger)
+			attr := usage.ParseMetadataHeader(r.Header.Get("X-Relay-Metadata"))
+			ctx = context.WithValue(ctx, ctxKeyAttribution, attr)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// Attribution returns the parsed X-Relay-Metadata map from ctx, or nil.
+func Attribution(ctx context.Context) map[string]string {
+	v, _ := ctx.Value(ctxKeyAttribution).(map[string]string)
+	return v
 }
 
 func From(ctx context.Context) string {

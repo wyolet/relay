@@ -106,3 +106,24 @@ func TestZeroValues(t *testing.T) {
 		t.Fatal("expected message, got nil")
 	}
 }
+
+func TestAttributionRoundTrip(t *testing.T) {
+	ch := NewChannel(context.Background(), "test-attr", 1, 1)
+	defer ch.Cancel()
+
+	attr := map[string]string{"env": "prod", "team": "relay"}
+	in := &Message{ID: "req-attr", Attribution: attr}
+
+	go func() {
+		ch.In <- in
+		close(ch.In)
+	}()
+
+	got := <-ch.In
+	if got.Attribution == nil {
+		t.Fatal("Attribution is nil after round-trip")
+	}
+	if got.Attribution["env"] != "prod" || got.Attribution["team"] != "relay" {
+		t.Errorf("Attribution mismatch: %v", got.Attribution)
+	}
+}

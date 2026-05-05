@@ -3,70 +3,16 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
-
-// --- parseMetadata tests ---
-
-func TestParseMetadata_Valid(t *testing.T) {
-	m, err := parseMetadata("k1=v1,k2=v2")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if m["k1"] != "v1" || m["k2"] != "v2" {
-		t.Errorf("unexpected map: %v", m)
-	}
-}
-
-func TestParseMetadata_Empty(t *testing.T) {
-	m, err := parseMetadata("")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(m) != 0 {
-		t.Errorf("expected empty map, got %v", m)
-	}
-}
-
-func TestParseMetadata_TooManyKeys(t *testing.T) {
-	pairs := make([]string, 17)
-	for i := range pairs {
-		pairs[i] = "k=v"
-	}
-	_, err := parseMetadata(strings.Join(pairs, ","))
-	if err == nil {
-		t.Fatal("expected error for too many keys")
-	}
-}
-
-func TestParseMetadata_KeyTooLong(t *testing.T) {
-	key := strings.Repeat("a", 129)
-	_, err := parseMetadata(key + "=v")
-	if err == nil {
-		t.Fatal("expected error for key too long")
-	}
-}
-
-func TestParseMetadata_ValueTooLong(t *testing.T) {
-	val := strings.Repeat("v", 513)
-	_, err := parseMetadata("k=" + val)
-	if err == nil {
-		t.Fatal("expected error for value too long")
-	}
-}
-
-func TestParseMetadata_Malformed(t *testing.T) {
-	_, err := parseMetadata("no_equals")
-	if err == nil {
-		t.Fatal("expected error for malformed entry")
-	}
-}
 
 // --- ChatCompletions handler tests ---
 
@@ -246,5 +192,34 @@ func TestChatCompletions_StreamingClientCancel(t *testing.T) {
 	// No SSE error event should be emitted on client cancel.
 	if strings.Contains(got, "data: {") && strings.Contains(got, "error") {
 		t.Errorf("error event emitted after client cancel: %q", got)
+	}
+}
+
+func TestChatCompletions_AttributionFlowsFromContext(t *testing.T) {
+	var capturedAttribution map[string]string
+	innerHandler := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+		defer close(ch.Out)
+		msg := <-ch.In
+		capturedAttribution = msg.Attribution
+		ch.Out <- &transport.Message{
+			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"},
+		}
+		ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+		return nil
+	})
+
+	// Wrap with reqid.Middleware so attribution is parsed from X-Relay-Metadata.
+	wrapped := reqid.Middleware(slog.Default())(innerHandler)
+
+	body := `{"model":"gpt-4","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Relay-Metadata", "env=test")
+	rec := httptest.NewRecorder()
+
+	wrapped.ServeHTTP(rec, req)
+
+	if capturedAttribution == nil || capturedAttribution["env"] != "test" {
+		t.Errorf("Attribution not threaded: %v", capturedAttribution)
 	}
 }

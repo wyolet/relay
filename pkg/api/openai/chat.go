@@ -3,7 +3,6 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -84,18 +83,12 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 			forwardBody, _ = json.Marshal(generic)
 		}
 
-		labels, err := parseMetadata(r.Header.Get("X-Relay-Metadata"))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error(), "invalid_metadata")
-			return
-		}
-
 		msg := &transport.Message{
 			ID:          reqid.From(r.Context()),
 			ParentID:    "",
 			Body:        forwardBody,
 			Headers:     map[string]string{"Content-Type": r.Header.Get("Content-Type")},
-			Labels:      labels,
+			Attribution: reqid.Attribution(r.Context()),
 			ReceivedAt:  time.Now().UTC(),
 		}
 
@@ -167,36 +160,6 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 			log.Printf("pipeline: %v", err)
 		}
 	}
-}
-
-var errMetadataTooManyKeys = errors.New("X-Relay-Metadata: too many keys (max 16)")
-
-func parseMetadata(headerValue string) (map[string]string, error) {
-	if headerValue == "" {
-		return nil, nil
-	}
-	pairs := strings.Split(headerValue, ",")
-	if len(pairs) > 16 {
-		return nil, errMetadataTooManyKeys
-	}
-	out := make(map[string]string, len(pairs))
-	for _, pair := range pairs {
-		pair = strings.TrimSpace(pair)
-		idx := strings.IndexByte(pair, '=')
-		if idx < 0 {
-			return nil, fmt.Errorf("X-Relay-Metadata: malformed entry %q (expected k=v)", pair)
-		}
-		k := pair[:idx]
-		v := pair[idx+1:]
-		if len(k) > 128 {
-			return nil, fmt.Errorf("X-Relay-Metadata: key too long (max 128 chars)")
-		}
-		if len(v) > 512 {
-			return nil, fmt.Errorf("X-Relay-Metadata: value too long (max 512 chars)")
-		}
-		out[k] = v
-	}
-	return out, nil
 }
 
 type errEnvelope struct {

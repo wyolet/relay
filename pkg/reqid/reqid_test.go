@@ -140,3 +140,40 @@ func TestFromAndLoggerOnEmptyContext(t *testing.T) {
 		t.Error("Logger(background) returned nil")
 	}
 }
+
+func TestMiddleware_AttributionValid(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Relay-Metadata", "env=prod,team=backend")
+
+	var got map[string]string
+	applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
+		got = Attribution(ctx)
+	}), r)
+
+	if got == nil {
+		t.Fatal("expected non-nil Attribution")
+	}
+	if got["env"] != "prod" || got["team"] != "backend" {
+		t.Errorf("unexpected Attribution: %v", got)
+	}
+}
+
+func TestMiddleware_AttributionMalformed(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("X-Relay-Metadata", "no_equals_sign")
+
+	var got map[string]string
+	applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
+		got = Attribution(ctx)
+	}), r)
+
+	if got != nil {
+		t.Errorf("expected nil Attribution for malformed header, got %v", got)
+	}
+}
+
+func TestAttribution_EmptyContext(t *testing.T) {
+	if a := Attribution(context.Background()); a != nil {
+		t.Errorf("expected nil, got %v", a)
+	}
+}
