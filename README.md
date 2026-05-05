@@ -414,6 +414,12 @@ curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/
 - `http://localhost:16686` — Jaeger UI
 - `localhost:5432` — Postgres (for `psql` / migrations)
 
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/runbook.md](docs/runbook.md) | Operator reference: deployment, env-var table, healthcheck semantics, failure modes, debugging recipes, capacity planning, security checklist |
+
 ## Status
 
 M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`, `/healthz`, graceful shutdown, OTel storage resource attrs. docker-compose smoke stack (PER-248).
