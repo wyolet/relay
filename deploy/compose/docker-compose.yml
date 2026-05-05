@@ -1,0 +1,115 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23-alpine
+    environment:
+      CLICKHOUSE_USER: relay
+      CLICKHOUSE_PASSWORD: relay
+      CLICKHOUSE_DB: relay
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user relay --password relay --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 10s
+      retries: 15
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
+  relay-a:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      RELAY_INSTANCE_ID: relay-a
+      RELAY_CATALOG_BACKEND: pg
+      RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+      RELAY_STATE_BACKEND: redis
+      RELAY_REDIS_ADDR: valkey:6379
+      RELAY_EVENTLOG_BACKEND: clickhouse
+      RELAY_CH_DSN: clickhouse://relay:relay@clickhouse:9000/relay
+      RELAY_OTLP_ENDPOINT: jaeger:4317
+      RELAY_ADMIN_TOKEN: smoke-admin-token
+      RELAY_AUTO_SEED_IF_EMPTY: "1"
+      RELAY_CONFIG_DIR: /config
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+
+  relay-b:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      RELAY_INSTANCE_ID: relay-b
+      RELAY_CATALOG_BACKEND: pg
+      RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+      RELAY_STATE_BACKEND: redis
+      RELAY_REDIS_ADDR: valkey:6379
+      RELAY_EVENTLOG_BACKEND: clickhouse
+      RELAY_CH_DSN: clickhouse://relay:relay@clickhouse:9000/relay
+      RELAY_OTLP_ENDPOINT: jaeger:4317
+      RELAY_ADMIN_TOKEN: smoke-admin-token
+      RELAY_CONFIG_DIR: /config
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - relay-a
+      - relay-b
+
+volumes:
+  pg-data:
+  ch-data:

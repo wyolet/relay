@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(started_at)
 ORDER BY (started_at, model, pool)
-TTL started_at + INTERVAL %d DAY DELETE
+TTL toDateTime(started_at) + INTERVAL %d DAY DELETE
 `
 
 type clickHouseSink struct {

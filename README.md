@@ -355,9 +355,68 @@ Total wall time is capped by `RELAY_SHUTDOWN_DEADLINE_S` (default `15`).
 
 Boot fails with a non-zero exit code if a required DSN is missing or invalid for the configured backend — no silent fallback to in-memory.
 
+## Local production-shape deployment
+
+`deploy/compose/` brings up a full stack: two relay instances behind nginx, backed by Postgres, Valkey (Redis-compatible), ClickHouse, and Jaeger.
+
+### Quick start
+
+```bash
+make smoke-up      # build images, start stack, migrate, wait for health
+make smoke-seed    # seed Postgres from deploy/compose/config/
+make smoke-down    # tear down, remove volumes
+```
+
+`smoke-up` automatically runs `smoke-migrate` before starting the relay instances.
+
+### What's running
+
+| Container | Image | Host port | Role |
+|---|---|---|---|
+| `nginx` | `nginx:alpine` | `8080` | Round-robin LB in front of relay-a and relay-b |
+| `relay-a` | local build | `8081` | Relay instance A |
+| `relay-b` | local build | `8082` | Relay instance B |
+| `postgres` | `postgres:16-alpine` | `5432` | Catalog (config truth) |
+| `valkey` | `valkey/valkey:8-alpine` | — | Rate-limit counters + key health |
+| `clickhouse` | `clickhouse/clickhouse-server:23-alpine` | — | Usage events |
+| `jaeger` | `jaegertracing/all-in-one` | `16686` (UI), `4317` (OTLP) | Traces |
+
+### Env-var matrix (relay instances)
+
+| Variable | Value in compose | Description |
+|---|---|---|
+| `RELAY_CATALOG_BACKEND` | `pg` | Postgres-backed catalog |
+| `RELAY_PG_DSN` | `postgres://relay:relay@postgres:5432/relay?sslmode=disable` | PG connection |
+| `RELAY_STATE_BACKEND` | `redis` | Valkey for counters |
+| `RELAY_REDIS_ADDR` | `valkey:6379` | Valkey address |
+| `RELAY_EVENTLOG_BACKEND` | `clickhouse` | CH for usage events |
+| `RELAY_CH_DSN` | `clickhouse://relay:relay@clickhouse:9000/relay` | CH connection |
+| `RELAY_OTLP_ENDPOINT` | `jaeger:4317` | OTLP gRPC collector |
+| `RELAY_ADMIN_TOKEN` | `smoke-admin-token` | Bearer token for `/admin/reload` |
+| `RELAY_INSTANCE_ID` | `relay-a` / `relay-b` | Per-pod identity in events and spans |
+| `RELAY_AUTO_SEED_IF_EMPTY` | `1` (relay-a only) | Seeds catalog from `/config` on first boot |
+
+### Fixture catalog
+
+`deploy/compose/config/` contains a minimal catalog: one Provider (Ollama at `host.docker.internal:11434`), one Pool, one Model (`smoke-model`) with a 60 RPM rate limit, and a default Route. Edit the YAML, run `make smoke-seed`, then `POST /admin/reload` to both pods to apply changes without restart.
+
+```bash
+# Admin reload
+curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8081/admin/reload
+curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/admin/reload
+```
+
+### Ports summary
+
+- `http://localhost:8080` — nginx LB (use this for API traffic)
+- `http://localhost:8081/healthz` — relay-a direct
+- `http://localhost:8082/healthz` — relay-b direct
+- `http://localhost:16686` — Jaeger UI
+- `localhost:5432` — Postgres (for `psql` / migrations)
+
 ## Status
 
-M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`, `/healthz`, graceful shutdown, OTel storage resource attrs.
+M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`, `/healthz`, graceful shutdown, OTel storage resource attrs. docker-compose smoke stack (PER-248).
 
 ## License
 

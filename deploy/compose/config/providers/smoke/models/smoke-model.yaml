@@ -1,0 +1,29 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+  name: smoke-model
+spec:
+  provider: smoke-ollama
+  upstreamName: tinyllama:latest
+  description: "Smoke-test model (TinyLlama via Ollama)"
+  family: tinyllama
+  capabilities:
+    chat: true
+    streaming: false
+  modalities:
+    input: [text]
+    output: [text]
+  contextWindow: 2048
+  rateLimits:
+    - ref: smoke-rpm
+      meter: requests
+
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: smoke-rpm
+spec:
+  strategy: sliding-window
+  window: 1m
+  amount: 60

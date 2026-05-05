@@ -1,0 +1,8 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pool
+metadata:
+  name: smoke-pool
+spec:
+  provider: smoke-ollama
+  secrets:
+    - smoke-anon

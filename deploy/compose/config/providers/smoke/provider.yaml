@@ -1,0 +1,9 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+  name: smoke-ollama
+spec:
+  kind: ollama
+  baseURL: http://host.docker.internal:11434
+  default: true
+  defaultPool: smoke-pool
