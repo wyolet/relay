@@ -205,7 +205,7 @@ func TestRecord_OmitEmpty(t *testing.T) {
 func TestRecord_EventlogFull(t *testing.T) {
 	dir := t.TempDir()
 	el, _ := eventlog.New(eventlog.Config{Dir: dir, BufferSize: 1})
-	defer el.Close(context.Background())
+	el.Close(context.Background())
 
 	_, tp := newRecorder()
 
@@ -214,13 +214,13 @@ func TestRecord_EventlogFull(t *testing.T) {
 	defer func() { defaultEventLogger = orig }()
 
 	before := DroppedEvents()
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 5; i++ {
 		lc := newTestLC(tp)
 		Record(context.Background(), lc)
 	}
 	after := DroppedEvents()
-	if after <= before {
-		t.Errorf("DroppedEvents should have increased, before=%d after=%d", before, after)
+	if after-before < 5 {
+		t.Errorf("DroppedEvents should have increased by at least 5, before=%d after=%d", before, after)
 	}
 }
 
