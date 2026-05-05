@@ -24,8 +24,23 @@ type MemStore struct {
 	data    sync.Map // string -> entry
 	mu      sync.Map // string -> *sync.Mutex (per-key locks for WithLock)
 	incrMu  sync.Map // string -> *sync.Mutex (per-key locks for Incr atomicity)
+	scripts sync.Map // string -> ScriptImpl
 	stopCh  chan struct{}
 	stopped chan struct{}
+}
+
+// RegisterScript registers a Go emulator for a named script.
+func (m *MemStore) RegisterScript(name string, fn ScriptImpl) {
+	m.scripts.Store(name, fn)
+}
+
+// RunScript looks up the named emulator and invokes it.
+func (m *MemStore) RunScript(ctx context.Context, name, _ string, keys []string, args ...any) ([]byte, error) {
+	v, ok := m.scripts.Load(name)
+	if !ok {
+		return nil, fmt.Errorf("state: script %q not registered", name)
+	}
+	return v.(ScriptImpl)(ctx, m, keys, args)
 }
 
 // New constructs a MemStore and starts the TTL janitor.
