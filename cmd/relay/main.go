@@ -12,11 +12,13 @@ import (
 	apiopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/httpmw"
+	"github.com/wyolet/relay/pkg/keypool"
 	"github.com/wyolet/relay/pkg/pipeline"
 	"github.com/wyolet/relay/pkg/provider"
 	"github.com/wyolet/relay/pkg/provider/ollama"
 	"github.com/wyolet/relay/pkg/provider/openai"
 	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/state"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
@@ -29,10 +31,13 @@ func main() {
 	}
 	cfg = yamlStore
 
+	// In-memory state store for key circuit breakers.
+	st := state.New()
+	sel := keypool.New(st, slog.Default(), nil)
+
 	// Build provider clients and register them.
 	reg := provider.NewRegistry()
 
-	// Ollama: find provider by kind and register.
 	for _, p := range cfg.Providers() {
 		switch p.Spec.Kind {
 		case configstore.PKOllama:
@@ -55,7 +60,16 @@ func main() {
 		if !ok {
 			return nil, false
 		}
-		return &apiopenai.RequestPlan{Model: m, Provider: p}, true
+		plan := &apiopenai.RequestPlan{Model: m, Provider: p}
+
+		// Resolve pool and secrets for the provider's default pool.
+		if poolName := p.Spec.DefaultPool; poolName != "" {
+			if pool, ok := cfg.PoolByName(poolName); ok {
+				plan.Pool = pool
+				plan.Secrets = cfg.SecretsForPool(pool)
+			}
+		}
+		return plan, true
 	}
 
 	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) error {
@@ -64,25 +78,32 @@ func main() {
 			return err
 		}
 
-		// Secret selection: placeholder for PER-227.
-		// Ollama: anonymous (empty secret).
-		// OpenAI: first secret from the provider's default pool.
-		secret := ""
-		if plan.Provider.Spec.Kind != configstore.PKOllama {
-			if poolName := plan.Provider.Spec.DefaultPool; poolName != "" {
-				if pool, ok := cfg.PoolByName(poolName); ok {
-					secrets := cfg.SecretsForPool(pool)
-					if len(secrets) > 0 {
-						secret = secrets[0].Resolved
-					}
-				}
-			}
+		// If we have a pool with keys, use the orchestrating Run.
+		if plan.Pool != nil && len(plan.Secrets) > 0 {
+			return pipeline.Run(ctx, ch, pipeline.RunOptions{
+				Pool:     plan.Pool,
+				Secrets:  plan.Secrets,
+				Selector: sel,
+				Outbound: ob,
+			})
 		}
 
-		bound := func(ctx context.Context, body []byte, out chan<- *transport.Message) error {
-			return ob.ChatCompletions(ctx, body, secret, out)
+		// Fallback for providers without a pool (e.g., anonymous Ollama).
+		// Use a synthetic pool with an empty-secret key.
+		emptySecret := &configstore.Secret{
+			Metadata: configstore.Metadata{Name: "anon"},
+			Resolved: "",
+			KeyHash:  "anon",
 		}
-		return pipeline.Run(ctx, ch, bound)
+		syntheticPool := &configstore.Pool{
+			Metadata: configstore.Metadata{Name: "anon-pool"},
+		}
+		return pipeline.Run(ctx, ch, pipeline.RunOptions{
+			Pool:     syntheticPool,
+			Secrets:  []*configstore.Secret{emptySecret},
+			Selector: sel,
+			Outbound: ob,
+		})
 	}
 
 	r := chi.NewRouter()

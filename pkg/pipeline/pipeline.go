@@ -3,36 +3,287 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strconv"
+	"time"
 
+	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/keypool"
+	"github.com/wyolet/relay/pkg/provider"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
-// Outbound sends a request body to a destination and emits the response
-// as a stream of *Messages on out. The Outbound is responsible for
-// closing out before returning. The first emitted Message must carry
-// any HTTP-status / Content-Type semantics in its Headers (see chat.go
-// for the contract); subsequent Messages contribute body bytes only;
-// the final Message marks Headers["X-Relay-Final"] = "true".
-type Outbound func(ctx context.Context, body []byte, out chan<- *transport.Message) error
+var (
+	ErrNoInboundMessage = errors.New("pipeline: no inbound message on Channel.In")
+	ErrAttemptsExhausted = errors.New("pipeline: all attempts exhausted")
+)
 
-var ErrNoInboundMessage = errors.New("pipeline: no inbound message on Channel.In")
+const defaultMaxAttempts = 3
+const shortRateLimitThreshold = 5 * time.Second
 
-// Run reads one inbound *Message from ch.In, calls outbound with its
-// body and ch.Out, and returns the outbound's error (if any).
-//
-// Run is intentionally minimal in M1. M2 will resolve a Pool here;
-// M3 will gate RateLimits here. Today it is a passthrough.
-//
-// Run honors ch.Ctx for cancellation and returns ctx.Err() if the
-// caller cancels before the inbound message is read.
-func Run(ctx context.Context, ch *transport.Channel, outbound Outbound) error {
+// RunOptions configures a Run invocation.
+type RunOptions struct {
+	Pool        *configstore.Pool
+	Secrets     []*configstore.Secret
+	Selector    *keypool.Selector
+	Outbound    provider.Outbound
+	MaxAttempts int // 0 → 3
+}
+
+// Run reads the inbound Message from ch.In and orchestrates upstream calls
+// with retry/failover. It closes ch.Out before returning. Pre-first-byte
+// retry only: once a non-error first response chunk is forwarded, the
+// response is committed.
+func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
+	maxAttempts := opts.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+
+	// Read inbound message.
+	var inboundMsg *transport.Message
 	select {
 	case msg, ok := <-ch.In:
 		if !ok {
 			return ErrNoInboundMessage
 		}
-		return outbound(ctx, msg.Body, ch.Out)
+		inboundMsg = msg
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+
+	defer close(ch.Out)
+
+	attempt := 0
+	sameKeyAttempt := 0
+	var chosenKey *configstore.Secret
+
+	for attempt < maxAttempts {
+		attempt++
+
+		// Pick a key if we don't have one.
+		if chosenKey == nil {
+			var err error
+			chosenKey, err = opts.Selector.Pick(ctx, opts.Pool, opts.Secrets)
+			if err != nil {
+				if errors.Is(err, keypool.ErrNoHealthyKeys) {
+					sendPoolExhausted(ch.Out)
+					return err
+				}
+				return err
+			}
+			sameKeyAttempt = 0
+		}
+
+		secret := chosenKey
+
+		// Spawn outbound into intermediate channel.
+		inter := make(chan *transport.Message, 64)
+		outboundErr := make(chan error, 1)
+		go func() {
+			outboundErr <- opts.Outbound.ChatCompletions(ctx, inboundMsg.Body, secret.Resolved, inter)
+		}()
+
+		// Read first message.
+		var firstMsg *transport.Message
+		select {
+		case msg, ok := <-inter:
+			if !ok || msg == nil {
+				// Channel closed without message — treat as network failure.
+				<-outboundErr
+				opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureNetwork, 0)
+				slog.Default().Info("pipeline attempt",
+					"attempt", attempt,
+					"key_hash", secret.KeyHash,
+					"classification", "network",
+				)
+				if sameKeyAttempt == 0 {
+					sameKeyAttempt++
+				} else {
+					chosenKey = nil
+					sameKeyAttempt = 0
+				}
+				continue
+			}
+			firstMsg = msg
+		case <-ctx.Done():
+			go drain(inter)
+			return ctx.Err()
+		}
+
+		status := parseStatus(firstMsg.Headers["X-Relay-Status"])
+		retryAfter := parseRetryAfter(firstMsg.Headers["Retry-After"])
+
+		cls := classify(status)
+		// Resolve 429 short vs long based on actual retryAfter.
+		if cls == classRateLimit429Short && retryAfter > shortRateLimitThreshold {
+			cls = classRateLimit429Long
+		}
+
+		switch cls {
+		case classSuccess:
+			opts.Selector.RecordSuccess(ctx, secret.KeyHash)
+			slog.Default().Info("pipeline attempt",
+				"attempt", attempt,
+				"key_hash", secret.KeyHash,
+				"status", status,
+				"classification", "success",
+			)
+			ch.Out <- firstMsg
+			for msg := range inter {
+				select {
+				case <-ctx.Done():
+					go drain(inter)
+					<-outboundErr
+					return ctx.Err()
+				default:
+				}
+				ch.Out <- msg
+			}
+			<-outboundErr
+			return nil
+
+		case classAuth:
+			go drain(inter)
+			<-outboundErr
+			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureAuth, 0)
+			slog.Default().Info("pipeline attempt",
+				"attempt", attempt,
+				"key_hash", secret.KeyHash,
+				"status", status,
+				"classification", "auth",
+			)
+			chosenKey = nil
+			sameKeyAttempt = 0
+
+		case classRateLimit429Short:
+			go drain(inter)
+			<-outboundErr
+			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureRateLimitShort, retryAfter)
+			slog.Default().Info("pipeline attempt",
+				"attempt", attempt,
+				"key_hash", secret.KeyHash,
+				"status", status,
+				"classification", "rate_limit_short",
+				"retry_after_ms", retryAfter.Milliseconds(),
+			)
+			if retryAfter > 0 {
+				select {
+				case <-time.After(retryAfter):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			sameKeyAttempt++
+			// chosenKey unchanged
+
+		case classRateLimit429Long:
+			go drain(inter)
+			<-outboundErr
+			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureRateLimitLong, retryAfter)
+			slog.Default().Info("pipeline attempt",
+				"attempt", attempt,
+				"key_hash", secret.KeyHash,
+				"status", status,
+				"classification", "rate_limit_long",
+				"retry_after_ms", retryAfter.Milliseconds(),
+			)
+			chosenKey = nil
+			sameKeyAttempt = 0
+
+		case classServerError, classNetwork:
+			go drain(inter)
+			<-outboundErr
+			kind := keypool.FailureServerError
+			classification := "5xx"
+			if cls == classNetwork {
+				kind = keypool.FailureNetwork
+				classification = "network"
+			}
+			opts.Selector.RecordFailure(ctx, secret.KeyHash, kind, 0)
+			slog.Default().Info("pipeline attempt",
+				"attempt", attempt,
+				"key_hash", secret.KeyHash,
+				"status", status,
+				"classification", classification,
+			)
+			if sameKeyAttempt == 0 {
+				sameKeyAttempt++
+			} else {
+				chosenKey = nil
+				sameKeyAttempt = 0
+			}
+		}
+	}
+
+	sendPoolExhausted(ch.Out)
+	return ErrAttemptsExhausted
+}
+
+type responseClass int
+
+const (
+	classSuccess responseClass = iota
+	classAuth
+	classRateLimit429Short
+	classRateLimit429Long
+	classServerError
+	classNetwork
+)
+
+func classify(status int) responseClass {
+	switch {
+	case status >= 200 && status < 300:
+		return classSuccess
+	case status == 401 || status == 403:
+		return classAuth
+	case status == 429:
+		// caller resolves short vs long via retryAfter; we return short here as sentinel
+		// The actual branching in Run() reads retryAfter separately.
+		return classRateLimit429Short // placeholder; Run switches on this then checks retryAfter
+	case status >= 500:
+		return classServerError
+	case status == 0:
+		return classNetwork
+	default:
+		return classServerError
+	}
+}
+
+// parseStatus converts the X-Relay-Status header string to int. 0 on failure.
+func parseStatus(s string) int {
+	if s == "" {
+		return 0
+	}
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+// parseRetryAfter parses Retry-After header value (seconds only; HTTP-date → 60s).
+func parseRetryAfter(s string) time.Duration {
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		// HTTP-date or unparseable — default 60s.
+		return 60 * time.Second
+	}
+	return time.Duration(n) * time.Second
+}
+
+func drain(ch <-chan *transport.Message) {
+	for range ch {
+	}
+}
+
+func sendPoolExhausted(out chan<- *transport.Message) {
+	out <- &transport.Message{
+		Headers: map[string]string{
+			"X-Relay-Status": "502",
+			"Content-Type":   "application/json",
+			"X-Relay-Final":  "true",
+		},
+		Body: []byte(`{"error":{"message":"all keys in pool exhausted","type":"upstream_error","code":"pool_exhausted"}}`),
 	}
 }

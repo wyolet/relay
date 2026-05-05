@@ -47,13 +47,14 @@ func (c *Client) ChatCompletions(ctx context.Context, body []byte, secret string
 	}
 	defer resp.Body.Close()
 
-	// Header-only first message: status + content-type.
-	out <- &transport.Message{
-		Headers: map[string]string{
-			"X-Relay-Status": strconv.Itoa(resp.StatusCode),
-			"Content-Type":   resp.Header.Get("Content-Type"),
-		},
+	firstHeaders := map[string]string{
+		"X-Relay-Status": strconv.Itoa(resp.StatusCode),
+		"Content-Type":   resp.Header.Get("Content-Type"),
 	}
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		firstHeaders["Retry-After"] = ra
+	}
+	out <- &transport.Message{Headers: firstHeaders}
 
 	buf := make([]byte, 4096)
 	for {

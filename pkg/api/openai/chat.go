@@ -19,11 +19,12 @@ import (
 	"github.com/wyolet/relay/pkg/transport"
 )
 
-// RequestPlan holds the resolved model and provider for a single request.
-// PER-227 will extend this with Pool and Secrets.
+// RequestPlan holds the resolved model, provider, pool, and secrets for a request.
 type RequestPlan struct {
 	Model    *configstore.Model
 	Provider *configstore.Provider
+	Pool     *configstore.Pool
+	Secrets  []*configstore.Secret
 }
 
 // PlanResolver resolves a model name to a RequestPlan. ok=false means unknown model.
