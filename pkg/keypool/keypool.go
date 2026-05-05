@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand"
 	"time"
 
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/state"
 )
@@ -36,6 +38,7 @@ const (
 )
 
 var ErrNoHealthyKeys = errors.New("keypool: no healthy keys in pool")
+var ErrPoolOutOfCapacity = errors.New("keypool: pool out of capacity (all secrets at zero remaining quota)")
 
 // backoffSchedule is seconds per step, capped at 60.
 var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
@@ -51,17 +54,25 @@ const (
 
 // Selector picks Secrets from Pools and tracks per-key circuit-breaker state.
 type Selector struct {
-	state state.Store
-	log   *slog.Logger
-	clock func() time.Time
+	state   state.Store
+	log     *slog.Logger
+	clock   func() time.Time
+	limiter *limit.Limiter
+	cfg     configstore.ConfigStore
+	rng     *rand.Rand
 }
 
-// New constructs a Selector. clock may be nil (defaults to time.Now).
-func New(s state.Store, log *slog.Logger, clock func() time.Time) *Selector {
+// New constructs a Selector. clock, limiter, cfg, and rng may be nil.
+// When limiter and cfg are nil, Pick falls back to round-robin (M2 behavior).
+// When rng is nil, a new rand seeded from time.Now().UnixNano() is used.
+func New(s state.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Limiter, cfg configstore.ConfigStore, rng *rand.Rand) *Selector {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Selector{state: s, log: log, clock: clock}
+	if rng == nil {
+		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	return &Selector{state: s, log: log, clock: clock, limiter: limiter, cfg: cfg, rng: rng}
 }
 
 func (s *Selector) stateKey(keyHash string) string { return stateKeyPrefix + keyHash }
@@ -94,20 +105,20 @@ func (s *Selector) writeRecord(ctx context.Context, keyHash string, r circuitRec
 	}
 }
 
-// Pick returns the next healthy Secret in pool via round-robin over the
-// healthy subset of secrets (input order; caller passes alphabetically sorted
-// slice from configstore.SecretsForPool for deterministic distribution).
+// Pick returns a healthy Secret from the pool. When a limiter and config store
+// are configured, it uses quota-aware weighted-random selection; otherwise it
+// falls back to round-robin (M2 behavior).
 //
 // Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
 // eligible. Concurrent Picks may both pick the same half-open key; the
 // caller's RecordSuccess/RecordFailure resolves the outcome (acceptable in M2).
-func (s *Selector) Pick(ctx context.Context, pool *configstore.Pool, secrets []*configstore.Secret) (*configstore.Secret, error) {
+func (s *Selector) Pick(ctx context.Context, provider *configstore.Provider, pool *configstore.Pool, model *configstore.Model, secrets []*configstore.Secret) (*configstore.Secret, error) {
 	now := s.clock()
 
 	type candidate struct {
-		secret *configstore.Secret
-		rec    circuitRecord
-		promote bool // was Open→HalfOpen this call
+		secret  *configstore.Secret
+		rec     circuitRecord
+		promote bool
 	}
 
 	var healthy []candidate
@@ -117,12 +128,11 @@ func (s *Selector) Pick(ctx context.Context, pool *configstore.Pool, secrets []*
 		switch rec.State {
 		case CircuitOpen:
 			if rec.Indefinite {
-				continue // never eligible
+				continue
 			}
 			if now.Before(rec.OpenUntil) {
-				continue // still open
+				continue
 			}
-			// Expired open window → promote to half-open.
 			prior := rec.State
 			rec.State = CircuitHalfOpen
 			rec.LastTransition = now
@@ -148,7 +158,68 @@ func (s *Selector) Pick(ctx context.Context, pool *configstore.Pool, secrets []*
 		return nil, ErrNoHealthyKeys
 	}
 
-	// Atomic round-robin counter under lock so concurrent Picks are ordered.
+	// Weighted-random when limiter and cfg are available.
+	if s.limiter != nil && s.cfg != nil {
+		weights := make([]int64, len(healthy))
+		anyRules := false
+		for i, c := range healthy {
+			rules := s.cfg.RateLimitsForRequest(provider, pool, model, c.secret)
+			if len(rules) == 0 {
+				weights[i] = -1 // sentinel: no rules → unbounded
+				continue
+			}
+			anyRules = true
+			remaining, err := s.limiter.RemainingByMeter(ctx, rules)
+			if err != nil {
+				weights[i] = -1
+				continue
+			}
+			w := int64(-1)
+			if v, ok := remaining[configstore.MeterRequests]; ok {
+				if w < 0 || v < w {
+					w = v
+				}
+			}
+			if v, ok := remaining[configstore.MeterTokens]; ok {
+				if w < 0 || v < w {
+					w = v
+				}
+			}
+			if w < 0 {
+				// Only concurrency or unknown meters → treat as unbounded.
+				weights[i] = -1
+			} else {
+				weights[i] = w
+			}
+		}
+
+		if anyRules {
+			// Replace unbounded sentinels with a high weight relative to bounded ones.
+			const highWeight = int64(1<<32 - 1)
+			var total int64
+			for i := range weights {
+				if weights[i] < 0 {
+					weights[i] = highWeight
+				}
+				total += weights[i]
+			}
+			if total == 0 {
+				return nil, ErrPoolOutOfCapacity
+			}
+			r := s.rng.Int63n(total)
+			var acc int64
+			for i, c := range healthy {
+				acc += weights[i]
+				if r < acc {
+					return c.secret, nil
+				}
+			}
+			return healthy[len(healthy)-1].secret, nil
+		}
+		// No secret has any rules → fall through to round-robin.
+	}
+
+	// Round-robin fallback.
 	var idx int64
 	err := s.state.WithLock(ctx, []string{s.rrKey(pool.Metadata.Name)}, func(ctx context.Context) error {
 		var ierr error
@@ -156,7 +227,6 @@ func (s *Selector) Pick(ctx context.Context, pool *configstore.Pool, secrets []*
 		return ierr
 	})
 	if err != nil {
-		// Fall back to first healthy key rather than failing.
 		idx = 1
 	}
 

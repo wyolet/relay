@@ -24,7 +24,9 @@ const shortRateLimitThreshold = 5 * time.Second
 
 // RunOptions configures a Run invocation.
 type RunOptions struct {
+	Provider    *configstore.Provider
 	Pool        *configstore.Pool
+	Model       *configstore.Model
 	Secrets     []*configstore.Secret
 	Selector    *keypool.Selector
 	Outbound    provider.Outbound
@@ -95,10 +97,14 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 		// Pick a key if we don't have one.
 		if chosenKey == nil {
 			var err error
-			chosenKey, err = opts.Selector.Pick(ctx, opts.Pool, opts.Secrets)
+			chosenKey, err = opts.Selector.Pick(ctx, opts.Provider, opts.Pool, opts.Model, opts.Secrets)
 			if err != nil {
 				if errors.Is(err, keypool.ErrNoHealthyKeys) {
 					sendExhaustedEnvelope(ch.Out, keypool.FailureKind(-2), 0)
+					return err
+				}
+				if errors.Is(err, keypool.ErrPoolOutOfCapacity) {
+					sendPoolOutOfCapacityEnvelope(ch.Out)
 					return err
 				}
 				return err
@@ -370,6 +376,18 @@ func sendExhaustedEnvelope(out chan<- *transport.Message, kind keypool.FailureKi
 
 	body := []byte(`{"error":{"message":"` + msg + `","type":"` + errType + `","code":"` + code + `"}}`)
 	out <- &transport.Message{Headers: headers, Body: body}
+}
+
+func sendPoolOutOfCapacityEnvelope(out chan<- *transport.Message) {
+	out <- &transport.Message{
+		Headers: map[string]string{
+			"X-Relay-Status": "429",
+			"Content-Type":   "application/json",
+			"X-Relay-Final":  "true",
+			"Retry-After":    "30",
+		},
+		Body: []byte(`{"error":{"message":"pool out of capacity: all secrets at zero remaining quota","type":"rate_limit_exceeded","code":"pool_out_of_capacity"}}`),
+	}
 }
 
 func sendPoolExhausted(out chan<- *transport.Message) {

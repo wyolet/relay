@@ -35,8 +35,8 @@ func main() {
 
 	// In-memory state store for key circuit breakers and rate-limit counters.
 	st := state.New()
-	sel := keypool.New(st, slog.Default(), nil)
 	limiter := limit.New(st, slog.Default(), nil)
+	sel := keypool.New(st, slog.Default(), nil, limiter, cfg, nil)
 
 	// Build provider clients and register them.
 	reg := provider.NewRegistry()
@@ -87,7 +87,9 @@ func main() {
 		// If we have a pool with keys, use the orchestrating Run.
 		if plan.Pool != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
+				Provider: plan.Provider,
 				Pool:     plan.Pool,
+				Model:    plan.Model,
 				Secrets:  plan.Secrets,
 				Selector: sel,
 				Outbound: ob,
