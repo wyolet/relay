@@ -1,15 +1,15 @@
 // Package limit implements a sliding-window-counter rate limiter with a
 // two-phase Reserve/Commit API. Three meters are supported: requests,
-// tokens, concurrency. State is persisted via pkg/state with WithLock for
-// atomicity. Idempotent Commit is guaranteed via a guard key.
+// tokens, concurrency. State is persisted via pkg/state using a single
+// RunScript call per phase (Lua on Redis, Go-emulator on MemStore).
 package limit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/wyolet/relay/pkg/configstore"
@@ -24,23 +24,35 @@ const (
 // Limiter enforces rate-limit rules using pkg/state for counters.
 // One Limiter is shared across the process; concurrent calls are safe.
 type Limiter struct {
-	state state.Store
-	log   *slog.Logger
-	clock func() time.Time
+	runner state.ScriptRunner
+	store  state.Store
+	log    *slog.Logger
+	clock  func() time.Time
 }
 
 func New(s state.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Limiter{state: s, log: log, clock: clock}
+	l := &Limiter{store: s, log: log, clock: clock}
+	if sr, ok := s.(state.ScriptRunner); ok {
+		l.runner = sr
+	}
+	if ms, ok := s.(*state.MemStore); ok {
+		RegisterScripts(ms)
+	}
+	return l
 }
 
 // Reservation is returned by a successful Reserve call.
 type Reservation struct {
-	ID          string
-	rules       []configstore.ResolvedRule
-	incremented []configstore.ResolvedRule // subset whose counters were incremented
+	ID    string
+	rules []configstore.ResolvedRule
+	// conKeys holds the concurrency state keys incremented at Reserve time.
+	// Used by Commit to decrement them.
+	conKeys []string
+	// tokRules holds token-meter rules (for post-hoc Commit increment).
+	tokRules []configstore.ResolvedRule
 }
 
 // Observations are passed to Commit to supply post-hoc measurements.
@@ -65,147 +77,105 @@ func (e *ExceededError) Unwrap() error { return ErrExceeded }
 
 var ErrExceeded = errors.New("limit: budget exceeded")
 
-// Reserve checks all rules and increments counters. On violation, all
-// increments from this call are rolled back and *ExceededError is returned.
+// Reserve checks all rules and increments counters atomically via one RunScript call.
+// On violation, all increments from this call are rolled back and *ExceededError is returned.
 func (l *Limiter) Reserve(ctx context.Context, rules []configstore.ResolvedRule) (*Reservation, error) {
 	now := l.clock()
+	token := reqid.Generate()
 
-	// Collect all state keys so we can lock them atomically.
-	keys := collectKeys(rules, now)
-
-	res := &Reservation{
-		ID:    reqid.Generate(),
-		rules: rules,
-	}
-
-	var exceeded *ExceededError
-
-	err := l.state.WithLock(ctx, keys, func(ctx context.Context) error {
-		for _, rule := range rules {
-			w := rule.RateLimit.Spec.Window
-			amount := rule.RateLimit.Spec.Amount
-			cur, prev := windowBuckets(now, w)
-			frac := fractionElapsed(now, cur, w)
-
-			switch rule.Meter {
-			case configstore.MeterRequests:
-				curKey := bucketKey(rule, cur)
-				prevKey := bucketKey(rule, prev)
-
-				// Increment first, then check.
-				newCur, err := l.state.Incr(ctx, curKey, 1)
-				if err != nil {
-					return err
-				}
-				_ = l.state.Expire(ctx, curKey, 2*w)
-				prevVal, err := readCounter(ctx, l.state, prevKey)
-				if err != nil {
-					return err
-				}
-				rate := interpolatedRate(newCur, prevVal, frac)
-				if rate > float64(amount) {
-					// Roll back all increments including this one.
-					if _, rerr := l.state.Incr(ctx, curKey, -1); rerr != nil {
-						l.log.Error("limit: rollback failed", "key", curKey, "err", rerr)
-					}
-					l.rollback(ctx, res.incremented, now)
-					res.incremented = nil
-					ra := retryAfterRequests(newCur-1, prevVal, amount, now, cur, w)
-					exceeded = &ExceededError{Rule: rule, RetryAfter: ra}
-					return nil
-				}
-				res.incremented = append(res.incremented, rule)
-
-			case configstore.MeterConcurrency:
-				cKey := concurrencyKey(rule)
-				newVal, err := l.state.Incr(ctx, cKey, 1)
-				if err != nil {
-					return err
-				}
-				_ = l.state.Expire(ctx, cKey, 5*w)
-				if newVal > amount {
-					if _, rerr := l.state.Incr(ctx, cKey, -1); rerr != nil {
-						l.log.Error("limit: rollback failed", "key", cKey, "err", rerr)
-					}
-					l.rollback(ctx, res.incremented, now)
-					res.incremented = nil
-					exceeded = &ExceededError{Rule: rule, RetryAfter: w}
-					return nil
-				}
-				res.incremented = append(res.incremented, rule)
-
-			case configstore.MeterTokens:
-				// Peek only — no increment at Reserve time.
-				curKey := bucketKey(rule, cur)
-				prevKey := bucketKey(rule, prev)
-				curVal, err := readCounter(ctx, l.state, curKey)
-				if err != nil {
-					return err
-				}
-				prevVal, err := readCounter(ctx, l.state, prevKey)
-				if err != nil {
-					return err
-				}
-				rate := interpolatedRate(curVal, prevVal, frac)
-				if rate >= float64(amount) {
-					l.rollback(ctx, res.incremented, now)
-					res.incremented = nil
-					ra := retryAfterRequests(curVal, prevVal, amount, now, cur, w)
-					exceeded = &ExceededError{Rule: rule, RetryAfter: ra}
-					return nil
-				}
-				// No increment; not added to incremented list.
-			}
-		}
-		return nil
-	})
-
+	keys, ruleArgs, err := buildReserveArgs(rules, now)
 	if err != nil {
 		return nil, err
 	}
 
-	if exceeded != nil {
+	rulesJSON, err := json.Marshal(ruleArgs)
+	if err != nil {
+		return nil, fmt.Errorf("limit: marshal rules: %w", err)
+	}
+
+	raw, err := l.runner.RunScript(ctx, "limit.reserve", reserveLuaScript, keys,
+		now.UnixMilli(), string(rulesJSON), token)
+	if err != nil {
+		return nil, fmt.Errorf("limit: reserve script: %w", err)
+	}
+
+	var res reserveResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("limit: decode reserve result: %w", err)
+	}
+
+	if res.Exceeded {
+		exceeded := &ExceededError{
+			RetryAfter: time.Duration(res.RetryAfterMs) * time.Millisecond,
+		}
+		// Reconstruct the violated rule from the result metadata.
+		exceeded.Rule = findRule(rules, res.ParentKind, res.ParentName, res.RuleName, res.Meter)
 		l.log.Info("limit reserve exceeded",
 			"request_id", reqid.From(ctx),
-			"rule", fmt.Sprintf("%s:%s:%s", exceeded.Rule.ParentName, exceeded.Rule.RateLimit.Metadata.Name, exceeded.Rule.Meter),
+			"rule", fmt.Sprintf("%s:%s:%s", res.ParentName, res.RuleName, res.Meter),
 			"retry_after_seconds", exceeded.RetryAfter.Seconds(),
 		)
 		return nil, exceeded
 	}
 
-	l.log.Debug("limit reserve",
-		"request_id", reqid.From(ctx),
-		"rules", len(rules),
-		"decision", "granted",
-	)
-	return res, nil
-}
-
-// rollback decrements all incremented counters. Must be called under lock.
-func (l *Limiter) rollback(ctx context.Context, incremented []configstore.ResolvedRule, now time.Time) {
-	for _, rule := range incremented {
-		w := rule.RateLimit.Spec.Window
+	reservation := &Reservation{
+		ID:    token,
+		rules: rules,
+	}
+	// Pre-compute concurrency key list and token rule list for Commit.
+	for _, rule := range rules {
 		switch rule.Meter {
-		case configstore.MeterRequests:
-			cur, _ := windowBuckets(now, w)
-			if _, err := l.state.Incr(ctx, bucketKey(rule, cur), -1); err != nil {
-				l.log.Error("limit: rollback requests failed", "err", err)
-			}
 		case configstore.MeterConcurrency:
-			if _, err := l.state.Incr(ctx, concurrencyKey(rule), -1); err != nil {
-				l.log.Error("limit: rollback concurrency failed", "err", err)
-			}
+			reservation.conKeys = append(reservation.conKeys, concurrencyKey(rule))
+		case configstore.MeterTokens:
+			reservation.tokRules = append(reservation.tokRules, rule)
 		}
 	}
+
+	l.log.Debug("limit reserve", "request_id", reqid.From(ctx), "rules", len(rules), "decision", "granted")
+	return reservation, nil
 }
 
-// Commit finalizes a Reservation. Tokens are incremented post-hoc; concurrency
-// is always decremented. Calling Commit twice is a no-op.
+// Commit finalizes a Reservation via one RunScript call. Tokens are incremented
+// post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
-	guard := commitGuardKey(res.ID)
+	now := l.clock()
+	guardKey := commitGuardKey(res.ID)
+	guardTTLMs := commitGuardTTL.Milliseconds()
 
-	// Idempotency check.
-	if _, err := l.state.Get(ctx, guard); err == nil {
+	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys]
+	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules))
+	keys = append(keys, guardKey)
+	keys = append(keys, res.conKeys...)
+
+	var tokTTLMs int64
+	for _, rule := range res.tokRules {
+		w := rule.RateLimit.Spec.Window
+		cur, _ := windowBuckets(now, w)
+		keys = append(keys, bucketKey(rule, cur))
+		if ttl := (2 * w).Milliseconds(); ttl > tokTTLMs {
+			tokTTLMs = ttl
+		}
+	}
+
+	actualTok := obs.Tokens
+	if obs.Cancelled {
+		actualTok = 0
+	}
+
+	raw, err := l.runner.RunScript(ctx, "limit.commit", commitLuaScript, keys,
+		res.ID,
+		guardTTLMs,
+		int64(len(res.conKeys)),
+		int64(len(res.tokRules)),
+		actualTok,
+		tokTTLMs,
+	)
+	if err != nil {
+		return fmt.Errorf("limit: commit script: %w", err)
+	}
+
+	if string(raw) == "noop" {
 		l.log.Debug("limit commit duplicate", "reservation_id", res.ID)
 		return nil
 	}
@@ -215,42 +185,6 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		"tokens", obs.Tokens,
 		"cancelled", obs.Cancelled,
 	)
-
-	now := l.clock()
-
-	for _, rule := range res.incremented {
-		switch rule.Meter {
-		case configstore.MeterConcurrency:
-			cKey := concurrencyKey(rule)
-			if _, err := l.state.Incr(ctx, cKey, -1); err != nil {
-				l.log.Error("limit commit: decrement concurrency failed", "err", err)
-			}
-		case configstore.MeterRequests:
-			// Already incremented at Reserve; no action needed.
-		}
-	}
-
-	// Token meters: retroactively add tokens (not tracked in incremented since no Reserve-time increment).
-	if !obs.Cancelled && obs.Tokens > 0 {
-		for _, rule := range res.rules {
-			if rule.Meter != configstore.MeterTokens {
-				continue
-			}
-			w := rule.RateLimit.Spec.Window
-			cur, _ := windowBuckets(now, w)
-			tKey := bucketKey(rule, cur)
-			newVal, err := l.state.Incr(ctx, tKey, obs.Tokens)
-			if err != nil {
-				l.log.Error("limit commit: increment tokens failed", "err", err)
-				continue
-			}
-			_ = l.state.Expire(ctx, tKey, 2*w)
-			_ = newVal
-		}
-	}
-
-	// Set guard key.
-	_ = l.state.Set(ctx, guard, []byte("1"), commitGuardTTL)
 	return nil
 }
 
@@ -271,18 +205,18 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, rules []configstore.Reso
 		case configstore.MeterRequests, configstore.MeterTokens:
 			curKey := bucketKey(rule, cur)
 			prevKey := bucketKey(rule, prev)
-			curVal, err := readCounter(ctx, l.state, curKey)
+			curVal, err := readCounter(ctx, l.store, curKey)
 			if err != nil {
 				return nil, err
 			}
-			prevVal, err := readCounter(ctx, l.state, prevKey)
+			prevVal, err := readCounter(ctx, l.store, prevKey)
 			if err != nil {
 				return nil, err
 			}
 			rate = interpolatedRate(curVal, prevVal, frac)
 
 		case configstore.MeterConcurrency:
-			cVal, err := readCounter(ctx, l.state, concurrencyKey(rule))
+			cVal, err := readCounter(ctx, l.store, concurrencyKey(rule))
 			if err != nil {
 				return nil, err
 			}
@@ -302,24 +236,24 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, rules []configstore.Reso
 	return result, nil
 }
 
-// collectKeys gathers all state keys touched for locking.
-func collectKeys(rules []configstore.ResolvedRule, now time.Time) []string {
-	seen := make(map[string]struct{})
-	for _, rule := range rules {
-		w := rule.RateLimit.Spec.Window
-		cur, prev := windowBuckets(now, w)
-		switch rule.Meter {
-		case configstore.MeterRequests, configstore.MeterTokens:
-			seen[bucketKey(rule, cur)] = struct{}{}
-			seen[bucketKey(rule, prev)] = struct{}{}
-		case configstore.MeterConcurrency:
-			seen[concurrencyKey(rule)] = struct{}{}
+// findRule looks up a rule by its identifying fields; returns a zero-value
+// ResolvedRule with synthesized RateLimit if not found (avoids nil panic).
+func findRule(rules []configstore.ResolvedRule, parentKind, parentName, ruleName, meter string) configstore.ResolvedRule {
+	for _, r := range rules {
+		if string(r.ParentKind) == parentKind &&
+			r.ParentName == parentName &&
+			r.RateLimit.Metadata.Name == ruleName &&
+			string(r.Meter) == meter {
+			return r
 		}
 	}
-	keys := make([]string, 0, len(seen))
-	for k := range seen {
-		keys = append(keys, k)
+	// Fallback: synthesize a minimal rule so the error message is useful.
+	return configstore.ResolvedRule{
+		ParentKind: configstore.Kind(parentKind),
+		ParentName: parentName,
+		Meter:      configstore.Meter(meter),
+		RateLimit: &configstore.RateLimit{
+			Metadata: configstore.Metadata{Name: ruleName},
+		},
 	}
-	sort.Strings(keys)
-	return keys
 }
