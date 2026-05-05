@@ -175,3 +175,76 @@ func TestChatCompletions_BadJSON(t *testing.T) {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }
+
+func TestChatCompletions_StreamingMidstreamError(t *testing.T) {
+	errEnvJSON := `{"error":{"message":"upstream lost","type":"upstream_error","code":"upstream_unavailable"}}`
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error {
+		defer close(ch.Out)
+		ch.Out <- &transport.Message{
+			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
+		}
+		ch.Out <- &transport.Message{Body: []byte("data: chunk1\n\n")}
+		ch.Out <- &transport.Message{
+			Headers: map[string]string{
+				"X-Relay-Status": "502",
+				"X-Relay-Final":  "true",
+			},
+			Body: []byte(errEnvJSON),
+		}
+		return nil
+	}
+
+	body := `{"model":"gpt-4","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+
+	if rec.Code != 200 {
+		t.Errorf("status = %d, want 200 (already committed)", rec.Code)
+	}
+	got := rec.Body.String()
+	if !strings.Contains(got, "data: chunk1") {
+		t.Errorf("body missing original chunk: %q", got)
+	}
+	if !strings.Contains(got, "data: "+errEnvJSON) {
+		t.Errorf("body missing SSE error event: %q", got)
+	}
+	if !strings.Contains(got, "data: [DONE]") {
+		t.Errorf("body missing [DONE]: %q", got)
+	}
+}
+
+func TestChatCompletions_StreamingClientCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Pipeline sends first message then blocks until context is done.
+	runPipeline := func(pCtx context.Context, ch *transport.Channel, plan *RequestPlan) error {
+		defer close(ch.Out)
+		ch.Out <- &transport.Message{
+			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
+		}
+		ch.Out <- &transport.Message{Body: []byte("data: chunk1\n\n")}
+		// Wait for context cancellation.
+		<-pCtx.Done()
+		return pCtx.Err()
+	}
+
+	body := `{"model":"gpt-4","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	// Cancel after a short time to unblock the handler.
+	go func() {
+		cancel()
+	}()
+
+	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+
+	got := rec.Body.String()
+	// No SSE error event should be emitted on client cancel.
+	if strings.Contains(got, "data: {") && strings.Contains(got, "error") {
+		t.Errorf("error event emitted after client cancel: %q", got)
+	}
+}

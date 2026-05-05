@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/provider"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -106,8 +107,8 @@ func errorMessage(err error) *transport.Message {
 
 func errorEnvelope(err error) []byte {
 	return []byte(fmt.Sprintf(
-		`{"error":{"message":"upstream: %s","type":"upstream_error","code":"upstream_unavailable"}}`,
-		jsonEscapeString(err.Error()),
+		`{"error":{"message":"%s","type":"upstream_error","code":"upstream_unavailable"}}`,
+		jsonEscapeString(httpheader.SafeUpstreamError("openai", err)),
 	))
 }
 

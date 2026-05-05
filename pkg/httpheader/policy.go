@@ -2,8 +2,25 @@ package httpheader
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 )
+
+var (
+	reIP  = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?`)
+	reURL = regexp.MustCompile(`https?://[^\s]+`)
+)
+
+// SafeUpstreamError returns a user-safe error message for an upstream failure,
+// redacting URLs, IP addresses, and other internal details.
+// providerName is the public provider identifier (e.g. "openai").
+func SafeUpstreamError(providerName string, err error) string {
+	msg := err.Error()
+	if reURL.MatchString(msg) || reIP.MatchString(msg) {
+		return providerName + ": upstream connection failed"
+	}
+	return providerName + ": " + msg
+}
 
 // HopByHop is the canonical RFC 7230 hop-by-hop header set.
 var HopByHop = []string{

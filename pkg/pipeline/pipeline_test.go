@@ -241,10 +241,157 @@ func TestRun_AllExhausted(t *testing.T) {
 	}
 	msgs := collectOut(ch)
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 pool_exhausted message, got %d", len(msgs))
+		t.Fatalf("expected 1 exhausted message, got %d", len(msgs))
 	}
 	if msgs[0].Headers["X-Relay-Status"] != "502" {
-		t.Fatalf("expected 502 status in pool_exhausted message")
+		t.Fatalf("expected 502 status, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "upstream_5xx_exhausted") {
+		t.Fatalf("expected upstream_5xx_exhausted code, got %s", body)
+	}
+}
+
+func containsStr(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStrHelper(s, sub))
+}
+
+func containsStrHelper(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRun_AllAuthFailed_AuthFailedEnvelope(t *testing.T) {
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "401", "X-Relay-Final": "true"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+	opts.MaxAttempts = 2
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != ErrAttemptsExhausted {
+		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
+	}
+	msgs := collectOut(ch)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "502" {
+		t.Fatalf("expected 502, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "auth_failed") {
+		t.Fatalf("expected auth_failed code, got %s", body)
+	}
+	if !containsStr(body, "upstream_error") {
+		t.Fatalf("expected upstream_error type, got %s", body)
+	}
+}
+
+func TestRun_AllRateLimited_RateLimitEnvelope(t *testing.T) {
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{
+			"X-Relay-Status": "429",
+			"Retry-After":    "30",
+			"X-Relay-Final":  "true",
+		}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+	opts.MaxAttempts = 2
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != ErrAttemptsExhausted {
+		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
+	}
+	msgs := collectOut(ch)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "429" {
+		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "rate_limit_exceeded") {
+		t.Fatalf("expected rate_limit_exceeded, got %s", body)
+	}
+	if msgs[0].Headers["Retry-After"] != "30" {
+		t.Fatalf("expected Retry-After: 30, got %s", msgs[0].Headers["Retry-After"])
+	}
+}
+
+func TestRun_All5xx_ServerErrorEnvelope(t *testing.T) {
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "500", "X-Relay-Final": "true"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+	opts.MaxAttempts = 3
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != ErrAttemptsExhausted {
+		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
+	}
+	msgs := collectOut(ch)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "502" {
+		t.Fatalf("expected 502, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "upstream_5xx_exhausted") {
+		t.Fatalf("expected upstream_5xx_exhausted, got %s", body)
+	}
+}
+
+func TestRun_NoKeysFromStart_NoHealthyKeysEnvelope(t *testing.T) {
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+
+	ctx := context.Background()
+	// Mark all keys as auth-failed so ErrNoHealthyKeys is returned immediately.
+	opts.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
+	opts.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != keypool.ErrNoHealthyKeys {
+		t.Fatalf("expected ErrNoHealthyKeys, got %v", err)
+	}
+	msgs := collectOut(ch)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "503" {
+		t.Fatalf("expected 503, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "no_healthy_keys") {
+		t.Fatalf("expected no_healthy_keys, got %s", body)
 	}
 }
 
@@ -270,7 +417,10 @@ func TestRun_NoHealthyKeys(t *testing.T) {
 	}
 	msgs := collectOut(ch)
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 pool_exhausted message, got %d", len(msgs))
+		t.Fatalf("expected 1 exhausted message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "503" {
+		t.Fatalf("expected 503, got %s", msgs[0].Headers["X-Relay-Status"])
 	}
 }
 

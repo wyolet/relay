@@ -57,6 +57,8 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 	attempt := 0
 	sameKeyAttempt := 0
 	var chosenKey *configstore.Secret
+	lastFailureKind := keypool.FailureKind(-1)
+	var maxRetryAfter time.Duration
 
 	for attempt < maxAttempts {
 		attempt++
@@ -67,7 +69,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 			chosenKey, err = opts.Selector.Pick(ctx, opts.Pool, opts.Secrets)
 			if err != nil {
 				if errors.Is(err, keypool.ErrNoHealthyKeys) {
-					sendPoolExhausted(ch.Out)
+					sendExhaustedEnvelope(ch.Out, keypool.FailureKind(-2), 0)
 					return err
 				}
 				return err
@@ -92,6 +94,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 				// Channel closed without message — treat as network failure.
 				<-outboundErr
 				opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureNetwork, 0)
+				lastFailureKind = keypool.FailureNetwork
 				slog.Default().Info("pipeline attempt",
 					"attempt", attempt,
 					"key_hash", secret.KeyHash,
@@ -147,6 +150,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 			go drain(inter)
 			<-outboundErr
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureAuth, 0)
+			lastFailureKind = keypool.FailureAuth
 			slog.Default().Info("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
@@ -160,6 +164,10 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 			go drain(inter)
 			<-outboundErr
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureRateLimitShort, retryAfter)
+			lastFailureKind = keypool.FailureRateLimitShort
+			if retryAfter > maxRetryAfter {
+				maxRetryAfter = retryAfter
+			}
 			slog.Default().Info("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
@@ -181,6 +189,10 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 			go drain(inter)
 			<-outboundErr
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureRateLimitLong, retryAfter)
+			lastFailureKind = keypool.FailureRateLimitLong
+			if retryAfter > maxRetryAfter {
+				maxRetryAfter = retryAfter
+			}
 			slog.Default().Info("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
@@ -201,6 +213,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 				classification = "network"
 			}
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, kind, 0)
+			lastFailureKind = kind
 			slog.Default().Info("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
@@ -216,7 +229,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 		}
 	}
 
-	sendPoolExhausted(ch.Out)
+	sendExhaustedEnvelope(ch.Out, lastFailureKind, maxRetryAfter)
 	return ErrAttemptsExhausted
 }
 
@@ -275,6 +288,57 @@ func parseRetryAfter(s string) time.Duration {
 func drain(ch <-chan *transport.Message) {
 	for range ch {
 	}
+}
+
+const noHealthyKeysSentinel = keypool.FailureKind(-2)
+
+func sendExhaustedEnvelope(out chan<- *transport.Message, kind keypool.FailureKind, retryAfter time.Duration) {
+	var status, errType, code, msg string
+	switch {
+	case kind == noHealthyKeysSentinel:
+		status = "503"
+		errType = "upstream_error"
+		code = "no_healthy_keys"
+		msg = "no healthy keys available"
+	case kind == keypool.FailureAuth:
+		status = "502"
+		errType = "upstream_error"
+		code = "auth_failed"
+		msg = "all keys exhausted: authentication failed"
+	case kind == keypool.FailureRateLimitShort || kind == keypool.FailureRateLimitLong:
+		status = "429"
+		errType = "rate_limit_exceeded"
+		code = "rate_limit_exceeded"
+		msg = "all keys exhausted: rate limit exceeded"
+	case kind == keypool.FailureServerError:
+		status = "502"
+		errType = "upstream_error"
+		code = "upstream_5xx_exhausted"
+		msg = "all keys exhausted: upstream server error"
+	case kind == keypool.FailureNetwork:
+		status = "502"
+		errType = "upstream_error"
+		code = "upstream_unavailable"
+		msg = "all keys exhausted: upstream unavailable"
+	default:
+		// fallback
+		status = "502"
+		errType = "upstream_error"
+		code = "pool_exhausted"
+		msg = "all keys in pool exhausted"
+	}
+
+	headers := map[string]string{
+		"X-Relay-Status": status,
+		"Content-Type":   "application/json",
+		"X-Relay-Final":  "true",
+	}
+	if (kind == keypool.FailureRateLimitShort || kind == keypool.FailureRateLimitLong) && retryAfter > 0 {
+		headers["Retry-After"] = strconv.Itoa(int(retryAfter.Seconds()))
+	}
+
+	body := []byte(`{"error":{"message":"` + msg + `","type":"` + errType + `","code":"` + code + `"}}`)
+	out <- &transport.Message{Headers: headers, Body: body}
 }
 
 func sendPoolExhausted(out chan<- *transport.Message) {

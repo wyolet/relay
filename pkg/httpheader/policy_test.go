@@ -1,7 +1,9 @@
 package httpheader
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -107,5 +109,27 @@ func TestMatch_PrefixWildcard(t *testing.T) {
 	}
 	if Match("x-other", []string{"X-OpenAI-*"}) {
 		t.Error("x-other should not match X-OpenAI-*")
+	}
+}
+
+func TestSafeUpstreamError_RedactsIP(t *testing.T) {
+	err := errors.New("dial tcp 192.168.0.109:443: connect: connection refused")
+	msg := SafeUpstreamError("openai", err)
+	if strings.Contains(msg, "192.168.0.109") {
+		t.Errorf("IP not redacted: %q", msg)
+	}
+	if !strings.Contains(msg, "openai") {
+		t.Errorf("provider name missing: %q", msg)
+	}
+}
+
+func TestSafeUpstreamError_RedactsURL(t *testing.T) {
+	err := errors.New("Post \"https://api.openai.com/v1/foo\": dial tcp: connection refused")
+	msg := SafeUpstreamError("openai", err)
+	if strings.Contains(msg, "https://") {
+		t.Errorf("URL not redacted: %q", msg)
+	}
+	if !strings.Contains(msg, "openai") {
+		t.Errorf("provider name missing: %q", msg)
 	}
 }

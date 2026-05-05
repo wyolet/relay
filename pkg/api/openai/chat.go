@@ -108,28 +108,57 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 		}()
 
 		flusher, _ := w.(http.Flusher)
-		first := true
-		for outMsg := range ch.Out {
-			if first {
-				first = false
-				status := 200
-				if s := outMsg.Headers["X-Relay-Status"]; s != "" {
-					if code, err := strconv.Atoi(s); err == nil {
-						status = code
-					}
-				}
-				if ct := outMsg.Headers["Content-Type"]; ct != "" {
-					w.Header().Set("Content-Type", ct)
-				}
-				w.WriteHeader(status)
+		flush := func() {
+			if flusher != nil {
+				flusher.Flush()
 			}
-			if len(outMsg.Body) > 0 {
-				w.Write(outMsg.Body)
-				if flusher != nil {
-					flusher.Flush()
+		}
+		firstSeen := false
+		isStreaming := false
+		for {
+			select {
+			case <-r.Context().Done():
+				goto done
+			case outMsg, ok := <-ch.Out:
+				if !ok {
+					goto done
+				}
+				if !firstSeen {
+					firstSeen = true
+					status := 200
+					if s := outMsg.Headers["X-Relay-Status"]; s != "" {
+						if code, err := strconv.Atoi(s); err == nil {
+							status = code
+						}
+					}
+					ct := outMsg.Headers["Content-Type"]
+					if ct != "" {
+						w.Header().Set("Content-Type", ct)
+					}
+					isStreaming = strings.HasPrefix(ct, "text/event-stream")
+					w.WriteHeader(status)
+					if len(outMsg.Body) > 0 {
+						w.Write(outMsg.Body)
+						flush()
+					}
+					continue
+				}
+				// Subsequent messages.
+				if isStreaming && outMsg.Headers["X-Relay-Final"] == "true" && len(outMsg.Body) > 0 {
+					// Mid-stream error: emit SSE error event then [DONE].
+					w.Write([]byte("data: "))
+					w.Write(outMsg.Body)
+					w.Write([]byte("\n\ndata: [DONE]\n\n"))
+					flush()
+					goto done
+				}
+				if len(outMsg.Body) > 0 {
+					w.Write(outMsg.Body)
+					flush()
 				}
 			}
 		}
+		done:
 
 		if err := <-pipeErr; err != nil {
 			log.Printf("pipeline: %v", err)
