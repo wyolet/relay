@@ -1,0 +1,20 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+  name: gemma3-27b
+  labels:
+    family: gemma
+    runtime: ollama
+spec:
+  provider: dev-ollama
+  upstreamName: gemma3:27b-it-qat
+  description: "Gemma 3 27B QAT (Ollama)"
+  family: gemma3
+  capabilities:
+    chat: true
+    streaming: true
+  modalities:
+    input: [text]
+    output: [text]
+  contextWindow: 8192
+  license: gemma-terms

@@ -1,0 +1,7 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Route
+metadata:
+  name: default
+spec:
+  default: true
+  models: [gemma4, gemma3-27b]
