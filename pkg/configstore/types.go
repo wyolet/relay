@@ -9,6 +9,8 @@ const (
 	KindModel     Kind = "Model"
 	KindRoute     Kind = "Route"
 	KindRateLimit Kind = "RateLimit"
+	KindSecret    Kind = "Secret"
+	KindPool      Kind = "Pool"
 )
 
 type ProviderKind string
@@ -32,9 +34,43 @@ type Provider struct {
 }
 
 type ProviderSpec struct {
-	Kind    ProviderKind `yaml:"kind"`
-	BaseURL string       `yaml:"baseURL"`
-	Default bool         `yaml:"default,omitempty"`
+	Kind        ProviderKind `yaml:"kind"`
+	BaseURL     string       `yaml:"baseURL"`
+	Default     bool         `yaml:"default,omitempty"`
+	DefaultPool string       `yaml:"defaultPool,omitempty"`
+}
+
+type Secret struct {
+	APIVersion  string     `yaml:"apiVersion"`
+	Kind        Kind       `yaml:"kind"`
+	Metadata    Metadata   `yaml:"metadata"`
+	Spec        SecretSpec `yaml:"spec"`
+	Resolved    string
+	KeyHash     string
+	UsedLiteral bool
+}
+
+type SecretSpec struct {
+	Provider  string           `yaml:"provider"`
+	ValueFrom *SecretValueFrom `yaml:"valueFrom,omitempty"`
+	Value     string           `yaml:"value,omitempty"`
+}
+
+type SecretValueFrom struct {
+	Env string `yaml:"env"`
+}
+
+type Pool struct {
+	APIVersion string   `yaml:"apiVersion"`
+	Kind       Kind     `yaml:"kind"`
+	Metadata   Metadata `yaml:"metadata"`
+	Spec       PoolSpec `yaml:"spec"`
+}
+
+type PoolSpec struct {
+	Provider       string            `yaml:"provider"`
+	Secrets        []string          `yaml:"secrets,omitempty"`
+	SecretSelector map[string]string `yaml:"secretSelector,omitempty"`
 }
 
 type Model struct {

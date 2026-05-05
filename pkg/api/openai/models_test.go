@@ -14,17 +14,22 @@ type fakeStore struct {
 	models []*configstore.Model
 }
 
-func (f *fakeStore) Models() []*configstore.Model                              { return f.models }
-func (f *fakeStore) ProviderByName(string) (*configstore.Provider, bool)      { return nil, false }
-func (f *fakeStore) ModelByName(string) (*configstore.Model, bool)            { return nil, false }
-func (f *fakeStore) RouteByName(string) (*configstore.Route, bool)            { return nil, false }
-func (f *fakeStore) RateLimitByName(string) (*configstore.RateLimit, bool)    { return nil, false }
-func (f *fakeStore) Providers() []*configstore.Provider                       { return nil }
-func (f *fakeStore) Routes() []*configstore.Route                             { return nil }
-func (f *fakeStore) RateLimits() []*configstore.RateLimit                     { return nil }
-func (f *fakeStore) DefaultProvider() *configstore.Provider                   { return nil }
-func (f *fakeStore) DefaultRoute() *configstore.Route                         { return nil }
-func (f *fakeStore) ProviderForModel(string) (*configstore.Provider, bool)    { return nil, false }
+func (f *fakeStore) Models() []*configstore.Model                                       { return f.models }
+func (f *fakeStore) ProviderByName(string) (*configstore.Provider, bool)               { return nil, false }
+func (f *fakeStore) ModelByName(string) (*configstore.Model, bool)                     { return nil, false }
+func (f *fakeStore) RouteByName(string) (*configstore.Route, bool)                     { return nil, false }
+func (f *fakeStore) RateLimitByName(string) (*configstore.RateLimit, bool)             { return nil, false }
+func (f *fakeStore) SecretByName(string) (*configstore.Secret, bool)                   { return nil, false }
+func (f *fakeStore) PoolByName(string) (*configstore.Pool, bool)                       { return nil, false }
+func (f *fakeStore) Providers() []*configstore.Provider                                { return nil }
+func (f *fakeStore) Routes() []*configstore.Route                                      { return nil }
+func (f *fakeStore) RateLimits() []*configstore.RateLimit                              { return nil }
+func (f *fakeStore) Secrets() []*configstore.Secret                                    { return nil }
+func (f *fakeStore) Pools() []*configstore.Pool                                        { return nil }
+func (f *fakeStore) DefaultProvider() *configstore.Provider                            { return nil }
+func (f *fakeStore) DefaultRoute() *configstore.Route                                  { return nil }
+func (f *fakeStore) ProviderForModel(string) (*configstore.Provider, bool)             { return nil, false }
+func (f *fakeStore) SecretsForPool(*configstore.Pool) []*configstore.Secret            { return nil }
 
 func makeModel(name, provider string) *configstore.Model {
 	return &configstore.Model{

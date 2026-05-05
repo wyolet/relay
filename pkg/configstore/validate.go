@@ -11,6 +11,12 @@ func validate(s *YAMLStore) error {
 		return errors.New("at least one Provider required")
 	}
 
+	if err := validateSecrets(s); err != nil {
+		return err
+	}
+	if err := validatePools(s); err != nil {
+		return err
+	}
 	if err := validateProviders(s); err != nil {
 		return err
 	}
@@ -22,6 +28,63 @@ func validate(s *YAMLStore) error {
 	}
 	if err := validateRateLimits(s); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateSecrets(s *YAMLStore) error {
+	for _, sec := range s.secrets {
+		hasEnv := sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != ""
+		hasVal := sec.Spec.Value != ""
+		if hasEnv && hasVal {
+			return fmt.Errorf("Secret %q: exactly one of valueFrom.env or value must be set, not both", sec.Metadata.Name)
+		}
+		if !hasEnv && !hasVal {
+			// allow empty literal only for anonymous (ollama) providers
+			if sec.Spec.ValueFrom != nil {
+				// valueFrom set but env empty
+				return fmt.Errorf("Secret %q: valueFrom.env must not be empty", sec.Metadata.Name)
+			}
+			// neither set — check provider kind
+			p, ok := s.providers[sec.Spec.Provider]
+			if ok && p.Spec.Kind != PKOllama {
+				return fmt.Errorf("Secret %q: exactly one of valueFrom.env or value required", sec.Metadata.Name)
+			}
+		}
+		if sec.Spec.Provider == "" {
+			return fmt.Errorf("Secret %q: provider required", sec.Metadata.Name)
+		}
+		if _, ok := s.providers[sec.Spec.Provider]; !ok {
+			return fmt.Errorf("Secret %q: unknown provider %q", sec.Metadata.Name, sec.Spec.Provider)
+		}
+	}
+	return nil
+}
+
+func validatePools(s *YAMLStore) error {
+	for _, pool := range s.pools {
+		if pool.Spec.Provider == "" {
+			return fmt.Errorf("Pool %q: provider required", pool.Metadata.Name)
+		}
+		prov, ok := s.providers[pool.Spec.Provider]
+		if !ok {
+			return fmt.Errorf("Pool %q: unknown provider %q", pool.Metadata.Name, pool.Spec.Provider)
+		}
+		for _, secName := range pool.Spec.Secrets {
+			sec, ok := s.secrets[secName]
+			if !ok {
+				return fmt.Errorf("Pool %q: unknown secret %q", pool.Metadata.Name, secName)
+			}
+			if sec.Spec.Provider != pool.Spec.Provider {
+				return fmt.Errorf("Pool %q: secret %q belongs to provider %q, not %q", pool.Metadata.Name, secName, sec.Spec.Provider, pool.Spec.Provider)
+			}
+		}
+		// compute effective set
+		effective := s.SecretsForPool(pool)
+		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
+		if authRequired && len(effective) == 0 {
+			return fmt.Errorf("Pool %q: provider %q requires auth but pool has no effective secrets", pool.Metadata.Name, pool.Spec.Provider)
+		}
 	}
 	return nil
 }
@@ -47,6 +110,18 @@ func validateProviders(s *YAMLStore) error {
 	}
 	if defaults > 1 {
 		return errors.New("at most one Provider may be default")
+	}
+	for _, p := range s.providers {
+		if p.Spec.DefaultPool == "" {
+			continue
+		}
+		pool, ok := s.pools[p.Spec.DefaultPool]
+		if !ok {
+			return fmt.Errorf("Provider %q: defaultPool %q does not exist", p.Metadata.Name, p.Spec.DefaultPool)
+		}
+		if pool.Spec.Provider != p.Metadata.Name {
+			return fmt.Errorf("Provider %q: defaultPool %q belongs to provider %q", p.Metadata.Name, p.Spec.DefaultPool, pool.Spec.Provider)
+		}
 	}
 	return nil
 }

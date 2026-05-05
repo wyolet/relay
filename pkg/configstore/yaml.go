@@ -1,10 +1,12 @@
 package configstore
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +19,8 @@ type YAMLStore struct {
 	models     map[string]*Model
 	routes     map[string]*Route
 	rateLimits map[string]*RateLimit
+	secrets    map[string]*Secret
+	pools      map[string]*Pool
 }
 
 func LoadYAML(dir string) (*YAMLStore, error) {
@@ -25,6 +29,8 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 		models:     map[string]*Model{},
 		routes:     map[string]*Route{},
 		rateLimits: map[string]*RateLimit{},
+		secrets:    map[string]*Secret{},
+		pools:      map[string]*Pool{},
 	}
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -44,10 +50,46 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 		return nil, err
 	}
 
+	if err := resolveSecrets(s); err != nil {
+		return nil, err
+	}
+
 	if err := validate(s); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+func resolveSecrets(s *YAMLStore) error {
+	var literalNames []string
+	for name, sec := range s.secrets {
+		switch {
+		case sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "":
+			val, ok := os.LookupEnv(sec.Spec.ValueFrom.Env)
+			if !ok || val == "" {
+				return fmt.Errorf("Secret %q: env var %q not set or empty", name, sec.Spec.ValueFrom.Env)
+			}
+			sec.Resolved = val
+		case sec.Spec.Value != "":
+			sec.Resolved = sec.Spec.Value
+			sec.UsedLiteral = true
+			literalNames = append(literalNames, name)
+		case sec.Spec.Value == "" && sec.Spec.ValueFrom == nil:
+			// validation will catch this; allow empty literal for anon providers
+			sec.Resolved = ""
+			sec.UsedLiteral = true
+			literalNames = append(literalNames, name)
+		}
+		if sec.Resolved != "" {
+			sum := sha256.Sum256([]byte(sec.Resolved))
+			sec.KeyHash = fmt.Sprintf("%x", sum[:6])
+		}
+	}
+	if len(literalNames) > 0 {
+		sort.Strings(literalNames)
+		slog.Warn("secrets used literal value (deprecated, encrypted storage in M5)", "secrets", literalNames)
+	}
+	return nil
 }
 
 func (s *YAMLStore) ProviderByName(name string) (*Provider, bool) {
@@ -104,6 +146,71 @@ func (s *YAMLStore) RateLimits() []*RateLimit {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
 	return out
+}
+
+func (s *YAMLStore) SecretByName(name string) (*Secret, bool) {
+	sec, ok := s.secrets[name]
+	return sec, ok
+}
+
+func (s *YAMLStore) PoolByName(name string) (*Pool, bool) {
+	p, ok := s.pools[name]
+	return p, ok
+}
+
+func (s *YAMLStore) Secrets() []*Secret {
+	out := make([]*Secret, 0, len(s.secrets))
+	for _, sec := range s.secrets {
+		out = append(out, sec)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
+	return out
+}
+
+func (s *YAMLStore) Pools() []*Pool {
+	out := make([]*Pool, 0, len(s.pools))
+	for _, p := range s.pools {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
+	return out
+}
+
+func (s *YAMLStore) SecretsForPool(p *Pool) []*Secret {
+	seen := map[string]struct{}{}
+	var out []*Secret
+	for _, name := range p.Spec.Secrets {
+		sec, ok := s.secrets[name]
+		if !ok {
+			continue
+		}
+		if _, dup := seen[name]; !dup {
+			seen[name] = struct{}{}
+			out = append(out, sec)
+		}
+	}
+	if len(p.Spec.SecretSelector) > 0 {
+		for _, sec := range s.secrets {
+			if _, dup := seen[sec.Metadata.Name]; dup {
+				continue
+			}
+			if labelsMatch(p.Spec.SecretSelector, sec.Metadata.Labels) {
+				seen[sec.Metadata.Name] = struct{}{}
+				out = append(out, sec)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
+	return out
+}
+
+func labelsMatch(selector, labels map[string]string) bool {
+	for k, v := range selector {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *YAMLStore) DefaultProvider() *Provider {
@@ -218,6 +325,26 @@ func dispatchKind(path string, idx int, raw *rawDoc, s *YAMLStore) error {
 			return fmt.Errorf("%s [doc %d]: duplicate RateLimit %q", path, idx, name)
 		}
 		s.rateLimits[name] = &RateLimit{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+
+	case KindSecret:
+		var spec SecretSpec
+		if err := raw.Spec.Decode(&spec); err != nil {
+			return fmt.Errorf("%s [doc %d] Secret %s: %w", path, idx, name, err)
+		}
+		if _, dup := s.secrets[name]; dup {
+			return fmt.Errorf("%s [doc %d]: duplicate Secret %q", path, idx, name)
+		}
+		s.secrets[name] = &Secret{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+
+	case KindPool:
+		var spec PoolSpec
+		if err := raw.Spec.Decode(&spec); err != nil {
+			return fmt.Errorf("%s [doc %d] Pool %s: %w", path, idx, name, err)
+		}
+		if _, dup := s.pools[name]; dup {
+			return fmt.Errorf("%s [doc %d]: duplicate Pool %q", path, idx, name)
+		}
+		s.pools[name] = &Pool{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	default:
 		return fmt.Errorf("%s [doc %d]: unknown kind %q", path, idx, raw.Kind)
