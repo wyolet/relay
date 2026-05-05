@@ -16,6 +16,23 @@ import (
 	"github.com/wyolet/relay/pkg/eventlog"
 )
 
+// attemptsToRecords converts []Attempt to []eventlog.AttemptRecord.
+func attemptsToRecords(as []Attempt) []eventlog.AttemptRecord {
+	if as == nil {
+		return nil
+	}
+	out := make([]eventlog.AttemptRecord, len(as))
+	for i, a := range as {
+		out[i] = eventlog.AttemptRecord{
+			SecretHash: a.SecretHash,
+			Outcome:    a.Outcome,
+			HTTPStatus: a.HTTPStatus,
+			LatencyMS:  a.LatencyMS,
+		}
+	}
+	return out
+}
+
 var (
 	droppedEvents atomic.Uint64
 
@@ -61,25 +78,6 @@ func SecretHash(raw string) string {
 	return hex.EncodeToString(h[:])[:12]
 }
 
-// eventRecord is the JSON shape written to eventlog.
-type eventRecord struct {
-	EventVersion int               `json:"event_version"`
-	RequestID    string            `json:"request_id"`
-	Model        string            `json:"model"`
-	Provider     string            `json:"provider"`
-	Pool         string            `json:"pool"`
-	SecretHash   string            `json:"secret_hash"`
-	TerminatedBy TerminatedBy      `json:"terminated_by"`
-	Tokens       TokenBlock        `json:"tokens"`
-	Attempts     []Attempt         `json:"attempts,omitempty"`
-	Attribution  map[string]string `json:"attribution,omitempty"`
-	Metrics      map[string]int64  `json:"metrics,omitempty"`
-	InstanceID   string            `json:"instance_id"`
-	RelayVersion string            `json:"relay_version"`
-	StartedAt    string            `json:"started_at"`
-	EndedAt      string            `json:"ended_at"`
-}
-
 // Record serializes lc into a JSON event, hands it to the eventlog, and ends the OTel span.
 // Never returns an error; internal failures increment counters and WARN-log only.
 func Record(ctx context.Context, lc *Lifecycle) {
@@ -92,16 +90,21 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		relayVersion = cachedRelayVersion
 	}
 
-	rec := eventRecord{
+	rec := eventlog.Event{
 		EventVersion: 1,
 		RequestID:    lc.RequestID,
 		Model:        lc.Model,
 		Provider:     lc.Provider,
 		Pool:         lc.Pool,
 		SecretHash:   lc.SecretHash,
-		TerminatedBy: lc.TerminatedBy,
-		Tokens:       lc.Tokens,
-		Attempts:     lc.Attempts,
+		TerminatedBy: string(lc.TerminatedBy),
+		Tokens: eventlog.TokenCounts{
+			Prompt:     lc.Tokens.Prompt,
+			Completion: lc.Tokens.Completion,
+			Total:      lc.Tokens.Total,
+			Cached:     lc.Tokens.Cached,
+		},
+		Attempts:     attemptsToRecords(lc.Attempts),
 		Attribution:  lc.Attribution,
 		Metrics:      lc.Metrics,
 		InstanceID:   instanceID,

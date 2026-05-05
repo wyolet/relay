@@ -37,8 +37,16 @@ func main() {
 
 	bootCtx := context.Background()
 
-	// Event log (daily-rotated JSONL under RELAY_EVENTLOG_DIR or ./events).
-	el, err := eventlog.New(eventlog.Config{})
+	// Event log — BackendFile by default; BackendClickHouse when RELAY_EVENTLOG_BACKEND=clickhouse.
+	elCfg := eventlog.Config{}
+	if backend := os.Getenv("RELAY_EVENTLOG_BACKEND"); backend == "clickhouse" {
+		elCfg.Backend = eventlog.BackendClickHouse
+		elCfg.DSN = os.Getenv("RELAY_CH_DSN")
+		if days := envInt("RELAY_CH_RETENTION_DAYS", 90); days > 0 {
+			elCfg.RetentionDays = days
+		}
+	}
+	el, err := eventlog.New(elCfg)
 	if err != nil {
 		log.Fatalf("eventlog: %v", err)
 	}
