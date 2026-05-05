@@ -18,3 +18,8 @@ py-relay/.python-version
 # Local event logs
 events/
 *.jsonl
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
