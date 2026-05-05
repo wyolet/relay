@@ -18,16 +18,28 @@ spec:
     output: [text]
   contextWindow: 8192
   license: gemma-terms
+  rateLimits:
+    - ref: gemma4-rpm-default
+      meter: requests
+    - ref: gemma4-tpm-default
+      meter: tokens
 
-# Model-specific rate limit. Co-located because it belongs to the model.
+# Model-specific rate limits. Co-located because they belong to the model.
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
-  name: gemma4-default
+  name: gemma4-rpm-default
 spec:
-  target:
-    kind: Model
-    name: gemma4
-  rpm: 1000
-  tpm: 500000
+  strategy: sliding-window
+  window: 1m
+  amount: 1000
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: gemma4-tpm-default
+spec:
+  strategy: sliding-window
+  window: 1m
+  amount: 500000
