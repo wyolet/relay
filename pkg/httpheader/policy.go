@@ -34,24 +34,43 @@ var HopByHop = []string{
 	"Upgrade",
 }
 
-// SensitiveInbound is the set of headers Relay strips from inbound
-// HTTP requests before the request enters the pipeline. They are
-// either credentials (must never be forwarded), Relay-reserved
-// (use specific X-Relay-* fields instead), or provider-private
-// (X-OpenAI-*, etc.).
+// InboundAllowlist is the set of headers that are permitted to pass through
+// inbound to the pipeline. Every header NOT in this list is stripped.
+// Matching is case-insensitive. Prefix-style matchers use a trailing "*".
 //
-// Matching is case-insensitive. Prefix-style matchers are denoted
-// by a trailing "*" (e.g., "X-OpenAI-*").
-var SensitiveInbound = []string{
-	"Authorization",
-	"Proxy-Authorization",
-	"X-OpenAI-*",
+// Note: Authorization is retained here so that auth middleware (which runs
+// before StripInbound) can still see it. In practice auth middleware removes
+// it before StripInbound is called; any residual Authorization is still
+// dropped by OutboundAllowlist before the upstream request is made.
+var InboundAllowlist = []string{
+	"Content-Type",
+	"Content-Length",
+	"Accept",
+	"Accept-Encoding",
+	"User-Agent",
+	"X-Request-ID",
 	"X-Relay-Metadata",
+	"Authorization",
 }
 
-// StripInbound removes credential and provider-private headers from
-// h in place. Hop-by-hop headers listed in Connection are also
-// removed (per RFC 7230). Returns the same map for chaining.
+// OutboundAllowlist is the set of headers forwarded on upstream requests.
+// Compared to InboundAllowlist:
+//   - X-Relay-Metadata is excluded (M4 contract: never leaked to upstream)
+//   - Authorization is excluded (provider client injects its own key)
+//   - Provider-specific headers are added (e.g. OpenAI-Beta)
+var OutboundAllowlist = []string{
+	"Content-Type",
+	"Content-Length",
+	"Accept",
+	"Accept-Encoding",
+	"User-Agent",
+	"X-Request-ID",
+	"OpenAI-Beta",
+}
+
+// StripInbound removes every header from h that is not in InboundAllowlist.
+// Hop-by-hop headers listed in Connection are also removed (per RFC 7230).
+// Returns the same map for chaining.
 func StripInbound(h http.Header) http.Header {
 	// RFC 7230: remove headers named in Connection value.
 	if conn := h.Get("Connection"); conn != "" {
@@ -60,7 +79,19 @@ func StripInbound(h http.Header) http.Header {
 		}
 	}
 	for name := range h {
-		if Match(name, SensitiveInbound) {
+		if !Match(name, InboundAllowlist) {
+			h.Del(name)
+		}
+	}
+	return h
+}
+
+// StripOutbound removes every header from h that is not in OutboundAllowlist.
+// This is used by provider clients to sanitize headers before sending upstream.
+// Returns the same map for chaining.
+func StripOutbound(h http.Header) http.Header {
+	for name := range h {
+		if !Match(name, OutboundAllowlist) {
 			h.Del(name)
 		}
 	}
