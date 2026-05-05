@@ -51,6 +51,9 @@ func Postgres(ctx context.Context, dsn string) (*PGStore, error) {
 // Close releases the connection pool.
 func (s *PGStore) Close() { s.pool.Close() }
 
+// Ping checks the database connection.
+func (s *PGStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
+
 // OpenPool opens a raw pgxpool.Pool with the same defaults as Postgres().
 // Intended for tests and the seed CLI.
 func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {

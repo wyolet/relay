@@ -318,9 +318,46 @@ curl -X POST http://localhost:8080/admin/reload \
 
 Every call is logged at INFO with caller IP and request ID. The endpoint is unmounted when `RELAY_CATALOG_BACKEND` is not `pg` (no PGStore to reload).
 
+## Operator: healthcheck
+
+`GET /healthz` pings every configured backend in parallel and returns:
+
+| Condition | HTTP | Body |
+|---|---|---|
+| All backends healthy | 200 | `{"status":"ok","backends":{"catalog":"ok","state":"ok","eventlog":"ok"}}` |
+| Any backend failed | 503 | `{"status":"degraded","backends":{"catalog":"ok","state":"error: <reason>","eventlog":"ok"}}` |
+
+Backends configured as `memory`/`file`/`yaml` report `"ok"` unconditionally (no external dep to ping). Only `pg`, `redis`, and `clickhouse` backends are pinged.
+
+Per-check deadline: 500ms by default, configurable via `RELAY_HEALTHZ_DEADLINE_MS`.
+
+## Operator: graceful shutdown
+
+Send `SIGTERM` or `SIGINT`. The relay drains in order:
+
+1. Stop accepting new HTTP requests (up to 10s)
+2. `usage.Shutdown` — drain OTel batch processor (up to 5s)
+3. `eventlog.Close` — flush pending ClickHouse inserts (up to 8s)
+4. `state.Close` — drain in-flight Lua scripts
+5. `configstore.Close` — close pgxpool
+
+Total wall time is capped by `RELAY_SHUTDOWN_DEADLINE_S` (default `15`).
+
+## Operator: backend env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `RELAY_CATALOG_BACKEND` | `yaml` | `yaml` or `pg`. Requires `RELAY_PG_DSN` when `pg`. |
+| `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Requires `RELAY_REDIS_ADDR` when `redis`. |
+| `RELAY_EVENTLOG_BACKEND` | `file` | `file` or `clickhouse`. Requires `RELAY_CH_DSN` when `clickhouse`. |
+| `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Per-backend ping deadline in milliseconds. |
+| `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Total graceful shutdown budget in seconds. |
+
+Boot fails with a non-zero exit code if a required DSN is missing or invalid for the configured backend — no silent fallback to in-memory.
+
 ## Status
 
-M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`.
+M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`, `/healthz`, graceful shutdown, OTel storage resource attrs.
 
 ## License
 

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -106,6 +107,12 @@ type Config struct {
 	// EventLog, when non-nil, receives serialized events from Record.
 	// When nil, Record skips the eventlog write but still ends the OTel span.
 	EventLog *eventlog.Logger
+
+	// Storage backend names, recorded as OTel resource attributes.
+	// Defaults to "unknown" when empty.
+	CatalogBackend  string
+	StateBackend    string
+	EventlogBackend string
 }
 
 // Shutdown is a function that tears down the TracerProvider.
@@ -134,6 +141,13 @@ func (c *countingExporter) ExportSpans(ctx context.Context, spans []sdktrace.Rea
 	return err
 }
 
+func storageBackend(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
 // Init installs a TracerProvider as the global OTel provider.
 // When cfg.OTLPEndpoint is empty a no-op provider is used.
 // Returns a Shutdown function that is safe to call multiple times.
@@ -160,7 +174,12 @@ func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 	}
 
 	res, err := resource.New(ctx,
-		resource.WithAttributes(semconv.ServiceName(cfg.ServiceName)),
+		resource.WithAttributes(
+			semconv.ServiceName(cfg.ServiceName),
+			attribute.String("relay.storage.catalog", storageBackend(cfg.CatalogBackend, "unknown")),
+			attribute.String("relay.storage.state", storageBackend(cfg.StateBackend, "unknown")),
+			attribute.String("relay.storage.eventlog", storageBackend(cfg.EventlogBackend, "unknown")),
+		),
 	)
 	if err != nil {
 		return nil, err

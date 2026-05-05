@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,6 +30,70 @@ import (
 	"github.com/wyolet/relay/pkg/usage"
 )
 
+// pinger is anything that can report its own health.
+type pinger interface {
+	Ping(ctx context.Context) error
+}
+
+// healthzHandler builds a GET /healthz handler given named pingers.
+// Backends with a nil pinger are reported "ok" unconditionally (memory/file).
+func healthzHandler(backends map[string]pinger, deadlineMS int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dl := time.Duration(deadlineMS) * time.Millisecond
+		ctx, cancel := context.WithTimeout(r.Context(), dl)
+		defer cancel()
+
+		type result struct {
+			name   string
+			status string
+		}
+		results := make(chan result, len(backends))
+		var wg sync.WaitGroup
+
+		for name, p := range backends {
+			name, p := name, p
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if p == nil {
+					results <- result{name, "ok"}
+					return
+				}
+				if err := p.Ping(ctx); err != nil {
+					slog.Warn("healthz: backend error", "backend", name, "err", err)
+					results <- result{name, "error: " + err.Error()}
+					return
+				}
+				results <- result{name, "ok"}
+			}()
+		}
+
+		wg.Wait()
+		close(results)
+
+		overall := "ok"
+		backendsOut := make(map[string]string, len(backends))
+		for r := range results {
+			backendsOut[r.name] = r.status
+			if r.status != "ok" {
+				overall = "degraded"
+			}
+		}
+
+		code := http.StatusOK
+		if overall != "ok" {
+			code = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":   overall,
+			"backends": backendsOut,
+		})
+	}
+}
+
 func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -43,24 +111,45 @@ func main() {
 
 	bootCtx := context.Background()
 
+	catalogBackend := os.Getenv("RELAY_CATALOG_BACKEND")
+	if catalogBackend == "" {
+		catalogBackend = "yaml"
+	}
+	stateBackend := os.Getenv("RELAY_STATE_BACKEND")
+	if stateBackend == "" {
+		stateBackend = "memory"
+	}
+	eventlogBackend := os.Getenv("RELAY_EVENTLOG_BACKEND")
+	if eventlogBackend == "" {
+		eventlogBackend = "file"
+	}
+
 	// Event log — BackendFile by default; BackendClickHouse when RELAY_EVENTLOG_BACKEND=clickhouse.
 	elCfg := eventlog.Config{}
-	if backend := os.Getenv("RELAY_EVENTLOG_BACKEND"); backend == "clickhouse" {
+	if eventlogBackend == "clickhouse" {
 		elCfg.Backend = eventlog.BackendClickHouse
 		elCfg.DSN = os.Getenv("RELAY_CH_DSN")
+		if elCfg.DSN == "" {
+			slog.Error("RELAY_CH_DSN not set (required when RELAY_EVENTLOG_BACKEND=clickhouse)")
+			os.Exit(1)
+		}
 		if days := envInt("RELAY_CH_RETENTION_DAYS", 90); days > 0 {
 			elCfg.RetentionDays = days
 		}
 	}
 	el, err := eventlog.New(elCfg)
 	if err != nil {
-		log.Fatalf("eventlog: %v", err)
+		slog.Error("eventlog init failed", "err", err)
+		os.Exit(1)
 	}
 
 	// OTel TracerProvider — no-op when RELAY_OTLP_ENDPOINT is unset.
 	usageShutdown, err := usage.Init(bootCtx, usage.Config{
-		OTLPEndpoint: os.Getenv("RELAY_OTLP_ENDPOINT"),
-		EventLog:     el,
+		OTLPEndpoint:    os.Getenv("RELAY_OTLP_ENDPOINT"),
+		EventLog:        el,
+		CatalogBackend:  catalogBackend,
+		StateBackend:    stateBackend,
+		EventlogBackend: eventlogBackend,
 	})
 	if err != nil {
 		log.Fatalf("usage.Init: %v", err)
@@ -68,10 +157,12 @@ func main() {
 
 	var cfg configstore.ConfigStore
 	var pgStoreForAdmin *configstore.PGStore
-	if os.Getenv("RELAY_CATALOG_BACKEND") == "pg" {
+	var pgPinger pinger
+	if catalogBackend == "pg" {
 		pgDSN := os.Getenv("RELAY_PG_DSN")
 		if pgDSN == "" {
-			log.Fatal("RELAY_PG_DSN not set (required when RELAY_CATALOG_BACKEND=pg)")
+			slog.Error("RELAY_PG_DSN not set (required when RELAY_CATALOG_BACKEND=pg)")
+			os.Exit(1)
 		}
 		autoSeed := os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
 		if autoSeed {
@@ -81,10 +172,12 @@ func main() {
 		}
 		pgStore, err := configstore.Postgres(bootCtx, pgDSN)
 		if err != nil {
-			log.Fatalf("configstore(pg): %v", err)
+			slog.Error("configstore(pg) init failed", "err", err)
+			os.Exit(1)
 		}
 		pgStoreForAdmin = pgStore
 		cfg = pgStore
+		pgPinger = pgStore
 	} else {
 		yamlStore, err := configstore.LoadYAML("config")
 		if err != nil {
@@ -93,14 +186,30 @@ func main() {
 		cfg = yamlStore
 	}
 
-	// In-memory state store for key circuit breakers and rate-limit counters.
-	st := state.New()
+	// State store — Redis when RELAY_STATE_BACKEND=redis, else in-memory.
+	var st state.Store
+	var redisPinger pinger
+	if stateBackend == "redis" {
+		addr := os.Getenv("RELAY_REDIS_ADDR")
+		if addr == "" {
+			slog.Error("RELAY_REDIS_ADDR not set (required when RELAY_STATE_BACKEND=redis)")
+			os.Exit(1)
+		}
+		rs, err := state.NewRedis(bootCtx, state.RedisConfig{Addr: addr})
+		if err != nil {
+			slog.Error("state(redis) init failed", "err", err)
+			os.Exit(1)
+		}
+		st = rs
+		redisPinger = rs
+	} else {
+		st = state.New()
+	}
+
 	limiter := limit.New(st, slog.Default(), nil)
 	sel := keypool.New(st, slog.Default(), nil, limiter, cfg, nil)
 
-	// Build provider clients and register them.
 	reg := provider.NewRegistry()
-
 	for _, p := range cfg.Providers() {
 		switch p.Spec.Kind {
 		case configstore.PKOllama:
@@ -124,14 +233,10 @@ func main() {
 			return nil, false
 		}
 		plan := &apiopenai.RequestPlan{Model: m, Provider: p}
-
-		// Resolve pool and secrets for the provider's default pool.
 		if poolName := p.Spec.DefaultPool; poolName != "" {
 			if pool, ok := cfg.PoolByName(poolName); ok {
 				plan.Pool = pool
 				plan.Secrets = cfg.SecretsForPool(pool)
-				// Pre-resolve rate-limit rules for Pool+Model scope.
-				// Secret-level rules are M4+ work.
 				plan.Rules = cfg.RateLimitsForRequest(p, pool, m, nil)
 			}
 		}
@@ -143,8 +248,6 @@ func main() {
 		if err != nil {
 			return err
 		}
-
-		// If we have a pool with keys, use the orchestrating Run.
 		if plan.Pool != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
 				Provider: plan.Provider,
@@ -157,9 +260,6 @@ func main() {
 				Rules:    plan.Rules,
 			})
 		}
-
-		// Fallback for providers without a pool (e.g., anonymous Ollama).
-		// Use a synthetic pool with an empty-secret key.
 		emptySecret := &configstore.Secret{
 			Metadata: configstore.Metadata{Name: "anon"},
 			Resolved: "",
@@ -176,12 +276,18 @@ func main() {
 		})
 	}
 
+	// Healthcheck backends: nil pinger = unconditionally healthy (memory/file).
+	healthzDeadlineMS := envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
+	healthzBackends := map[string]pinger{
+		"catalog":  pgPinger,    // nil when yaml
+		"state":    redisPinger, // nil when memory
+		"eventlog": el,          // always non-nil; fileSink.ping returns nil
+	}
+
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
+	r.Get("/healthz", healthzHandler(healthzBackends, healthzDeadlineMS))
 	r.Post("/v1/chat/completions", apiopenai.ChatCompletions(resolve, runPipeline))
 	r.Get("/v1/models", apiopenai.ListModels(cfg))
 	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
@@ -191,15 +297,64 @@ func main() {
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: r}
 
-	log.Printf("relay listening on %s", addr)
+	slog.Info("relay listening", "addr", addr)
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.ListenAndServe() }()
 
-	<-srvErr // block until server exits (or use signal handling in prod)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	select {
+	case sig := <-quit:
+		slog.Info("relay: received signal, shutting down", "signal", sig.String())
+	case err := <-srvErr:
+		if err != nil && err != http.ErrServerClosed {
+			slog.Error("relay: server error", "err", err)
+		}
+	}
 
-	// Graceful stop: drain usage spans/events before closing eventlog.
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	totalDeadline := time.Duration(envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)) * time.Second
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), totalDeadline)
 	defer shutCancel()
-	usageShutdown(shutCtx)
-	el.Close(shutCtx)
+	shutdown(shutCtx, srv, usageShutdown, el, st, cfg)
+}
+
+// shutdown executes the ordered drain sequence within the provided context deadline.
+func shutdown(
+	ctx context.Context,
+	srv *http.Server,
+	usageShutdown usage.Shutdown,
+	el *eventlog.Logger,
+	st state.Store,
+	cfg configstore.ConfigStore,
+) {
+	step := func(name string, fn func(context.Context) error, budget time.Duration) {
+		slog.Info("shutdown: starting step", "step", name)
+		stepCtx, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		if err := fn(stepCtx); err != nil {
+			slog.Warn("shutdown: step exceeded deadline or errored", "step", name, "err", err)
+			return
+		}
+		slog.Info("shutdown: step done", "step", name)
+	}
+
+	// 1. Stop accepting new HTTP requests (10s of the budget).
+	step("http", func(ctx context.Context) error { return srv.Shutdown(ctx) }, 10*time.Second)
+
+	// 2. Drain OTel batch processor (5s).
+	step("usage", usageShutdown, 5*time.Second)
+
+	// 3. Flush pending eventlog inserts (remaining deadline via ctx).
+	step("eventlog", func(ctx context.Context) error { return el.Close(ctx) }, 8*time.Second)
+
+	// 4. Drain in-flight Lua scripts.
+	step("state", func(_ context.Context) error { return st.Close() }, 5*time.Second)
+
+	// 5. Close pgxpool.
+	step("configstore", func(_ context.Context) error {
+		if pg, ok := cfg.(*configstore.PGStore); ok {
+			pg.Close()
+		}
+		return nil
+	}, 2*time.Second)
 }
