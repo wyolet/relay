@@ -30,6 +30,11 @@ func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		runMigrate(os.Args[2:])
+		return
+	}
+
 	bootCtx := context.Background()
 
 	// Event log (daily-rotated JSONL under RELAY_EVENTLOG_DIR or ./events).
@@ -48,11 +53,23 @@ func main() {
 	}
 
 	var cfg configstore.ConfigStore
-	yamlStore, err := configstore.LoadYAML("config")
-	if err != nil {
-		log.Fatalf("config: %v", err)
+	if os.Getenv("RELAY_CATALOG_BACKEND") == "pg" {
+		pgDSN := os.Getenv("RELAY_PG_DSN")
+		if pgDSN == "" {
+			log.Fatal("RELAY_PG_DSN not set (required when RELAY_CATALOG_BACKEND=pg)")
+		}
+		pgStore, err := configstore.Postgres(bootCtx, pgDSN)
+		if err != nil {
+			log.Fatalf("configstore(pg): %v", err)
+		}
+		cfg = pgStore
+	} else {
+		yamlStore, err := configstore.LoadYAML("config")
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		cfg = yamlStore
 	}
-	cfg = yamlStore
 
 	// In-memory state store for key circuit breakers and rate-limit counters.
 	st := state.New()

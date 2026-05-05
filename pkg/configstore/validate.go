@@ -6,7 +6,7 @@ import (
 	"net/url"
 )
 
-func validate(s *YAMLStore) error {
+func validate(s *snapshot) error {
 	if len(s.providers) == 0 {
 		return errors.New("at least one Provider required")
 	}
@@ -32,7 +32,7 @@ func validate(s *YAMLStore) error {
 	return nil
 }
 
-func validateSecrets(s *YAMLStore) error {
+func validateSecrets(s *snapshot) error {
 	for _, sec := range s.secrets {
 		hasEnv := sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != ""
 		hasVal := sec.Spec.Value != ""
@@ -40,12 +40,9 @@ func validateSecrets(s *YAMLStore) error {
 			return fmt.Errorf("Secret %q: exactly one of valueFrom.env or value must be set, not both", sec.Metadata.Name)
 		}
 		if !hasEnv && !hasVal {
-			// allow empty literal only for anonymous (ollama) providers
 			if sec.Spec.ValueFrom != nil {
-				// valueFrom set but env empty
 				return fmt.Errorf("Secret %q: valueFrom.env must not be empty", sec.Metadata.Name)
 			}
-			// neither set — check provider kind
 			p, ok := s.providers[sec.Spec.Provider]
 			if ok && p.Spec.Kind != PKOllama {
 				return fmt.Errorf("Secret %q: exactly one of valueFrom.env or value required", sec.Metadata.Name)
@@ -61,7 +58,7 @@ func validateSecrets(s *YAMLStore) error {
 	return nil
 }
 
-func validatePools(s *YAMLStore) error {
+func validatePools(s *snapshot) error {
 	for _, pool := range s.pools {
 		if pool.Spec.Provider == "" {
 			return fmt.Errorf("Pool %q: provider required", pool.Metadata.Name)
@@ -79,8 +76,7 @@ func validatePools(s *YAMLStore) error {
 				return fmt.Errorf("Pool %q: secret %q belongs to provider %q, not %q", pool.Metadata.Name, secName, sec.Spec.Provider, pool.Spec.Provider)
 			}
 		}
-		// compute effective set
-		effective := s.SecretsForPool(pool)
+		effective := s.secretsForPool(pool)
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
 		if authRequired && len(effective) == 0 {
 			return fmt.Errorf("Pool %q: provider %q requires auth but pool has no effective secrets", pool.Metadata.Name, pool.Spec.Provider)
@@ -89,7 +85,7 @@ func validatePools(s *YAMLStore) error {
 	return nil
 }
 
-func validateProviders(s *YAMLStore) error {
+func validateProviders(s *snapshot) error {
 	defaults := 0
 	for _, p := range s.providers {
 		if p.Spec.Default {
@@ -126,7 +122,7 @@ func validateProviders(s *YAMLStore) error {
 	return nil
 }
 
-func validateModels(s *YAMLStore) error {
+func validateModels(s *snapshot) error {
 	for _, m := range s.models {
 		if m.Spec.Provider == "" {
 			return fmt.Errorf("Model %q: provider required", m.Metadata.Name)
@@ -141,7 +137,7 @@ func validateModels(s *YAMLStore) error {
 	return nil
 }
 
-func validateRoutes(s *YAMLStore) error {
+func validateRoutes(s *snapshot) error {
 	defaults := 0
 	for _, r := range s.routes {
 		if r.Spec.Default {
@@ -162,7 +158,7 @@ func validateRoutes(s *YAMLStore) error {
 	return nil
 }
 
-func validateRateLimits(s *YAMLStore) error {
+func validateRateLimits(s *snapshot) error {
 	for _, rl := range s.rateLimits {
 		if rl.Spec.Strategy != StrategySlidingWindow {
 			return fmt.Errorf("RateLimit %q: unsupported strategy %q (must be sliding-window)", rl.Metadata.Name, rl.Spec.Strategy)
@@ -187,7 +183,7 @@ func validateRateLimits(s *YAMLStore) error {
 	return nil
 }
 
-func validateAttachments(s *YAMLStore) error {
+func validateAttachments(s *snapshot) error {
 	validMeter := func(m Meter) bool {
 		return m == MeterRequests || m == MeterTokens || m == MeterConcurrency
 	}
@@ -220,7 +216,7 @@ func validateAttachments(s *YAMLStore) error {
 	return nil
 }
 
-func validatePoolDefaultLimits(s *YAMLStore) error {
+func validatePoolDefaultLimits(s *snapshot) error {
 	for _, pool := range s.pools {
 		prov, ok := s.providers[pool.Spec.Provider]
 		if !ok {
@@ -240,7 +236,7 @@ func validatePoolDefaultLimits(s *YAMLStore) error {
 				hasTokens = true
 			}
 		}
-		for _, sec := range s.SecretsForPool(pool) {
+		for _, sec := range s.secretsForPool(pool) {
 			for _, a := range sec.Spec.RateLimits {
 				if a.Meter == MeterRequests {
 					hasRequests = true

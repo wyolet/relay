@@ -15,23 +15,11 @@ import (
 )
 
 type YAMLStore struct {
-	providers  map[string]*Provider
-	models     map[string]*Model
-	routes     map[string]*Route
-	rateLimits map[string]*RateLimit
-	secrets    map[string]*Secret
-	pools      map[string]*Pool
+	snap *snapshot
 }
 
 func LoadYAML(dir string) (*YAMLStore, error) {
-	s := &YAMLStore{
-		providers:  map[string]*Provider{},
-		models:     map[string]*Model{},
-		routes:     map[string]*Route{},
-		rateLimits: map[string]*RateLimit{},
-		secrets:    map[string]*Secret{},
-		pools:      map[string]*Pool{},
-	}
+	snap := newSnapshot()
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -44,25 +32,25 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 		if ext != ".yaml" && ext != ".yml" {
 			return nil
 		}
-		return loadFile(path, s)
+		return loadFile(path, snap)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := resolveSecrets(s); err != nil {
+	if err := resolveSecrets(snap); err != nil {
 		return nil, err
 	}
 
-	if err := validate(s); err != nil {
+	if err := validate(snap); err != nil {
 		return nil, err
 	}
-	return s, nil
+	return &YAMLStore{snap: snap}, nil
 }
 
-func resolveSecrets(s *YAMLStore) error {
+func resolveSecrets(snap *snapshot) error {
 	var literalNames []string
-	for name, sec := range s.secrets {
+	for name, sec := range snap.secrets {
 		switch {
 		case sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "":
 			val, ok := os.LookupEnv(sec.Spec.ValueFrom.Env)
@@ -75,7 +63,6 @@ func resolveSecrets(s *YAMLStore) error {
 			sec.UsedLiteral = true
 			literalNames = append(literalNames, name)
 		case sec.Spec.Value == "" && sec.Spec.ValueFrom == nil:
-			// validation will catch this; allow empty literal for anon providers
 			sec.Resolved = ""
 			sec.UsedLiteral = true
 			literalNames = append(literalNames, name)
@@ -92,184 +79,26 @@ func resolveSecrets(s *YAMLStore) error {
 	return nil
 }
 
-func (s *YAMLStore) ProviderByName(name string) (*Provider, bool) {
-	p, ok := s.providers[name]
-	return p, ok
-}
-
-func (s *YAMLStore) ModelByName(name string) (*Model, bool) {
-	m, ok := s.models[name]
-	return m, ok
-}
-
-func (s *YAMLStore) RouteByName(name string) (*Route, bool) {
-	r, ok := s.routes[name]
-	return r, ok
-}
-
-func (s *YAMLStore) RateLimitByName(name string) (*RateLimit, bool) {
-	rl, ok := s.rateLimits[name]
-	return rl, ok
-}
-
-func (s *YAMLStore) Providers() []*Provider {
-	out := make([]*Provider, 0, len(s.providers))
-	for _, p := range s.providers {
-		out = append(out, p)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func (s *YAMLStore) Models() []*Model {
-	out := make([]*Model, 0, len(s.models))
-	for _, m := range s.models {
-		out = append(out, m)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func (s *YAMLStore) Routes() []*Route {
-	out := make([]*Route, 0, len(s.routes))
-	for _, r := range s.routes {
-		out = append(out, r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func (s *YAMLStore) RateLimits() []*RateLimit {
-	out := make([]*RateLimit, 0, len(s.rateLimits))
-	for _, rl := range s.rateLimits {
-		out = append(out, rl)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func (s *YAMLStore) SecretByName(name string) (*Secret, bool) {
-	sec, ok := s.secrets[name]
-	return sec, ok
-}
-
-func (s *YAMLStore) PoolByName(name string) (*Pool, bool) {
-	p, ok := s.pools[name]
-	return p, ok
-}
-
-func (s *YAMLStore) Secrets() []*Secret {
-	out := make([]*Secret, 0, len(s.secrets))
-	for _, sec := range s.secrets {
-		out = append(out, sec)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func (s *YAMLStore) Pools() []*Pool {
-	out := make([]*Pool, 0, len(s.pools))
-	for _, p := range s.pools {
-		out = append(out, p)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func (s *YAMLStore) SecretsForPool(p *Pool) []*Secret {
-	seen := map[string]struct{}{}
-	var out []*Secret
-	for _, name := range p.Spec.Secrets {
-		sec, ok := s.secrets[name]
-		if !ok {
-			continue
-		}
-		if _, dup := seen[name]; !dup {
-			seen[name] = struct{}{}
-			out = append(out, sec)
-		}
-	}
-	if len(p.Spec.SecretSelector) > 0 {
-		for _, sec := range s.secrets {
-			if _, dup := seen[sec.Metadata.Name]; dup {
-				continue
-			}
-			if labelsMatch(p.Spec.SecretSelector, sec.Metadata.Labels) {
-				seen[sec.Metadata.Name] = struct{}{}
-				out = append(out, sec)
-			}
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
-	return out
-}
-
-func labelsMatch(selector, labels map[string]string) bool {
-	for k, v := range selector {
-		if labels[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *YAMLStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
-	var out []ResolvedRule
-	if secret != nil {
-		for _, a := range secret.Spec.RateLimits {
-			rl, ok := s.rateLimits[a.Ref]
-			if !ok {
-				continue
-			}
-			out = append(out, ResolvedRule{ParentKind: KindSecret, ParentName: secret.Metadata.Name, Meter: a.Meter, RateLimit: rl})
-		}
-	}
-	if pool != nil {
-		for _, a := range pool.Spec.RateLimits {
-			rl, ok := s.rateLimits[a.Ref]
-			if !ok {
-				continue
-			}
-			out = append(out, ResolvedRule{ParentKind: KindPool, ParentName: pool.Metadata.Name, Meter: a.Meter, RateLimit: rl})
-		}
-	}
-	if model != nil {
-		for _, a := range model.Spec.RateLimits {
-			rl, ok := s.rateLimits[a.Ref]
-			if !ok {
-				continue
-			}
-			out = append(out, ResolvedRule{ParentKind: KindModel, ParentName: model.Metadata.Name, Meter: a.Meter, RateLimit: rl})
-		}
-	}
-	return out
-}
-
-func (s *YAMLStore) DefaultProvider() *Provider {
-	for _, p := range s.providers {
-		if p.Spec.Default {
-			return p
-		}
-	}
-	return nil
-}
-
-func (s *YAMLStore) DefaultRoute() *Route {
-	for _, r := range s.routes {
-		if r.Spec.Default {
-			return r
-		}
-	}
-	return nil
-}
-
+func (s *YAMLStore) ProviderByName(name string) (*Provider, bool)   { return s.snap.providerByName(name) }
+func (s *YAMLStore) ModelByName(name string) (*Model, bool)          { return s.snap.modelByName(name) }
+func (s *YAMLStore) RouteByName(name string) (*Route, bool)          { return s.snap.routeByName(name) }
+func (s *YAMLStore) RateLimitByName(name string) (*RateLimit, bool)  { return s.snap.rateLimitByName(name) }
+func (s *YAMLStore) SecretByName(name string) (*Secret, bool)        { return s.snap.secretByName(name) }
+func (s *YAMLStore) PoolByName(name string) (*Pool, bool)            { return s.snap.poolByName(name) }
+func (s *YAMLStore) Providers() []*Provider                          { return s.snap.listProviders() }
+func (s *YAMLStore) Models() []*Model                                { return s.snap.listModels() }
+func (s *YAMLStore) Routes() []*Route                                { return s.snap.listRoutes() }
+func (s *YAMLStore) RateLimits() []*RateLimit                        { return s.snap.listRateLimits() }
+func (s *YAMLStore) Secrets() []*Secret                              { return s.snap.listSecrets() }
+func (s *YAMLStore) Pools() []*Pool                                  { return s.snap.listPools() }
+func (s *YAMLStore) DefaultProvider() *Provider                      { return s.snap.defaultProvider() }
+func (s *YAMLStore) DefaultRoute() *Route                            { return s.snap.defaultRoute() }
 func (s *YAMLStore) ProviderForModel(modelName string) (*Provider, bool) {
-	m, ok := s.models[modelName]
-	if !ok {
-		return nil, false
-	}
-	p, ok := s.providers[m.Spec.Provider]
-	return p, ok
+	return s.snap.providerForModel(modelName)
+}
+func (s *YAMLStore) SecretsForPool(p *Pool) []*Secret { return s.snap.secretsForPool(p) }
+func (s *YAMLStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
+	return s.snap.rateLimitsForRequest(provider, pool, model, secret)
 }
 
 type rawDoc struct {
@@ -279,7 +108,7 @@ type rawDoc struct {
 	Spec       yaml.Node `yaml:"spec"`
 }
 
-func loadFile(path string, s *YAMLStore) error {
+func loadFile(path string, snap *snapshot) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
@@ -307,7 +136,7 @@ func loadFile(path string, s *YAMLStore) error {
 		if raw.Metadata.Name == "" {
 			return fmt.Errorf("%s [doc %d]: metadata.name required", path, docIdx)
 		}
-		if err := dispatchKind(path, docIdx, &raw, s); err != nil {
+		if err := dispatchKind(path, docIdx, &raw, snap); err != nil {
 			return err
 		}
 		docIdx++
@@ -315,7 +144,7 @@ func loadFile(path string, s *YAMLStore) error {
 	return nil
 }
 
-func dispatchKind(path string, idx int, raw *rawDoc, s *YAMLStore) error {
+func dispatchKind(path string, idx int, raw *rawDoc, snap *snapshot) error {
 	name := raw.Metadata.Name
 	switch raw.Kind {
 	case KindProvider:
@@ -323,60 +152,60 @@ func dispatchKind(path string, idx int, raw *rawDoc, s *YAMLStore) error {
 		if err := raw.Spec.Decode(&spec); err != nil {
 			return fmt.Errorf("%s [doc %d] Provider %s: %w", path, idx, name, err)
 		}
-		if _, dup := s.providers[name]; dup {
+		if _, dup := snap.providers[name]; dup {
 			return fmt.Errorf("%s [doc %d]: duplicate Provider %q", path, idx, name)
 		}
-		s.providers[name] = &Provider{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.providers[name] = &Provider{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	case KindModel:
 		var spec ModelSpec
 		if err := raw.Spec.Decode(&spec); err != nil {
 			return fmt.Errorf("%s [doc %d] Model %s: %w", path, idx, name, err)
 		}
-		if _, dup := s.models[name]; dup {
+		if _, dup := snap.models[name]; dup {
 			return fmt.Errorf("%s [doc %d]: duplicate Model %q", path, idx, name)
 		}
-		s.models[name] = &Model{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.models[name] = &Model{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	case KindRoute:
 		var spec RouteSpec
 		if err := raw.Spec.Decode(&spec); err != nil {
 			return fmt.Errorf("%s [doc %d] Route %s: %w", path, idx, name, err)
 		}
-		if _, dup := s.routes[name]; dup {
+		if _, dup := snap.routes[name]; dup {
 			return fmt.Errorf("%s [doc %d]: duplicate Route %q", path, idx, name)
 		}
-		s.routes[name] = &Route{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.routes[name] = &Route{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	case KindRateLimit:
 		var spec RateLimitSpec
 		if err := raw.Spec.Decode(&spec); err != nil {
 			return fmt.Errorf("%s [doc %d] RateLimit %s: %w", path, idx, name, err)
 		}
-		if _, dup := s.rateLimits[name]; dup {
+		if _, dup := snap.rateLimits[name]; dup {
 			return fmt.Errorf("%s [doc %d]: duplicate RateLimit %q", path, idx, name)
 		}
-		s.rateLimits[name] = &RateLimit{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.rateLimits[name] = &RateLimit{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	case KindSecret:
 		var spec SecretSpec
 		if err := raw.Spec.Decode(&spec); err != nil {
 			return fmt.Errorf("%s [doc %d] Secret %s: %w", path, idx, name, err)
 		}
-		if _, dup := s.secrets[name]; dup {
+		if _, dup := snap.secrets[name]; dup {
 			return fmt.Errorf("%s [doc %d]: duplicate Secret %q", path, idx, name)
 		}
-		s.secrets[name] = &Secret{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.secrets[name] = &Secret{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	case KindPool:
 		var spec PoolSpec
 		if err := raw.Spec.Decode(&spec); err != nil {
 			return fmt.Errorf("%s [doc %d] Pool %s: %w", path, idx, name, err)
 		}
-		if _, dup := s.pools[name]; dup {
+		if _, dup := snap.pools[name]; dup {
 			return fmt.Errorf("%s [doc %d]: duplicate Pool %q", path, idx, name)
 		}
-		s.pools[name] = &Pool{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.pools[name] = &Pool{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	default:
 		return fmt.Errorf("%s [doc %d]: unknown kind %q", path, idx, raw.Kind)
