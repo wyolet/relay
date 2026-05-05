@@ -144,9 +144,124 @@ Exceeding a budget returns a 429 with an OpenAI-shape envelope:
 
 Codes: `rpm_exceeded`, `tpm_exceeded`, `concurrency_exceeded`, `pool_out_of_capacity`. `Retry-After` header included.
 
+## Caller attribution via X-Relay-Metadata
+
+Attach arbitrary key=value pairs to every request for cost attribution, per-tenant dashboards, and audit logs.
+
+**Format:** comma-separated `k=v` pairs, whitespace-tolerant.
+
+| Limit | Value |
+|---|---|
+| Max pairs | 16 |
+| Max key length | 64 chars (`[a-zA-Z0-9_.-]`) |
+| Max value length | 256 chars (printable ASCII, no `,` or `=`) |
+
+Any single violation drops the **entire** header silently — the request still succeeds and is routed normally. A debug log line is emitted and `relay_metadata_rejected_total` increments. No error is returned to the caller.
+
+The header is stripped before forwarding — it never reaches OpenAI, Ollama, or any upstream.
+
+**curl:**
+
+```bash
+curl localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-Relay-Metadata: customer=acme,env=prod' \
+  -d '{"model":"gemma4:31b","messages":[{"role":"user","content":"hi"}]}'
+```
+
+**Python OpenAI SDK:**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1",
+    api_key="unused",
+    default_headers={"X-Relay-Metadata": "customer=acme,env=prod"},
+)
+resp = client.chat.completions.create(
+    model="gemma4:31b",
+    messages=[{"role": "user", "content": "hi"}],
+)
+```
+
+Attribution pairs appear in every JSONL event under `attribution` and as flattened `relay.attr.<key>` tags on the OTel span.
+
+## Observability
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `RELAY_OTLP_ENDPOINT` | _(empty)_ | `host:port` of an OTLP/gRPC collector. Empty = no-op tracer (no spans exported). |
+| `RELAY_INSTANCE_ID` | hostname | Identifies the relay pod/process in events and spans. |
+| `RELAY_EVENTLOG_DIR` | `./events` | Directory for daily-rotated JSONL event files. |
+
+**Local Jaeger:**
+
+```bash
+docker run -d --rm --name jaeger \
+  -p 4317:4317 -p 16686:16686 \
+  jaegertracing/all-in-one:latest
+
+RELAY_OTLP_ENDPOINT=localhost:4317 go run ./cmd/relay
+# open http://localhost:16686, service = relay
+```
+
+### Event schema
+
+Each request appends one JSON line to `$RELAY_EVENTLOG_DIR/<date>.jsonl`. Top-level fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `event_version` | int | Schema version (currently `1`) |
+| `request_id` | string | UUID per request |
+| `model` | string | Model name as sent by caller |
+| `provider` | string | Provider kind (`ollama`, `openai`, …) |
+| `pool` | string | Key pool name |
+| `secret_hash` | string | First 12 hex chars of sha256 of the winning key |
+| `terminated_by` | string | `clean` \| `client_cancel` \| `upstream_error` \| `upstream_timeout` \| `rate_limited` \| `pool_exhausted` \| `relay_error` |
+| `tokens` | object | `prompt`, `completion`, `total`, `cached` (int64) |
+| `attempts` | array | Per-attempt outcome, HTTP status, latency |
+| `attribution` | object | Key=value pairs from `X-Relay-Metadata` (absent if header missing/rejected) |
+| `metrics` | object | Pipeline latency stamps in milliseconds (`pre_upstream_ms`, `ttfb_ms`, `upstream_ms`, `total_ms`) |
+| `instance_id` | string | Value of `RELAY_INSTANCE_ID` or hostname |
+| `relay_version` | string | Go module version or `dev` |
+| `started_at` | string | RFC3339Nano UTC |
+| `ended_at` | string | RFC3339Nano UTC |
+
+Example event (abbreviated):
+
+```json
+{
+  "event_version": 1,
+  "request_id": "01jwabcdef",
+  "model": "gemma4:31b",
+  "provider": "ollama",
+  "pool": "ollama-pool",
+  "secret_hash": "a3f9c12b4e87",
+  "terminated_by": "clean",
+  "tokens": {"prompt": 12, "completion": 48, "total": 60, "cached": 0},
+  "attribution": {"customer": "acme", "env": "prod"},
+  "metrics": {"pre_upstream_ms": 1, "ttfb_ms": 210, "upstream_ms": 890, "total_ms": 891},
+  "instance_id": "relay-pod-0",
+  "relay_version": "dev",
+  "started_at": "2026-05-05T10:00:00.000Z",
+  "ended_at": "2026-05-05T10:00:00.891Z"
+}
+```
+
+### Drop counters
+
+| Metric | Meaning |
+|---|---|
+| `relay_eventlog_dropped_total` | Events that could not be written to the JSONL file (disk full, rotation error). Requests still complete; data is lost. |
+| `relay_otel_dropped_total` | OTel spans dropped because the batch processor queue was full or the export RPC failed. Indicates collector backpressure. |
+| `relay_metadata_rejected_total` | `X-Relay-Metadata` headers silently dropped due to format violations. Labels: `reason=oversize`, `reason=bad_charset`, `reason=malformed`. Request still succeeds with no attribution. |
+
 ## Status
 
-M3 complete: rate limiting, sliding-window-counter, three-meter Reserve/Commit, quota-aware pool selection.
+M4 complete: usage tracking (eventlog JSONL, OTel spans, X-Relay-Metadata attribution, drop counters).
 
 ## License
 
