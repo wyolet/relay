@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"log/slog"
 	"net/http"
@@ -11,8 +12,10 @@ import (
 	"github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/httpmw"
+	"github.com/wyolet/relay/pkg/pipeline"
 	"github.com/wyolet/relay/pkg/provider/ollama"
 	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/transport"
 )
 
 func main() {
@@ -42,13 +45,21 @@ func main() {
 		return m.Spec.UpstreamName, true
 	}
 
+	ollamaOutbound := func(ctx context.Context, body []byte, out chan<- *transport.Message) error {
+		return client.ChatCompletions(ctx, body, out)
+	}
+
+	runPipeline := func(ctx context.Context, ch *transport.Channel) error {
+		return pipeline.Run(ctx, ch, ollamaOutbound)
+	}
+
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	r.Post("/v1/chat/completions", openai.ChatCompletions(resolve, client.ChatCompletions))
+	r.Post("/v1/chat/completions", openai.ChatCompletions(resolve, runPipeline))
 	r.Get("/v1/models", openai.ListModels(cfg))
 
 	addr := ":8080"

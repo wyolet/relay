@@ -3,12 +3,18 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/wyolet/relay/pkg/httpmw"
+	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/transport"
 )
 
 // ModelResolver looks up a model name from the request and returns
@@ -16,14 +22,12 @@ import (
 // "unknown model".
 type ModelResolver func(name string) (upstreamName string, ok bool)
 
-// ForwardFn forwards a chat-completion body to the upstream and writes
-// the response into w.
-type ForwardFn func(ctx context.Context, body []byte, w http.ResponseWriter) error
+// Pipeline orchestrates message flow for one request through a Channel.
+type Pipeline func(ctx context.Context, ch *transport.Channel) error
 
-// ChatCompletions handles POST /v1/chat/completions in OpenAI shape.
-// Validates the model against the resolver, rewrites it to the
-// upstream-facing name when aliased, then forwards.
-func ChatCompletions(resolve ModelResolver, forward ForwardFn) http.HandlerFunc {
+// ChatCompletions returns an http.HandlerFunc. resolve looks up the
+// upstream model name; runPipeline orchestrates the message flow.
+func ChatCompletions(resolve ModelResolver, runPipeline Pipeline) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -36,8 +40,6 @@ func ChatCompletions(resolve ModelResolver, forward ForwardFn) http.HandlerFunc 
 			return
 		}
 
-		// Parse generically so unknown fields (new OpenAI options,
-		// vendor extensions) survive untouched.
 		var generic map[string]json.RawMessage
 		if err := json.Unmarshal(body, &generic); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request_error", "request body is not valid JSON", "")
@@ -68,10 +70,90 @@ func ChatCompletions(resolve ModelResolver, forward ForwardFn) http.HandlerFunc 
 			forwardBody, _ = json.Marshal(generic)
 		}
 
-		if err := forward(r.Context(), forwardBody, w); err != nil {
-			log.Printf("forward: %v", err)
+		labels, err := parseMetadata(r.Header.Get("X-Relay-Metadata"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error(), "invalid_metadata")
+			return
+		}
+
+		msg := &transport.Message{
+			ID:          reqid.From(r.Context()),
+			ParentID:    "",
+			Body:        forwardBody,
+			Headers:     map[string]string{"Content-Type": r.Header.Get("Content-Type")},
+			Labels:      labels,
+			ReceivedAt:  time.Now().UTC(),
+		}
+
+		ch := transport.NewChannel(r.Context(), msg.ID, 1, 64)
+		defer ch.Cancel()
+
+		ch.In <- msg
+		close(ch.In)
+
+		pipeErr := make(chan error, 1)
+		go func() {
+			pipeErr <- runPipeline(ch.Ctx, ch)
+		}()
+
+		flusher, _ := w.(http.Flusher)
+		first := true
+		for outMsg := range ch.Out {
+			if first {
+				first = false
+				status := 200
+				if s := outMsg.Headers["X-Relay-Status"]; s != "" {
+					if code, err := strconv.Atoi(s); err == nil {
+						status = code
+					}
+				}
+				if ct := outMsg.Headers["Content-Type"]; ct != "" {
+					w.Header().Set("Content-Type", ct)
+				}
+				w.WriteHeader(status)
+			}
+			if len(outMsg.Body) > 0 {
+				w.Write(outMsg.Body)
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+		}
+
+		if err := <-pipeErr; err != nil {
+			log.Printf("pipeline: %v", err)
 		}
 	}
+}
+
+var errMetadataTooManyKeys = errors.New("X-Relay-Metadata: too many keys (max 16)")
+
+func parseMetadata(headerValue string) (map[string]string, error) {
+	if headerValue == "" {
+		return nil, nil
+	}
+	pairs := strings.Split(headerValue, ",")
+	if len(pairs) > 16 {
+		return nil, errMetadataTooManyKeys
+	}
+	out := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		pair = strings.TrimSpace(pair)
+		idx := strings.IndexByte(pair, '=')
+		if idx < 0 {
+			return nil, fmt.Errorf("X-Relay-Metadata: malformed entry %q (expected k=v)", pair)
+		}
+		k := pair[:idx]
+		v := pair[idx+1:]
+		if len(k) > 128 {
+			return nil, fmt.Errorf("X-Relay-Metadata: key too long (max 128 chars)")
+		}
+		if len(v) > 512 {
+			return nil, fmt.Errorf("X-Relay-Metadata: value too long (max 512 chars)")
+		}
+		out[k] = v
+	}
+	return out, nil
 }
 
 type errEnvelope struct {
