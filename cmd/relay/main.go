@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apiopenai "github.com/wyolet/relay/pkg/api/openai"
+	"github.com/wyolet/relay/pkg/auth"
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -284,15 +285,31 @@ func main() {
 		"eventlog": el,          // always non-nil; fileSink.ping returns nil
 	}
 
+	apiKeys := auth.ParseKeys(os.Getenv("RELAY_API_KEY"), os.Getenv("RELAY_API_KEYS"))
+	if len(apiKeys) == 0 {
+		slog.Warn("auth: no API keys configured — running fail-open (RELAY_API_KEY/RELAY_API_KEYS unset)")
+	}
+	authMW := auth.Middleware(apiKeys)
+
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+
+	// Open routes — no auth required.
 	r.Get("/healthz", healthzHandler(healthzBackends, healthzDeadlineMS))
-	r.Post("/v1/chat/completions", apiopenai.ChatCompletions(resolve, runPipeline))
-	r.Get("/v1/models", apiopenai.ListModels(cfg))
-	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
-		r.Post("/admin/reload", adminReloadHandler(tok, pgStoreForAdmin))
-	}
+	// Forward-looking open routes (PER-250): /openapi.json, /docs.
+	r.Get("/openapi.json", http.NotFound)
+	r.Get("/docs", http.NotFound)
+
+	// Authenticated routes.
+	r.Group(func(r chi.Router) {
+		r.Use(authMW)
+		r.Post("/v1/chat/completions", apiopenai.ChatCompletions(resolve, runPipeline))
+		r.Get("/v1/models", apiopenai.ListModels(cfg))
+		if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
+			r.Post("/admin/reload", adminReloadHandler(tok, pgStoreForAdmin))
+		}
+	})
 
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: r}
