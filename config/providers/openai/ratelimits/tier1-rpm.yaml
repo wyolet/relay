@@ -1,0 +1,9 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: tier1-rpm
+spec:
+  strategy: sliding-window
+  window: 1m
+  amount: 10000
+  source: user_defined

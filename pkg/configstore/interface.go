@@ -17,4 +17,5 @@ type ConfigStore interface {
 	DefaultRoute() *Route
 	ProviderForModel(modelName string) (*Provider, bool)
 	SecretsForPool(p *Pool) []*Secret
+	RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule
 }

@@ -30,6 +30,9 @@ func (f *fakeStore) DefaultProvider() *configstore.Provider                     
 func (f *fakeStore) DefaultRoute() *configstore.Route                                  { return nil }
 func (f *fakeStore) ProviderForModel(string) (*configstore.Provider, bool)             { return nil, false }
 func (f *fakeStore) SecretsForPool(*configstore.Pool) []*configstore.Secret            { return nil }
+func (f *fakeStore) RateLimitsForRequest(*configstore.Provider, *configstore.Pool, *configstore.Model, *configstore.Secret) []configstore.ResolvedRule {
+	return nil
+}
 
 func makeModel(name, provider string) *configstore.Model {
 	return &configstore.Model{

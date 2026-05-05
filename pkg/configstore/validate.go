@@ -164,25 +164,94 @@ func validateRoutes(s *YAMLStore) error {
 
 func validateRateLimits(s *YAMLStore) error {
 	for _, rl := range s.rateLimits {
-		t := rl.Spec.Target
-		switch t.Kind {
-		case KindProvider:
-			if _, ok := s.providers[t.Name]; !ok {
-				return fmt.Errorf("RateLimit %q: unknown Provider target %q", rl.Metadata.Name, t.Name)
-			}
-		case KindModel:
-			if _, ok := s.models[t.Name]; !ok {
-				return fmt.Errorf("RateLimit %q: unknown Model target %q", rl.Metadata.Name, t.Name)
-			}
-		case KindRoute:
-			if _, ok := s.routes[t.Name]; !ok {
-				return fmt.Errorf("RateLimit %q: unknown Route target %q", rl.Metadata.Name, t.Name)
-			}
-		default:
-			return fmt.Errorf("RateLimit %q: unsupported target kind %q", rl.Metadata.Name, t.Kind)
+		if rl.Spec.Strategy != StrategySlidingWindow {
+			return fmt.Errorf("RateLimit %q: unsupported strategy %q (must be sliding-window)", rl.Metadata.Name, rl.Spec.Strategy)
 		}
-		if rl.Spec.RPM == 0 && rl.Spec.TPM == 0 {
-			return fmt.Errorf("RateLimit %q: at least one of rpm/tpm required", rl.Metadata.Name)
+		if rl.Spec.Window <= 0 {
+			return fmt.Errorf("RateLimit %q: window must be > 0", rl.Metadata.Name)
+		}
+		if rl.Spec.Amount <= 0 {
+			return fmt.Errorf("RateLimit %q: amount must be > 0", rl.Metadata.Name)
+		}
+		if rl.Spec.Source != "" && rl.Spec.Source != SourceUserDefined && rl.Spec.Source != SourceSystemMirrored {
+			return fmt.Errorf("RateLimit %q: unsupported source %q", rl.Metadata.Name, rl.Spec.Source)
+		}
+	}
+
+	if err := validateAttachments(s); err != nil {
+		return err
+	}
+	if err := validatePoolDefaultLimits(s); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAttachments(s *YAMLStore) error {
+	validMeter := func(m Meter) bool {
+		return m == MeterRequests || m == MeterTokens || m == MeterConcurrency
+	}
+	checkAttachments := func(kind Kind, name string, attachments []RateLimitAttachment) error {
+		for _, a := range attachments {
+			if _, ok := s.rateLimits[a.Ref]; !ok {
+				return fmt.Errorf("%s %q: rateLimits ref %q does not exist", kind, name, a.Ref)
+			}
+			if !validMeter(a.Meter) {
+				return fmt.Errorf("%s %q: rateLimits meter %q invalid (must be requests|tokens|concurrency)", kind, name, a.Meter)
+			}
+		}
+		return nil
+	}
+	for _, sec := range s.secrets {
+		if err := checkAttachments(KindSecret, sec.Metadata.Name, sec.Spec.RateLimits); err != nil {
+			return err
+		}
+	}
+	for _, pool := range s.pools {
+		if err := checkAttachments(KindPool, pool.Metadata.Name, pool.Spec.RateLimits); err != nil {
+			return err
+		}
+	}
+	for _, m := range s.models {
+		if err := checkAttachments(KindModel, m.Metadata.Name, m.Spec.RateLimits); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePoolDefaultLimits(s *YAMLStore) error {
+	for _, pool := range s.pools {
+		prov, ok := s.providers[pool.Spec.Provider]
+		if !ok {
+			continue
+		}
+		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
+		if !authRequired || pool.Spec.SkipDefaultLimits {
+			continue
+		}
+		hasRequests := false
+		hasTokens := false
+		for _, a := range pool.Spec.RateLimits {
+			if a.Meter == MeterRequests {
+				hasRequests = true
+			}
+			if a.Meter == MeterTokens {
+				hasTokens = true
+			}
+		}
+		for _, sec := range s.SecretsForPool(pool) {
+			for _, a := range sec.Spec.RateLimits {
+				if a.Meter == MeterRequests {
+					hasRequests = true
+				}
+				if a.Meter == MeterTokens {
+					hasTokens = true
+				}
+			}
+		}
+		if !hasRequests || !hasTokens {
+			return fmt.Errorf("Pool %q: auth-required provider needs at least one requests and one tokens rate-limit attachment (set skipDefaultLimits: true to opt out)", pool.Metadata.Name)
 		}
 	}
 	return nil

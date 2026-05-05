@@ -211,6 +211,7 @@ spec:
   secrets:
     - key-a
     - key-b
+  skipDefaultLimits: true
 `)
 	s, err := LoadYAML(dir)
 	if err != nil {
@@ -264,6 +265,7 @@ spec:
   provider: openai-prod
   secretSelector:
     tier: prod
+  skipDefaultLimits: true
 `)
 	s, err := LoadYAML(dir)
 	if err != nil {
@@ -323,6 +325,7 @@ spec:
     - sec-c
   secretSelector:
     env: prod
+  skipDefaultLimits: true
 `)
 	s, err := LoadYAML(dir)
 	if err != nil {

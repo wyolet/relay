@@ -54,10 +54,9 @@ kind: RateLimit
 metadata:
   name: ollama-rpm
 spec:
-  target:
-    kind: Provider
-    name: ollama-local
-  rpm: 60
+  strategy: sliding-window
+  window: 1m
+  amount: 60
 `
 
 func TestHappyPath(t *testing.T) {

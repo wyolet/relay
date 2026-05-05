@@ -1,5 +1,7 @@
 package configstore
 
+import "time"
+
 const APIVersion = "relay.wyolet.dev/v1"
 
 type Kind string
@@ -51,9 +53,10 @@ type Secret struct {
 }
 
 type SecretSpec struct {
-	Provider  string           `yaml:"provider"`
-	ValueFrom *SecretValueFrom `yaml:"valueFrom,omitempty"`
-	Value     string           `yaml:"value,omitempty"`
+	Provider   string               `yaml:"provider"`
+	ValueFrom  *SecretValueFrom     `yaml:"valueFrom,omitempty"`
+	Value      string               `yaml:"value,omitempty"`
+	RateLimits []RateLimitAttachment `yaml:"rateLimits,omitempty"`
 }
 
 type SecretValueFrom struct {
@@ -68,9 +71,11 @@ type Pool struct {
 }
 
 type PoolSpec struct {
-	Provider       string            `yaml:"provider"`
-	Secrets        []string          `yaml:"secrets,omitempty"`
-	SecretSelector map[string]string `yaml:"secretSelector,omitempty"`
+	Provider          string               `yaml:"provider"`
+	Secrets           []string             `yaml:"secrets,omitempty"`
+	SecretSelector    map[string]string    `yaml:"secretSelector,omitempty"`
+	RateLimits        []RateLimitAttachment `yaml:"rateLimits,omitempty"`
+	SkipDefaultLimits bool                 `yaml:"skipDefaultLimits,omitempty"`
 }
 
 type Model struct {
@@ -102,6 +107,8 @@ type ModelSpec struct {
 
 	Documentation string `yaml:"documentation,omitempty"`
 	License       string `yaml:"license,omitempty"`
+
+	RateLimits []RateLimitAttachment `yaml:"rateLimits,omitempty"`
 }
 
 type Capabilities struct {
@@ -148,12 +155,41 @@ type RateLimit struct {
 }
 
 type RateLimitSpec struct {
-	Target Target `yaml:"target"`
-	RPM    int    `yaml:"rpm,omitempty"`
-	TPM    int    `yaml:"tpm,omitempty"`
+	Strategy RateLimitStrategy `yaml:"strategy"`
+	Window   time.Duration     `yaml:"window"`
+	Amount   int64             `yaml:"amount"`
+	Source   RateLimitSource   `yaml:"source,omitempty"`
 }
 
-type Target struct {
-	Kind Kind   `yaml:"kind"`
-	Name string `yaml:"name"`
+type RateLimitStrategy string
+
+const (
+	StrategySlidingWindow RateLimitStrategy = "sliding-window"
+)
+
+type RateLimitSource string
+
+const (
+	SourceUserDefined    RateLimitSource = "user_defined"
+	SourceSystemMirrored RateLimitSource = "system_mirrored"
+)
+
+type RateLimitAttachment struct {
+	Ref   string `yaml:"ref"`
+	Meter Meter  `yaml:"meter"`
+}
+
+type Meter string
+
+const (
+	MeterRequests    Meter = "requests"
+	MeterTokens      Meter = "tokens"
+	MeterConcurrency Meter = "concurrency"
+)
+
+type ResolvedRule struct {
+	ParentKind Kind
+	ParentName string
+	Meter      Meter
+	RateLimit  *RateLimit
 }

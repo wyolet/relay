@@ -213,6 +213,38 @@ func labelsMatch(selector, labels map[string]string) bool {
 	return true
 }
 
+func (s *YAMLStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
+	var out []ResolvedRule
+	if secret != nil {
+		for _, a := range secret.Spec.RateLimits {
+			rl, ok := s.rateLimits[a.Ref]
+			if !ok {
+				continue
+			}
+			out = append(out, ResolvedRule{ParentKind: KindSecret, ParentName: secret.Metadata.Name, Meter: a.Meter, RateLimit: rl})
+		}
+	}
+	if pool != nil {
+		for _, a := range pool.Spec.RateLimits {
+			rl, ok := s.rateLimits[a.Ref]
+			if !ok {
+				continue
+			}
+			out = append(out, ResolvedRule{ParentKind: KindPool, ParentName: pool.Metadata.Name, Meter: a.Meter, RateLimit: rl})
+		}
+	}
+	if model != nil {
+		for _, a := range model.Spec.RateLimits {
+			rl, ok := s.rateLimits[a.Ref]
+			if !ok {
+				continue
+			}
+			out = append(out, ResolvedRule{ParentKind: KindModel, ParentName: model.Metadata.Name, Meter: a.Meter, RateLimit: rl})
+		}
+	}
+	return out
+}
+
 func (s *YAMLStore) DefaultProvider() *Provider {
 	for _, p := range s.providers {
 		if p.Spec.Default {
