@@ -160,6 +160,34 @@ func TestChatCompletions_NetworkError(t *testing.T) {
 	}
 }
 
+func TestChatCompletions_NoRelayHeadersUpstream(t *testing.T) {
+	var captured http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = r.Header.Clone()
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	collectMessages(t, c, []byte(`{}`), "key")
+
+	forbidden := []string{"X-Relay-Request-Id", "X-Request-Id", "X-Relay-Route"}
+	for _, name := range forbidden {
+		if captured.Get(name) != "" {
+			t.Errorf("header %q should not reach upstream, got %q", name, captured.Get(name))
+		}
+	}
+	// Verify only Content-Type and Authorization are set.
+	for name := range captured {
+		switch strings.ToLower(name) {
+		case "content-type", "authorization", "user-agent", "content-length", "accept-encoding":
+			// expected
+		default:
+			t.Errorf("unexpected header sent upstream: %q", name)
+		}
+	}
+}
+
 func TestChatCompletions_ContextCancel(t *testing.T) {
 	started := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

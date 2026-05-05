@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
@@ -35,6 +36,8 @@ type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan
 // runPipeline orchestrates the message flow.
 func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		httpheader.StripInbound(r.Header)
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			if httpmw.IsBodyTooLargeError(err) {
