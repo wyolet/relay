@@ -23,6 +23,7 @@ import (
 )
 
 func main() {
+	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	var cfg configstore.ConfigStore
 	yamlStore, err := configstore.LoadYAML("config")

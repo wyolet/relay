@@ -52,9 +52,69 @@ The control plane owns truth and fans out config changes via pub/sub. The data p
 - `POST /v1/batches` — Relay-native batch
 - `X-Relay-*` headers carry control metadata (route, fallback override, budget scope, trace context)
 
+## M2 features (current)
+
+- YAML-file config store (`config/providers/<provider>/...`)
+- Multi-provider routing: Ollama (dev) + OpenAI (production), extensible to any provider
+- API key pooling with env-var secret refs
+- `/v1/models` model listing
+- `.env` auto-loader for local development (no `source .env` required)
+
+## Configuration
+
+Config lives under `config/providers/<provider>/`:
+
+```
+config/providers/
+  ollama/
+    provider.yaml   # Provider kind + base URL
+    pool.yaml       # Pool listing secrets
+    secrets/        # One file per API key
+    models/         # One file per model
+  openai/
+    provider.yaml
+    pool.yaml
+    secrets/openai-key-1.yaml
+    models/gpt-4o-mini.yaml
+```
+
+Secret values are resolved from env vars at startup:
+
+```yaml
+# secrets/openai-key-1.yaml
+spec:
+  valueFrom:
+    env: OPENAI_API_KEY
+```
+
+For local development, create a `.env` file in the repo root:
+
+```
+OPENAI_API_KEY=sk-...
+```
+
+The relay reads it on startup and does **not** override values already in the environment, so CI/production env vars always take precedence.
+
+## Quick start
+
+```bash
+# Dev (Ollama, no key needed)
+go run ./cmd/relay
+
+# With OpenAI
+OPENAI_API_KEY=sk-... go run ./cmd/relay
+# or put it in .env and just:
+go run ./cmd/relay
+
+curl localhost:8080/v1/models
+curl localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
+```
+
 ## Status
 
-Early. Architecture is locked; implementation is starting.
+M2 complete: YAML config, multi-provider, key pooling, env-var secrets, .env loader.
 
 ## License
 

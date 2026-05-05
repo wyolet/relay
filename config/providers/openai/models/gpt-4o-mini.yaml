@@ -1,0 +1,26 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+  name: gpt-4o-mini
+  labels:
+    family: gpt-4
+    runtime: openai
+spec:
+  provider: openai-prod
+  upstreamName: gpt-4o-mini
+  description: "GPT-4o mini (OpenAI)"
+  family: gpt-4
+  capabilities:
+    chat: true
+    streaming: true
+    tools: true
+    jsonMode: true
+    structuredOutput: true
+  modalities:
+    input: [text]
+    output: [text]
+  contextWindow: 128000
+  maxOutputTokens: 16384
+  pricing:
+    input: 0.15
+    output: 0.60

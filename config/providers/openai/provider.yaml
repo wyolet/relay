@@ -1,0 +1,8 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+  name: openai-prod
+spec:
+  kind: openai
+  baseURL: https://api.openai.com
+  defaultPool: openai-default
