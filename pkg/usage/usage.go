@@ -12,6 +12,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/wyolet/relay/pkg/eventlog"
 )
 
 const (
@@ -86,6 +88,10 @@ type Config struct {
 
 	// BatchQueueSize overrides the default OTel batch processor queue size (2048).
 	BatchQueueSize int
+
+	// EventLog, when non-nil, receives serialized events from Record.
+	// When nil, Record skips the eventlog write but still ends the OTel span.
+	EventLog *eventlog.Logger
 }
 
 // Shutdown is a function that tears down the TracerProvider.
@@ -120,6 +126,7 @@ func (c *countingExporter) ExportSpans(ctx context.Context, spans []sdktrace.Rea
 func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 	if cfg.OTLPEndpoint == "" {
 		otel.SetTracerProvider(noop.NewTracerProvider())
+		defaultEventLogger = cfg.EventLog
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -157,6 +164,7 @@ func Init(ctx context.Context, cfg Config) (Shutdown, error) {
 	)
 
 	otel.SetTracerProvider(tp)
+	defaultEventLogger = cfg.EventLog
 
 	var once atomic.Bool
 	return func(ctx context.Context) error {
