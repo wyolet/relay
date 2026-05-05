@@ -19,12 +19,15 @@ import (
 	"github.com/wyolet/relay/pkg/transport"
 )
 
-// RequestPlan holds the resolved model, provider, pool, and secrets for a request.
+// RequestPlan holds the resolved model, provider, pool, secrets, and rate-limit
+// rules for a request. Rules are pre-resolved for Pool+Model scope at plan time;
+// Secret-level rules are M4+ work.
 type RequestPlan struct {
 	Model    *configstore.Model
 	Provider *configstore.Provider
 	Pool     *configstore.Pool
 	Secrets  []*configstore.Secret
+	Rules    []configstore.ResolvedRule
 }
 
 // PlanResolver resolves a model name to a RequestPlan. ok=false means unknown model.

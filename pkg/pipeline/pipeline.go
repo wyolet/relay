@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/keypool"
+	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/provider"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -28,6 +29,13 @@ type RunOptions struct {
 	Selector    *keypool.Selector
 	Outbound    provider.Outbound
 	MaxAttempts int // 0 → 3
+
+	// Limiter and Rules enable rate limiting. If either is nil/empty, rate
+	// limiting is skipped (preserves M2 behavior for configs without limits).
+	// Rules should be pre-resolved by the caller for Pool+Model scope.
+	// Secret-level rules are M4+ work.
+	Limiter *limit.Limiter
+	Rules   []configstore.ResolvedRule
 }
 
 // Run reads the inbound Message from ch.In and orchestrates upstream calls
@@ -53,6 +61,27 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 	}
 
 	defer close(ch.Out)
+
+	// Rate limiting: Reserve before the retry loop; Commit via defer regardless of path.
+	var tokensSeen int64
+	if opts.Limiter != nil && len(opts.Rules) > 0 {
+		res, err := opts.Limiter.Reserve(ctx, opts.Rules)
+		if err != nil {
+			var exceeded *limit.ExceededError
+			if errors.As(err, &exceeded) {
+				send429LimitEnvelope(ch.Out, exceeded)
+			} else {
+				sendGenericErrorEnvelope(ch.Out)
+			}
+			return err
+		}
+		defer func() {
+			cancelled := ctx.Err() != nil
+			commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			opts.Limiter.Commit(commitCtx, res, limit.Observations{Tokens: tokensSeen, Cancelled: cancelled})
+		}()
+	}
 
 	attempt := 0
 	sameKeyAttempt := 0
@@ -132,6 +161,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 				"status", status,
 				"classification", "success",
 			)
+			peekTokens(firstMsg.Body, &tokensSeen)
 			ch.Out <- firstMsg
 			for msg := range inter {
 				select {
@@ -141,6 +171,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) error {
 					return ctx.Err()
 				default:
 				}
+				peekTokens(msg.Body, &tokensSeen)
 				ch.Out <- msg
 			}
 			<-outboundErr
@@ -349,5 +380,57 @@ func sendPoolExhausted(out chan<- *transport.Message) {
 			"X-Relay-Final":  "true",
 		},
 		Body: []byte(`{"error":{"message":"all keys in pool exhausted","type":"upstream_error","code":"pool_exhausted"}}`),
+	}
+}
+
+// send429LimitEnvelope emits an OpenAI-shaped 429 for a relay-side limit violation.
+func send429LimitEnvelope(out chan<- *transport.Message, exceeded *limit.ExceededError) {
+	code := meterToCode(exceeded.Rule.Meter)
+	msg := "rate limit exceeded: " + string(exceeded.Rule.Meter)
+	headers := map[string]string{
+		"X-Relay-Status": "429",
+		"Content-Type":   "application/json",
+		"X-Relay-Final":  "true",
+	}
+	if exceeded.RetryAfter > 0 {
+		headers["Retry-After"] = strconv.Itoa(int(exceeded.RetryAfter.Seconds()))
+	}
+	body := []byte(`{"error":{"message":"` + msg + `","type":"rate_limit_exceeded","code":"` + code + `"}}`)
+	out <- &transport.Message{Headers: headers, Body: body}
+}
+
+func meterToCode(m configstore.Meter) string {
+	switch m {
+	case configstore.MeterRequests:
+		return "rpm_exceeded"
+	case configstore.MeterTokens:
+		return "tpm_exceeded"
+	case configstore.MeterConcurrency:
+		return "concurrency_exceeded"
+	default:
+		return "rate_limit_exceeded"
+	}
+}
+
+func sendGenericErrorEnvelope(out chan<- *transport.Message) {
+	out <- &transport.Message{
+		Headers: map[string]string{
+			"X-Relay-Status": "500",
+			"Content-Type":   "application/json",
+			"X-Relay-Final":  "true",
+		},
+		Body: []byte(`{"error":{"message":"internal error","type":"internal_error","code":"internal_error"}}`),
+	}
+}
+
+// peekTokens extracts token usage from a message body and accumulates into *acc.
+// Only updates if tokens are found and are greater than the current value.
+func peekTokens(b []byte, acc *int64) {
+	if len(b) == 0 {
+		return
+	}
+	n, ok := limit.ParseTokens(b)
+	if ok && n > *acc {
+		*acc = n
 	}
 }

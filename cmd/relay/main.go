@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/keypool"
+	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/pipeline"
 	"github.com/wyolet/relay/pkg/provider"
 	"github.com/wyolet/relay/pkg/provider/ollama"
@@ -32,9 +33,10 @@ func main() {
 	}
 	cfg = yamlStore
 
-	// In-memory state store for key circuit breakers.
+	// In-memory state store for key circuit breakers and rate-limit counters.
 	st := state.New()
 	sel := keypool.New(st, slog.Default(), nil)
+	limiter := limit.New(st, slog.Default(), nil)
 
 	// Build provider clients and register them.
 	reg := provider.NewRegistry()
@@ -68,6 +70,9 @@ func main() {
 			if pool, ok := cfg.PoolByName(poolName); ok {
 				plan.Pool = pool
 				plan.Secrets = cfg.SecretsForPool(pool)
+				// Pre-resolve rate-limit rules for Pool+Model scope.
+				// Secret-level rules are M4+ work.
+				plan.Rules = cfg.RateLimitsForRequest(p, pool, m, nil)
 			}
 		}
 		return plan, true
@@ -86,6 +91,8 @@ func main() {
 				Secrets:  plan.Secrets,
 				Selector: sel,
 				Outbound: ob,
+				Limiter:  limiter,
+				Rules:    plan.Rules,
 			})
 		}
 

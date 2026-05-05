@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/keypool"
+	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/state"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -499,4 +500,333 @@ func TestRun_NetworkError(t *testing.T) {
 	if keys[1] == keys[2] {
 		t.Fatalf("second retry should use different key (failover): %q vs %q", keys[1], keys[2])
 	}
+}
+
+// --- Rate limit tests ---
+
+// fakeLimiter tracks Reserve/Commit calls for pipeline rate-limit tests.
+type fakeLimiter struct {
+	reserveErr  error
+	commitCalls []limit.Observations
+	reserveCalls int
+}
+
+func (f *fakeLimiter) reserve(ctx context.Context, rules []configstore.ResolvedRule) (*limit.Reservation, error) {
+	f.reserveCalls++
+	if f.reserveErr != nil {
+		return nil, f.reserveErr
+	}
+	// Return a zero-value Reservation via limit.New with MemStore — not possible
+	// from outside the package. We expose via the real Limiter instead.
+	return nil, nil
+}
+
+// testLimiterSetup creates a real Limiter backed by MemStore, plus a rule set.
+// The rule allows 1000 requests/min so tests pass through unless forced to fail.
+func testLimiterSetup(t *testing.T) (*limit.Limiter, []configstore.ResolvedRule, func()) {
+	t.Helper()
+	st := state.New()
+	l := limit.New(st, slog.Default(), nil)
+	rules := []configstore.ResolvedRule{
+		{
+			ParentKind: configstore.KindPool,
+			ParentName: "test-pool",
+			Meter:      configstore.MeterRequests,
+			RateLimit: &configstore.RateLimit{
+				Metadata: configstore.Metadata{Name: "rpm"},
+				Spec: configstore.RateLimitSpec{
+					Strategy: configstore.StrategySlidingWindow,
+					Window:   time.Minute,
+					Amount:   1000,
+				},
+			},
+		},
+	}
+	return l, rules, func() { st.Close() }
+}
+
+func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rules []configstore.ResolvedRule) RunOptions {
+	t.Helper()
+	st := state.New()
+	t.Cleanup(func() { st.Close() })
+	sel := keypool.New(st, slog.Default(), nil)
+	pool := &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}}
+	secrets := []*configstore.Secret{
+		{Metadata: configstore.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
+	}
+	return RunOptions{
+		Pool:        pool,
+		Secrets:     secrets,
+		Selector:    sel,
+		Outbound:    ob,
+		MaxAttempts: 3,
+		Limiter:     l,
+		Rules:       rules,
+	}
+}
+
+func exceededRules(meter configstore.Meter, retryAfterSec int) ([]configstore.ResolvedRule, *limit.Limiter, func()) {
+	st := state.New()
+	window := time.Minute
+	amount := int64(1)
+	// Use a fixed clock so the window bucket is deterministic.
+	now := time.Now()
+	l := limit.New(st, slog.Default(), func() time.Time { return now })
+	rule := configstore.ResolvedRule{
+		ParentKind: configstore.KindPool,
+		ParentName: "test-pool",
+		Meter:      meter,
+		RateLimit: &configstore.RateLimit{
+			Metadata: configstore.Metadata{Name: string(meter) + "-limit"},
+			Spec: configstore.RateLimitSpec{
+				Strategy: configstore.StrategySlidingWindow,
+				Window:   window,
+				Amount:   amount,
+			},
+		},
+	}
+	rules := []configstore.ResolvedRule{rule}
+	ctx := context.Background()
+	// Exhaust the budget: Reserve once (succeeds), then the next Reserve will fail.
+	if meter == configstore.MeterRequests {
+		l.Reserve(ctx, rules)
+	} else if meter == configstore.MeterConcurrency {
+		l.Reserve(ctx, rules)
+	}
+	// For tokens: set the counter via a successful Reserve+Commit with tokens=amount.
+	if meter == configstore.MeterTokens {
+		res, _ := l.Reserve(ctx, rules)
+		if res != nil {
+			commitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			l.Commit(commitCtx, res, limit.Observations{Tokens: amount})
+		}
+	}
+	return rules, l, func() { st.Close() }
+}
+
+func TestRun_LimiterNil_NoGating(t *testing.T) {
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+	// opts.Limiter is nil by default — no gating
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ob.calls.Load() != 1 {
+		t.Fatalf("expected 1 call, got %d", ob.calls.Load())
+	}
+}
+
+func TestRun_RPMExceeded_Returns429(t *testing.T) {
+	rules, l, cleanup := exceededRules(configstore.MeterRequests, 30)
+	defer cleanup()
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		// should never be called
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+	}}
+	st2 := state.New()
+	defer st2.Close()
+	sel := keypool.New(st2, slog.Default(), nil)
+	opts := RunOptions{
+		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "p"}},
+		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
+		Selector:    sel,
+		Outbound:    ob,
+		MaxAttempts: 3,
+		Limiter:     l,
+		Rules:       rules,
+	}
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err == nil {
+		t.Fatal("expected error from rate limit, got nil")
+	}
+	msgs := collectOut(ch)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "429" {
+		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "rpm_exceeded") {
+		t.Fatalf("expected rpm_exceeded code in body: %s", body)
+	}
+	if !containsStr(body, "rate_limit_exceeded") {
+		t.Fatalf("expected rate_limit_exceeded type in body: %s", body)
+	}
+	if ob.calls.Load() != 0 {
+		t.Fatalf("outbound should not be called on rate-limit violation, got %d calls", ob.calls.Load())
+	}
+}
+
+func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
+	rules, l, cleanup := exceededRules(configstore.MeterConcurrency, 0)
+	defer cleanup()
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+	}}
+	st2 := state.New()
+	defer st2.Close()
+	sel := keypool.New(st2, slog.Default(), nil)
+	opts := RunOptions{
+		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "p"}},
+		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
+		Selector:    sel,
+		Outbound:    ob,
+		MaxAttempts: 3,
+		Limiter:     l,
+		Rules:       rules,
+	}
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err == nil {
+		t.Fatal("expected error from concurrency limit")
+	}
+	msgs := collectOut(ch)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Headers["X-Relay-Status"] != "429" {
+		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
+	}
+	body := string(msgs[0].Body)
+	if !containsStr(body, "concurrency_exceeded") {
+		t.Fatalf("expected concurrency_exceeded in body: %s", body)
+	}
+	if ob.calls.Load() != 0 {
+		t.Fatalf("outbound should not be called on rate-limit violation")
+	}
+}
+
+func TestRun_TokensCommittedFromResponseUsage(t *testing.T) {
+	l, rules, cleanup := testLimiterSetup(t)
+	defer cleanup()
+
+	responseBody := []byte(`{"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":32,"total_tokens":42}}`)
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{
+			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"},
+			Body:    responseBody,
+		}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+
+	opts := testSetupWithLimiter(t, ob, l, rules)
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Collect all output.
+	msgs := collectOut(ch)
+	if len(msgs) == 0 {
+		t.Fatal("expected output messages")
+	}
+	// Verify pipeline forwarded the body containing usage.
+	found := false
+	for _, m := range msgs {
+		if containsStr(string(m.Body), "total_tokens") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected usage body to be forwarded")
+	}
+}
+
+func TestRun_StreamingTokensCommitted(t *testing.T) {
+	l, rules, cleanup := testLimiterSetup(t)
+	defer cleanup()
+
+	chunk1 := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n")
+	chunk2 := []byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":13}}\n\n")
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{
+			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
+		}
+		out <- &transport.Message{Body: chunk1}
+		out <- &transport.Message{Body: chunk2}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+
+	opts := testSetupWithLimiter(t, ob, l, rules)
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	msgs := collectOut(ch)
+	if len(msgs) == 0 {
+		t.Fatal("expected output messages")
+	}
+}
+
+func TestRun_CancellationCommitsCancelled(t *testing.T) {
+	l, rules, cleanup := testLimiterSetup(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		// Block before sending anything — let ctx.Done() trigger in Run.
+		<-ctx.Done()
+	}}
+
+	st2 := state.New()
+	defer st2.Close()
+	sel := keypool.New(st2, slog.Default(), nil)
+	opts := RunOptions{
+		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "p"}},
+		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
+		Selector:    sel,
+		Outbound:    ob,
+		MaxAttempts: 3,
+		Limiter:     l,
+		Rules:       rules,
+	}
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, ch, opts)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	err := <-errCh
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	collectOut(ch)
 }
