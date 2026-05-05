@@ -1,4 +1,4 @@
-package config
+package configstore
 
 import (
 	"errors"
@@ -6,29 +6,29 @@ import (
 	"net/url"
 )
 
-func (c *Config) Validate() error {
-	if len(c.Providers) == 0 {
+func validate(s *YAMLStore) error {
+	if len(s.providers) == 0 {
 		return errors.New("at least one Provider required")
 	}
 
-	if err := c.validateProviders(); err != nil {
+	if err := validateProviders(s); err != nil {
 		return err
 	}
-	if err := c.validateModels(); err != nil {
+	if err := validateModels(s); err != nil {
 		return err
 	}
-	if err := c.validateRoutes(); err != nil {
+	if err := validateRoutes(s); err != nil {
 		return err
 	}
-	if err := c.validateRateLimits(); err != nil {
+	if err := validateRateLimits(s); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Config) validateProviders() error {
+func validateProviders(s *YAMLStore) error {
 	defaults := 0
-	for _, p := range c.Providers {
+	for _, p := range s.providers {
 		if p.Spec.Default {
 			defaults++
 		}
@@ -51,12 +51,12 @@ func (c *Config) validateProviders() error {
 	return nil
 }
 
-func (c *Config) validateModels() error {
-	for _, m := range c.Models {
+func validateModels(s *YAMLStore) error {
+	for _, m := range s.models {
 		if m.Spec.Provider == "" {
 			return fmt.Errorf("Model %q: provider required", m.Metadata.Name)
 		}
-		if _, ok := c.Providers[m.Spec.Provider]; !ok {
+		if _, ok := s.providers[m.Spec.Provider]; !ok {
 			return fmt.Errorf("Model %q: unknown provider %q", m.Metadata.Name, m.Spec.Provider)
 		}
 		if m.Spec.UpstreamName == "" {
@@ -66,9 +66,9 @@ func (c *Config) validateModels() error {
 	return nil
 }
 
-func (c *Config) validateRoutes() error {
+func validateRoutes(s *YAMLStore) error {
 	defaults := 0
-	for _, r := range c.Routes {
+	for _, r := range s.routes {
 		if r.Spec.Default {
 			defaults++
 		}
@@ -76,7 +76,7 @@ func (c *Config) validateRoutes() error {
 			return fmt.Errorf("Route %q: at least one model required", r.Metadata.Name)
 		}
 		for _, mn := range r.Spec.Models {
-			if _, ok := c.Models[mn]; !ok {
+			if _, ok := s.models[mn]; !ok {
 				return fmt.Errorf("Route %q: unknown model %q", r.Metadata.Name, mn)
 			}
 		}
@@ -87,20 +87,20 @@ func (c *Config) validateRoutes() error {
 	return nil
 }
 
-func (c *Config) validateRateLimits() error {
-	for _, rl := range c.RateLimits {
+func validateRateLimits(s *YAMLStore) error {
+	for _, rl := range s.rateLimits {
 		t := rl.Spec.Target
 		switch t.Kind {
 		case KindProvider:
-			if _, ok := c.Providers[t.Name]; !ok {
+			if _, ok := s.providers[t.Name]; !ok {
 				return fmt.Errorf("RateLimit %q: unknown Provider target %q", rl.Metadata.Name, t.Name)
 			}
 		case KindModel:
-			if _, ok := c.Models[t.Name]; !ok {
+			if _, ok := s.models[t.Name]; !ok {
 				return fmt.Errorf("RateLimit %q: unknown Model target %q", rl.Metadata.Name, t.Name)
 			}
 		case KindRoute:
-			if _, ok := c.Routes[t.Name]; !ok {
+			if _, ok := s.routes[t.Name]; !ok {
 				return fmt.Errorf("RateLimit %q: unknown Route target %q", rl.Metadata.Name, t.Name)
 			}
 		default:

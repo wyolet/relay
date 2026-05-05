@@ -7,21 +7,23 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/pkg/api/openai"
-	"github.com/wyolet/relay/pkg/config"
+	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/provider/ollama"
 )
 
 func main() {
-	cfg, err := config.Load("config")
+	var cfg configstore.ConfigStore
+	yamlStore, err := configstore.LoadYAML("config")
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	cfg = yamlStore
 
 	p := cfg.DefaultProvider()
 	if p == nil {
 		log.Fatal("config: no default provider")
 	}
-	if p.Spec.Kind != config.PKOllama {
+	if p.Spec.Kind != configstore.PKOllama {
 		log.Fatalf("config: only ollama supported for now, got %q", p.Spec.Kind)
 	}
 

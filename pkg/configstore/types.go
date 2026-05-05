@@ -1,7 +1,4 @@
-// Package config reads and validates Relay's k8s-style YAML manifests.
-// Other packages consume the resulting structs; nothing outside this
-// package parses YAML.
-package config
+package configstore
 
 const APIVersion = "relay.wyolet.dev/v1"
 
@@ -27,8 +24,6 @@ type Metadata struct {
 	Labels map[string]string `yaml:"labels,omitempty"`
 }
 
-// --- Provider ---
-
 type Provider struct {
 	APIVersion string       `yaml:"apiVersion"`
 	Kind       Kind         `yaml:"kind"`
@@ -41,8 +36,6 @@ type ProviderSpec struct {
 	BaseURL string       `yaml:"baseURL"`
 	Default bool         `yaml:"default,omitempty"`
 }
-
-// --- Model ---
 
 type Model struct {
 	APIVersion string    `yaml:"apiVersion"`
@@ -99,8 +92,6 @@ type Pricing struct {
 	Output      float64 `yaml:"output"`
 }
 
-// --- Route ---
-
 type Route struct {
 	APIVersion string    `yaml:"apiVersion"`
 	Kind       Kind      `yaml:"kind"`
@@ -112,8 +103,6 @@ type RouteSpec struct {
 	Default bool     `yaml:"default,omitempty"`
 	Models  []string `yaml:"models"`
 }
-
-// --- RateLimit ---
 
 type RateLimit struct {
 	APIVersion string        `yaml:"apiVersion"`
@@ -131,60 +120,4 @@ type RateLimitSpec struct {
 type Target struct {
 	Kind Kind   `yaml:"kind"`
 	Name string `yaml:"name"`
-}
-
-// --- Config: the loaded set ---
-
-type Config struct {
-	Providers  map[string]*Provider
-	Models     map[string]*Model
-	Routes     map[string]*Route
-	RateLimits map[string]*RateLimit
-}
-
-func newConfig() *Config {
-	return &Config{
-		Providers:  map[string]*Provider{},
-		Models:     map[string]*Model{},
-		Routes:     map[string]*Route{},
-		RateLimits: map[string]*RateLimit{},
-	}
-}
-
-func (c *Config) ModelByName(name string) (*Model, bool) {
-	m, ok := c.Models[name]
-	return m, ok
-}
-
-func (c *Config) ProviderByName(name string) (*Provider, bool) {
-	p, ok := c.Providers[name]
-	return p, ok
-}
-
-func (c *Config) DefaultProvider() *Provider {
-	for _, p := range c.Providers {
-		if p.Spec.Default {
-			return p
-		}
-	}
-	return nil
-}
-
-func (c *Config) DefaultRoute() *Route {
-	for _, r := range c.Routes {
-		if r.Spec.Default {
-			return r
-		}
-	}
-	return nil
-}
-
-// ProviderForModel resolves the Provider that hosts a given Model.
-func (c *Config) ProviderForModel(modelName string) (*Provider, bool) {
-	m, ok := c.Models[modelName]
-	if !ok {
-		return nil, false
-	}
-	p, ok := c.Providers[m.Spec.Provider]
-	return p, ok
 }
