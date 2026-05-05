@@ -2,16 +2,20 @@ package main
 
 import (
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/provider/ollama"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	var cfg configstore.ConfigStore
 	yamlStore, err := configstore.LoadYAML("config")
 	if err != nil {
@@ -38,6 +42,7 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+	r.Use(reqid.Middleware(slog.Default()))
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
