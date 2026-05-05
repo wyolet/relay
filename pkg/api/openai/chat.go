@@ -12,22 +12,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
-// ModelResolver looks up a model name from the request and returns
-// the upstream-facing name to send to the provider. ok=false means
-// "unknown model".
-type ModelResolver func(name string) (upstreamName string, ok bool)
+// RequestPlan holds the resolved model and provider for a single request.
+// PER-227 will extend this with Pool and Secrets.
+type RequestPlan struct {
+	Model    *configstore.Model
+	Provider *configstore.Provider
+}
+
+// PlanResolver resolves a model name to a RequestPlan. ok=false means unknown model.
+type PlanResolver func(modelName string) (*RequestPlan, bool)
 
 // Pipeline orchestrates message flow for one request through a Channel.
-type Pipeline func(ctx context.Context, ch *transport.Channel) error
+type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error
 
-// ChatCompletions returns an http.HandlerFunc. resolve looks up the
-// upstream model name; runPipeline orchestrates the message flow.
-func ChatCompletions(resolve ModelResolver, runPipeline Pipeline) http.HandlerFunc {
+// ChatCompletions returns an http.HandlerFunc. resolve builds the RequestPlan;
+// runPipeline orchestrates the message flow.
+func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -57,13 +63,14 @@ func ChatCompletions(resolve ModelResolver, runPipeline Pipeline) http.HandlerFu
 			return
 		}
 
-		upstream, ok := resolve(modelName)
+		plan, ok := resolve(modelName)
 		if !ok {
 			writeError(w, http.StatusNotFound, "invalid_request_error",
 				fmt.Sprintf("model %q not found", modelName), "model_not_found")
 			return
 		}
 
+		upstream := plan.Model.Spec.UpstreamName
 		forwardBody := body
 		if upstream != modelName {
 			generic["model"], _ = json.Marshal(upstream)
@@ -93,7 +100,7 @@ func ChatCompletions(resolve ModelResolver, runPipeline Pipeline) http.HandlerFu
 
 		pipeErr := make(chan error, 1)
 		go func() {
-			pipeErr <- runPipeline(ch.Ctx, ch)
+			pipeErr <- runPipeline(ch.Ctx, ch, plan)
 		}()
 
 		flusher, _ := w.(http.Flusher)

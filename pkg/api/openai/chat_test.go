@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
@@ -69,14 +70,23 @@ func TestParseMetadata_Malformed(t *testing.T) {
 
 // --- ChatCompletions handler tests ---
 
-func fakeResolve(name string) (string, bool) {
-	known := map[string]string{"gpt-4": "gpt-4", "mymodel": "upstream-model"}
-	up, ok := known[name]
-	return up, ok
+func fakeResolve(name string) (*RequestPlan, bool) {
+	known := map[string]*RequestPlan{
+		"gpt-4": {
+			Model:    &configstore.Model{Spec: configstore.ModelSpec{UpstreamName: "gpt-4"}},
+			Provider: &configstore.Provider{Spec: configstore.ProviderSpec{Kind: configstore.PKOpenAI}},
+		},
+		"mymodel": {
+			Model:    &configstore.Model{Spec: configstore.ModelSpec{UpstreamName: "upstream-model"}},
+			Provider: &configstore.Provider{Spec: configstore.ProviderSpec{Kind: configstore.PKOllama}},
+		},
+	}
+	p, ok := known[name]
+	return p, ok
 }
 
 func TestChatCompletions_HappyPath(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel) error {
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error {
 		defer close(ch.Out)
 		ch.Out <- &transport.Message{
 			Headers: map[string]string{
@@ -108,7 +118,7 @@ func TestChatCompletions_HappyPath(t *testing.T) {
 }
 
 func TestChatCompletions_StreamingPath(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel) error {
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error {
 		defer close(ch.Out)
 		ch.Out <- &transport.Message{
 			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
@@ -133,7 +143,7 @@ func TestChatCompletions_StreamingPath(t *testing.T) {
 }
 
 func TestChatCompletions_ModelNotFound(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel) error { return nil }
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error { return nil }
 
 	body := `{"model":"unknown-model","messages":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
@@ -154,7 +164,7 @@ func TestChatCompletions_ModelNotFound(t *testing.T) {
 }
 
 func TestChatCompletions_BadJSON(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel) error { return nil }
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error { return nil }
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not json"))
 	rec := httptest.NewRecorder()

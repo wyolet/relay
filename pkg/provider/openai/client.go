@@ -1,4 +1,4 @@
-package ollama
+package openai
 
 import (
 	"bytes"
@@ -14,19 +14,24 @@ import (
 
 var _ provider.Outbound = (*Client)(nil)
 
+const defaultBaseURL = "https://api.openai.com"
+
 type Client struct {
 	baseURL string
 	http    *http.Client
 }
 
 func New(baseURL string) *Client {
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
 	return &Client{
 		baseURL: baseURL,
 		http:    &http.Client{},
 	}
 }
 
-// ChatCompletions forwards an OpenAI-shaped chat completion to Ollama and
+// ChatCompletions forwards an OpenAI-shaped chat completion request and
 // emits response chunks as *transport.Messages on out. The first message
 // carries X-Relay-Status and Content-Type headers; subsequent messages carry
 // body chunks; the final message carries X-Relay-Final="true".
@@ -39,6 +44,9 @@ func (c *Client) ChatCompletions(ctx context.Context, body []byte, secret string
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if secret != "" {
+		req.Header.Set("Authorization", "Bearer "+secret)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -47,7 +55,6 @@ func (c *Client) ChatCompletions(ctx context.Context, body []byte, secret string
 	}
 	defer resp.Body.Close()
 
-	// Header-only first message: status + content-type.
 	out <- &transport.Message{
 		Headers: map[string]string{
 			"X-Relay-Status": strconv.Itoa(resp.StatusCode),
