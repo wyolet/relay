@@ -4,7 +4,7 @@ import httpx
 from openai import OpenAI
 
 BASE_URL = os.environ.get("RELAY_BASE_URL", "https://relay.wyolet.dev/v1")
-MODEL = os.environ.get("RELAY_MODEL", "gemma4:latest")
+MODEL = os.environ.get("RELAY_MODEL", "gemma4")
 
 # Caddy's local CA isn't in the system trust store, so disable verify
 # for local dev. Override with RELAY_VERIFY=1 when pointing at a real cert.
