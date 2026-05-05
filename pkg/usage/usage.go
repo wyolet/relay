@@ -77,6 +77,20 @@ func (l *Lifecycle) Span() trace.Span { return l.span }
 // SetSpan stores the OTel span. Called by the pipeline after starting the span.
 func (l *Lifecycle) SetSpan(s trace.Span) { l.span = s }
 
+// ctxSpanKey is the context key for the OTel span started in reqid middleware.
+type ctxSpanKey struct{}
+
+// ContextWithSpan returns a new context carrying the given span.
+func ContextWithSpan(ctx context.Context, sp trace.Span) context.Context {
+	return context.WithValue(ctx, ctxSpanKey{}, sp)
+}
+
+// SpanFromContext retrieves the span stored by ContextWithSpan. Returns nil if absent.
+func SpanFromContext(ctx context.Context) trace.Span {
+	sp, _ := ctx.Value(ctxSpanKey{}).(trace.Span)
+	return sp
+}
+
 // Config controls TracerProvider initialization.
 type Config struct {
 	// OTLPEndpoint is the host:port of the OTLP/gRPC collector.

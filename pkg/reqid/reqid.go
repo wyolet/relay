@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	"github.com/oklog/ulid/v2"
+	"go.opentelemetry.io/otel"
+
 	"github.com/wyolet/relay/pkg/usage"
 )
 
@@ -62,6 +64,8 @@ func Middleware(base *slog.Logger) func(http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, ctxKeyLogger, logger)
 			attr := usage.ParseMetadataHeader(r.Header.Get("X-Relay-Metadata"))
 			ctx = context.WithValue(ctx, ctxKeyAttribution, attr)
+			ctx, sp := otel.Tracer("relay").Start(ctx, usage.SpanName)
+			ctx = usage.ContextWithSpan(ctx, sp)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

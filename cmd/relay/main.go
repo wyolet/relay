@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	apiopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/keypool"
 	"github.com/wyolet/relay/pkg/limit"
@@ -21,11 +23,30 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/state"
 	"github.com/wyolet/relay/pkg/transport"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
+	bootCtx := context.Background()
+
+	// Event log (daily-rotated JSONL under RELAY_EVENTLOG_DIR or ./events).
+	el, err := eventlog.New(eventlog.Config{})
+	if err != nil {
+		log.Fatalf("eventlog: %v", err)
+	}
+
+	// OTel TracerProvider — no-op when RELAY_OTLP_ENDPOINT is unset.
+	usageShutdown, err := usage.Init(bootCtx, usage.Config{
+		OTLPEndpoint: os.Getenv("RELAY_OTLP_ENDPOINT"),
+		EventLog:     el,
+	})
+	if err != nil {
+		log.Fatalf("usage.Init: %v", err)
+	}
+
 	var cfg configstore.ConfigStore
 	yamlStore, err := configstore.LoadYAML("config")
 	if err != nil {
@@ -126,6 +147,17 @@ func main() {
 	r.Get("/v1/models", apiopenai.ListModels(cfg))
 
 	addr := ":8080"
+	srv := &http.Server{Addr: addr, Handler: r}
+
 	log.Printf("relay listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, r))
+	srvErr := make(chan error, 1)
+	go func() { srvErr <- srv.ListenAndServe() }()
+
+	<-srvErr // block until server exits (or use signal handling in prod)
+
+	// Graceful stop: drain usage spans/events before closing eventlog.
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	usageShutdown(shutCtx)
+	el.Close(shutCtx)
 }

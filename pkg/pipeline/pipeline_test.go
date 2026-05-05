@@ -1,18 +1,26 @@
 package pipeline
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/keypool"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/state"
 	"github.com/wyolet/relay/pkg/transport"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // fakeOutbound is a controllable provider.Outbound for tests.
@@ -928,5 +936,316 @@ spec:
 	}
 	if msgs[0].Headers["Retry-After"] != "30" {
 		t.Fatalf("expected Retry-After: 30, got %s", msgs[0].Headers["Retry-After"])
+	}
+}
+
+// --- Lifecycle / usage.Record integration tests ---
+
+// lcEnv sets up a temp-dir eventlog + tracetest recorder, installs both
+// globally, and returns a context with a span on it.
+// flush() closes the eventlog (draining pending writes) then reads events.
+// t.Cleanup handles OTel shutdown.
+func lcEnv(t *testing.T) (ctx context.Context, sr *tracetest.SpanRecorder, flush func() []map[string]interface{}) {
+	t.Helper()
+	dir := t.TempDir()
+	el, err := eventlog.New(eventlog.Config{Dir: dir, BufferSize: 512})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr = tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	otel.SetTracerProvider(tp)
+	shutdown, err := usage.Init(context.Background(), usage.Config{EventLog: el})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		shutdown(shutCtx)
+		// Reset global eventlogger so parallel pkg tests aren't affected.
+		usage.Init(context.Background(), usage.Config{}) //nolint:errcheck
+	})
+	spanCtx, sp := tp.Tracer("relay").Start(context.Background(), usage.SpanName)
+	spanCtx = usage.ContextWithSpan(spanCtx, sp)
+	flush = func() []map[string]interface{} {
+		t.Helper()
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		el.Close(closeCtx)
+		return readEvents(t, dir)
+	}
+	return spanCtx, sr, flush
+}
+
+// readEvents reads all JSONL events from dir.
+func readEvents(t *testing.T, dir string) []map[string]interface{} {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]interface{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		f, err := os.Open(dir + "/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			line := sc.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			var m map[string]interface{}
+			if err2 := json.Unmarshal(line, &m); err2 != nil {
+				f.Close()
+				t.Fatal(err2)
+			}
+			out = append(out, m)
+		}
+		f.Close()
+	}
+	return out
+}
+
+func TestLifecycle_SingleSuccess(t *testing.T) {
+	ctx, sr, flush := lcEnv(t)
+
+	responseBody := []byte(`{"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}`)
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}, Body: responseBody}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+	opts.Model = &configstore.Model{Metadata: configstore.Metadata{Name: "gpt-4o"}}
+	opts.Provider = &configstore.Provider{Metadata: configstore.Metadata{Name: "openai"}}
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+	if err := Run(ctx, ch, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	ev := evs[0]
+	if ev["terminated_by"] != "clean" {
+		t.Errorf("terminated_by want clean, got %v", ev["terminated_by"])
+	}
+	if ev["model"] != "gpt-4o" {
+		t.Errorf("model want gpt-4o, got %v", ev["model"])
+	}
+	attempts, _ := ev["attempts"].([]interface{})
+	if len(attempts) != 1 {
+		t.Fatalf("expected 1 attempt, got %d", len(attempts))
+	}
+	a := attempts[0].(map[string]interface{})
+	if a["outcome"] != "success" {
+		t.Errorf("attempt outcome want success, got %v", a["outcome"])
+	}
+	metrics, _ := ev["metrics"].(map[string]interface{})
+	for _, key := range []string{"pre_upstream_ms", "upstream_ttfb_ms", "upstream_total_ms", "total_ms"} {
+		if _, ok := metrics[key]; !ok {
+			t.Errorf("missing metric %q", key)
+		}
+	}
+	tokens, _ := ev["tokens"].(map[string]interface{})
+	if tokens["total"] != float64(30) {
+		t.Errorf("tokens.total want 30, got %v", tokens["total"])
+	}
+
+	spans := sr.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span ended, got %d", len(spans))
+	}
+}
+
+func TestLifecycle_FailoverThenSuccess(t *testing.T) {
+	ctx, _, flush := lcEnv(t)
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		if idx == 1 {
+			out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "500", "X-Relay-Final": "true"}}
+			return
+		}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+	if err := Run(ctx, ch, opts); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	ev := evs[0]
+	if ev["terminated_by"] != "clean" {
+		t.Errorf("terminated_by want clean, got %v", ev["terminated_by"])
+	}
+	attempts, _ := ev["attempts"].([]interface{})
+	if len(attempts) != 2 {
+		t.Fatalf("expected 2 attempts, got %d", len(attempts))
+	}
+	a0 := attempts[0].(map[string]interface{})
+	a1 := attempts[1].(map[string]interface{})
+	if a0["outcome"] != "http_5xx" {
+		t.Errorf("attempt[0] outcome want http_5xx, got %v", a0["outcome"])
+	}
+	if a1["outcome"] != "success" {
+		t.Errorf("attempt[1] outcome want success, got %v", a1["outcome"])
+	}
+}
+
+func TestLifecycle_RateLimitedByReserve(t *testing.T) {
+	ctx, _, flush := lcEnv(t)
+
+	rules, l, rcleanup := exceededRules(configstore.MeterRequests, 30)
+	defer rcleanup()
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+	}}
+	opts := testSetupWithLimiter(t, ob, l, rules)
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+	Run(ctx, ch, opts)
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0]["terminated_by"] != string(usage.TerminatedRateLimited) {
+		t.Errorf("terminated_by want rate_limited, got %v", evs[0]["terminated_by"])
+	}
+	if attempts, ok := evs[0]["attempts"].([]interface{}); ok && len(attempts) > 0 {
+		t.Errorf("expected 0 attempts for rate-limited, got %d", len(attempts))
+	}
+}
+
+func TestLifecycle_PoolExhausted(t *testing.T) {
+	ctx, _, flush := lcEnv(t)
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+	opts.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
+	opts.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+	Run(ctx, ch, opts)
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0]["terminated_by"] != string(usage.TerminatedPoolExhausted) {
+		t.Errorf("terminated_by want pool_exhausted, got %v", evs[0]["terminated_by"])
+	}
+}
+
+func TestLifecycle_ClientCancelMidStream(t *testing.T) {
+	ctx, _, flush := lcEnv(t)
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+		<-cancelCtx.Done()
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+
+	ch := newTestChannel(cancelCtx)
+	sendInbound(ch)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- Run(cancelCtx, ch, opts) }()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	<-errCh
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0]["terminated_by"] != string(usage.TerminatedClientCancel) {
+		t.Errorf("terminated_by want client_cancel, got %v", evs[0]["terminated_by"])
+	}
+}
+
+func TestLifecycle_UpstreamDeadline(t *testing.T) {
+	ctx, _, flush := lcEnv(t)
+
+	deadlineCtx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancel()
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		<-deadlineCtx.Done()
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+
+	ch := newTestChannel(deadlineCtx)
+	sendInbound(ch)
+	Run(deadlineCtx, ch, opts)
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0]["terminated_by"] != string(usage.TerminatedUpstreamTimeout) {
+		t.Errorf("terminated_by want upstream_timeout, got %v", evs[0]["terminated_by"])
+	}
+}
+
+func TestLifecycle_PanicInProvider(t *testing.T) {
+	ctx, _, flush := lcEnv(t)
+
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		panic("provider bug")
+	}}
+	opts, cleanup := testSetup(t, ob)
+	defer cleanup()
+
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+
+	err := Run(ctx, ch, opts)
+	if err == nil {
+		t.Fatal("expected error from recovered panic")
+	}
+	collectOut(ch)
+
+	evs := flush()
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(evs))
+	}
+	if evs[0]["terminated_by"] != string(usage.TerminatedRelayError) {
+		t.Errorf("terminated_by want relay_error, got %v", evs[0]["terminated_by"])
 	}
 }
