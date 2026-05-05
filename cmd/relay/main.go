@@ -49,6 +49,7 @@ func main() {
 		w.Write([]byte("ok"))
 	})
 	r.Post("/v1/chat/completions", openai.ChatCompletions(resolve, client.ChatCompletions))
+	r.Get("/v1/models", openai.ListModels(cfg))
 
 	addr := ":8080"
 	log.Printf("relay listening on %s; default provider=%s (%s)", addr, p.Metadata.Name, p.Spec.BaseURL)
