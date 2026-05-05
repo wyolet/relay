@@ -64,6 +64,16 @@ func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
 
+// PostgresFromPool wraps an existing pgxpool.Pool into a PGStore without performing an initial Reload.
+// The catalog snapshot is initially nil; callers must Reload before reading config.
+// Intended for the seed CLI where the DB may be empty.
+func PostgresFromPool(_ context.Context, pool *pgxpool.Pool) (*PGStore, error) {
+	snap := newSnapshot()
+	s := &PGStore{pool: pool, q: db.New(pool)}
+	s.snap = snap
+	return s, nil
+}
+
 // Reload re-reads the catalog from Postgres and atomically swaps the snapshot.
 func (s *PGStore) Reload(ctx context.Context) error {
 	snap, err := s.loadSnapshot(ctx)

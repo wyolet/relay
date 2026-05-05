@@ -30,9 +30,15 @@ func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		runMigrate(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "migrate":
+			runMigrate(os.Args[2:])
+			return
+		case "seed":
+			runSeed(os.Args[2:])
+			return
+		}
 	}
 
 	bootCtx := context.Background()
@@ -61,15 +67,23 @@ func main() {
 	}
 
 	var cfg configstore.ConfigStore
+	var pgStoreForAdmin *configstore.PGStore
 	if os.Getenv("RELAY_CATALOG_BACKEND") == "pg" {
 		pgDSN := os.Getenv("RELAY_PG_DSN")
 		if pgDSN == "" {
 			log.Fatal("RELAY_PG_DSN not set (required when RELAY_CATALOG_BACKEND=pg)")
 		}
+		autoSeed := os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
+		if autoSeed {
+			if err := maybeAutoSeed(bootCtx, pgDSN); err != nil {
+				log.Fatalf("auto-seed: %v", err)
+			}
+		}
 		pgStore, err := configstore.Postgres(bootCtx, pgDSN)
 		if err != nil {
 			log.Fatalf("configstore(pg): %v", err)
 		}
+		pgStoreForAdmin = pgStore
 		cfg = pgStore
 	} else {
 		yamlStore, err := configstore.LoadYAML("config")
@@ -170,6 +184,9 @@ func main() {
 	})
 	r.Post("/v1/chat/completions", apiopenai.ChatCompletions(resolve, runPipeline))
 	r.Get("/v1/models", apiopenai.ListModels(cfg))
+	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
+		r.Post("/admin/reload", adminReloadHandler(tok, pgStoreForAdmin))
+	}
 
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: r}

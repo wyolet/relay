@@ -259,9 +259,68 @@ Example event (abbreviated):
 | `relay_otel_dropped_total` | OTel spans dropped because the batch processor queue was full or the export RPC failed. Indicates collector backpressure. |
 | `relay_metadata_rejected_total` | `X-Relay-Metadata` headers silently dropped due to format violations. Labels: `reason=oversize`, `reason=bad_charset`, `reason=malformed`. Request still succeeds with no attribution. |
 
+## Operator: seeding Postgres from YAML
+
+When `RELAY_CATALOG_BACKEND=pg`, use `relay seed` to populate Postgres from an existing YAML config directory.
+
+### Dry-run (no writes)
+
+```bash
+RELAY_PG_DSN="postgres://relay:relay@localhost:5432/relay?sslmode=disable" \
+  relay seed --from config/
+```
+
+Prints a grouped diff (`+` create, `~` update, `-` delete) without touching the database. Exit 0.
+
+### Apply (idempotent upsert)
+
+```bash
+relay seed --from config/ --apply
+# or pass DSN inline
+relay seed --from config/ --apply --dsn "postgres://..."
+```
+
+Runs a single `BEGIN … COMMIT` transaction. Validation runs before the transaction opens — a broken YAML directory exits non-zero and never touches the database. Running twice is a no-op.
+
+### Auto-seed on first boot
+
+Set `RELAY_AUTO_SEED_IF_EMPTY=1` when using the PG backend. On startup, if every catalog table is empty, Relay seeds from `RELAY_CONFIG_DIR` (default: `config/`) and logs:
+
+```
+auto-seed: applied N rows from <dir>
+```
+
+Subsequent boots that find any rows in any table are no-ops.
+
+| Variable | Default | Description |
+|---|---|---|
+| `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | Set to `1` to enable auto-seed on boot (PG backend only). |
+| `RELAY_CONFIG_DIR` | `config` | YAML config directory used by auto-seed. |
+
+## Operator: admin reload endpoint
+
+`POST /admin/reload` tells the running relay to re-read its catalog from Postgres and swap the in-memory snapshot atomically.
+
+The endpoint is **only registered** when `RELAY_ADMIN_TOKEN` is set. When the env var is absent, the route does not exist (404 from the default handler — no endpoint discovery).
+
+| Auth result | Response |
+|---|---|
+| Missing / wrong token | 404 (obscures endpoint existence) |
+| Correct token | 200 (empty body) |
+| Reload error | 500 (JSON error envelope) |
+
+```bash
+export RELAY_ADMIN_TOKEN=my-secret-token
+
+curl -X POST http://localhost:8080/admin/reload \
+  -H "Authorization: Bearer my-secret-token"
+```
+
+Every call is logged at INFO with caller IP and request ID. The endpoint is unmounted when `RELAY_CATALOG_BACKEND` is not `pg` (no PGStore to reload).
+
 ## Status
 
-M4 complete: usage tracking (eventlog JSONL, OTel spans, X-Relay-Metadata attribution, drop counters).
+M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`.
 
 ## License
 
