@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/wyolet/relay/pkg/httpmw"
 )
 
 // ModelResolver looks up a model name from the request and returns
@@ -25,6 +27,11 @@ func ChatCompletions(resolve ModelResolver, forward ForwardFn) http.HandlerFunc 
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			if httpmw.IsBodyTooLargeError(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error",
+					fmt.Sprintf("request body exceeds %d bytes", httpmw.DefaultMaxRequestBytes), "request_too_large")
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body", "")
 			return
 		}

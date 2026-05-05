@@ -10,6 +10,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/provider/ollama"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -43,6 +44,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
+	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte("ok"))
 	})
