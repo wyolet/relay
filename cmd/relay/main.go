@@ -295,21 +295,23 @@ func main() {
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 
-	// Open routes — no auth required.
-	r.Get("/healthz", healthzHandler(healthzBackends, healthzDeadlineMS))
-	// Forward-looking open routes (PER-250): /openapi.json, /docs.
-	r.Get("/openapi.json", http.NotFound)
-	r.Get("/docs", http.NotFound)
+	var adminH http.HandlerFunc
+	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
+		adminH = adminReloadHandler(tok, pgStoreForAdmin)
+	}
 
-	// Authenticated routes.
-	r.Group(func(r chi.Router) {
-		r.Use(authMW)
-		r.Post("/v1/chat/completions", apiopenai.ChatCompletions(resolve, runPipeline))
-		r.Get("/v1/models", apiopenai.ListModels(cfg))
-		if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
-			r.Post("/admin/reload", adminReloadHandler(tok, pgStoreForAdmin))
-		}
-	})
+	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,
+	// /schemas (unauthenticated) and all business-logic operations (auth enforced
+	// per-operation via humaAuth). The chi Group pattern from PER-249 is replaced
+	// by per-op huma middleware; auth_wiring_test.go uses its own plain chi helper.
+	mountHuma(
+		r,
+		authMW,
+		healthzHandler(healthzBackends, healthzDeadlineMS),
+		apiopenai.ChatCompletions(resolve, runPipeline),
+		apiopenai.ListModels(cfg),
+		adminH,
+	)
 
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: r}
