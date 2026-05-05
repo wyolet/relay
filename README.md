@@ -112,9 +112,41 @@ curl localhost:8080/v1/chat/completions \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
 ```
 
+## Rate limiting (M3)
+
+Rate limits are first-class YAML resources. A `RateLimit` is a generic budget (`strategy + window + amount`); attachments on `Secret` / `Pool` / `Model` declare what to count via a `meter` (`requests` / `tokens` / `concurrency`):
+
+```yaml
+# rate-limit definition
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata: { name: gpt4-rpm }
+spec:
+  strategy: sliding-window
+  window: 1m
+  amount: 500
+
+# attachment on a Model
+spec:
+  rateLimits:
+    - { ref: gpt4-rpm, meter: requests }
+    - { ref: gpt4-tpm, meter: tokens }
+    - { ref: gpt4-conc, meter: concurrency }
+```
+
+Enforcement is two-phase: **Reserve** pre-flight (requests + concurrency + token-budget peek) and **Commit** post-call (token credit from upstream usage block, concurrency decrement). Pool selection is quota-aware: secrets with more remaining headroom get picked more often.
+
+Exceeding a budget returns a 429 with an OpenAI-shape envelope:
+
+```json
+{"error":{"message":"rate limit exceeded: requests","type":"rate_limit_exceeded","code":"rpm_exceeded"}}
+```
+
+Codes: `rpm_exceeded`, `tpm_exceeded`, `concurrency_exceeded`, `pool_out_of_capacity`. `Retry-After` header included.
+
 ## Status
 
-M2 complete: YAML config, multi-provider, key pooling, env-var secrets, .env loader.
+M3 complete: rate limiting, sliding-window-counter, three-meter Reserve/Commit, quota-aware pool selection.
 
 ## License
 

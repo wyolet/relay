@@ -19,27 +19,39 @@ spec:
   contextWindow: 8192
   license: gemma-terms
   rateLimits:
-    - ref: gemma4-rpm-default
+    - ref: gemma4-rpm
       meter: requests
-    - ref: gemma4-tpm-default
+    - ref: gemma4-tpm
       meter: tokens
+    - ref: gemma4-concurrency
+      meter: concurrency
 
-# Model-specific rate limits. Co-located because they belong to the model.
+# Tight defaults so M3 enforcement is visible end-to-end on a dev box.
+# Bump amounts for production-shaped local testing.
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
-  name: gemma4-rpm-default
+  name: gemma4-rpm
 spec:
   strategy: sliding-window
   window: 1m
-  amount: 1000
+  amount: 5
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
-  name: gemma4-tpm-default
+  name: gemma4-tpm
 spec:
   strategy: sliding-window
   window: 1m
-  amount: 500000
+  amount: 1000000
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: gemma4-concurrency
+spec:
+  strategy: sliding-window
+  window: 1m
+  amount: 3
