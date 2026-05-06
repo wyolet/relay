@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -430,17 +429,15 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore
 }
 
 // adminTokenGate returns a chi middleware that checks the admin token.
-// Accepted sources (in order): X-Relay-Admin-Token header, Authorization: Bearer header,
-// relay_admin cookie (set by POST /admin/login).
+// Accepted sources (in order): X-Relay-Admin-Token header, relay_admin cookie
+// (set by POST /admin/login). Authorization: Bearer is reserved for the
+// caller-API-key auth tier; it is not read here.
 // Returns 404 on mismatch — security-through-obscurity posture matching /admin/reload.
 func adminTokenGate(token string) func(http.Handler) http.Handler {
 	tok := []byte(token)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			adminTok := r.Header.Get("X-Relay-Admin-Token")
-			if adminTok == "" {
-				adminTok = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			}
 			if adminTok == "" {
 				if c, err := r.Cookie("relay_admin"); err == nil {
 					adminTok = c.Value
