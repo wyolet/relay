@@ -136,15 +136,15 @@ Boot fails with a non-zero exit code if a required DSN is missing for the config
 
 | Var | Default | Required when | Semantics |
 |---|---|---|---|
-| `RELAY_ADMIN_TOKEN` | _(empty)_ | optional | Bearer token for `POST /admin/reload`. When unset, the endpoint is not registered (404). Rotation procedure: see §7. |
-| `RELAY_API_KEY` | _(empty)_ | see PER-249 | Single inbound API key for caller auth (forward-looking, see PER-249). |
-| `RELAY_API_KEYS` | _(empty)_ | see PER-249 | Comma-separated list of valid inbound API keys (forward-looking, see PER-249). |
+| `RELAY_ADMIN_TOKEN` | _(empty)_ | optional | Bearer token for `POST /admin/reload`. When unset, the endpoint is not registered (404). Pass via `X-Relay-Admin-Token` header when caller auth is active. Rotation procedure: see §7. |
+| `RELAY_API_KEY` | _(empty)_ | optional | Single inbound API key for caller auth. When unset alongside `RELAY_API_KEYS`, relay runs fail-open (a warning is logged). |
+| `RELAY_API_KEYS` | _(empty)_ | optional | Comma-separated list of valid inbound API keys. Takes precedence alongside `RELAY_API_KEY` (both are parsed together). |
 
 ### Admin / tuning
 
 | Var | Default | Required when | Semantics |
 |---|---|---|---|
-| `RELAY_ADMIN_RELOAD_RPM` | _(see PER-254)_ | optional | Rate limit on `POST /admin/reload` (forward-looking, see PER-254). |
+| `RELAY_ADMIN_RELOAD_RPM` | `10` | optional | Rate limit (requests per minute) on `POST /admin/reload`, enforced per source IP. Default 10 RPM. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | optional | Per-backend ping timeout for `/healthz` in milliseconds. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | optional | Total graceful shutdown budget in seconds. Covers all drain steps. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | optional | Set to `1` to seed Postgres from `RELAY_CONFIG_DIR` on first boot if all catalog tables are empty. Subsequent boots with any rows are no-ops. |
@@ -300,6 +300,18 @@ relay seed --from config/ --apply
 2. Reload both pods:
 
 ```bash
+# When caller auth (RELAY_API_KEY/RELAY_API_KEYS) is active, pass the caller key
+# in Authorization and the admin token in X-Relay-Admin-Token:
+curl -s -X POST \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/admin/reload
+curl -s -X POST \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
+  http://localhost:8082/admin/reload
+
+# Without caller auth (RELAY_API_KEY unset), use Authorization for the admin token:
 curl -s -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   http://localhost:8081/admin/reload
 curl -s -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
@@ -320,7 +332,7 @@ SELECT name, updated_at FROM rate_limits ORDER BY updated_at DESC LIMIT 5;
 curl http://localhost:8080/openapi.json | jq
 ```
 
-(Forward-looking — see PER-250 for OpenAPI endpoint implementation.)
+The spec is served at `/openapi.json` (unauthenticated). The interactive Swagger UI is at `/docs`. Both are registered as huma operations and reflect all public and admin endpoints.
 
 ### Correlate a request across all signals
 
@@ -421,7 +433,7 @@ Relay supports multiple inbound keys via `RELAY_API_KEYS` (comma-separated). Zer
    RELAY_API_KEYS=new-key
    ```
 
-(Forward-looking — caller auth is implemented in PER-249.)
+`RELAY_API_KEY` (singular) and `RELAY_API_KEYS` (comma-separated) are both parsed and merged at startup. Either or both may be set.
 
 ### Admin token rotation
 
@@ -436,8 +448,9 @@ There is no multi-token support for the admin endpoint today — rotation requir
 ### Admin endpoint hardening
 
 - `POST /admin/reload` is only registered when `RELAY_ADMIN_TOKEN` is set AND `RELAY_CATALOG_BACKEND=pg`.
-- A wrong or missing token returns 404 (obscures endpoint existence).
-- Rate limiting on the admin endpoint is planned (PER-254).
+- A wrong or missing admin token returns 404 (obscures endpoint existence).
+- Rate limiting: 10 RPM per source IP by default (configurable via `RELAY_ADMIN_RELOAD_RPM`). The 11th request in a 60s window returns 429 with `Retry-After`.
+- When caller auth is active (`RELAY_API_KEY`/`RELAY_API_KEYS`), pass the caller bearer key in `Authorization: Bearer` and the admin secret in `X-Relay-Admin-Token`. Without caller auth, use `Authorization: Bearer` for the admin token directly.
 - Restrict network access to the admin port via your LB/ingress CIDR allowlist or a private-only VPC subnet.
 
 ### CIDR allowlist / network isolation

@@ -420,9 +420,41 @@ curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/
 |---|---|
 | [docs/runbook.md](docs/runbook.md) | Operator reference: deployment, env-var table, healthcheck semantics, failure modes, debugging recipes, capacity planning, security checklist |
 
+## Caller authentication
+
+Set `RELAY_API_KEY` or `RELAY_API_KEYS` (comma-separated) to enforce bearer-token auth on all API endpoints:
+
+```bash
+RELAY_API_KEY=your-secret-key ./relay
+```
+
+Unauthenticated endpoints (always open): `GET /healthz`, `GET /openapi.json`, `GET /docs`.
+
+Protected endpoints (require `Authorization: Bearer <key>`): `POST /v1/chat/completions`, `GET /v1/models`, `POST /admin/reload`.
+
+Zero-downtime key rotation: set both old and new keys in `RELAY_API_KEYS`, migrate clients, then remove the old key.
+
+When both caller auth and `RELAY_ADMIN_TOKEN` are active, call `/admin/reload` with:
+
+```bash
+curl -X POST http://localhost:8080/admin/reload \
+  -H "Authorization: Bearer $RELAY_API_KEY" \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
+```
+
+## Production deployment
+
+See [docs/runbook.md](docs/runbook.md) for:
+- Full env-var reference (storage backends, auth, observability, tuning)
+- Healthcheck semantics and LB integration
+- Failure modes (Postgres down, Redis down, ClickHouse down, OTel down)
+- Debugging recipes (admin reload, Redis inspection, log correlation)
+- Capacity planning and GOMEMLIMIT/GOGC tuning
+- Security checklist (TLS, API key rotation, admin endpoint hardening)
+
 ## Status
 
-M5 complete: PG-backed catalog, seed CLI, auto-seed, `/admin/reload`, `/healthz`, graceful shutdown, OTel storage resource attrs. docker-compose smoke stack (PER-248).
+M6 complete: caller bearer auth, OpenAPI 3.1 surface (`/openapi.json`, `/docs`), header allowlist (PER-251), error envelope audit (PER-252), operator runbook (PER-253), admin rate-limit (PER-254), p99 bench gate (PER-255). All 8 HITL walkthrough scenarios verified (PER-256).
 
 ## License
 

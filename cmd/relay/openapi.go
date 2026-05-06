@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -11,6 +14,66 @@ import (
 )
 
 const relayVersion = "0.1.0"
+
+func init() {
+	// Override huma's default error model to produce OpenAI-compatible envelopes.
+	// This ensures that huma-level errors (413 body too large, 422 validation, etc.)
+	// arrive in the same shape as Relay's own errors.
+	huma.NewError = func(status int, msg string, errs ...error) huma.StatusError {
+		code := ""
+		errType := "invalid_request_error"
+		// Detect body-too-large regardless of the status huma assigns.
+		// When httpmw.LimitBody (http.MaxBytesReader) triggers before huma's own
+		// limit-reader, huma receives a *http.MaxBytesError and maps it to 500.
+		// We promote that to 413 here.
+		for _, e := range errs {
+			var mbe *http.MaxBytesError
+			if errors.As(e, &mbe) {
+				status = http.StatusRequestEntityTooLarge
+				msg = "request body too large"
+				break
+			}
+		}
+		switch status {
+		case http.StatusRequestEntityTooLarge:
+			code = "request_too_large"
+		case http.StatusUnprocessableEntity:
+			code = "unprocessable_entity"
+		case http.StatusTooManyRequests:
+			errType = "rate_limit_exceeded"
+			code = "rate_limit_exceeded"
+			msg = "rate limit exceeded"
+		case http.StatusInternalServerError:
+			errType = "server_error"
+			code = "internal_error"
+		}
+		return &openAIError{
+			Err:        openAIErrorInner{Type: errType, Code: code, Message: msg},
+			httpStatus: status,
+		}
+	}
+}
+
+// openAIErrorInner is the inner object of the OpenAI error envelope.
+type openAIErrorInner struct {
+	Type    string `json:"type"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// openAIError implements huma.StatusError and outputs an OpenAI-compatible envelope.
+// The Error field is exported so huma's SchemaLinkTransformer copies it into the
+// wrapped struct (which adds $schema). The unexported httpStatus carries the HTTP code.
+type openAIError struct {
+	// Err is the inner OpenAI error object; serialized as "error" key.
+	Err openAIErrorInner `json:"error"`
+
+	httpStatus int
+}
+
+func (e *openAIError) GetStatus() int              { return e.httpStatus }
+func (e *openAIError) Error() string               { return e.Err.Message }
+func (e *openAIError) ContentType(_ string) string { return "application/json" }
 
 // humaAuth converts a net/http middleware into a huma per-operation middleware.
 // It is used to gate /v1/* and /admin/* endpoints with the same bearer-token
@@ -64,14 +127,20 @@ func mountHuma(
 	}
 
 	// delegateBody wraps an http.HandlerFunc as a huma stream handler with a raw body.
+	// Huma reads r.Body to populate inp.RawBody for OpenAPI validation; we restore
+	// r.Body from the parsed bytes so the downstream handler can re-read it.
 	type chatInput struct {
 		RawBody json.RawMessage `doc:"OpenAI-compatible chat completion request (see https://platform.openai.com/docs/api-reference/chat/create)."`
 	}
 	delegateBody := func(h http.HandlerFunc) func(context.Context, *chatInput) (*huma.StreamResponse, error) {
-		return func(_ context.Context, _ *chatInput) (*huma.StreamResponse, error) {
+		return func(_ context.Context, inp *chatInput) (*huma.StreamResponse, error) {
+			raw := inp.RawBody
 			return &huma.StreamResponse{
 				Body: func(ctx huma.Context) {
 					r, w := humachi.Unwrap(ctx)
+					// Restore the body that huma consumed during schema validation.
+					r.Body = io.NopCloser(bytes.NewReader(raw))
+					r.ContentLength = int64(len(raw))
 					h.ServeHTTP(w, r)
 				},
 			}, nil

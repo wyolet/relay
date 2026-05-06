@@ -84,8 +84,14 @@ func adminReloadHandler(token string, store reloader, lim *limit.Limiter) http.H
 		log := reqid.Logger(ctx)
 		ip := sourceIP(r)
 
-		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(auth), tok) != 1 {
+		// Admin token may be passed as X-Relay-Admin-Token or as Authorization: Bearer.
+		// When the outer caller-auth middleware is active, Authorization is consumed by
+		// the API-key check; operators should use X-Relay-Admin-Token for the admin secret.
+		adminTok := r.Header.Get("X-Relay-Admin-Token")
+		if adminTok == "" {
+			adminTok = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		}
+		if subtle.ConstantTimeCompare([]byte(adminTok), tok) != 1 {
 			log.Warn("admin/reload: unauthorized", "ip", ip)
 			http.NotFound(w, r)
 			return
