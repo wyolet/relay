@@ -58,6 +58,18 @@ The **Route** is the unit of intent. Customer sends `X-Relay-Route: prod-cheap`;
 - No middleware/plugin chain à la LiteLLM
 - All emits (usage → ClickHouse, span → OTel, payload → S3) are async via bounded channels with drop-on-full + drop counter
 
+### `pkg/kv` consumer conventions
+
+1. Hash-tag every kv key with `{tag}:` where tag is the consumer's atomicity boundary.
+2. All keys touched in one Lua script (`RunScript`) or `WithLock` must share the same `{tag}` substring.
+3. Centralize key construction in a `keys.go` per consumer — no inline key strings at call sites.
+4. Each consumer declares its own narrow interface listing only the kv methods it uses; don't import a fat `kv.Store` everywhere.
+5. Every key must have a TTL unless justified in a code comment. Persistent data goes in Postgres.
+6. Tests must pass against both `kv.Mem` and `kv.Redis` backends.
+7. Document expected kv ops per request in the consumer's package doc comment.
+
+Full guide: `docs/kv.md`.
+
 ### Streaming
 - Tee model: bytes pass through, parser goroutine extracts usage from a copy
 - Cross-format reserialize is a slower path; same-format passthrough is the 95% case
