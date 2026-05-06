@@ -9,12 +9,18 @@
 // key selection, and pipeline orchestration — from real network latency, real
 // datastores, and multi-pod coordination.
 //
+// The bench exercises the full huma + humachi production hot path: chat
+// completions are registered via huma.Register with a RawBody input struct,
+// and the body-restore pattern from delegateBody (PER-256) is applied so the
+// downstream handler can re-read r.Body after huma consumes it. This matches
+// cmd/relay/openapi.go exactly.
+//
 // What IS measured (the realistic post-PER-249/PER-251 hot path):
 //   - Bearer-token auth middleware (auth.Middleware)
 //   - Inbound-header allowlist (httpheader.StripInbound, inside ChatCompletions)
 //   - Request-ID middleware (reqid.Middleware)
 //   - Body-limit middleware (httpmw.LimitBody)
-//   - Huma/humachi routing layer
+//   - Huma/humachi routing + body-passthrough layer (full production path)
 //   - Model resolution from in-memory configstore
 //   - Key selection via keypool.Selector (in-memory state, no Redis round-trip)
 //   - Rate-limit Reserve+Commit via pkg/limit (in-memory sliding window)
@@ -67,6 +73,11 @@ import (
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/pkg/usage"
 )
+
+// chatInput mirrors the production input struct in cmd/relay/openapi.go.
+type chatInput struct {
+	RawBody json.RawMessage `doc:"OpenAI-compatible chat completion request."`
+}
 
 // cannedResponse is a realistic ~500-byte non-streaming chat completion response.
 const cannedResponse = `{"id":"chatcmpl-bench001","object":"chat.completion","created":1700000000,"model":"gpt-bench","choices":[{"index":0,"message":{"role":"assistant","content":"The answer is 42. This is a canned response used by the Relay p99 bench to provide a realistic payload size without a live upstream."},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":32,"total_tokens":44}}`
@@ -268,31 +279,74 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	return r
 }
 
-// mountBenchHuma wires the chi router with huma for OpenAPI infrastructure and
-// registers the chat-completions route using a plain chi group (not huma's body
-// parser) so that r.Body is available when ChatCompletions reads it. Auth is
-// enforced via a chi middleware group, matching the realistic hot path.
-//
-// Note: huma is mounted for its routing/middleware layer; the chat endpoint is
-// registered as a direct chi route to avoid huma consuming r.Body before
-// ChatCompletions can read it (the same approach used in auth_wiring_test.go).
+// humaAuthBench converts a net/http middleware into a huma per-operation
+// middleware, mirroring humaAuth in cmd/relay/openapi.go.
+func humaAuthBench(authMW func(http.Handler) http.Handler) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		r, w := humachi.Unwrap(ctx)
+		authMW(http.HandlerFunc(func(w2 http.ResponseWriter, r2 *http.Request) {
+			next(humachi.NewContext(ctx.Operation(), r2, w2))
+		})).ServeHTTP(w, r)
+	}
+}
+
+// mountBenchHuma wires the chi router through huma + humachi exactly as
+// cmd/relay/openapi.go does: chat is registered as a huma operation with a
+// RawBody input struct; the body-restore pattern from delegateBody (PER-256)
+// ensures the downstream handler can re-read r.Body after huma consumes it.
 func mountBenchHuma(
 	chiRouter chi.Router,
 	authMW func(http.Handler) http.Handler,
 	chatH http.HandlerFunc,
 	modelsH http.HandlerFunc,
 ) {
-	// Mount huma for OpenAPI infrastructure (schema, docs).
 	cfg := huma.DefaultConfig("Wyolet Relay bench", "0.0.0")
-	humachi.New(chiRouter, cfg)
+	api := humachi.New(chiRouter, cfg)
+	auth := huma.Middlewares{humaAuthBench(authMW)}
 
-	// Register chat + models as plain chi routes with auth middleware.
-	// This is the realistic hot path: auth MW → chi routing → handler.
-	chiRouter.Group(func(r chi.Router) {
-		r.Use(authMW)
-		r.Post("/v1/chat/completions", chatH)
-		r.Get("/v1/models", modelsH)
+	delegate := func(h http.HandlerFunc) func(context.Context, *struct{}) (*huma.StreamResponse, error) {
+		return func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+			return &huma.StreamResponse{
+				Body: func(ctx huma.Context) {
+					r, w := humachi.Unwrap(ctx)
+					h.ServeHTTP(w, r)
+				},
+			}, nil
+		}
+	}
+
+	// POST /v1/chat/completions — huma reads RawBody, we restore r.Body so
+	// ChatCompletions can re-read it (mirrors delegateBody in openapi.go).
+	huma.Register(api, huma.Operation{
+		OperationID: "create-chat-completion",
+		Method:      http.MethodPost,
+		Path:        "/v1/chat/completions",
+		Summary:     "Create chat completion",
+		Tags:        []string{"chat"},
+		Errors:      []int{400, 401, 404, 429, 500},
+		Middlewares: auth,
+	}, func(_ context.Context, inp *chatInput) (*huma.StreamResponse, error) {
+		raw := inp.RawBody
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				r, w := humachi.Unwrap(ctx)
+				r.Body = io.NopCloser(bytes.NewReader(raw))
+				r.ContentLength = int64(len(raw))
+				chatH.ServeHTTP(w, r)
+			},
+		}, nil
 	})
+
+	// GET /v1/models — auth-gated.
+	huma.Register(api, huma.Operation{
+		OperationID: "list-models",
+		Method:      http.MethodGet,
+		Path:        "/v1/models",
+		Summary:     "List models",
+		Tags:        []string{"models"},
+		Errors:      []int{401},
+		Middlewares: auth,
+	}, delegate(modelsH))
 }
 
 // BenchmarkBareStub measures the cost of calling the stub handler directly via
