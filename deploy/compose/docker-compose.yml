@@ -49,25 +49,12 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+    env_file:
+      - smoke.env
+      - path: ../../.env
+        required: false
     environment:
       RELAY_INSTANCE_ID: relay-a
-      RELAY_CATALOG_BACKEND: pg
-      RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
-      RELAY_STATE_BACKEND: redis
-      RELAY_REDIS_ADDR: valkey:6379
-      RELAY_EVENTLOG_BACKEND: clickhouse
-      RELAY_CH_DSN: clickhouse://relay:relay@clickhouse:9000/relay
-      RELAY_OTLP_ENDPOINT: jaeger:4317
-      RELAY_API_KEY: test-key
-      RELAY_ADMIN_TOKEN: admin-token
-      # Auto-seed disabled for M8 HITL — catalog built via admin API
-      # RELAY_AUTO_SEED_IF_EMPTY: "1"
-      RELAY_CONFIG_DIR: /config
-      # Smoke-only master key — operators must rotate before production
-      RELAY_MASTER_KEY: aZ5opEc3vkV8vUo5wgUJzUaAqjymt/aAm0RzzMlx/d4=
-      OPENAI_KEY_TEST: test-value-1234
-      # Higher reload RPM for smoke testing
-      RELAY_ADMIN_RELOAD_RPM: "600"
     volumes:
       - ./config:/config:ro
     depends_on:
@@ -84,23 +71,12 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+    env_file:
+      - smoke.env
+      - path: ../../.env
+        required: false
     environment:
       RELAY_INSTANCE_ID: relay-b
-      RELAY_CATALOG_BACKEND: pg
-      RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
-      RELAY_STATE_BACKEND: redis
-      RELAY_REDIS_ADDR: valkey:6379
-      RELAY_EVENTLOG_BACKEND: clickhouse
-      RELAY_CH_DSN: clickhouse://relay:relay@clickhouse:9000/relay
-      RELAY_OTLP_ENDPOINT: jaeger:4317
-      RELAY_API_KEY: test-key
-      RELAY_ADMIN_TOKEN: admin-token
-      RELAY_CONFIG_DIR: /config
-      # Smoke-only master key — operators must rotate before production
-      RELAY_MASTER_KEY: aZ5opEc3vkV8vUo5wgUJzUaAqjymt/aAm0RzzMlx/d4=
-      OPENAI_KEY_TEST: test-value-1234
-      # Higher reload RPM for smoke testing
-      RELAY_ADMIN_RELOAD_RPM: "600"
     volumes:
       - ./config:/config:ro
     depends_on:
