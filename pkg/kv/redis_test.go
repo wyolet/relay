@@ -1,6 +1,6 @@
 //go:build integration
 
-package state_test
+package kv_test
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // startRedis launches a redis:7-alpine container and returns (addr, cleanup).
@@ -46,10 +46,10 @@ func startRedis(t *testing.T) string {
 	return fmt.Sprintf("%s:%s", host, port.Port())
 }
 
-func newRedisStore(t *testing.T, addr string) *state.RedisStore {
+func newRedisStore(t *testing.T, addr string) *kv.Redis {
 	t.Helper()
 	ctx := context.Background()
-	s, err := state.NewRedis(ctx, state.RedisConfig{Addr: addr})
+	s, err := kv.NewRedis(ctx, kv.RedisConfig{Addr: addr})
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
@@ -59,7 +59,7 @@ func newRedisStore(t *testing.T, addr string) *state.RedisStore {
 
 // ---- contract tests — same body runs against MemStore and RedisStore ----
 
-type storeFactory func(t *testing.T) state.Store
+type storeFactory func(t *testing.T) kv.Store
 
 func contractGetSet(t *testing.T, factory storeFactory) {
 	t.Helper()
@@ -67,7 +67,7 @@ func contractGetSet(t *testing.T, factory storeFactory) {
 	s := factory(t)
 
 	_, err := s.Get(ctx, "missing")
-	if !errors.Is(err, state.ErrNotFound) {
+	if !errors.Is(err, kv.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 	if err := s.Set(ctx, "k", []byte("hello"), 0); err != nil {
@@ -120,7 +120,7 @@ func contractTTL(t *testing.T, factory storeFactory) {
 		t.Fatalf("expected value before expiry, got %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if _, err := s.Get(ctx, "ttl-key"); !errors.Is(err, state.ErrNotFound) {
+	if _, err := s.Get(ctx, "ttl-key"); !errors.Is(err, kv.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound after expiry, got %v", err)
 	}
 }
@@ -160,7 +160,7 @@ func contractExpire(t *testing.T, factory storeFactory) {
 	if _, err := s.Get(ctx, "exp-key"); err != nil {
 		t.Fatalf("expected key after Expire reset, got %v", err)
 	}
-	if err := s.Expire(ctx, "no-such", 100*time.Millisecond); !errors.Is(err, state.ErrNotFound) {
+	if err := s.Expire(ctx, "no-such", 100*time.Millisecond); !errors.Is(err, kv.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
@@ -213,8 +213,8 @@ func runContractSuite(t *testing.T, name string, factory storeFactory) {
 }
 
 func TestContractMem(t *testing.T) {
-	runContractSuite(t, "MemStore", func(t *testing.T) state.Store {
-		s := state.New()
+	runContractSuite(t, "MemStore", func(t *testing.T) kv.Store {
+		s := kv.NewMem()
 		t.Cleanup(func() { _ = s.Close() })
 		return s
 	})
@@ -223,7 +223,7 @@ func TestContractMem(t *testing.T) {
 func TestContractRedis(t *testing.T) {
 	addr := startRedis(t)
 	// Each sub-test needs its own store to avoid key collisions.
-	runContractSuite(t, "RedisStore", func(t *testing.T) state.Store {
+	runContractSuite(t, "RedisStore", func(t *testing.T) kv.Store {
 		return newRedisStore(t, addr)
 	})
 }

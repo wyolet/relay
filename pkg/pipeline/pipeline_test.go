@@ -18,7 +18,7 @@ import (
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/keypool"
 	"github.com/wyolet/relay/pkg/limit"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/pkg/usage"
 )
@@ -39,7 +39,7 @@ func (f *fakeOutbound) ChatCompletions(ctx context.Context, body []byte, secret 
 // testSetup builds a RunOptions with two secrets and a fresh Selector.
 func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
 	t.Helper()
-	st := state.New()
+	st := kv.NewMem()
 	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
 
 	pool := &configstore.Pool{
@@ -534,7 +534,7 @@ func (f *fakeLimiter) reserve(ctx context.Context, rules []configstore.ResolvedR
 // The rule allows 1000 requests/min so tests pass through unless forced to fail.
 func testLimiterSetup(t *testing.T) (*limit.Limiter, []configstore.ResolvedRule, func()) {
 	t.Helper()
-	st := state.New()
+	st := kv.NewMem()
 	l := limit.New(st, slog.Default(), nil)
 	rules := []configstore.ResolvedRule{
 		{
@@ -556,7 +556,7 @@ func testLimiterSetup(t *testing.T) (*limit.Limiter, []configstore.ResolvedRule,
 
 func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rules []configstore.ResolvedRule) RunOptions {
 	t.Helper()
-	st := state.New()
+	st := kv.NewMem()
 	t.Cleanup(func() { st.Close() })
 	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
 	pool := &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}}
@@ -575,7 +575,7 @@ func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rule
 }
 
 func exceededRules(meter configstore.Meter, retryAfterSec int) ([]configstore.ResolvedRule, *limit.Limiter, func()) {
-	st := state.New()
+	st := kv.NewMem()
 	window := time.Minute
 	amount := int64(1)
 	// Use a fixed clock so the window bucket is deterministic.
@@ -644,7 +644,7 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 		// should never be called
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 	}}
-	st2 := state.New()
+	st2 := kv.NewMem()
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
@@ -691,7 +691,7 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 	}}
-	st2 := state.New()
+	st2 := kv.NewMem()
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
@@ -809,7 +809,7 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 		<-ctx.Done()
 	}}
 
-	st2 := state.New()
+	st2 := kv.NewMem()
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
@@ -886,7 +886,7 @@ spec:
 		t.Fatal(err)
 	}
 
-	st3 := state.New()
+	st3 := kv.NewMem()
 	defer st3.Close()
 	lim3 := limit.New(st3, slog.Default(), nil)
 	sel3 := keypool.New(st3, slog.Default(), nil, lim3, cfg, nil)

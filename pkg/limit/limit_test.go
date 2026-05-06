@@ -9,14 +9,14 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/configstore"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // helpers
 
-func newStore(t *testing.T) state.Store {
+func newStore(t *testing.T) kv.Store {
 	t.Helper()
-	s := state.New()
+	s := kv.NewMem()
 	t.Cleanup(func() { _ = s.Close() })
 	return s
 }

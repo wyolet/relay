@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,24 @@ import (
 	"time"
 )
 
+// makeTestEvent returns a minimal valid Event for use in unit tests.
+func makeTestEvent(requestID string) Event {
+	return Event{
+		EventVersion: 1,
+		RequestID:    requestID,
+		Model:        "gpt-4o",
+		Provider:     "openai",
+		Pool:         "default",
+		SecretHash:   "abc123def456",
+		TerminatedBy: "clean",
+		Tokens:       TokenCounts{Prompt: 10, Completion: 20, Total: 30},
+		InstanceID:   "pod-1",
+		RelayVersion: "dev",
+		StartedAt:    time.Now().UTC().Format("2006-01-02T15:04:05.999999999Z"),
+		EndedAt:      time.Now().UTC().Format("2006-01-02T15:04:05.999999999Z"),
+	}
+}
+
 func TestAppendAndRead(t *testing.T) {
 	dir := t.TempDir()
 	l, err := New(Config{Dir: dir})
@@ -20,14 +39,10 @@ func TestAppendAndRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	type Evt struct {
-		Name string
-		Val  int
-	}
-	events := []Evt{{"a", 1}, {"b", 2}, {"c", 3}}
+	ids := []string{"req-a", "req-b", "req-c"}
 	ctx := context.Background()
-	for _, e := range events {
-		if err := l.Append(ctx, e); err != nil {
+	for _, id := range ids {
+		if err := l.Append(ctx, makeTestEvent(id)); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 	}
@@ -46,12 +61,12 @@ func TestAppendAndRead(t *testing.T) {
 	sc := bufio.NewScanner(f)
 	var i int
 	for sc.Scan() {
-		var m map[string]any
-		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+		var ev Event
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
 			t.Fatalf("line %d not valid JSON: %v", i, err)
 		}
-		if m["Name"] != events[i].Name {
-			t.Errorf("line %d Name mismatch", i)
+		if ev.RequestID != ids[i] {
+			t.Errorf("line %d RequestID mismatch: got %q, want %q", i, ev.RequestID, ids[i])
 		}
 		i++
 	}
@@ -74,7 +89,7 @@ func TestConcurrentAppend(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				l.Append(ctx, map[string]int{"g": i, "j": j})
+				l.Append(ctx, makeTestEvent(fmt.Sprintf("req-%d-%d", i, j)))
 			}
 		}(i)
 	}
@@ -111,7 +126,7 @@ func TestBufferOverflow(t *testing.T) {
 	ctx := context.Background()
 	var gotFull bool
 	for i := 0; i < 10; i++ {
-		err := l.Append(ctx, map[string]int{"i": i})
+		err := l.Append(ctx, makeTestEvent(fmt.Sprintf("req-%d", i)))
 		if errors.Is(err, ErrBufferFull) {
 			gotFull = true
 		}
@@ -139,8 +154,8 @@ func TestDailyRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	l.Append(ctx, map[string]string{"day": "1", "seq": "a"})
-	l.Append(ctx, map[string]string{"day": "1", "seq": "b"})
+	l.Append(ctx, makeTestEvent("req-day1-a"))
+	l.Append(ctx, makeTestEvent("req-day1-b"))
 
 	// Wait until both day-1 events are written before advancing the clock.
 	for i := 0; i < 100; i++ {
@@ -152,8 +167,8 @@ func TestDailyRotation(t *testing.T) {
 
 	// Advance clock to day 2.
 	tick.Store(day2)
-	l.Append(ctx, map[string]string{"day": "2", "seq": "c"})
-	l.Append(ctx, map[string]string{"day": "2", "seq": "d"})
+	l.Append(ctx, makeTestEvent("req-day2-c"))
+	l.Append(ctx, makeTestEvent("req-day2-d"))
 
 	if err := l.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -198,12 +213,13 @@ func TestCloseAfterClose(t *testing.T) {
 		t.Errorf("second Close returned error: %v", err)
 	}
 	// Append after Close.
-	if err := l.Append(ctx, "x"); !errors.Is(err, ErrLoggerClosed) {
+	if err := l.Append(ctx, makeTestEvent("req-after-close")); !errors.Is(err, ErrLoggerClosed) {
 		t.Errorf("Append after Close: got %v, want ErrLoggerClosed", err)
 	}
 }
 
-func TestMarshalError(t *testing.T) {
+func TestZeroEventAppends(t *testing.T) {
+	// A zero-value Event is valid JSON and must not produce an error.
 	dir := t.TempDir()
 	l, err := New(Config{Dir: dir})
 	if err != nil {
@@ -211,28 +227,25 @@ func TestMarshalError(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	ch := make(chan int) // channels are not JSON-marshalable
-	err = l.Append(ctx, ch)
-	if !errors.Is(err, ErrMarshalFailed) {
-		t.Errorf("expected ErrMarshalFailed, got %v", err)
+	if err := l.Append(ctx, Event{}); err != nil {
+		t.Errorf("Append(zero Event): unexpected error: %v", err)
 	}
-	if l.dropped.Load() != 1 {
-		t.Errorf("expected dropped==1, got %d", l.dropped.Load())
-	}
-
 	if err := l.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if l.dropped.Load() != 0 {
+		t.Errorf("expected dropped==0, got %d", l.dropped.Load())
+	}
 
-	// No file should have been written.
 	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		f, _ := os.Open(filepath.Join(dir, e.Name()))
-		sc := bufio.NewScanner(f)
-		if sc.Scan() {
-			t.Errorf("expected empty file, found content in %s", e.Name())
-		}
-		f.Close()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(entries))
+	}
+	f, _ := os.Open(filepath.Join(dir, entries[0].Name()))
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	if !sc.Scan() {
+		t.Error("expected one line in file")
 	}
 }
 
@@ -244,7 +257,7 @@ func TestStatsAccuracy(t *testing.T) {
 	}
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		l.Append(ctx, map[string]int{"i": i})
+		l.Append(ctx, makeTestEvent(fmt.Sprintf("req-%d", i)))
 	}
 	if err := l.Close(ctx); err != nil {
 		t.Fatal(err)
