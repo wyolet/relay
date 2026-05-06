@@ -15,6 +15,9 @@ py-relay/.python-version
 *.test
 *.out
 
+# UI dist — fetched at build time via make ui-fetch, not source-tracked
+cmd/relay/web/dist/
+
 # Local event logs
 events/
 *.jsonl
