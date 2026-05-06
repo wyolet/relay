@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/configstore"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // reserveLuaScript is the atomic Reserve script run on Redis via EVALSHA.
@@ -240,7 +240,7 @@ func buildReserveArgs(rules []configstore.ResolvedRule, now time.Time) (keys []s
 
 // RegisterScripts registers the Go emulators for limit.reserve and limit.commit
 // on the given MemStore. Called once per Limiter constructed from a MemStore.
-func RegisterScripts(m *state.MemStore) {
+func RegisterScripts(m *kv.Mem) {
 	m.RegisterScript("limit.reserve", memReserveImpl)
 	m.RegisterScript("limit.commit", memCommitImpl)
 }
@@ -249,7 +249,7 @@ func RegisterScripts(m *state.MemStore) {
 // It replicates the same sliding-window + rollback logic atomically using
 // MemStore.WithLock (already held by the caller via RunScript's locking model;
 // MemStore.RunScript does NOT hold a lock — we must take one inside).
-func memReserveImpl(ctx context.Context, store *state.MemStore, keys []string, args []any) ([]byte, error) {
+func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []any) ([]byte, error) {
 	if len(args) < 3 {
 		return nil, fmt.Errorf("limit.reserve: expected 3 args, got %d", len(args))
 	}
@@ -416,7 +416,7 @@ func memReserveImpl(ctx context.Context, store *state.MemStore, keys []string, a
 }
 
 // memReadCounter reads an int64 from MemStore; missing key = 0.
-func memReadCounter(ctx context.Context, store *state.MemStore, key string) (int64, error) {
+func memReadCounter(ctx context.Context, store *kv.Mem, key string) (int64, error) {
 	b, err := store.Get(ctx, key)
 	if err != nil {
 		if isNotFound(err) {
@@ -432,11 +432,11 @@ func memReadCounter(ctx context.Context, store *state.MemStore, key string) (int
 }
 
 func isNotFound(err error) bool {
-	return err != nil && err.Error() == state.ErrNotFound.Error()
+	return err != nil && err.Error() == kv.ErrNotFound.Error()
 }
 
 // memCommitImpl is the Go emulator for commitLuaScript.
-func memCommitImpl(ctx context.Context, store *state.MemStore, keys []string, args []any) ([]byte, error) {
+func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any) ([]byte, error) {
 	if len(args) < 6 {
 		return nil, fmt.Errorf("limit.commit: expected 6 args, got %d", len(args))
 	}

@@ -18,7 +18,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/limit"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // startRedis launches a redis:7-alpine container and returns (addr, cleanup).
@@ -50,9 +50,9 @@ func startRedis(t *testing.T) string {
 	return fmt.Sprintf("%s:%s", host, port.Port())
 }
 
-func newRedisStore(t *testing.T, addr string) *state.RedisStore {
+func newRedisStore(t *testing.T, addr string) *kv.Redis {
 	t.Helper()
-	s, err := state.NewRedis(context.Background(), state.RedisConfig{Addr: addr})
+	s, err := kv.NewRedis(context.Background(), kv.RedisConfig{Addr: addr})
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
@@ -146,7 +146,7 @@ type storeFactoryFn func(t *testing.T) *limit.Limiter
 // Each call creates a new store so sub-tests are isolated.
 func redisLimiterFactory(addr string) func(t *testing.T, now *time.Time) *limit.Limiter {
 	return func(t *testing.T, now *time.Time) *limit.Limiter {
-		s, err := state.NewRedis(context.Background(), state.RedisConfig{Addr: addr})
+		s, err := kv.NewRedis(context.Background(), kv.RedisConfig{Addr: addr})
 		if err != nil {
 			t.Fatalf("NewRedis: %v", err)
 		}
@@ -157,7 +157,7 @@ func redisLimiterFactory(addr string) func(t *testing.T, now *time.Time) *limit.
 }
 
 func memLimiterFactory(t *testing.T, now *time.Time) *limit.Limiter {
-	s := state.New()
+	s := kv.NewMem()
 	t.Cleanup(func() { _ = s.Close() })
 	clock := func() time.Time { return *now }
 	return limit.New(s, discardLogger(), clock)

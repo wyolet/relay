@@ -1,4 +1,4 @@
-package state
+package kv
 
 import (
 	"context"
@@ -19,8 +19,8 @@ func (e entry) expired() bool {
 	return !e.deadline.IsZero() && time.Now().After(e.deadline)
 }
 
-// MemStore is an in-memory Store backed by sync.Map.
-type MemStore struct {
+// Mem is an in-memory Store backed by sync.Map.
+type Mem struct {
 	data    sync.Map // string -> entry
 	mu      sync.Map // string -> *sync.Mutex (per-key locks for WithLock)
 	incrMu  sync.Map // string -> *sync.Mutex (per-key locks for Incr atomicity)
@@ -30,12 +30,12 @@ type MemStore struct {
 }
 
 // RegisterScript registers a Go emulator for a named script.
-func (m *MemStore) RegisterScript(name string, fn ScriptImpl) {
+func (m *Mem) RegisterScript(name string, fn ScriptImpl) {
 	m.scripts.Store(name, fn)
 }
 
 // RunScript looks up the named emulator and invokes it.
-func (m *MemStore) RunScript(ctx context.Context, name, _ string, keys []string, args ...any) ([]byte, error) {
+func (m *Mem) RunScript(ctx context.Context, name, _ string, keys []string, args ...any) ([]byte, error) {
 	v, ok := m.scripts.Load(name)
 	if !ok {
 		return nil, fmt.Errorf("state: script %q not registered", name)
@@ -43,9 +43,9 @@ func (m *MemStore) RunScript(ctx context.Context, name, _ string, keys []string,
 	return v.(ScriptImpl)(ctx, m, keys, args)
 }
 
-// New constructs a MemStore and starts the TTL janitor.
-func New() *MemStore {
-	m := &MemStore{
+// NewMem constructs a Mem and starts the TTL janitor.
+func NewMem() *Mem {
+	m := &Mem{
 		stopCh:  make(chan struct{}),
 		stopped: make(chan struct{}),
 	}
@@ -53,7 +53,7 @@ func New() *MemStore {
 	return m
 }
 
-func (m *MemStore) janitor() {
+func (m *Mem) janitor() {
 	defer close(m.stopped)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -72,7 +72,7 @@ func (m *MemStore) janitor() {
 	}
 }
 
-func (m *MemStore) Get(_ context.Context, key string) ([]byte, error) {
+func (m *Mem) Get(_ context.Context, key string) ([]byte, error) {
 	v, ok := m.data.Load(key)
 	if !ok {
 		return nil, ErrNotFound
@@ -85,7 +85,7 @@ func (m *MemStore) Get(_ context.Context, key string) ([]byte, error) {
 	return e.value, nil
 }
 
-func (m *MemStore) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
+func (m *Mem) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
 	e := entry{value: value}
 	if ttl > 0 {
 		e.deadline = time.Now().Add(ttl)
@@ -94,13 +94,13 @@ func (m *MemStore) Set(_ context.Context, key string, value []byte, ttl time.Dur
 	return nil
 }
 
-func (m *MemStore) keyMu(store *sync.Map, key string) *sync.Mutex {
+func (m *Mem) keyMu(store *sync.Map, key string) *sync.Mutex {
 	mu := &sync.Mutex{}
 	actual, _ := store.LoadOrStore(key, mu)
 	return actual.(*sync.Mutex)
 }
 
-func (m *MemStore) Incr(_ context.Context, key string, delta int64) (int64, error) {
+func (m *Mem) Incr(_ context.Context, key string, delta int64) (int64, error) {
 	mu := m.keyMu(&m.incrMu, key)
 	mu.Lock()
 	defer mu.Unlock()
@@ -126,7 +126,7 @@ func (m *MemStore) Incr(_ context.Context, key string, delta int64) (int64, erro
 	return cur, nil
 }
 
-func (m *MemStore) Expire(_ context.Context, key string, ttl time.Duration) error {
+func (m *Mem) Expire(_ context.Context, key string, ttl time.Duration) error {
 	v, ok := m.data.Load(key)
 	if !ok {
 		return ErrNotFound
@@ -145,7 +145,7 @@ func (m *MemStore) Expire(_ context.Context, key string, ttl time.Duration) erro
 	return nil
 }
 
-func (m *MemStore) Range(_ context.Context, prefix string) ([]Entry, error) {
+func (m *Mem) Range(_ context.Context, prefix string) ([]Entry, error) {
 	var entries []Entry
 	m.data.Range(func(k, v any) bool {
 		key := k.(string)
@@ -166,7 +166,7 @@ func (m *MemStore) Range(_ context.Context, prefix string) ([]Entry, error) {
 	return entries, nil
 }
 
-func (m *MemStore) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
+func (m *Mem) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
 	sorted := make([]string, len(keys))
 	copy(sorted, keys)
 	sort.Strings(sorted)
@@ -194,7 +194,7 @@ func (m *MemStore) WithLock(ctx context.Context, keys []string, fn func(context.
 	return fn(ctx)
 }
 
-func (m *MemStore) Close() error {
+func (m *Mem) Close() error {
 	close(m.stopCh)
 	<-m.stopped
 	return nil

@@ -1,4 +1,4 @@
-package state
+package kv
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-func newStore(t *testing.T) *MemStore {
+func newStore(t *testing.T) *Mem {
 	t.Helper()
-	s := New()
+	s := NewMem()
 	t.Cleanup(func() { s.Close() })
 	return s
 }
@@ -223,7 +223,7 @@ func TestExpireZeroClearsExpiry(t *testing.T) {
 }
 
 func TestCloseStopsJanitor(t *testing.T) {
-	s := New()
+	s := NewMem()
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}

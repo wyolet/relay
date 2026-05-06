@@ -14,7 +14,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 type mockReloader struct {
@@ -28,7 +28,7 @@ func (m *mockReloader) Reload(_ context.Context) error {
 }
 
 func newTestLimiter() *limit.Limiter {
-	st := state.New()
+	st := kv.NewMem()
 	return limit.New(st, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 }
 

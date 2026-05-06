@@ -14,7 +14,7 @@ import (
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // FailureKind classifies the upstream failure for circuit-breaker transitions.
@@ -54,7 +54,7 @@ const (
 
 // Selector picks Secrets from Pools and tracks per-key circuit-breaker state.
 type Selector struct {
-	state   state.Store
+	state   kv.Store
 	log     *slog.Logger
 	clock   func() time.Time
 	limiter *limit.Limiter
@@ -65,7 +65,7 @@ type Selector struct {
 // New constructs a Selector. clock, limiter, cfg, and rng may be nil.
 // When limiter and cfg are nil, Pick falls back to round-robin (M2 behavior).
 // When rng is nil, a new rand seeded from time.Now().UnixNano() is used.
-func New(s state.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Limiter, cfg configstore.ConfigStore, rng *rand.Rand) *Selector {
+func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Limiter, cfg configstore.ConfigStore, rng *rand.Rand) *Selector {
 	if clock == nil {
 		clock = time.Now
 	}

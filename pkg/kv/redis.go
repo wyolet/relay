@@ -1,4 +1,4 @@
-package state
+package kv
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 
 var ErrLockBusy = errors.New("state: lock busy")
 
-// RedisConfig configures a RedisStore.
+// RedisConfig configures a Redis store.
 type RedisConfig struct {
 	Addr         string
 	Sentinel     *SentinelConfig
@@ -35,15 +35,15 @@ type SentinelConfig struct {
 	SentinelPassword string
 }
 
-// RedisStore implements state.Store (and ScriptRunner) backed by Redis/Valkey.
-type RedisStore struct {
+// Redis implements Store (and Scripter) backed by Redis/Valkey.
+type Redis struct {
 	client redis.UniversalClient
 	shas   sync.Map // name -> sha string
 	inflight sync.WaitGroup
 }
 
-// NewRedis constructs a RedisStore and pings the server.
-func NewRedis(ctx context.Context, cfg RedisConfig) (*RedisStore, error) {
+// NewRedis constructs a Redis and pings the server.
+func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 	var client redis.UniversalClient
 	if cfg.Sentinel != nil {
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
@@ -68,15 +68,15 @@ func NewRedis(ctx context.Context, cfg RedisConfig) (*RedisStore, error) {
 		_ = client.Close()
 		return nil, fmt.Errorf("state: redis ping: %w", err)
 	}
-	return &RedisStore{client: client}, nil
+	return &Redis{client: client}, nil
 }
 
 // Ping checks the connection.
-func (r *RedisStore) Ping(ctx context.Context) error {
+func (r *Redis) Ping(ctx context.Context) error {
 	return r.client.Ping(ctx).Err()
 }
 
-func (r *RedisStore) Get(ctx context.Context, key string) ([]byte, error) {
+func (r *Redis) Get(ctx context.Context, key string) ([]byte, error) {
 	v, err := r.client.Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, ErrNotFound
@@ -84,15 +84,15 @@ func (r *RedisStore) Get(ctx context.Context, key string) ([]byte, error) {
 	return v, err
 }
 
-func (r *RedisStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	return r.client.Set(ctx, key, value, ttl).Err()
 }
 
-func (r *RedisStore) Incr(ctx context.Context, key string, delta int64) (int64, error) {
+func (r *Redis) Incr(ctx context.Context, key string, delta int64) (int64, error) {
 	return r.client.IncrBy(ctx, key, delta).Result()
 }
 
-func (r *RedisStore) Expire(ctx context.Context, key string, ttl time.Duration) error {
+func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	ok, err := r.client.Expire(ctx, key, ttl).Result()
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func (r *RedisStore) Expire(ctx context.Context, key string, ttl time.Duration) 
 	return nil
 }
 
-func (r *RedisStore) Range(ctx context.Context, prefix string) ([]Entry, error) {
+func (r *Redis) Range(ctx context.Context, prefix string) ([]Entry, error) {
 	pattern := prefix + "*"
 	var keys []string
 	var cursor uint64
@@ -166,7 +166,7 @@ end
 return n`
 )
 
-func (r *RedisStore) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
+func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
 	sorted := make([]string, len(keys))
 	copy(sorted, keys)
 	sort.Strings(sorted)
@@ -202,7 +202,7 @@ func (r *RedisStore) WithLock(ctx context.Context, keys []string, fn func(contex
 
 // runLua is an internal helper; it is NOT the exported RunScript.
 // It does SCRIPT LOAD → EVALSHA with EVAL fallback.
-func (r *RedisStore) runLua(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
+func (r *Redis) runLua(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	sha, err := r.loadSHA(ctx, name, script)
 	if err != nil {
 		return nil, err
@@ -227,7 +227,7 @@ func (r *RedisStore) runLua(ctx context.Context, name, script string, keys []str
 	return redisResultToBytes(result)
 }
 
-func (r *RedisStore) loadSHA(ctx context.Context, name, script string) (string, error) {
+func (r *Redis) loadSHA(ctx context.Context, name, script string) (string, error) {
 	if v, ok := r.shas.Load(name); ok {
 		return v.(string), nil
 	}
@@ -239,14 +239,14 @@ func (r *RedisStore) loadSHA(ctx context.Context, name, script string) (string, 
 	return actual.(string), nil
 }
 
-// RunScript implements ScriptRunner.
-func (r *RedisStore) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
+// RunScript implements Scripter.
+func (r *Redis) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
 	r.inflight.Add(1)
 	defer r.inflight.Done()
 	return r.runLua(ctx, name, script, keys, args...)
 }
 
-func (r *RedisStore) Close() error {
+func (r *Redis) Close() error {
 	done := make(chan struct{})
 	go func() {
 		r.inflight.Wait()

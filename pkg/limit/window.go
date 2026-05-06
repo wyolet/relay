@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // windowBuckets returns the current and previous bucket timestamps for t and window W.
@@ -29,10 +29,10 @@ func fractionElapsed(t time.Time, current time.Time, w time.Duration) float64 {
 }
 
 // readCounter reads an int64 counter from state; missing key = 0.
-func readCounter(ctx context.Context, st state.Store, key string) (int64, error) {
+func readCounter(ctx context.Context, st kv.Store, key string) (int64, error) {
 	b, err := st.Get(ctx, key)
 	if err != nil {
-		if errors.Is(err, state.ErrNotFound) {
+		if errors.Is(err, kv.ErrNotFound) {
 			return 0, nil
 		}
 		return 0, err

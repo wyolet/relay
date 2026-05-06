@@ -12,14 +12,14 @@ import (
 
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/limit"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // helpers
 
-func newSel(t *testing.T, clock func() time.Time) (*Selector, *state.MemStore) {
+func newSel(t *testing.T, clock func() time.Time) (*Selector, *kv.Mem) {
 	t.Helper()
-	ms := state.New()
+	ms := kv.NewMem()
 	t.Cleanup(func() { ms.Close() })
 	return New(ms, noopLogger(), clock, nil, nil, nil), ms
 }
@@ -355,9 +355,9 @@ func makeRule(name string, meter configstore.Meter, amount int64) configstore.Re
 }
 
 // newWeightedSel builds a Selector with a limiter and stubCfg.
-func newWeightedSel(t *testing.T, cfg *stubCfg, rng *rand.Rand) (*Selector, *limit.Limiter, *state.MemStore) {
+func newWeightedSel(t *testing.T, cfg *stubCfg, rng *rand.Rand) (*Selector, *limit.Limiter, *kv.Mem) {
 	t.Helper()
-	ms := state.New()
+	ms := kv.NewMem()
 	t.Cleanup(func() { ms.Close() })
 	l := limit.New(ms, noopLogger(), nil)
 	sel := New(ms, noopLogger(), frozenClock(t0), l, cfg, rng)
@@ -512,7 +512,7 @@ func TestPickWeighted_DeterministicWithSeededRNG(t *testing.T) {
 
 	picks := func(seed int64) []string {
 		rng := rand.New(rand.NewSource(seed))
-		ms := state.New()
+		ms := kv.NewMem()
 		defer ms.Close()
 		l := limit.New(ms, noopLogger(), nil)
 		sel := New(ms, noopLogger(), frozenClock(t0), l, cfg, rng)
