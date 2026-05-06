@@ -11,7 +11,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
@@ -60,14 +60,14 @@ type Selector struct {
 	log     *slog.Logger
 	clock   func() time.Time
 	limiter *limit.Limiter
-	cfg     configstore.ConfigStore
+	cfg     catalog.Store
 	rng     *rand.Rand
 }
 
 // New constructs a Selector. clock, limiter, cfg, and rng may be nil.
 // When limiter and cfg are nil, Pick falls back to round-robin (M2 behavior).
 // When rng is nil, a new rand seeded from time.Now().UnixNano() is used.
-func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Limiter, cfg configstore.ConfigStore, rng *rand.Rand) *Selector {
+func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Limiter, cfg catalog.Store, rng *rand.Rand) *Selector {
 	if clock == nil {
 		clock = time.Now
 	}
@@ -112,11 +112,11 @@ func (s *Selector) writeRecord(ctx context.Context, keyHash string, r circuitRec
 // Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
 // eligible. Concurrent Picks may both pick the same half-open key; the
 // caller's RecordSuccess/RecordFailure resolves the outcome (acceptable in M2).
-func (s *Selector) Pick(ctx context.Context, provider *configstore.Provider, pool *configstore.Pool, model *configstore.Model, secrets []*configstore.Secret) (*configstore.Secret, error) {
+func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *catalog.Pool, model *catalog.Model, secrets []*catalog.Secret) (*catalog.Secret, error) {
 	now := s.clock()
 
 	type candidate struct {
-		secret  *configstore.Secret
+		secret  *catalog.Secret
 		rec     circuitRecord
 		promote bool
 	}
@@ -175,12 +175,12 @@ func (s *Selector) Pick(ctx context.Context, provider *configstore.Provider, poo
 				continue
 			}
 			w := int64(-1)
-			if v, ok := remaining[configstore.MeterRequests]; ok {
+			if v, ok := remaining[catalog.MeterRequests]; ok {
 				if w < 0 || v < w {
 					w = v
 				}
 			}
-			if v, ok := remaining[configstore.MeterTokens]; ok {
+			if v, ok := remaining[catalog.MeterTokens]; ok {
 				if w < 0 || v < w {
 					w = v
 				}

@@ -14,21 +14,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
 const adminTestToken = "test-admin-secret"
 
-func buildAdminTestServer(t *testing.T) (*httptest.Server, *configstore.PGStore) {
+func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 	t.Helper()
 	ctx := context.Background()
 	dsn := startPG(t)
 	runMigrationsForTest(t, dsn)
 
 	// Seed a minimal provider so the catalog validator is satisfied on Reload.
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -42,7 +42,7 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *configstore.PGStore)
 		t.Fatalf("seed provider: %v", err)
 	}
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		pool.Close()
 		t.Fatalf("configstore: %v", err)
@@ -116,7 +116,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 		resp.Body.Close()
 		t.Fatalf("create: want 201 got %d", resp.StatusCode)
 	}
-	var created configstore.Provider
+	var created catalog.Provider
 	decodeResp(t, resp, &created)
 	if created.Metadata.Name != "test-prov" {
 		t.Errorf("name: got %q", created.Metadata.Name)
@@ -134,7 +134,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: want 200 got %d", resp.StatusCode)
 	}
-	var listOut struct{ Items []configstore.Provider }
+	var listOut struct{ Items []catalog.Provider }
 	decodeResp(t, resp, &listOut)
 	found := false
 	for _, p := range listOut.Items {
@@ -153,7 +153,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 		resp.Body.Close()
 		t.Fatalf("update: want 200 got %d", resp.StatusCode)
 	}
-	var updated configstore.Provider
+	var updated catalog.Provider
 	decodeResp(t, resp, &updated)
 	if updated.Spec.Kind != "openai" {
 		t.Errorf("update: want kind=openai, got %q", updated.Spec.Kind)
@@ -272,7 +272,7 @@ func TestAdminModel_CRUD(t *testing.T) {
 		resp.Body.Close()
 		t.Fatalf("update model: want 200 got %d", resp.StatusCode)
 	}
-	var updated configstore.Model
+	var updated catalog.Model
 	decodeResp(t, resp, &updated)
 	if updated.Spec.UpstreamName != "llama3:70b" {
 		t.Errorf("update model: want upstreamName=llama3:70b, got %q", updated.Spec.UpstreamName)

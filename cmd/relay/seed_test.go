@@ -16,7 +16,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 func startPG(t *testing.T) string {
@@ -111,7 +111,7 @@ func TestSeed_DryRun(t *testing.T) {
 
 	// Verify no rows were written.
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSeed_Apply_And_Idempotent(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestSeed_BrokenYAML(t *testing.T) {
 
 	// No transaction should have been opened — verify providers empty.
 	ctx := context.Background()
-	pool, err2 := configstore.OpenPool(ctx, dsn)
+	pool, err2 := catalog.OpenPool(ctx, dsn)
 	if err2 != nil {
 		t.Fatalf("open pool: %v", err2)
 	}
@@ -223,7 +223,7 @@ func TestAutoSeed_FirstBoot_ThenNoop(t *testing.T) {
 		t.Fatalf("first auto-seed: %v", err)
 	}
 
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}

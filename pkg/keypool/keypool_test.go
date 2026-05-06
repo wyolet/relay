@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -28,15 +28,15 @@ func noopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func secret(name, hash string) *configstore.Secret {
-	return &configstore.Secret{
-		Metadata: configstore.Metadata{Name: name},
+func secret(name, hash string) *catalog.Secret {
+	return &catalog.Secret{
+		Metadata: catalog.Metadata{Name: name},
 		KeyHash:  hash,
 	}
 }
 
-func pool(name string) *configstore.Pool {
-	return &configstore.Pool{Metadata: configstore.Metadata{Name: name}}
+func pool(name string) *catalog.Pool {
+	return &catalog.Pool{Metadata: catalog.Metadata{Name: name}}
 }
 
 // frozen clock helpers
@@ -75,7 +75,7 @@ func TestAuthFailureIsIndefinite(t *testing.T) {
 		t.Fatal("want open+indefinite")
 	}
 	p := pool("p")
-	_, err := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{secret("s", k)})
+	_, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secret("s", k)})
 	if err != ErrNoHealthyKeys {
 		t.Fatalf("want ErrNoHealthyKeys, got %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRateLimitShortStaysClosed(t *testing.T) {
 		t.Fatalf("want closed, got %v", rec.State)
 	}
 	p := pool("p2")
-	got, err := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{secret("s", k)})
+	got, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secret("s", k)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,14 +112,14 @@ func TestRateLimitLongOpensForDuration(t *testing.T) {
 	// at t+10s — still open
 	sel.clock = frozenClock(t0.Add(10 * time.Second))
 	p := pool("p3")
-	_, err := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{secret("s", k)})
+	_, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secret("s", k)})
 	if err != ErrNoHealthyKeys {
 		t.Fatalf("want ErrNoHealthyKeys at t+10s, got %v", err)
 	}
 
 	// at t+31s — should auto-transition to half-open and be eligible
 	sel.clock = frozenClock(t0.Add(31 * time.Second))
-	got, err := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{secret("s", k)})
+	got, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secret("s", k)})
 	if err != nil {
 		t.Fatalf("want key at t+31s, got err %v", err)
 	}
@@ -155,7 +155,7 @@ func TestServerErrorBackoffEscalates(t *testing.T) {
 	// Past OpenUntil → half-open probe; record success → BackoffStep=0.
 	sel.clock = frozenClock(t0.Add(9 * time.Second))
 	p := pool("p4")
-	got, err := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{secret("s", k)})
+	got, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secret("s", k)})
 	if err != nil || got.KeyHash != k {
 		t.Fatal("expected half-open pick")
 	}
@@ -186,7 +186,7 @@ func TestNetworkBehavesLike5xx(t *testing.T) {
 func TestPick_RoundRobin(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
-	secrets := []*configstore.Secret{
+	secrets := []*catalog.Secret{
 		secret("a", "hA"),
 		secret("b", "hB"),
 		secret("c", "hC"),
@@ -212,7 +212,7 @@ func TestPick_SkipsOpen(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	sel.RecordFailure(ctx, "hB", FailureAuth, 0)
-	secrets := []*configstore.Secret{
+	secrets := []*catalog.Secret{
 		secret("a", "hA"),
 		secret("b", "hB"),
 		secret("c", "hC"),
@@ -233,7 +233,7 @@ func TestPick_SkipsOpen(t *testing.T) {
 func TestPick_NoHealthy(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
-	secrets := []*configstore.Secret{
+	secrets := []*catalog.Secret{
 		secret("a", "hA"),
 		secret("b", "hB"),
 	}
@@ -257,12 +257,12 @@ func TestPick_HalfOpenOnceVisible(t *testing.T) {
 	p := pool("ho")
 	sec := secret("s", k)
 
-	got, err := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{sec})
+	got, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{sec})
 	if err != nil || got.KeyHash != k {
 		t.Fatalf("first pick: want key, got err=%v", err)
 	}
 	// Second pick without recording outcome — should not panic.
-	_, err2 := sel.Pick(ctx, nil, p, nil, []*configstore.Secret{sec})
+	_, err2 := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{sec})
 	_ = err2 // half-open may be returned or not; just no panic
 }
 
@@ -270,7 +270,7 @@ func TestPick_HalfOpenOnceVisible(t *testing.T) {
 func TestPickConcurrent(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
-	secrets := []*configstore.Secret{
+	secrets := []*catalog.Secret{
 		secret("a", "cA"),
 		secret("b", "cB"),
 		secret("c", "cC"),
@@ -309,44 +309,44 @@ func TestPickConcurrent(t *testing.T) {
 
 // --- Weighted-random tests ---
 
-// stubCfg is a minimal configstore.ConfigStore that returns pre-set rules per secret name.
+// stubCfg is a minimal catalog.Store that returns pre-set rules per secret name.
 type stubCfg struct {
-	rules map[string][]configstore.ResolvedRule // keyed by secret name
+	rules map[string][]catalog.ResolvedRule // keyed by secret name
 }
 
-func (c *stubCfg) RateLimitsForRequest(_ *configstore.Provider, _ *configstore.Pool, _ *configstore.Model, sec *configstore.Secret) []configstore.ResolvedRule {
+func (c *stubCfg) RateLimitsForRequest(_ *catalog.Provider, _ *catalog.Pool, _ *catalog.Model, sec *catalog.Secret) []catalog.ResolvedRule {
 	if sec == nil {
 		return nil
 	}
 	return c.rules[sec.Metadata.Name]
 }
-func (c *stubCfg) ProviderByName(_ string) (*configstore.Provider, bool)  { return nil, false }
-func (c *stubCfg) ModelByName(_ string) (*configstore.Model, bool)        { return nil, false }
-func (c *stubCfg) RouteByName(_ string) (*configstore.Route, bool)        { return nil, false }
-func (c *stubCfg) RateLimitByName(_ string) (*configstore.RateLimit, bool) { return nil, false }
-func (c *stubCfg) SecretByName(_ string) (*configstore.Secret, bool)      { return nil, false }
-func (c *stubCfg) PoolByName(_ string) (*configstore.Pool, bool)          { return nil, false }
-func (c *stubCfg) Providers() []*configstore.Provider                     { return nil }
-func (c *stubCfg) Models() []*configstore.Model                           { return nil }
-func (c *stubCfg) Routes() []*configstore.Route                           { return nil }
-func (c *stubCfg) RateLimits() []*configstore.RateLimit                   { return nil }
-func (c *stubCfg) Secrets() []*configstore.Secret                         { return nil }
-func (c *stubCfg) Pools() []*configstore.Pool                             { return nil }
-func (c *stubCfg) DefaultProvider() *configstore.Provider                 { return nil }
-func (c *stubCfg) DefaultRoute() *configstore.Route                       { return nil }
-func (c *stubCfg) ProviderForModel(_ string) (*configstore.Provider, bool) { return nil, false }
-func (c *stubCfg) SecretsForPool(_ *configstore.Pool) []*configstore.Secret { return nil }
+func (c *stubCfg) ProviderByName(_ string) (*catalog.Provider, bool)  { return nil, false }
+func (c *stubCfg) ModelByName(_ string) (*catalog.Model, bool)        { return nil, false }
+func (c *stubCfg) RouteByName(_ string) (*catalog.Route, bool)        { return nil, false }
+func (c *stubCfg) RateLimitByName(_ string) (*catalog.RateLimit, bool) { return nil, false }
+func (c *stubCfg) SecretByName(_ string) (*catalog.Secret, bool)      { return nil, false }
+func (c *stubCfg) PoolByName(_ string) (*catalog.Pool, bool)          { return nil, false }
+func (c *stubCfg) Providers() []*catalog.Provider                     { return nil }
+func (c *stubCfg) Models() []*catalog.Model                           { return nil }
+func (c *stubCfg) Routes() []*catalog.Route                           { return nil }
+func (c *stubCfg) RateLimits() []*catalog.RateLimit                   { return nil }
+func (c *stubCfg) Secrets() []*catalog.Secret                         { return nil }
+func (c *stubCfg) Pools() []*catalog.Pool                             { return nil }
+func (c *stubCfg) DefaultProvider() *catalog.Provider                 { return nil }
+func (c *stubCfg) DefaultRoute() *catalog.Route                       { return nil }
+func (c *stubCfg) ProviderForModel(_ string) (*catalog.Provider, bool) { return nil, false }
+func (c *stubCfg) SecretsForPool(_ *catalog.Pool) []*catalog.Secret { return nil }
 
 // makeRule creates a ResolvedRule with a given meter and amount.
-func makeRule(name string, meter configstore.Meter, amount int64) configstore.ResolvedRule {
-	return configstore.ResolvedRule{
-		ParentKind: configstore.KindSecret,
+func makeRule(name string, meter catalog.Meter, amount int64) catalog.ResolvedRule {
+	return catalog.ResolvedRule{
+		ParentKind: catalog.KindSecret,
 		ParentName: name,
 		Meter:      meter,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: name + "-" + string(meter)},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: name + "-" + string(meter)},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   time.Minute,
 				Amount:   amount,
 			},
@@ -366,17 +366,17 @@ func newWeightedSel(t *testing.T, cfg *stubCfg, rng *rand.Rand) (*Selector, *lim
 
 // TestPickWeighted_SkewsToHigherQuota — 1000 vs 100 quota; over 10000 picks ratio ~10:1 (±20%).
 func TestPickWeighted_SkewsToHigherQuota(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]configstore.ResolvedRule{
-		"high": {makeRule("high", configstore.MeterRequests, 1000)},
-		"low":  {makeRule("low", configstore.MeterRequests, 100)},
+	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
+		"high": {makeRule("high", catalog.MeterRequests, 1000)},
+		"low":  {makeRule("low", catalog.MeterRequests, 100)},
 	}}
 	rng := rand.New(rand.NewSource(42))
 	sel, _, _ := newWeightedSel(t, cfg, rng)
 	ctx := context.Background()
 	p := pool("w1")
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "high"}, KeyHash: "hHigh"},
-		{Metadata: configstore.Metadata{Name: "low"}, KeyHash: "hLow"},
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "high"}, KeyHash: "hHigh"},
+		{Metadata: catalog.Metadata{Name: "low"}, KeyHash: "hLow"},
 	}
 	counts := map[string]int{}
 	const n = 10000
@@ -395,19 +395,19 @@ func TestPickWeighted_SkewsToHigherQuota(t *testing.T) {
 
 // TestPickWeighted_ZeroQuotaSkipped — three secrets, one at zero; it's never picked.
 func TestPickWeighted_ZeroQuotaSkipped(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]configstore.ResolvedRule{
-		"a":    {makeRule("a", configstore.MeterRequests, 500)},
-		"b":    {makeRule("b", configstore.MeterRequests, 0)},
-		"c":    {makeRule("c", configstore.MeterRequests, 500)},
+	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
+		"a":    {makeRule("a", catalog.MeterRequests, 500)},
+		"b":    {makeRule("b", catalog.MeterRequests, 0)},
+		"c":    {makeRule("c", catalog.MeterRequests, 500)},
 	}}
 	rng := rand.New(rand.NewSource(42))
 	sel, _, _ := newWeightedSel(t, cfg, rng)
 	ctx := context.Background()
 	p := pool("w2")
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: configstore.Metadata{Name: "b"}, KeyHash: "hB"},
-		{Metadata: configstore.Metadata{Name: "c"}, KeyHash: "hC"},
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
+		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
+		{Metadata: catalog.Metadata{Name: "c"}, KeyHash: "hC"},
 	}
 	for i := 0; i < 1000; i++ {
 		got, err := sel.Pick(ctx, nil, p, nil, secrets)
@@ -422,17 +422,17 @@ func TestPickWeighted_ZeroQuotaSkipped(t *testing.T) {
 
 // TestPickWeighted_AllZeroReturnsErr — all secrets at zero → ErrPoolOutOfCapacity.
 func TestPickWeighted_AllZeroReturnsErr(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]configstore.ResolvedRule{
-		"a": {makeRule("a", configstore.MeterRequests, 0)},
-		"b": {makeRule("b", configstore.MeterRequests, 0)},
+	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
+		"a": {makeRule("a", catalog.MeterRequests, 0)},
+		"b": {makeRule("b", catalog.MeterRequests, 0)},
 	}}
 	rng := rand.New(rand.NewSource(42))
 	sel, _, _ := newWeightedSel(t, cfg, rng)
 	ctx := context.Background()
 	p := pool("w3")
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: configstore.Metadata{Name: "b"}, KeyHash: "hB"},
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
+		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
 	}
 	_, err := sel.Pick(ctx, nil, p, nil, secrets)
 	if err != ErrPoolOutOfCapacity {
@@ -442,15 +442,15 @@ func TestPickWeighted_AllZeroReturnsErr(t *testing.T) {
 
 // TestPickWeighted_NoLimitsFallsBackToRR — no rate limits → round-robin.
 func TestPickWeighted_NoLimitsFallsBackToRR(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]configstore.ResolvedRule{}}
+	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{}}
 	rng := rand.New(rand.NewSource(42))
 	sel, _, _ := newWeightedSel(t, cfg, rng)
 	ctx := context.Background()
 	p := pool("w4")
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: configstore.Metadata{Name: "b"}, KeyHash: "hB"},
-		{Metadata: configstore.Metadata{Name: "c"}, KeyHash: "hC"},
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
+		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
+		{Metadata: catalog.Metadata{Name: "c"}, KeyHash: "hC"},
 	}
 	counts := map[string]int{}
 	for i := 0; i < 30; i++ {
@@ -474,12 +474,12 @@ func TestPickWeighted_DistinctFromCircuitOpen(t *testing.T) {
 	p := pool("w5")
 
 	// All quota zero → ErrPoolOutOfCapacity
-	cfg := &stubCfg{rules: map[string][]configstore.ResolvedRule{
-		"a": {makeRule("a", configstore.MeterRequests, 0)},
+	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
+		"a": {makeRule("a", catalog.MeterRequests, 0)},
 	}}
 	rng := rand.New(rand.NewSource(42))
 	sel, _, _ := newWeightedSel(t, cfg, rng)
-	secrets := []*configstore.Secret{{Metadata: configstore.Metadata{Name: "a"}, KeyHash: "hA"}}
+	secrets := []*catalog.Secret{{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"}}
 	_, err := sel.Pick(ctx, nil, p, nil, secrets)
 	if err != ErrPoolOutOfCapacity {
 		t.Fatalf("want ErrPoolOutOfCapacity, got %v", err)
@@ -499,15 +499,15 @@ func TestPickWeighted_DistinctFromCircuitOpen(t *testing.T) {
 
 // TestPickWeighted_DeterministicWithSeededRNG — same seed → same sequence.
 func TestPickWeighted_DeterministicWithSeededRNG(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]configstore.ResolvedRule{
-		"a": {makeRule("a", configstore.MeterRequests, 700)},
-		"b": {makeRule("b", configstore.MeterRequests, 300)},
+	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
+		"a": {makeRule("a", catalog.MeterRequests, 700)},
+		"b": {makeRule("b", catalog.MeterRequests, 300)},
 	}}
 	ctx := context.Background()
 	p := pool("w6")
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: configstore.Metadata{Name: "b"}, KeyHash: "hB"},
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
+		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
 	}
 
 	picks := func(seed int64) []string {

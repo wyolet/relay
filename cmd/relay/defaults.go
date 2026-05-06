@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"gopkg.in/yaml.v3"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 //go:embed defaults/providers.yaml
@@ -21,22 +21,22 @@ var defaultProvidersYAML []byte
 // has none. No-op once the operator has created any provider — defaults
 // never overwrite. Runs before the admin API comes online so the operator
 // always sees a non-empty Providers list on first launch.
-func seedDefaultProviders(ctx context.Context, store *configstore.PGStore) error {
+func seedDefaultProviders(ctx context.Context, store *catalog.PGStore) error {
 	if len(store.Providers()) > 0 {
 		return nil
 	}
 
 	dec := yaml.NewDecoder(bytes.NewReader(defaultProvidersYAML))
-	var providers []*configstore.Provider
+	var providers []*catalog.Provider
 	for {
-		var p configstore.Provider
+		var p catalog.Provider
 		if err := dec.Decode(&p); err != nil {
 			if err == io.EOF {
 				break
 			}
 			return fmt.Errorf("decode defaults/providers.yaml: %w", err)
 		}
-		if p.Kind != configstore.KindProvider || p.Metadata.Name == "" {
+		if p.Kind != catalog.KindProvider || p.Metadata.Name == "" {
 			continue
 		}
 		pp := p

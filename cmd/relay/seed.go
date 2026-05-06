@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 func runSeed(args []string) {
@@ -55,20 +55,20 @@ func runSeedTo(out io.Writer, args []string) error {
 	}
 
 	// Validate first — never open a transaction on bad input.
-	src, err := configstore.LoadYAML(fromDir)
+	src, err := catalog.LoadYAML(fromDir)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
 	}
 
 	ctx := context.Background()
 
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("open pg pool: %w", err)
 	}
 	defer pool.Close()
 
-	pgStore, err := configstore.PostgresFromPool(ctx, pool)
+	pgStore, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		return fmt.Errorf("pg store: %w", err)
 	}
@@ -104,13 +104,13 @@ func maybeAutoSeed(ctx context.Context, dsn string) error {
 		configDir = "config"
 	}
 
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("open pg pool: %w", err)
 	}
 	defer pool.Close()
 
-	pgStore, err := configstore.PostgresFromPool(ctx, pool)
+	pgStore, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		return fmt.Errorf("pg store: %w", err)
 	}
@@ -123,7 +123,7 @@ func maybeAutoSeed(ctx context.Context, dsn string) error {
 		return nil
 	}
 
-	src, err := configstore.LoadYAML(configDir)
+	src, err := catalog.LoadYAML(configDir)
 	if err != nil {
 		return fmt.Errorf("load yaml %s: %w", configDir, err)
 	}
@@ -147,8 +147,8 @@ func maybeAutoSeed(ctx context.Context, dsn string) error {
 	return nil
 }
 
-func printDiff(out io.Writer, d *configstore.SeedDiff) {
-	for _, kd := range []configstore.KindDiff{
+func printDiff(out io.Writer, d *catalog.SeedDiff) {
+	for _, kd := range []catalog.KindDiff{
 		d.Providers, d.Pools, d.Secrets, d.Models, d.Routes, d.RateLimits,
 	} {
 		if kd.Empty() {

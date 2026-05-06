@@ -7,42 +7,42 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 type fakeStore struct {
-	models []*configstore.Model
+	models []*catalog.Model
 }
 
-func (f *fakeStore) Models() []*configstore.Model                                       { return f.models }
-func (f *fakeStore) ProviderByName(string) (*configstore.Provider, bool)               { return nil, false }
-func (f *fakeStore) ModelByName(string) (*configstore.Model, bool)                     { return nil, false }
-func (f *fakeStore) RouteByName(string) (*configstore.Route, bool)                     { return nil, false }
-func (f *fakeStore) RateLimitByName(string) (*configstore.RateLimit, bool)             { return nil, false }
-func (f *fakeStore) SecretByName(string) (*configstore.Secret, bool)                   { return nil, false }
-func (f *fakeStore) PoolByName(string) (*configstore.Pool, bool)                       { return nil, false }
-func (f *fakeStore) Providers() []*configstore.Provider                                { return nil }
-func (f *fakeStore) Routes() []*configstore.Route                                      { return nil }
-func (f *fakeStore) RateLimits() []*configstore.RateLimit                              { return nil }
-func (f *fakeStore) Secrets() []*configstore.Secret                                    { return nil }
-func (f *fakeStore) Pools() []*configstore.Pool                                        { return nil }
-func (f *fakeStore) DefaultProvider() *configstore.Provider                            { return nil }
-func (f *fakeStore) DefaultRoute() *configstore.Route                                  { return nil }
-func (f *fakeStore) ProviderForModel(string) (*configstore.Provider, bool)             { return nil, false }
-func (f *fakeStore) SecretsForPool(*configstore.Pool) []*configstore.Secret            { return nil }
-func (f *fakeStore) RateLimitsForRequest(*configstore.Provider, *configstore.Pool, *configstore.Model, *configstore.Secret) []configstore.ResolvedRule {
+func (f *fakeStore) Models() []*catalog.Model                                       { return f.models }
+func (f *fakeStore) ProviderByName(string) (*catalog.Provider, bool)               { return nil, false }
+func (f *fakeStore) ModelByName(string) (*catalog.Model, bool)                     { return nil, false }
+func (f *fakeStore) RouteByName(string) (*catalog.Route, bool)                     { return nil, false }
+func (f *fakeStore) RateLimitByName(string) (*catalog.RateLimit, bool)             { return nil, false }
+func (f *fakeStore) SecretByName(string) (*catalog.Secret, bool)                   { return nil, false }
+func (f *fakeStore) PoolByName(string) (*catalog.Pool, bool)                       { return nil, false }
+func (f *fakeStore) Providers() []*catalog.Provider                                { return nil }
+func (f *fakeStore) Routes() []*catalog.Route                                      { return nil }
+func (f *fakeStore) RateLimits() []*catalog.RateLimit                              { return nil }
+func (f *fakeStore) Secrets() []*catalog.Secret                                    { return nil }
+func (f *fakeStore) Pools() []*catalog.Pool                                        { return nil }
+func (f *fakeStore) DefaultProvider() *catalog.Provider                            { return nil }
+func (f *fakeStore) DefaultRoute() *catalog.Route                                  { return nil }
+func (f *fakeStore) ProviderForModel(string) (*catalog.Provider, bool)             { return nil, false }
+func (f *fakeStore) SecretsForPool(*catalog.Pool) []*catalog.Secret            { return nil }
+func (f *fakeStore) RateLimitsForRequest(*catalog.Provider, *catalog.Pool, *catalog.Model, *catalog.Secret) []catalog.ResolvedRule {
 	return nil
 }
 
-func makeModel(name, provider string) *configstore.Model {
-	return &configstore.Model{
-		Metadata: configstore.Metadata{Name: name},
-		Spec:     configstore.ModelSpec{Provider: provider},
+func makeModel(name, provider string) *catalog.Model {
+	return &catalog.Model{
+		Metadata: catalog.Metadata{Name: name},
+		Spec:     catalog.ModelSpec{Provider: provider},
 	}
 }
 
 func TestListModels_HappyPath(t *testing.T) {
-	store := &fakeStore{models: []*configstore.Model{
+	store := &fakeStore{models: []*catalog.Model{
 		makeModel("gemma4", "dev-ollama"),
 		makeModel("gemma3-27b", "dev-ollama"),
 	}}
@@ -68,7 +68,7 @@ func TestListModels_HappyPath(t *testing.T) {
 }
 
 func TestListModels_EmptyCatalog(t *testing.T) {
-	store := &fakeStore{models: []*configstore.Model{}}
+	store := &fakeStore{models: []*catalog.Model{}}
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	ListModels(store)(rec, req)

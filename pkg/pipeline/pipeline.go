@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/keypool"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/provider"
@@ -26,10 +26,10 @@ const shortRateLimitThreshold = 5 * time.Second
 
 // RunOptions configures a Run invocation.
 type RunOptions struct {
-	Provider    *configstore.Provider
-	Pool        *configstore.Pool
-	Model       *configstore.Model
-	Secrets     []*configstore.Secret
+	Provider    *catalog.Provider
+	Pool        *catalog.Pool
+	Model       *catalog.Model
+	Secrets     []*catalog.Secret
 	Selector    *keypool.Selector
 	Outbound    provider.Outbound
 	MaxAttempts int // 0 → 3
@@ -39,7 +39,7 @@ type RunOptions struct {
 	// Rules should be pre-resolved by the caller for Pool+Model scope.
 	// Secret-level rules are M4+ work.
 	Limiter *limit.Limiter
-	Rules   []configstore.ResolvedRule
+	Rules   []catalog.ResolvedRule
 }
 
 // Run reads the inbound Message from ch.In and orchestrates upstream calls
@@ -147,7 +147,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 	log := reqid.Logger(ctx)
 	attempt := 0
 	sameKeyAttempt := 0
-	var chosenKey *configstore.Secret
+	var chosenKey *catalog.Secret
 	lastFailureKind := keypool.FailureKind(-1)
 	var maxRetryAfter time.Duration
 	var outboundPanicked atomic.Bool
@@ -380,7 +380,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 }
 
 // appendAttempt adds an Attempt to lc, capped at AttemptsCap.
-func appendAttempt(lc *usage.Lifecycle, secret *configstore.Secret, outcome string, status int, latencyMS int64) {
+func appendAttempt(lc *usage.Lifecycle, secret *catalog.Secret, outcome string, status int, latencyMS int64) {
 	if len(lc.Attempts) >= usage.AttemptsCap {
 		return
 	}
@@ -589,13 +589,13 @@ func send429LimitEnvelope(out chan<- *transport.Message, exceeded *limit.Exceede
 	out <- &transport.Message{Headers: headers, Body: body}
 }
 
-func meterToCode(m configstore.Meter) string {
+func meterToCode(m catalog.Meter) string {
 	switch m {
-	case configstore.MeterRequests:
+	case catalog.MeterRequests:
 		return "rpm_exceeded"
-	case configstore.MeterTokens:
+	case catalog.MeterTokens:
 		return "tpm_exceeded"
-	case configstore.MeterConcurrency:
+	case catalog.MeterConcurrency:
 		return "concurrency_exceeded"
 	default:
 		return "rate_limit_exceeded"

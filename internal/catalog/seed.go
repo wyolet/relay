@@ -1,4 +1,4 @@
-package configstore
+package catalog
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/wyolet/relay/internal/db"
+	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// SeedDiff holds the human-readable diff between a source ConfigStore and the current PG state.
+// SeedDiff holds the human-readable diff between a source Store and the current PG state.
 type SeedDiff struct {
 	Providers  KindDiff
 	Pools      KindDiff
@@ -41,7 +41,7 @@ func (d *SeedDiff) Empty() bool {
 }
 
 // Diff computes the diff between src and the current PG state.
-func (s *PGStore) Diff(ctx context.Context, src ConfigStore) (*SeedDiff, error) {
+func (s *PGStore) Diff(ctx context.Context, src Store) (*SeedDiff, error) {
 	pgSnap, err := s.loadSnapshot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Diff: load pg snapshot: %w", err)
@@ -84,21 +84,21 @@ func diffNames[T any, M map[string]T](kind string, pgMap M, srcList []T, name fu
 
 // Seed upserts src into Postgres in a single transaction.
 // Validation must pass before calling; if it fails, no transaction is opened.
-func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
+func (s *PGStore) Seed(ctx context.Context, src Store) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("Seed: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	q := db.New(tx)
+	q := gen.New(tx)
 
 	for _, p := range src.Providers() {
 		meta, spec, err := marshalMetaSpec(p.Metadata, p.Spec)
 		if err != nil {
 			return fmt.Errorf("Seed: Provider %q: %w", p.Metadata.Name, err)
 		}
-		if err := q.UpsertProvider(ctx, db.UpsertProviderParams{Name: p.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
+		if err := q.UpsertProvider(ctx, gen.UpsertProviderParams{Name: p.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
 			return fmt.Errorf("Seed: UpsertProvider %q: %w", p.Metadata.Name, err)
 		}
 	}
@@ -108,7 +108,7 @@ func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
 		if err != nil {
 			return fmt.Errorf("Seed: Pool %q: %w", pool.Metadata.Name, err)
 		}
-		if err := q.UpsertPool(ctx, db.UpsertPoolParams{Name: pool.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
+		if err := q.UpsertPool(ctx, gen.UpsertPoolParams{Name: pool.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
 			return fmt.Errorf("Seed: UpsertPool %q: %w", pool.Metadata.Name, err)
 		}
 	}
@@ -118,7 +118,7 @@ func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
 		if err != nil {
 			return fmt.Errorf("Seed: Secret %q: %w", sec.Metadata.Name, err)
 		}
-		if err := q.UpsertSecret(ctx, db.UpsertSecretParams{Name: sec.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
+		if err := q.UpsertSecret(ctx, gen.UpsertSecretParams{Name: sec.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
 			return fmt.Errorf("Seed: UpsertSecret %q: %w", sec.Metadata.Name, err)
 		}
 	}
@@ -128,7 +128,7 @@ func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
 		if err != nil {
 			return fmt.Errorf("Seed: Model %q: %w", m.Metadata.Name, err)
 		}
-		if err := q.UpsertModel(ctx, db.UpsertModelParams{Name: m.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
+		if err := q.UpsertModel(ctx, gen.UpsertModelParams{Name: m.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
 			return fmt.Errorf("Seed: UpsertModel %q: %w", m.Metadata.Name, err)
 		}
 	}
@@ -138,7 +138,7 @@ func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
 		if err != nil {
 			return fmt.Errorf("Seed: Route %q: %w", r.Metadata.Name, err)
 		}
-		if err := q.UpsertRoute(ctx, db.UpsertRouteParams{Name: r.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
+		if err := q.UpsertRoute(ctx, gen.UpsertRouteParams{Name: r.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
 			return fmt.Errorf("Seed: UpsertRoute %q: %w", r.Metadata.Name, err)
 		}
 	}
@@ -148,7 +148,7 @@ func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
 		if err != nil {
 			return fmt.Errorf("Seed: RateLimit %q: %w", rl.Metadata.Name, err)
 		}
-		if err := q.UpsertRateLimit(ctx, db.UpsertRateLimitParams{Name: rl.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
+		if err := q.UpsertRateLimit(ctx, gen.UpsertRateLimitParams{Name: rl.Metadata.Name, Metadata: meta, Spec: spec}); err != nil {
 			return fmt.Errorf("Seed: UpsertRateLimit %q: %w", rl.Metadata.Name, err)
 		}
 	}

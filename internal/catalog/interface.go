@@ -1,6 +1,6 @@
-package configstore
+package catalog
 
-type ConfigStore interface {
+type Store interface {
 	ProviderByName(name string) (*Provider, bool)
 	ModelByName(name string) (*Model, bool)
 	RouteByName(name string) (*Route, bool)

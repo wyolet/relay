@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/wyolet/relay/pkg/admin/crud"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 // --- in-memory widget store ---
@@ -110,7 +110,7 @@ type fakePatcher struct {
 	err error
 }
 
-func (f *fakePatcher) ValidateWithPatch(_ configstore.Patch) error { return f.err }
+func (f *fakePatcher) ValidateWithPatch(_ catalog.Patch) error { return f.err }
 
 // --- fake Reloader ---
 
@@ -342,7 +342,7 @@ func TestCreate_BrokenRef_ValidationFail_400_RollsBack(t *testing.T) {
 	tx := &fakeTx{}
 	patcher := &fakePatcher{err: errors.New("broken reference")}
 	k := buildKind(ws, nil, nil, nil)
-	k.Patch = func(v string) configstore.Patch { return configstore.Patch{} }
+	k.Patch = func(v string) catalog.Patch { return catalog.Patch{} }
 	deps := makeDeps(tx, patcher, &fakeReloader{}, slog.New(ah))
 	_, _, create, _, _ := k.Handlers(deps)
 

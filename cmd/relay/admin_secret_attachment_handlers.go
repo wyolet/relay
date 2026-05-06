@@ -12,9 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/wyolet/relay/internal/db"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/admin/crud"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 // ensure chi is used (URL params in handlers)
@@ -51,8 +51,8 @@ func maskValue(cleartext string) string {
 	return "***..." + last4
 }
 
-// secretToResponse converts a configstore.Secret to secretResponse (no cleartext).
-func secretToResponse(sec *configstore.Secret) secretResponse {
+// secretToResponse converts a catalog.Secret to secretResponse (no cleartext).
+func secretToResponse(sec *catalog.Secret) secretResponse {
 	if sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "" {
 		return secretResponse{
 			Name: sec.Metadata.Name,
@@ -87,7 +87,7 @@ type secretInput struct {
 
 // --- Secret handler factories ---
 
-func secretListHandler(store *configstore.PGStore) http.HandlerFunc {
+func secretListHandler(store *catalog.PGStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		secrets := store.Secrets()
 		out := make([]secretResponse, 0, len(secrets))
@@ -98,7 +98,7 @@ func secretListHandler(store *configstore.PGStore) http.HandlerFunc {
 	}
 }
 
-func secretGetHandler(store *configstore.PGStore) http.HandlerFunc {
+func secretGetHandler(store *catalog.PGStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
 		sec, ok := store.SecretByName(name)
@@ -138,8 +138,8 @@ func decodeSecretInput(r *http.Request) (secretInput, error) {
 	return v, nil
 }
 
-func applySecretWrite(ctx context.Context, store *configstore.PGStore, tx pgx.Tx, name string, inp secretInput) error {
-	meta := configstore.Metadata{Name: name}
+func applySecretWrite(ctx context.Context, store *catalog.PGStore, tx pgx.Tx, name string, inp secretInput) error {
+	meta := catalog.Metadata{Name: name}
 	switch inp.ValueFrom.Kind {
 	case "env":
 		return store.UpsertSecretEnv(ctx, tx, name, inp.ValueFrom.Env, inp.Provider, meta)
@@ -150,7 +150,7 @@ func applySecretWrite(ctx context.Context, store *configstore.PGStore, tx pgx.Tx
 	}
 }
 
-func secretCreateHandler(store *configstore.PGStore, deps crud.Deps) http.HandlerFunc {
+func secretCreateHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
@@ -203,7 +203,7 @@ func secretCreateHandler(store *configstore.PGStore, deps crud.Deps) http.Handle
 	}
 }
 
-func secretUpdateHandler(store *configstore.PGStore, deps crud.Deps) http.HandlerFunc {
+func secretUpdateHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		name := chi.URLParam(r, "name")
@@ -264,7 +264,7 @@ func secretUpdateHandler(store *configstore.PGStore, deps crud.Deps) http.Handle
 	}
 }
 
-func secretDeleteHandler(store *configstore.PGStore, deps crud.Deps) http.HandlerFunc {
+func secretDeleteHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		name := chi.URLParam(r, "name")
@@ -275,7 +275,7 @@ func secretDeleteHandler(store *configstore.PGStore, deps crud.Deps) http.Handle
 			return
 		}
 
-		if verr := deps.Patcher.ValidateWithPatch(configstore.Patch{DeleteSecret: name}); verr != nil {
+		if verr := deps.Patcher.ValidateWithPatch(catalog.Patch{DeleteSecret: name}); verr != nil {
 			adminWriteErr(w, http.StatusBadRequest, "invalid_request_error", "validation_failed", verr.Error())
 			return
 		}
@@ -286,7 +286,7 @@ func secretDeleteHandler(store *configstore.PGStore, deps crud.Deps) http.Handle
 			return
 		}
 
-		if err := db.New(tx).DeleteSecret(ctx, name); err != nil {
+		if err := gen.New(tx).DeleteSecret(ctx, name); err != nil {
 			_ = tx.Rollback(ctx)
 			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
 			return
@@ -330,7 +330,7 @@ func attachmentID(parentKind, parentName, rlName, meter string) string {
 // from the in-memory snapshot (Pools, Secrets, Models inline rateLimits).
 // Optional query params parent_kind + parent_name (both required together) filter to one parent.
 // The attachments DB table no longer exists; this view is derived entirely from inline spec data.
-func attachmentListHandler(store *configstore.PGStore, _ crud.Deps) http.HandlerFunc {
+func attachmentListHandler(store *catalog.PGStore, _ crud.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parentKind := r.URL.Query().Get("parent_kind")
 		parentName := r.URL.Query().Get("parent_name")
@@ -344,8 +344,8 @@ func attachmentListHandler(store *configstore.PGStore, _ crud.Deps) http.Handler
 
 		// Unknown parentKind with a non-empty filter.
 		if parentKind != "" {
-			wantKind := configstore.Kind(parentKind)
-			if wantKind != configstore.KindPool && wantKind != configstore.KindSecret && wantKind != configstore.KindModel {
+			wantKind := catalog.Kind(parentKind)
+			if wantKind != catalog.KindPool && wantKind != catalog.KindSecret && wantKind != catalog.KindModel {
 				adminWriteErr(w, http.StatusBadRequest, "invalid_request_error", "invalid_query",
 					fmt.Sprintf("parent_kind %q not supported (must be Pool, Secret, or Model)", parentKind))
 				return
@@ -354,7 +354,7 @@ func attachmentListHandler(store *configstore.PGStore, _ crud.Deps) http.Handler
 
 		var out []attachmentResponse
 
-		emit := func(kind, name string, rls []configstore.RateLimitAttachment) {
+		emit := func(kind, name string, rls []catalog.RateLimitAttachment) {
 			for _, a := range rls {
 				out = append(out, attachmentResponse{
 					ID:            attachmentID(kind, name, a.Ref, string(a.Meter)),
@@ -366,30 +366,30 @@ func attachmentListHandler(store *configstore.PGStore, _ crud.Deps) http.Handler
 			}
 		}
 
-		wantKind := configstore.Kind(parentKind)
+		wantKind := catalog.Kind(parentKind)
 
-		if parentKind == "" || wantKind == configstore.KindPool {
+		if parentKind == "" || wantKind == catalog.KindPool {
 			for _, p := range store.Pools() {
 				if parentName != "" && p.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(configstore.KindPool), p.Metadata.Name, p.Spec.RateLimits)
+				emit(string(catalog.KindPool), p.Metadata.Name, p.Spec.RateLimits)
 			}
 		}
-		if parentKind == "" || wantKind == configstore.KindSecret {
+		if parentKind == "" || wantKind == catalog.KindSecret {
 			for _, s := range store.Secrets() {
 				if parentName != "" && s.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(configstore.KindSecret), s.Metadata.Name, s.Spec.RateLimits)
+				emit(string(catalog.KindSecret), s.Metadata.Name, s.Spec.RateLimits)
 			}
 		}
-		if parentKind == "" || wantKind == configstore.KindModel {
+		if parentKind == "" || wantKind == catalog.KindModel {
 			for _, m := range store.Models() {
 				if parentName != "" && m.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(configstore.KindModel), m.Metadata.Name, m.Spec.RateLimits)
+				emit(string(catalog.KindModel), m.Metadata.Name, m.Spec.RateLimits)
 			}
 		}
 

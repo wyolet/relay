@@ -1,4 +1,4 @@
-package configstore
+package catalog
 
 // Patch describes a prospective in-memory mutation to the catalog snapshot.
 // Each field is optional; nil means "no change for this kind".

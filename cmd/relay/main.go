@@ -18,7 +18,7 @@ import (
 	apiopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/auth"
 	"github.com/wyolet/relay/pkg/crypto"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/keypool"
@@ -190,8 +190,8 @@ func main() {
 		log.Fatalf("usage.Init: %v", err)
 	}
 
-	var cfg configstore.ConfigStore
-	var pgStoreForAdmin *configstore.PGStore
+	var cfg catalog.Store
+	var pgStoreForAdmin *catalog.PGStore
 	var pgPinger pinger
 	if catalogBackend == "pg" {
 		pgDSN := os.Getenv("RELAY_PG_DSN")
@@ -205,7 +205,7 @@ func main() {
 				log.Fatalf("auto-seed: %v", err)
 			}
 		}
-		pgStore, err := configstore.Postgres(bootCtx, pgDSN, masterKey)
+		pgStore, err := catalog.Postgres(bootCtx, pgDSN, masterKey)
 		if err != nil {
 			slog.Error("configstore(pg) init failed", "err", err)
 			os.Exit(1)
@@ -220,7 +220,7 @@ func main() {
 			slog.Warn("default provider seed failed", "err", err)
 		}
 	} else {
-		yamlStore, err := configstore.LoadYAML("config")
+		yamlStore, err := catalog.LoadYAML("config")
 		if err != nil {
 			log.Fatalf("config: %v", err)
 		}
@@ -253,14 +253,14 @@ func main() {
 	reg := provider.NewRegistry()
 	for _, p := range cfg.Providers() {
 		switch p.Spec.Kind {
-		case configstore.PKOllama:
-			reg.Register(configstore.PKOllama, ollama.New(p.Spec.BaseURL))
-		case configstore.PKOpenAI:
+		case catalog.PKOllama:
+			reg.Register(catalog.PKOllama, ollama.New(p.Spec.BaseURL))
+		case catalog.PKOpenAI:
 			baseURL := p.Spec.BaseURL
 			if baseURL == "" {
 				baseURL = "https://api.openai.com"
 			}
-			reg.Register(configstore.PKOpenAI, openai.New(baseURL))
+			reg.Register(catalog.PKOpenAI, openai.New(baseURL))
 		}
 	}
 
@@ -273,9 +273,9 @@ func main() {
 		}
 		// Not yet registered — create and cache it now.
 		switch plan.Provider.Spec.Kind {
-		case configstore.PKOllama:
+		case catalog.PKOllama:
 			ob = ollama.New(plan.Provider.Spec.BaseURL)
-		case configstore.PKOpenAI:
+		case catalog.PKOpenAI:
 			baseURL := plan.Provider.Spec.BaseURL
 			if baseURL == "" {
 				baseURL = "https://api.openai.com"
@@ -325,17 +325,17 @@ func main() {
 				Rules:    plan.Rules,
 			})
 		}
-		emptySecret := &configstore.Secret{
-			Metadata: configstore.Metadata{Name: "anon"},
+		emptySecret := &catalog.Secret{
+			Metadata: catalog.Metadata{Name: "anon"},
 			Resolved: "",
 			KeyHash:  "anon",
 		}
-		syntheticPool := &configstore.Pool{
-			Metadata: configstore.Metadata{Name: "anon-pool"},
+		syntheticPool := &catalog.Pool{
+			Metadata: catalog.Metadata{Name: "anon-pool"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
 			Pool:     syntheticPool,
-			Secrets:  []*configstore.Secret{emptySecret},
+			Secrets:  []*catalog.Secret{emptySecret},
 			Selector: sel,
 			Outbound: ob,
 		})
@@ -420,7 +420,7 @@ func shutdown(
 	usageShutdown usage.Shutdown,
 	el *eventlog.Logger,
 	st kv.Store,
-	cfg configstore.ConfigStore,
+	cfg catalog.Store,
 ) {
 	step := func(name string, fn func(context.Context) error, budget time.Duration) {
 		slog.Info("shutdown: starting step", "step", name)
@@ -447,7 +447,7 @@ func shutdown(
 
 	// 5. Close pgxpool.
 	step("configstore", func(_ context.Context) error {
-		if pg, ok := cfg.(*configstore.PGStore); ok {
+		if pg, ok := cfg.(*catalog.PGStore); ok {
 			pg.Close()
 		}
 		return nil

@@ -1,4 +1,4 @@
-package configstore
+package catalog
 
 import "time"
 

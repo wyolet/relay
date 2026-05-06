@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 type modelObject struct {
@@ -23,7 +23,7 @@ type modelList struct {
 // Reads the catalog from the supplied ConfigStore and emits the
 // OpenAI list response shape. created is 0 — a stable placeholder
 // (could be config load time later; zero is fine).
-func ListModels(cfg configstore.ConfigStore) http.HandlerFunc {
+func ListModels(cfg catalog.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		models := cfg.Models()
 		data := make([]modelObject, 0, len(models))

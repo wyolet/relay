@@ -77,7 +77,7 @@ import (
 
 	apiopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/auth"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/keypool"
@@ -166,48 +166,48 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 		secretName   = "bench-secret"
 	)
 
-	prov := &configstore.Provider{
-		APIVersion: configstore.APIVersion,
-		Kind:       configstore.KindProvider,
-		Metadata:   configstore.Metadata{Name: providerName},
-		Spec: configstore.ProviderSpec{
-			Kind:        configstore.PKOpenAI,
+	prov := &catalog.Provider{
+		APIVersion: catalog.APIVersion,
+		Kind:       catalog.KindProvider,
+		Metadata:   catalog.Metadata{Name: providerName},
+		Spec: catalog.ProviderSpec{
+			Kind:        catalog.PKOpenAI,
 			BaseURL:     stubURL,
 			Default:     true,
 			DefaultPool: poolName,
 		},
 	}
-	sec := &configstore.Secret{
-		APIVersion: configstore.APIVersion,
-		Kind:       configstore.KindSecret,
-		Metadata:   configstore.Metadata{Name: secretName},
-		Spec: configstore.SecretSpec{
+	sec := &catalog.Secret{
+		APIVersion: catalog.APIVersion,
+		Kind:       catalog.KindSecret,
+		Metadata:   catalog.Metadata{Name: secretName},
+		Spec: catalog.SecretSpec{
 			Provider: providerName,
 			Value:    "bench-api-key",
 		},
 		Resolved: "bench-api-key",
 		KeyHash:  "benchhash",
 	}
-	pool := &configstore.Pool{
-		APIVersion: configstore.APIVersion,
-		Kind:       configstore.KindPool,
-		Metadata:   configstore.Metadata{Name: poolName},
-		Spec: configstore.PoolSpec{
+	pool := &catalog.Pool{
+		APIVersion: catalog.APIVersion,
+		Kind:       catalog.KindPool,
+		Metadata:   catalog.Metadata{Name: poolName},
+		Spec: catalog.PoolSpec{
 			Provider: providerName,
 			Secrets:  []string{secretName},
 		},
 	}
-	model := &configstore.Model{
-		APIVersion: configstore.APIVersion,
-		Kind:       configstore.KindModel,
-		Metadata:   configstore.Metadata{Name: modelName},
-		Spec: configstore.ModelSpec{
+	model := &catalog.Model{
+		APIVersion: catalog.APIVersion,
+		Kind:       catalog.KindModel,
+		Metadata:   catalog.Metadata{Name: modelName},
+		Spec: catalog.ModelSpec{
 			Provider:     providerName,
 			UpstreamName: "gpt-bench",
 		},
 	}
 
-	cfg := configstore.NewMemStore(prov, sec, pool, model)
+	cfg := catalog.NewMemStore(prov, sec, pool, model)
 	st := kv.NewMem()
 
 	el, err := eventlog.New(eventlog.Config{
@@ -229,7 +229,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	}
 
 	reg := provider.NewRegistry()
-	reg.Register(configstore.PKOpenAI, providerOpenAI.New(stubURL))
+	reg.Register(catalog.PKOpenAI, providerOpenAI.New(stubURL))
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	limiter := limit.New(st, logger, nil)
@@ -272,17 +272,17 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 				Rules:    plan.Rules,
 			})
 		}
-		emptySecret := &configstore.Secret{
-			Metadata: configstore.Metadata{Name: "anon"},
+		emptySecret := &catalog.Secret{
+			Metadata: catalog.Metadata{Name: "anon"},
 			Resolved: "",
 			KeyHash:  "anon",
 		}
-		syntheticPool := &configstore.Pool{
-			Metadata: configstore.Metadata{Name: "anon-pool"},
+		syntheticPool := &catalog.Pool{
+			Metadata: catalog.Metadata{Name: "anon-pool"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
 			Pool:     syntheticPool,
-			Secrets:  []*configstore.Secret{emptySecret},
+			Secrets:  []*catalog.Secret{emptySecret},
 			Selector: sel,
 			Outbound: ob,
 		})

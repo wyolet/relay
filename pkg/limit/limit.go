@@ -12,7 +12,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -48,12 +48,12 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 type Reservation struct {
 	ID       string
 	poolName string // Redis Cluster hash-tag anchor; all keys share {pool:<poolName>}
-	rules    []configstore.ResolvedRule
+	rules    []catalog.ResolvedRule
 	// conKeys holds the concurrency state keys incremented at Reserve time.
 	// Used by Commit to decrement them.
 	conKeys []string
 	// tokRules holds token-meter rules (for post-hoc Commit increment).
-	tokRules []configstore.ResolvedRule
+	tokRules []catalog.ResolvedRule
 }
 
 // Observations are passed to Commit to supply post-hoc measurements.
@@ -64,7 +64,7 @@ type Observations struct {
 
 // ExceededError is returned by Reserve when a budget is violated.
 type ExceededError struct {
-	Rule       configstore.ResolvedRule
+	Rule       catalog.ResolvedRule
 	RetryAfter time.Duration
 }
 
@@ -82,7 +82,7 @@ var ErrExceeded = errors.New("limit: budget exceeded")
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
 // poolName is the pool that anchors all Redis Cluster hash tags for this call; pass an
 // empty string only in tests or non-Cluster deployments.
-func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []configstore.ResolvedRule) (*Reservation, error) {
+func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []catalog.ResolvedRule) (*Reservation, error) {
 	now := l.clock()
 	token := reqid.Generate()
 
@@ -129,9 +129,9 @@ func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []configst
 	// Pre-compute concurrency key list and token rule list for Commit.
 	for _, rule := range rules {
 		switch rule.Meter {
-		case configstore.MeterConcurrency:
+		case catalog.MeterConcurrency:
 			reservation.conKeys = append(reservation.conKeys, concurrencyKey(poolName, rule))
-		case configstore.MeterTokens:
+		case catalog.MeterTokens:
 			reservation.tokRules = append(reservation.tokRules, rule)
 		}
 	}
@@ -194,9 +194,9 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 
 // RemainingByMeter returns the smallest remaining capacity per meter across rules.
 // poolName must match the value used in Reserve for the same rules.
-func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules []configstore.ResolvedRule) (map[configstore.Meter]int64, error) {
+func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules []catalog.ResolvedRule) (map[catalog.Meter]int64, error) {
 	now := l.clock()
-	result := make(map[configstore.Meter]int64)
+	result := make(map[catalog.Meter]int64)
 
 	for _, rule := range rules {
 		w := rule.RateLimit.Spec.Window
@@ -207,7 +207,7 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules [
 		var rate float64
 
 		switch rule.Meter {
-		case configstore.MeterRequests, configstore.MeterTokens:
+		case catalog.MeterRequests, catalog.MeterTokens:
 			curKey := bucketKey(poolName, rule, cur)
 			prevKey := bucketKey(poolName, rule, prev)
 			curVal, err := readCounter(ctx, l.store, curKey)
@@ -220,7 +220,7 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules [
 			}
 			rate = interpolatedRate(curVal, prevVal, frac)
 
-		case configstore.MeterConcurrency:
+		case catalog.MeterConcurrency:
 			cVal, err := readCounter(ctx, l.store, concurrencyKey(poolName, rule))
 			if err != nil {
 				return nil, err
@@ -243,7 +243,7 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules [
 
 // findRule looks up a rule by its identifying fields; returns a zero-value
 // ResolvedRule with synthesized RateLimit if not found (avoids nil panic).
-func findRule(rules []configstore.ResolvedRule, parentKind, parentName, ruleName, meter string) configstore.ResolvedRule {
+func findRule(rules []catalog.ResolvedRule, parentKind, parentName, ruleName, meter string) catalog.ResolvedRule {
 	for _, r := range rules {
 		if string(r.ParentKind) == parentKind &&
 			r.ParentName == parentName &&
@@ -253,12 +253,12 @@ func findRule(rules []configstore.ResolvedRule, parentKind, parentName, ruleName
 		}
 	}
 	// Fallback: synthesize a minimal rule so the error message is useful.
-	return configstore.ResolvedRule{
-		ParentKind: configstore.Kind(parentKind),
+	return catalog.ResolvedRule{
+		ParentKind: catalog.Kind(parentKind),
 		ParentName: parentName,
-		Meter:      configstore.Meter(meter),
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: ruleName},
+		Meter:      catalog.Meter(meter),
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: ruleName},
 		},
 	}
 }

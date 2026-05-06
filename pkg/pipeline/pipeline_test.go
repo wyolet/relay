@@ -14,7 +14,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/keypool"
 	"github.com/wyolet/relay/pkg/limit"
@@ -42,12 +42,12 @@ func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
 	st := kv.NewMem()
 	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
 
-	pool := &configstore.Pool{
-		Metadata: configstore.Metadata{Name: "test-pool"},
+	pool := &catalog.Pool{
+		Metadata: catalog.Metadata{Name: "test-pool"},
 	}
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
-		{Metadata: configstore.Metadata{Name: "key2"}, Resolved: "secret-key2", KeyHash: "hash2"},
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
+		{Metadata: catalog.Metadata{Name: "key2"}, Resolved: "secret-key2", KeyHash: "hash2"},
 	}
 
 	opts := RunOptions{
@@ -520,7 +520,7 @@ type fakeLimiter struct {
 	reserveCalls int
 }
 
-func (f *fakeLimiter) reserve(ctx context.Context, rules []configstore.ResolvedRule) (*limit.Reservation, error) {
+func (f *fakeLimiter) reserve(ctx context.Context, rules []catalog.ResolvedRule) (*limit.Reservation, error) {
 	f.reserveCalls++
 	if f.reserveErr != nil {
 		return nil, f.reserveErr
@@ -532,19 +532,19 @@ func (f *fakeLimiter) reserve(ctx context.Context, rules []configstore.ResolvedR
 
 // testLimiterSetup creates a real Limiter backed by MemStore, plus a rule set.
 // The rule allows 1000 requests/min so tests pass through unless forced to fail.
-func testLimiterSetup(t *testing.T) (*limit.Limiter, []configstore.ResolvedRule, func()) {
+func testLimiterSetup(t *testing.T) (*limit.Limiter, []catalog.ResolvedRule, func()) {
 	t.Helper()
 	st := kv.NewMem()
 	l := limit.New(st, slog.Default(), nil)
-	rules := []configstore.ResolvedRule{
+	rules := []catalog.ResolvedRule{
 		{
-			ParentKind: configstore.KindPool,
+			ParentKind: catalog.KindPool,
 			ParentName: "test-pool",
-			Meter:      configstore.MeterRequests,
-			RateLimit: &configstore.RateLimit{
-				Metadata: configstore.Metadata{Name: "rpm"},
-				Spec: configstore.RateLimitSpec{
-					Strategy: configstore.StrategySlidingWindow,
+			Meter:      catalog.MeterRequests,
+			RateLimit: &catalog.RateLimit{
+				Metadata: catalog.Metadata{Name: "rpm"},
+				Spec: catalog.RateLimitSpec{
+					Strategy: catalog.StrategySlidingWindow,
 					Window:   time.Minute,
 					Amount:   1000,
 				},
@@ -554,14 +554,14 @@ func testLimiterSetup(t *testing.T) (*limit.Limiter, []configstore.ResolvedRule,
 	return l, rules, func() { st.Close() }
 }
 
-func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rules []configstore.ResolvedRule) RunOptions {
+func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rules []catalog.ResolvedRule) RunOptions {
 	t.Helper()
 	st := kv.NewMem()
 	t.Cleanup(func() { st.Close() })
 	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
-	pool := &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}}
-	secrets := []*configstore.Secret{
-		{Metadata: configstore.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
+	pool := &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}}
+	secrets := []*catalog.Secret{
+		{Metadata: catalog.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
 	}
 	return RunOptions{
 		Pool:        pool,
@@ -574,36 +574,36 @@ func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rule
 	}
 }
 
-func exceededRules(meter configstore.Meter, retryAfterSec int) ([]configstore.ResolvedRule, *limit.Limiter, func()) {
+func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRule, *limit.Limiter, func()) {
 	st := kv.NewMem()
 	window := time.Minute
 	amount := int64(1)
 	// Use a fixed clock so the window bucket is deterministic.
 	now := time.Now()
 	l := limit.New(st, slog.Default(), func() time.Time { return now })
-	rule := configstore.ResolvedRule{
-		ParentKind: configstore.KindPool,
+	rule := catalog.ResolvedRule{
+		ParentKind: catalog.KindPool,
 		ParentName: "test-pool",
 		Meter:      meter,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: string(meter) + "-limit"},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: string(meter) + "-limit"},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
 				Amount:   amount,
 			},
 		},
 	}
-	rules := []configstore.ResolvedRule{rule}
+	rules := []catalog.ResolvedRule{rule}
 	ctx := context.Background()
 	// Exhaust the budget: Reserve once (succeeds), then the next Reserve will fail.
-	if meter == configstore.MeterRequests {
+	if meter == catalog.MeterRequests {
 		l.Reserve(ctx, "test-pool", rules)
-	} else if meter == configstore.MeterConcurrency {
+	} else if meter == catalog.MeterConcurrency {
 		l.Reserve(ctx, "test-pool", rules)
 	}
 	// For tokens: set the counter via a successful Reserve+Commit with tokens=amount.
-	if meter == configstore.MeterTokens {
+	if meter == catalog.MeterTokens {
 		res, _ := l.Reserve(ctx, "test-pool", rules)
 		if res != nil {
 			commitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -637,7 +637,7 @@ func TestRun_LimiterNil_NoGating(t *testing.T) {
 }
 
 func TestRun_RPMExceeded_Returns429(t *testing.T) {
-	rules, l, cleanup := exceededRules(configstore.MeterRequests, 30)
+	rules, l, cleanup := exceededRules(catalog.MeterRequests, 30)
 	defer cleanup()
 
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
@@ -648,8 +648,8 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}},
-		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
+		Pool:        &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}},
+		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
 		MaxAttempts: 3,
@@ -685,7 +685,7 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 }
 
 func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
-	rules, l, cleanup := exceededRules(configstore.MeterConcurrency, 0)
+	rules, l, cleanup := exceededRules(catalog.MeterConcurrency, 0)
 	defer cleanup()
 
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
@@ -695,8 +695,8 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}},
-		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
+		Pool:        &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}},
+		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
 		MaxAttempts: 3,
@@ -813,8 +813,8 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}},
-		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
+		Pool:        &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}},
+		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
 		MaxAttempts: 3,
@@ -881,7 +881,7 @@ spec:
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	cfg, err := configstore.LoadYAML(dir)
+	cfg, err := catalog.LoadYAML(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -892,23 +892,23 @@ spec:
 	sel3 := keypool.New(st3, slog.Default(), nil, lim3, cfg, nil)
 
 	sec := cfg.Secrets()[0]
-	p2 := &configstore.Pool{Metadata: configstore.Metadata{Name: "pp"}}
+	p2 := &catalog.Pool{Metadata: catalog.Metadata{Name: "pp"}}
 
 	// Pre-exhaust the budget.
-	rule3 := configstore.ResolvedRule{
-		ParentKind: configstore.KindSecret,
+	rule3 := catalog.ResolvedRule{
+		ParentKind: catalog.KindSecret,
 		ParentName: "k",
-		Meter:      configstore.MeterRequests,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: "rpm-zero"},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		Meter:      catalog.MeterRequests,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: "rpm-zero"},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   time.Minute,
 				Amount:   1,
 			},
 		},
 	}
-	lim3.Reserve(ctx, "pp", []configstore.ResolvedRule{rule3})
+	lim3.Reserve(ctx, "pp", []catalog.ResolvedRule{rule3})
 
 	ch := newTestChannel(ctx)
 	ch.In <- &transport.Message{ID: "x", Body: []byte(`{"model":"m"}`)}
@@ -916,7 +916,7 @@ spec:
 
 	runErr := Run(ctx, ch, RunOptions{
 		Pool:    p2,
-		Secrets: []*configstore.Secret{sec},
+		Secrets: []*catalog.Secret{sec},
 		Selector: sel3,
 		Outbound: ob,
 		MaxAttempts: 1,
@@ -1022,8 +1022,8 @@ func TestLifecycle_SingleSuccess(t *testing.T) {
 	}}
 	opts, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.Model = &configstore.Model{Metadata: configstore.Metadata{Name: "gpt-4o"}}
-	opts.Provider = &configstore.Provider{Metadata: configstore.Metadata{Name: "openai"}}
+	opts.Model = &catalog.Model{Metadata: catalog.Metadata{Name: "gpt-4o"}}
+	opts.Provider = &catalog.Provider{Metadata: catalog.Metadata{Name: "openai"}}
 
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
@@ -1114,7 +1114,7 @@ func TestLifecycle_FailoverThenSuccess(t *testing.T) {
 func TestLifecycle_RateLimitedByReserve(t *testing.T) {
 	ctx, _, flush := lcEnv(t)
 
-	rules, l, rcleanup := exceededRules(configstore.MeterRequests, 30)
+	rules, l, rcleanup := exceededRules(catalog.MeterRequests, 30)
 	defer rcleanup()
 
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {

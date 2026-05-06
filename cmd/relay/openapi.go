@@ -15,9 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/wyolet/relay/internal/db"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/admin/crud"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -115,7 +115,7 @@ type adminCRUD struct {
 	// Nil when admin is not configured or when built from stubs (tests).
 	kinds *adminKinds
 	deps  *crud.Deps
-	pgStore *configstore.PGStore // for secrets/attachment typed handlers
+	pgStore *catalog.PGStore // for secrets/attachment typed handlers
 }
 
 // mountHuma wraps chiRouter in a humachi-backed huma API and registers all operations.
@@ -512,7 +512,7 @@ type secretUpdateInput struct {
 	Body SecretWriteBody
 }
 
-func storeToSecretResp(sec *configstore.Secret) SecretResponse {
+func storeToSecretResp(sec *catalog.Secret) SecretResponse {
 	if sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "" {
 		return SecretResponse{
 			Name:      sec.Metadata.Name,
@@ -541,12 +541,12 @@ func validateSecretWriteBody(inp SecretWriteBody) error {
 	return nil
 }
 
-func applySecretWriteToTx(ctx context.Context, store *configstore.PGStore, tx pgx.Tx, name string, inp SecretWriteBody) error {
+func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, tx pgx.Tx, name string, inp SecretWriteBody) error {
 	provider := inp.Provider
 	if provider == "" {
 		provider = "default"
 	}
-	meta := configstore.Metadata{Name: name}
+	meta := catalog.Metadata{Name: name}
 	switch inp.ValueFrom.Kind {
 	case "env":
 		return store.UpsertSecretEnv(ctx, tx, name, inp.ValueFrom.Env, provider, meta)
@@ -557,7 +557,7 @@ func applySecretWriteToTx(ctx context.Context, store *configstore.PGStore, tx pg
 	}
 }
 
-func registerTypedSecretOps(api huma.API, store *configstore.PGStore, deps *crud.Deps, adminAuth huma.Middlewares) {
+func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Deps, adminAuth huma.Middlewares) {
 	// List
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_secret_list",
@@ -692,14 +692,14 @@ func registerTypedSecretOps(api huma.API, store *configstore.PGStore, deps *crud
 		if _, ok := store.SecretByName(in.Name); !ok {
 			return nil, huma.NewError(http.StatusNotFound, fmt.Sprintf("Secret %q not found", in.Name))
 		}
-		if verr := deps.Patcher.ValidateWithPatch(configstore.Patch{DeleteSecret: in.Name}); verr != nil {
+		if verr := deps.Patcher.ValidateWithPatch(catalog.Patch{DeleteSecret: in.Name}); verr != nil {
 			return nil, huma.NewError(http.StatusBadRequest, verr.Error())
 		}
 		tx, err := deps.Pool.Begin(ctx)
 		if err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "begin tx: "+err.Error())
 		}
-		if err := db.New(tx).DeleteSecret(ctx, in.Name); err != nil {
+		if err := gen.New(tx).DeleteSecret(ctx, in.Name); err != nil {
 			_ = tx.Rollback(ctx)
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}
@@ -738,7 +738,7 @@ type attachmentQueryInput struct {
 	ParentName string `query:"parent_name" doc:"Filter by parent resource name. Must be combined with parent_kind."`
 }
 
-func registerTypedAttachmentOps(api huma.API, store *configstore.PGStore, adminAuth huma.Middlewares) {
+func registerTypedAttachmentOps(api huma.API, store *catalog.PGStore, adminAuth huma.Middlewares) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_attachment_list",
 		Method:      http.MethodGet,
@@ -758,15 +758,15 @@ func registerTypedAttachmentOps(api huma.API, store *configstore.PGStore, adminA
 				"parent_kind and parent_name must be provided together (or both omitted to list all)")
 		}
 		if parentKind != "" {
-			wk := configstore.Kind(parentKind)
-			if wk != configstore.KindPool && wk != configstore.KindSecret && wk != configstore.KindModel {
+			wk := catalog.Kind(parentKind)
+			if wk != catalog.KindPool && wk != catalog.KindSecret && wk != catalog.KindModel {
 				return nil, huma.NewError(http.StatusBadRequest,
 					fmt.Sprintf("parent_kind %q not supported (must be Pool, Secret, or Model)", parentKind))
 			}
 		}
 
 		var items []AttachmentResponse
-		emit := func(kind, name string, rls []configstore.RateLimitAttachment) {
+		emit := func(kind, name string, rls []catalog.RateLimitAttachment) {
 			for _, a := range rls {
 				items = append(items, AttachmentResponse{
 					ID:            kind + ":" + name + ":" + a.Ref + ":" + string(a.Meter),
@@ -777,29 +777,29 @@ func registerTypedAttachmentOps(api huma.API, store *configstore.PGStore, adminA
 				})
 			}
 		}
-		wantKind := configstore.Kind(parentKind)
-		if parentKind == "" || wantKind == configstore.KindPool {
+		wantKind := catalog.Kind(parentKind)
+		if parentKind == "" || wantKind == catalog.KindPool {
 			for _, p := range store.Pools() {
 				if parentName != "" && p.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(configstore.KindPool), p.Metadata.Name, p.Spec.RateLimits)
+				emit(string(catalog.KindPool), p.Metadata.Name, p.Spec.RateLimits)
 			}
 		}
-		if parentKind == "" || wantKind == configstore.KindSecret {
+		if parentKind == "" || wantKind == catalog.KindSecret {
 			for _, s := range store.Secrets() {
 				if parentName != "" && s.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(configstore.KindSecret), s.Metadata.Name, s.Spec.RateLimits)
+				emit(string(catalog.KindSecret), s.Metadata.Name, s.Spec.RateLimits)
 			}
 		}
-		if parentKind == "" || wantKind == configstore.KindModel {
+		if parentKind == "" || wantKind == catalog.KindModel {
 			for _, m := range store.Models() {
 				if parentName != "" && m.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(configstore.KindModel), m.Metadata.Name, m.Spec.RateLimits)
+				emit(string(catalog.KindModel), m.Metadata.Name, m.Spec.RateLimits)
 			}
 		}
 		out := &attachmentListOutput{}

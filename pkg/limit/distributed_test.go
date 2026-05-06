@@ -16,7 +16,7 @@ import (
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -64,19 +64,19 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-func makeRule(meter configstore.Meter, amount int64, window time.Duration) configstore.ResolvedRule {
+func makeRule(meter catalog.Meter, amount int64, window time.Duration) catalog.ResolvedRule {
 	return makeRuleNamed(meter, amount, window, "test-route")
 }
 
-func makeRuleNamed(meter configstore.Meter, amount int64, window time.Duration, routeName string) configstore.ResolvedRule {
-	return configstore.ResolvedRule{
-		ParentKind: configstore.KindRoute,
+func makeRuleNamed(meter catalog.Meter, amount int64, window time.Duration, routeName string) catalog.ResolvedRule {
+	return catalog.ResolvedRule{
+		ParentKind: catalog.KindRoute,
 		ParentName: routeName,
 		Meter:      meter,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: "rl-" + string(meter)},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: "rl-" + string(meter)},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
 				Amount:   amount,
 			},
@@ -101,8 +101,8 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 
 	const budget = 200
 	const goroutines = 1000
-	rule := makeRule(configstore.MeterRequests, budget, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterRequests, budget, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	var admitted atomic.Int64
 	var wg sync.WaitGroup
@@ -168,8 +168,8 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 		l := factory(t, &now)
 		ctx := context.Background()
-		rule := makeRuleNamed(configstore.MeterRequests, 10, time.Minute, "route-req-happy")
-		rules := []configstore.ResolvedRule{rule}
+		rule := makeRuleNamed(catalog.MeterRequests, 10, time.Minute, "route-req-happy")
+		rules := []catalog.ResolvedRule{rule}
 		for i := 0; i < 10; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
@@ -187,8 +187,8 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 		l := factory(t, &now)
 		ctx := context.Background()
-		rule := makeRuleNamed(configstore.MeterConcurrency, 3, time.Minute, "route-con-cap")
-		rules := []configstore.ResolvedRule{rule}
+		rule := makeRuleNamed(catalog.MeterConcurrency, 3, time.Minute, "route-con-cap")
+		rules := []catalog.ResolvedRule{rule}
 		var r [3]*limit.Reservation
 		for i := 0; i < 3; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
@@ -215,8 +215,8 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 		l := factory(t, &now)
 		ctx := context.Background()
-		rule := makeRuleNamed(configstore.MeterTokens, 100, time.Minute, "route-tok-posthoc")
-		rules := []configstore.ResolvedRule{rule}
+		rule := makeRuleNamed(catalog.MeterTokens, 100, time.Minute, "route-tok-posthoc")
+		rules := []catalog.ResolvedRule{rule}
 		var reservations [5]*limit.Reservation
 		for i := 0; i < 5; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
@@ -242,8 +242,8 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		ctx := context.Background()
 		// budget=1: Reserve occupies the slot; Commit releases it (concurrency→0).
 		// Duplicate Commit must not double-decrement (would go to -1).
-		rule := makeRuleNamed(configstore.MeterConcurrency, 1, time.Minute, "route-idem-commit")
-		rules := []configstore.ResolvedRule{rule}
+		rule := makeRuleNamed(catalog.MeterConcurrency, 1, time.Minute, "route-idem-commit")
+		rules := []catalog.ResolvedRule{rule}
 		res, err := l.Reserve(ctx, "test-pool", rules)
 		if err != nil {
 			t.Fatalf("reserve: %v", err)
@@ -260,8 +260,8 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if err != nil {
 			t.Fatalf("remaining: %v", err)
 		}
-		if rem[configstore.MeterConcurrency] != 1 {
-			t.Fatalf("expected concurrency remaining=1 after single commit, got %d", rem[configstore.MeterConcurrency])
+		if rem[catalog.MeterConcurrency] != 1 {
+			t.Fatalf("expected concurrency remaining=1 after single commit, got %d", rem[catalog.MeterConcurrency])
 		}
 	})
 
@@ -269,11 +269,11 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 		l := factory(t, &now)
 		ctx := context.Background()
-		rule0 := makeRuleNamed(configstore.MeterRequests, 100, time.Minute, "route-rollback")
+		rule0 := makeRuleNamed(catalog.MeterRequests, 100, time.Minute, "route-rollback")
 		rule0.RateLimit.Metadata.Name = "rl-rule0"
-		rule1 := makeRuleNamed(configstore.MeterConcurrency, 0, time.Minute, "route-rollback")
+		rule1 := makeRuleNamed(catalog.MeterConcurrency, 0, time.Minute, "route-rollback")
 		rule1.RateLimit.Metadata.Name = "rl-rule1"
-		rules := []configstore.ResolvedRule{rule0, rule1}
+		rules := []catalog.ResolvedRule{rule0, rule1}
 
 		_, err := l.Reserve(ctx, "test-pool", rules)
 		if !errors.Is(err, limit.ErrExceeded) {
@@ -284,12 +284,12 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if ee.Rule.RateLimit.Metadata.Name != "rl-rule1" {
 			t.Fatalf("expected rule1 to be violated, got %s", ee.Rule.RateLimit.Metadata.Name)
 		}
-		rem, err := l.RemainingByMeter(ctx, "test-pool", []configstore.ResolvedRule{rule0})
+		rem, err := l.RemainingByMeter(ctx, "test-pool", []catalog.ResolvedRule{rule0})
 		if err != nil {
 			t.Fatalf("remaining: %v", err)
 		}
-		if rem[configstore.MeterRequests] != 100 {
-			t.Fatalf("expected rule0 remaining=100 after rollback, got %d", rem[configstore.MeterRequests])
+		if rem[catalog.MeterRequests] != 100 {
+			t.Fatalf("expected rule0 remaining=100 after rollback, got %d", rem[catalog.MeterRequests])
 		}
 	})
 }

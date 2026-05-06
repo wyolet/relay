@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 // hashTagRE matches a Redis key that contains exactly one valid hash tag:
@@ -13,14 +13,14 @@ import (
 var hashTagRE = regexp.MustCompile(`^[^{}]*\{[^{}]+\}[^{}]*$`)
 
 func TestBucketKey_HashTag(t *testing.T) {
-	r := configstore.ResolvedRule{
-		ParentKind: configstore.KindPool,
+	r := catalog.ResolvedRule{
+		ParentKind: catalog.KindPool,
 		ParentName: "prod-pool",
-		Meter:      configstore.MeterRequests,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: "per-minute"},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		Meter:      catalog.MeterRequests,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: "per-minute"},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   60_000_000_000,
 				Amount:   100,
 			},
@@ -36,14 +36,14 @@ func TestBucketKey_HashTag(t *testing.T) {
 }
 
 func TestConcurrencyKey_HashTag(t *testing.T) {
-	r := configstore.ResolvedRule{
-		ParentKind: configstore.KindSecret,
+	r := catalog.ResolvedRule{
+		ParentKind: catalog.KindSecret,
 		ParentName: "sk-abc123",
-		Meter:      configstore.MeterConcurrency,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: "max-concurrent"},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		Meter:      catalog.MeterConcurrency,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: "max-concurrent"},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   60_000_000_000,
 				Amount:   10,
 			},

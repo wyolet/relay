@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
@@ -22,11 +22,11 @@ import (
 // rules for a request. Rules are pre-resolved for Pool+Model scope at plan time;
 // Secret-level rules are M4+ work.
 type RequestPlan struct {
-	Model    *configstore.Model
-	Provider *configstore.Provider
-	Pool     *configstore.Pool
-	Secrets  []*configstore.Secret
-	Rules    []configstore.ResolvedRule
+	Model    *catalog.Model
+	Provider *catalog.Provider
+	Pool     *catalog.Pool
+	Secrets  []*catalog.Secret
+	Rules    []catalog.ResolvedRule
 }
 
 // PlanResolver resolves a model name to a RequestPlan. ok=false means unknown model.

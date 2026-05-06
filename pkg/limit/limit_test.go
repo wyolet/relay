@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -21,15 +21,15 @@ func newStore(t *testing.T) kv.Store {
 	return s
 }
 
-func makeRule(meter configstore.Meter, amount int64, window time.Duration) configstore.ResolvedRule {
-	return configstore.ResolvedRule{
-		ParentKind: configstore.KindRoute,
+func makeRule(meter catalog.Meter, amount int64, window time.Duration) catalog.ResolvedRule {
+	return catalog.ResolvedRule{
+		ParentKind: catalog.KindRoute,
 		ParentName: "test-route",
 		Meter:      meter,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: "rl-" + string(meter)},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: "rl-" + string(meter)},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
 				Amount:   amount,
 			},
@@ -53,8 +53,8 @@ func TestRequests_RPMWindow_HappyPath(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 	l := newLimiter(t, &now)
 	ctx := context.Background()
-	rule := makeRule(configstore.MeterRequests, 10, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterRequests, 10, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	for i := 0; i < 10; i++ {
 		res, err := l.Reserve(ctx, "test-pool", rules)
@@ -75,7 +75,7 @@ func TestRequests_RPMWindow_HappyPath(t *testing.T) {
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatal("expected errors.Is(err, ErrExceeded)")
 	}
-	if ee.Rule.Meter != configstore.MeterRequests {
+	if ee.Rule.Meter != catalog.MeterRequests {
 		t.Fatalf("expected requests meter, got %s", ee.Rule.Meter)
 	}
 }
@@ -86,8 +86,8 @@ func TestRequests_SlidingInterpolation(t *testing.T) {
 	now := base.Add(500 * time.Millisecond) // slightly into the first bucket
 	l := newLimiter(t, &now)
 	ctx := context.Background()
-	rule := makeRule(configstore.MeterRequests, 10, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterRequests, 10, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	// Fill 10 requests in the first bucket.
 	for i := 0; i < 10; i++ {
@@ -141,8 +141,8 @@ func TestTokens_PostHocOnly(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 	l := newLimiter(t, &now)
 	ctx := context.Background()
-	rule := makeRule(configstore.MeterTokens, 100, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterTokens, 100, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	// 5 reserves succeed (tokens not yet consumed).
 	var reservations [5]*Reservation
@@ -167,7 +167,7 @@ func TestTokens_PostHocOnly(t *testing.T) {
 		t.Fatalf("expected ErrExceeded after 100 tokens consumed, got %v", err)
 	}
 	var ee *ExceededError
-	if !errors.As(err, &ee) || ee.Rule.Meter != configstore.MeterTokens {
+	if !errors.As(err, &ee) || ee.Rule.Meter != catalog.MeterTokens {
 		t.Fatalf("expected tokens meter exceeded, got %v", err)
 	}
 }
@@ -177,8 +177,8 @@ func TestConcurrency_BudgetCap(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	l := newLimiter(t, &now)
 	ctx := context.Background()
-	rule := makeRule(configstore.MeterConcurrency, 3, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterConcurrency, 3, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	var r [3]*Reservation
 	for i := 0; i < 3; i++ {
@@ -212,8 +212,8 @@ func TestConcurrency_CommitOnCancel_DecreasesCounter(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	l := newLimiter(t, &now)
 	ctx := context.Background()
-	rule := makeRule(configstore.MeterConcurrency, 1, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterConcurrency, 1, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	res, err := l.Reserve(ctx, "test-pool", rules)
 	if err != nil {
@@ -245,14 +245,14 @@ func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 	l := newLimiter(t, &now)
 	ctx := context.Background()
 
-	rule0 := makeRule(configstore.MeterRequests, 100, time.Minute)
+	rule0 := makeRule(catalog.MeterRequests, 100, time.Minute)
 	rule0.RateLimit.Metadata.Name = "rl-rule0"
-	rule1 := makeRule(configstore.MeterConcurrency, 0, time.Minute) // cap=0, always fails
+	rule1 := makeRule(catalog.MeterConcurrency, 0, time.Minute) // cap=0, always fails
 	rule1.RateLimit.Metadata.Name = "rl-rule1"
-	rule2 := makeRule(configstore.MeterRequests, 100, time.Minute)
+	rule2 := makeRule(catalog.MeterRequests, 100, time.Minute)
 	rule2.RateLimit.Metadata.Name = "rl-rule2"
 
-	rules := []configstore.ResolvedRule{rule0, rule1, rule2}
+	rules := []catalog.ResolvedRule{rule0, rule1, rule2}
 
 	_, err := l.Reserve(ctx, "test-pool", rules)
 	if !errors.Is(err, ErrExceeded) {
@@ -266,21 +266,21 @@ func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 	}
 
 	// rule0's requests counter should be rolled back → still 0.
-	rem, err := l.RemainingByMeter(ctx, "test-pool", []configstore.ResolvedRule{rule0})
+	rem, err := l.RemainingByMeter(ctx, "test-pool", []catalog.ResolvedRule{rule0})
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
-	if rem[configstore.MeterRequests] != 100 {
-		t.Fatalf("expected rule0 requests remaining=100 after rollback, got %d", rem[configstore.MeterRequests])
+	if rem[catalog.MeterRequests] != 100 {
+		t.Fatalf("expected rule0 requests remaining=100 after rollback, got %d", rem[catalog.MeterRequests])
 	}
 
 	// rule2 should be untouched (rule1 failed before rule2 was evaluated).
-	rem2, err := l.RemainingByMeter(ctx, "test-pool", []configstore.ResolvedRule{rule2})
+	rem2, err := l.RemainingByMeter(ctx, "test-pool", []catalog.ResolvedRule{rule2})
 	if err != nil {
 		t.Fatalf("remaining rule2: %v", err)
 	}
-	if rem2[configstore.MeterRequests] != 100 {
-		t.Fatalf("expected rule2 untouched, got %d", rem2[configstore.MeterRequests])
+	if rem2[catalog.MeterRequests] != 100 {
+		t.Fatalf("expected rule2 untouched, got %d", rem2[catalog.MeterRequests])
 	}
 }
 
@@ -289,8 +289,8 @@ func TestIdempotentCommit(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	l := newLimiter(t, &now)
 	ctx := context.Background()
-	rule := makeRule(configstore.MeterConcurrency, 1, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterConcurrency, 1, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	res, err := l.Reserve(ctx, "test-pool", rules)
 	if err != nil {
@@ -311,22 +311,22 @@ func TestIdempotentCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
-	if rem[configstore.MeterConcurrency] != 1 {
-		t.Fatalf("expected concurrency remaining=1, got %d", rem[configstore.MeterConcurrency])
+	if rem[catalog.MeterConcurrency] != 1 {
+		t.Fatalf("expected concurrency remaining=1, got %d", rem[catalog.MeterConcurrency])
 	}
 }
 
 // TestSlidingWindow_BoundaryAccuracy
 func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 	base := time.Date(2024, 1, 1, 0, 1, 0, 0, time.UTC) // minute boundary
-	rule := makeRule(configstore.MeterRequests, 5, time.Minute)
+	rule := makeRule(catalog.MeterRequests, 5, time.Minute)
 
 	// Fill 5 in bucket starting at base.
 	{
 		now := base.Add(500 * time.Millisecond) // t=0.5s into bucket
 		l := newLimiter(t, &now)
 		ctx := context.Background()
-		rules := []configstore.ResolvedRule{rule}
+		rules := []catalog.ResolvedRule{rule}
 		for i := 0; i < 5; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
@@ -348,7 +348,7 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 		ctx := context.Background()
 		// Same store not shared — independent test. Just verify math is correct.
 		// Fill 5 in this window.
-		rules := []configstore.ResolvedRule{rule}
+		rules := []catalog.ResolvedRule{rule}
 		for i := 0; i < 5; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
@@ -367,7 +367,7 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 		now := base.Add(60*time.Second + time.Millisecond)
 		l := newLimiter(t, &now)
 		ctx := context.Background()
-		rules := []configstore.ResolvedRule{rule}
+		rules := []catalog.ResolvedRule{rule}
 		// New bucket, nothing in it.
 		res, err := l.Reserve(ctx, "test-pool", rules)
 		if err != nil {
@@ -383,12 +383,12 @@ func TestRemainingByMeter_MinAcrossRules(t *testing.T) {
 	l := newLimiter(t, &now)
 	ctx := context.Background()
 
-	rule10 := makeRule(configstore.MeterRequests, 10, time.Minute)
+	rule10 := makeRule(catalog.MeterRequests, 10, time.Minute)
 	rule10.RateLimit.Metadata.Name = "rl-10"
-	rule5 := makeRule(configstore.MeterRequests, 5, time.Minute)
+	rule5 := makeRule(catalog.MeterRequests, 5, time.Minute)
 	rule5.RateLimit.Metadata.Name = "rl-5"
 
-	rules := []configstore.ResolvedRule{rule10, rule5}
+	rules := []catalog.ResolvedRule{rule10, rule5}
 
 	// 3 reserves → consumes from both rules.
 	for i := 0; i < 3; i++ {
@@ -404,8 +404,8 @@ func TestRemainingByMeter_MinAcrossRules(t *testing.T) {
 		t.Fatalf("remaining: %v", err)
 	}
 	// min(10-3, 5-3) = min(7, 2) = 2
-	if rem[configstore.MeterRequests] != 2 {
-		t.Fatalf("expected remaining=2, got %d", rem[configstore.MeterRequests])
+	if rem[catalog.MeterRequests] != 2 {
+		t.Fatalf("expected remaining=2, got %d", rem[catalog.MeterRequests])
 	}
 }
 
@@ -413,8 +413,8 @@ func TestRemainingByMeter_MinAcrossRules(t *testing.T) {
 func TestReserve_ContextCancel(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	l := newLimiter(t, &now)
-	rule := makeRule(configstore.MeterConcurrency, 2, time.Minute)
-	rules := []configstore.ResolvedRule{rule}
+	rule := makeRule(catalog.MeterConcurrency, 2, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -439,7 +439,7 @@ func TestReserve_ContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
-	if rem[configstore.MeterConcurrency] != 2 {
-		t.Fatalf("expected remaining=2, got %d", rem[configstore.MeterConcurrency])
+	if rem[catalog.MeterConcurrency] != 2 {
+		t.Fatalf("expected remaining=2, got %d", rem[catalog.MeterConcurrency])
 	}
 }

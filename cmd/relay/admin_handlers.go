@@ -13,21 +13,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/internal/db"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/admin/crud"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 // adminKinds bundles the five kind handlers produced by the PER-265 factory.
 type adminKinds struct {
-	provider  *crud.Kind[*configstore.Provider]
-	pool      *crud.Kind[*configstore.Pool]
-	model     *crud.Kind[*configstore.Model]
-	route     *crud.Kind[*configstore.Route]
-	rateLimit *crud.Kind[*configstore.RateLimit]
+	provider  *crud.Kind[*catalog.Provider]
+	pool      *crud.Kind[*catalog.Pool]
+	model     *crud.Kind[*catalog.Model]
+	route     *crud.Kind[*catalog.Route]
+	rateLimit *crud.Kind[*catalog.RateLimit]
 }
 
-func buildAdminKinds(store *configstore.PGStore, q *db.Queries) adminKinds {
+func buildAdminKinds(store *catalog.PGStore, q *gen.Queries) adminKinds {
 	return adminKinds{
 		provider:  providerKind(store, q),
 		pool:      poolKind(store, q),
@@ -39,47 +39,47 @@ func buildAdminKinds(store *configstore.PGStore, q *db.Queries) adminKinds {
 
 // --- Provider ---
 
-func providerKind(store *configstore.PGStore, q *db.Queries) *crud.Kind[*configstore.Provider] {
-	return &crud.Kind[*configstore.Provider]{
+func providerKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Provider] {
+	return &crud.Kind[*catalog.Provider]{
 		Name: "Provider",
-		Decode: func(r *http.Request) (*configstore.Provider, error) {
-			return decodeBody[configstore.Provider](r, func(v *configstore.Provider) error {
+		Decode: func(r *http.Request) (*catalog.Provider, error) {
+			return decodeBody[catalog.Provider](r, func(v *catalog.Provider) error {
 				if v.Metadata.Name == "" {
 					return errors.New("metadata.name required")
 				}
 				return nil
 			})
 		},
-		List: func(ctx context.Context) ([]*configstore.Provider, error) {
+		List: func(ctx context.Context) ([]*catalog.Provider, error) {
 			return store.Providers(), nil
 		},
-		Get: func(ctx context.Context, name string) (*configstore.Provider, error) {
+		Get: func(ctx context.Context, name string) (*catalog.Provider, error) {
 			v, ok := store.ProviderByName(name)
 			if !ok {
 				return nil, crud.ErrNotFound
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *configstore.Provider) error {
+		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Provider) error {
 			return upsertProvider(ctx, tx, v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *configstore.Provider) error {
+		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Provider) error {
 			return upsertProvider(ctx, tx, v)
 		},
 		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return db.New(tx).DeleteProvider(ctx, name)
+			return gen.New(tx).DeleteProvider(ctx, name)
 		},
-		ResourceID: func(v *configstore.Provider) string { return v.Metadata.Name },
-		Patch: func(v *configstore.Provider) configstore.Patch {
-			return configstore.Patch{UpsertProvider: v}
+		ResourceID: func(v *catalog.Provider) string { return v.Metadata.Name },
+		Patch: func(v *catalog.Provider) catalog.Patch {
+			return catalog.Patch{UpsertProvider: v}
 		},
-		PatchDelete: func(name string) configstore.Patch {
-			return configstore.Patch{DeleteProvider: name}
+		PatchDelete: func(name string) catalog.Patch {
+			return catalog.Patch{DeleteProvider: name}
 		},
 	}
 }
 
-func upsertProvider(ctx context.Context, tx pgx.Tx, v *configstore.Provider) error {
+func upsertProvider(ctx context.Context, tx pgx.Tx, v *catalog.Provider) error {
 	meta, err := json.Marshal(v.Metadata)
 	if err != nil {
 		return err
@@ -88,7 +88,7 @@ func upsertProvider(ctx context.Context, tx pgx.Tx, v *configstore.Provider) err
 	if err != nil {
 		return err
 	}
-	return db.New(tx).UpsertProvider(ctx, db.UpsertProviderParams{
+	return gen.New(tx).UpsertProvider(ctx, gen.UpsertProviderParams{
 		Name:     v.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
@@ -97,47 +97,47 @@ func upsertProvider(ctx context.Context, tx pgx.Tx, v *configstore.Provider) err
 
 // --- Pool ---
 
-func poolKind(store *configstore.PGStore, q *db.Queries) *crud.Kind[*configstore.Pool] {
-	return &crud.Kind[*configstore.Pool]{
+func poolKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Pool] {
+	return &crud.Kind[*catalog.Pool]{
 		Name: "Pool",
-		Decode: func(r *http.Request) (*configstore.Pool, error) {
-			return decodeBody[configstore.Pool](r, func(v *configstore.Pool) error {
+		Decode: func(r *http.Request) (*catalog.Pool, error) {
+			return decodeBody[catalog.Pool](r, func(v *catalog.Pool) error {
 				if v.Metadata.Name == "" {
 					return errors.New("metadata.name required")
 				}
 				return nil
 			})
 		},
-		List: func(ctx context.Context) ([]*configstore.Pool, error) {
+		List: func(ctx context.Context) ([]*catalog.Pool, error) {
 			return store.Pools(), nil
 		},
-		Get: func(ctx context.Context, name string) (*configstore.Pool, error) {
+		Get: func(ctx context.Context, name string) (*catalog.Pool, error) {
 			v, ok := store.PoolByName(name)
 			if !ok {
 				return nil, crud.ErrNotFound
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *configstore.Pool) error {
+		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Pool) error {
 			return upsertPool(ctx, tx, v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *configstore.Pool) error {
+		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Pool) error {
 			return upsertPool(ctx, tx, v)
 		},
 		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return db.New(tx).DeletePool(ctx, name)
+			return gen.New(tx).DeletePool(ctx, name)
 		},
-		ResourceID: func(v *configstore.Pool) string { return v.Metadata.Name },
-		Patch: func(v *configstore.Pool) configstore.Patch {
-			return configstore.Patch{UpsertPool: v}
+		ResourceID: func(v *catalog.Pool) string { return v.Metadata.Name },
+		Patch: func(v *catalog.Pool) catalog.Patch {
+			return catalog.Patch{UpsertPool: v}
 		},
-		PatchDelete: func(name string) configstore.Patch {
-			return configstore.Patch{DeletePool: name}
+		PatchDelete: func(name string) catalog.Patch {
+			return catalog.Patch{DeletePool: name}
 		},
 	}
 }
 
-func upsertPool(ctx context.Context, tx pgx.Tx, v *configstore.Pool) error {
+func upsertPool(ctx context.Context, tx pgx.Tx, v *catalog.Pool) error {
 	meta, err := json.Marshal(v.Metadata)
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func upsertPool(ctx context.Context, tx pgx.Tx, v *configstore.Pool) error {
 	if err != nil {
 		return err
 	}
-	return db.New(tx).UpsertPool(ctx, db.UpsertPoolParams{
+	return gen.New(tx).UpsertPool(ctx, gen.UpsertPoolParams{
 		Name:     v.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
@@ -155,47 +155,47 @@ func upsertPool(ctx context.Context, tx pgx.Tx, v *configstore.Pool) error {
 
 // --- Model ---
 
-func modelKind(store *configstore.PGStore, q *db.Queries) *crud.Kind[*configstore.Model] {
-	return &crud.Kind[*configstore.Model]{
+func modelKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Model] {
+	return &crud.Kind[*catalog.Model]{
 		Name: "Model",
-		Decode: func(r *http.Request) (*configstore.Model, error) {
-			return decodeBody[configstore.Model](r, func(v *configstore.Model) error {
+		Decode: func(r *http.Request) (*catalog.Model, error) {
+			return decodeBody[catalog.Model](r, func(v *catalog.Model) error {
 				if v.Metadata.Name == "" {
 					return errors.New("metadata.name required")
 				}
 				return nil
 			})
 		},
-		List: func(ctx context.Context) ([]*configstore.Model, error) {
+		List: func(ctx context.Context) ([]*catalog.Model, error) {
 			return store.Models(), nil
 		},
-		Get: func(ctx context.Context, name string) (*configstore.Model, error) {
+		Get: func(ctx context.Context, name string) (*catalog.Model, error) {
 			v, ok := store.ModelByName(name)
 			if !ok {
 				return nil, crud.ErrNotFound
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *configstore.Model) error {
+		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Model) error {
 			return upsertModel(ctx, tx, v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *configstore.Model) error {
+		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Model) error {
 			return upsertModel(ctx, tx, v)
 		},
 		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return db.New(tx).DeleteModel(ctx, name)
+			return gen.New(tx).DeleteModel(ctx, name)
 		},
-		ResourceID: func(v *configstore.Model) string { return v.Metadata.Name },
-		Patch: func(v *configstore.Model) configstore.Patch {
-			return configstore.Patch{UpsertModel: v}
+		ResourceID: func(v *catalog.Model) string { return v.Metadata.Name },
+		Patch: func(v *catalog.Model) catalog.Patch {
+			return catalog.Patch{UpsertModel: v}
 		},
-		PatchDelete: func(name string) configstore.Patch {
-			return configstore.Patch{DeleteModel: name}
+		PatchDelete: func(name string) catalog.Patch {
+			return catalog.Patch{DeleteModel: name}
 		},
 	}
 }
 
-func upsertModel(ctx context.Context, tx pgx.Tx, v *configstore.Model) error {
+func upsertModel(ctx context.Context, tx pgx.Tx, v *catalog.Model) error {
 	meta, err := json.Marshal(v.Metadata)
 	if err != nil {
 		return err
@@ -204,7 +204,7 @@ func upsertModel(ctx context.Context, tx pgx.Tx, v *configstore.Model) error {
 	if err != nil {
 		return err
 	}
-	return db.New(tx).UpsertModel(ctx, db.UpsertModelParams{
+	return gen.New(tx).UpsertModel(ctx, gen.UpsertModelParams{
 		Name:     v.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
@@ -213,47 +213,47 @@ func upsertModel(ctx context.Context, tx pgx.Tx, v *configstore.Model) error {
 
 // --- Route ---
 
-func routeKind(store *configstore.PGStore, q *db.Queries) *crud.Kind[*configstore.Route] {
-	return &crud.Kind[*configstore.Route]{
+func routeKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Route] {
+	return &crud.Kind[*catalog.Route]{
 		Name: "Route",
-		Decode: func(r *http.Request) (*configstore.Route, error) {
-			return decodeBody[configstore.Route](r, func(v *configstore.Route) error {
+		Decode: func(r *http.Request) (*catalog.Route, error) {
+			return decodeBody[catalog.Route](r, func(v *catalog.Route) error {
 				if v.Metadata.Name == "" {
 					return errors.New("metadata.name required")
 				}
 				return nil
 			})
 		},
-		List: func(ctx context.Context) ([]*configstore.Route, error) {
+		List: func(ctx context.Context) ([]*catalog.Route, error) {
 			return store.Routes(), nil
 		},
-		Get: func(ctx context.Context, name string) (*configstore.Route, error) {
+		Get: func(ctx context.Context, name string) (*catalog.Route, error) {
 			v, ok := store.RouteByName(name)
 			if !ok {
 				return nil, crud.ErrNotFound
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *configstore.Route) error {
+		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Route) error {
 			return upsertRoute(ctx, tx, v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *configstore.Route) error {
+		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Route) error {
 			return upsertRoute(ctx, tx, v)
 		},
 		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return db.New(tx).DeleteRoute(ctx, name)
+			return gen.New(tx).DeleteRoute(ctx, name)
 		},
-		ResourceID: func(v *configstore.Route) string { return v.Metadata.Name },
-		Patch: func(v *configstore.Route) configstore.Patch {
-			return configstore.Patch{UpsertRoute: v}
+		ResourceID: func(v *catalog.Route) string { return v.Metadata.Name },
+		Patch: func(v *catalog.Route) catalog.Patch {
+			return catalog.Patch{UpsertRoute: v}
 		},
-		PatchDelete: func(name string) configstore.Patch {
-			return configstore.Patch{DeleteRoute: name}
+		PatchDelete: func(name string) catalog.Patch {
+			return catalog.Patch{DeleteRoute: name}
 		},
 	}
 }
 
-func upsertRoute(ctx context.Context, tx pgx.Tx, v *configstore.Route) error {
+func upsertRoute(ctx context.Context, tx pgx.Tx, v *catalog.Route) error {
 	meta, err := json.Marshal(v.Metadata)
 	if err != nil {
 		return err
@@ -262,7 +262,7 @@ func upsertRoute(ctx context.Context, tx pgx.Tx, v *configstore.Route) error {
 	if err != nil {
 		return err
 	}
-	return db.New(tx).UpsertRoute(ctx, db.UpsertRouteParams{
+	return gen.New(tx).UpsertRoute(ctx, gen.UpsertRouteParams{
 		Name:     v.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
@@ -271,47 +271,47 @@ func upsertRoute(ctx context.Context, tx pgx.Tx, v *configstore.Route) error {
 
 // --- RateLimit ---
 
-func rateLimitKind(store *configstore.PGStore, q *db.Queries) *crud.Kind[*configstore.RateLimit] {
-	return &crud.Kind[*configstore.RateLimit]{
+func rateLimitKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.RateLimit] {
+	return &crud.Kind[*catalog.RateLimit]{
 		Name: "RateLimit",
-		Decode: func(r *http.Request) (*configstore.RateLimit, error) {
-			return decodeBody[configstore.RateLimit](r, func(v *configstore.RateLimit) error {
+		Decode: func(r *http.Request) (*catalog.RateLimit, error) {
+			return decodeBody[catalog.RateLimit](r, func(v *catalog.RateLimit) error {
 				if v.Metadata.Name == "" {
 					return errors.New("metadata.name required")
 				}
 				return nil
 			})
 		},
-		List: func(ctx context.Context) ([]*configstore.RateLimit, error) {
+		List: func(ctx context.Context) ([]*catalog.RateLimit, error) {
 			return store.RateLimits(), nil
 		},
-		Get: func(ctx context.Context, name string) (*configstore.RateLimit, error) {
+		Get: func(ctx context.Context, name string) (*catalog.RateLimit, error) {
 			v, ok := store.RateLimitByName(name)
 			if !ok {
 				return nil, crud.ErrNotFound
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *configstore.RateLimit) error {
+		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.RateLimit) error {
 			return upsertRateLimit(ctx, tx, v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *configstore.RateLimit) error {
+		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.RateLimit) error {
 			return upsertRateLimit(ctx, tx, v)
 		},
 		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return db.New(tx).DeleteRateLimit(ctx, name)
+			return gen.New(tx).DeleteRateLimit(ctx, name)
 		},
-		ResourceID: func(v *configstore.RateLimit) string { return v.Metadata.Name },
-		Patch: func(v *configstore.RateLimit) configstore.Patch {
-			return configstore.Patch{UpsertRateLimit: v}
+		ResourceID: func(v *catalog.RateLimit) string { return v.Metadata.Name },
+		Patch: func(v *catalog.RateLimit) catalog.Patch {
+			return catalog.Patch{UpsertRateLimit: v}
 		},
-		PatchDelete: func(name string) configstore.Patch {
-			return configstore.Patch{DeleteRateLimit: name}
+		PatchDelete: func(name string) catalog.Patch {
+			return catalog.Patch{DeleteRateLimit: name}
 		},
 	}
 }
 
-func upsertRateLimit(ctx context.Context, tx pgx.Tx, v *configstore.RateLimit) error {
+func upsertRateLimit(ctx context.Context, tx pgx.Tx, v *catalog.RateLimit) error {
 	meta, err := json.Marshal(v.Metadata)
 	if err != nil {
 		return err
@@ -320,7 +320,7 @@ func upsertRateLimit(ctx context.Context, tx pgx.Tx, v *configstore.RateLimit) e
 	if err != nil {
 		return err
 	}
-	return db.New(tx).UpsertRateLimit(ctx, db.UpsertRateLimitParams{
+	return gen.New(tx).UpsertRateLimit(ctx, gen.UpsertRateLimitParams{
 		Name:     v.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
@@ -346,14 +346,14 @@ func decodeBody[T any](r *http.Request, validate func(*T) error) (*T, error) {
 }
 
 // crudDeps constructs crud.Deps from the PGStore and its underlying pool.
-func crudDeps(pool *pgxpool.Pool, store *configstore.PGStore) crud.Deps {
+func crudDeps(pool *pgxpool.Pool, store *catalog.PGStore) crud.Deps {
 	return crud.DepsFromPGStore(pool, store, slog.Default())
 }
 
 // buildAdminCRUD calls Handlers() on each kind and bundles the results.
 // It also populates the typed fields (kinds, deps, pgStore) used by mountHuma
 // for full OpenAPI schema generation.
-func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore) *adminCRUD {
+func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore) *adminCRUD {
 	pl, pg, pc, pu, pd := kinds.provider.Handlers(deps)
 	ol, og, oc, ou, od := kinds.pool.Handlers(deps)
 	ml, mg, mc, mu, md := kinds.model.Handlers(deps)
@@ -387,7 +387,7 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore
 
 // mountAdminRoutes registers chi routes for all admin CRUD endpoints, gated by token check.
 // Also mounts the unauthenticated POST /admin/login (cookie auth bootstrap).
-func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore.PGStore, deps crud.Deps) {
+func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *catalog.PGStore, deps crud.Deps) {
 	gate := adminTokenGate(tok)
 
 	// Login is NOT gated — it is the mechanism by which clients obtain a session cookie.

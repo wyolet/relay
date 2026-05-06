@@ -16,16 +16,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
 // ErrNotFound is returned by Get callbacks when the resource does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Patcher validates a proposed post-write snapshot. Implemented by *configstore.PGStore.
+// Patcher validates a proposed post-write snapshot. Implemented by *catalog.PGStore.
 type Patcher interface {
-	ValidateWithPatch(patch configstore.Patch) error
+	ValidateWithPatch(patch catalog.Patch) error
 }
 
 // Reloader atomically swaps the in-memory snapshot from Postgres.
@@ -47,7 +47,7 @@ type Deps struct {
 }
 
 // DepsFromPGStore constructs Deps from the concrete pgxpool.Pool and PGStore types.
-func DepsFromPGStore(pool *pgxpool.Pool, store *configstore.PGStore, logger *slog.Logger) Deps {
+func DepsFromPGStore(pool *pgxpool.Pool, store *catalog.PGStore, logger *slog.Logger) Deps {
 	return Deps{Pool: pool, Patcher: store, Reloader: store, Logger: logger}
 }
 
@@ -78,13 +78,13 @@ type Kind[T any] struct {
 	// ResourceID extracts the resource name from a value (e.g. v.Metadata.Name).
 	ResourceID func(T) string
 
-	// Patch builds the configstore.Patch for Create/Update validation.
+	// Patch builds the catalog.Patch for Create/Update validation.
 	// If nil, no pre-commit validation is performed.
-	Patch func(v T) configstore.Patch
+	Patch func(v T) catalog.Patch
 
-	// PatchDelete builds the configstore.Patch for Delete validation.
+	// PatchDelete builds the catalog.Patch for Delete validation.
 	// If nil, no pre-commit validation is performed.
-	PatchDelete func(name string) configstore.Patch
+	PatchDelete func(name string) catalog.Patch
 
 	// Summarize produces a diff string for audit logs. Optional; nil => empty.
 	Summarize func(before, after T) string

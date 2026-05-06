@@ -1,6 +1,6 @@
-package configstore
+package catalog
 
-// MemStore is a read-only ConfigStore backed by an in-memory snapshot.
+// MemStore is a read-only Store backed by an in-memory snapshot.
 // It is intended for tests and benchmarks that need a lightweight catalog
 // without loading YAML from disk or connecting to Postgres.
 type MemStore struct {

@@ -16,7 +16,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -62,7 +62,7 @@ func seedMinimal(t *testing.T, dsn string) {
 	t.Helper()
 	ctx := context.Background()
 
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestPGStore_Boot_EmptyDB(t *testing.T) {
 
 	// Empty catalog: boot should succeed — the relay starts with no config and
 	// is populated via the admin API (M8 HITL use case).
-	store, err := configstore.Postgres(context.Background(), dsn, nil)
+	store, err := catalog.Postgres(context.Background(), dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres() with empty catalog: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestPGStore_Boot_And_Read(t *testing.T) {
 	runMigrations(t, dsn)
 	seedMinimal(t, dsn)
 
-	store, err := configstore.Postgres(context.Background(), dsn, nil)
+	store, err := catalog.Postgres(context.Background(), dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -142,14 +142,14 @@ func TestPGStore_Reload(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	store, err := configstore.Postgres(ctx, dsn, nil)
+	store, err := catalog.Postgres(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
 	defer store.Close()
 
 	// Insert a second provider via direct SQL.
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestPGStore_MalformedSpec(t *testing.T) {
 	runMigrations(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestPGStore_MalformedSpec(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	_, err = configstore.Postgres(ctx, dsn, nil)
+	_, err = catalog.Postgres(ctx, dsn, nil)
 	if err == nil {
 		t.Fatal("expected error from malformed spec, got nil")
 	}
@@ -216,7 +216,7 @@ func TestPGStore_ConcurrentReloadRace(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	store, err := configstore.Postgres(ctx, dsn, nil)
+	store, err := catalog.Postgres(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -286,7 +286,7 @@ func TestMigration000002_Backfill(t *testing.T) {
 	m.Close()
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestMigration000002_CheckConstraintViolation(t *testing.T) {
 	runMigrations(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -370,23 +370,23 @@ func TestResolver_EnvMode_Set(t *testing.T) {
 	t.Setenv("RELAY_SECRET_TESTVAR", "supersecret")
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
-	if err := store.UpsertSecretEnv(ctx, nil, "test-env", "RELAY_SECRET_TESTVAR", "ollama", configstore.Metadata{Name: "test-env"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, nil, "test-env", "RELAY_SECRET_TESTVAR", "ollama", catalog.Metadata{Name: "test-env"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
 	// Boot a new PGStore which will resolve secrets.
-	s, err := configstore.Postgres(ctx, dsn, nil)
+	s, err := catalog.Postgres(ctx, dsn, nil)
 	if err != nil {
 		// Validate failure is expected here (no provider seeded in seedMinimal? — actually it is).
 		// Reload failure from secret resolution would be surfaced.
@@ -409,23 +409,23 @@ func TestResolver_EnvMode_MissingVar(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
 	os.Unsetenv("RELAY_SECRET_MISSING")
-	if err := store.UpsertSecretEnv(ctx, nil, "missing-var", "RELAY_SECRET_MISSING", "ollama", configstore.Metadata{Name: "missing-var"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, nil, "missing-var", "RELAY_SECRET_MISSING", "ollama", catalog.Metadata{Name: "missing-var"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
-	_, err = configstore.Postgres(ctx, dsn, nil)
+	_, err = catalog.Postgres(ctx, dsn, nil)
 	if err == nil {
 		t.Fatal("expected error when env var missing, got nil")
 	}
@@ -438,24 +438,24 @@ func TestResolver_StoredMode_OK(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 	store.SetMasterKey(testMasterKey)
 
 	const plaintext = "my-api-key"
-	if err := store.UpsertSecretStored(ctx, nil, "stored-ok", plaintext, "ollama", configstore.Metadata{Name: "stored-ok"}); err != nil {
+	if err := store.UpsertSecretStored(ctx, nil, "stored-ok", plaintext, "ollama", catalog.Metadata{Name: "stored-ok"}); err != nil {
 		t.Fatalf("UpsertSecretStored: %v", err)
 	}
 
-	s, err := configstore.Postgres(ctx, dsn, testMasterKey)
+	s, err := catalog.Postgres(ctx, dsn, testMasterKey)
 	if err != nil {
 		t.Fatalf("Postgres: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestResolver_StoredMode_NoMasterKey(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestResolver_StoredMode_NoMasterKey(t *testing.T) {
 		t.Fatalf("insert stored row: %v", err)
 	}
 
-	_, err = configstore.Postgres(ctx, dsn, nil) // no master key
+	_, err = catalog.Postgres(ctx, dsn, nil) // no master key
 	if err == nil {
 		t.Fatal("expected error when master key unset, got nil")
 	}
@@ -508,7 +508,7 @@ func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
 		t.Fatalf("insert tampered row: %v", err)
 	}
 
-	_, err = configstore.Postgres(ctx, dsn, testMasterKey)
+	_, err = catalog.Postgres(ctx, dsn, testMasterKey)
 	if err == nil {
 		t.Fatal("expected error on tampered ciphertext, got nil")
 	}
@@ -543,20 +543,20 @@ func TestUpsertSecretStored_EncryptsBeforeWrite(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 	store.SetMasterKey(testMasterKey)
 
 	const plaintext = "my-plaintext-key"
-	if err := store.UpsertSecretStored(ctx, nil, "enc-test", plaintext, "ollama", configstore.Metadata{Name: "enc-test"}); err != nil {
+	if err := store.UpsertSecretStored(ctx, nil, "enc-test", plaintext, "ollama", catalog.Metadata{Name: "enc-test"}); err != nil {
 		t.Fatalf("UpsertSecretStored: %v", err)
 	}
 
@@ -586,18 +586,18 @@ func TestUpsertSecretEnv_NoCiphertext(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
-	if err := store.UpsertSecretEnv(ctx, nil, "env-test", "MY_ENV_VAR", "ollama", configstore.Metadata{Name: "env-test"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, nil, "env-test", "MY_ENV_VAR", "ollama", catalog.Metadata{Name: "env-test"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
@@ -624,18 +624,18 @@ func TestDeleteSecret(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
-	if err := store.UpsertSecretEnv(ctx, nil, "del-test", "DEL_VAR", "ollama", configstore.Metadata{Name: "del-test"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, nil, "del-test", "DEL_VAR", "ollama", catalog.Metadata{Name: "del-test"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 	if err := store.DeleteSecret(ctx, nil, "del-test"); err != nil {

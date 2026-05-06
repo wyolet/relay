@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -34,22 +34,22 @@ func adminReloadRPM() int64 {
 
 // adminReloadRules constructs the synthetic ResolvedRule slice for the /admin/reload limiter.
 // ParentKind=Admin, ParentName=reload, meter=requests, sliding-window of 60s.
-func adminReloadRules(rpm int64) []configstore.ResolvedRule {
-	rl := &configstore.RateLimit{
-		APIVersion: configstore.APIVersion,
-		Kind:       configstore.KindRateLimit,
-		Metadata:   configstore.Metadata{Name: "admin-reload-rpm"},
-		Spec: configstore.RateLimitSpec{
-			Strategy: configstore.StrategySlidingWindow,
+func adminReloadRules(rpm int64) []catalog.ResolvedRule {
+	rl := &catalog.RateLimit{
+		APIVersion: catalog.APIVersion,
+		Kind:       catalog.KindRateLimit,
+		Metadata:   catalog.Metadata{Name: "admin-reload-rpm"},
+		Spec: catalog.RateLimitSpec{
+			Strategy: catalog.StrategySlidingWindow,
 			Window:   60 * time.Second,
 			Amount:   rpm,
 		},
 	}
-	return []configstore.ResolvedRule{
+	return []catalog.ResolvedRule{
 		{
 			ParentKind: "Admin",
 			ParentName: "reload",
-			Meter:      configstore.MeterRequests,
+			Meter:      catalog.MeterRequests,
 			RateLimit:  rl,
 		},
 	}

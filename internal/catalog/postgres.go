@@ -1,4 +1,4 @@
-package configstore
+package catalog
 
 import (
 	"context"
@@ -14,15 +14,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/internal/db"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
-// PGStore implements ConfigStore backed by Postgres.
+// PGStore implements Store backed by Postgres.
 // Reads are served from an in-memory snapshot swapped atomically on Reload.
 type PGStore struct {
 	pool      *pgxpool.Pool
-	q         *db.Queries
+	q         *gen.Queries
 	masterKey []byte // 32-byte AES-GCM key, nil when stored-mode secrets are not in use
 
 	mu   sync.RWMutex
@@ -34,7 +34,7 @@ type PGStore struct {
 func Postgres(ctx context.Context, dsn string, masterKey []byte) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("configstore.Postgres: parse DSN: %w", err)
+		return nil, fmt.Errorf("catalog.Postgres: parse DSN: %w", err)
 	}
 	cfg.MaxConns = 10
 	cfg.MinConns = 2
@@ -42,10 +42,10 @@ func Postgres(ctx context.Context, dsn string, masterKey []byte) (*PGStore, erro
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("configstore.Postgres: open pool: %w", err)
+		return nil, fmt.Errorf("catalog.Postgres: open pool: %w", err)
 	}
 
-	s := &PGStore{pool: pool, q: db.New(pool), masterKey: masterKey}
+	s := &PGStore{pool: pool, q: gen.New(pool), masterKey: masterKey}
 	if err := s.Reload(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -87,7 +87,7 @@ func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 // Intended for the seed CLI where the DB may be empty.
 func PostgresFromPool(_ context.Context, pool *pgxpool.Pool) (*PGStore, error) {
 	snap := newSnapshot()
-	s := &PGStore{pool: pool, q: db.New(pool), snap: snap}
+	s := &PGStore{pool: pool, q: gen.New(pool), snap: snap}
 	return s, nil
 }
 
@@ -95,10 +95,10 @@ func PostgresFromPool(_ context.Context, pool *pgxpool.Pool) (*PGStore, error) {
 func (s *PGStore) Reload(ctx context.Context) error {
 	snap, err := s.loadSnapshot(ctx)
 	if err != nil {
-		return fmt.Errorf("configstore.PGStore.Reload: %w", err)
+		return fmt.Errorf("catalog.PGStore.Reload: %w", err)
 	}
 	if err := validate(snap); err != nil {
-		return fmt.Errorf("configstore.PGStore.Reload: catalog invalid: %w", err)
+		return fmt.Errorf("catalog.PGStore.Reload: catalog invalid: %w", err)
 	}
 	s.mu.Lock()
 	s.snap = snap
@@ -314,9 +314,9 @@ func (s *PGStore) UpsertSecretEnv(ctx context.Context, tx pgx.Tx, name, envVar, 
 	}
 	q := s.q
 	if tx != nil {
-		q = db.New(tx)
+		q = gen.New(tx)
 	}
-	_, err = q.InsertSecretEnv(ctx, db.InsertSecretEnvParams{
+	_, err = q.InsertSecretEnv(ctx, gen.InsertSecretEnvParams{
 		Name:         name,
 		ValueFromEnv: pgtype.Text{String: envVar, Valid: true},
 		Metadata:     metaJSON,
@@ -346,9 +346,9 @@ func (s *PGStore) UpsertSecretStored(ctx context.Context, tx pgx.Tx, name, plain
 	}
 	q := s.q
 	if tx != nil {
-		q = db.New(tx)
+		q = gen.New(tx)
 	}
-	_, err = q.InsertSecretStored(ctx, db.InsertSecretStoredParams{
+	_, err = q.InsertSecretStored(ctx, gen.InsertSecretStoredParams{
 		Name:            name,
 		ValueCiphertext: ct,
 		ValueNonce:      nonce,
@@ -362,9 +362,9 @@ func (s *PGStore) UpsertSecretStored(ctx context.Context, tx pgx.Tx, name, plain
 func (s *PGStore) UpdateSecretEnv(ctx context.Context, tx pgx.Tx, name, envVar string) error {
 	q := s.q
 	if tx != nil {
-		q = db.New(tx)
+		q = gen.New(tx)
 	}
-	_, err := q.UpdateSecretEnv(ctx, db.UpdateSecretEnvParams{Name: name, ValueFromEnv: pgtype.Text{String: envVar, Valid: true}})
+	_, err := q.UpdateSecretEnv(ctx, gen.UpdateSecretEnvParams{Name: name, ValueFromEnv: pgtype.Text{String: envVar, Valid: true}})
 	return err
 }
 
@@ -379,9 +379,9 @@ func (s *PGStore) UpdateSecretStored(ctx context.Context, tx pgx.Tx, name, plain
 	}
 	q := s.q
 	if tx != nil {
-		q = db.New(tx)
+		q = gen.New(tx)
 	}
-	_, err = q.UpdateSecretStored(ctx, db.UpdateSecretStoredParams{
+	_, err = q.UpdateSecretStored(ctx, gen.UpdateSecretStoredParams{
 		Name:            name,
 		ValueCiphertext: ct,
 		ValueNonce:      nonce,
@@ -393,7 +393,7 @@ func (s *PGStore) UpdateSecretStored(ctx context.Context, tx pgx.Tx, name, plain
 func (s *PGStore) DeleteSecret(ctx context.Context, tx pgx.Tx, name string) error {
 	q := s.q
 	if tx != nil {
-		q = db.New(tx)
+		q = gen.New(tx)
 	}
 	return q.DeleteSecret(ctx, name)
 }

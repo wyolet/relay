@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
@@ -23,22 +23,22 @@ type Outbound interface {
 	ChatCompletions(ctx context.Context, body []byte, secret string, out chan<- *transport.Message) error
 }
 
-// Registry maps a configstore.ProviderKind to an Outbound implementation.
+// Registry maps a catalog.ProviderKind to an Outbound implementation.
 type Registry struct {
-	byKind map[configstore.ProviderKind]Outbound
+	byKind map[catalog.ProviderKind]Outbound
 }
 
 func NewRegistry() *Registry {
-	return &Registry{byKind: make(map[configstore.ProviderKind]Outbound)}
+	return &Registry{byKind: make(map[catalog.ProviderKind]Outbound)}
 }
 
 // Register associates a kind with an Outbound. Last write wins.
-func (r *Registry) Register(kind configstore.ProviderKind, o Outbound) {
+func (r *Registry) Register(kind catalog.ProviderKind, o Outbound) {
 	r.byKind[kind] = o
 }
 
 // Get returns the Outbound for a kind, or an error if none registered.
-func (r *Registry) Get(kind configstore.ProviderKind) (Outbound, error) {
+func (r *Registry) Get(kind catalog.ProviderKind) (Outbound, error) {
 	o, ok := r.byKind[kind]
 	if !ok {
 		return nil, fmt.Errorf("provider: no outbound registered for kind %q", kind)

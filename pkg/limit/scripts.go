@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -204,7 +204,7 @@ type reserveResult struct {
 // Returns sorted KEYS slice and ruleArg slice. keyIndex maps key→1-based index.
 // poolName is embedded as a hash tag in every key so all keys in a single EVAL
 // call map to the same Redis Cluster slot.
-func buildReserveArgs(poolName string, rules []configstore.ResolvedRule, now time.Time) (keys []string, ruleArgs []ruleArg, err error) {
+func buildReserveArgs(poolName string, rules []catalog.ResolvedRule, now time.Time) (keys []string, ruleArgs []ruleArg, err error) {
 	seen := make(map[string]int) // key -> 1-based index
 
 	addKey := func(k string) int {
@@ -230,10 +230,10 @@ func buildReserveArgs(poolName string, rules []configstore.ResolvedRule, now tim
 			RuleName:   rule.RateLimit.Metadata.Name,
 		}
 		switch rule.Meter {
-		case configstore.MeterRequests, configstore.MeterTokens:
+		case catalog.MeterRequests, catalog.MeterTokens:
 			ra.CurKeyIdx = addKey(bucketKey(poolName, rule, cur))
 			ra.PrevKeyIdx = addKey(bucketKey(poolName, rule, prev))
-		case configstore.MeterConcurrency:
+		case catalog.MeterConcurrency:
 			ra.ConKeyIdx = addKey(concurrencyKey(poolName, rule))
 		}
 		ruleArgs = append(ruleArgs, ra)

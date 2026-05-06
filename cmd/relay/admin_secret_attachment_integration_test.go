@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -18,13 +18,13 @@ import (
 // testMasterKey is a 32-byte hex key used in integration tests.
 const testMasterKeyHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 
-func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *configstore.PGStore) {
+func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *catalog.PGStore) {
 	t.Helper()
 	ctx := context.Background()
 	dsn := startPG(t)
 	runMigrationsForTest(t, dsn)
 
-	pool, err := configstore.OpenPool(ctx, dsn)
+	pool, err := catalog.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -47,7 +47,7 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *conf
 		}
 	}
 
-	store, err := configstore.PostgresFromPool(ctx, pool)
+	store, err := catalog.PostgresFromPool(ctx, pool)
 	if err != nil {
 		pool.Close()
 		t.Fatalf("configstore: %v", err)

@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -23,15 +23,15 @@ func memStoreFactory() kv.Store {
 	return kv.NewMem()
 }
 
-func makeRuleWith(meter configstore.Meter, amount int64, window time.Duration, name string) configstore.ResolvedRule {
-	return configstore.ResolvedRule{
-		ParentKind: configstore.KindRoute,
+func makeRuleWith(meter catalog.Meter, amount int64, window time.Duration, name string) catalog.ResolvedRule {
+	return catalog.ResolvedRule{
+		ParentKind: catalog.KindRoute,
 		ParentName: "test-route",
 		Meter:      meter,
-		RateLimit: &configstore.RateLimit{
-			Metadata: configstore.Metadata{Name: name},
-			Spec: configstore.RateLimitSpec{
-				Strategy: configstore.StrategySlidingWindow,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: name},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
 				Amount:   amount,
 			},

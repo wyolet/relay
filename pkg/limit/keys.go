@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 )
 
 // bucketKey returns the state key for a sliding-window bucket.
 // format: limit:{pool:<poolName>}:<parentKind>:<parentName>:<rlName>:<meter>:<bucketTS>
 // The {pool:<poolName>} hash tag pins all keys for a single request to the
 // same Redis Cluster slot regardless of parentKind.
-func bucketKey(poolName string, r configstore.ResolvedRule, bucketTS time.Time) string {
+func bucketKey(poolName string, r catalog.ResolvedRule, bucketTS time.Time) string {
 	return fmt.Sprintf("limit:{pool:%s}:%s:%s:%s:%s:%s",
 		poolName,
 		r.ParentKind, r.ParentName,
@@ -23,7 +23,7 @@ func bucketKey(poolName string, r configstore.ResolvedRule, bucketTS time.Time) 
 
 // concurrencyKey returns the state key for a concurrency counter.
 // format: limit:{pool:<poolName>}:<parentKind>:<parentName>:<rlName>:<meter>
-func concurrencyKey(poolName string, r configstore.ResolvedRule) string {
+func concurrencyKey(poolName string, r catalog.ResolvedRule) string {
 	return fmt.Sprintf("limit:{pool:%s}:%s:%s:%s:%s",
 		poolName,
 		r.ParentKind, r.ParentName,

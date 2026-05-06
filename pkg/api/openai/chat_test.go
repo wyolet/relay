@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -19,12 +19,12 @@ import (
 func fakeResolve(name string) (*RequestPlan, bool) {
 	known := map[string]*RequestPlan{
 		"gpt-4": {
-			Model:    &configstore.Model{Spec: configstore.ModelSpec{UpstreamName: "gpt-4"}},
-			Provider: &configstore.Provider{Spec: configstore.ProviderSpec{Kind: configstore.PKOpenAI}},
+			Model:    &catalog.Model{Spec: catalog.ModelSpec{UpstreamName: "gpt-4"}},
+			Provider: &catalog.Provider{Spec: catalog.ProviderSpec{Kind: catalog.PKOpenAI}},
 		},
 		"mymodel": {
-			Model:    &configstore.Model{Spec: configstore.ModelSpec{UpstreamName: "upstream-model"}},
-			Provider: &configstore.Provider{Spec: configstore.ProviderSpec{Kind: configstore.PKOllama}},
+			Model:    &catalog.Model{Spec: catalog.ModelSpec{UpstreamName: "upstream-model"}},
+			Provider: &catalog.Provider{Spec: catalog.ProviderSpec{Kind: catalog.PKOllama}},
 		},
 	}
 	p, ok := known[name]
