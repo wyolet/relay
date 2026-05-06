@@ -59,8 +59,8 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *configstore.PGStore)
 
 	deps := crudDeps(store.RawPool(), store)
 	kinds := buildAdminKinds(store, nil)
-	crud := buildAdminCRUD(kinds, deps)
-	mountAdminRoutes(r, adminTestToken, crud)
+	crudH := buildAdminCRUD(kinds, deps, store)
+	mountAdminRoutes(r, adminTestToken, crudH, store, deps)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

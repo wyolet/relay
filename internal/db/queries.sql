@@ -104,6 +104,22 @@ INSERT INTO attachments (parent_kind, parent_name, ratelimit_name, meter)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT DO NOTHING;
 
+-- name: InsertAttachment :one
+INSERT INTO attachments (parent_kind, parent_name, ratelimit_name, meter)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+RETURNING parent_kind, parent_name, ratelimit_name, meter;
+
+-- name: ListAttachmentsByParent :many
+SELECT parent_kind, parent_name, ratelimit_name, meter
+FROM attachments
+WHERE parent_kind = $1 AND parent_name = $2
+ORDER BY ratelimit_name, meter;
+
+-- name: DeleteAttachmentByCompositeKey :execrows
+DELETE FROM attachments
+WHERE parent_kind = $1 AND parent_name = $2 AND ratelimit_name = $3 AND meter = $4;
+
 -- name: DeleteProvider :exec
 DELETE FROM providers WHERE name = $1;
 

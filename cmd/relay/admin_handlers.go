@@ -352,7 +352,7 @@ func crudDeps(pool *pgxpool.Pool, store *configstore.PGStore) crud.Deps {
 }
 
 // buildAdminCRUD calls Handlers() on each kind and bundles the results.
-func buildAdminCRUD(kinds adminKinds, deps crud.Deps) *adminCRUD {
+func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore) *adminCRUD {
 	pl, pg, pc, pu, pd := kinds.provider.Handlers(deps)
 	ol, og, oc, ou, od := kinds.pool.Handlers(deps)
 	ml, mg, mc, mu, md := kinds.model.Handlers(deps)
@@ -364,33 +364,57 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps) *adminCRUD {
 		model:     adminHandlers{ml, mg, mc, mu, md},
 		route:     adminHandlers{rl, rg, rc, ru, rd},
 		rateLimit: adminHandlers{ll, lg, lc, lu, ld},
+
+		secretList:       secretListHandler(store),
+		secretGet:        secretGetHandler(store),
+		secretCreate:     secretCreateHandler(store, deps),
+		secretUpdate:     secretUpdateHandler(store, deps),
+		secretDelete:     secretDeleteHandler(store, deps),
+		attachmentList:   attachmentListHandler(store, deps),
+		attachmentCreate: attachmentCreateHandler(store, deps),
+		attachmentDelete: attachmentDeleteHandler(store, deps),
 	}
 }
 
 // mountAdminRoutes registers chi routes for all admin CRUD endpoints, gated by token check.
-func mountAdminRoutes(r chi.Router, tok string, crud *adminCRUD) {
+func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore.PGStore, deps crud.Deps) {
 	gate := adminTokenGate(tok)
 
 	type kindRoutes struct {
-		plural string
-		h      adminHandlers
+		plural   string
+		handlers adminHandlers
 	}
 	kinds := []kindRoutes{
-		{"providers", crud.provider},
-		{"pools", crud.pool},
-		{"models", crud.model},
-		{"routes", crud.route},
-		{"ratelimits", crud.rateLimit},
+		{"providers", h.provider},
+		{"pools", h.pool},
+		{"models", h.model},
+		{"routes", h.route},
+		{"ratelimits", h.rateLimit},
 	}
 	for _, k := range kinds {
 		k := k
 		base := "/admin/" + k.plural
-		r.With(gate).Get(base, k.h.list)
-		r.With(gate).Post(base, k.h.create)
-		r.With(gate).Get(base+"/{name}", k.h.get)
-		r.With(gate).Put(base+"/{name}", k.h.update)
-		r.With(gate).Delete(base+"/{name}", k.h.del)
+		r.With(gate).Get(base, k.handlers.list)
+		r.With(gate).Post(base, k.handlers.create)
+		r.With(gate).Get(base+"/{name}", k.handlers.get)
+		r.With(gate).Put(base+"/{name}", k.handlers.update)
+		r.With(gate).Delete(base+"/{name}", k.handlers.del)
 	}
+
+	// Secret endpoints (custom shapes, not via Kind[T] factory).
+	r.With(gate).Get("/admin/secrets", h.secretList)
+	r.With(gate).Post("/admin/secrets", h.secretCreate)
+	r.With(gate).Get("/admin/secrets/{name}", h.secretGet)
+	r.With(gate).Put("/admin/secrets/{name}", h.secretUpdate)
+	r.With(gate).Delete("/admin/secrets/{name}", h.secretDelete)
+
+	// Attachment endpoints.
+	r.With(gate).Get("/admin/attachments", h.attachmentList)
+	r.With(gate).Post("/admin/attachments", h.attachmentCreate)
+	r.With(gate).Delete("/admin/attachments/{id}", h.attachmentDelete)
+
+	_ = store
+	_ = deps
 }
 
 // adminTokenGate returns a chi middleware that checks X-Relay-Admin-Token.

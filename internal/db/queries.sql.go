@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteAttachmentByCompositeKey = `-- name: DeleteAttachmentByCompositeKey :execrows
+DELETE FROM attachments
+WHERE parent_kind = $1 AND parent_name = $2 AND ratelimit_name = $3 AND meter = $4
+`
+
+type DeleteAttachmentByCompositeKeyParams struct {
+	ParentKind    string `db:"parent_kind" json:"parent_kind"`
+	ParentName    string `db:"parent_name" json:"parent_name"`
+	RatelimitName string `db:"ratelimit_name" json:"ratelimit_name"`
+	Meter         string `db:"meter" json:"meter"`
+}
+
+func (q *Queries) DeleteAttachmentByCompositeKey(ctx context.Context, arg DeleteAttachmentByCompositeKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAttachmentByCompositeKey,
+		arg.ParentKind,
+		arg.ParentName,
+		arg.RatelimitName,
+		arg.Meter,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteModel = `-- name: DeleteModel :exec
 DELETE FROM models WHERE name = $1
 `
@@ -63,6 +88,37 @@ DELETE FROM secrets WHERE name = $1
 func (q *Queries) DeleteSecret(ctx context.Context, name string) error {
 	_, err := q.db.Exec(ctx, deleteSecret, name)
 	return err
+}
+
+const insertAttachment = `-- name: InsertAttachment :one
+INSERT INTO attachments (parent_kind, parent_name, ratelimit_name, meter)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+RETURNING parent_kind, parent_name, ratelimit_name, meter
+`
+
+type InsertAttachmentParams struct {
+	ParentKind    string `db:"parent_kind" json:"parent_kind"`
+	ParentName    string `db:"parent_name" json:"parent_name"`
+	RatelimitName string `db:"ratelimit_name" json:"ratelimit_name"`
+	Meter         string `db:"meter" json:"meter"`
+}
+
+func (q *Queries) InsertAttachment(ctx context.Context, arg InsertAttachmentParams) (Attachment, error) {
+	row := q.db.QueryRow(ctx, insertAttachment,
+		arg.ParentKind,
+		arg.ParentName,
+		arg.RatelimitName,
+		arg.Meter,
+	)
+	var i Attachment
+	err := row.Scan(
+		&i.ParentKind,
+		&i.ParentName,
+		&i.RatelimitName,
+		&i.Meter,
+	)
+	return i, err
 }
 
 const insertSecretEnv = `-- name: InsertSecretEnv :one
@@ -175,6 +231,43 @@ SELECT parent_kind, parent_name, ratelimit_name, meter FROM attachments ORDER BY
 
 func (q *Queries) ListAttachments(ctx context.Context) ([]Attachment, error) {
 	rows, err := q.db.Query(ctx, listAttachments)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Attachment
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ParentKind,
+			&i.ParentName,
+			&i.RatelimitName,
+			&i.Meter,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAttachmentsByParent = `-- name: ListAttachmentsByParent :many
+SELECT parent_kind, parent_name, ratelimit_name, meter
+FROM attachments
+WHERE parent_kind = $1 AND parent_name = $2
+ORDER BY ratelimit_name, meter
+`
+
+type ListAttachmentsByParentParams struct {
+	ParentKind string `db:"parent_kind" json:"parent_kind"`
+	ParentName string `db:"parent_name" json:"parent_name"`
+}
+
+func (q *Queries) ListAttachmentsByParent(ctx context.Context, arg ListAttachmentsByParentParams) ([]Attachment, error) {
+	rows, err := q.db.Query(ctx, listAttachmentsByParent, arg.ParentKind, arg.ParentName)
 	if err != nil {
 		return nil, err
 	}

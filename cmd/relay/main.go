@@ -334,8 +334,8 @@ func main() {
 
 		deps := crudDeps(pgStoreForAdmin.RawPool(), pgStoreForAdmin)
 		kinds := buildAdminKinds(pgStoreForAdmin, nil)
-		adminCRUDHandlers = buildAdminCRUD(kinds, deps)
-		mountAdminRoutes(r, tok, adminCRUDHandlers)
+		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin)
+		mountAdminRoutes(r, tok, adminCRUDHandlers, pgStoreForAdmin, deps)
 	}
 
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,

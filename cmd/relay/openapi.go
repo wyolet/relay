@@ -98,11 +98,21 @@ type adminHandlers struct {
 
 // adminCRUD bundles all five kinds' handler sets for huma registration.
 type adminCRUD struct {
-	provider  adminHandlers
-	pool      adminHandlers
-	model     adminHandlers
-	route     adminHandlers
-	rateLimit adminHandlers
+	provider   adminHandlers
+	pool       adminHandlers
+	model      adminHandlers
+	route      adminHandlers
+	rateLimit  adminHandlers
+
+	// Secret and Attachment handlers are stored here for huma registration.
+	secretList       http.HandlerFunc
+	secretGet        http.HandlerFunc
+	secretCreate     http.HandlerFunc
+	secretUpdate     http.HandlerFunc
+	secretDelete     http.HandlerFunc
+	attachmentList   http.HandlerFunc
+	attachmentCreate http.HandlerFunc
+	attachmentDelete http.HandlerFunc
 }
 
 // mountHuma wraps chiRouter in a humachi-backed huma API and registers all
@@ -332,6 +342,88 @@ func mountHuma(
 				Middlewares: auth,
 			}, delegate(k.h.del))
 		}
+
+		// Secret endpoints — 5 ops; response struct has no cleartext field.
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_secret_list",
+			Method:      http.MethodGet,
+			Path:        "/admin/secrets",
+			Summary:     "List secrets",
+			Tags:        []string{"admin"},
+			Errors:      []int{500},
+			Middlewares: auth,
+		}, delegate(crud.secretList))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_secret_get",
+			Method:      http.MethodGet,
+			Path:        "/admin/secrets/{name}",
+			Summary:     "Get secret",
+			Tags:        []string{"admin"},
+			Errors:      []int{404, 500},
+			Middlewares: auth,
+		}, delegate(crud.secretGet))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_secret_create",
+			Method:      http.MethodPost,
+			Path:        "/admin/secrets",
+			Summary:     "Create secret",
+			Tags:        []string{"admin"},
+			Errors:      []int{400, 500},
+			Middlewares: auth,
+		}, delegate(crud.secretCreate))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_secret_update",
+			Method:      http.MethodPut,
+			Path:        "/admin/secrets/{name}",
+			Summary:     "Update secret",
+			Tags:        []string{"admin"},
+			Errors:      []int{400, 404, 500},
+			Middlewares: auth,
+		}, delegate(crud.secretUpdate))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_secret_delete",
+			Method:      http.MethodDelete,
+			Path:        "/admin/secrets/{name}",
+			Summary:     "Delete secret",
+			Tags:        []string{"admin"},
+			Errors:      []int{404, 500},
+			Middlewares: auth,
+		}, delegate(crud.secretDelete))
+
+		// Attachment endpoints — 3 ops.
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_attachment_list",
+			Method:      http.MethodGet,
+			Path:        "/admin/attachments",
+			Summary:     "List attachments by parent",
+			Tags:        []string{"admin"},
+			Errors:      []int{400, 500},
+			Middlewares: auth,
+		}, delegate(crud.attachmentList))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_attachment_create",
+			Method:      http.MethodPost,
+			Path:        "/admin/attachments",
+			Summary:     "Create attachment",
+			Tags:        []string{"admin"},
+			Errors:      []int{400, 500},
+			Middlewares: auth,
+		}, delegate(crud.attachmentCreate))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_attachment_delete",
+			Method:      http.MethodDelete,
+			Path:        "/admin/attachments/{id}",
+			Summary:     "Delete attachment",
+			Tags:        []string{"admin"},
+			Errors:      []int{400, 404, 500},
+			Middlewares: auth,
+		}, delegate(crud.attachmentDelete))
 	}
 
 	return api
