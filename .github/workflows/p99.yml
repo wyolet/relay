@@ -20,21 +20,21 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      # Run each bench 3 times (-count=3); pick the median.
-      - name: Run p99 bench — chat (count=3)
-        id: bench_chat
+      # Run each chat-overhead bench 3 times (-count=3); pick the median per mode.
+      - name: Run p99 bench — chat Rich (count=3)
+        id: bench_chat_rich
         run: |
           set -euo pipefail
-          mkdir -p /tmp/bench-runs/chat
+          mkdir -p /tmp/bench-runs/chat-rich
 
           for i in 1 2 3; do
             GOMAXPROCS=2 go test \
-              -bench=BenchmarkRelayInternalOverhead \
+              -bench=BenchmarkRelayChatOverhead_Rich \
               -benchtime=10000x \
               -count=1 \
               -run='^$' \
               ./bench/...
-            cp bench/results.json /tmp/bench-runs/chat/run${i}.json
+            cp bench/results-rich.json /tmp/bench-runs/chat-rich/run${i}.json
           done
 
           python3 - <<'PYEOF'
@@ -42,11 +42,12 @@ jobs:
 
           runs = []
           for i in (1, 2, 3):
-              with open(f"/tmp/bench-runs/chat/run{i}.json") as f:
+              with open(f"/tmp/bench-runs/chat-rich/run{i}.json") as f:
                   runs.append(json.load(f))
 
           median_result = {
               "path":   "chat",
+              "mode":   "rich",
               "p50_us": int(statistics.median(r["p50_us"] for r in runs)),
               "p95_us": int(statistics.median(r["p95_us"] for r in runs)),
               "p99_us": int(statistics.median(r["p99_us"] for r in runs)),
@@ -54,10 +55,50 @@ jobs:
               "git_sha": os.environ.get("GITHUB_SHA", "unknown"),
           }
 
-          with open("bench/results.json", "w") as f:
+          with open("bench/results-rich.json", "w") as f:
               json.dump(median_result, f, indent=2)
 
-          print(f"Chat median: p50={median_result['p50_us']}µs  p95={median_result['p95_us']}µs  p99={median_result['p99_us']}µs")
+          print(f"Chat Rich median: p50={median_result['p50_us']}µs  p95={median_result['p95_us']}µs  p99={median_result['p99_us']}µs")
+          PYEOF
+
+      - name: Run p99 bench — chat Minimal (count=3)
+        id: bench_chat_minimal
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bench-runs/chat-minimal
+
+          for i in 1 2 3; do
+            GOMAXPROCS=2 go test \
+              -bench=BenchmarkRelayChatOverhead_Minimal \
+              -benchtime=10000x \
+              -count=1 \
+              -run='^$' \
+              ./bench/...
+            cp bench/results-minimal.json /tmp/bench-runs/chat-minimal/run${i}.json
+          done
+
+          python3 - <<'PYEOF'
+          import json, os, statistics
+
+          runs = []
+          for i in (1, 2, 3):
+              with open(f"/tmp/bench-runs/chat-minimal/run{i}.json") as f:
+                  runs.append(json.load(f))
+
+          median_result = {
+              "path":   "chat",
+              "mode":   "minimal",
+              "p50_us": int(statistics.median(r["p50_us"] for r in runs)),
+              "p95_us": int(statistics.median(r["p95_us"] for r in runs)),
+              "p99_us": int(statistics.median(r["p99_us"] for r in runs)),
+              "n":      runs[0]["n"],
+              "git_sha": os.environ.get("GITHUB_SHA", "unknown"),
+          }
+
+          with open("bench/results-minimal.json", "w") as f:
+              json.dump(median_result, f, indent=2)
+
+          print(f"Chat Minimal median: p50={median_result['p50_us']}µs  p95={median_result['p95_us']}µs  p99={median_result['p99_us']}µs")
           PYEOF
 
       - name: Run p99 bench — streaming (count=3)
@@ -104,11 +145,12 @@ jobs:
         id: baseline
         continue-on-error: true
         run: |
-          git show origin/main:bench/results.json > /tmp/main_results.json 2>/dev/null
+          git show origin/main:bench/results-rich.json    > /tmp/main_results_rich.json    2>/dev/null || true
+          git show origin/main:bench/results-minimal.json > /tmp/main_results_minimal.json 2>/dev/null || true
           git show origin/main:bench/streaming-results.json > /tmp/main_streaming_results.json 2>/dev/null || true
           echo "found=true" >> "$GITHUB_OUTPUT"
 
-      # Post a PR comment with the comparison table (chat + streaming rows).
+      # Post a PR comment with the comparison table (chat Rich + Minimal + streaming rows).
       - name: Post PR comment
         if: github.event_name == 'pull_request'
         env:
@@ -119,18 +161,25 @@ jobs:
           python3 - <<'PYEOF'
           import json, os, subprocess
 
-          with open("bench/results.json") as f:
-              chat = json.load(f)
+          with open("bench/results-rich.json") as f:
+              chat_rich = json.load(f)
+          with open("bench/results-minimal.json") as f:
+              chat_minimal = json.load(f)
           with open("bench/streaming-results.json") as f:
               streaming = json.load(f)
 
           baseline_found = os.environ.get("BASELINE_FOUND", "") == "true"
 
-          main_chat = main_stream = None
+          main_rich = main_minimal = main_stream = None
           if baseline_found:
               try:
-                  with open("/tmp/main_results.json") as f:
-                      main_chat = json.load(f)
+                  with open("/tmp/main_results_rich.json") as f:
+                      main_rich = json.load(f)
+              except Exception:
+                  pass
+              try:
+                  with open("/tmp/main_results_minimal.json") as f:
+                      main_minimal = json.load(f)
               except Exception:
                   pass
               try:
@@ -146,35 +195,36 @@ jobs:
                   return f"{us/1000:.1f}ms"
               return f"{us}µs"
 
-          def slo_tag(p99, p50, p99_limit, p50_limit):
-              return "✅" if p99 <= p99_limit and p50 <= p50_limit else "❌"
+          def slo_chat(r):
+              return "✅" if r["p99_us"] <= 5000 and r["p50_us"] <= 1000 else "❌"
 
-          chat_tag    = slo_tag(chat["p99_us"],      chat["p50_us"],      5000, 1000)
-          stream_tag  = slo_tag(streaming["p99_us"], streaming["p50_us"], 10000, 2000)
+          def slo_stream(r):
+              return "✅" if r["p99_us"] <= 10000 and r["p50_us"] <= 2000 else "❌"
 
-          def row(label, pr, main_r, p99_slo):
+          def row(path, mode, pr, main_r, slo_fn):
               mp50 = fmt(main_r["p50_us"]) if main_r else "n/a"
               mp95 = fmt(main_r["p95_us"]) if main_r else "n/a"
               mp99 = fmt(main_r["p99_us"]) if main_r else "n/a"
-              tag = "✅" if pr["p99_us"] <= p99_slo else "❌"
-              return (f"| {label} | {fmt(pr['p50_us'])} | {fmt(pr['p95_us'])} | {fmt(pr['p99_us'])} "
+              tag = slo_fn(pr)
+              mode_col = mode if mode else "—"
+              return (f"| {path} | {mode_col} | {fmt(pr['p50_us'])} | {fmt(pr['p95_us'])} | {fmt(pr['p99_us'])} "
                       f"| {mp50} | {mp95} | {mp99} | {tag} |")
 
+          sha = chat_rich.get("git_sha", "unknown")[:8]
           body = f"""### p99 Overhead Report
 
-          | Path | p50 | p95 | p99 | main p50 | main p95 | main p99 | SLO |
-          |------|-----|-----|-----|----------|----------|----------|-----|
-          {row("Chat",      chat,      main_chat,   5000)}
-          {row("Streaming", streaming, main_stream, 10000)}
+| Path | Mode | p50 | p95 | p99 | main p50 | main p95 | main p99 | SLO |
+|------|------|-----|-----|-----|----------|----------|----------|-----|
+{row("Chat",      "Rich",    chat_rich,    main_rich,    slo_chat)}
+{row("Chat",      "Minimal", chat_minimal, main_minimal, slo_chat)}
+{row("Streaming", "",        streaming,    main_stream,  slo_stream)}
 
-          **Chat n={chat['n']}  Streaming n={streaming['n']}  sha={chat['git_sha'][:8]}**
+**Chat n={chat_rich['n']}  Streaming n={streaming['n']}  sha={sha}**
 
-          SLO: Chat p99 ≤ 5ms, p50 ≤ 1ms | Streaming p99 ≤ 10ms, p50 ≤ 2ms
+SLO: Chat p99 ≤ 5ms, p50 ≤ 1ms | Streaming p99 ≤ 10ms, p50 ≤ 2ms
 
-          > Measured in-process (in-memory config, no real Redis/PG). Overhead = relay total minus bare-stub p50 baseline. See `bench/` for methodology.
-          """
-
-          body = "\n".join(line.lstrip() for line in body.strip().splitlines())
+> Measured in-process (in-memory config, no real Redis/PG). Overhead = relay total minus bare-stub p50 baseline. See `bench/` for methodology.
+"""
 
           pr_number = os.environ["PR_NUMBER"]
           subprocess.run(

@@ -32,6 +32,17 @@
 //   - Network round-trip to a remote upstream
 //   - Multi-pod coordination or cache-warming
 //
+// # Chat-overhead parameterization (PER-260 / M7)
+//
+// BenchmarkRelayChatOverhead_Rich exercises the M7 default: RELAY_RICH_PARSING=on
+// (full body parse via Parse — model, stream, user, metadata validation, messages
+// extraction). BenchmarkRelayChatOverhead_Minimal exercises the legacy partial-parse
+// path: RELAY_RICH_PARSING=off (model/stream/user/raw only; metadata and messages left
+// nil). Both assert the same non-streaming SLO (p99 ≤ 5ms, p50 ≤ 1ms). The delta
+// between modes is the observable cost of the M7 full-parse default. Each bench
+// calls b.Cleanup to restore SetRichParsing to its prior value so test ordering
+// never matters.
+//
 // # SLO gates
 //
 // Non-streaming: p99 overhead ≤ 5 ms, p50 ≤ 1 ms (CLAUDE.md performance contract).
@@ -102,7 +113,11 @@ func stubUpstream() *httptest.Server {
 }
 
 // benchResult holds percentile latencies and iteration count, written to results.json.
+// Path tags which hot path the measurement covers ("chat" or "streaming").
+// Mode tags the parsing mode ("rich" or "minimal") for chat-path measurements; empty for streaming.
 type benchResult struct {
+	Path   string `json:"path"`
+	Mode   string `json:"mode,omitempty"`
 	P50us  int64  `json:"p50_us"`
 	P95us  int64  `json:"p95_us"`
 	P99us  int64  `json:"p99_us"`
@@ -373,22 +388,17 @@ func BenchmarkBareStub(b *testing.B) {
 	}
 }
 
-// BenchmarkRelayInternalOverhead is the primary SLO gate.
-//
-// It measures end-to-end latency through the full Relay handler (auth +
-// body-limit + reqid + huma routing + model resolution + key selection +
-// pipeline), subtracts the bare-stub p50 baseline, and computes p50 / p95 / p99
-// of Relay's own contribution. Fails the build when p99 > 5 ms or p50 > 1 ms.
-func BenchmarkRelayInternalOverhead(b *testing.B) {
+// runChatOverhead is the shared implementation for BenchmarkRelayChatOverhead_Rich
+// and BenchmarkRelayChatOverhead_Minimal. mode is "rich" or "minimal".
+func runChatOverhead(b *testing.B, mode string) {
+	b.Helper()
+
 	stub := stubUpstream()
 	b.Cleanup(stub.Close)
 
 	handler := buildRelayHandler(b, stub.URL)
 	body := benchBody()
 
-	// Measure the stub handler directly via ServeHTTP (same method as relay
-	// below) to get a comparable baseline. We use nanosecond precision to avoid
-	// the zero-truncation problem that microseconds cause for very fast handlers.
 	stubHandler := stub.Config.Handler
 	const warmupN = 500
 	stubNs := make([]int64, 0, warmupN)
@@ -405,7 +415,6 @@ func BenchmarkRelayInternalOverhead(b *testing.B) {
 
 	b.ResetTimer()
 
-	// All latencies in nanoseconds.
 	relayNs := make([]int64, 0, b.N)
 	for i := 0; i < b.N; i++ {
 		req, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
@@ -425,15 +434,12 @@ func BenchmarkRelayInternalOverhead(b *testing.B) {
 
 	b.StopTimer()
 
-	// Skip SLO gate and result writing on the brief Go-internal probe runs
-	// (B.N < 100). The gate only fires when we have a real sample population.
 	if b.N < 100 {
 		return
 	}
 
 	sort.Slice(relayNs, func(i, j int) bool { return relayNs[i] < relayNs[j] })
 
-	// Overhead = relay - stub_p50, floor at 0. All in nanoseconds.
 	overheadNs := make([]int64, len(relayNs))
 	for i, lat := range relayNs {
 		if ov := lat - stubP50ns; ov > 0 {
@@ -442,39 +448,63 @@ func BenchmarkRelayInternalOverhead(b *testing.B) {
 	}
 	sort.Slice(overheadNs, func(i, j int) bool { return overheadNs[i] < overheadNs[j] })
 
-	// Convert to µs for SLO comparison and reporting.
 	p50 := percentile(overheadNs, 50) / 1000
 	p95 := percentile(overheadNs, 95) / 1000
 	p99 := percentile(overheadNs, 99) / 1000
 
-	b.Logf("stub p50=%dns | relay-total p50=%dµs p95=%dµs p99=%dµs",
-		stubP50ns,
+	b.Logf("mode=%s stub p50=%dns | relay-total p50=%dµs p95=%dµs p99=%dµs",
+		mode, stubP50ns,
 		percentile(relayNs, 50)/1000,
 		percentile(relayNs, 95)/1000,
 		percentile(relayNs, 99)/1000,
 	)
-	b.Logf("overhead (relay - stub_p50): p50=%dµs p95=%dµs p99=%dµs n=%d",
-		p50, p95, p99, len(overheadNs))
+	b.Logf("mode=%s overhead (relay - stub_p50): p50=%dµs p95=%dµs p99=%dµs n=%d",
+		mode, p50, p95, p99, len(overheadNs))
 
 	result := benchResult{
+		Path:   "chat",
+		Mode:   mode,
 		P50us:  p50,
 		P95us:  p95,
 		P99us:  p99,
 		N:      len(overheadNs),
 		GitSHA: gitSHA(),
 	}
-	writeResults(b, result)
+	writeResults(b, mode, result)
 
-	// Hard SLO assertions — these make `go test -bench=.` the CI gate.
 	if p99 > 5000 {
-		b.Fatalf("SLO BREACH: p99 overhead %dµs > 5000µs (5ms)", p99)
+		b.Fatalf("SLO BREACH: p99 overhead %dµs > 5000µs (5ms) [mode=%s]", p99, mode)
 	}
 	if p50 > 1000 {
-		b.Fatalf("SLO BREACH: p50 overhead %dµs > 1000µs (1ms)", p50)
+		b.Fatalf("SLO BREACH: p50 overhead %dµs > 1000µs (1ms) [mode=%s]", p50, mode)
 	}
 
-	fmt.Printf("Relay overhead — p50: %dµs  p95: %dµs  p99: %dµs  n: %d\n",
-		p50, p95, p99, len(overheadNs))
+	fmt.Printf("Relay chat overhead [%s] — p50: %dµs  p95: %dµs  p99: %dµs  n: %d\n",
+		mode, p50, p95, p99, len(overheadNs))
+}
+
+// BenchmarkRelayChatOverhead_Rich is the chat SLO gate for the M7 default parsing mode.
+//
+// It sets RELAY_RICH_PARSING=on (full body parse: model, stream, user, metadata
+// validation, messages extraction) and measures end-to-end overhead through the
+// full Relay handler. Fails the build when p99 > 5 ms or p50 > 1 ms.
+func BenchmarkRelayChatOverhead_Rich(b *testing.B) {
+	prev := apiopenai.RichParsing()
+	apiopenai.SetRichParsing(true)
+	b.Cleanup(func() { apiopenai.SetRichParsing(prev) })
+	runChatOverhead(b, "rich")
+}
+
+// BenchmarkRelayChatOverhead_Minimal is the chat SLO gate for the legacy partial-parse path.
+//
+// It sets RELAY_RICH_PARSING=off (model/stream/user/raw only; metadata and messages
+// left nil) and measures end-to-end overhead through the full Relay handler.
+// Fails the build when p99 > 5 ms or p50 > 1 ms.
+func BenchmarkRelayChatOverhead_Minimal(b *testing.B) {
+	prev := apiopenai.RichParsing()
+	apiopenai.SetRichParsing(false)
+	b.Cleanup(func() { apiopenai.SetRichParsing(prev) })
+	runChatOverhead(b, "minimal")
 }
 
 // benchBody returns a minimal but valid chat-completions request body.
@@ -489,8 +519,23 @@ func benchBody() []byte {
 	return b
 }
 
-// benchResult holds percentile latencies and iteration count, written to results.json.
-// The Path field tags which hot path the measurement covers ("chat" or "streaming").
+// writeResults writes bench/results-{mode}.json in the bench directory and also
+// bench/results.json for the last mode written (CI reads both files by mode name).
+// Failures are non-fatal (they don't break the bench gate itself).
+func writeResults(tb testing.TB, mode string, r benchResult) {
+	tb.Helper()
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		tb.Logf("writeResults: marshal: %v", err)
+		return
+	}
+	modeFile := "results-" + mode + ".json"
+	if err := os.WriteFile(modeFile, data, 0o644); err != nil {
+		tb.Logf("writeResults: write %s: %v", modeFile, err)
+	}
+}
+
+// streamingBenchResult holds percentile latencies for the streaming path.
 type streamingBenchResult struct {
 	Path   string `json:"path"`
 	P50us  int64  `json:"p50_us"`
@@ -498,20 +543,6 @@ type streamingBenchResult struct {
 	P99us  int64  `json:"p99_us"`
 	N      int    `json:"n"`
 	GitSHA string `json:"git_sha"`
-}
-
-// writeResults writes results.json in the bench directory.
-// Failures are non-fatal (they don't break the bench gate itself).
-func writeResults(tb testing.TB, r benchResult) {
-	tb.Helper()
-	data, err := json.MarshalIndent(r, "", "  ")
-	if err != nil {
-		tb.Logf("writeResults: marshal: %v", err)
-		return
-	}
-	if err := os.WriteFile("results.json", data, 0o644); err != nil {
-		tb.Logf("writeResults: write: %v", err)
-	}
 }
 
 // writeStreamingResults writes streaming-results.json in the bench directory.
@@ -591,7 +622,6 @@ func BenchmarkRelayStreamingOverhead(b *testing.B) {
 	handler := buildRelayHandler(b, stub.URL)
 	body := benchBody()
 
-	// Measure stub handler directly to get a comparable baseline.
 	stubHandler := stub.Config.Handler
 	const warmupN = 500
 	stubNs := make([]int64, 0, warmupN)
@@ -664,7 +694,6 @@ func BenchmarkRelayStreamingOverhead(b *testing.B) {
 	}
 	writeStreamingResults(b, result)
 
-	// Hard SLO assertions — streaming budget is roomier than non-streaming.
 	if p99 > 10000 {
 		b.Fatalf("SLO BREACH: streaming p99 overhead %dµs > 10000µs (10ms)", p99)
 	}
