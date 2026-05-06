@@ -146,8 +146,10 @@ func mountHuma(
 
 	api := humachi.New(chiRouter, cfg)
 	auth := huma.Middlewares{humaAuth(authMW)}
-	// adminAuth gates admin endpoints with both API-key auth AND admin token.
-	adminAuth := huma.Middlewares{humaAuth(authMW), humaAuth(adminTokenGate(adminTok))}
+	// adminAuth gates admin endpoints with the admin-token check only.
+	// Admin endpoints do not require the caller-API-key tier — the admin token
+	// (X-Relay-Admin-Token header or relay_admin cookie) is the auth signal.
+	adminAuth := huma.Middlewares{humaAuth(adminTokenGate(adminTok))}
 
 	// delegate wraps an http.HandlerFunc as a huma stream handler (no request body).
 	delegate := func(h http.HandlerFunc) func(context.Context, *struct{}) (*huma.StreamResponse, error) {
