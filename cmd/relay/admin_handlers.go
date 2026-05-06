@@ -365,14 +365,12 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore
 		route:     adminHandlers{rl, rg, rc, ru, rd},
 		rateLimit: adminHandlers{ll, lg, lc, lu, ld},
 
-		secretList:       secretListHandler(store),
-		secretGet:        secretGetHandler(store),
-		secretCreate:     secretCreateHandler(store, deps),
-		secretUpdate:     secretUpdateHandler(store, deps),
-		secretDelete:     secretDeleteHandler(store, deps),
-		attachmentList:   attachmentListHandler(store, deps),
-		attachmentCreate: attachmentCreateHandler(store, deps),
-		attachmentDelete: attachmentDeleteHandler(store, deps),
+		secretList:     secretListHandler(store),
+		secretGet:      secretGetHandler(store),
+		secretCreate:   secretCreateHandler(store, deps),
+		secretUpdate:   secretUpdateHandler(store, deps),
+		secretDelete:   secretDeleteHandler(store, deps),
+		attachmentList: attachmentListHandler(store, deps),
 
 		version:           versionHandler(),
 		masterKeyGenerate: masterKeyGenerateHandler(),
@@ -380,8 +378,16 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore
 }
 
 // mountAdminRoutes registers chi routes for all admin CRUD endpoints, gated by token check.
+// Also mounts the unauthenticated POST /admin/login (cookie auth bootstrap).
 func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore.PGStore, deps crud.Deps) {
 	gate := adminTokenGate(tok)
+
+	// Login is NOT gated — it is the mechanism by which clients obtain a session cookie.
+	// 401 is returned on wrong token (endpoint is publicly discoverable).
+	r.Post("/admin/login", adminLoginHandler(tok))
+	// Logout and whoami ARE gated — they require an existing valid session.
+	r.With(gate).Post("/admin/logout", adminLogoutHandler())
+	r.With(gate).Get("/admin/whoami", adminWhoamiHandler())
 
 	type kindRoutes struct {
 		plural   string
@@ -411,10 +417,9 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore
 	r.With(gate).Put("/admin/secrets/{name}", h.secretUpdate)
 	r.With(gate).Delete("/admin/secrets/{name}", h.secretDelete)
 
-	// Attachment endpoints.
+	// Attachment endpoint — read-only derived view.
+	// Attachments are managed inline on Pool/Secret/Model specs; no POST/DELETE here.
 	r.With(gate).Get("/admin/attachments", h.attachmentList)
-	r.With(gate).Post("/admin/attachments", h.attachmentCreate)
-	r.With(gate).Delete("/admin/attachments/{id}", h.attachmentDelete)
 
 	// Misc admin endpoints (PER-275 version, PER-280 master-key generation).
 	r.With(gate).Get("/admin/version", versionHandler())
@@ -424,8 +429,10 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore
 	_ = deps
 }
 
-// adminTokenGate returns a chi middleware that checks X-Relay-Admin-Token.
-// Returns 404 on mismatch — same posture as /admin/reload.
+// adminTokenGate returns a chi middleware that checks the admin token.
+// Accepted sources (in order): X-Relay-Admin-Token header, Authorization: Bearer header,
+// relay_admin cookie (set by POST /admin/login).
+// Returns 404 on mismatch — security-through-obscurity posture matching /admin/reload.
 func adminTokenGate(token string) func(http.Handler) http.Handler {
 	tok := []byte(token)
 	return func(next http.Handler) http.Handler {
@@ -433,6 +440,11 @@ func adminTokenGate(token string) func(http.Handler) http.Handler {
 			adminTok := r.Header.Get("X-Relay-Admin-Token")
 			if adminTok == "" {
 				adminTok = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			}
+			if adminTok == "" {
+				if c, err := r.Cookie("relay_admin"); err == nil {
+					adminTok = c.Value
+				}
 			}
 			if subtle.ConstantTimeCompare([]byte(adminTok), tok) != 1 {
 				http.NotFound(w, r)

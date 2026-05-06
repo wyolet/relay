@@ -153,62 +153,7 @@ func (s *PGStore) Seed(ctx context.Context, src ConfigStore) error {
 		}
 	}
 
-	// Upsert attachments: delete-then-insert per parent to keep it transactionally clean.
-	if err := seedAttachments(ctx, q, tx, src); err != nil {
-		return fmt.Errorf("Seed: attachments: %w", err)
-	}
-
 	return tx.Commit(ctx)
-}
-
-// seedAttachments deletes existing attachments for each parent that appears in src, then inserts fresh ones.
-func seedAttachments(ctx context.Context, q *db.Queries, tx pgx.Tx, src ConfigStore) error {
-	type parentKey struct{ kind, name string }
-	toInsert := map[parentKey][]struct{ rlName, meter string }{}
-
-	for _, sec := range src.Secrets() {
-		pk := parentKey{string(KindSecret), sec.Metadata.Name}
-		for _, a := range sec.Spec.RateLimits {
-			toInsert[pk] = append(toInsert[pk], struct{ rlName, meter string }{a.Ref, string(a.Meter)})
-		}
-	}
-	for _, pool := range src.Pools() {
-		pk := parentKey{string(KindPool), pool.Metadata.Name}
-		for _, a := range pool.Spec.RateLimits {
-			toInsert[pk] = append(toInsert[pk], struct{ rlName, meter string }{a.Ref, string(a.Meter)})
-		}
-	}
-	for _, m := range src.Models() {
-		pk := parentKey{string(KindModel), m.Metadata.Name}
-		for _, a := range m.Spec.RateLimits {
-			toInsert[pk] = append(toInsert[pk], struct{ rlName, meter string }{a.Ref, string(a.Meter)})
-		}
-	}
-
-	// Delete existing attachments for touched parents.
-	for pk := range toInsert {
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM attachments WHERE parent_kind=$1 AND parent_name=$2`,
-			pk.kind, pk.name,
-		); err != nil {
-			return fmt.Errorf("delete attachments %s/%s: %w", pk.kind, pk.name, err)
-		}
-	}
-
-	// Re-insert.
-	for pk, rows := range toInsert {
-		for _, row := range rows {
-			if err := q.UpsertAttachment(ctx, db.UpsertAttachmentParams{
-				ParentKind:    pk.kind,
-				ParentName:    pk.name,
-				RatelimitName: row.rlName,
-				Meter:         row.meter,
-			}); err != nil {
-				return fmt.Errorf("insert attachment %s/%s->%s: %w", pk.kind, pk.name, row.rlName, err)
-			}
-		}
-	}
-	return nil
 }
 
 // IsEmpty returns true when all catalog tables have zero rows.
