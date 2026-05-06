@@ -278,6 +278,11 @@ func secretDeleteHandler(store *configstore.PGStore, deps crud.Deps) http.Handle
 			return
 		}
 
+		if verr := deps.Patcher.ValidateWithPatch(configstore.Patch{DeleteSecret: name}); verr != nil {
+			adminWriteErr(w, http.StatusBadRequest, "invalid_request_error", "validation_failed", verr.Error())
+			return
+		}
+
 		tx, err := deps.Pool.Begin(ctx)
 		if err != nil {
 			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())

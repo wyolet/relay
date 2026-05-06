@@ -309,19 +309,13 @@ func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
 	}
 }
 
-func TestAdminSecret_PoolDelete_CascadeOK(t *testing.T) {
-	// Pool referencing the Secret via secrets[] list can be deleted independently.
-	// The Secret itself can be deleted; the Pool's spec references it by name but
-	// the validator only blocks deletion if there's a broken ref in the live snapshot.
-	// Here we test the simple case: delete the secret, pool's secret ref becomes dangling
-	// but since we cascade-delete at the DB level and reload, the pool will fail validation.
-	// Decision: Pool referencing Secret → Secret delete is 500 (reload fails due to validation).
-	// So the expected behavior is: delete secret → 500 if a pool references it.
-	// We document this as "validator rejects" rather than implementing cascade.
+func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
+	// Deleting a Secret that a Pool references must return 400 with a validator
+	// error — the pre-validation pass catches the dangling ref before any PG
+	// mutation. PG state stays consistent; no orphan rows, no stale snapshot.
 	t.Setenv("RELAY_SEC_REF", "pool-ref-value")
 	srv, _ := buildSecretTestServer(t, false)
 
-	// Create the secret
 	secBody := map[string]any{
 		"name": "ref-secret", "provider": "seed-prov",
 		"valueFrom": map[string]any{"kind": "env", "env": "RELAY_SEC_REF"},
@@ -332,7 +326,6 @@ func TestAdminSecret_PoolDelete_CascadeOK(t *testing.T) {
 		t.Fatalf("create secret: want 201 got %d", resp.StatusCode)
 	}
 
-	// Create a pool that references the secret
 	poolBody := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1", "kind": "Pool",
 		"metadata": map[string]string{"name": "ref-pool"},
@@ -344,12 +337,17 @@ func TestAdminSecret_PoolDelete_CascadeOK(t *testing.T) {
 		t.Fatalf("create pool: want 201 got %d", resp.StatusCode)
 	}
 
-	// Delete secret → reload will fail (pool has dangling secret ref) → 500
 	resp = adminReq(t, srv, http.MethodDelete, "/admin/secrets/ref-secret", nil)
 	defer resp.Body.Close()
-	// The delete commits but reload fails (validator catches dangling ref).
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Logf("note: delete secret with pool ref returned %d (expected 500 if validator blocks reload)", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("delete referenced secret: want 400 got %d", resp.StatusCode)
+	}
+
+	// Secret must still be present (no PG mutation happened).
+	resp2 := adminReq(t, srv, http.MethodGet, "/admin/secrets/ref-secret", nil)
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("secret should still exist after rejected delete: got %d", resp2.StatusCode)
 	}
 }
 
