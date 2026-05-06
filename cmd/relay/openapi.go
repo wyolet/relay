@@ -133,6 +133,7 @@ func mountHuma(
 	modelsH http.HandlerFunc,
 	adminH http.HandlerFunc,
 	crud *adminCRUD,
+	adminTok string,
 ) huma.API {
 	cfg := huma.DefaultConfig("Wyolet Relay", relayVersion)
 	cfg.Info.Description = "High-throughput LLM router. " +
@@ -143,6 +144,8 @@ func mountHuma(
 
 	api := humachi.New(chiRouter, cfg)
 	auth := huma.Middlewares{humaAuth(authMW)}
+	// adminAuth gates admin endpoints with both API-key auth AND admin token.
+	adminAuth := huma.Middlewares{humaAuth(authMW), humaAuth(adminTokenGate(adminTok))}
 
 	// delegate wraps an http.HandlerFunc as a huma stream handler (no request body).
 	delegate := func(h http.HandlerFunc) func(context.Context, *struct{}) (*huma.StreamResponse, error) {
@@ -269,7 +272,7 @@ func mountHuma(
 			Description: "Triggers a live config reload from the Postgres catalog. Requires admin bearer token.",
 			Tags:        []string{"admin"},
 			Errors:      []int{401, 429, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(adminH))
 	}
 
@@ -299,7 +302,7 @@ func mountHuma(
 				Summary:     "List " + k.plural,
 				Tags:        []string{"admin"},
 				Errors:      []int{500},
-				Middlewares: auth,
+				Middlewares: adminAuth,
 			}, delegate(k.h.list))
 
 			huma.Register(api, huma.Operation{
@@ -309,7 +312,7 @@ func mountHuma(
 				Summary:     "Get " + k.singular,
 				Tags:        []string{"admin"},
 				Errors:      []int{404, 500},
-				Middlewares: auth,
+				Middlewares: adminAuth,
 			}, delegate(k.h.get))
 
 			huma.Register(api, huma.Operation{
@@ -319,7 +322,7 @@ func mountHuma(
 				Summary:     "Create " + k.singular,
 				Tags:        []string{"admin"},
 				Errors:      []int{400, 500},
-				Middlewares: auth,
+				Middlewares: adminAuth,
 			}, delegate(k.h.create))
 
 			huma.Register(api, huma.Operation{
@@ -329,7 +332,7 @@ func mountHuma(
 				Summary:     "Update " + k.singular,
 				Tags:        []string{"admin"},
 				Errors:      []int{400, 404, 500},
-				Middlewares: auth,
+				Middlewares: adminAuth,
 			}, delegate(k.h.update))
 
 			huma.Register(api, huma.Operation{
@@ -339,7 +342,7 @@ func mountHuma(
 				Summary:     "Delete " + k.singular,
 				Tags:        []string{"admin"},
 				Errors:      []int{404, 500},
-				Middlewares: auth,
+				Middlewares: adminAuth,
 			}, delegate(k.h.del))
 		}
 
@@ -351,7 +354,7 @@ func mountHuma(
 			Summary:     "List secrets",
 			Tags:        []string{"admin"},
 			Errors:      []int{500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.secretList))
 
 		huma.Register(api, huma.Operation{
@@ -361,7 +364,7 @@ func mountHuma(
 			Summary:     "Get secret",
 			Tags:        []string{"admin"},
 			Errors:      []int{404, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.secretGet))
 
 		huma.Register(api, huma.Operation{
@@ -371,7 +374,7 @@ func mountHuma(
 			Summary:     "Create secret",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.secretCreate))
 
 		huma.Register(api, huma.Operation{
@@ -381,7 +384,7 @@ func mountHuma(
 			Summary:     "Update secret",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 404, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.secretUpdate))
 
 		huma.Register(api, huma.Operation{
@@ -391,7 +394,7 @@ func mountHuma(
 			Summary:     "Delete secret",
 			Tags:        []string{"admin"},
 			Errors:      []int{404, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.secretDelete))
 
 		// Attachment endpoints — 3 ops.
@@ -402,7 +405,7 @@ func mountHuma(
 			Summary:     "List attachments by parent",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.attachmentList))
 
 		huma.Register(api, huma.Operation{
@@ -412,7 +415,7 @@ func mountHuma(
 			Summary:     "Create attachment",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.attachmentCreate))
 
 		huma.Register(api, huma.Operation{
@@ -422,7 +425,7 @@ func mountHuma(
 			Summary:     "Delete attachment",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 404, 500},
-			Middlewares: auth,
+			Middlewares: adminAuth,
 		}, delegate(crud.attachmentDelete))
 	}
 

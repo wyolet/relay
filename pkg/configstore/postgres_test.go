@@ -90,10 +90,15 @@ func TestPGStore_Boot_EmptyDB(t *testing.T) {
 	dsn := startPostgres(t)
 	runMigrations(t, dsn)
 
-	// Empty catalog: boot should fail (validator requires ≥1 provider).
-	_, err := configstore.Postgres(context.Background(), dsn, nil)
-	if err == nil {
-		t.Fatal("expected error booting with empty catalog, got nil")
+	// Empty catalog: boot should succeed — the relay starts with no config and
+	// is populated via the admin API (M8 HITL use case).
+	store, err := configstore.Postgres(context.Background(), dsn, nil)
+	if err != nil {
+		t.Fatalf("Postgres() with empty catalog: %v", err)
+	}
+	defer store.Close()
+	if got := store.Providers(); len(got) != 0 {
+		t.Fatalf("expected 0 providers, got %d", len(got))
 	}
 }
 

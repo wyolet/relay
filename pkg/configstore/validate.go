@@ -7,6 +7,13 @@ import (
 )
 
 func validate(s *snapshot) error {
+	// An entirely empty catalog is valid — the relay starts without config and
+	// is populated via the admin API. Only validate cross-entity consistency
+	// when there is at least one object present.
+	if len(s.providers) == 0 && len(s.secrets) == 0 && len(s.pools) == 0 &&
+		len(s.models) == 0 && len(s.routes) == 0 && len(s.rateLimits) == 0 {
+		return nil
+	}
 	if len(s.providers) == 0 {
 		return errors.New("at least one Provider required")
 	}
@@ -36,10 +43,15 @@ func validateSecrets(s *snapshot) error {
 	for _, sec := range s.secrets {
 		hasEnv := sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != ""
 		hasVal := sec.Spec.Value != ""
+		// Stored-mode secrets (written via UpsertSecretStored) carry their
+		// resolved plaintext in sec.Resolved but have neither ValueFrom.Env
+		// nor Spec.Value populated in the JSON spec column.  Accept them as
+		// long as they resolved successfully.
+		hasResolved := sec.Resolved != ""
 		if hasEnv && hasVal {
 			return fmt.Errorf("Secret %q: exactly one of valueFrom.env or value must be set, not both", sec.Metadata.Name)
 		}
-		if !hasEnv && !hasVal {
+		if !hasEnv && !hasVal && !hasResolved {
 			if sec.Spec.ValueFrom != nil {
 				return fmt.Errorf("Secret %q: valueFrom.env must not be empty", sec.Metadata.Name)
 			}

@@ -182,7 +182,8 @@ func TestSeed_BrokenYAML(t *testing.T) {
 	runMigrationsForTest(t, dsn)
 
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(":::invalid yaml:::"), 0644); err != nil {
+	// "\t\t: invalid" is unparseable YAML (tab indentation error).
+	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte("\t\t: invalid"), 0644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 

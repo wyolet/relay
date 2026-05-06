@@ -31,6 +31,7 @@ func buildHumaTestRouterWithAdmin(crud *adminCRUD) http.Handler {
 		http.HandlerFunc(stub), // models
 		http.HandlerFunc(stub), // admin reload
 		crud,
+		"test-admin-token",
 	)
 
 	return r
@@ -53,6 +54,7 @@ func buildHumaTestRouter() http.Handler {
 		http.HandlerFunc(stub), // models
 		nil,                    // admin — not configured
 		nil,                    // crud — not configured
+		"",                     // adminTok — not configured
 	)
 
 	return r

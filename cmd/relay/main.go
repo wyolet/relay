@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -256,6 +257,30 @@ func main() {
 		}
 	}
 
+	// outboundFor resolves the provider adapter for a request plan, registering
+	// it on-demand when the catalog was empty at startup (admin-API bootstrap).
+	outboundFor := func(plan *apiopenai.RequestPlan) (provider.Outbound, error) {
+		ob, err := reg.Get(plan.Provider.Spec.Kind)
+		if err == nil {
+			return ob, nil
+		}
+		// Not yet registered — create and cache it now.
+		switch plan.Provider.Spec.Kind {
+		case configstore.PKOllama:
+			ob = ollama.New(plan.Provider.Spec.BaseURL)
+		case configstore.PKOpenAI:
+			baseURL := plan.Provider.Spec.BaseURL
+			if baseURL == "" {
+				baseURL = "https://api.openai.com"
+			}
+			ob = openai.New(baseURL)
+		default:
+			return nil, fmt.Errorf("provider: no outbound registered for kind %q", plan.Provider.Spec.Kind)
+		}
+		reg.Register(plan.Provider.Spec.Kind, ob)
+		return ob, nil
+	}
+
 	resolve := func(modelName string) (*apiopenai.RequestPlan, bool) {
 		m, ok := cfg.ModelByName(modelName)
 		if !ok {
@@ -277,7 +302,7 @@ func main() {
 	}
 
 	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) error {
-		ob, err := reg.Get(plan.Provider.Spec.Kind)
+		ob, err := outboundFor(plan)
 		if err != nil {
 			return err
 		}
@@ -350,6 +375,7 @@ func main() {
 		apiopenai.ListModels(cfg),
 		adminH,
 		adminCRUDHandlers,
+		os.Getenv("RELAY_ADMIN_TOKEN"),
 	)
 
 	addr := ":8080"
