@@ -16,6 +16,7 @@ import (
 
 	apiopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/auth"
+	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -30,6 +31,10 @@ import (
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/pkg/usage"
 )
+
+// masterKey holds the parsed RELAY_MASTER_KEY (32 bytes) or nil if unset.
+// PER-266 consumers read this at construction time.
+var masterKey []byte
 
 // pinger is anything that can report its own health.
 type pinger interface {
@@ -107,6 +112,20 @@ func main() {
 		case "seed":
 			runSeed(os.Args[2:])
 			return
+		case "master-key":
+			runMasterKey(os.Args[2:])
+			return
+		}
+	}
+
+	// Parse RELAY_MASTER_KEY if present. Optional — env-ref secrets work without it.
+	// PER-266 consumers will read masterKey.
+	if raw := os.Getenv("RELAY_MASTER_KEY"); raw != "" {
+		var err error
+		masterKey, err = crypto.ParseMasterKey(raw)
+		if err != nil {
+			slog.Error("RELAY_MASTER_KEY invalid", "err", err)
+			os.Exit(1)
 		}
 	}
 
