@@ -378,6 +378,9 @@ func main() {
 		os.Getenv("RELAY_ADMIN_TOKEN"),
 	)
 
+	// Mount the operator admin UI at /ui (unauthenticated static assets; PER-274 gates API calls).
+	mountUI(r)
+
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: r}
 
