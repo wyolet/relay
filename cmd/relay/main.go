@@ -213,6 +213,12 @@ func main() {
 		pgStoreForAdmin = pgStore
 		cfg = pgStore
 		pgPinger = pgStore
+
+		// Seed bundled default providers (openai, ollama) on first launch.
+		// No-op once the operator has created any provider.
+		if err := seedDefaultProviders(bootCtx, pgStore); err != nil {
+			slog.Warn("default provider seed failed", "err", err)
+		}
 	} else {
 		yamlStore, err := configstore.LoadYAML("config")
 		if err != nil {
@@ -361,7 +367,8 @@ func main() {
 		deps := crudDeps(pgStoreForAdmin.RawPool(), pgStoreForAdmin)
 		kinds := buildAdminKinds(pgStoreForAdmin, nil)
 		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin)
-		mountAdminRoutes(r, tok, adminCRUDHandlers, pgStoreForAdmin, deps)
+		// mountAdminRoutes is NOT called here: huma owns all admin routes in production.
+		// Integration tests call mountAdminRoutes directly (bypassing huma) so they still work.
 	}
 
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,

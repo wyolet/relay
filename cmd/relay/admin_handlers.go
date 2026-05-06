@@ -351,12 +351,16 @@ func crudDeps(pool *pgxpool.Pool, store *configstore.PGStore) crud.Deps {
 }
 
 // buildAdminCRUD calls Handlers() on each kind and bundles the results.
+// It also populates the typed fields (kinds, deps, pgStore) used by mountHuma
+// for full OpenAPI schema generation.
 func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore) *adminCRUD {
 	pl, pg, pc, pu, pd := kinds.provider.Handlers(deps)
 	ol, og, oc, ou, od := kinds.pool.Handlers(deps)
 	ml, mg, mc, mu, md := kinds.model.Handlers(deps)
 	rl, rg, rc, ru, rd := kinds.route.Handlers(deps)
 	ll, lg, lc, lu, ld := kinds.rateLimit.Handlers(deps)
+	depsCopy := deps
+	kindsCopy := kinds
 	return &adminCRUD{
 		provider:  adminHandlers{pl, pg, pc, pu, pd},
 		pool:      adminHandlers{ol, og, oc, ou, od},
@@ -373,6 +377,11 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore
 
 		version:           versionHandler(),
 		masterKeyGenerate: masterKeyGenerateHandler(),
+
+		// Typed fields for mountHuma full-schema registration.
+		kinds:   &kindsCopy,
+		deps:    &depsCopy,
+		pgStore: store,
 	}
 }
 
