@@ -74,6 +74,11 @@ func (s *PGStore) ListAttachmentsByParent(ctx context.Context, parentKind, paren
 	})
 }
 
+// ListAllAttachments returns every attachment row in the catalog.
+func (s *PGStore) ListAllAttachments(ctx context.Context) ([]db.Attachment, error) {
+	return s.q.ListAttachments(ctx)
+}
+
 // Ping checks the database connection.
 func (s *PGStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 

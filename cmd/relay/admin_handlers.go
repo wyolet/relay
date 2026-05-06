@@ -373,6 +373,9 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *configstore.PGStore
 		attachmentList:   attachmentListHandler(store, deps),
 		attachmentCreate: attachmentCreateHandler(store, deps),
 		attachmentDelete: attachmentDeleteHandler(store, deps),
+
+		version:           versionHandler(),
+		masterKeyGenerate: masterKeyGenerateHandler(),
 	}
 }
 
@@ -412,6 +415,10 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *configstore
 	r.With(gate).Get("/admin/attachments", h.attachmentList)
 	r.With(gate).Post("/admin/attachments", h.attachmentCreate)
 	r.With(gate).Delete("/admin/attachments/{id}", h.attachmentDelete)
+
+	// Misc admin endpoints (PER-275 version, PER-280 master-key generation).
+	r.With(gate).Get("/admin/version", versionHandler())
+	r.With(gate).Get("/admin/master-key/generate", masterKeyGenerateHandler())
 
 	_ = store
 	_ = deps

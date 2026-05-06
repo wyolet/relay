@@ -44,7 +44,7 @@ type pinger interface {
 
 // healthzHandler builds a GET /healthz handler given named pingers.
 // Backends with a nil pinger are reported "ok" unconditionally (memory/file).
-func healthzHandler(backends map[string]pinger, deadlineMS int) http.HandlerFunc {
+func healthzHandler(backends map[string]pinger, deadlineMS int, masterKeyConfigured bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dl := time.Duration(deadlineMS) * time.Millisecond
 		ctx, cancel := context.WithTimeout(r.Context(), dl)
@@ -95,8 +95,9 @@ func healthzHandler(backends map[string]pinger, deadlineMS int) http.HandlerFunc
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":   overall,
-			"backends": backendsOut,
+			"status":                overall,
+			"backends":              backendsOut,
+			"master_key_configured": masterKeyConfigured,
 		})
 	}
 }
@@ -370,7 +371,7 @@ func main() {
 	mountHuma(
 		r,
 		authMW,
-		healthzHandler(healthzBackends, healthzDeadlineMS),
+		healthzHandler(healthzBackends, healthzDeadlineMS, len(masterKey) > 0),
 		apiopenai.ChatCompletions(resolve, runPipeline),
 		apiopenai.ListModels(cfg),
 		adminH,
