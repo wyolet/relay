@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 FROM golang:1.25-alpine AS builder
 # curl and tar are needed for make ui-fetch (alpine ships tar; curl is added here)
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl make
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
