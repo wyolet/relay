@@ -40,6 +40,16 @@ Org → Project → Route (named bundle: pool + policy + ACL + budget + storage)
 
 The **Route** is the unit of intent. Customer sends `X-Relay-Route: prod-cheap`; admins own the meaning. Header overrides are an escape hatch, not the primary interface.
 
+### Admin CRUD surface
+
+`/admin/{kind}` (list/create) and `/admin/{kind}/:name` (get/update/delete) for six kinds: `providers`, `pools`, `secrets`, `models`, `routes`, `ratelimits`. Plus `/admin/attachments` (polymorphic rate-limit → resource links).
+
+- Handlers live in `cmd/relay/` (`admin_handlers.go`, `admin_secret_attachment_handlers.go`)
+- Generic CRUD factory lives in `pkg/admin/crud`
+- Pre-write validation (snapshot + proposed patch) lives in `pkg/configstore` (`ValidateWithPatch`)
+- Secrets support two modes: `valueFrom: {kind: env, env: VAR_NAME}` (env-ref, no creds in PG) and `valueFrom: {kind: stored, value: sk-...}` (AES-GCM-256 encrypted with `RELAY_MASTER_KEY`, ciphertext in PG)
+- Every write auto-reloads the snapshot; no manual `/admin/reload` needed for CRUD operations
+
 ### Hot-path rules (non-negotiable)
 - No Postgres calls on the request path
 - Default: full body parse to a typed shape-specific struct (`RELAY_RICH_PARSING=on`). `off` reverts to the legacy minimal-parse path (model/stream/user/raw only). Always: `messages` content not deep-parsed; raw body retained for byte-equivalent upstream forward. Shape-specific parsed types live in `pkg/api/<shape>` — `pkg/transport` is shape-agnostic. Token counts come from the provider response.

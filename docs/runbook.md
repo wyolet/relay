@@ -8,11 +8,13 @@ Operational reference for running Wyolet Relay in production.
 
 1. [Deployment](#1-deployment)
 2. [Env-var reference](#2-env-var-reference)
-3. [Healthcheck semantics](#3-healthcheck-semantics)
-4. [Failure modes](#4-failure-modes)
-5. [Debugging recipes](#5-debugging-recipes)
-6. [Capacity planning](#6-capacity-planning)
-7. [Security checklist](#7-security-checklist)
+3. [Admin API](#3-admin-api)
+4. [Secret storage](#4-secret-storage)
+5. [Healthcheck semantics](#5-healthcheck-semantics)
+6. [Failure modes](#6-failure-modes)
+7. [Debugging recipes](#7-debugging-recipes)
+8. [Capacity planning](#8-capacity-planning)
+9. [Security checklist](#9-security-checklist)
 
 ---
 
@@ -136,9 +138,10 @@ Boot fails with a non-zero exit code if a required DSN is missing for the config
 
 | Var | Default | Required when | Semantics |
 |---|---|---|---|
-| `RELAY_ADMIN_TOKEN` | _(empty)_ | optional | Bearer token for `POST /admin/reload`. When unset, the endpoint is not registered (404). Pass via `X-Relay-Admin-Token` header when caller auth is active. Rotation procedure: see §7. |
+| `RELAY_ADMIN_TOKEN` | _(empty)_ | optional | Bearer token for admin endpoints. When unset, admin routes are not registered (404). Pass via `X-Relay-Admin-Token` header; falls back to `Authorization: Bearer`. Rotation procedure: see §9. |
 | `RELAY_API_KEY` | _(empty)_ | optional | Single inbound API key for caller auth. When unset alongside `RELAY_API_KEYS`, relay runs fail-open (a warning is logged). |
 | `RELAY_API_KEYS` | _(empty)_ | optional | Comma-separated list of valid inbound API keys. Takes precedence alongside `RELAY_API_KEY` (both are parsed together). |
+| `RELAY_MASTER_KEY` | _(empty)_ | `valueFrom.kind=stored` used in any Secret | 32 bytes base64-encoded; AES-GCM-256 master key for stored-mode secret encryption. Missing → stored-mode writes rejected with 400. Env-mode secrets unaffected. Generate with `relay master-key generate`. |
 
 ### Admin / tuning
 
@@ -155,7 +158,191 @@ Boot fails with a non-zero exit code if a required DSN is missing for the config
 
 ---
 
-## 3. Healthcheck semantics
+## 3. Admin API
+
+The admin CRUD surface is available when `RELAY_CATALOG_BACKEND=pg` and `RELAY_ADMIN_TOKEN` is set. The full machine-readable spec is at `/openapi.json`; the interactive Swagger UI is at `/docs`.
+
+### Auth model
+
+Every admin endpoint is gated by `X-Relay-Admin-Token`. The middleware checks this header first; if absent it falls back to `Authorization: Bearer`. A missing or wrong token returns **404** — the endpoint existence is obscured.
+
+When caller auth is also active (`RELAY_API_KEY` / `RELAY_API_KEYS`), the caller bearer key **also** must pass (via `Authorization: Bearer`). In this dual-auth configuration:
+
+| Header present | Result |
+|---|---|
+| Neither | 404 (admin gate fires first) |
+| `X-Relay-Admin-Token` correct, no caller key | 401 (caller auth middleware) |
+| Both correct | 200 / 201 / 204 |
+
+Without caller auth configured, `Authorization: Bearer` carries the admin token directly (legacy single-header path).
+
+### URL shape
+
+Six resource kinds, all under `/admin/`:
+
+| Kind | Path prefix |
+|---|---|
+| `providers` | `/admin/providers` |
+| `pools` | `/admin/pools` |
+| `secrets` | `/admin/secrets` |
+| `models` | `/admin/models` |
+| `routes` | `/admin/routes` |
+| `ratelimits` | `/admin/ratelimits` |
+
+Standard CRUD per kind:
+
+| Verb | Path | Action |
+|---|---|---|
+| `GET` | `/admin/{kind}` | List all (returns `{"items":[...]}`) |
+| `POST` | `/admin/{kind}` | Create (201 on success) |
+| `GET` | `/admin/{kind}/{name}` | Get one (404 if absent) |
+| `PUT` | `/admin/{kind}/{name}` | Upsert / update |
+| `DELETE` | `/admin/{kind}/{name}` | Hard delete (204 on success) |
+
+**Attachments** (rate-limit → resource links) are polymorphic — one endpoint for all parent kinds:
+
+| Verb | Path | Notes |
+|---|---|---|
+| `GET` | `/admin/attachments?parent_kind=Pool&parent_name=my-pool` | `parent_kind` and `parent_name` required |
+| `POST` | `/admin/attachments` | Body: `{parentKind, parentName, ratelimitName, meter}` |
+| `DELETE` | `/admin/attachments/{id}` | `id` is `parentKind:parentName:ratelimitName:meter` |
+
+### curl example — create a Provider
+
+```bash
+curl -s -X POST http://localhost:8080/admin/providers \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": {"name": "openai"},
+    "spec": {"kind": "openai", "baseURL": "https://api.openai.com/v1"}
+  }'
+
+# List providers
+curl -s http://localhost:8080/admin/providers \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
+```
+
+### Auto-reload
+
+Every successful admin write (create, update, delete) atomically commits to Postgres and then triggers a snapshot reload before responding. Subsequent requests see the new state immediately — no manual `/admin/reload` required.
+
+### Error envelope
+
+All 4xx/5xx responses use a structured JSON envelope:
+
+```json
+{
+  "error": {
+    "type": "invalid_request_error",
+    "code": "validation_failed",
+    "message": "Secret \"my-secret\" is referenced by Pool \"my-pool\"; remove the reference first"
+  }
+}
+```
+
+Common `type` values: `invalid_request_error`, `server_error`. Common `code` values: `not_found`, `invalid_body`, `validation_failed`, `master_key_required`, `reload_failed`.
+
+### Pre-validation
+
+Writes are validated against the proposed post-write snapshot before the database transaction commits. A broken reference (e.g. deleting a Secret that is still referenced by a Pool) returns **400** with `code: validation_failed`. The PG transaction rolls back automatically — the catalog is left unchanged. This is the behavior introduced by commit `baadaed` (PER-268): deleting a referenced Secret returns 400, not 500.
+
+### M8 limitations
+
+- **Hard delete**: deletes are permanent; there is no soft-delete or trash.
+- **Last-writer-wins**: concurrent writes are not protected by ETags or optimistic locking. ETag / conditional-update support is deferred to a future milestone.
+
+---
+
+## 4. Secret storage
+
+Relay supports two modes for storing provider API keys. Choose based on whether you already have a secret manager.
+
+### Mode 1 — `env` (reference an env var)
+
+```json
+{"name": "openai-key-1", "valueFrom": {"kind": "env", "env": "OPENAI_API_KEY"}}
+```
+
+Relay stores only the env-var **name** in Postgres — the credential itself lives in your orchestrator's secret store (Vault, SOPS, k8s Sealed Secrets, AWS Secrets Manager, etc.). At runtime Relay reads the named env var. If the env var is absent at startup, the secret resolves to an empty string and any pool referencing it will fail validation.
+
+Best for: teams that already have a secret manager and do not want Relay touching credentials.
+
+### Mode 2 — `stored` (encrypted at rest)
+
+```json
+{"name": "openai-key-1", "valueFrom": {"kind": "stored", "value": "sk-..."}}
+```
+
+Relay encrypts the literal credential with AES-GCM-256 (keyed by `RELAY_MASTER_KEY`) and stores the ciphertext in Postgres. The cleartext never appears in logs or API responses.
+
+Best for: single-cluster dogfood deployments without an existing secret manager.
+
+### RELAY_MASTER_KEY
+
+| | |
+|---|---|
+| **Default** | _(empty)_ |
+| **Required when** | `valueFrom.kind = stored` is used in any Secret |
+| **Semantics** | 32 bytes, base64-encoded. AES-GCM-256 master key for stored-mode encryption. Missing → stored-mode writes rejected with **400** (`code: master_key_required`). Env-mode is unaffected. |
+
+Generate a fresh key:
+
+```bash
+relay master-key generate
+# emits one line, e.g.:
+# 4z3Lk9...base64...==
+```
+
+Capture it once, store it in your orchestrator's secret store, pass it at runtime:
+
+```bash
+RELAY_MASTER_KEY="$(relay master-key generate)" ./relay
+```
+
+### API response shapes
+
+Read responses **never** return cleartext. The response struct has no cleartext field — leakage is structurally impossible.
+
+Env-mode response:
+
+```json
+{"name": "openai-key-1", "valueFrom": {"kind": "env", "env": "OPENAI_API_KEY"}}
+```
+
+Stored-mode response (masked — provider prefix + last 4 chars):
+
+```json
+{"name": "openai-key-1", "valueFrom": {"kind": "stored", "value_masked": "sk-...A1B2"}}
+```
+
+Recognized prefixes preserved in the mask: `sk-`, `gsk_`, `xai-`, `ant-`, `hf_`. Unrecognized prefixes show `***...last4`.
+
+### Trust model
+
+| Attacker has | Risk |
+|---|---|
+| PG dump only | Useless ciphertext — no credentials leaked |
+| `RELAY_MASTER_KEY` only | Nothing to decrypt — no PG, no ciphertext |
+| Both PG dump + master key | Full compromise — same posture as LiteLLM / OpenRouter |
+
+Keep `RELAY_MASTER_KEY` out of Postgres and out of application logs. Treat it like a root CA private key.
+
+### Master-key rotation
+
+Deferred to a future milestone. Workaround: after rotating `RELAY_MASTER_KEY` in your orchestrator, re-PUT each stored Secret via the API — each write re-encrypts with the new key.
+
+```bash
+# Re-encrypt a stored secret with the new master key
+curl -s -X PUT http://localhost:8080/admin/secrets/openai-key-1 \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "openai-key-1", "valueFrom": {"kind": "stored", "value": "sk-..."}}'
+```
+
+---
+
+## 5. Healthcheck semantics
 
 ```
 GET /healthz
@@ -228,7 +415,7 @@ livenessProbe:
 
 ---
 
-## 4. Failure modes
+## 6. Failure modes
 
 ### Postgres down
 
@@ -256,7 +443,7 @@ Check first: verify the collector process (`docker ps | grep jaeger` or equivale
 
 ---
 
-## 5. Debugging recipes
+## 7. Debugging recipes
 
 ### Tail file-backed usage events
 
@@ -355,7 +542,7 @@ clickhouse-client --query \
 
 ---
 
-## 6. Capacity planning
+## 8. Capacity planning
 
 ### RPS per pod
 
@@ -416,7 +603,7 @@ Redis connection pool size is set by the client library defaults; override via `
 
 ---
 
-## 7. Security checklist
+## 9. Security checklist
 
 ### TLS
 
@@ -450,11 +637,12 @@ There is no multi-token support for the admin endpoint today — rotation requir
 
 ### Admin endpoint hardening
 
-- `POST /admin/reload` is only registered when `RELAY_ADMIN_TOKEN` is set AND `RELAY_CATALOG_BACKEND=pg`.
+- All `/admin/*` routes are only registered when `RELAY_ADMIN_TOKEN` is set AND `RELAY_CATALOG_BACKEND=pg`.
 - A wrong or missing admin token returns 404 (obscures endpoint existence).
-- Rate limiting: 10 RPM per source IP by default (configurable via `RELAY_ADMIN_RELOAD_RPM`). The 11th request in a 60s window returns 429 with `Retry-After`.
+- Rate limiting on `POST /admin/reload`: 10 RPM per source IP by default (configurable via `RELAY_ADMIN_RELOAD_RPM`). The 11th request in a 60s window returns 429 with `Retry-After`.
 - When caller auth is active (`RELAY_API_KEY`/`RELAY_API_KEYS`), pass the caller bearer key in `Authorization: Bearer` and the admin secret in `X-Relay-Admin-Token`. Without caller auth, use `Authorization: Bearer` for the admin token directly.
 - Restrict network access to the admin port via your LB/ingress CIDR allowlist or a private-only VPC subnet.
+- `RELAY_MASTER_KEY` must be kept separate from Postgres — if both are compromised together, stored-mode secrets are fully exposed.
 
 ### CIDR allowlist / network isolation
 
@@ -464,4 +652,4 @@ Relay does not implement application-layer IP allowlisting. Use one of:
 - **Ingress CIDR rules**: restrict inbound traffic to known client CIDR ranges at the LB or Kubernetes NetworkPolicy level.
 - **mTLS**: terminate mTLS at the ingress and pass a client-cert header to relay for audit.
 
-The API surface (`/v1/chat/completions`, `/v1/messages`, `/v1/batches`, `/v1/models`, `/healthz`) and the admin surface (`/admin/reload`) should be on separate listener ports or subdomains when possible, so the admin surface can be allowlisted independently.
+The API surface (`/v1/chat/completions`, `/v1/messages`, `/v1/batches`, `/v1/models`, `/healthz`) and the admin surface (`/admin/*`) should be on separate listener ports or subdomains when possible, so the admin surface can be allowlisted independently.

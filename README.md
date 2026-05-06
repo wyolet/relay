@@ -320,26 +320,33 @@ Subsequent boots that find any rows in any table are no-ops.
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | Set to `1` to enable auto-seed on boot (PG backend only). |
 | `RELAY_CONFIG_DIR` | `config` | YAML config directory used by auto-seed. |
 
-## Operator: admin reload endpoint
+## Operator: admin API
 
-`POST /admin/reload` tells the running relay to re-read its catalog from Postgres and swap the in-memory snapshot atomically.
+When `RELAY_CATALOG_BACKEND=pg` and `RELAY_ADMIN_TOKEN` is set, Relay exposes a full CRUD API for managing catalog resources without restarts. Full reference: [docs/runbook.md §3](docs/runbook.md#3-admin-api).
 
-The endpoint is **only registered** when `RELAY_ADMIN_TOKEN` is set. When the env var is absent, the route does not exist (404 from the default handler — no endpoint discovery).
-
-| Auth result | Response |
-|---|---|
-| Missing / wrong token | 404 (obscures endpoint existence) |
-| Correct token | 200 (empty body) |
-| Reload error | 500 (JSON error envelope) |
+Six resource kinds: `providers`, `pools`, `secrets`, `models`, `routes`, `ratelimits`. Plus `/admin/attachments` for rate-limit → resource links. Every successful write triggers an automatic snapshot reload — no manual `/admin/reload` needed.
 
 ```bash
-export RELAY_ADMIN_TOKEN=my-secret-token
+# Create a provider
+curl -s -X POST http://localhost:8080/admin/providers \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata":{"name":"openai"},"spec":{"kind":"openai","baseURL":"https://api.openai.com/v1"}}'
 
-curl -X POST http://localhost:8080/admin/reload \
-  -H "Authorization: Bearer my-secret-token"
+# List providers
+curl -s http://localhost:8080/admin/providers \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
 ```
 
-Every call is logged at INFO with caller IP and request ID. The endpoint is unmounted when `RELAY_CATALOG_BACKEND` is not `pg` (no PGStore to reload).
+**Missing / wrong token → 404** (obscures endpoint existence). When caller auth (`RELAY_API_KEYS`) is also active, both the caller bearer key (`Authorization: Bearer`) and the admin token (`X-Relay-Admin-Token`) are required.
+
+**Stored secrets** require a master key. Generate one:
+
+```bash
+relay master-key generate   # prints a base64 RELAY_MASTER_KEY
+```
+
+See [docs/runbook.md §4](docs/runbook.md#4-secret-storage) for the full env-ref vs stored-mode guide.
 
 ## Operator: healthcheck
 
@@ -441,7 +448,12 @@ curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/
 
 | Doc | Contents |
 |---|---|
-| [docs/runbook.md](docs/runbook.md) | Operator reference: deployment, env-var table, healthcheck semantics, failure modes, debugging recipes, capacity planning, security checklist |
+| [docs/runbook.md](docs/runbook.md) | Operator reference: deployment, env-var table, admin API, secret storage, healthcheck semantics, failure modes, debugging recipes, capacity planning, security checklist |
+
+Key runbook sections for operators getting started:
+
+- **[Admin API](docs/runbook.md#3-admin-api)** — auth model, URL shape, curl examples, auto-reload, pre-validation behavior
+- **[Secret storage](docs/runbook.md#4-secret-storage)** — env-ref vs encrypted-at-rest, `RELAY_MASTER_KEY`, masked-response contract, trust model
 
 ## Caller authentication
 
