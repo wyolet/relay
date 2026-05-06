@@ -70,6 +70,20 @@ The **Route** is the unit of intent. Customer sends `X-Relay-Route: prod-cheap`;
 
 Full guide: `docs/kv.md`.
 
+### Storage layer conventions
+
+`internal/storage` owns the entire Postgres surface. Domain packages (`internal/catalog`, future `internal/audit`, `internal/batch`) call typed storage methods and never see SQL or pgx.
+
+1. No `pgx`, `pgxpool`, or `pgconn` types in any signature outside `internal/storage`.
+2. No SQL strings (`SELECT`/`INSERT`/`UPDATE`/`DELETE`) in `.go` files outside `internal/storage`.
+3. No sqlc-generated types in exported signatures — convert to domain types at the storage boundary.
+4. Transactions are storage-managed: domain code uses `storage.WithTx(ctx, func(tx *Storage) error {...})`, never holds a `*pgx.Tx`.
+5. Storage returns domain errors (`catalog.ErrNotFound`, `catalog.ErrConflict`), never `pgx.ErrNoRows` or `*pgconn.PgError`.
+6. Group storage by domain area, not by entity: `s.Catalog.UpsertProvider`, `s.Audit.Append` — not flat methods or one-repo-per-entity.
+7. Encryption policy lives in domain (`internal/catalog`), primitives in `pkg/crypto`. Storage handles already-encrypted bytes; the master key never enters `internal/storage`.
+
+Full guide: `docs/storage.md`.
+
 ### Streaming
 - Tee model: bytes pass through, parser goroutine extracts usage from a copy
 - Cross-format reserialize is a slower path; same-format passthrough is the 95% case
