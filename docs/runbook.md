@@ -149,6 +149,9 @@ Boot fails with a non-zero exit code if a required DSN is missing for the config
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | optional | Total graceful shutdown budget in seconds. Covers all drain steps. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | optional | Set to `1` to seed Postgres from `RELAY_CONFIG_DIR` on first boot if all catalog tables are empty. Subsequent boots with any rows are no-ops. |
 | `RELAY_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | optional | Maximum inbound request body size in bytes. Requests exceeding this are rejected with 413 before parsing. |
+| `RELAY_RICH_PARSING` | `on` | never | Default `on`. Full body parse to a typed `ChatRequest` struct (extracts `model`, `stream`, `user`, `metadata`, `messages` as raw). `off` reverts to the legacy partial-parse path (only `model`, `stream`, `user` extracted; body's `metadata` field ignored). The raw body is always forwarded byte-equivalent to the upstream provider regardless of this setting. |
+
+`RELAY_RICH_PARSING` controls how much of the request body is decoded on the hot path. The default (`on`) gives typical callers body-native attribution (see `metadata` field) and makes `messages` available as raw JSON for future enrichment — with no deep content parse. Set to `off` only when shaving every microsecond matters and body-level attribution is not used; the legacy partial-parse path extracts only `model`, `stream`, and `user`.
 
 ---
 

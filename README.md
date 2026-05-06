@@ -148,7 +148,11 @@ Codes: `rpm_exceeded`, `tpm_exceeded`, `concurrency_exceeded`, `pool_out_of_capa
 
 Attach arbitrary key=value pairs to every request for cost attribution, per-tenant dashboards, and audit logs.
 
-**Format:** comma-separated `k=v` pairs, whitespace-tolerant.
+As of M7, the request body's `metadata` field is the canonical attribution path when `RELAY_RICH_PARSING=on` (the default). The `X-Relay-Metadata` header remains fully supported and **overrides** the body's `metadata` when both are present — the M4 header contract is preserved unchanged.
+
+**Precedence:** `X-Relay-Metadata` header > body `metadata` field.
+
+**Caps (identical for both paths):**
 
 | Limit | Value |
 |---|---|
@@ -156,11 +160,19 @@ Attach arbitrary key=value pairs to every request for cost attribution, per-tena
 | Max key length | 64 chars (`[a-zA-Z0-9_.-]`) |
 | Max value length | 256 chars (printable ASCII, no `,` or `=`) |
 
-Any single violation drops the **entire** header silently — the request still succeeds and is routed normally. A debug log line is emitted and `relay_metadata_rejected_total` increments. No error is returned to the caller.
+Any single violation drops the **entire** metadata source silently — the request still succeeds and is routed normally. For header violations, a debug log line is emitted and `relay_metadata_rejected_total` increments. Body metadata violations are dropped silently (no counter yet; tracked for a future ticket).
 
-The header is stripped before forwarding — it never reaches OpenAI, Ollama, or any upstream.
+The header is stripped before forwarding — it never reaches OpenAI, Ollama, or any upstream. Body `metadata` is forwarded as-is (it is part of the raw body passed byte-equivalent to the upstream).
 
-**curl:**
+**curl — body-native (M7 default):**
+
+```bash
+curl localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemma4:31b","messages":[{"role":"user","content":"hi"}],"metadata":{"customer":"acme","env":"prod"}}'
+```
+
+**curl — header (still works, takes precedence if both set):**
 
 ```bash
 curl localhost:8080/v1/chat/completions \
@@ -174,6 +186,15 @@ curl localhost:8080/v1/chat/completions \
 ```python
 from openai import OpenAI
 
+# Body-native (M7 default, RELAY_RICH_PARSING=on)
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="unused")
+resp = client.chat.completions.create(
+    model="gemma4:31b",
+    messages=[{"role": "user", "content": "hi"}],
+    extra_body={"metadata": {"customer": "acme", "env": "prod"}},
+)
+
+# Header (still works, takes precedence if both set)
 client = OpenAI(
     base_url="http://localhost:8080/v1",
     api_key="unused",
@@ -184,6 +205,8 @@ resp = client.chat.completions.create(
     messages=[{"role": "user", "content": "hi"}],
 )
 ```
+
+When `RELAY_RICH_PARSING=off`, body `metadata` is ignored entirely; only the `X-Relay-Metadata` header path is active.
 
 Attribution pairs appear in every JSONL event under `attribution` and as flattened `relay.attr.<key>` tags on the OTel span.
 
