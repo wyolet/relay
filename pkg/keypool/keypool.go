@@ -44,12 +44,14 @@ var ErrPoolOutOfCapacity = errors.New("keypool: pool out of capacity (all secret
 var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
 
 const (
-	stateKeyPrefix = "secret_health:"
-	rrKeyPrefix    = "pool_rr:"
-
-	// ttlFlat is the TTL applied to all non-indefinite records so they
-	// persist past OpenUntil for debugging.
+	// ttlFlat is the TTL applied to all non-indefinite circuit-breaker records
+	// so they persist past OpenUntil for debugging.
 	ttlFlat = 24 * time.Hour
+
+	// ttlRoundRobin is the TTL on pool_rr counters. The counter is a modular
+	// index so staleness is harmless, but a long TTL lets Redis reclaim keys
+	// from deleted pools instead of accumulating indefinitely.
+	ttlRoundRobin = 30 * 24 * time.Hour
 )
 
 // Selector picks Secrets from Pools and tracks per-key circuit-breaker state.
@@ -75,11 +77,9 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Li
 	return &Selector{state: s, log: log, clock: clock, limiter: limiter, cfg: cfg, rng: rng}
 }
 
-func (s *Selector) stateKey(keyHash string) string { return stateKeyPrefix + keyHash }
-func (s *Selector) rrKey(poolName string) string   { return rrKeyPrefix + poolName }
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) circuitRecord {
-	b, err := s.state.Get(ctx, s.stateKey(keyHash))
+	b, err := s.state.Get(ctx, circuitKey(keyHash))
 	if err != nil || len(b) == 0 {
 		return circuitRecord{State: CircuitClosed}
 	}
@@ -100,7 +100,7 @@ func (s *Selector) writeRecord(ctx context.Context, keyHash string, r circuitRec
 	if r.Indefinite {
 		ttl = 0 // no expiry
 	}
-	if err := s.state.Set(ctx, s.stateKey(keyHash), b, ttl); err != nil {
+	if err := s.state.Set(ctx, circuitKey(keyHash), b, ttl); err != nil {
 		s.log.Error("keypool: write record failed", "key_hash", keyHash, "err", err)
 	}
 }
@@ -169,7 +169,7 @@ func (s *Selector) Pick(ctx context.Context, provider *configstore.Provider, poo
 				continue
 			}
 			anyRules = true
-			remaining, err := s.limiter.RemainingByMeter(ctx, rules)
+			remaining, err := s.limiter.RemainingByMeter(ctx, pool.Metadata.Name, rules)
 			if err != nil {
 				weights[i] = -1
 				continue
@@ -221,9 +221,14 @@ func (s *Selector) Pick(ctx context.Context, provider *configstore.Provider, poo
 
 	// Round-robin fallback.
 	var idx int64
-	err := s.state.WithLock(ctx, []string{s.rrKey(pool.Metadata.Name)}, func(ctx context.Context) error {
+	err := s.state.WithLock(ctx, []string{roundRobinKey(pool.Metadata.Name)}, func(ctx context.Context) error {
 		var ierr error
-		idx, ierr = s.state.Incr(ctx, s.rrKey(pool.Metadata.Name), 1)
+		idx, ierr = s.state.Incr(ctx, roundRobinKey(pool.Metadata.Name), 1)
+		if ierr == nil {
+			// Refresh 30-day TTL on every increment. Redis reclaims counters for
+			// deleted pools without affecting modular-index correctness.
+			_ = s.state.Expire(ctx, roundRobinKey(pool.Metadata.Name), ttlRoundRobin)
+		}
 		return ierr
 	})
 	if err != nil {

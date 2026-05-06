@@ -115,7 +115,7 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 			if i%2 == 0 {
 				l = l2
 			}
-			res, err := l.Reserve(context.Background(), rules)
+			res, err := l.Reserve(context.Background(), "test-pool", rules)
 			if err != nil {
 				if !errors.Is(err, limit.ErrExceeded) {
 					t.Errorf("unexpected error: %v", err)
@@ -171,13 +171,13 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		rule := makeRuleNamed(configstore.MeterRequests, 10, time.Minute, "route-req-happy")
 		rules := []configstore.ResolvedRule{rule}
 		for i := 0; i < 10; i++ {
-			res, err := l.Reserve(ctx, rules)
+			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
 				t.Fatalf("reserve %d: %v", i+1, err)
 			}
 			_ = l.Commit(ctx, res, limit.Observations{})
 		}
-		_, err := l.Reserve(ctx, rules)
+		_, err := l.Reserve(ctx, "test-pool", rules)
 		if !errors.Is(err, limit.ErrExceeded) {
 			t.Fatalf("expected ErrExceeded on 11th reserve, got %v", err)
 		}
@@ -191,20 +191,20 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		rules := []configstore.ResolvedRule{rule}
 		var r [3]*limit.Reservation
 		for i := 0; i < 3; i++ {
-			res, err := l.Reserve(ctx, rules)
+			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
 				t.Fatalf("reserve %d: %v", i+1, err)
 			}
 			r[i] = res
 		}
-		_, err := l.Reserve(ctx, rules)
+		_, err := l.Reserve(ctx, "test-pool", rules)
 		if !errors.Is(err, limit.ErrExceeded) {
 			t.Fatalf("expected ErrExceeded on 4th, got %v", err)
 		}
 		if err := l.Commit(ctx, r[0], limit.Observations{}); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
-		res, err := l.Reserve(ctx, rules)
+		res, err := l.Reserve(ctx, "test-pool", rules)
 		if err != nil {
 			t.Fatalf("reserve after commit: %v", err)
 		}
@@ -219,7 +219,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		rules := []configstore.ResolvedRule{rule}
 		var reservations [5]*limit.Reservation
 		for i := 0; i < 5; i++ {
-			res, err := l.Reserve(ctx, rules)
+			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
 				t.Fatalf("reserve %d: %v", i+1, err)
 			}
@@ -230,7 +230,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 				t.Fatalf("commit %d: %v", i+1, err)
 			}
 		}
-		_, err := l.Reserve(ctx, rules)
+		_, err := l.Reserve(ctx, "test-pool", rules)
 		if !errors.Is(err, limit.ErrExceeded) {
 			t.Fatalf("expected ErrExceeded after 100 tokens, got %v", err)
 		}
@@ -244,7 +244,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		// Duplicate Commit must not double-decrement (would go to -1).
 		rule := makeRuleNamed(configstore.MeterConcurrency, 1, time.Minute, "route-idem-commit")
 		rules := []configstore.ResolvedRule{rule}
-		res, err := l.Reserve(ctx, rules)
+		res, err := l.Reserve(ctx, "test-pool", rules)
 		if err != nil {
 			t.Fatalf("reserve: %v", err)
 		}
@@ -256,7 +256,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			t.Fatalf("commit 2: %v", err)
 		}
 		// Concurrency should be 1 (slot fully released once; counter at 0 → remaining=1).
-		rem, err := l.RemainingByMeter(ctx, rules)
+		rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
 		if err != nil {
 			t.Fatalf("remaining: %v", err)
 		}
@@ -275,7 +275,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		rule1.RateLimit.Metadata.Name = "rl-rule1"
 		rules := []configstore.ResolvedRule{rule0, rule1}
 
-		_, err := l.Reserve(ctx, rules)
+		_, err := l.Reserve(ctx, "test-pool", rules)
 		if !errors.Is(err, limit.ErrExceeded) {
 			t.Fatalf("expected exceeded, got %v", err)
 		}
@@ -284,7 +284,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if ee.Rule.RateLimit.Metadata.Name != "rl-rule1" {
 			t.Fatalf("expected rule1 to be violated, got %s", ee.Rule.RateLimit.Metadata.Name)
 		}
-		rem, err := l.RemainingByMeter(ctx, []configstore.ResolvedRule{rule0})
+		rem, err := l.RemainingByMeter(ctx, "test-pool", []configstore.ResolvedRule{rule0})
 		if err != nil {
 			t.Fatalf("remaining: %v", err)
 		}

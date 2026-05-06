@@ -19,9 +19,14 @@ import (
 var ErrLockBusy = errors.New("state: lock busy")
 
 // RedisConfig configures a Redis store.
+// Exactly one of Addr, Sentinel, or ClusterAddrs should be set.
+// When ClusterAddrs is non-empty, a redis.ClusterClient is used and all
+// multi-key operations (RunScript, WithLock) require keys to share the
+// same hash tag to avoid CROSSSLOT errors.
 type RedisConfig struct {
 	Addr         string
 	Sentinel     *SentinelConfig
+	ClusterAddrs []string // non-empty → Cluster mode (redis.NewClusterClient)
 	DB           int
 	Password     string
 	PoolSize     int
@@ -43,9 +48,17 @@ type Redis struct {
 }
 
 // NewRedis constructs a Redis and pings the server.
+// Precedence: ClusterAddrs > Sentinel > Addr (single-node).
 func NewRedis(ctx context.Context, cfg RedisConfig) (*Redis, error) {
 	var client redis.UniversalClient
-	if cfg.Sentinel != nil {
+	if len(cfg.ClusterAddrs) > 0 {
+		client = redis.NewClusterClient(&redis.ClusterOptions{
+			Addrs:        cfg.ClusterAddrs,
+			Password:     cfg.Password,
+			PoolSize:     cfg.PoolSize,
+			MinIdleConns: cfg.MinIdleConns,
+		})
+	} else if cfg.Sentinel != nil {
 		client = redis.NewFailoverClient(&redis.FailoverOptions{
 			MasterName:       cfg.Sentinel.MasterName,
 			SentinelAddrs:    cfg.Sentinel.SentinelAddrs,
@@ -103,6 +116,7 @@ func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error
 	return nil
 }
 
+// TODO(kv): Cluster-unsafe — SCAN only covers one shard.
 func (r *Redis) Range(ctx context.Context, prefix string) ([]Entry, error) {
 	pattern := prefix + "*"
 	var keys []string
@@ -166,6 +180,7 @@ end
 return n`
 )
 
+// Cluster safety: all keys must share the same hash tag, else CROSSSLOT.
 func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
 	sorted := make([]string, len(keys))
 	copy(sorted, keys)

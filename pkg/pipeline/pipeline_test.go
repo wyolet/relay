@@ -598,13 +598,13 @@ func exceededRules(meter configstore.Meter, retryAfterSec int) ([]configstore.Re
 	ctx := context.Background()
 	// Exhaust the budget: Reserve once (succeeds), then the next Reserve will fail.
 	if meter == configstore.MeterRequests {
-		l.Reserve(ctx, rules)
+		l.Reserve(ctx, "test-pool", rules)
 	} else if meter == configstore.MeterConcurrency {
-		l.Reserve(ctx, rules)
+		l.Reserve(ctx, "test-pool", rules)
 	}
 	// For tokens: set the counter via a successful Reserve+Commit with tokens=amount.
 	if meter == configstore.MeterTokens {
-		res, _ := l.Reserve(ctx, rules)
+		res, _ := l.Reserve(ctx, "test-pool", rules)
 		if res != nil {
 			commitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -648,7 +648,7 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "p"}},
+		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}},
 		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -695,7 +695,7 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "p"}},
+		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}},
 		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -813,7 +813,7 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "p"}},
+		Pool:        &configstore.Pool{Metadata: configstore.Metadata{Name: "test-pool"}},
 		Secrets:     []*configstore.Secret{{Metadata: configstore.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -908,7 +908,7 @@ spec:
 			},
 		},
 	}
-	lim3.Reserve(ctx, []configstore.ResolvedRule{rule3})
+	lim3.Reserve(ctx, "pp", []configstore.ResolvedRule{rule3})
 
 	ch := newTestChannel(ctx)
 	ch.In <- &transport.Message{ID: "x", Body: []byte(`{"model":"m"}`)}

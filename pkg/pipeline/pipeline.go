@@ -119,7 +119,11 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 	// Rate limiting: Reserve before the retry loop; Commit via defer regardless of path.
 	var tokensSeen int64
 	if opts.Limiter != nil && len(opts.Rules) > 0 {
-		res, err := opts.Limiter.Reserve(ctx, opts.Rules)
+		poolName := ""
+		if opts.Pool != nil {
+			poolName = opts.Pool.Metadata.Name
+		}
+		res, err := opts.Limiter.Reserve(ctx, poolName, opts.Rules)
 		if err != nil {
 			var exceeded *limit.ExceededError
 			if errors.As(err, &exceeded) {

@@ -102,7 +102,7 @@ func adminReloadHandler(token string, store reloader, lim *limit.Limiter) http.H
 		// Scope state key to source IP by embedding it in ParentName.
 		rules[0].ParentName = fmt.Sprintf("reload:%s", ip)
 
-		res, err := lim.Reserve(ctx, rules)
+		res, err := lim.Reserve(ctx, "admin", rules)
 		if err != nil {
 			var exceeded *limit.ExceededError
 			if errors.As(err, &exceeded) {

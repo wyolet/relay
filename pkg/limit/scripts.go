@@ -3,6 +3,7 @@ package limit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -201,7 +202,9 @@ type reserveResult struct {
 
 // buildReserveArgs builds (keys, ruleArgs, keyIndex) for the Reserve script.
 // Returns sorted KEYS slice and ruleArg slice. keyIndex maps key→1-based index.
-func buildReserveArgs(rules []configstore.ResolvedRule, now time.Time) (keys []string, ruleArgs []ruleArg, err error) {
+// poolName is embedded as a hash tag in every key so all keys in a single EVAL
+// call map to the same Redis Cluster slot.
+func buildReserveArgs(poolName string, rules []configstore.ResolvedRule, now time.Time) (keys []string, ruleArgs []ruleArg, err error) {
 	seen := make(map[string]int) // key -> 1-based index
 
 	addKey := func(k string) int {
@@ -228,10 +231,10 @@ func buildReserveArgs(rules []configstore.ResolvedRule, now time.Time) (keys []s
 		}
 		switch rule.Meter {
 		case configstore.MeterRequests, configstore.MeterTokens:
-			ra.CurKeyIdx = addKey(bucketKey(rule, cur))
-			ra.PrevKeyIdx = addKey(bucketKey(rule, prev))
+			ra.CurKeyIdx = addKey(bucketKey(poolName, rule, cur))
+			ra.PrevKeyIdx = addKey(bucketKey(poolName, rule, prev))
 		case configstore.MeterConcurrency:
-			ra.ConKeyIdx = addKey(concurrencyKey(rule))
+			ra.ConKeyIdx = addKey(concurrencyKey(poolName, rule))
 		}
 		ruleArgs = append(ruleArgs, ra)
 	}
@@ -432,7 +435,7 @@ func memReadCounter(ctx context.Context, store *kv.Mem, key string) (int64, erro
 }
 
 func isNotFound(err error) bool {
-	return err != nil && err.Error() == kv.ErrNotFound.Error()
+	return errors.Is(err, kv.ErrNotFound)
 }
 
 // memCommitImpl is the Go emulator for commitLuaScript.

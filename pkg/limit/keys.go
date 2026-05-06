@@ -8,9 +8,12 @@ import (
 )
 
 // bucketKey returns the state key for a sliding-window bucket.
-// format: limit:<parentKind>:<parentName>:<rlName>:requests:<bucketTS>
-func bucketKey(r configstore.ResolvedRule, bucketTS time.Time) string {
-	return fmt.Sprintf("limit:%s:%s:%s:%s:%s",
+// format: limit:{pool:<poolName>}:<parentKind>:<parentName>:<rlName>:<meter>:<bucketTS>
+// The {pool:<poolName>} hash tag pins all keys for a single request to the
+// same Redis Cluster slot regardless of parentKind.
+func bucketKey(poolName string, r configstore.ResolvedRule, bucketTS time.Time) string {
+	return fmt.Sprintf("limit:{pool:%s}:%s:%s:%s:%s:%s",
+		poolName,
 		r.ParentKind, r.ParentName,
 		r.RateLimit.Metadata.Name,
 		r.Meter,
@@ -19,9 +22,10 @@ func bucketKey(r configstore.ResolvedRule, bucketTS time.Time) string {
 }
 
 // concurrencyKey returns the state key for a concurrency counter.
-// format: limit:<parentKind>:<parentName>:<rlName>:concurrency
-func concurrencyKey(r configstore.ResolvedRule) string {
-	return fmt.Sprintf("limit:%s:%s:%s:%s",
+// format: limit:{pool:<poolName>}:<parentKind>:<parentName>:<rlName>:<meter>
+func concurrencyKey(poolName string, r configstore.ResolvedRule) string {
+	return fmt.Sprintf("limit:{pool:%s}:%s:%s:%s:%s",
+		poolName,
 		r.ParentKind, r.ParentName,
 		r.RateLimit.Metadata.Name,
 		r.Meter,
@@ -29,6 +33,9 @@ func concurrencyKey(r configstore.ResolvedRule) string {
 }
 
 // commitGuardKey returns the idempotency guard key for a reservation.
-func commitGuardKey(reservationID string) string {
-	return "limit:committed:" + reservationID
+// format: limit:{pool:<poolName>}:committed:<reservationID>
+// The pool hash tag must match the concurrency/token keys touched in the
+// same Commit Lua call to avoid a CROSSSLOT error in Cluster mode.
+func commitGuardKey(poolName, reservationID string) string {
+	return fmt.Sprintf("limit:{pool:%s}:committed:%s", poolName, reservationID)
 }

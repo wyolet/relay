@@ -46,8 +46,9 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 
 // Reservation is returned by a successful Reserve call.
 type Reservation struct {
-	ID    string
-	rules []configstore.ResolvedRule
+	ID       string
+	poolName string // Redis Cluster hash-tag anchor; all keys share {pool:<poolName>}
+	rules    []configstore.ResolvedRule
 	// conKeys holds the concurrency state keys incremented at Reserve time.
 	// Used by Commit to decrement them.
 	conKeys []string
@@ -79,11 +80,13 @@ var ErrExceeded = errors.New("limit: budget exceeded")
 
 // Reserve checks all rules and increments counters atomically via one RunScript call.
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
-func (l *Limiter) Reserve(ctx context.Context, rules []configstore.ResolvedRule) (*Reservation, error) {
+// poolName is the pool that anchors all Redis Cluster hash tags for this call; pass an
+// empty string only in tests or non-Cluster deployments.
+func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []configstore.ResolvedRule) (*Reservation, error) {
 	now := l.clock()
 	token := reqid.Generate()
 
-	keys, ruleArgs, err := buildReserveArgs(rules, now)
+	keys, ruleArgs, err := buildReserveArgs(poolName, rules, now)
 	if err != nil {
 		return nil, err
 	}
@@ -119,14 +122,15 @@ func (l *Limiter) Reserve(ctx context.Context, rules []configstore.ResolvedRule)
 	}
 
 	reservation := &Reservation{
-		ID:    token,
-		rules: rules,
+		ID:       token,
+		poolName: poolName,
+		rules:    rules,
 	}
 	// Pre-compute concurrency key list and token rule list for Commit.
 	for _, rule := range rules {
 		switch rule.Meter {
 		case configstore.MeterConcurrency:
-			reservation.conKeys = append(reservation.conKeys, concurrencyKey(rule))
+			reservation.conKeys = append(reservation.conKeys, concurrencyKey(poolName, rule))
 		case configstore.MeterTokens:
 			reservation.tokRules = append(reservation.tokRules, rule)
 		}
@@ -140,7 +144,7 @@ func (l *Limiter) Reserve(ctx context.Context, rules []configstore.ResolvedRule)
 // post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
 	now := l.clock()
-	guardKey := commitGuardKey(res.ID)
+	guardKey := commitGuardKey(res.poolName, res.ID)
 	guardTTLMs := commitGuardTTL.Milliseconds()
 
 	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys]
@@ -152,7 +156,7 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 	for _, rule := range res.tokRules {
 		w := rule.RateLimit.Spec.Window
 		cur, _ := windowBuckets(now, w)
-		keys = append(keys, bucketKey(rule, cur))
+		keys = append(keys, bucketKey(res.poolName, rule, cur))
 		if ttl := (2 * w).Milliseconds(); ttl > tokTTLMs {
 			tokTTLMs = ttl
 		}
@@ -189,7 +193,8 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 }
 
 // RemainingByMeter returns the smallest remaining capacity per meter across rules.
-func (l *Limiter) RemainingByMeter(ctx context.Context, rules []configstore.ResolvedRule) (map[configstore.Meter]int64, error) {
+// poolName must match the value used in Reserve for the same rules.
+func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules []configstore.ResolvedRule) (map[configstore.Meter]int64, error) {
 	now := l.clock()
 	result := make(map[configstore.Meter]int64)
 
@@ -203,8 +208,8 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, rules []configstore.Reso
 
 		switch rule.Meter {
 		case configstore.MeterRequests, configstore.MeterTokens:
-			curKey := bucketKey(rule, cur)
-			prevKey := bucketKey(rule, prev)
+			curKey := bucketKey(poolName, rule, cur)
+			prevKey := bucketKey(poolName, rule, prev)
 			curVal, err := readCounter(ctx, l.store, curKey)
 			if err != nil {
 				return nil, err
@@ -216,7 +221,7 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, rules []configstore.Reso
 			rate = interpolatedRate(curVal, prevVal, frac)
 
 		case configstore.MeterConcurrency:
-			cVal, err := readCounter(ctx, l.store, concurrencyKey(rule))
+			cVal, err := readCounter(ctx, l.store, concurrencyKey(poolName, rule))
 			if err != nil {
 				return nil, err
 			}
