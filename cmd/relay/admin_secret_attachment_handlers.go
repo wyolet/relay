@@ -362,13 +362,18 @@ func attachmentListHandler(store *configstore.PGStore, _ crud.Deps) http.Handler
 		parentKind := r.URL.Query().Get("parent_kind")
 		parentName := r.URL.Query().Get("parent_name")
 
-		if parentKind == "" || parentName == "" {
+		var rows []db.Attachment
+		var err error
+		switch {
+		case parentKind == "" && parentName == "":
+			rows, err = store.ListAllAttachments(ctx)
+		case parentKind != "" && parentName != "":
+			rows, err = store.ListAttachmentsByParent(ctx, parentKind, parentName)
+		default:
 			adminWriteErr(w, http.StatusBadRequest, "invalid_request_error", "invalid_query",
-				"parent_kind and parent_name query params required")
+				"parent_kind and parent_name must be provided together (or both omitted to list all)")
 			return
 		}
-
-		rows, err := store.ListAttachmentsByParent(ctx, parentKind, parentName)
 		if err != nil {
 			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
 			return

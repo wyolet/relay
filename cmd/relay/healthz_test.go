@@ -36,7 +36,7 @@ func doHealthz(t *testing.T, backends map[string]pinger, deadlineMS int) *health
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
-	healthzHandler(backends, deadlineMS).ServeHTTP(w, req)
+	healthzHandler(backends, deadlineMS, false).ServeHTTP(w, req)
 	var resp healthzResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -52,7 +52,7 @@ func TestHealthz_AllOK(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
-	healthzHandler(backends, 500).ServeHTTP(w, req)
+	healthzHandler(backends, 500, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -77,7 +77,7 @@ func TestHealthz_OnePingErrors_Returns503(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
-	healthzHandler(backends, 500).ServeHTTP(w, req)
+	healthzHandler(backends, 500, false).ServeHTTP(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", w.Code)
@@ -103,7 +103,7 @@ func TestHealthz_SlowPing_DeadlineEnforced(t *testing.T) {
 	start := time.Now()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
-	healthzHandler(backends, 300).ServeHTTP(w, req) // 300ms deadline
+	healthzHandler(backends, 300, false).ServeHTTP(w, req) // 300ms deadline
 	elapsed := time.Since(start)
 
 	if elapsed > 600*time.Millisecond {

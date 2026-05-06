@@ -113,6 +113,10 @@ type adminCRUD struct {
 	attachmentList   http.HandlerFunc
 	attachmentCreate http.HandlerFunc
 	attachmentDelete http.HandlerFunc
+
+	// Misc admin endpoints (PER-275 / PER-280).
+	version           http.HandlerFunc
+	masterKeyGenerate http.HandlerFunc
 }
 
 // mountHuma wraps chiRouter in a humachi-backed huma API and registers all
@@ -402,7 +406,8 @@ func mountHuma(
 			OperationID: "admin_attachment_list",
 			Method:      http.MethodGet,
 			Path:        "/admin/attachments",
-			Summary:     "List attachments by parent",
+			Summary:     "List attachments",
+			Description: "Returns all attachments. Optional query params parent_kind + parent_name (must be supplied together) filter to one parent.",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 500},
 			Middlewares: adminAuth,
@@ -427,6 +432,28 @@ func mountHuma(
 			Errors:      []int{400, 404, 500},
 			Middlewares: adminAuth,
 		}, delegate(crud.attachmentDelete))
+
+		// Misc admin endpoints — version probe + master-key generation.
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_version",
+			Method:      http.MethodGet,
+			Path:        "/admin/version",
+			Summary:     "Get relay version",
+			Tags:        []string{"admin"},
+			Errors:      []int{401},
+			Middlewares: adminAuth,
+		}, delegate(crud.version))
+
+		huma.Register(api, huma.Operation{
+			OperationID: "admin_master_key_generate",
+			Method:      http.MethodGet,
+			Path:        "/admin/master-key/generate",
+			Summary:     "Generate a fresh master key",
+			Description: "Returns a freshly generated 32-byte master key, base64-encoded. This is the ONE place the API ever returns a master key — relay does not persist it. Operator must store it in their orchestrator's secret store before navigating away.",
+			Tags:        []string{"admin"},
+			Errors:      []int{401, 500},
+			Middlewares: adminAuth,
+		}, delegate(crud.masterKeyGenerate))
 	}
 
 	return api
