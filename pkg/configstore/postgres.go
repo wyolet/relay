@@ -66,19 +66,6 @@ func (s *PGStore) RawPool() *pgxpool.Pool { return s.pool }
 // HasMasterKey reports whether a master key is configured (stored-mode secrets are available).
 func (s *PGStore) HasMasterKey() bool { return len(s.masterKey) > 0 }
 
-// ListAttachmentsByParent returns all attachment rows for a given parent kind and name.
-func (s *PGStore) ListAttachmentsByParent(ctx context.Context, parentKind, parentName string) ([]db.Attachment, error) {
-	return s.q.ListAttachmentsByParent(ctx, db.ListAttachmentsByParentParams{
-		ParentKind: parentKind,
-		ParentName: parentName,
-	})
-}
-
-// ListAllAttachments returns every attachment row in the catalog.
-func (s *PGStore) ListAllAttachments(ctx context.Context) ([]db.Attachment, error) {
-	return s.q.ListAttachments(ctx)
-}
-
 // Ping checks the database connection.
 func (s *PGStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 

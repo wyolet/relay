@@ -5,10 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -21,7 +18,7 @@ import (
 // testMasterKey is a 32-byte hex key used in integration tests.
 const testMasterKeyHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 
-func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, *configstore.PGStore) {
+func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *configstore.PGStore) {
 	t.Helper()
 	ctx := context.Background()
 	dsn := startPG(t)
@@ -224,7 +221,6 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	if _, hasVal := vf["value"]; hasVal {
 		t.Error("response must not contain cleartext value")
 	}
-	// Should start with sk- prefix and end with last 4 chars.
 	if len(masked) < 8 {
 		t.Errorf("masked too short: %q", masked)
 	}
@@ -310,9 +306,6 @@ func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
 }
 
 func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
-	// Deleting a Secret that a Pool references must return 400 with a validator
-	// error — the pre-validation pass catches the dangling ref before any PG
-	// mutation. PG state stays consistent; no orphan rows, no stale snapshot.
 	t.Setenv("RELAY_SEC_REF", "pool-ref-value")
 	srv, _ := buildSecretTestServer(t, false)
 
@@ -391,12 +384,14 @@ func TestAdminSecret_List(t *testing.T) {
 	}
 }
 
-// --- Attachment tests ---
+// --- Attachment (derived view) tests ---
 
-func TestAdminAttachment_CRUD(t *testing.T) {
+// TestAdminAttachment_DerivedView verifies GET /admin/attachments derives from inline spec.
+// Attachments are created by PUTting a Pool with rateLimits inline.
+func TestAdminAttachment_DerivedView(t *testing.T) {
 	srv, store := buildSecretTestServer(t, false)
 
-	// Create prerequisites: a ratelimit and a pool.
+	// Create a ratelimit.
 	rlBody := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1", "kind": "RateLimit",
 		"metadata": map[string]string{"name": "att-rl"},
@@ -412,120 +407,115 @@ func TestAdminAttachment_CRUD(t *testing.T) {
 		t.Fatalf("create ratelimit: want 201 got %d", resp.StatusCode)
 	}
 
+	// Create a pool WITH inline rateLimits.
 	poolBody := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1", "kind": "Pool",
 		"metadata": map[string]string{"name": "att-pool"},
-		"spec":     map[string]any{"provider": "seed-prov", "skipDefaultLimits": true},
+		"spec": map[string]any{
+			"provider":          "seed-prov",
+			"skipDefaultLimits": true,
+			"rateLimits":        []map[string]any{{"ref": "att-rl", "meter": "requests"}},
+		},
 	}
 	resp = adminReq(t, srv, http.MethodPost, "/admin/pools", poolBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create pool: want 201 got %d", resp.StatusCode)
+		t.Fatalf("create pool with rateLimits: want 201 got %d", resp.StatusCode)
 	}
 
-	// List before create → empty
-	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool&parent_name=att-pool", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list before: want 200 got %d", resp.StatusCode)
-	}
-	var listBefore struct{ Items []map[string]any }
-	decodeResp(t, resp, &listBefore)
-	if len(listBefore.Items) != 0 {
-		t.Errorf("want 0 items before create, got %d", len(listBefore.Items))
-	}
-
-	// Create attachment → 201
-	attBody := map[string]any{
-		"parentKind":    "Pool",
-		"parentName":    "att-pool",
-		"ratelimitName": "att-rl",
-		"meter":         "requests",
-	}
-	resp = adminReq(t, srv, http.MethodPost, "/admin/attachments", attBody)
-	if resp.StatusCode != http.StatusCreated {
-		resp.Body.Close()
-		t.Fatalf("create attachment: want 201 got %d", resp.StatusCode)
-	}
-	var created map[string]any
-	decodeResp(t, resp, &created)
-
-	id, _ := created["id"].(string)
-	if id == "" {
-		t.Error("want non-empty id in response")
-	}
-	if created["parentKind"] != "Pool" {
-		t.Errorf("want parentKind=Pool, got %v", created["parentKind"])
-	}
-
-	// Auto-reload: pool spec should have the attachment
+	// Verify snapshot reflects inline rateLimits.
 	pool, ok := store.PoolByName("att-pool")
 	if !ok {
-		t.Fatal("auto-reload: pool not in snapshot")
+		t.Fatal("pool not in snapshot")
 	}
 	if len(pool.Spec.RateLimits) == 0 {
-		t.Error("auto-reload: pool spec missing RateLimits after attachment create")
+		t.Error("pool spec missing RateLimits")
 	} else if pool.Spec.RateLimits[0].Ref != "att-rl" {
-		t.Errorf("auto-reload: want ref=att-rl, got %q", pool.Spec.RateLimits[0].Ref)
+		t.Errorf("want ref=att-rl, got %q", pool.Spec.RateLimits[0].Ref)
 	}
 
-	// List → shows the attachment
+	// GET /admin/attachments — all → includes our pool attachment.
+	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list all: want 200 got %d", resp.StatusCode)
+	}
+	var listAll struct{ Items []map[string]any }
+	decodeResp(t, resp, &listAll)
+	found := false
+	for _, item := range listAll.Items {
+		if item["parentKind"] == "Pool" && item["parentName"] == "att-pool" && item["ratelimitName"] == "att-rl" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected attachment for att-pool in list-all response, got %+v", listAll.Items)
+	}
+
+	// GET /admin/attachments?parent_kind=Pool&parent_name=att-pool → filtered.
 	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool&parent_name=att-pool", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list after create: want 200 got %d", resp.StatusCode)
+		t.Fatalf("list filtered: want 200 got %d", resp.StatusCode)
 	}
-	var listAfter struct{ Items []map[string]any }
-	decodeResp(t, resp, &listAfter)
-	if len(listAfter.Items) != 1 {
-		t.Errorf("want 1 item after create, got %d", len(listAfter.Items))
+	var listFiltered struct{ Items []map[string]any }
+	decodeResp(t, resp, &listFiltered)
+	if len(listFiltered.Items) != 1 {
+		t.Errorf("want 1 item, got %d", len(listFiltered.Items))
+	}
+	item := listFiltered.Items[0]
+	if item["ratelimitName"] != "att-rl" {
+		t.Errorf("want ratelimitName=att-rl, got %v", item["ratelimitName"])
+	}
+	if item["meter"] != "requests" {
+		t.Errorf("want meter=requests, got %v", item["meter"])
+	}
+	expectedID := "Pool:att-pool:att-rl:requests"
+	if item["id"] != expectedID {
+		t.Errorf("want id=%q, got %q", expectedID, item["id"])
 	}
 
-	// Delete → 204
-	resp = adminReq(t, srv, http.MethodDelete, fmt.Sprintf("/admin/attachments/%s", id), nil)
-	if resp.StatusCode != http.StatusNoContent {
-		resp.Body.Close()
-		t.Fatalf("delete attachment: want 204 got %d", resp.StatusCode)
+	// Removing the rateLimits via PUT removes it from the derived view.
+	poolBodyNoRL := map[string]any{
+		"apiVersion": "relay.wyolet.dev/v1", "kind": "Pool",
+		"metadata": map[string]string{"name": "att-pool"},
+		"spec": map[string]any{
+			"provider":          "seed-prov",
+			"skipDefaultLimits": true,
+		},
 	}
+	resp = adminReq(t, srv, http.MethodPut, "/admin/pools/att-pool", poolBodyNoRL)
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update pool: want 200 got %d", resp.StatusCode)
+	}
 
-	// List → empty again
 	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool&parent_name=att-pool", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list after delete: want 200 got %d", resp.StatusCode)
+		t.Fatalf("list after remove: want 200 got %d", resp.StatusCode)
 	}
 	var listEmpty struct{ Items []map[string]any }
 	decodeResp(t, resp, &listEmpty)
 	if len(listEmpty.Items) != 0 {
-		t.Errorf("want 0 items after delete, got %d", len(listEmpty.Items))
+		t.Errorf("want 0 items after removing rateLimits, got %d", len(listEmpty.Items))
 	}
 }
 
-func TestAdminAttachment_BrokenRef_400(t *testing.T) {
+// TestAdminAttachment_NoWriteEndpoints verifies that POST/DELETE /admin/attachments returns 404/405.
+func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
 	srv, _ := buildSecretTestServer(t, false)
 
-	// Reference a ratelimit that doesn't exist → 400
-	attBody := map[string]any{
-		"parentKind":    "Pool",
-		"parentName":    "nonexistent-pool",
-		"ratelimitName": "nonexistent-rl",
-		"meter":         "requests",
-	}
+	// POST /admin/attachments should now 404 (route is gone).
+	attBody := map[string]any{"parentKind": "Pool", "parentName": "x", "ratelimitName": "y", "meter": "requests"}
 	resp := adminReq(t, srv, http.MethodPost, "/admin/attachments", attBody)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("broken ref: want 400 got %d", resp.StatusCode)
-	}
-	var errOut map[string]map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&errOut); err == nil {
-		if errOut["error"]["type"] != "invalid_request_error" {
-			t.Errorf("want invalid_request_error, got %q", errOut["error"]["type"])
-		}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
+		t.Error("POST /admin/attachments should not succeed (write API removed)")
 	}
 }
 
+// TestAdminAttachment_MissingQueryParams_400 verifies the filter validation.
 func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
 	srv, _ := buildSecretTestServer(t, false)
 
-	// Missing parent_name → 400
 	resp := adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -533,21 +523,10 @@ func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
 	}
 }
 
+// TestAdminSecret_OpenAPISchema_NoCleartextField verifies the response shape.
 func TestAdminSecret_OpenAPISchema_NoCleartextField(t *testing.T) {
-	// Verify that /openapi.json for secret endpoints does not declare a "value" field
-	// in the response schema. We do this by registering huma on a test server.
-	// Since we use delegate() (StreamResponse) for all admin ops, huma cannot introspect
-	// the Go type; the schema will be empty/opaque — which means no cleartext is declared.
-	// This test asserts that the OpenAPI spec does NOT include a "value" key under
-	// the secret response properties (structurally impossible since we use delegate()).
 	srv, _ := buildSecretTestServer(t, false)
 
-	// Spin up a huma API on a second server to check /openapi.json
-	// Note: the chi routes are already mounted; we just check that the route exists
-	// and returns expected shape (this is the admin-only test; huma is not wired in
-	// the test server, so we just verify the response shape from the actual handler).
-
-	// GET /admin/secrets returns {items: []} — no cleartext field possible in items.
 	resp := adminReq(t, srv, http.MethodGet, "/admin/secrets", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: want 200 got %d", resp.StatusCode)

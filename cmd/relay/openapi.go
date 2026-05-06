@@ -105,14 +105,12 @@ type adminCRUD struct {
 	rateLimit  adminHandlers
 
 	// Secret and Attachment handlers are stored here for huma registration.
-	secretList       http.HandlerFunc
-	secretGet        http.HandlerFunc
-	secretCreate     http.HandlerFunc
-	secretUpdate     http.HandlerFunc
-	secretDelete     http.HandlerFunc
-	attachmentList   http.HandlerFunc
-	attachmentCreate http.HandlerFunc
-	attachmentDelete http.HandlerFunc
+	secretList     http.HandlerFunc
+	secretGet      http.HandlerFunc
+	secretCreate   http.HandlerFunc
+	secretUpdate   http.HandlerFunc
+	secretDelete   http.HandlerFunc
+	attachmentList http.HandlerFunc // read-only derived view; no create/delete
 
 	// Misc admin endpoints (PER-275 / PER-280).
 	version           http.HandlerFunc
@@ -280,6 +278,41 @@ func mountHuma(
 		}, delegate(adminH))
 	}
 
+	// Admin auth endpoints — login is public, logout/whoami require the gate.
+	// POST /admin/login returns 401 (not 404) because the endpoint is publicly discoverable.
+	huma.Register(api, huma.Operation{
+		OperationID: "admin_login",
+		Method:      http.MethodPost,
+		Path:        "/admin/login",
+		Summary:     "Admin login (cookie auth)",
+		Description: "Validates the admin token and sets a relay_admin session cookie (HttpOnly, Secure, SameSite=Strict, 24 h). " +
+			"Returns 401 on wrong token. This endpoint is not gated by the admin middleware.",
+		Tags:   []string{"admin"},
+		Errors: []int{400, 401},
+	}, delegate(adminLoginHandler(adminTok)))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "admin_logout",
+		Method:      http.MethodPost,
+		Path:        "/admin/logout",
+		Summary:     "Admin logout",
+		Description: "Clears the relay_admin session cookie. Requires an active session (cookie or header).",
+		Tags:        []string{"admin"},
+		Errors:      []int{401},
+		Middlewares: adminAuth,
+	}, delegate(adminLogoutHandler()))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "admin_whoami",
+		Method:      http.MethodGet,
+		Path:        "/admin/whoami",
+		Summary:     "Admin whoami",
+		Description: "Returns {authenticated: true} if the admin session is valid.",
+		Tags:        []string{"admin"},
+		Errors:      []int{401},
+		Middlewares: adminAuth,
+	}, delegate(adminWhoamiHandler()))
+
 	// Admin CRUD — five kinds × five verbs = 25 endpoints.
 	if crud != nil {
 		type kindSpec struct {
@@ -401,37 +434,21 @@ func mountHuma(
 			Middlewares: adminAuth,
 		}, delegate(crud.secretDelete))
 
-		// Attachment endpoints — 3 ops.
+		// Attachment endpoint — read-only derived view (no create/delete).
+		// Attachments are expressed inline on Pool/Secret/Model specs; this endpoint
+		// derives the flattened view from the in-memory snapshot.
 		huma.Register(api, huma.Operation{
 			OperationID: "admin_attachment_list",
 			Method:      http.MethodGet,
 			Path:        "/admin/attachments",
-			Summary:     "List attachments",
-			Description: "Returns all attachments. Optional query params parent_kind + parent_name (must be supplied together) filter to one parent.",
+			Summary:     "List attachments (derived, read-only)",
+			Description: "Returns all rate-limit attachments derived from inline rateLimits on Pool/Secret/Model specs. " +
+				"Optional query params parent_kind + parent_name (both required together) filter to one parent. " +
+				"To create or remove attachments, PUT the parent resource with an updated rateLimits array.",
 			Tags:        []string{"admin"},
 			Errors:      []int{400, 500},
 			Middlewares: adminAuth,
 		}, delegate(crud.attachmentList))
-
-		huma.Register(api, huma.Operation{
-			OperationID: "admin_attachment_create",
-			Method:      http.MethodPost,
-			Path:        "/admin/attachments",
-			Summary:     "Create attachment",
-			Tags:        []string{"admin"},
-			Errors:      []int{400, 500},
-			Middlewares: adminAuth,
-		}, delegate(crud.attachmentCreate))
-
-		huma.Register(api, huma.Operation{
-			OperationID: "admin_attachment_delete",
-			Method:      http.MethodDelete,
-			Path:        "/admin/attachments/{id}",
-			Summary:     "Delete attachment",
-			Tags:        []string{"admin"},
-			Errors:      []int{400, 404, 500},
-			Middlewares: adminAuth,
-		}, delegate(crud.attachmentDelete))
 
 		// Misc admin endpoints — version probe + master-key generation.
 		huma.Register(api, huma.Operation{
