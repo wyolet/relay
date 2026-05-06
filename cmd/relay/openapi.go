@@ -87,6 +87,24 @@ func humaAuth(authMW func(http.Handler) http.Handler) func(huma.Context, func(hu
 	}
 }
 
+// adminHandlers holds the five http.HandlerFuncs produced by the crud factory for one kind.
+type adminHandlers struct {
+	list   http.HandlerFunc
+	get    http.HandlerFunc
+	create http.HandlerFunc
+	update http.HandlerFunc
+	del    http.HandlerFunc
+}
+
+// adminCRUD bundles all five kinds' handler sets for huma registration.
+type adminCRUD struct {
+	provider  adminHandlers
+	pool      adminHandlers
+	model     adminHandlers
+	route     adminHandlers
+	rateLimit adminHandlers
+}
+
 // mountHuma wraps chiRouter in a humachi-backed huma API and registers all
 // public operations. Returns the huma API (used in tests to inspect the spec).
 //
@@ -96,6 +114,7 @@ func humaAuth(authMW func(http.Handler) http.Handler) func(huma.Context, func(hu
 // huma on the same router.
 //
 // adminH may be nil (admin not configured); its op is skipped in that case.
+// crud may be nil (admin not configured); its ops are skipped in that case.
 func mountHuma(
 	chiRouter chi.Router,
 	authMW func(http.Handler) http.Handler,
@@ -103,6 +122,7 @@ func mountHuma(
 	chatH http.HandlerFunc,
 	modelsH http.HandlerFunc,
 	adminH http.HandlerFunc,
+	crud *adminCRUD,
 ) huma.API {
 	cfg := huma.DefaultConfig("Wyolet Relay", relayVersion)
 	cfg.Info.Description = "High-throughput LLM router. " +
@@ -241,6 +261,77 @@ func mountHuma(
 			Errors:      []int{401, 429, 500},
 			Middlewares: auth,
 		}, delegate(adminH))
+	}
+
+	// Admin CRUD — five kinds × five verbs = 25 endpoints.
+	if crud != nil {
+		type kindSpec struct {
+			singular string
+			plural   string
+			h        adminHandlers
+		}
+		kinds := []kindSpec{
+			{"provider", "providers", crud.provider},
+			{"pool", "pools", crud.pool},
+			{"model", "models", crud.model},
+			{"route", "routes", crud.route},
+			{"ratelimit", "ratelimits", crud.rateLimit},
+		}
+		for _, k := range kinds {
+			k := k
+			base := "/admin/" + k.plural
+			nameParam := base + "/{name}"
+
+			huma.Register(api, huma.Operation{
+				OperationID: "admin_" + k.singular + "_list",
+				Method:      http.MethodGet,
+				Path:        base,
+				Summary:     "List " + k.plural,
+				Tags:        []string{"admin"},
+				Errors:      []int{500},
+				Middlewares: auth,
+			}, delegate(k.h.list))
+
+			huma.Register(api, huma.Operation{
+				OperationID: "admin_" + k.singular + "_get",
+				Method:      http.MethodGet,
+				Path:        nameParam,
+				Summary:     "Get " + k.singular,
+				Tags:        []string{"admin"},
+				Errors:      []int{404, 500},
+				Middlewares: auth,
+			}, delegate(k.h.get))
+
+			huma.Register(api, huma.Operation{
+				OperationID: "admin_" + k.singular + "_create",
+				Method:      http.MethodPost,
+				Path:        base,
+				Summary:     "Create " + k.singular,
+				Tags:        []string{"admin"},
+				Errors:      []int{400, 500},
+				Middlewares: auth,
+			}, delegate(k.h.create))
+
+			huma.Register(api, huma.Operation{
+				OperationID: "admin_" + k.singular + "_update",
+				Method:      http.MethodPut,
+				Path:        nameParam,
+				Summary:     "Update " + k.singular,
+				Tags:        []string{"admin"},
+				Errors:      []int{400, 404, 500},
+				Middlewares: auth,
+			}, delegate(k.h.update))
+
+			huma.Register(api, huma.Operation{
+				OperationID: "admin_" + k.singular + "_delete",
+				Method:      http.MethodDelete,
+				Path:        nameParam,
+				Summary:     "Delete " + k.singular,
+				Tags:        []string{"admin"},
+				Errors:      []int{404, 500},
+				Middlewares: auth,
+			}, delegate(k.h.del))
+		}
 	}
 
 	return api

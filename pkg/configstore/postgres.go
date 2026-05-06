@@ -10,23 +10,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/internal/db"
+	"github.com/wyolet/relay/pkg/crypto"
 )
 
 // PGStore implements ConfigStore backed by Postgres.
 // Reads are served from an in-memory snapshot swapped atomically on Reload.
 type PGStore struct {
-	pool *pgxpool.Pool
-	q    *db.Queries
+	pool      *pgxpool.Pool
+	q         *db.Queries
+	masterKey []byte // 32-byte AES-GCM key, nil when stored-mode secrets are not in use
 
 	mu   sync.RWMutex
 	snap *snapshot
 }
 
 // Postgres opens a connection pool and loads the initial catalog snapshot.
-func Postgres(ctx context.Context, dsn string) (*PGStore, error) {
+// masterKey is the parsed RELAY_MASTER_KEY (32 bytes) or nil.
+func Postgres(ctx context.Context, dsn string, masterKey []byte) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("configstore.Postgres: parse DSN: %w", err)
@@ -40,7 +45,7 @@ func Postgres(ctx context.Context, dsn string) (*PGStore, error) {
 		return nil, fmt.Errorf("configstore.Postgres: open pool: %w", err)
 	}
 
-	s := &PGStore{pool: pool, q: db.New(pool)}
+	s := &PGStore{pool: pool, q: db.New(pool), masterKey: masterKey}
 	if err := s.Reload(ctx); err != nil {
 		pool.Close()
 		return nil, err
@@ -50,6 +55,13 @@ func Postgres(ctx context.Context, dsn string) (*PGStore, error) {
 
 // Close releases the connection pool.
 func (s *PGStore) Close() { s.pool.Close() }
+
+// SetMasterKey sets the AES-GCM master key used for stored-mode secrets.
+// Must be called before Reload or write methods that use stored mode.
+func (s *PGStore) SetMasterKey(key []byte) { s.masterKey = key }
+
+// RawPool returns the underlying pgxpool.Pool (for admin CRUD transaction management).
+func (s *PGStore) RawPool() *pgxpool.Pool { return s.pool }
 
 // Ping checks the database connection.
 func (s *PGStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
@@ -72,8 +84,7 @@ func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 // Intended for the seed CLI where the DB may be empty.
 func PostgresFromPool(_ context.Context, pool *pgxpool.Pool) (*PGStore, error) {
 	snap := newSnapshot()
-	s := &PGStore{pool: pool, q: db.New(pool)}
-	s.snap = snap
+	s := &PGStore{pool: pool, q: db.New(pool), snap: snap}
 	return s, nil
 }
 
@@ -170,7 +181,9 @@ func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
 			return nil, fmt.Errorf("secret %q spec: %w", row.Name, err)
 		}
 		sec := &Secret{APIVersion: APIVersion, Kind: KindSecret, Metadata: meta, Spec: spec}
-		resolveSecretPG(sec)
+		if err := s.resolveSecretRow(sec, row.ValueKind, row.ValueFromEnv.String, row.ValueCiphertext, row.ValueNonce, row.ValueFromEnv.Valid); err != nil {
+			return nil, err
+		}
 		snap.secrets[row.Name] = sec
 	}
 
@@ -225,12 +238,52 @@ func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
 	return snap, nil
 }
 
-func resolveSecretPG(sec *Secret) {
+// resolveSecretRow populates sec.Resolved from the DB columns.
+// valueKindValid indicates whether valueFromEnv came from a non-NULL column.
+func (s *PGStore) resolveSecretRow(sec *Secret, valueKind, valueFromEnvStr string, valueCiphertext, valueNonce []byte, valueFromEnvValid bool) error {
+	name := sec.Metadata.Name
+	switch valueKind {
+	case "env":
+		if !valueFromEnvValid {
+			// Legacy row without value_from_env set (pre-migration or malformed).
+			// Fall through to spec-based resolution.
+			return s.resolveSecretSpec(sec)
+		}
+		val := os.Getenv(valueFromEnvStr)
+		if val == "" {
+			return fmt.Errorf("secret %s: env var %s not set", name, valueFromEnvStr)
+		}
+		sec.Resolved = val
+	case "stored":
+		if len(s.masterKey) == 0 {
+			return fmt.Errorf("secret %s: stored mode requires RELAY_MASTER_KEY", name)
+		}
+		plain, err := crypto.Decrypt(s.masterKey, valueCiphertext, valueNonce)
+		if err != nil {
+			return fmt.Errorf("secret %s: decrypt failed: %w", name, err)
+		}
+		sec.Resolved = string(plain)
+	default:
+		// value_kind column not yet populated (pre-000002 row via UpsertSecret).
+		return s.resolveSecretSpec(sec)
+	}
+	if sec.Resolved != "" {
+		sum := sha256.Sum256([]byte(sec.Resolved))
+		sec.KeyHash = fmt.Sprintf("%x", sum[:6])
+	}
+	return nil
+}
+
+// resolveSecretSpec handles legacy rows that were written before migration 000002
+// (i.e. UpsertSecret path that doesn't populate value_kind columns).
+func (s *PGStore) resolveSecretSpec(sec *Secret) error {
 	switch {
 	case sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "":
-		if val := os.Getenv(sec.Spec.ValueFrom.Env); val != "" {
-			sec.Resolved = val
+		val := os.Getenv(sec.Spec.ValueFrom.Env)
+		if val == "" {
+			return fmt.Errorf("secret %s: env var %s not set", sec.Metadata.Name, sec.Spec.ValueFrom.Env)
 		}
+		sec.Resolved = val
 	case sec.Spec.Value != "":
 		sec.Resolved = sec.Spec.Value
 		sec.UsedLiteral = true
@@ -242,4 +295,102 @@ func resolveSecretPG(sec *Secret) {
 		sum := sha256.Sum256([]byte(sec.Resolved))
 		sec.KeyHash = fmt.Sprintf("%x", sum[:6])
 	}
+	return nil
+}
+
+// UpsertSecretEnv inserts or updates a secret in env-ref mode.
+// provider is the provider name (e.g. "ollama") that this secret belongs to.
+func (s *PGStore) UpsertSecretEnv(ctx context.Context, tx pgx.Tx, name, envVar, provider string, meta Metadata) error {
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("UpsertSecretEnv: marshal metadata: %w", err)
+	}
+	specJSON, err := json.Marshal(SecretSpec{Provider: provider, ValueFrom: &SecretValueFrom{Env: envVar}})
+	if err != nil {
+		return fmt.Errorf("UpsertSecretEnv: marshal spec: %w", err)
+	}
+	q := s.q
+	if tx != nil {
+		q = db.New(tx)
+	}
+	_, err = q.InsertSecretEnv(ctx, db.InsertSecretEnvParams{
+		Name:         name,
+		ValueFromEnv: pgtype.Text{String: envVar, Valid: true},
+		Metadata:     metaJSON,
+		Spec:         specJSON,
+	})
+	return err
+}
+
+// UpsertSecretStored inserts or updates a secret in stored (encrypted) mode.
+// plaintext is encrypted with s.masterKey before writing.
+// provider is the provider name (e.g. "ollama") that this secret belongs to.
+func (s *PGStore) UpsertSecretStored(ctx context.Context, tx pgx.Tx, name, plaintext, provider string, meta Metadata) error {
+	if len(s.masterKey) == 0 {
+		return fmt.Errorf("UpsertSecretStored: stored mode requires RELAY_MASTER_KEY")
+	}
+	ct, nonce, err := crypto.Encrypt(s.masterKey, []byte(plaintext))
+	if err != nil {
+		return fmt.Errorf("UpsertSecretStored: encrypt: %w", err)
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("UpsertSecretStored: marshal metadata: %w", err)
+	}
+	specJSON, err := json.Marshal(SecretSpec{Provider: provider})
+	if err != nil {
+		return fmt.Errorf("UpsertSecretStored: marshal spec: %w", err)
+	}
+	q := s.q
+	if tx != nil {
+		q = db.New(tx)
+	}
+	_, err = q.InsertSecretStored(ctx, db.InsertSecretStoredParams{
+		Name:            name,
+		ValueCiphertext: ct,
+		ValueNonce:      nonce,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+	})
+	return err
+}
+
+// UpdateSecretEnv changes an existing secret to env-ref mode.
+func (s *PGStore) UpdateSecretEnv(ctx context.Context, tx pgx.Tx, name, envVar string) error {
+	q := s.q
+	if tx != nil {
+		q = db.New(tx)
+	}
+	_, err := q.UpdateSecretEnv(ctx, db.UpdateSecretEnvParams{Name: name, ValueFromEnv: pgtype.Text{String: envVar, Valid: true}})
+	return err
+}
+
+// UpdateSecretStored rotates the ciphertext for a stored-mode secret.
+func (s *PGStore) UpdateSecretStored(ctx context.Context, tx pgx.Tx, name, plaintext string) error {
+	if len(s.masterKey) == 0 {
+		return fmt.Errorf("UpdateSecretStored: stored mode requires RELAY_MASTER_KEY")
+	}
+	ct, nonce, err := crypto.Encrypt(s.masterKey, []byte(plaintext))
+	if err != nil {
+		return fmt.Errorf("UpdateSecretStored: encrypt: %w", err)
+	}
+	q := s.q
+	if tx != nil {
+		q = db.New(tx)
+	}
+	_, err = q.UpdateSecretStored(ctx, db.UpdateSecretStoredParams{
+		Name:            name,
+		ValueCiphertext: ct,
+		ValueNonce:      nonce,
+	})
+	return err
+}
+
+// DeleteSecret removes a secret by name.
+func (s *PGStore) DeleteSecret(ctx context.Context, tx pgx.Tx, name string) error {
+	q := s.q
+	if tx != nil {
+		q = db.New(tx)
+	}
+	return q.DeleteSecret(ctx, name)
 }

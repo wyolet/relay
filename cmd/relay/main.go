@@ -203,7 +203,7 @@ func main() {
 				log.Fatalf("auto-seed: %v", err)
 			}
 		}
-		pgStore, err := configstore.Postgres(bootCtx, pgDSN)
+		pgStore, err := configstore.Postgres(bootCtx, pgDSN, masterKey)
 		if err != nil {
 			slog.Error("configstore(pg) init failed", "err", err)
 			os.Exit(1)
@@ -328,8 +328,14 @@ func main() {
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 
 	var adminH http.HandlerFunc
+	var adminCRUDHandlers *adminCRUD
 	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
 		adminH = adminReloadHandler(tok, pgStoreForAdmin, limiter)
+
+		deps := crudDeps(pgStoreForAdmin.RawPool(), pgStoreForAdmin)
+		kinds := buildAdminKinds(pgStoreForAdmin, nil)
+		adminCRUDHandlers = buildAdminCRUD(kinds, deps)
+		mountAdminRoutes(r, tok, adminCRUDHandlers)
 	}
 
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,
@@ -343,6 +349,7 @@ func main() {
 		apiopenai.ChatCompletions(resolve, runPipeline),
 		apiopenai.ListModels(cfg),
 		adminH,
+		adminCRUDHandlers,
 	)
 
 	addr := ":8080"

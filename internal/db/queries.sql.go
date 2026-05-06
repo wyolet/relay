@@ -7,7 +7,167 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const deleteModel = `-- name: DeleteModel :exec
+DELETE FROM models WHERE name = $1
+`
+
+func (q *Queries) DeleteModel(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteModel, name)
+	return err
+}
+
+const deletePool = `-- name: DeletePool :exec
+DELETE FROM pools WHERE name = $1
+`
+
+func (q *Queries) DeletePool(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deletePool, name)
+	return err
+}
+
+const deleteProvider = `-- name: DeleteProvider :exec
+DELETE FROM providers WHERE name = $1
+`
+
+func (q *Queries) DeleteProvider(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteProvider, name)
+	return err
+}
+
+const deleteRateLimit = `-- name: DeleteRateLimit :exec
+DELETE FROM rate_limits WHERE name = $1
+`
+
+func (q *Queries) DeleteRateLimit(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteRateLimit, name)
+	return err
+}
+
+const deleteRoute = `-- name: DeleteRoute :exec
+DELETE FROM routes WHERE name = $1
+`
+
+func (q *Queries) DeleteRoute(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteRoute, name)
+	return err
+}
+
+const deleteSecret = `-- name: DeleteSecret :exec
+DELETE FROM secrets WHERE name = $1
+`
+
+func (q *Queries) DeleteSecret(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteSecret, name)
+	return err
+}
+
+const insertSecretEnv = `-- name: InsertSecretEnv :one
+INSERT INTO secrets (name, value_kind, value_from_env, metadata, spec)
+VALUES ($1, 'env', $2, $3, $4)
+ON CONFLICT (name) DO UPDATE
+    SET value_kind     = 'env',
+        value_from_env = EXCLUDED.value_from_env,
+        value_ciphertext = NULL,
+        value_nonce      = NULL,
+        metadata         = EXCLUDED.metadata,
+        spec             = EXCLUDED.spec,
+        updated_at       = NOW()
+RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+`
+
+type InsertSecretEnvParams struct {
+	Name         string      `db:"name" json:"name"`
+	ValueFromEnv pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	Metadata     []byte      `db:"metadata" json:"metadata"`
+	Spec         []byte      `db:"spec" json:"spec"`
+}
+
+type InsertSecretEnvRow struct {
+	Name            string      `db:"name" json:"name"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+}
+
+func (q *Queries) InsertSecretEnv(ctx context.Context, arg InsertSecretEnvParams) (InsertSecretEnvRow, error) {
+	row := q.db.QueryRow(ctx, insertSecretEnv,
+		arg.Name,
+		arg.ValueFromEnv,
+		arg.Metadata,
+		arg.Spec,
+	)
+	var i InsertSecretEnvRow
+	err := row.Scan(
+		&i.Name,
+		&i.ValueKind,
+		&i.ValueFromEnv,
+		&i.ValueCiphertext,
+		&i.ValueNonce,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const insertSecretStored = `-- name: InsertSecretStored :one
+INSERT INTO secrets (name, value_kind, value_ciphertext, value_nonce, metadata, spec)
+VALUES ($1, 'stored', $2, $3, $4, $5)
+ON CONFLICT (name) DO UPDATE
+    SET value_kind       = 'stored',
+        value_from_env   = NULL,
+        value_ciphertext = EXCLUDED.value_ciphertext,
+        value_nonce      = EXCLUDED.value_nonce,
+        metadata         = EXCLUDED.metadata,
+        spec             = EXCLUDED.spec,
+        updated_at       = NOW()
+RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+`
+
+type InsertSecretStoredParams struct {
+	Name            string `db:"name" json:"name"`
+	ValueCiphertext []byte `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte `db:"value_nonce" json:"value_nonce"`
+	Metadata        []byte `db:"metadata" json:"metadata"`
+	Spec            []byte `db:"spec" json:"spec"`
+}
+
+type InsertSecretStoredRow struct {
+	Name            string      `db:"name" json:"name"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+}
+
+func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStoredParams) (InsertSecretStoredRow, error) {
+	row := q.db.QueryRow(ctx, insertSecretStored,
+		arg.Name,
+		arg.ValueCiphertext,
+		arg.ValueNonce,
+		arg.Metadata,
+		arg.Spec,
+	)
+	var i InsertSecretStoredRow
+	err := row.Scan(
+		&i.Name,
+		&i.ValueKind,
+		&i.ValueFromEnv,
+		&i.ValueCiphertext,
+		&i.ValueNonce,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
 
 const listAttachments = `-- name: ListAttachments :many
 SELECT parent_kind, parent_name, ratelimit_name, meter FROM attachments ORDER BY parent_kind, parent_name
@@ -189,13 +349,17 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT name, metadata, spec FROM secrets ORDER BY name
+SELECT name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	Name            string      `db:"name" json:"name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
 }
 
 func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
@@ -207,7 +371,15 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 	var items []ListSecretsRow
 	for rows.Next() {
 		var i ListSecretsRow
-		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+		if err := rows.Scan(
+			&i.Name,
+			&i.Metadata,
+			&i.Spec,
+			&i.ValueKind,
+			&i.ValueFromEnv,
+			&i.ValueCiphertext,
+			&i.ValueNonce,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -216,6 +388,89 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateSecretEnv = `-- name: UpdateSecretEnv :one
+UPDATE secrets
+SET value_kind       = 'env',
+    value_from_env   = $2,
+    value_ciphertext = NULL,
+    value_nonce      = NULL,
+    updated_at       = NOW()
+WHERE name = $1
+RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+`
+
+type UpdateSecretEnvParams struct {
+	Name         string      `db:"name" json:"name"`
+	ValueFromEnv pgtype.Text `db:"value_from_env" json:"value_from_env"`
+}
+
+type UpdateSecretEnvRow struct {
+	Name            string      `db:"name" json:"name"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpdateSecretEnv(ctx context.Context, arg UpdateSecretEnvParams) (UpdateSecretEnvRow, error) {
+	row := q.db.QueryRow(ctx, updateSecretEnv, arg.Name, arg.ValueFromEnv)
+	var i UpdateSecretEnvRow
+	err := row.Scan(
+		&i.Name,
+		&i.ValueKind,
+		&i.ValueFromEnv,
+		&i.ValueCiphertext,
+		&i.ValueNonce,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const updateSecretStored = `-- name: UpdateSecretStored :one
+UPDATE secrets
+SET value_kind       = 'stored',
+    value_from_env   = NULL,
+    value_ciphertext = $2,
+    value_nonce      = $3,
+    updated_at       = NOW()
+WHERE name = $1
+RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+`
+
+type UpdateSecretStoredParams struct {
+	Name            string `db:"name" json:"name"`
+	ValueCiphertext []byte `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte `db:"value_nonce" json:"value_nonce"`
+}
+
+type UpdateSecretStoredRow struct {
+	Name            string      `db:"name" json:"name"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStoredParams) (UpdateSecretStoredRow, error) {
+	row := q.db.QueryRow(ctx, updateSecretStored, arg.Name, arg.ValueCiphertext, arg.ValueNonce)
+	var i UpdateSecretStoredRow
+	err := row.Scan(
+		&i.Name,
+		&i.ValueKind,
+		&i.ValueFromEnv,
+		&i.ValueCiphertext,
+		&i.ValueNonce,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
 }
 
 const upsertAttachment = `-- name: UpsertAttachment :exec
@@ -338,6 +593,7 @@ type UpsertSecretParams struct {
 	Spec     []byte `db:"spec" json:"spec"`
 }
 
+// UpsertSecret is kept for the seed CLI (YAML-import path). Deprecated for new code; use InsertSecretEnv / InsertSecretStored.
 func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) error {
 	_, err := q.db.Exec(ctx, upsertSecret, arg.Name, arg.Metadata, arg.Spec)
 	return err

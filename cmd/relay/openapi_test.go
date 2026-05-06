@@ -15,6 +15,27 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
+// buildHumaTestRouterWithAdmin mirrors the production mount order with admin CRUD enabled.
+func buildHumaTestRouterWithAdmin(crud *adminCRUD) http.Handler {
+	authMW := auth.Middleware([][]byte{[]byte("test-secret")})
+
+	r := chi.NewRouter()
+	r.Use(reqid.Middleware(slog.Default()))
+	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+
+	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+
+	mountHuma(r, authMW,
+		http.HandlerFunc(stub), // healthz
+		http.HandlerFunc(stub), // chat completions
+		http.HandlerFunc(stub), // models
+		http.HandlerFunc(stub), // admin reload
+		crud,
+	)
+
+	return r
+}
+
 // buildHumaTestRouter mirrors the production mount order and returns the chi
 // router (which huma has been layered on top of). Admin is omitted (nil).
 func buildHumaTestRouter() http.Handler {
@@ -31,6 +52,7 @@ func buildHumaTestRouter() http.Handler {
 		http.HandlerFunc(stub), // chat completions
 		http.HandlerFunc(stub), // models
 		nil,                    // admin — not configured
+		nil,                    // crud — not configured
 	)
 
 	return r
@@ -144,5 +166,84 @@ func TestOpenAPI_ChatCompletions401WithoutBearer(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("/v1/chat/completions without bearer: want 401 got %d", resp.StatusCode)
+	}
+}
+
+// TestOpenAPI_AdminCRUD_25Paths verifies all 25 admin CRUD operations appear in the spec.
+func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	stubH := adminHandlers{stub, stub, stub, stub, stub}
+	crud := &adminCRUD{
+		provider:  stubH,
+		pool:      stubH,
+		model:     stubH,
+		route:     stubH,
+		rateLimit: stubH,
+	}
+
+	srv := httptest.NewServer(buildHumaTestRouterWithAdmin(crud))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/openapi.json")
+	if err != nil {
+		t.Fatalf("GET /openapi.json: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var raw json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	loader := openapi3.NewLoader()
+	doc, err := loader.LoadFromData(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	type opCheck struct {
+		method, path, operationID string
+	}
+	ops := []opCheck{
+		{"GET", "/admin/providers", "admin_provider_list"},
+		{"GET", "/admin/providers/{name}", "admin_provider_get"},
+		{"POST", "/admin/providers", "admin_provider_create"},
+		{"PUT", "/admin/providers/{name}", "admin_provider_update"},
+		{"DELETE", "/admin/providers/{name}", "admin_provider_delete"},
+		{"GET", "/admin/pools", "admin_pool_list"},
+		{"GET", "/admin/pools/{name}", "admin_pool_get"},
+		{"POST", "/admin/pools", "admin_pool_create"},
+		{"PUT", "/admin/pools/{name}", "admin_pool_update"},
+		{"DELETE", "/admin/pools/{name}", "admin_pool_delete"},
+		{"GET", "/admin/models", "admin_model_list"},
+		{"GET", "/admin/models/{name}", "admin_model_get"},
+		{"POST", "/admin/models", "admin_model_create"},
+		{"PUT", "/admin/models/{name}", "admin_model_update"},
+		{"DELETE", "/admin/models/{name}", "admin_model_delete"},
+		{"GET", "/admin/routes", "admin_route_list"},
+		{"GET", "/admin/routes/{name}", "admin_route_get"},
+		{"POST", "/admin/routes", "admin_route_create"},
+		{"PUT", "/admin/routes/{name}", "admin_route_update"},
+		{"DELETE", "/admin/routes/{name}", "admin_route_delete"},
+		{"GET", "/admin/ratelimits", "admin_ratelimit_list"},
+		{"GET", "/admin/ratelimits/{name}", "admin_ratelimit_get"},
+		{"POST", "/admin/ratelimits", "admin_ratelimit_create"},
+		{"PUT", "/admin/ratelimits/{name}", "admin_ratelimit_update"},
+		{"DELETE", "/admin/ratelimits/{name}", "admin_ratelimit_delete"},
+	}
+
+	for _, op := range ops {
+		pathItem := doc.Paths.Find(op.path)
+		if pathItem == nil {
+			t.Errorf("path %s not in spec", op.path)
+			continue
+		}
+		o := pathItem.GetOperation(op.method)
+		if o == nil {
+			t.Errorf("%s %s: no operation", op.method, op.path)
+			continue
+		}
+		if o.OperationID != op.operationID {
+			t.Errorf("%s %s: want operationID %q got %q", op.method, op.path, op.operationID, o.OperationID)
+		}
 	}
 }
