@@ -1,0 +1,15 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+  name: openai
+spec:
+  kind: openai
+  baseURL: https://api.openai.com
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+  name: ollama
+spec:
+  kind: ollama
+  baseURL: http://host.docker.internal:11434
