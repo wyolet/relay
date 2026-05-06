@@ -4,9 +4,9 @@ metadata:
   name: smoke-model
 spec:
   provider: smoke-ollama
-  upstreamName: tinyllama:latest
-  description: "Smoke-test model (TinyLlama via Ollama)"
-  family: tinyllama
+  upstreamName: gemma3:1b
+  description: "Smoke-test model (gemma3:1b via Ollama)"
+  family: gemma3
   capabilities:
     chat: true
     streaming: false

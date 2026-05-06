@@ -190,6 +190,33 @@ func mountHuma(
 		Middlewares: auth,
 	}, delegateBody(chatH))
 
+	// Patch the generated OpenAPI spec for /v1/chat/completions: huma's RawBody
+	// handling produces an opaque binary schema. We replace it with a proper
+	// application/json schema that exposes the fields Relay inspects so that
+	// API consumers (and scenario-7 smoke) can discover the metadata field.
+	if op, ok := api.OpenAPI().Paths["/v1/chat/completions"]; ok {
+		if op.Post != nil && op.Post.RequestBody != nil {
+			op.Post.RequestBody.Content = map[string]*huma.MediaType{
+				"application/json": {
+					Schema: &huma.Schema{
+						Type: "object",
+						Properties: map[string]*huma.Schema{
+							"model": {Type: "string", Description: "ID of the model to use (required)."},
+							"stream": {Type: "boolean", Description: "If true, partial message deltas are sent as SSE."},
+							"user": {Type: "string", Description: "Caller identifier forwarded to the upstream provider."},
+							"metadata": {
+								Type:        "object",
+								Description: "Up to 16 key/value pairs for caller attribution. Keys: [a-zA-Z0-9_.-], max 64 chars. Values: printable ASCII, max 256 chars.",
+								AdditionalProperties: &huma.Schema{Type: "string"},
+							},
+						},
+						Required: []string{"model"},
+					},
+				},
+			}
+		}
+	}
+
 	// GET /v1/models — auth-gated.
 	huma.Register(api, huma.Operation{
 		OperationID: "list-models",

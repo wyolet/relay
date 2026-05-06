@@ -98,6 +98,13 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 		return ctx.Err()
 	}
 
+	// Attribution: prefer the message-level attribution (which may include
+	// body-parsed metadata from M7 rich-parsing path), falling back to the
+	// context value (header-only, set by reqid.Middleware).
+	if inboundMsg.Attribution != nil {
+		lc.Attribution = inboundMsg.Attribution
+	}
+
 	// Extract model from inbound if set (best-effort; opts.Model is canonical).
 	if opts.Model != nil {
 		lc.Model = opts.Model.Metadata.Name
