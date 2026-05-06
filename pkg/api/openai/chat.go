@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -157,7 +156,7 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 		done:
 
 		if err := <-pipeErr; err != nil {
-			log.Printf("pipeline: %v", err)
+			reqid.Logger(r.Context()).Warn("pipeline error", "err", err)
 		}
 	}
 }

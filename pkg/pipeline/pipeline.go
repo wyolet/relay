@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -134,6 +133,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 
 	preUpstreamStart := time.Now()
 
+	log := reqid.Logger(ctx)
 	attempt := 0
 	sameKeyAttempt := 0
 	var chosenKey *configstore.Secret
@@ -200,7 +200,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 				opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureNetwork, 0)
 				lastFailureKind = keypool.FailureNetwork
 				appendAttempt(lc, secret, "network_error", 0, latencyMS)
-				slog.Default().Info("pipeline attempt",
+				log.Debug("pipeline attempt",
 					"attempt", attempt,
 					"key_hash", secret.KeyHash,
 					"classification", "network",
@@ -231,7 +231,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 		switch cls {
 		case classSuccess:
 			opts.Selector.RecordSuccess(ctx, secret.KeyHash)
-			slog.Default().Info("pipeline attempt",
+			log.Debug("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
 				"status", status,
@@ -272,7 +272,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			<-outboundErr
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureAuth, 0)
 			lastFailureKind = keypool.FailureAuth
-			slog.Default().Info("pipeline attempt",
+			log.Debug("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
 				"status", status,
@@ -291,7 +291,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			if retryAfter > maxRetryAfter {
 				maxRetryAfter = retryAfter
 			}
-			slog.Default().Info("pipeline attempt",
+			log.Debug("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
 				"status", status,
@@ -318,7 +318,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			if retryAfter > maxRetryAfter {
 				maxRetryAfter = retryAfter
 			}
-			slog.Default().Info("pipeline attempt",
+			log.Debug("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
 				"status", status,
@@ -343,7 +343,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			}
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, kind, 0)
 			lastFailureKind = kind
-			slog.Default().Info("pipeline attempt",
+			log.Debug("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
 				"status", status,

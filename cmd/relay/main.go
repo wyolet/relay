@@ -297,7 +297,7 @@ func main() {
 
 	var adminH http.HandlerFunc
 	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
-		adminH = adminReloadHandler(tok, pgStoreForAdmin)
+		adminH = adminReloadHandler(tok, pgStoreForAdmin, limiter)
 	}
 
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,

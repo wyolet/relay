@@ -4,10 +4,17 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"log/slog"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/limit"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -15,30 +22,116 @@ type reloader interface {
 	Reload(ctx context.Context) error
 }
 
+// adminReloadRPM returns the configured RPM for /admin/reload (RELAY_ADMIN_RELOAD_RPM, default 10).
+func adminReloadRPM() int64 {
+	if v := os.Getenv("RELAY_ADMIN_RELOAD_RPM"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 10
+}
+
+// adminReloadRules constructs the synthetic ResolvedRule slice for the /admin/reload limiter.
+// ParentKind=Admin, ParentName=reload, meter=requests, sliding-window of 60s.
+func adminReloadRules(rpm int64) []configstore.ResolvedRule {
+	rl := &configstore.RateLimit{
+		APIVersion: configstore.APIVersion,
+		Kind:       configstore.KindRateLimit,
+		Metadata:   configstore.Metadata{Name: "admin-reload-rpm"},
+		Spec: configstore.RateLimitSpec{
+			Strategy: configstore.StrategySlidingWindow,
+			Window:   60 * time.Second,
+			Amount:   rpm,
+		},
+	}
+	return []configstore.ResolvedRule{
+		{
+			ParentKind: "Admin",
+			ParentName: "reload",
+			Meter:      configstore.MeterRequests,
+			RateLimit:  rl,
+		},
+	}
+}
+
+// sourceIP resolves the client IP from X-Forwarded-For (first hop) or RemoteAddr.
+// Precedence: X-Forwarded-For leftmost non-empty token > RemoteAddr (port stripped).
+func sourceIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		for _, p := range parts {
+			if ip := strings.TrimSpace(p); ip != "" {
+				return ip
+			}
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // adminReloadHandler returns an http.HandlerFunc that calls store.Reload.
 // token must be non-empty; callers are responsible for not registering when token is empty.
-func adminReloadHandler(token string, store reloader) http.HandlerFunc {
+// lim enforces a per-source-IP rate limit (10 RPM by default, RELAY_ADMIN_RELOAD_RPM to override).
+func adminReloadHandler(token string, store reloader, lim *limit.Limiter) http.HandlerFunc {
 	tok := []byte(token)
+	rpm := adminReloadRPM()
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := reqid.From(r.Context())
-		ip := r.RemoteAddr
+		ctx := r.Context()
+		log := reqid.Logger(ctx)
+		ip := sourceIP(r)
 
 		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(auth), tok) != 1 {
-			slog.Info("admin/reload: unauthorized", "request_id", id, "ip", ip)
+			log.Warn("admin/reload: unauthorized", "ip", ip)
 			http.NotFound(w, r)
 			return
 		}
 
+		// Rate-limit by source IP. Build rules with IP-scoped parent name.
+		rules := adminReloadRules(rpm)
+		// Scope state key to source IP by embedding it in ParentName.
+		rules[0].ParentName = fmt.Sprintf("reload:%s", ip)
+
+		res, err := lim.Reserve(ctx, rules)
+		if err != nil {
+			var exceeded *limit.ExceededError
+			if errors.As(err, &exceeded) {
+				retryAfterSec := int(exceeded.RetryAfter.Seconds())
+				if retryAfterSec < 1 {
+					retryAfterSec = 1
+				}
+				log.Warn("admin/reload: rate limited", "ip", ip, "retry_after_s", retryAfterSec)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSec))
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error": map[string]string{
+						"type":    "rate_limit_exceeded",
+						"code":    "admin_rate_limit_exceeded",
+						"message": fmt.Sprintf("admin reload rate limit exceeded; retry after %ds", retryAfterSec),
+					},
+				})
+				return
+			}
+			// Reserve error (non-exceeded): log and proceed fail-open.
+			log.Warn("admin/reload: limiter reserve error (fail-open)", "ip", ip, "err", err)
+		} else {
+			defer func() { _ = lim.Commit(ctx, res, limit.Observations{}) }()
+		}
+
 		if err := store.Reload(r.Context()); err != nil {
-			slog.Info("admin/reload: failed", "request_id", id, "ip", ip, "err", err)
+			log.Error("admin/reload: failed", "ip", ip, "err", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
 
-		slog.Info("admin/reload: ok", "request_id", id, "ip", ip)
+		log.Info("admin/reload: ok", "ip", ip)
 		w.WriteHeader(http.StatusOK)
 	}
 }
