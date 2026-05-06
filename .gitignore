@@ -19,6 +19,9 @@ py-relay/.python-version
 events/
 *.jsonl
 
+# Bench output — written at runtime, not source-tracked
+bench/results.json
+
 # Secrets — never commit
 .env
 .env.*

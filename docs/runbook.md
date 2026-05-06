@@ -344,7 +344,13 @@ clickhouse-client --query \
 
 ### RPS per pod
 
-The M5 compose smoke (PER-248) validated correctness at 50–200 RPM against a live stack. Sustained RPS-per-pod throughput numbers will be available from the PER-255 load bench — see PER-255 results for updated figures. Design targets from CLAUDE.md:
+The M5 compose smoke (PER-248) validated correctness at 50–200 RPM against a live stack. Relay's internal overhead per request is measured continuously by the `bench/` directory benchmark (PER-255). Run locally with:
+
+```sh
+GOMAXPROCS=2 go test -bench=BenchmarkRelayInternalOverhead -benchtime=10000x -count=1 -run='^$' ./bench/...
+```
+
+The bench writes `bench/results.json` with p50/p95/p99 in microseconds. The CI workflow (`.github/workflows/p99.yml`) runs this on every PR and posts a comparison table comment. The bench hard-fails when p99 > 5 ms or p50 > 1 ms. Design targets from CLAUDE.md:
 
 | Metric | Target |
 |---|---|
