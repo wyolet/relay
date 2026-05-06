@@ -31,12 +31,18 @@
 //   - Real Redis / Postgres / ClickHouse latency
 //   - Network round-trip to a remote upstream
 //   - Multi-pod coordination or cache-warming
-//   - Streaming (the canned response is non-streaming JSON)
 //
-// # SLO gate
+// # SLO gates
 //
-// The bench hard-fails (b.Fatalf) when p99 overhead > 5 ms or p50 overhead >
-// 1 ms, matching the performance contract in CLAUDE.md.
+// Non-streaming: p99 overhead ≤ 5 ms, p50 ≤ 1 ms (CLAUDE.md performance contract).
+//
+// Streaming: p99 overhead ≤ 10 ms, p50 ≤ 2 ms. The roomier budget reflects that
+// the streaming path involves multiple write syscalls and Flush() calls — one per
+// SSE chunk — plus a tee goroutine reading the body copy for usage extraction. Each
+// flush round-trips through the OS kernel; 5–20 chunks means 5–20× the write
+// pressure of a single JSON response. The 10 ms / 2 ms SLO is therefore conservative
+// relative to the non-streaming budget on a per-syscall basis while still catching
+// regressions in Relay's own orchestration layer.
 package bench
 
 import (
@@ -483,6 +489,17 @@ func benchBody() []byte {
 	return b
 }
 
+// benchResult holds percentile latencies and iteration count, written to results.json.
+// The Path field tags which hot path the measurement covers ("chat" or "streaming").
+type streamingBenchResult struct {
+	Path   string `json:"path"`
+	P50us  int64  `json:"p50_us"`
+	P95us  int64  `json:"p95_us"`
+	P99us  int64  `json:"p99_us"`
+	N      int    `json:"n"`
+	GitSHA string `json:"git_sha"`
+}
+
 // writeResults writes results.json in the bench directory.
 // Failures are non-fatal (they don't break the bench gate itself).
 func writeResults(tb testing.TB, r benchResult) {
@@ -495,4 +512,166 @@ func writeResults(tb testing.TB, r benchResult) {
 	if err := os.WriteFile("results.json", data, 0o644); err != nil {
 		tb.Logf("writeResults: write: %v", err)
 	}
+}
+
+// writeStreamingResults writes streaming-results.json in the bench directory.
+func writeStreamingResults(tb testing.TB, r streamingBenchResult) {
+	tb.Helper()
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		tb.Logf("writeStreamingResults: marshal: %v", err)
+		return
+	}
+	if err := os.WriteFile("streaming-results.json", data, 0o644); err != nil {
+		tb.Logf("writeStreamingResults: write: %v", err)
+	}
+}
+
+// cannedSSEChunk is a single realistic chat-completions streaming delta chunk.
+const cannedSSEChunk = `data: {"id":"chatcmpl-stream001","object":"chat.completion.chunk","created":1700000000,"model":"gpt-bench","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}` + "\n\n"
+
+// cannedSSEDone is the terminal SSE frame.
+const cannedSSEDone = "data: [DONE]\n\n"
+
+// stubStreamingUpstream returns an httptest.Server that responds with a
+// multi-chunk SSE response: 10 data chunks followed by [DONE]. Each chunk is
+// flushed individually to exercise the streaming write path.
+func stubStreamingUpstream() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for i := 0; i < 10; i++ {
+			_, _ = w.Write([]byte(cannedSSEChunk))
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte(cannedSSEDone))
+		flusher.Flush()
+	}))
+}
+
+// BenchmarkBareStubStreaming measures the cost of calling the streaming stub
+// handler directly via ServeHTTP (no TCP, no Relay code), providing a floor
+// for the streaming overhead comparison.
+func BenchmarkBareStubStreaming(b *testing.B) {
+	stub := stubStreamingUpstream()
+	b.Cleanup(stub.Close)
+
+	handler := stub.Config.Handler
+	body := benchBody()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		req, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+	}
+}
+
+// BenchmarkRelayStreamingOverhead is the streaming SLO gate.
+//
+// It measures end-to-end latency from request entry to final chunk delivered
+// through the full Relay handler (auth + body-limit + reqid + huma routing +
+// model resolution + key selection + pipeline), using a multi-chunk SSE stub
+// upstream. Subtracts a bare-stub streaming baseline to isolate Relay's own
+// contribution. Hard-fails when p99 > 10 ms or p50 > 2 ms.
+//
+// The roomier thresholds vs. the non-streaming gate reflect that the streaming
+// path issues one write + Flush per chunk (10 in the stub), multiplying syscall
+// pressure. See the package doc for full rationale.
+func BenchmarkRelayStreamingOverhead(b *testing.B) {
+	stub := stubStreamingUpstream()
+	b.Cleanup(stub.Close)
+
+	handler := buildRelayHandler(b, stub.URL)
+	body := benchBody()
+
+	// Measure stub handler directly to get a comparable baseline.
+	stubHandler := stub.Config.Handler
+	const warmupN = 500
+	stubNs := make([]int64, 0, warmupN)
+	for i := 0; i < warmupN; i++ {
+		req, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rr := httptest.NewRecorder()
+		t0 := time.Now()
+		stubHandler.ServeHTTP(rr, req)
+		stubNs = append(stubNs, time.Since(t0).Nanoseconds())
+	}
+	sort.Slice(stubNs, func(i, j int) bool { return stubNs[i] < stubNs[j] })
+	stubP50ns := percentile(stubNs, 50)
+
+	b.ResetTimer()
+
+	relayNs := make([]int64, 0, b.N)
+	for i := 0; i < b.N; i++ {
+		req, _ := http.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+benchKey)
+
+		rr := httptest.NewRecorder()
+		t0 := time.Now()
+		handler.ServeHTTP(rr, req)
+		elapsed := time.Since(t0).Nanoseconds()
+
+		if rr.Code != http.StatusOK {
+			b.Fatalf("unexpected status %d: %s", rr.Code, rr.Body.String())
+		}
+		relayNs = append(relayNs, elapsed)
+	}
+
+	b.StopTimer()
+
+	if b.N < 100 {
+		return
+	}
+
+	sort.Slice(relayNs, func(i, j int) bool { return relayNs[i] < relayNs[j] })
+
+	overheadNs := make([]int64, len(relayNs))
+	for i, lat := range relayNs {
+		if ov := lat - stubP50ns; ov > 0 {
+			overheadNs[i] = ov
+		}
+	}
+	sort.Slice(overheadNs, func(i, j int) bool { return overheadNs[i] < overheadNs[j] })
+
+	p50 := percentile(overheadNs, 50) / 1000
+	p95 := percentile(overheadNs, 95) / 1000
+	p99 := percentile(overheadNs, 99) / 1000
+
+	b.Logf("streaming stub p50=%dns | relay-total p50=%dµs p95=%dµs p99=%dµs",
+		stubP50ns,
+		percentile(relayNs, 50)/1000,
+		percentile(relayNs, 95)/1000,
+		percentile(relayNs, 99)/1000,
+	)
+	b.Logf("streaming overhead (relay - stub_p50): p50=%dµs p95=%dµs p99=%dµs n=%d",
+		p50, p95, p99, len(overheadNs))
+
+	result := streamingBenchResult{
+		Path:   "streaming",
+		P50us:  p50,
+		P95us:  p95,
+		P99us:  p99,
+		N:      len(overheadNs),
+		GitSHA: gitSHA(),
+	}
+	writeStreamingResults(b, result)
+
+	// Hard SLO assertions — streaming budget is roomier than non-streaming.
+	if p99 > 10000 {
+		b.Fatalf("SLO BREACH: streaming p99 overhead %dµs > 10000µs (10ms)", p99)
+	}
+	if p50 > 2000 {
+		b.Fatalf("SLO BREACH: streaming p50 overhead %dµs > 2000µs (2ms)", p50)
+	}
+
+	fmt.Printf("Relay streaming overhead — p50: %dµs  p95: %dµs  p99: %dµs  n: %d\n",
+		p50, p95, p99, len(overheadNs))
 }

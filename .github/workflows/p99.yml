@@ -20,13 +20,12 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      # Run the bench 3 times (-count=3); each run writes bench/results.json.
-      # We capture all three JSON outputs and pick the median.
-      - name: Run p99 bench (count=3)
-        id: bench
+      # Run each bench 3 times (-count=3); pick the median.
+      - name: Run p99 bench — chat (count=3)
+        id: bench_chat
         run: |
           set -euo pipefail
-          mkdir -p /tmp/bench-runs
+          mkdir -p /tmp/bench-runs/chat
 
           for i in 1 2 3; do
             GOMAXPROCS=2 go test \
@@ -35,19 +34,19 @@ jobs:
               -count=1 \
               -run='^$' \
               ./bench/...
-            cp bench/results.json /tmp/bench-runs/run${i}.json
+            cp bench/results.json /tmp/bench-runs/chat/run${i}.json
           done
 
-          # Compute median of each percentile field across the 3 runs.
           python3 - <<'PYEOF'
           import json, os, statistics
 
           runs = []
           for i in (1, 2, 3):
-              with open(f"/tmp/bench-runs/run{i}.json") as f:
+              with open(f"/tmp/bench-runs/chat/run{i}.json") as f:
                   runs.append(json.load(f))
 
           median_result = {
+              "path":   "chat",
               "p50_us": int(statistics.median(r["p50_us"] for r in runs)),
               "p95_us": int(statistics.median(r["p95_us"] for r in runs)),
               "p99_us": int(statistics.median(r["p99_us"] for r in runs)),
@@ -58,18 +57,58 @@ jobs:
           with open("bench/results.json", "w") as f:
               json.dump(median_result, f, indent=2)
 
-          print(f"Median: p50={median_result['p50_us']}µs  p95={median_result['p95_us']}µs  p99={median_result['p99_us']}µs")
+          print(f"Chat median: p50={median_result['p50_us']}µs  p95={median_result['p95_us']}µs  p99={median_result['p99_us']}µs")
           PYEOF
 
-      # Try to get the main-branch baseline for comparison (best-effort; skip on first run).
+      - name: Run p99 bench — streaming (count=3)
+        id: bench_streaming
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bench-runs/streaming
+
+          for i in 1 2 3; do
+            GOMAXPROCS=2 go test \
+              -bench=BenchmarkRelayStreamingOverhead \
+              -benchtime=10000x \
+              -count=1 \
+              -run='^$' \
+              ./bench/...
+            cp bench/streaming-results.json /tmp/bench-runs/streaming/run${i}.json
+          done
+
+          python3 - <<'PYEOF'
+          import json, os, statistics
+
+          runs = []
+          for i in (1, 2, 3):
+              with open(f"/tmp/bench-runs/streaming/run{i}.json") as f:
+                  runs.append(json.load(f))
+
+          median_result = {
+              "path":   "streaming",
+              "p50_us": int(statistics.median(r["p50_us"] for r in runs)),
+              "p95_us": int(statistics.median(r["p95_us"] for r in runs)),
+              "p99_us": int(statistics.median(r["p99_us"] for r in runs)),
+              "n":      runs[0]["n"],
+              "git_sha": os.environ.get("GITHUB_SHA", "unknown"),
+          }
+
+          with open("bench/streaming-results.json", "w") as f:
+              json.dump(median_result, f, indent=2)
+
+          print(f"Streaming median: p50={median_result['p50_us']}µs  p95={median_result['p95_us']}µs  p99={median_result['p99_us']}µs")
+          PYEOF
+
+      # Try to get the main-branch baseline for comparison (best-effort).
       - name: Fetch main baseline
         id: baseline
         continue-on-error: true
         run: |
           git show origin/main:bench/results.json > /tmp/main_results.json 2>/dev/null
+          git show origin/main:bench/streaming-results.json > /tmp/main_streaming_results.json 2>/dev/null || true
           echo "found=true" >> "$GITHUB_OUTPUT"
 
-      # Post a PR comment with the comparison table.
+      # Post a PR comment with the comparison table (chat + streaming rows).
       - name: Post PR comment
         if: github.event_name == 'pull_request'
         env:
@@ -81,19 +120,22 @@ jobs:
           import json, os, subprocess
 
           with open("bench/results.json") as f:
-              pr = json.load(f)
+              chat = json.load(f)
+          with open("bench/streaming-results.json") as f:
+              streaming = json.load(f)
 
           baseline_found = os.environ.get("BASELINE_FOUND", "") == "true"
-          main_path = "/tmp/main_results.json"
 
-          main_p50 = main_p95 = main_p99 = None
+          main_chat = main_stream = None
           if baseline_found:
               try:
-                  with open(main_path) as f:
-                      main = json.load(f)
-                  main_p50 = main["p50_us"]
-                  main_p95 = main["p95_us"]
-                  main_p99 = main["p99_us"]
+                  with open("/tmp/main_results.json") as f:
+                      main_chat = json.load(f)
+              except Exception:
+                  pass
+              try:
+                  with open("/tmp/main_streaming_results.json") as f:
+                      main_stream = json.load(f)
               except Exception:
                   pass
 
@@ -104,29 +146,34 @@ jobs:
                   return f"{us/1000:.1f}ms"
               return f"{us}µs"
 
-          slo_ok = pr["p99_us"] <= 5000 and pr["p50_us"] <= 1000
-          status = "✅ within SLO (p99 ≤ 5ms, p50 ≤ 1ms)" if slo_ok else "❌ SLO BREACH"
+          def slo_tag(p99, p50, p99_limit, p50_limit):
+              return "✅" if p99 <= p99_limit and p50 <= p50_limit else "❌"
 
-          main_col = f" {fmt(main_p50)} |" if main_p50 is not None else " n/a (first run) |"
-          main_col95 = f" {fmt(main_p95)} |" if main_p95 is not None else " n/a |"
-          main_col99 = f" {fmt(main_p99)} |" if main_p99 is not None else " n/a |"
+          chat_tag    = slo_tag(chat["p99_us"],      chat["p50_us"],      5000, 1000)
+          stream_tag  = slo_tag(streaming["p99_us"], streaming["p50_us"], 10000, 2000)
+
+          def row(label, pr, main_r, p99_slo):
+              mp50 = fmt(main_r["p50_us"]) if main_r else "n/a"
+              mp95 = fmt(main_r["p95_us"]) if main_r else "n/a"
+              mp99 = fmt(main_r["p99_us"]) if main_r else "n/a"
+              tag = "✅" if pr["p99_us"] <= p99_slo else "❌"
+              return (f"| {label} | {fmt(pr['p50_us'])} | {fmt(pr['p95_us'])} | {fmt(pr['p99_us'])} "
+                      f"| {mp50} | {mp95} | {mp99} | {tag} |")
 
           body = f"""### p99 Overhead Report
 
-          | Metric | This PR | main |
-          |--------|---------|------|
-          | p50    | {fmt(pr['p50_us'])} |{main_col}
-          | p95    | {fmt(pr['p95_us'])} |{main_col95}
-          | p99    | {fmt(pr['p99_us'])} |{main_col99}
+          | Path | p50 | p95 | p99 | main p50 | main p95 | main p99 | SLO |
+          |------|-----|-----|-----|----------|----------|----------|-----|
+          {row("Chat",      chat,      main_chat,   5000)}
+          {row("Streaming", streaming, main_stream, 10000)}
 
-          **n={pr['n']}  sha={pr['git_sha'][:8]}**
+          **Chat n={chat['n']}  Streaming n={streaming['n']}  sha={chat['git_sha'][:8]}**
 
-          Status: {status}
+          SLO: Chat p99 ≤ 5ms, p50 ≤ 1ms | Streaming p99 ≤ 10ms, p50 ≤ 2ms
 
           > Measured in-process (in-memory config, no real Redis/PG). Overhead = relay total minus bare-stub p50 baseline. See `bench/` for methodology.
           """
 
-          # Dedent
           body = "\n".join(line.lstrip() for line in body.strip().splitlines())
 
           pr_number = os.environ["PR_NUMBER"]
