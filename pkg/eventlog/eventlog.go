@@ -169,15 +169,20 @@ func New(cfg Config) (*Logger, error) {
 	return l, nil
 }
 
-// Append marshals event to JSON and enqueues it. Never blocks.
-func (l *Logger) Append(_ context.Context, event any) error {
+// Append marshals ev to JSON and enqueues it. Never blocks.
+// Returns ErrLoggerClosed if the logger has been closed, or ErrBufferFull if
+// the internal channel is full — callers should increment a drop counter on
+// non-nil returns.
+func (l *Logger) Append(_ context.Context, ev Event) error {
 	if l.closed.Load() {
 		l.dropped.Add(1)
 		return ErrLoggerClosed
 	}
 
-	b, err := json.Marshal(event)
+	b, err := json.Marshal(ev)
 	if err != nil {
+		// Event is a concrete struct; this branch is unreachable in practice
+		// but we keep the drop counter consistent.
 		l.dropped.Add(1)
 		return fmt.Errorf("%w: %v", ErrMarshalFailed, err)
 	}
