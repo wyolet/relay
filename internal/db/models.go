@@ -56,9 +56,13 @@ type Route struct {
 }
 
 type Secret struct {
-	Name      string             `db:"name" json:"name"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name            string             `db:"name" json:"name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ValueKind       string             `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text        `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte             `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte             `db:"value_nonce" json:"value_nonce"`
 }

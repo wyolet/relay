@@ -3,7 +3,9 @@
 package configstore_test
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 	"github.com/wyolet/relay/pkg/configstore"
+	"github.com/wyolet/relay/pkg/crypto"
 )
 
 func startPostgres(t *testing.T) string {
@@ -88,7 +91,7 @@ func TestPGStore_Boot_EmptyDB(t *testing.T) {
 	runMigrations(t, dsn)
 
 	// Empty catalog: boot should fail (validator requires ≥1 provider).
-	_, err := configstore.Postgres(context.Background(), dsn)
+	_, err := configstore.Postgres(context.Background(), dsn, nil)
 	if err == nil {
 		t.Fatal("expected error booting with empty catalog, got nil")
 	}
@@ -99,7 +102,7 @@ func TestPGStore_Boot_And_Read(t *testing.T) {
 	runMigrations(t, dsn)
 	seedMinimal(t, dsn)
 
-	store, err := configstore.Postgres(context.Background(), dsn)
+	store, err := configstore.Postgres(context.Background(), dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -134,7 +137,7 @@ func TestPGStore_Reload(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	store, err := configstore.Postgres(ctx, dsn)
+	store, err := configstore.Postgres(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -196,7 +199,7 @@ func TestPGStore_MalformedSpec(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	_, err = configstore.Postgres(ctx, dsn)
+	_, err = configstore.Postgres(ctx, dsn, nil)
 	if err == nil {
 		t.Fatal("expected error from malformed spec, got nil")
 	}
@@ -208,7 +211,7 @@ func TestPGStore_ConcurrentReloadRace(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	store, err := configstore.Postgres(ctx, dsn)
+	store, err := configstore.Postgres(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -229,5 +232,417 @@ func TestPGStore_ConcurrentReloadRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// --- Migration 000002 tests ---
+
+func runMigrationsUpDown(t *testing.T, dsn string) {
+	t.Helper()
+	src, err := iofs.New(pgmigrations.FS, ".")
+	if err != nil {
+		t.Fatalf("iofs source: %v", err)
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	if err != nil {
+		t.Fatalf("migrate init: %v", err)
+	}
+	defer m.Close()
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate up: %v", err)
+	}
+	if err := m.Down(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate down: %v", err)
+	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate up (second): %v", err)
+	}
+}
+
+func TestMigration000002_UpDownUp(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrationsUpDown(t, dsn)
+}
+
+func TestMigration000002_Backfill(t *testing.T) {
+	dsn := startPostgres(t)
+
+	// Run only migration 000001 so we can insert a legacy row.
+	src, err := iofs.New(pgmigrations.FS, ".")
+	if err != nil {
+		t.Fatalf("iofs source: %v", err)
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	if err != nil {
+		t.Fatalf("migrate init: %v", err)
+	}
+	if err := m.Steps(1); err != nil {
+		t.Fatalf("migrate steps(1): %v", err)
+	}
+	m.Close()
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	// Insert a legacy secret row using the old schema (no value_kind columns yet).
+	_, err = pool.Exec(ctx, `
+		INSERT INTO secrets (name, metadata, spec) VALUES (
+			'legacy-env',
+			'{"Name":"legacy-env","Labels":{}}',
+			'{"provider":"ollama","valueFrom":{"env":"LEGACY_TEST_VAR"}}'
+		);
+	`)
+	if err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	// Now run migration 000002.
+	src2, err := iofs.New(pgmigrations.FS, ".")
+	if err != nil {
+		t.Fatalf("iofs source: %v", err)
+	}
+	m2, err := migrate.NewWithSourceInstance("iofs", src2, dsn)
+	if err != nil {
+		t.Fatalf("migrate init: %v", err)
+	}
+	defer m2.Close()
+	if err := m2.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate up (000002): %v", err)
+	}
+
+	// Verify backfill.
+	var valueKind, valueFromEnv string
+	err = pool.QueryRow(ctx, `SELECT value_kind, value_from_env FROM secrets WHERE name = 'legacy-env'`).Scan(&valueKind, &valueFromEnv)
+	if err != nil {
+		t.Fatalf("query backfilled row: %v", err)
+	}
+	if valueKind != "env" {
+		t.Errorf("value_kind = %q, want %q", valueKind, "env")
+	}
+	if valueFromEnv != "LEGACY_TEST_VAR" {
+		t.Errorf("value_from_env = %q, want %q", valueFromEnv, "LEGACY_TEST_VAR")
+	}
+}
+
+func TestMigration000002_CheckConstraintViolation(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	// Attempt to INSERT with value_kind='env' AND value_ciphertext populated — must fail.
+	_, err = pool.Exec(ctx, `
+		INSERT INTO secrets (name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce)
+		VALUES ('bad', '{"Name":"bad"}', '{}', 'env', 'SOMEVAR', '\xdeadbeef', '\x000000000000000000000000');
+	`)
+	if err == nil {
+		t.Fatal("expected CHECK constraint violation, got nil")
+	}
+}
+
+// --- Resolver tests ---
+
+var testMasterKey = bytes.Repeat([]byte{0x42}, 32)
+
+func seedMinimalWithSecrets(t *testing.T, dsn string) {
+	t.Helper()
+	seedMinimal(t, dsn)
+}
+
+func TestResolver_EnvMode_Set(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimalWithSecrets(t, dsn)
+
+	t.Setenv("RELAY_SECRET_TESTVAR", "supersecret")
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	store, err := configstore.PostgresFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("PostgresFromPool: %v", err)
+	}
+
+	if err := store.UpsertSecretEnv(ctx, nil, "test-env", "RELAY_SECRET_TESTVAR", "ollama", configstore.Metadata{Name: "test-env"}); err != nil {
+		t.Fatalf("UpsertSecretEnv: %v", err)
+	}
+
+	// Boot a new PGStore which will resolve secrets.
+	s, err := configstore.Postgres(ctx, dsn, nil)
+	if err != nil {
+		// Validate failure is expected here (no provider seeded in seedMinimal? — actually it is).
+		// Reload failure from secret resolution would be surfaced.
+		t.Fatalf("Postgres: %v", err)
+	}
+	defer s.Close()
+
+	sec, ok := s.SecretByName("test-env")
+	if !ok {
+		t.Fatal("SecretByName(test-env) not found")
+	}
+	if sec.Resolved != "supersecret" {
+		t.Errorf("Resolved = %q, want %q", sec.Resolved, "supersecret")
+	}
+}
+
+func TestResolver_EnvMode_MissingVar(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	store, err := configstore.PostgresFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("PostgresFromPool: %v", err)
+	}
+
+	os.Unsetenv("RELAY_SECRET_MISSING")
+	if err := store.UpsertSecretEnv(ctx, nil, "missing-var", "RELAY_SECRET_MISSING", "ollama", configstore.Metadata{Name: "missing-var"}); err != nil {
+		t.Fatalf("UpsertSecretEnv: %v", err)
+	}
+
+	_, err = configstore.Postgres(ctx, dsn, nil)
+	if err == nil {
+		t.Fatal("expected error when env var missing, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+}
+
+func TestResolver_StoredMode_OK(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	store, err := configstore.PostgresFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("PostgresFromPool: %v", err)
+	}
+	store.SetMasterKey(testMasterKey)
+
+	const plaintext = "my-api-key"
+	if err := store.UpsertSecretStored(ctx, nil, "stored-ok", plaintext, "ollama", configstore.Metadata{Name: "stored-ok"}); err != nil {
+		t.Fatalf("UpsertSecretStored: %v", err)
+	}
+
+	s, err := configstore.Postgres(ctx, dsn, testMasterKey)
+	if err != nil {
+		t.Fatalf("Postgres: %v", err)
+	}
+	defer s.Close()
+
+	sec, ok := s.SecretByName("stored-ok")
+	if !ok {
+		t.Fatal("SecretByName(stored-ok) not found")
+	}
+	if sec.Resolved != plaintext {
+		t.Errorf("Resolved = %q, want %q", sec.Resolved, plaintext)
+	}
+}
+
+func TestResolver_StoredMode_NoMasterKey(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	// Insert stored-mode row directly (using a known key).
+	ct, nonce, err := crypto.Encrypt(testMasterKey, []byte("secret"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO secrets (name, metadata, spec, value_kind, value_ciphertext, value_nonce)
+		VALUES ('stored-nokey', '{"Name":"stored-nokey"}', '{}', 'stored', $1, $2)
+	`, ct, nonce)
+	if err != nil {
+		t.Fatalf("insert stored row: %v", err)
+	}
+
+	_, err = configstore.Postgres(ctx, dsn, nil) // no master key
+	if err == nil {
+		t.Fatal("expected error when master key unset, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+}
+
+func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	ct, nonce, err := crypto.Encrypt(testMasterKey, []byte("secret"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	ct[0] ^= 0xFF // tamper
+
+	_, err = pool.Exec(ctx, `
+		INSERT INTO secrets (name, metadata, spec, value_kind, value_ciphertext, value_nonce)
+		VALUES ('stored-tampered', '{"Name":"stored-tampered"}', '{}', 'stored', $1, $2)
+	`, ct, nonce)
+	if err != nil {
+		t.Fatalf("insert tampered row: %v", err)
+	}
+
+	_, err = configstore.Postgres(ctx, dsn, testMasterKey)
+	if err == nil {
+		t.Fatal("expected error on tampered ciphertext, got nil")
+	}
+	t.Logf("got expected error: %v", err)
+}
+
+// --- Write method tests ---
+
+func TestUpsertSecretStored_EncryptsBeforeWrite(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	store, err := configstore.PostgresFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("PostgresFromPool: %v", err)
+	}
+	store.SetMasterKey(testMasterKey)
+
+	const plaintext = "my-plaintext-key"
+	if err := store.UpsertSecretStored(ctx, nil, "enc-test", plaintext, "ollama", configstore.Metadata{Name: "enc-test"}); err != nil {
+		t.Fatalf("UpsertSecretStored: %v", err)
+	}
+
+	// Read ciphertext from DB directly and verify it's NOT plaintext bytes.
+	var ct, nonce []byte
+	err = pool.QueryRow(ctx, `SELECT value_ciphertext, value_nonce FROM secrets WHERE name = 'enc-test'`).Scan(&ct, &nonce)
+	if err != nil {
+		t.Fatalf("query ciphertext: %v", err)
+	}
+	if bytes.Equal(ct, []byte(plaintext)) {
+		t.Fatal("ciphertext equals plaintext — encryption did not happen")
+	}
+
+	// Round-trip decrypt.
+	got, err := crypto.Decrypt(testMasterKey, ct, nonce)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if string(got) != plaintext {
+		t.Errorf("decrypted = %q, want %q", got, plaintext)
+	}
+}
+
+func TestUpsertSecretEnv_NoCiphertext(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	store, err := configstore.PostgresFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("PostgresFromPool: %v", err)
+	}
+
+	if err := store.UpsertSecretEnv(ctx, nil, "env-test", "MY_ENV_VAR", "ollama", configstore.Metadata{Name: "env-test"}); err != nil {
+		t.Fatalf("UpsertSecretEnv: %v", err)
+	}
+
+	var valueKind, valueFromEnv string
+	var ct []byte
+	err = pool.QueryRow(ctx, `SELECT value_kind, value_from_env, value_ciphertext FROM secrets WHERE name = 'env-test'`).Scan(&valueKind, &valueFromEnv, &ct)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if valueKind != "env" {
+		t.Errorf("value_kind = %q, want env", valueKind)
+	}
+	if valueFromEnv != "MY_ENV_VAR" {
+		t.Errorf("value_from_env = %q, want MY_ENV_VAR", valueFromEnv)
+	}
+	if ct != nil {
+		t.Errorf("value_ciphertext should be NULL, got %v", ct)
+	}
+}
+
+func TestDeleteSecret(t *testing.T) {
+	dsn := startPostgres(t)
+	runMigrations(t, dsn)
+	seedMinimal(t, dsn)
+
+	ctx := context.Background()
+	pool, err := configstore.OpenPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	store, err := configstore.PostgresFromPool(ctx, pool)
+	if err != nil {
+		t.Fatalf("PostgresFromPool: %v", err)
+	}
+
+	if err := store.UpsertSecretEnv(ctx, nil, "del-test", "DEL_VAR", "ollama", configstore.Metadata{Name: "del-test"}); err != nil {
+		t.Fatalf("UpsertSecretEnv: %v", err)
+	}
+	if err := store.DeleteSecret(ctx, nil, "del-test"); err != nil {
+		t.Fatalf("DeleteSecret: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM secrets WHERE name = 'del-test'`).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 rows after delete, got %d", count)
+	}
 }
 
