@@ -86,7 +86,7 @@ import (
 	"github.com/wyolet/relay/pkg/provider"
 	providerOpenAI "github.com/wyolet/relay/pkg/provider/openai"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/pkg/usage"
 )
@@ -208,7 +208,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	}
 
 	cfg := configstore.NewMemStore(prov, sec, pool, model)
-	st := state.New()
+	st := kv.NewMem()
 
 	el, err := eventlog.New(eventlog.Config{
 		Backend: eventlog.BackendFile,

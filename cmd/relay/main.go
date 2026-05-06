@@ -28,7 +28,7 @@ import (
 	"github.com/wyolet/relay/pkg/provider/ollama"
 	"github.com/wyolet/relay/pkg/provider/openai"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/pkg/usage"
 )
@@ -228,7 +228,7 @@ func main() {
 	}
 
 	// State store — Redis when RELAY_STATE_BACKEND=redis, else in-memory.
-	var st state.Store
+	var st kv.Store
 	var redisPinger pinger
 	if stateBackend == "redis" {
 		addr := os.Getenv("RELAY_REDIS_ADDR")
@@ -236,7 +236,7 @@ func main() {
 			slog.Error("RELAY_REDIS_ADDR not set (required when RELAY_STATE_BACKEND=redis)")
 			os.Exit(1)
 		}
-		rs, err := state.NewRedis(bootCtx, state.RedisConfig{Addr: addr})
+		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{Addr: addr})
 		if err != nil {
 			slog.Error("state(redis) init failed", "err", err)
 			os.Exit(1)
@@ -244,7 +244,7 @@ func main() {
 		st = rs
 		redisPinger = rs
 	} else {
-		st = state.New()
+		st = kv.NewMem()
 	}
 
 	limiter := limit.New(st, slog.Default(), nil)
@@ -419,7 +419,7 @@ func shutdown(
 	srv *http.Server,
 	usageShutdown usage.Shutdown,
 	el *eventlog.Logger,
-	st state.Store,
+	st kv.Store,
 	cfg configstore.ConfigStore,
 ) {
 	step := func(name string, fn func(context.Context) error, budget time.Duration) {

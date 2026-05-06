@@ -1,6 +1,6 @@
 package limit
 
-// storeFactory produces a state.Store for parameterized tests.
+// storeFactory produces a kv.Store for parameterized tests.
 // The concrete type is defined per build tag (mem vs integration).
 
 import (
@@ -9,18 +9,18 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/configstore"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 type limiterFactory func() *Limiter
 
-func newLimiterFromStore(s state.Store, now *time.Time) *Limiter {
+func newLimiterFromStore(s kv.Store, now *time.Time) *Limiter {
 	clock := func() time.Time { return *now }
 	return New(s, slog.New(slog.NewTextHandler(io.Discard, nil)), clock)
 }
 
-func memStoreFactory() state.Store {
-	return state.New()
+func memStoreFactory() kv.Store {
+	return kv.NewMem()
 }
 
 func makeRuleWith(meter configstore.Meter, amount int64, window time.Duration, name string) configstore.ResolvedRule {

@@ -14,7 +14,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/configstore"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/state"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 const (
@@ -24,21 +24,21 @@ const (
 // Limiter enforces rate-limit rules using pkg/state for counters.
 // One Limiter is shared across the process; concurrent calls are safe.
 type Limiter struct {
-	runner state.ScriptRunner
-	store  state.Store
+	runner kv.Scripter
+	store  kv.Store
 	log    *slog.Logger
 	clock  func() time.Time
 }
 
-func New(s state.Store, log *slog.Logger, clock func() time.Time) *Limiter {
+func New(s kv.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 	if clock == nil {
 		clock = time.Now
 	}
 	l := &Limiter{store: s, log: log, clock: clock}
-	if sr, ok := s.(state.ScriptRunner); ok {
+	if sr, ok := s.(kv.Scripter); ok {
 		l.runner = sr
 	}
-	if ms, ok := s.(*state.MemStore); ok {
+	if ms, ok := s.(*kv.Mem); ok {
 		RegisterScripts(ms)
 	}
 	return l
