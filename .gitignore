@@ -20,8 +20,7 @@ events/
 *.jsonl
 
 # Bench output — written at runtime, not source-tracked
-bench/results.json
-bench/streaming-results.json
+bench/results*.json
 
 # Secrets — never commit
 .env
