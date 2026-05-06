@@ -129,8 +129,20 @@ func mountHuma(
 	// delegateBody wraps an http.HandlerFunc as a huma stream handler with a raw body.
 	// Huma reads r.Body to populate inp.RawBody for OpenAPI validation; we restore
 	// r.Body from the parsed bytes so the downstream handler can re-read it.
+	//
+	// chatInput declares the documented fields so the generated OpenAPI spec exposes
+	// them. Body handling is performed by the chat handler via Parse(); the parsed
+	// values from huma (Model, Stream, User, Metadata) are intentionally discarded
+	// here — they exist for documentation only.
 	type chatInput struct {
 		RawBody json.RawMessage `doc:"OpenAI-compatible chat completion request (see https://platform.openai.com/docs/api-reference/chat/create)."`
+
+		// Documentation-only fields — Relay inspects these from the raw body via Parse().
+		// Values set here by huma's decoder are never read.
+		Model    string            `json:"model" doc:"ID of the model to use (required)."`
+		Stream   bool              `json:"stream,omitempty" doc:"If true, partial message deltas are sent as SSE."`
+		User     string            `json:"user,omitempty" doc:"Caller identifier forwarded to the upstream provider."`
+		Metadata map[string]string `json:"metadata,omitempty" doc:"Up to 16 key/value pairs for caller attribution. Keys: [a-zA-Z0-9_.-], max 64 chars. Values: printable ASCII, max 256 chars."`
 	}
 	delegateBody := func(h http.HandlerFunc) func(context.Context, *chatInput) (*huma.StreamResponse, error) {
 		return func(_ context.Context, inp *chatInput) (*huma.StreamResponse, error) {

@@ -6,11 +6,11 @@ import (
 	"fmt"
 )
 
-// ChatRequest mirrors POST /v1/chat/completions request body.
+// FullChatRequest mirrors POST /v1/chat/completions request body.
 // Polymorphic fields (Content, Stop, ToolChoice) are kept as json.RawMessage
 // so unknown variants pass through to upstream untouched.
 // Optional numerics use pointers so zero is distinguishable from absence.
-type ChatRequest struct {
+type FullChatRequest struct {
 	Model    string        `json:"model"`
 	Messages []ChatMessage `json:"messages"`
 
@@ -106,7 +106,7 @@ type ToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
-func (r *ChatRequest) Validate() error {
+func (r *FullChatRequest) Validate() error {
 	if r.Model == "" {
 		return errors.New("model is required")
 	}

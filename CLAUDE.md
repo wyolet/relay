@@ -42,7 +42,7 @@ The **Route** is the unit of intent. Customer sends `X-Relay-Route: prod-cheap`;
 
 ### Hot-path rules (non-negotiable)
 - No Postgres calls on the request path
-- No request body parse beyond `model`, `stream`, `user` — token counts come from the provider response
+- Default: full body parse to a typed shape-specific struct (`RELAY_RICH_PARSING=on`). `off` reverts to the legacy minimal-parse path (model/stream/user/raw only). Always: `messages` content not deep-parsed; raw body retained for byte-equivalent upstream forward. Shape-specific parsed types live in `pkg/api/<shape>` — `pkg/transport` is shape-agnostic. Token counts come from the provider response.
 - **One** Redis Lua call per request (auth + rate limit + quota + key-pool snapshot in one atomic script). Not three.
 - No mid-stream failover. Failover only pre-first-byte.
 - No middleware/plugin chain à la LiteLLM

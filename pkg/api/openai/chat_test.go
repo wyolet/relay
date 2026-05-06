@@ -223,3 +223,98 @@ func TestChatCompletions_AttributionFlowsFromContext(t *testing.T) {
 		t.Errorf("Attribution not threaded: %v", capturedAttribution)
 	}
 }
+
+func TestChatCompletions_BodyAttributionRichMode(t *testing.T) {
+	withRich(true, func() {
+		var capturedAttribution map[string]string
+		h := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+			defer close(ch.Out)
+			msg := <-ch.In
+			capturedAttribution = msg.Attribution
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+			return nil
+		})
+
+		body := `{"model":"gpt-4","metadata":{"caller":"sdk"}}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if capturedAttribution == nil || capturedAttribution["caller"] != "sdk" {
+			t.Errorf("body attribution not threaded: %v", capturedAttribution)
+		}
+	})
+}
+
+func TestChatCompletions_HeaderWinsOverBody(t *testing.T) {
+	withRich(true, func() {
+		var capturedAttribution map[string]string
+		innerHandler := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+			defer close(ch.Out)
+			msg := <-ch.In
+			capturedAttribution = msg.Attribution
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+			return nil
+		})
+
+		wrapped := reqid.Middleware(slog.Default())(innerHandler)
+		body := `{"model":"gpt-4","metadata":{"caller":"body"}}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("X-Relay-Metadata", "caller=header")
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+
+		if capturedAttribution == nil || capturedAttribution["caller"] != "header" {
+			t.Errorf("header should win over body: %v", capturedAttribution)
+		}
+	})
+}
+
+func TestChatCompletions_MinimalModeBodyAttributionIgnored(t *testing.T) {
+	withRich(false, func() {
+		var capturedAttribution map[string]string
+		h := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+			defer close(ch.Out)
+			msg := <-ch.In
+			capturedAttribution = msg.Attribution
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+			return nil
+		})
+
+		body := `{"model":"gpt-4","metadata":{"caller":"sdk"}}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if capturedAttribution != nil {
+			t.Errorf("minimal mode: body attribution should be nil, got %v", capturedAttribution)
+		}
+	})
+}
+
+func TestChatCompletions_RawBodyForwarded(t *testing.T) {
+	withRich(true, func() {
+		var capturedBody []byte
+		h := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+			defer close(ch.Out)
+			msg := <-ch.In
+			capturedBody = msg.Body
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
+			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+			return nil
+		})
+
+		// model name matches upstream, so Raw is forwarded as-is.
+		body := `{"model":"gpt-4","max_tokens":42,"messages":[]}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if string(capturedBody) != body {
+			t.Errorf("forwarded body = %s, want %s", capturedBody, body)
+		}
+	})
+}

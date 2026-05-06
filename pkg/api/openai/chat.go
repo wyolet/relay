@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // RequestPlan holds the resolved model, provider, pool, secrets, and rate-limit
@@ -51,47 +52,59 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 			return
 		}
 
-		var generic map[string]json.RawMessage
-		if err := json.Unmarshal(body, &generic); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "request body is not valid JSON", "")
+		cr, parseErr := Parse(r.Context(), body, r.Header)
+		if parseErr != nil {
+			if status, pbody, ok := ParseError(parseErr); ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				w.Write(pbody)
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid_request_error", parseErr.Error(), "")
 			return
 		}
 
-		modelRaw, ok := generic["model"]
-		if !ok {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "model is required", "")
-			return
-		}
-		var modelName string
-		if err := json.Unmarshal(modelRaw, &modelName); err != nil || modelName == "" {
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "model must be a non-empty string", "")
-			return
-		}
+		ctx := r.Context()
+		ctx = ContextWithChatRequest(ctx, cr)
 
-		plan, ok := resolve(modelName)
+		plan, ok := resolve(cr.Model)
 		if !ok {
 			writeError(w, http.StatusNotFound, "invalid_request_error",
-				fmt.Sprintf("model %q not found", modelName), "model_not_found")
+				fmt.Sprintf("model %q not found", cr.Model), "model_not_found")
 			return
 		}
 
+		// Build attribution: header wins over body metadata (M4 contract preserved).
+		var attribution map[string]string
+		if hv := r.Header.Get("X-Relay-Metadata"); hv != "" {
+			attribution = usage.ParseMetadataHeader(hv)
+		} else if cr.Metadata != nil {
+			attribution = cr.Metadata
+		} else {
+			attribution = reqid.Attribution(ctx)
+		}
+
+		// Forward the raw body to upstream; rewrite model field if upstream name differs.
+		forwardBody := cr.Raw
 		upstream := plan.Model.Spec.UpstreamName
-		forwardBody := body
-		if upstream != modelName {
-			generic["model"], _ = json.Marshal(upstream)
-			forwardBody, _ = json.Marshal(generic)
+		if upstream != cr.Model {
+			var generic map[string]json.RawMessage
+			if err := json.Unmarshal(body, &generic); err == nil {
+				generic["model"], _ = json.Marshal(upstream)
+				forwardBody, _ = json.Marshal(generic)
+			}
 		}
 
 		msg := &transport.Message{
-			ID:          reqid.From(r.Context()),
+			ID:          reqid.From(ctx),
 			ParentID:    "",
 			Body:        forwardBody,
 			Headers:     map[string]string{"Content-Type": r.Header.Get("Content-Type")},
-			Attribution: reqid.Attribution(r.Context()),
+			Attribution: attribution,
 			ReceivedAt:  time.Now().UTC(),
 		}
 
-		ch := transport.NewChannel(r.Context(), msg.ID, 1, 64)
+		ch := transport.NewChannel(ctx, msg.ID, 1, 64)
 		defer ch.Cancel()
 
 		ch.In <- msg
@@ -153,7 +166,7 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 				}
 			}
 		}
-		done:
+	done:
 
 		if err := <-pipeErr; err != nil {
 			reqid.Logger(r.Context()).Warn("pipeline error", "err", err)

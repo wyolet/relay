@@ -110,6 +110,19 @@ func main() {
 		}
 	}
 
+	// RELAY_RICH_PARSING: "on" (default) enables full body parse to ChatRequest.
+	// "off" reverts to minimal-parse (model/stream/user/raw only, metadata ignored).
+	// Any other value exits with a clear error.
+	switch rp := os.Getenv("RELAY_RICH_PARSING"); rp {
+	case "", "on":
+		apiopenai.SetRichParsing(true)
+	case "off":
+		apiopenai.SetRichParsing(false)
+	default:
+		slog.Error("RELAY_RICH_PARSING must be \"on\" or \"off\"", "got", rp)
+		os.Exit(1)
+	}
+
 	bootCtx := context.Background()
 
 	catalogBackend := os.Getenv("RELAY_CATALOG_BACKEND")
