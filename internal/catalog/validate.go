@@ -3,8 +3,20 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
+	"regexp"
+	"time"
 )
+
+// meterRE matches valid multi-rule meter strings.
+// Accepted forms: requests, concurrency, tokens, tokens.<suffix>
+var meterRE = regexp.MustCompile(`^(requests|concurrency|tokens|tokens\.[a-z][a-z0-9_]*)$`)
+
+// sourceRE matches the optional attribution source field.
+var sourceRE = regexp.MustCompile(`^attribution\.[a-z][a-z0-9_]*$`)
+
+const maxRateLimitWindow = 30 * 24 * time.Hour
 
 func validate(s *snapshot) error {
 	// An entirely empty catalog is valid — the relay starts without config and
@@ -178,11 +190,34 @@ func validateRateLimits(s *snapshot) error {
 		if rl.Spec.Window <= 0 {
 			return fmt.Errorf("RateLimit %q: window must be > 0", rl.Metadata.Name)
 		}
-		if rl.Spec.Amount <= 0 {
-			return fmt.Errorf("RateLimit %q: amount must be > 0", rl.Metadata.Name)
+		if rl.Spec.Window > maxRateLimitWindow {
+			return fmt.Errorf("RateLimit %q: window %v exceeds maximum of 30 days", rl.Metadata.Name, rl.Spec.Window)
 		}
-		if rl.Spec.Source != "" && rl.Spec.Source != SourceUserDefined && rl.Spec.Source != SourceSystemMirrored {
-			return fmt.Errorf("RateLimit %q: unsupported source %q", rl.Metadata.Name, rl.Spec.Source)
+		// Reject explicitly empty rules list (nil/omitted is fine — it falls back to legacy).
+		if rl.Spec.Rules != nil && len(rl.Spec.Rules) == 0 {
+			return fmt.Errorf("RateLimit %q: rules must be non-empty", rl.Metadata.Name)
+		}
+		rules := rl.Spec.NormalizedRules()
+		if len(rules) == 0 {
+			return fmt.Errorf("RateLimit %q: rules must be non-empty", rl.Metadata.Name)
+		}
+		meterSeen := make(map[string]int)
+		for i, r := range rules {
+			if !meterRE.MatchString(r.Meter) {
+				return fmt.Errorf("RateLimit %q rule[%d]: meter %q invalid (must match requests|concurrency|tokens|tokens.<suffix>)", rl.Metadata.Name, i, r.Meter)
+			}
+			if r.Amount <= 0 {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): amount must be > 0", rl.Metadata.Name, i, r.Meter)
+			}
+			if r.Source != "" && !sourceRE.MatchString(r.Source) {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): source %q must match attribution.<key>", rl.Metadata.Name, i, r.Meter, r.Source)
+			}
+			meterSeen[r.Meter]++
+		}
+		for m, cnt := range meterSeen {
+			if cnt > 1 {
+				slog.Warn("RateLimit has duplicate meter in rules", "name", rl.Metadata.Name, "meter", m, "count", cnt)
+			}
 		}
 	}
 
@@ -196,16 +231,10 @@ func validateRateLimits(s *snapshot) error {
 }
 
 func validateAttachments(s *snapshot) error {
-	validMeter := func(m Meter) bool {
-		return m == MeterRequests || m == MeterTokens || m == MeterConcurrency
-	}
 	checkAttachments := func(kind Kind, name string, attachments []RateLimitAttachment) error {
 		for _, a := range attachments {
 			if _, ok := s.rateLimits[a.Ref]; !ok {
 				return fmt.Errorf("%s %q: rateLimits ref %q does not exist", kind, name, a.Ref)
-			}
-			if !validMeter(a.Meter) {
-				return fmt.Errorf("%s %q: rateLimits meter %q invalid (must be requests|tokens|concurrency)", kind, name, a.Meter)
 			}
 		}
 		return nil
@@ -240,23 +269,27 @@ func validatePoolDefaultLimits(s *snapshot) error {
 		}
 		hasRequests := false
 		hasTokens := false
-		for _, a := range pool.Spec.RateLimits {
-			if a.Meter == MeterRequests {
-				hasRequests = true
-			}
-			if a.Meter == MeterTokens {
-				hasTokens = true
+
+		// Check effective rules via snapshot expansion.
+		checkRules := func(attachments []RateLimitAttachment) {
+			for _, a := range attachments {
+				rl, ok := s.rateLimits[a.Ref]
+				if !ok {
+					continue
+				}
+				for _, r := range rl.Spec.NormalizedRules() {
+					if r.Meter == string(MeterRequests) {
+						hasRequests = true
+					}
+					if r.Meter == string(MeterTokens) || (len(r.Meter) > len("tokens.") && r.Meter[:len("tokens.")] == "tokens.") {
+						hasTokens = true
+					}
+				}
 			}
 		}
+		checkRules(pool.Spec.RateLimits)
 		for _, sec := range s.secretsForPool(pool) {
-			for _, a := range sec.Spec.RateLimits {
-				if a.Meter == MeterRequests {
-					hasRequests = true
-				}
-				if a.Meter == MeterTokens {
-					hasTokens = true
-				}
-			}
+			checkRules(sec.Spec.RateLimits)
 		}
 		if !hasRequests || !hasTokens {
 			return fmt.Errorf("Pool %q: auth-required provider needs at least one requests and one tokens rate-limit attachment (set skipDefaultLimits: true to opt out)", pool.Metadata.Name)

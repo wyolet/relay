@@ -1,6 +1,10 @@
 package catalog
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 const APIVersion = "relay.wyolet.dev/v1"
 
@@ -154,11 +158,44 @@ type RateLimit struct {
 	Spec       RateLimitSpec `yaml:"spec"       json:"spec"`
 }
 
+// RateLimitRule is one meter/amount pair within a RateLimitSpec.
+type RateLimitRule struct {
+	Meter  string `yaml:"meter"            json:"meter"`
+	Amount int64  `yaml:"amount"           json:"amount"`
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+}
+
 type RateLimitSpec struct {
-	Strategy RateLimitStrategy `yaml:"strategy"        json:"strategy"`
-	Window   time.Duration     `yaml:"window"          json:"window"`
-	Amount   int64             `yaml:"amount"          json:"amount"`
-	Source   RateLimitSource   `yaml:"source,omitempty" json:"source,omitempty"`
+	Strategy RateLimitStrategy `yaml:"strategy" json:"strategy"`
+	Window   time.Duration     `yaml:"window"   json:"window"`
+
+	// Rules is the multi-rule list. If non-empty it is the canonical shape.
+	Rules []RateLimitRule `yaml:"rules,omitempty" json:"rules,omitempty"`
+
+	// Legacy single-rule fields. Still accepted on input; lifted into Rules
+	// by NormalizedRules(). Marshalled only when Rules is empty.
+	Amount int64           `yaml:"amount,omitempty" json:"amount,omitempty"`
+	Meter  string          `yaml:"meter,omitempty"  json:"meter,omitempty"`
+	Source RateLimitSource `yaml:"source,omitempty" json:"source,omitempty"`
+}
+
+// NormalizedRules returns the effective rule list for a spec.
+// If Rules is non-empty it is returned unchanged. Otherwise the legacy
+// Amount/Meter/Source fields are wrapped in a one-element list so all
+// downstream code paths are uniform. Read-only — never mutates the spec.
+func (s *RateLimitSpec) NormalizedRules() []RateLimitRule {
+	if len(s.Rules) > 0 {
+		return s.Rules
+	}
+	meter := s.Meter
+	if meter == "" {
+		meter = string(MeterRequests)
+	}
+	return []RateLimitRule{{
+		Meter:  meter,
+		Amount: s.Amount,
+		Source: string(s.Source),
+	}}
 }
 
 type RateLimitStrategy string
@@ -174,9 +211,65 @@ const (
 	SourceSystemMirrored RateLimitSource = "system_mirrored"
 )
 
+// RateLimitAttachment is a reference by name from a Pool/Secret/Model to a RateLimit.
+// It accepts two YAML/JSON shapes for backward compatibility:
+//
+//	New:    "my-rate-limit"                 (plain string)
+//	Legacy: {ref: "my-rate-limit", meter: "requests"}  (the meter field is now ignored)
 type RateLimitAttachment struct {
-	Ref   string `yaml:"ref"   json:"ref"`
-	Meter Meter  `yaml:"meter" json:"meter"`
+	Ref string // the RateLimit name
+}
+
+func (a RateLimitAttachment) MarshalJSON() ([]byte, error) {
+	return json.Marshal(a.Ref)
+}
+
+func (a *RateLimitAttachment) UnmarshalJSON(b []byte) error {
+	// Try plain string first.
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		a.Ref = s
+		return nil
+	}
+	// Fall back to legacy {ref, meter} object (meter is silently ignored).
+	var legacy struct {
+		Ref   string `json:"ref"`
+		Meter string `json:"meter"`
+	}
+	if err := json.Unmarshal(b, &legacy); err != nil {
+		return fmt.Errorf("RateLimitAttachment: expected string or {ref,meter} object: %w", err)
+	}
+	if legacy.Ref == "" {
+		return fmt.Errorf("RateLimitAttachment: ref must not be empty")
+	}
+	a.Ref = legacy.Ref
+	return nil
+}
+
+func (a RateLimitAttachment) MarshalYAML() (any, error) {
+	return a.Ref, nil
+}
+
+func (a *RateLimitAttachment) UnmarshalYAML(unmarshal func(any) error) error {
+	// Try plain string.
+	var s string
+	if err := unmarshal(&s); err == nil {
+		a.Ref = s
+		return nil
+	}
+	// Fall back to legacy {ref, meter} object.
+	var legacy struct {
+		Ref   string `yaml:"ref"`
+		Meter string `yaml:"meter"`
+	}
+	if err := unmarshal(&legacy); err != nil {
+		return fmt.Errorf("RateLimitAttachment: expected string or {ref, meter} mapping: %w", err)
+	}
+	if legacy.Ref == "" {
+		return fmt.Errorf("RateLimitAttachment: ref must not be empty")
+	}
+	a.Ref = legacy.Ref
+	return nil
 }
 
 type Meter string
@@ -187,9 +280,21 @@ const (
 	MeterConcurrency Meter = "concurrency"
 )
 
+// ResolvedRule is one concrete rule derived from attaching a RateLimit.
+// A single RateLimit with N rules produces N ResolvedRule entries.
 type ResolvedRule struct {
-	ParentKind Kind
-	ParentName string
-	Meter      Meter
-	RateLimit  *RateLimit
+	ParentKind    Kind
+	ParentName    string
+	RateLimitName string // name of the parent RateLimit object
+	Strategy      RateLimitStrategy
+	Window        time.Duration
+	Rule          RateLimitRule // the specific rule from the RateLimit
+
+	// RateLimit is kept for backward compat with code that still reads the
+	// full RateLimit object (keys.go, scripts.go). Updated by snapshot.go.
+	RateLimit *RateLimit
+
+	// Meter is the rule's meter as a catalog.Meter for legacy callers.
+	// Equal to Meter(Rule.Meter). Updated by snapshot.go.
+	Meter Meter
 }

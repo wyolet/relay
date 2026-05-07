@@ -190,9 +190,11 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	defer func() {
 		// Snapshot mutable state before the goroutine reads it.
 		res := reservation
-		// tokens.Sum() gives a backward-compatible total for the single-int Commit path.
-		// TODO(PR-2): pass per-meter typed observations instead of a sum.
-		tokenSum := tokens.Sum()
+		// Snapshot the typed token map for per-meter Commit.
+		tokSnap := make(usage.Tokens, len(tokens))
+		for k, v := range tokens {
+			tokSnap[k] = v
+		}
 		cancelled := ctx.Err() != nil
 		keyHash := successKeyHash
 		limiter := opts.Limiter
@@ -209,7 +211,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 			pfCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if limiter != nil && res != nil {
-				if err := limiter.Commit(pfCtx, res, ratelimit.Observations{Tokens: tokenSum, Cancelled: cancelled}); err != nil {
+				if err := limiter.Commit(pfCtx, res, ratelimit.Observations{Tokens: tokSnap, Cancelled: cancelled}); err != nil {
 					slog.Warn("limit.Commit failed (async)", "err", err)
 					metricPostFlightCommitErrors.Inc()
 				}
@@ -659,8 +661,12 @@ func sendPoolExhausted(out chan<- *transport.Message) {
 
 // send429LimitEnvelope emits an OpenAI-shaped 429 for a relay-side limit violation.
 func send429LimitEnvelope(out chan<- *transport.Message, exceeded *ratelimit.ExceededError) {
-	code := meterToCode(exceeded.Rule.Meter)
-	msg := "rate limit exceeded: " + string(exceeded.Rule.Meter)
+	meter := exceeded.Rule.Meter
+	if meter == "" {
+		meter = catalog.Meter(exceeded.Rule.Rule.Meter)
+	}
+	code := meterToCode(meter)
+	msg := "rate limit exceeded: " + string(meter)
 	headers := map[string]string{
 		"X-Relay-Status": "429",
 		"Content-Type":   "application/json",

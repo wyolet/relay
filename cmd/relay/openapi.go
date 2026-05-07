@@ -687,11 +687,11 @@ func registerTypedAttachmentOps(api huma.API, store *catalog.PGStore, adminAuth 
 		emit := func(kind, name string, rls []catalog.RateLimitAttachment) {
 			for _, a := range rls {
 				items = append(items, AttachmentResponse{
-					ID:            kind + ":" + name + ":" + a.Ref + ":" + string(a.Meter),
+					ID:            kind + ":" + name + ":" + a.Ref,
 					ParentKind:    kind,
 					ParentName:    name,
 					RatelimitName: a.Ref,
-					Meter:         string(a.Meter),
+					Meter:         "", // meter is now owned by the RateLimit rules, not the attachment
 				})
 			}
 		}

@@ -634,7 +634,7 @@ func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRu
 		if res != nil {
 			commitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			l.Commit(commitCtx, res, ratelimit.Observations{Tokens: amount})
+			l.Commit(commitCtx, res, ratelimit.Observations{Tokens: usage.Tokens{"tokens": amount}})
 		}
 	}
 	return rules, l, func() { st.Close() }

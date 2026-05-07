@@ -146,32 +146,36 @@ func (s *snapshot) secretsForPool(p *Pool) []*Secret {
 
 func (s *snapshot) rateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
 	var out []ResolvedRule
-	if secret != nil {
-		for _, a := range secret.Spec.RateLimits {
+
+	expand := func(parentKind Kind, parentName string, attachments []RateLimitAttachment) {
+		for _, a := range attachments {
 			rl, ok := s.rateLimits[a.Ref]
 			if !ok {
 				continue
 			}
-			out = append(out, ResolvedRule{ParentKind: KindSecret, ParentName: secret.Metadata.Name, Meter: a.Meter, RateLimit: rl})
+			for _, rule := range rl.Spec.NormalizedRules() {
+				out = append(out, ResolvedRule{
+					ParentKind:    parentKind,
+					ParentName:    parentName,
+					RateLimitName: rl.Metadata.Name,
+					Strategy:      rl.Spec.Strategy,
+					Window:        rl.Spec.Window,
+					Rule:          rule,
+					RateLimit:     rl,
+					Meter:         Meter(rule.Meter),
+				})
+			}
 		}
+	}
+
+	if secret != nil {
+		expand(KindSecret, secret.Metadata.Name, secret.Spec.RateLimits)
 	}
 	if pool != nil {
-		for _, a := range pool.Spec.RateLimits {
-			rl, ok := s.rateLimits[a.Ref]
-			if !ok {
-				continue
-			}
-			out = append(out, ResolvedRule{ParentKind: KindPool, ParentName: pool.Metadata.Name, Meter: a.Meter, RateLimit: rl})
-		}
+		expand(KindPool, pool.Metadata.Name, pool.Spec.RateLimits)
 	}
 	if model != nil {
-		for _, a := range model.Spec.RateLimits {
-			rl, ok := s.rateLimits[a.Ref]
-			if !ok {
-				continue
-			}
-			out = append(out, ResolvedRule{ParentKind: KindModel, ParentName: model.Metadata.Name, Meter: a.Meter, RateLimit: rl})
-		}
+		expand(KindModel, model.Metadata.Name, model.Spec.RateLimits)
 	}
 	return out
 }

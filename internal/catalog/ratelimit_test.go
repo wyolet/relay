@@ -113,17 +113,29 @@ spec:
 }
 
 func TestRateLimitAttachment_RefResolution(t *testing.T) {
+	// Test both new string form and legacy {ref,meter} form — both should parse.
 	t.Setenv("KEY", "val")
 	dir := t.TempDir()
 	writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
 apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
-  name: my-rl
+  name: req-rl
 spec:
   strategy: sliding-window
   window: 30s
+  meter: requests
   amount: 50
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: con-rl
+spec:
+  strategy: sliding-window
+  window: 30s
+  meter: concurrency
+  amount: 10
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: Secret
@@ -133,8 +145,7 @@ spec:
   provider: dev-ollama
   value: ""
   rateLimits:
-    - ref: my-rl
-      meter: requests
+    - req-rl
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: Pool
@@ -145,7 +156,7 @@ spec:
   secrets:
     - anon-sec
   rateLimits:
-    - ref: my-rl
+    - ref: req-rl
       meter: tokens
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -156,8 +167,7 @@ spec:
   provider: dev-ollama
   upstreamName: llama3
   rateLimits:
-    - ref: my-rl
-      meter: concurrency
+    - con-rl
 `)
 	_, err := LoadYAML(dir)
 	if err != nil {
@@ -186,6 +196,7 @@ spec:
 }
 
 func TestRateLimitAttachment_BadMeter(t *testing.T) {
+	// Bad meter now lives in the RateLimit spec itself, not in the attachment.
 	dir := t.TempDir()
 	writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
 apiVersion: relay.wyolet.dev/v1
@@ -195,7 +206,28 @@ metadata:
 spec:
   strategy: sliding-window
   window: 1m
+  meter: xyz
   amount: 100
+`)
+	_, err := LoadYAML(dir)
+	if err == nil || !strings.Contains(err.Error(), "meter") {
+		t.Fatalf("expected meter error, got: %v", err)
+	}
+}
+
+func TestRateLimitAttachment_LegacyShape_Accepted(t *testing.T) {
+	// Old {ref, meter} attachment shape still parses; meter on attachment is ignored.
+	dir := t.TempDir()
+	writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: my-rl
+spec:
+  strategy: sliding-window
+  window: 30s
+  meter: requests
+  amount: 50
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: Secret
@@ -206,11 +238,11 @@ spec:
   value: ""
   rateLimits:
     - ref: my-rl
-      meter: xyz
+      meter: requests
 `)
 	_, err := LoadYAML(dir)
-	if err == nil || !strings.Contains(err.Error(), "meter") {
-		t.Fatalf("expected meter error, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected legacy attachment to parse without error, got: %v", err)
 	}
 }
 
@@ -308,6 +340,7 @@ metadata:
 spec:
   strategy: sliding-window
   window: 1m
+  meter: requests
   amount: 1000
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -317,6 +350,7 @@ metadata:
 spec:
   strategy: sliding-window
   window: 1m
+  meter: tokens
   amount: 100000
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -328,8 +362,7 @@ spec:
   valueFrom:
     env: KEY
   rateLimits:
-    - ref: rpm-rl
-      meter: requests
+    - rpm-rl
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: Pool
@@ -349,8 +382,7 @@ spec:
   provider: openai-prod
   upstreamName: gpt-4o
   rateLimits:
-    - ref: tpm-rl
-      meter: tokens
+    - tpm-rl
 `)
 	s, err := LoadYAML(dir)
 	if err != nil {
@@ -382,6 +414,7 @@ metadata:
 spec:
   strategy: sliding-window
   window: 1m
+  meter: requests
   amount: 500
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -391,6 +424,7 @@ metadata:
 spec:
   strategy: sliding-window
   window: 1m
+  meter: tokens
   amount: 1000
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -400,6 +434,7 @@ metadata:
 spec:
   strategy: sliding-window
   window: 1m
+  meter: concurrency
   amount: 5000
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -411,8 +446,7 @@ spec:
   valueFrom:
     env: KEY
   rateLimits:
-    - ref: rl-a
-      meter: requests
+    - rl-a
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: Pool
@@ -423,8 +457,7 @@ spec:
   secrets:
     - my-key
   rateLimits:
-    - ref: rl-b
-      meter: tokens
+    - rl-b
   skipDefaultLimits: true
 ---
 apiVersion: relay.wyolet.dev/v1
@@ -435,8 +468,7 @@ spec:
   provider: openai-prod
   upstreamName: gpt-4o
   rateLimits:
-    - ref: rl-c
-      meter: concurrency
+    - rl-c
 `)
 	s, err := LoadYAML(dir)
 	if err != nil {
@@ -457,5 +489,165 @@ spec:
 	}
 	if rules[2].ParentKind != KindModel {
 		t.Errorf("third rule should be Model, got %v", rules[2].ParentKind)
+	}
+}
+
+// TestMultiRuleRateLimit_ParsesAndExpands verifies a multi-rule RateLimit produces
+// one ResolvedRule per rule when expanded via RateLimitsForRequest.
+func TestMultiRuleRateLimit_ParsesAndExpands(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: tier-1
+spec:
+  strategy: sliding-window
+  window: 1m
+  rules:
+    - meter: requests
+      amount: 5
+    - meter: tokens.input
+      amount: 200000
+    - meter: tokens.output
+      amount: 50000
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Pool
+metadata:
+  name: ollama-pool
+spec:
+  provider: dev-ollama
+  rateLimits:
+    - tier-1
+`)
+	s, err := LoadYAML(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pool, _ := s.PoolByName("ollama-pool")
+	rules := s.RateLimitsForRequest(nil, pool, nil, nil)
+	if len(rules) != 3 {
+		t.Fatalf("expected 3 resolved rules (one per Rule in tier-1), got %d", len(rules))
+	}
+	meters := make([]string, len(rules))
+	for i, r := range rules {
+		meters[i] = r.Rule.Meter
+	}
+	want := []string{"requests", "tokens.input", "tokens.output"}
+	for i, m := range want {
+		if meters[i] != m {
+			t.Errorf("rule[%d]: expected meter %q, got %q", i, m, meters[i])
+		}
+	}
+	// Verify amounts
+	if rules[0].Rule.Amount != 5 {
+		t.Errorf("rule[0] amount: expected 5, got %d", rules[0].Rule.Amount)
+	}
+	if rules[1].Rule.Amount != 200000 {
+		t.Errorf("rule[1] amount: expected 200000, got %d", rules[1].Rule.Amount)
+	}
+	if rules[2].Rule.Amount != 50000 {
+		t.Errorf("rule[2] amount: expected 50000, got %d", rules[2].Rule.Amount)
+	}
+	// Verify Window is propagated to each ResolvedRule
+	for i, r := range rules {
+		if r.Window != time.Minute {
+			t.Errorf("rule[%d]: expected window 1m, got %v", i, r.Window)
+		}
+	}
+}
+
+// TestNormalizedRules_LegacyLift verifies that the legacy single-field shape
+// is lifted transparently by NormalizedRules.
+func TestNormalizedRules_LegacyLift(t *testing.T) {
+	spec := RateLimitSpec{
+		Strategy: StrategySlidingWindow,
+		Window:   time.Minute,
+		Amount:   100,
+		Meter:    "tokens",
+	}
+	rules := spec.NormalizedRules()
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(rules))
+	}
+	if rules[0].Meter != "tokens" {
+		t.Errorf("expected meter tokens, got %q", rules[0].Meter)
+	}
+	if rules[0].Amount != 100 {
+		t.Errorf("expected amount 100, got %d", rules[0].Amount)
+	}
+}
+
+// TestNormalizedRules_DefaultMeter verifies that empty legacy Meter defaults to "requests".
+func TestNormalizedRules_DefaultMeter(t *testing.T) {
+	spec := RateLimitSpec{
+		Strategy: StrategySlidingWindow,
+		Window:   time.Minute,
+		Amount:   50,
+	}
+	rules := spec.NormalizedRules()
+	if len(rules) != 1 || rules[0].Meter != "requests" {
+		t.Fatalf("expected single requests rule, got %+v", rules)
+	}
+}
+
+// TestMultiRuleRateLimit_ValidationErrors verifies per-rule validation.
+func TestMultiRuleRateLimit_ValidationErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    string
+		wantErr string
+	}{
+		{
+			name: "invalid meter",
+			spec: `rules:
+    - meter: xyz
+      amount: 100`,
+			wantErr: "meter",
+		},
+		{
+			name: "zero amount in rule",
+			spec: `rules:
+    - meter: requests
+      amount: 0`,
+			wantErr: "amount must be > 0",
+		},
+		{
+			name: "bad source",
+			spec: `rules:
+    - meter: requests
+      amount: 10
+      source: not-attribution`,
+			wantErr: "source",
+		},
+		{
+			name:    "empty rules — must provide legacy fields",
+			spec:    `rules: []`,
+			wantErr: "rules must be non-empty",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: bad-rl
+spec:
+  strategy: sliding-window
+  window: 1m
+  `+tc.spec+`
+`)
+			_, err := LoadYAML(dir)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
+			}
+		})
 	}
 }

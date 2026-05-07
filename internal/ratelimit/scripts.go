@@ -101,8 +101,8 @@ for i, r in ipairs(rules) do
     end
     table.insert(inc_con, {con_key, ttl_ms})
 
-  elseif meter == "tokens" then
-    -- tokens: peek only at Reserve time; Commit will increment.
+  elseif meter == "tokens" or meter:sub(1, 7) == "tokens." then
+    -- tokens / tokens.X: peek only at Reserve time; Commit will increment.
     local cur_key  = KEYS[r.cur_key_idx]
     local prev_key = KEYS[r.prev_key_idx]
 
@@ -138,19 +138,19 @@ return cjson.encode({exceeded=false, token=tok})
 //   ARGV[2]     = guard_ttl_ms
 //   ARGV[3]     = n_con  (number of concurrency keys)
 //   ARGV[4]     = n_tok  (number of token rule keys)
-//   ARGV[5]     = actual_tokens (int64, 0 means skip token increment)
+//   ARGV[5]     = tok_amounts_json (JSON array of int64, one per token rule; cancelled = all zeros)
 //   ARGV[6]     = tok_ttl_ms (2*window of token rule, or 0 to skip)
 //
 // Returns "ok" or "noop" (duplicate).
 const commitLuaScript = `
 -- Commit: decrement concurrency + post-hoc token increment. Idempotent.
-local guard_key   = KEYS[1]
-local tok         = ARGV[1]
-local guard_ttl   = tonumber(ARGV[2])
-local n_con       = tonumber(ARGV[3])
-local n_tok       = tonumber(ARGV[4])
-local actual_tok  = tonumber(ARGV[5])
-local tok_ttl_ms  = tonumber(ARGV[6])
+local guard_key      = KEYS[1]
+local tok            = ARGV[1]
+local guard_ttl      = tonumber(ARGV[2])
+local n_con          = tonumber(ARGV[3])
+local n_tok          = tonumber(ARGV[4])
+local tok_amounts    = cjson.decode(ARGV[5])
+local tok_ttl_ms     = tonumber(ARGV[6])
 
 -- idempotency: if guard already set, this is a duplicate commit
 if redis.call('EXISTS', guard_key) == 1 then
@@ -162,11 +162,13 @@ for i = 2, 1 + n_con do
   redis.call('INCRBY', KEYS[i], -1)
 end
 
--- increment token buckets post-hoc (only if actual_tok > 0)
-if actual_tok > 0 then
-  for i = 2 + n_con, 1 + n_con + n_tok do
-    redis.call('INCRBY', KEYS[i], actual_tok)
-    redis.call('PEXPIRE', KEYS[i], tok_ttl_ms)
+-- increment token buckets post-hoc (per-rule amounts)
+for j = 1, n_tok do
+  local amount = tonumber(tok_amounts[j]) or 0
+  if amount > 0 then
+    local key_idx = 1 + n_con + j
+    redis.call('INCRBY', KEYS[key_idx], amount)
+    redis.call('PEXPIRE', KEYS[key_idx], tok_ttl_ms)
   end
 end
 
@@ -219,22 +221,42 @@ func buildReserveArgs(poolName string, rules []catalog.ResolvedRule, now time.Ti
 
 	ruleArgs = make([]ruleArg, 0, len(rules))
 	for _, rule := range rules {
-		w := rule.RateLimit.Spec.Window
+		w := rule.Window
+		if w == 0 && rule.RateLimit != nil {
+			w = rule.RateLimit.Spec.Window
+		}
 		cur, prev := windowBuckets(now, w)
+		rlName := rule.RateLimitName
+		if rlName == "" && rule.RateLimit != nil {
+			rlName = rule.RateLimit.Metadata.Name
+		}
+		meter := rule.Rule.Meter
+		if meter == "" {
+			meter = string(rule.Meter) // legacy fallback
+		}
+		amount := rule.Rule.Amount
+		if amount == 0 && rule.RateLimit != nil {
+			amount = rule.RateLimit.Spec.Amount // legacy fallback
+		}
 		ra := ruleArg{
-			Meter:      string(rule.Meter),
-			Amount:     rule.RateLimit.Spec.Amount,
+			Meter:      meter,
+			Amount:     amount,
 			WindowMs:   w.Milliseconds(),
 			ParentKind: string(rule.ParentKind),
 			ParentName: rule.ParentName,
-			RuleName:   rule.RateLimit.Metadata.Name,
+			RuleName:   rlName,
 		}
-		switch rule.Meter {
+		m := catalog.Meter(meter)
+		switch m {
 		case catalog.MeterRequests, catalog.MeterTokens:
 			ra.CurKeyIdx = addKey(bucketKey(poolName, rule, cur))
 			ra.PrevKeyIdx = addKey(bucketKey(poolName, rule, prev))
 		case catalog.MeterConcurrency:
 			ra.ConKeyIdx = addKey(concurrencyKey(poolName, rule))
+		default:
+			// tokens.X or other meters use bucket keys (same as tokens)
+			ra.CurKeyIdx = addKey(bucketKey(poolName, rule, cur))
+			ra.PrevKeyIdx = addKey(bucketKey(poolName, rule, prev))
 		}
 		ruleArgs = append(ruleArgs, ra)
 	}
@@ -371,7 +393,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 				}
 				incCon = append(incCon, incEntry{conKey})
 
-			case "tokens":
+			default: // tokens, tokens.*, and any other sliding-window meter
 				curKey := keys[r.CurKeyIdx-1]
 				prevKey := keys[r.PrevKeyIdx-1]
 
@@ -459,13 +481,18 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 	if err != nil {
 		return nil, fmt.Errorf("limit.commit: arg[3] n_tok: %w", err)
 	}
-	actualTok, err := toInt64(args[4])
-	if err != nil {
-		return nil, fmt.Errorf("limit.commit: arg[4] actual_tokens: %w", err)
+	tokAmountsJSON, ok2 := args[4].(string)
+	if !ok2 {
+		return nil, fmt.Errorf("limit.commit: arg[4] tok_amounts_json must be string")
 	}
 	tokTTLMs, err := toInt64(args[5])
 	if err != nil {
 		return nil, fmt.Errorf("limit.commit: arg[5] tok_ttl_ms: %w", err)
+	}
+
+	var tokAmounts []int64
+	if err := json.Unmarshal([]byte(tokAmountsJSON), &tokAmounts); err != nil {
+		return nil, fmt.Errorf("limit.commit: parse tok_amounts: %w", err)
 	}
 
 	guardKey := keys[0]
@@ -482,11 +509,16 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 		_, _ = store.Incr(ctx, keys[i], -1)
 	}
 
-	// Increment token buckets post-hoc.
-	if actualTok > 0 {
-		for i := int64(1) + nCon; i < int64(1)+nCon+nTok; i++ {
-			if _, err := store.Incr(ctx, keys[i], actualTok); err == nil && tokTTL > 0 {
-				_ = store.Expire(ctx, keys[i], tokTTL)
+	// Increment token buckets post-hoc (per-rule amounts).
+	for j := int64(0); j < nTok; j++ {
+		var amount int64
+		if int(j) < len(tokAmounts) {
+			amount = tokAmounts[j]
+		}
+		if amount > 0 {
+			keyIdx := 1 + nCon + j
+			if _, err := store.Incr(ctx, keys[keyIdx], amount); err == nil && tokTTL > 0 {
+				_ = store.Expire(ctx, keys[keyIdx], tokTTL)
 			}
 		}
 	}

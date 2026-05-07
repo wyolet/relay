@@ -7,6 +7,27 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 )
 
+// resolvedMeter returns the effective meter string for a ResolvedRule,
+// preferring the typed Rule.Meter over the legacy Meter field.
+func resolvedMeter(r catalog.ResolvedRule) string {
+	if r.Rule.Meter != "" {
+		return r.Rule.Meter
+	}
+	return string(r.Meter)
+}
+
+// resolvedRLName returns the effective RateLimit name for a ResolvedRule,
+// preferring RateLimitName over the legacy RateLimit.Metadata.Name.
+func resolvedRLName(r catalog.ResolvedRule) string {
+	if r.RateLimitName != "" {
+		return r.RateLimitName
+	}
+	if r.RateLimit != nil {
+		return r.RateLimit.Metadata.Name
+	}
+	return ""
+}
+
 // bucketKey returns the state key for a sliding-window bucket.
 // format: limit:{pool:<poolName>}:<parentKind>:<parentName>:<rlName>:<meter>:<bucketTS>
 // The {pool:<poolName>} hash tag pins all keys for a single request to the
@@ -15,8 +36,8 @@ func bucketKey(poolName string, r catalog.ResolvedRule, bucketTS time.Time) stri
 	return fmt.Sprintf("limit:{pool:%s}:%s:%s:%s:%s:%s",
 		poolName,
 		r.ParentKind, r.ParentName,
-		r.RateLimit.Metadata.Name,
-		r.Meter,
+		resolvedRLName(r),
+		resolvedMeter(r),
 		bucketTS.UTC().Format(time.RFC3339),
 	)
 }
@@ -27,8 +48,8 @@ func concurrencyKey(poolName string, r catalog.ResolvedRule) string {
 	return fmt.Sprintf("limit:{pool:%s}:%s:%s:%s:%s",
 		poolName,
 		r.ParentKind, r.ParentName,
-		r.RateLimit.Metadata.Name,
-		r.Meter,
+		resolvedRLName(r),
+		resolvedMeter(r),
 	)
 }
 

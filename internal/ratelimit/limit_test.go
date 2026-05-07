@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/usage"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -156,7 +157,7 @@ func TestTokens_PostHocOnly(t *testing.T) {
 
 	// Commit each with 20 tokens → total 100.
 	for i, res := range reservations {
-		if err := l.Commit(ctx, res, Observations{Tokens: 20}); err != nil {
+		if err := l.Commit(ctx, res, Observations{Tokens: usage.Tokens{"tokens": 20}}); err != nil {
 			t.Fatalf("commit %d: %v", i+1, err)
 		}
 	}
@@ -297,7 +298,7 @@ func TestIdempotentCommit(t *testing.T) {
 		t.Fatalf("reserve: %v", err)
 	}
 
-	obs := Observations{Tokens: 50}
+	obs := Observations{Tokens: usage.Tokens{"tokens": 50}}
 	if err := l.Commit(ctx, res, obs); err != nil {
 		t.Fatalf("commit 1: %v", err)
 	}
@@ -441,5 +442,145 @@ func TestReserve_ContextCancel(t *testing.T) {
 	}
 	if rem[catalog.MeterConcurrency] != 2 {
 		t.Fatalf("expected remaining=2, got %d", rem[catalog.MeterConcurrency])
+	}
+}
+
+// makeMultiRule builds a ResolvedRule using the new Rule field for multi-rule RateLimits.
+func makeMultiRule(parentName, rlName string, ruleMeter string, amount int64, window time.Duration) catalog.ResolvedRule {
+	return catalog.ResolvedRule{
+		ParentKind:    catalog.KindPool,
+		ParentName:    parentName,
+		RateLimitName: rlName,
+		Strategy:      catalog.StrategySlidingWindow,
+		Window:        window,
+		Rule: catalog.RateLimitRule{
+			Meter:  ruleMeter,
+			Amount: amount,
+		},
+		Meter: catalog.Meter(ruleMeter),
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: rlName},
+			Spec: catalog.RateLimitSpec{
+				Strategy: catalog.StrategySlidingWindow,
+				Window:   window,
+				Amount:   amount,
+			},
+		},
+	}
+}
+
+// TestMultiRule_AllGranted: all rules have headroom → reservation succeeds.
+func TestMultiRule_AllGranted(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+
+	rules := []catalog.ResolvedRule{
+		makeMultiRule("test-pool", "tier-1", "requests", 10, time.Minute),
+		makeMultiRule("test-pool", "tier-1", "tokens.input", 100000, time.Minute),
+		makeMultiRule("test-pool", "tier-1", "tokens.output", 50000, time.Minute),
+	}
+
+	res, err := l.Reserve(ctx, "test-pool", rules)
+	if err != nil {
+		t.Fatalf("expected reservation to succeed, got: %v", err)
+	}
+	if err := l.Commit(ctx, res, Observations{
+		Tokens: usage.Tokens{"input": 500, "output": 200},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+}
+
+// TestMultiRule_ViolatingRuleNamed: one exhausted rule → 429 names that rule.
+func TestMultiRule_ViolatingRuleNamed(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+
+	rules := []catalog.ResolvedRule{
+		makeMultiRule("test-pool", "tier-1", "requests", 1, time.Minute),
+		makeMultiRule("test-pool", "tier-1", "tokens.input", 100000, time.Minute),
+	}
+
+	// First reservation exhausts the requests budget.
+	res1, err := l.Reserve(ctx, "test-pool", rules)
+	if err != nil {
+		t.Fatalf("first reserve: %v", err)
+	}
+	_ = l.Commit(ctx, res1, Observations{Tokens: usage.Tokens{"input": 100}})
+
+	// Second should fail on requests.
+	_, err = l.Reserve(ctx, "test-pool", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected ErrExceeded, got: %v", err)
+	}
+	var ee *ExceededError
+	errors.As(err, &ee)
+	if ee.Rule.Rule.Meter != "requests" && string(ee.Rule.Meter) != "requests" {
+		t.Fatalf("expected requests meter violated, got meter=%q rule=%+v", ee.Rule.Rule.Meter, ee.Rule)
+	}
+}
+
+// TestMultiRule_PerMeterCommit: tokens.input/tokens.output incremented separately.
+func TestMultiRule_PerMeterCommit(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+
+	inputRule := makeMultiRule("test-pool", "tier-1", "tokens.input", 1000, time.Minute)
+	outputRule := makeMultiRule("test-pool", "tier-1", "tokens.output", 500, time.Minute)
+	rules := []catalog.ResolvedRule{inputRule, outputRule}
+
+	res, err := l.Reserve(ctx, "test-pool", rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	// Commit 900 input, 400 output.
+	if err := l.Commit(ctx, res, Observations{
+		Tokens: usage.Tokens{"input": 900, "output": 400},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// input: 1000-900=100 remaining; output: 500-400=100 remaining.
+	rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
+	if err != nil {
+		t.Fatalf("remaining: %v", err)
+	}
+	if rem["tokens.input"] != 100 {
+		t.Errorf("expected tokens.input remaining=100, got %d", rem["tokens.input"])
+	}
+	if rem["tokens.output"] != 100 {
+		t.Errorf("expected tokens.output remaining=100, got %d", rem["tokens.output"])
+	}
+}
+
+// TestMultiRule_BareTokensMeter: bare "tokens" meter sums all usage.Tokens values.
+func TestMultiRule_BareTokensMeter(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+
+	rule := makeMultiRule("test-pool", "tier-1", "tokens", 1000, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
+
+	res, err := l.Reserve(ctx, "test-pool", rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	// Sum = 300+200 = 500.
+	if err := l.Commit(ctx, res, Observations{
+		Tokens: usage.Tokens{"input": 300, "output": 200},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
+	if err != nil {
+		t.Fatalf("remaining: %v", err)
+	}
+	if rem[catalog.MeterTokens] != 500 {
+		t.Errorf("expected tokens remaining=500, got %d", rem[catalog.MeterTokens])
 	}
 }
