@@ -97,7 +97,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "5110:80"
+      - "5100:80"
     depends_on:
       - relay-a
       - relay-b
