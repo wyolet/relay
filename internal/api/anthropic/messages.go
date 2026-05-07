@@ -42,6 +42,11 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			}
 		}()
 
+		// Capture passthrough auth and extra headers before StripInbound removes them.
+		// These are forwarded verbatim to upstream when pool.passthrough=true.
+		inboundAuth := r.Header.Get("Authorization")
+		inboundPassthroughHeaders := capturePassthroughHeaders(r.Header)
+
 		httpheader.StripInbound(r.Header)
 
 		body, err := io.ReadAll(r.Body)
@@ -99,6 +104,13 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			}
 			return
 		}
+
+		// Stamp passthrough auth on the plan so the pipeline closure can use it.
+		if plan.Passthrough {
+			plan.PassthroughAuth = inboundAuth
+			plan.PassthroughHeaders = inboundPassthroughHeaders
+		}
+		plan.RawQuery = r.URL.RawQuery
 
 		// Build attribution: header wins over body metadata.
 		var attribution map[string]string
@@ -204,6 +216,18 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			reqid.Logger(r.Context()).Warn("pipeline error", "err", pr.err)
 		}
 	}
+}
+
+// capturePassthroughHeaders returns a copy of the headers that are in
+// OutboundPassthroughExtra, for forwarding on passthrough pool requests.
+func capturePassthroughHeaders(h http.Header) map[string]string {
+	out := make(map[string]string)
+	for name, vals := range h {
+		if httpheader.Match(name, httpheader.OutboundPassthroughExtra) && len(vals) > 0 {
+			out[name] = vals[0]
+		}
+	}
+	return out
 }
 
 // writeAnthropicError writes an Anthropic-shaped error response.

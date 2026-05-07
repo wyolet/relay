@@ -50,9 +50,14 @@ var InboundAllowlist = []string{
 	"User-Agent",
 	"X-Request-ID",
 	"X-Relay-Metadata",
+	"X-Relay-API-Key",
 	"Authorization",
 	"Anthropic-Version",
 	"Anthropic-Beta",
+	"Anthropic-Dangerous-Direct-Browser-Access",
+	"X-App",
+	"X-Claude-Code-Session-Id",
+	"X-Stainless-*",
 }
 
 // OutboundAllowlist is the set of headers forwarded on upstream requests.
@@ -70,6 +75,16 @@ var OutboundAllowlist = []string{
 	"OpenAI-Beta",
 	"Anthropic-Version",
 	"Anthropic-Beta",
+}
+
+// OutboundPassthroughExtra is appended to OutboundAllowlist for passthrough pools.
+// These headers are forwarded verbatim from the client — they carry client identity
+// signals that upstream providers (e.g. Anthropic) inspect.
+var OutboundPassthroughExtra = []string{
+	"Anthropic-Dangerous-Direct-Browser-Access",
+	"X-App",
+	"X-Claude-Code-Session-Id",
+	"X-Stainless-*",
 }
 
 // StripInbound removes every header from h that is not in InboundAllowlist.

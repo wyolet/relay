@@ -60,11 +60,15 @@ func Middleware(keys [][]byte) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var token string
 
-			// Accept both "Authorization: Bearer <token>" (OpenAI convention) and
-			// "x-api-key: <token>" (Anthropic convention) so that Anthropic-SDK
-			// clients (e.g. Claude Code with ANTHROPIC_BASE_URL) can reach Relay
-			// without reconfiguring their auth header.
-			if raw := r.Header.Get("Authorization"); raw != "" {
+			// Header priority:
+			//  1. X-Relay-API-Key — lets clients that use Authorization for their
+			//     own upstream auth (e.g. Claude Code OAuth Bearer) send the Relay
+			//     customer key out-of-band.
+			//  2. Authorization: Bearer <token> — OpenAI SDK convention.
+			//  3. x-api-key — Anthropic SDK convention.
+			if xrk := r.Header.Get("X-Relay-API-Key"); xrk != "" {
+				token = xrk
+			} else if raw := r.Header.Get("Authorization"); raw != "" {
 				if !strings.HasPrefix(raw, "Bearer ") {
 					reject(w, ReasonInvalid)
 					return

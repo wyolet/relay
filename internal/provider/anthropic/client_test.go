@@ -262,3 +262,54 @@ func TestMessages_ContextCancel(t *testing.T) {
 		t.Errorf("last message X-Relay-Final = %q; want true", last.Headers["X-Relay-Final"])
 	}
 }
+
+// TestMessages_PassthroughAuth verifies that a secret starting with "Bearer "
+// is forwarded as Authorization rather than x-api-key, and that RequestExtras
+// headers and query string are forwarded verbatim.
+func TestMessages_PassthroughAuth(t *testing.T) {
+	var (
+		capturedAuth      string
+		capturedXApp      string
+		capturedStainless string
+		capturedQuery     string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedAuth = r.Header.Get("Authorization")
+		capturedXApp = r.Header.Get("X-App")
+		capturedStainless = r.Header.Get("X-Stainless-Lang")
+		capturedQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	ctx := WithRequestExtras(context.Background(), RequestExtras{
+		RawQuery: "beta=true",
+		ExtraHeaders: map[string]string{
+			"X-App":            "cli",
+			"X-Stainless-Lang": "go",
+		},
+	})
+
+	out := make(chan *transport.Message, 64)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.Messages(ctx, []byte(`{}`), "Bearer sk-ant-oauth-token", out)
+	}()
+	for range out {
+	}
+	<-errCh
+
+	if capturedAuth != "Bearer sk-ant-oauth-token" {
+		t.Errorf("Authorization = %q; want Bearer sk-ant-oauth-token", capturedAuth)
+	}
+	if capturedXApp != "cli" {
+		t.Errorf("X-App = %q; want cli", capturedXApp)
+	}
+	if capturedStainless != "go" {
+		t.Errorf("X-Stainless-Lang = %q; want go", capturedStainless)
+	}
+	if capturedQuery != "beta=true" {
+		t.Errorf("RawQuery = %q; want beta=true", capturedQuery)
+	}
+}

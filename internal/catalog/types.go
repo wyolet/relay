@@ -93,6 +93,10 @@ type PoolSpec struct {
 	SecretSelector    map[string]string     `yaml:"secretSelector,omitempty" json:"secretSelector,omitempty"`
 	RateLimits        []RateLimitAttachment `yaml:"rateLimits,omitempty"  json:"rateLimits,omitempty"`
 	SkipDefaultLimits bool                  `yaml:"skipDefaultLimits,omitempty" json:"skipDefaultLimits,omitempty"`
+	// Passthrough, when true, means the pool has no relay-managed keys.
+	// The inbound Authorization header is forwarded verbatim to upstream.
+	// Secrets and SecretSelector must be empty.
+	Passthrough bool `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
 }
 
 type Model struct {

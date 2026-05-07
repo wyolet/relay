@@ -2,6 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"strconv"
@@ -10,11 +12,11 @@ import (
 
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/keypool"
-	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/internal/provider"
+	"github.com/wyolet/relay/internal/ratelimit"
+	"github.com/wyolet/relay/internal/usage"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/internal/usage"
 )
 
 // postFlightHook is called synchronously at the end of every async post-flight
@@ -77,6 +79,13 @@ type RunOptions struct {
 	// Nil means "no extraction" (legacy / providers without usage blocks).
 	// PR 2 will change Commit to pass per-meter typed observations.
 	TokenExtractor func(chunk []byte) usage.Tokens
+
+	// PassthroughAuth, when non-empty, enables passthrough mode: the pipeline
+	// skips key selection and passes this value (the inbound Authorization
+	// header) directly to the upstream call. sha256[:12] of the value is used
+	// as the key_hash metric label so the same credential gets consistent
+	// attribution. The raw value is never logged.
+	PassthroughAuth string
 
 	// InboundAdapter and UpstreamAdapter enable cross-shape transform.
 	// If both are non-nil and their names differ, the pipeline transforms the
@@ -258,16 +267,39 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 
 	preUpstreamStart := time.Now()
 
+	// Passthrough mode: synthesize a pseudo-secret from the inbound auth value.
+	// The resolved value is forwarded verbatim; sha256[:12] is the metric key_hash.
+	// Key selection and pool circuit breakers are bypassed entirely.
+	var passthroughKey *catalog.Secret
+	if opts.PassthroughAuth != "" {
+		sum := sha256.Sum256([]byte(opts.PassthroughAuth))
+		keyHash := hex.EncodeToString(sum[:6]) // 12 hex chars
+		passthroughKey = &catalog.Secret{
+			Metadata: catalog.Metadata{Name: "passthrough"},
+			Resolved: opts.PassthroughAuth,
+			KeyHash:  keyHash,
+		}
+	}
+
 	log := reqid.Logger(ctx)
 	attempt := 0
 	sameKeyAttempt := 0
+	// In passthrough mode chosenKey is pre-set and never replaced by Pick.
 	var chosenKey *catalog.Secret
+	if passthroughKey != nil {
+		chosenKey = passthroughKey
+	}
 	lastFailureKind := keypool.FailureKind(-1)
 	var maxRetryAfter time.Duration
 	var outboundPanicked atomic.Bool
 
 	for attempt < maxAttempts {
 		attempt++
+
+		// In passthrough mode the key never changes; restore if nil'd by a prior attempt.
+		if chosenKey == nil && passthroughKey != nil {
+			chosenKey = passthroughKey
+		}
 
 		// Pick a key if we don't have one.
 		if chosenKey == nil {

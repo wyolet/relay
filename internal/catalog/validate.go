@@ -107,6 +107,12 @@ func validatePools(s *snapshot) error {
 				return fmt.Errorf("Pool %q: secret %q belongs to provider %q, not %q", pool.Metadata.Name, secName, sec.Spec.Provider, pool.Spec.Provider)
 			}
 		}
+		if pool.Spec.Passthrough {
+			if len(pool.Spec.Secrets) > 0 || len(pool.Spec.SecretSelector) > 0 {
+				return fmt.Errorf("Pool %q: passthrough pool must not specify secrets or secretSelector", pool.Metadata.Name)
+			}
+			continue
+		}
 		effective := s.secretsForPool(pool)
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
 		if authRequired && len(effective) == 0 {
@@ -363,7 +369,7 @@ func validatePoolDefaultLimits(s *snapshot) error {
 			continue
 		}
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
-		if !authRequired || pool.Spec.SkipDefaultLimits {
+		if !authRequired || pool.Spec.SkipDefaultLimits || pool.Spec.Passthrough {
 			continue
 		}
 		hasRequests := false

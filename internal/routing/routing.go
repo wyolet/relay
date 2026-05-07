@@ -23,6 +23,17 @@ type RequestPlan struct {
 	Pool     *catalog.Pool
 	Secrets  []*catalog.Secret
 	Rules    []catalog.ResolvedRule
+	// Passthrough is true when Pool.Spec.Passthrough is set. The pipeline
+	// skips key selection and forwards the inbound Authorization header as-is.
+	Passthrough bool
+	// PassthroughAuth is the inbound Authorization header value to forward.
+	// Set by the HTTP handler when Passthrough is true.
+	PassthroughAuth string
+	// PassthroughHeaders are additional inbound headers to forward for passthrough pools.
+	// Set by the HTTP handler from the subset of inbound headers in OutboundPassthroughExtra.
+	PassthroughHeaders map[string]string
+	// RawQuery is the inbound request query string, forwarded to upstream.
+	RawQuery string
 }
 
 // Catalog is the narrow read-only view that the resolver needs from the catalog.
@@ -127,7 +138,11 @@ func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
 			return nil, ErrUnknownPool
 		}
 		plan.Pool = pool
-		plan.Secrets = res.catalog.SecretsForPool(pool)
+		if pool.Spec.Passthrough {
+			plan.Passthrough = true
+		} else {
+			plan.Secrets = res.catalog.SecretsForPool(pool)
+		}
 		plan.Rules = res.catalog.RateLimitsForRequest(p, pool, m, nil)
 	}
 	return plan, nil

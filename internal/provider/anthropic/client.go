@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/internal/provider"
@@ -16,6 +17,23 @@ import (
 
 const defaultBaseURL = "https://api.anthropic.com"
 const anthropicVersion = "2023-06-01"
+
+type ctxKey struct{}
+
+// RequestExtras carries per-request overrides that the caller injects via context.
+// Used by the passthrough path to forward extra headers and preserve the inbound
+// query string without widening the MessagesOutbound interface.
+type RequestExtras struct {
+	// ExtraHeaders are set on the outbound request in addition to the defaults.
+	ExtraHeaders map[string]string
+	// RawQuery is appended to the upstream URL as-is.
+	RawQuery string
+}
+
+// WithRequestExtras returns a new context carrying extras for the next Messages call.
+func WithRequestExtras(ctx context.Context, e RequestExtras) context.Context {
+	return context.WithValue(ctx, ctxKey{}, e)
+}
 
 // Client is an Anthropic provider client. It satisfies provider.MessagesOutbound.
 type Client struct {
@@ -48,15 +66,30 @@ func (c *Client) Messages(ctx context.Context, body []byte, secret string, out c
 		provider.MetricUpstreamDuration.WithLabelValues("anthropic", provider.StatusClass(statusCode)).Observe(time.Since(start).Seconds())
 	}()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/messages", bytes.NewReader(body))
+	upstreamURL := c.baseURL + "/v1/messages"
+	var extras RequestExtras
+	if v, ok := ctx.Value(ctxKey{}).(RequestExtras); ok {
+		extras = v
+	}
+	if extras.RawQuery != "" {
+		upstreamURL += "?" + extras.RawQuery
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		out <- errorMessage(err)
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", anthropicVersion)
-	if secret != "" {
+	if strings.HasPrefix(secret, "Bearer ") {
+		// Passthrough mode: forward the inbound Authorization header verbatim.
+		req.Header.Set("Authorization", secret)
+	} else if secret != "" {
 		req.Header.Set("x-api-key", secret)
+	}
+	for k, v := range extras.ExtraHeaders {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.http.Do(req)

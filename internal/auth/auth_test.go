@@ -141,6 +141,51 @@ func TestMiddlewareMultiKeyNoneMatch(t *testing.T) {
 	}
 }
 
+// TestMiddlewareXRelayAPIKey verifies that X-Relay-API-Key is accepted and
+// takes priority over Authorization and x-api-key.
+func TestMiddlewareXRelayAPIKey(t *testing.T) {
+	key := []byte("relay-customer-key")
+	mw := Middleware([][]byte{key})
+	handler := mw(http.HandlerFunc(ok200))
+
+	// Plain X-Relay-API-Key passes.
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("X-Relay-API-Key", "relay-customer-key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("X-Relay-API-Key: got %d want 200", rec.Code)
+	}
+
+	// X-Relay-API-Key wins over Authorization (different key in Authorization is ignored).
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req2.Header.Set("X-Relay-API-Key", "relay-customer-key")
+	req2.Header.Set("Authorization", "Bearer wrong-key")
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("X-Relay-API-Key priority: got %d want 200", rec2.Code)
+	}
+
+	// Wrong X-Relay-API-Key is rejected.
+	req3 := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req3.Header.Set("X-Relay-API-Key", "wrong-key")
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+	if rec3.Code != 401 {
+		t.Fatalf("wrong X-Relay-API-Key: got %d want 401", rec3.Code)
+	}
+
+	// x-api-key still accepted as fallback.
+	req4 := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req4.Header.Set("x-api-key", "relay-customer-key")
+	rec4 := httptest.NewRecorder()
+	handler.ServeHTTP(rec4, req4)
+	if rec4.Code != 200 {
+		t.Fatalf("x-api-key fallback: got %d want 200", rec4.Code)
+	}
+}
+
 func TestParseKeys(t *testing.T) {
 	cases := []struct {
 		name  string

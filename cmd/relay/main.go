@@ -375,19 +375,27 @@ func main() {
 		if err != nil {
 			return pipeline.RunResult{}, err
 		}
+		// Inject per-request extras (query string, passthrough headers) via context.
+		if plan.RawQuery != "" || len(plan.PassthroughHeaders) > 0 {
+			ctx = provideranthropicpkg.WithRequestExtras(ctx, provideranthropicpkg.RequestExtras{
+				RawQuery:     plan.RawQuery,
+				ExtraHeaders: plan.PassthroughHeaders,
+			})
+		}
 		doUpstream := mob.Messages
-		if plan.Pool != nil && len(plan.Secrets) > 0 {
+		if plan.Pool != nil && (len(plan.Secrets) > 0 || plan.Passthrough) {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
-				Provider:       plan.Provider,
-				Pool:           plan.Pool,
-				Model:          plan.Model,
-				Secrets:        plan.Secrets,
-				Selector:       sel,
-				DoUpstream:     doUpstream,
-				Limiter:        limiter,
-				Rules:          plan.Rules,
-				TokenExtractor: apianthropic.ExtractTokens,
-				CatalogStore:   catalogStore,
+				Provider:        plan.Provider,
+				Pool:            plan.Pool,
+				Model:           plan.Model,
+				Secrets:         plan.Secrets,
+				Selector:        sel,
+				DoUpstream:      doUpstream,
+				Limiter:         limiter,
+				Rules:           plan.Rules,
+				TokenExtractor:  apianthropic.ExtractTokens,
+				CatalogStore:    catalogStore,
+				PassthroughAuth: plan.PassthroughAuth,
 			})
 		}
 		emptySecret := &catalog.Secret{

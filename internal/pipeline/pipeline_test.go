@@ -1279,3 +1279,46 @@ func TestLifecycle_PanicInProvider(t *testing.T) {
 		t.Errorf("terminated_by want relay_error, got %v", evs[0]["terminated_by"])
 	}
 }
+
+// TestRun_PassthroughAuth verifies that the passthrough path bypasses key
+// selection and forwards the inbound auth value verbatim to the upstream call.
+func TestRun_PassthroughAuth(t *testing.T) {
+	const inboundAuth = "Bearer sk-ant-oauth-token-abc123"
+
+	var capturedSecret string
+	ob := &fakeOutbound{handle: func(_ int, secret string, out chan<- *transport.Message) {
+		capturedSecret = secret
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
+		out <- &transport.Message{Body: []byte(`{}`)}
+	}}
+
+	st := kv.NewMem()
+	defer st.Close()
+	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	ch.In <- &transport.Message{ID: "test", Body: []byte(`{}`)}
+	close(ch.In)
+
+	opts := RunOptions{
+		Pool: &catalog.Pool{
+			Metadata: catalog.Metadata{Name: "pt-pool"},
+			Spec:     catalog.PoolSpec{Passthrough: true},
+		},
+		Selector:        sel,
+		Outbound:        ob,
+		PassthroughAuth: inboundAuth,
+		MaxAttempts:     1,
+	}
+
+	_, err := Run(ctx, ch, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	collectOut(ch)
+
+	if capturedSecret != inboundAuth {
+		t.Errorf("secret forwarded = %q; want %q", capturedSecret, inboundAuth)
+	}
+}
