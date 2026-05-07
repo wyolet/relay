@@ -4,7 +4,8 @@ package anthropic
 // (AnthropicConfig.transform_request / transform_response)
 
 import (
-	"github.com/wyolet/relay/internal/api"
+	"fmt"
+
 	"github.com/wyolet/relay/internal/api/openai"
 )
 
@@ -17,18 +18,26 @@ func (AnthropicAdapter) ParseRequest(body []byte) (any, error) {
 	return Parse(body)
 }
 
-func (AnthropicAdapter) ToOpenAI(_ any) (*openai.FullChatRequest, error) {
-	return nil, api.ErrNotImplemented
+func (AnthropicAdapter) ToOpenAI(v any) (*openai.FullChatRequest, error) {
+	r, ok := v.(*MessagesRequest)
+	if !ok {
+		return nil, fmt.Errorf("anthropic: ToOpenAI: expected *MessagesRequest, got %T", v)
+	}
+	return ToOpenAI(r)
 }
 
-func (AnthropicAdapter) FromOpenAI(_ *openai.FullChatRequest) (any, error) {
-	return nil, api.ErrNotImplemented
+func (AnthropicAdapter) FromOpenAI(r *openai.FullChatRequest) (any, error) {
+	return FromOpenAI(r)
 }
 
-func (AnthropicAdapter) ToOpenAIResponse(_ any) (*openai.ChatResponse, error) {
-	return nil, api.ErrNotImplemented
+func (AnthropicAdapter) ToOpenAIResponse(v any) (*openai.ChatResponse, error) {
+	r, ok := v.(*MessagesResponse)
+	if !ok {
+		return nil, fmt.Errorf("anthropic: ToOpenAIResponse: expected *MessagesResponse, got %T", v)
+	}
+	return ToOpenAIResponse(r)
 }
 
-func (AnthropicAdapter) FromOpenAIResponse(_ *openai.ChatResponse) (any, error) {
-	return nil, api.ErrNotImplemented
+func (AnthropicAdapter) FromOpenAIResponse(r *openai.ChatResponse) (any, error) {
+	return FromOpenAIResponse(r)
 }
