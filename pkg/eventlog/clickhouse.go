@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     relay_version     LowCardinality(String),
     started_at        DateTime64(9, 'UTC') CODEC(DoubleDelta),
     ended_at          DateTime64(9, 'UTC') CODEC(DoubleDelta),
-    cost              Decimal(18, 8),
+    cost              Float64,
     currency          LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(started_at)
@@ -189,6 +189,7 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	// Check columns via DESCRIBE TABLE. If table does not exist, CREATE will handle it.
 	type colRow struct {
 		Name string `ch:"name"`
+		Type string `ch:"type"`
 	}
 	var rows []colRow
 	descErr := conn.Select(ctx, &rows, "DESCRIBE TABLE relay.usage_events")
@@ -201,6 +202,7 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	hasTokensMap := false
 	hasLegacy := false
 	hasCost := false
+	costIsDecimal := false
 	hasCurrency := false
 	for _, row := range rows {
 		switch row.Name {
@@ -210,12 +212,16 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 			hasLegacy = true
 		case "cost":
 			hasCost = true
+			// Legacy schema used Decimal(18,8); current schema uses Float64.
+			if row.Type != "Float64" {
+				costIsDecimal = true
+			}
 		case "currency":
 			hasCurrency = true
 		}
 	}
 
-	if !hasTokensMap || hasLegacy || !hasCost || !hasCurrency {
+	if !hasTokensMap || hasLegacy || !hasCost || !hasCurrency || costIsDecimal {
 		// Schema is incompatible — drop and recreate.
 		slog.Default().Warn("eventlog: usage_events schema incompatible, dropping and recreating table")
 		if err := conn.Exec(ctx, "DROP TABLE IF EXISTS relay.usage_events"); err != nil {
