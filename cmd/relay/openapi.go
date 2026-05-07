@@ -486,6 +486,22 @@ func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, name stri
 	}
 }
 
+// secretPatch builds a catalog.Patch for pre-commit snapshot validation of a
+// secret write. The patch uses only the fields the validator checks (provider
+// name); the actual stored value is irrelevant for cross-reference validation.
+func secretPatch(inp SecretWriteBody) catalog.Patch {
+	provider := inp.Provider
+	if provider == "" {
+		provider = "default"
+	}
+	return catalog.Patch{
+		UpsertSecret: &catalog.Secret{
+			Metadata: catalog.Metadata{Name: inp.Name},
+			Spec:     catalog.SecretSpec{Provider: provider},
+		},
+	}
+}
+
 func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Deps, kvStore kv.Store, adminAuth huma.Middlewares) {
 	// List
 	huma.Register(api, huma.Operation{
@@ -542,13 +558,17 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		if inp.ValueFrom.Kind == "stored" && !store.HasMasterKey() {
 			return nil, huma.NewError(http.StatusBadRequest, "stored-mode secret requires RELAY_MASTER_KEY to be set")
 		}
+		if verr := deps.Patcher.ValidateWithPatch(secretPatch(inp)); verr != nil {
+			return nil, huma.NewError(http.StatusBadRequest, verr.Error())
+		}
 		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
 			return applySecretWriteToTx(ctx, store, inp.Name, inp)
 		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())
+			slog.WarnContext(ctx, "admin: reload failed after secret create; snapshot may be stale",
+				"name", inp.Name, "err", err)
 		}
 		sec, ok := store.SecretByName(inp.Name)
 		if !ok {
@@ -578,13 +598,17 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		if inp.ValueFrom.Kind == "stored" && !store.HasMasterKey() {
 			return nil, huma.NewError(http.StatusBadRequest, "stored-mode secret requires RELAY_MASTER_KEY to be set")
 		}
+		if verr := deps.Patcher.ValidateWithPatch(secretPatch(inp)); verr != nil {
+			return nil, huma.NewError(http.StatusBadRequest, verr.Error())
+		}
 		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
 			return applySecretWriteToTx(ctx, store, in.Name, inp)
 		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())
+			slog.WarnContext(ctx, "admin: reload failed after secret update; snapshot may be stale",
+				"name", in.Name, "err", err)
 		}
 		sec, ok := store.SecretByName(in.Name)
 		if !ok {
@@ -618,7 +642,8 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())
+			slog.WarnContext(ctx, "admin: reload failed after secret delete; snapshot may be stale",
+				"name", in.Name, "err", err)
 		}
 		// Best-effort: delete the orphaned circuit-breaker key from Redis (R-8).
 		// The catalog write already succeeded; a Redis error is non-fatal.

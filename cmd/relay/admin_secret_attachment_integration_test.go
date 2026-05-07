@@ -538,3 +538,50 @@ func TestAdminSecret_OpenAPISchema_NoCleartextField(t *testing.T) {
 		}
 	}
 }
+
+// TestAdminSecret_InvalidProvider_Rejected verifies that POSTing a secret with
+// an unknown provider is rejected with 400 before any row is written to PG.
+// This covers the bug where ValidateWithPatch ran only on Reload (post-commit),
+// allowing an invalid row to poison subsequent catalog reloads cluster-wide.
+func TestAdminSecret_InvalidProvider_Rejected(t *testing.T) {
+	t.Setenv("RELAY_TEST_INVALID", "somevalue")
+
+	srv, _, st := buildSecretTestServer(t, false)
+	ctx := context.Background()
+
+	cases := []struct {
+		name     string
+		provider string
+	}{
+		{"empty provider defaults to 'default' which is unknown", ""},
+		{"explicitly nonexistent provider", "nonexistent-provider-xyz"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{
+				"name":     "bad-secret",
+				"provider": tc.provider,
+				"valueFrom": map[string]any{
+					"kind": "env",
+					"env":  "RELAY_TEST_INVALID",
+				},
+			}
+
+			resp := adminReq(t, srv, http.MethodPost, "/admin/secrets", body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("want 400, got %d", resp.StatusCode)
+			}
+
+			// No row must have been written to PG.
+			count, err := storagemod.CountSecrets(ctx, st, "bad-secret")
+			if err != nil {
+				t.Fatalf("CountSecrets: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("want 0 PG rows for rejected secret, got %d", count)
+			}
+		})
+	}
+}

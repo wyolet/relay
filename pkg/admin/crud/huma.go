@@ -138,10 +138,8 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
-			deps.Logger.ErrorContext(ctx, "admin: reload failed after create; snapshot may be stale",
+			deps.Logger.WarnContext(ctx, "admin: reload failed after create; snapshot may be stale",
 				"kind", k.Name, "name", k.ResourceID(v), "err", err)
-			return nil, humaError(http.StatusInternalServerError,
-				"mutation committed but reload failed: "+err.Error())
 		}
 		name := k.ResourceID(v)
 		emitAuditCtx(deps.Logger, ctx, k.Name, name, "create", "")
@@ -183,10 +181,8 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
-			deps.Logger.ErrorContext(ctx, "admin: reload failed after update; snapshot may be stale",
+			deps.Logger.WarnContext(ctx, "admin: reload failed after update; snapshot may be stale",
 				"kind", k.Name, "name", in.Name, "err", err)
-			return nil, humaError(http.StatusInternalServerError,
-				"mutation committed but reload failed: "+err.Error())
 		}
 		diff := ""
 		if k.Summarize != nil {
@@ -223,10 +219,8 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
-			deps.Logger.ErrorContext(ctx, "admin: reload failed after delete; snapshot may be stale",
+			deps.Logger.WarnContext(ctx, "admin: reload failed after delete; snapshot may be stale",
 				"kind", k.Name, "name", in.Name, "err", err)
-			return nil, humaError(http.StatusInternalServerError,
-				"mutation committed but reload failed: "+err.Error())
 		}
 		emitAuditCtx(deps.Logger, ctx, k.Name, in.Name, "delete", "")
 		return nil, nil
