@@ -122,6 +122,9 @@ func main() {
 		case "master-key":
 			runMasterKey(os.Args[2:])
 			return
+		case "import":
+			runImport(os.Args[2:])
+			return
 		}
 	}
 

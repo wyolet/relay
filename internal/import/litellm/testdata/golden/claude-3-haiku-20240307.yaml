@@ -1,0 +1,36 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: claude-3-haiku-20240307
+    labels:
+        family: claude
+        source: litellm
+        source_version: test-version
+spec:
+    provider: anthropic
+    upstreamName: claude-3-haiku-20240307
+    family: claude
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+        vision: true
+        promptCache: true
+    modalities:
+        input:
+            - text
+            - image
+        output:
+            - text
+    contextWindowInput: 200000
+    contextWindowOutput: 4096
+    contextWindowTotal: 200000
+    pricing:
+        currency: USD
+        unit: per_million
+        rates:
+            tokens.input: 0.25
+            tokens.output: 1.25
+    deprecation:
+        status: sunset
+        sunsetDate: "2025-06-01"

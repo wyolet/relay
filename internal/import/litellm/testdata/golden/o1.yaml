@@ -1,0 +1,37 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: o1
+    labels:
+        family: o1
+        source: litellm
+        source_version: test-version
+spec:
+    provider: openai
+    upstreamName: o1
+    family: o1
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+        vision: true
+        reasoning: true
+        structuredOutput: true
+        systemMessages: true
+    modalities:
+        input:
+            - text
+            - image
+        output:
+            - text
+    contextWindowInput: 200000
+    contextWindowOutput: 100000
+    contextWindowTotal: 200000
+    pricing:
+        currency: USD
+        unit: per_million
+        rates:
+            tokens.cache_read: 7.5
+            tokens.input: 15
+            tokens.output: 60
+            tokens.reasoning: 60

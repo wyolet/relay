@@ -1,0 +1,36 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: gpt-4o-audio-preview
+    labels:
+        family: gpt
+        source: litellm
+        source_version: test-version
+spec:
+    provider: openai
+    upstreamName: gpt-4o-audio-preview
+    family: gpt
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+        audioInput: true
+        audioOutput: true
+    modalities:
+        input:
+            - text
+            - audio
+        output:
+            - text
+            - audio
+    contextWindowInput: 128000
+    contextWindowOutput: 16384
+    contextWindowTotal: 128000
+    pricing:
+        currency: USD
+        unit: per_million
+        rates:
+            tokens.audio_input: 100
+            tokens.audio_output: 200
+            tokens.input: 2.5
+            tokens.output: 10
