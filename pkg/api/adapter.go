@@ -14,8 +14,6 @@ var ErrNotImplemented = errors.New("not implemented")
 // Adapter converts between a shape-native request/response and the OpenAI hub
 // format. Each shape package (openai, anthropic, …) exports a value that
 // implements this interface.
-//
-// TODO: streaming will need a per-chunk iterator variant of the response methods.
 type Adapter interface {
 	// Name returns the canonical shape name, e.g. "openai" or "anthropic".
 	Name() string

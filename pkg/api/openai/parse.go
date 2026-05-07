@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-
-	"github.com/wyolet/relay/internal/usage"
 )
 
 var richParsing = true // default on; set via SetRichParsing at boot
@@ -16,6 +14,16 @@ func SetRichParsing(on bool) { richParsing = on }
 
 // RichParsing reports the current toggle state.
 func RichParsing() bool { return richParsing }
+
+type errEnvelope struct {
+	Error errBody `json:"error"`
+}
+
+type errBody struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Code    string `json:"code,omitempty"`
+}
 
 // parseError carries a ready-to-write HTTP status code and JSON body.
 type parseError struct {
@@ -89,20 +97,20 @@ func Parse(_ context.Context, body []byte, _ http.Header) (*ChatRequest, error) 
 // Returns nil on any violation (drop-on-violation policy).
 func validateBodyMetadata(m map[string]string) map[string]string {
 	if len(m) > 16 {
-		incBodyRejected(usage.ReasonOversize)
+		incBodyRejected("oversize")
 		return nil
 	}
 	for k, v := range m {
 		if len(k) > 64 || len(v) > 256 {
-			incBodyRejected(usage.ReasonOversize)
+			incBodyRejected("oversize")
 			return nil
 		}
 		if !validMetaKey(k) {
-			incBodyRejected(usage.ReasonBadCharset)
+			incBodyRejected("bad_charset")
 			return nil
 		}
 		if !validMetaValue(v) {
-			incBodyRejected(usage.ReasonBadCharset)
+			incBodyRejected("bad_charset")
 			return nil
 		}
 	}

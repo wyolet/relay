@@ -3,7 +3,7 @@ package anthropic
 import (
 	"testing"
 
-	"github.com/wyolet/relay/internal/api/openai"
+	"github.com/wyolet/relay/pkg/api/openai"
 )
 
 func TestAnthropicAdapter(t *testing.T) {

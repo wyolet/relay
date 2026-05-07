@@ -3,7 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 
-	"github.com/wyolet/relay/internal/usage"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // ExtractTokens reads Anthropic usage from a /v1/messages response body.

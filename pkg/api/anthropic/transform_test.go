@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/wyolet/relay/internal/api/openai"
+	"github.com/wyolet/relay/pkg/api/openai"
 )
 
 func ptr[T any](v T) *T { return &v }

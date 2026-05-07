@@ -12,9 +12,17 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/routing"
+	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
+
+func withRich(on bool, fn func()) {
+	prev := pkgopenai.RichParsing()
+	pkgopenai.SetRichParsing(on)
+	defer pkgopenai.SetRichParsing(prev)
+	fn()
+}
 
 // --- ChatCompletions handler tests ---
 

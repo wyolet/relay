@@ -3,7 +3,7 @@ package openai
 import (
 	"encoding/json"
 
-	"github.com/wyolet/relay/internal/usage"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // ExtractTokens reads OpenAI usage from a response body chunk and emits

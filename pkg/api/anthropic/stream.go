@@ -9,22 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"github.com/wyolet/relay/internal/pipeline"
 )
-
-func init() {
-	// Upstream is OpenAI, inbound caller expects Anthropic SSE.
-	pipeline.RegisterStreamTransformerFactory("anthropic", "openai", func() func([]byte) ([]byte, error) {
-		t := &OpenAIToAnthropic{}
-		return t.TransformChunk
-	})
-	// Upstream is Anthropic, inbound caller expects OpenAI SSE.
-	pipeline.RegisterStreamTransformerFactory("openai", "anthropic", func() func([]byte) ([]byte, error) {
-		t := &AnthropicToOpenAI{}
-		return t.TransformChunk
-	})
-}
 
 // AnthropicToOpenAI transforms a single Anthropic SSE chunk (one data: line,
 // potentially with an event: prefix) into zero or more OpenAI SSE chunks.

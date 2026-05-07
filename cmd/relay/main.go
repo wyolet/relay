@@ -17,6 +17,8 @@ import (
 
 	apianthropic "github.com/wyolet/relay/internal/api/anthropic"
 	apiopenai "github.com/wyolet/relay/internal/api/openai"
+	pkganthropic "github.com/wyolet/relay/pkg/api/anthropic"
+	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/config"
@@ -135,7 +137,7 @@ func main() {
 	}
 
 	// Apply settings
-	apiopenai.SetRichParsing(cfg.RichParsing)
+	pkgopenai.SetRichParsing(cfg.RichParsing)
 	masterKey = cfg.MasterKey
 
 	bootCtx := context.Background()
@@ -349,7 +351,7 @@ func main() {
 				Outbound:       ob,
 				Limiter:        limiter,
 				Rules:          plan.Rules,
-				TokenExtractor: apiopenai.ExtractTokens,
+				TokenExtractor: pkgopenai.ExtractTokens,
 				CatalogStore:   catalogStore,
 			})
 		}
@@ -366,7 +368,7 @@ func main() {
 			Secrets:        []*catalog.Secret{emptySecret},
 			Selector:       sel,
 			Outbound:       ob,
-			TokenExtractor: apiopenai.ExtractTokens,
+			TokenExtractor: pkgopenai.ExtractTokens,
 		})
 	}
 
@@ -393,7 +395,7 @@ func main() {
 				DoUpstream:      doUpstream,
 				Limiter:         limiter,
 				Rules:           plan.Rules,
-				TokenExtractor:  apianthropic.ExtractTokens,
+				TokenExtractor:  pkganthropic.ExtractTokens,
 				CatalogStore:    catalogStore,
 				PassthroughAuth: plan.PassthroughAuth,
 			})
@@ -411,7 +413,7 @@ func main() {
 			Secrets:        []*catalog.Secret{emptySecret},
 			Selector:       sel,
 			DoUpstream:     doUpstream,
-			TokenExtractor: apianthropic.ExtractTokens,
+			TokenExtractor: pkganthropic.ExtractTokens,
 		})
 	}
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/internal/api/openai"
+	"github.com/wyolet/relay/pkg/api/openai"
 )
 
 // ToOpenAIResponse converts a MessagesResponse into an OpenAI ChatResponse.

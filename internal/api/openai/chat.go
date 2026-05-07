@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/internal/usage"
+	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
@@ -60,9 +61,9 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			return
 		}
 
-		cr, parseErr := Parse(r.Context(), body, r.Header)
+		cr, parseErr := pkgopenai.Parse(r.Context(), body, r.Header)
 		if parseErr != nil {
-			if status, pbody, ok := ParseError(parseErr); ok {
+			if status, pbody, ok := pkgopenai.ParseError(parseErr); ok {
 				statusCode = status
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(status)
@@ -78,7 +79,7 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		modelName = cr.Model
 
 		ctx := r.Context()
-		ctx = ContextWithChatRequest(ctx, cr)
+		ctx = pkgopenai.ContextWithChatRequest(ctx, cr)
 
 		plan, resolveErr := resolver.Resolve(routing.Request{
 			RouteHeader: r.Header.Get("X-Relay-Route"),

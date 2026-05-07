@@ -76,6 +76,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apiopenai "github.com/wyolet/relay/internal/api/openai"
+	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/routing"
@@ -472,9 +473,9 @@ func runChatOverhead(b *testing.B, mode string) {
 // validation, messages extraction) and measures end-to-end overhead through the
 // full Relay handler. Fails the build when p99 > 5 ms or p50 > 1 ms.
 func BenchmarkRelayChatOverhead_Rich(b *testing.B) {
-	prev := apiopenai.RichParsing()
-	apiopenai.SetRichParsing(true)
-	b.Cleanup(func() { apiopenai.SetRichParsing(prev) })
+	prev := pkgopenai.RichParsing()
+	pkgopenai.SetRichParsing(true)
+	b.Cleanup(func() { pkgopenai.SetRichParsing(prev) })
 	runChatOverhead(b, "rich")
 }
 
@@ -484,9 +485,9 @@ func BenchmarkRelayChatOverhead_Rich(b *testing.B) {
 // left nil) and measures end-to-end overhead through the full Relay handler.
 // Fails the build when p99 > 5 ms or p50 > 1 ms.
 func BenchmarkRelayChatOverhead_Minimal(b *testing.B) {
-	prev := apiopenai.RichParsing()
-	apiopenai.SetRichParsing(false)
-	b.Cleanup(func() { apiopenai.SetRichParsing(prev) })
+	prev := pkgopenai.RichParsing()
+	pkgopenai.SetRichParsing(false)
+	b.Cleanup(func() { pkgopenai.SetRichParsing(prev) })
 	runChatOverhead(b, "minimal")
 }
 

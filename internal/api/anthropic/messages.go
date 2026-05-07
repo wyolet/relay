@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/internal/usage"
+	pkganthropic "github.com/wyolet/relay/pkg/api/anthropic"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
@@ -62,9 +63,9 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			return
 		}
 
-		mr, parseErr := Parse(body)
+		mr, parseErr := pkganthropic.Parse(body)
 		if parseErr != nil {
-			if status, pbody, ok := ParseError(parseErr); ok {
+			if status, pbody, ok := pkganthropic.ParseError(parseErr); ok {
 				statusCode = status
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(status)
