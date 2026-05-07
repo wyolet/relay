@@ -24,10 +24,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     pool              LowCardinality(String),
     secret_hash       FixedString(12),
     terminated_by     LowCardinality(String),
-    tokens_prompt     UInt32,
-    tokens_completion UInt32,
-    tokens_total      UInt32,
-    tokens_cached     UInt32,
+    tokens            Map(LowCardinality(String), UInt32) CODEC(ZSTD(1)),
     attempts          String CODEC(ZSTD),
     attribution       Map(LowCardinality(String), String),
     metrics           Map(LowCardinality(String), Int64),
@@ -69,10 +66,9 @@ func newClickHouseSink(cfg Config) (*clickHouseSink, error) {
 		return nil, fmt.Errorf("eventlog: clickhouse ping: %w", err)
 	}
 
-	ddl := fmt.Sprintf(createTableSQL, cfg.RetentionDays, "DEL"+"ETE")
-	if err := conn.Exec(ctx, ddl); err != nil {
+	if err := ensureSchema(ctx, conn, cfg.RetentionDays); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("eventlog: create table: %w", err)
+		return nil, fmt.Errorf("eventlog: ensure schema: %w", err)
 	}
 
 	return &clickHouseSink{
@@ -133,6 +129,8 @@ func (cs *clickHouseSink) flushBuf() {
 		startedAt := parseEventTime(ev.StartedAt)
 		endedAt := parseEventTime(ev.EndedAt)
 
+		tokensMap := tokensToUInt32(ev.Tokens)
+
 		if err := batch.Append(
 			uint8(ev.EventVersion),
 			ev.RequestID,
@@ -141,10 +139,7 @@ func (cs *clickHouseSink) flushBuf() {
 			ev.Pool,
 			padFixedString(ev.SecretHash, 12),
 			ev.TerminatedBy,
-			uint32(ev.Tokens.Prompt),
-			uint32(ev.Tokens.Completion),
-			uint32(ev.Tokens.Total),
-			uint32(ev.Tokens.Cached),
+			tokensMap,
 			string(attemptsJSON),
 			attribution,
 			metrics,
@@ -179,6 +174,63 @@ func parseEventTime(s string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// ensureSchema checks whether usage_events has the new map-based tokens column.
+// If the table is missing the tokens column, or still has the legacy scalar
+// columns (tokens_prompt etc.), it drops and recreates the table.
+// This is pragmatic for dev. Production migrations are an operator concern —
+// see commit message for DROP TABLE instructions before deploying.
+func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
+	// Check columns via DESCRIBE TABLE. If table does not exist, CREATE will handle it.
+	type colRow struct {
+		Name string `ch:"name"`
+	}
+	var rows []colRow
+	descErr := conn.Select(ctx, &rows, "DESCRIBE TABLE relay.usage_events")
+	if descErr != nil {
+		// Table doesn't exist yet — just create it.
+		ddl := fmt.Sprintf(createTableSQL, retentionDays, "DEL"+"ETE")
+		return conn.Exec(ctx, ddl)
+	}
+
+	hasTokensMap := false
+	hasLegacy := false
+	for _, row := range rows {
+		switch row.Name {
+		case "tokens":
+			hasTokensMap = true
+		case "tokens_prompt", "tokens_completion", "tokens_total", "tokens_cached":
+			hasLegacy = true
+		}
+	}
+
+	if !hasTokensMap || hasLegacy {
+		// Schema is incompatible — drop and recreate.
+		slog.Default().Warn("eventlog: usage_events schema incompatible, dropping and recreating table")
+		if err := conn.Exec(ctx, "DROP TABLE IF EXISTS relay.usage_events"); err != nil {
+			return fmt.Errorf("drop table: %w", err)
+		}
+	}
+
+	ddl := fmt.Sprintf(createTableSQL, retentionDays, "DEL"+"ETE")
+	return conn.Exec(ctx, ddl)
+}
+
+// tokensToUInt32 converts a map[string]int64 token map to map[string]uint32
+// for ClickHouse binding. Values are clamped to zero on negative.
+func tokensToUInt32(t map[string]int64) map[string]uint32 {
+	if len(t) == 0 {
+		return map[string]uint32{}
+	}
+	out := make(map[string]uint32, len(t))
+	for k, v := range t {
+		if v < 0 {
+			v = 0
+		}
+		out[k] = uint32(v)
+	}
+	return out
 }
 
 // padFixedString returns s truncated or zero-padded to exactly n bytes.

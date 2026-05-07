@@ -35,7 +35,11 @@ const (
 	TerminatedRelayError      TerminatedBy = "relay_error"
 )
 
-// TokenBlock holds token counts from the provider response.
+// TokenBlock is the old struct-based token shape. Kept only so that the
+// ratelimit package (which has its own TokenBlock) does not conflict.
+// All pipeline/usage code now uses Tokens (map[string]int64).
+//
+// Deprecated: use Tokens instead.
 type TokenBlock struct {
 	Prompt     int64 `json:"prompt"`
 	Completion int64 `json:"completion"`
@@ -60,7 +64,7 @@ type Lifecycle struct {
 	Pool          string            `json:"pool"`
 	SecretHash    string            `json:"secret_hash"`
 	Attempts      []Attempt         `json:"attempts,omitempty"`
-	Tokens        TokenBlock        `json:"tokens"`
+	Tokens        Tokens            `json:"tokens"`
 	TerminatedBy  TerminatedBy      `json:"terminated_by"`
 	Attribution   map[string]string `json:"attribution,omitempty"`
 	Metrics       map[string]int64  `json:"metrics,omitempty"`

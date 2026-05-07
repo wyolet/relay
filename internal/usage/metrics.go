@@ -6,6 +6,18 @@ import (
 )
 
 var (
+	// metricTokensTotal counts tokens consumed, broken out by provider and token type.
+	// Label "type" matches the Tokens map key convention (input, output, cache_read, …).
+	metricTokensTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: "tokens",
+			Name:      "total",
+			Help:      "Total tokens consumed, by provider and token type.",
+		},
+		[]string{"provider", "type"},
+	)
+
 	metricMetadataRejectedOversize = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: metrics.Namespace,
 		Subsystem: "usage",
@@ -40,6 +52,7 @@ var (
 
 func init() {
 	metrics.Register(
+		metricTokensTotal,
 		metricMetadataRejectedOversize,
 		metricMetadataRejectedBadCharset,
 		metricMetadataRejectedMalformed,

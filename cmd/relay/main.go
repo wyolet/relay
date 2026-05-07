@@ -338,14 +338,15 @@ func main() {
 		}
 		if plan.Pool != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
-				Provider: plan.Provider,
-				Pool:     plan.Pool,
-				Model:    plan.Model,
-				Secrets:  plan.Secrets,
-				Selector: sel,
-				Outbound: ob,
-				Limiter:  limiter,
-				Rules:    plan.Rules,
+				Provider:       plan.Provider,
+				Pool:           plan.Pool,
+				Model:          plan.Model,
+				Secrets:        plan.Secrets,
+				Selector:       sel,
+				Outbound:       ob,
+				Limiter:        limiter,
+				Rules:          plan.Rules,
+				TokenExtractor: apiopenai.ExtractTokens,
 			})
 		}
 		emptySecret := &catalog.Secret{
@@ -357,10 +358,11 @@ func main() {
 			Metadata: catalog.Metadata{Name: "anon-pool"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Pool:     syntheticPool,
-			Secrets:  []*catalog.Secret{emptySecret},
-			Selector: sel,
-			Outbound: ob,
+			Pool:           syntheticPool,
+			Secrets:        []*catalog.Secret{emptySecret},
+			Selector:       sel,
+			Outbound:       ob,
+			TokenExtractor: apiopenai.ExtractTokens,
 		})
 	}
 
@@ -372,14 +374,15 @@ func main() {
 		doUpstream := mob.Messages
 		if plan.Pool != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
-				Provider:   plan.Provider,
-				Pool:       plan.Pool,
-				Model:      plan.Model,
-				Secrets:    plan.Secrets,
-				Selector:   sel,
-				DoUpstream: doUpstream,
-				Limiter:    limiter,
-				Rules:      plan.Rules,
+				Provider:       plan.Provider,
+				Pool:           plan.Pool,
+				Model:          plan.Model,
+				Secrets:        plan.Secrets,
+				Selector:       sel,
+				DoUpstream:     doUpstream,
+				Limiter:        limiter,
+				Rules:          plan.Rules,
+				TokenExtractor: apianthropic.ExtractTokens,
 			})
 		}
 		emptySecret := &catalog.Secret{
@@ -391,10 +394,11 @@ func main() {
 			Metadata: catalog.Metadata{Name: "anon-pool"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Pool:       syntheticPool,
-			Secrets:    []*catalog.Secret{emptySecret},
-			Selector:   sel,
-			DoUpstream: doUpstream,
+			Pool:           syntheticPool,
+			Secrets:        []*catalog.Secret{emptySecret},
+			Selector:       sel,
+			DoUpstream:     doUpstream,
+			TokenExtractor: apianthropic.ExtractTokens,
 		})
 	}
 

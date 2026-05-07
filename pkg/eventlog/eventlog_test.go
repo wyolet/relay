@@ -26,7 +26,7 @@ func makeTestEvent(requestID string) Event {
 		Pool:         "default",
 		SecretHash:   "abc123def456",
 		TerminatedBy: "clean",
-		Tokens:       TokenCounts{Prompt: 10, Completion: 20, Total: 30},
+		Tokens:       TokenCounts{"input": 10, "output": 20},
 		InstanceID:   "pod-1",
 		RelayVersion: "dev",
 		StartedAt:    time.Now().UTC().Format("2006-01-02T15:04:05.999999999Z"),

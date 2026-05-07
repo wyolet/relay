@@ -25,13 +25,9 @@ const (
 	BackendClickHouse Backend = "clickhouse"
 )
 
-// TokenCounts holds prompt/completion/total/cached token counts.
-type TokenCounts struct {
-	Prompt     int64 `json:"prompt"`
-	Completion int64 `json:"completion"`
-	Total      int64 `json:"total"`
-	Cached     int64 `json:"cached,omitempty"`
-}
+// TokenCounts is the token map type used in events. Keys are convention-based
+// (input, output, cache_creation, cache_read, reasoning, …).
+type TokenCounts = map[string]int64
 
 // AttemptRecord records a single upstream call within a request.
 type AttemptRecord struct {

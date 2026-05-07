@@ -34,7 +34,7 @@ func newTestLC(tp *sdktrace.TracerProvider) *Lifecycle {
 		Pool:         "pool-a",
 		SecretHash:   SecretHash("sk-secret"),
 		TerminatedBy: TerminatedClean,
-		Tokens:       TokenBlock{Prompt: 10, Completion: 20, Total: 30, Cached: 5},
+		Tokens:       Tokens{"input": 10, "output": 20, "cache_read": 5},
 		Attempts: []Attempt{
 			{SecretHash: SecretHash("sk-secret"), Outcome: "success", LatencyMS: 100},
 		},
@@ -108,8 +108,8 @@ func TestRecord_HappyPath(t *testing.T) {
 	if attrMap["relay.request_id"] != "req-1" {
 		t.Errorf("relay.request_id = %v", attrMap["relay.request_id"])
 	}
-	if attrMap["relay.tokens.cached"] != int64(5) {
-		t.Errorf("relay.tokens.cached = %v", attrMap["relay.tokens.cached"])
+	if attrMap["relay.tokens.cache_read"] != int64(5) {
+		t.Errorf("relay.tokens.cache_read = %v", attrMap["relay.tokens.cache_read"])
 	}
 	if attrMap["relay.metrics.retry_count"] != int64(1) {
 		t.Errorf("relay.metrics.retry_count = %v", attrMap["relay.metrics.retry_count"])

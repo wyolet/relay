@@ -95,12 +95,7 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		Pool:         lc.Pool,
 		SecretHash:   lc.SecretHash,
 		TerminatedBy: string(lc.TerminatedBy),
-		Tokens: eventlog.TokenCounts{
-			Prompt:     lc.Tokens.Prompt,
-			Completion: lc.Tokens.Completion,
-			Total:      lc.Tokens.Total,
-			Cached:     lc.Tokens.Cached,
-		},
+		Tokens: map[string]int64(lc.Tokens),
 		Attempts:     attemptsToRecords(lc.Attempts),
 		Attribution:  lc.Attribution,
 		Metrics:      lc.Metrics,
@@ -114,6 +109,16 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		if err := defaultEventLogger.Append(ctx, rec); err != nil {
 			metricDroppedEvents.Inc()
 			slog.WarnContext(ctx, "usage.Record: eventlog drop", "err", err)
+		}
+	}
+
+	// Increment per-type token counter. One observation per (provider, type).
+	if len(lc.Tokens) > 0 {
+		provider := lc.Provider
+		for tokenType, count := range lc.Tokens {
+			if count > 0 {
+				metricTokensTotal.WithLabelValues(provider, tokenType).Add(float64(count))
+			}
 		}
 	}
 
@@ -132,12 +137,9 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		attribute.Int("relay.event_version", 1),
 		attribute.String("relay.instance_id", instanceID),
 		attribute.String("relay.relay_version", relayVersion),
-		attribute.Int64("relay.tokens.prompt", lc.Tokens.Prompt),
-		attribute.Int64("relay.tokens.completion", lc.Tokens.Completion),
-		attribute.Int64("relay.tokens.total", lc.Tokens.Total),
 	}
-	if lc.Tokens.Cached != 0 {
-		attrs = append(attrs, attribute.Int64("relay.tokens.cached", lc.Tokens.Cached))
+	for k, v := range lc.Tokens {
+		attrs = append(attrs, attribute.Int64("relay.tokens."+k, v))
 	}
 	for k, v := range lc.Metrics {
 		attrs = append(attrs, attribute.Int64("relay.metrics."+k, v))

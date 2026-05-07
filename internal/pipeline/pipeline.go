@@ -66,6 +66,13 @@ type RunOptions struct {
 	// Secret-level rules are M4+ work.
 	Limiter *ratelimit.Limiter
 	Rules   []catalog.ResolvedRule
+
+	// TokenExtractor, when non-nil, is called on each response chunk body.
+	// It returns a Tokens map (nil = no usage in this chunk). The pipeline
+	// accumulates results via Tokens.Add into a running map per request.
+	// Nil means "no extraction" (legacy / providers without usage blocks).
+	// PR 2 will change Commit to pass per-meter typed observations.
+	TokenExtractor func(chunk []byte) usage.Tokens
 }
 
 // Run reads the inbound Message from ch.In and orchestrates upstream calls
@@ -149,7 +156,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 
 	// Rate limiting: Reserve before the retry loop; Commit is dispatched async
 	// after the response is sent so it doesn't add latency to the caller.
-	var tokensSeen int64
+	tokens := usage.Tokens{}    // running token map; keyed by convention (input/output/…)
 	var reservation *ratelimit.Reservation // non-nil only when Limiter is active
 	if opts.Limiter != nil && len(opts.Rules) > 0 {
 		poolName := ""
@@ -178,12 +185,14 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	// fully sent, using a detached context so it outlives the request ctx.
 	// Registered here (LIFO: runs before the usage.Record emit defer above) so
 	// the goroutine launches while lc fields are still being stamped — but it
-	// only reads tokensSeen and successKeyHash which are fully written by the
+	// only reads tokenSum and successKeyHash which are fully written by the
 	// time run() returns.
 	defer func() {
 		// Snapshot mutable state before the goroutine reads it.
 		res := reservation
-		tokens := tokensSeen
+		// tokens.Sum() gives a backward-compatible total for the single-int Commit path.
+		// TODO(PR-2): pass per-meter typed observations instead of a sum.
+		tokenSum := tokens.Sum()
 		cancelled := ctx.Err() != nil
 		keyHash := successKeyHash
 		limiter := opts.Limiter
@@ -200,7 +209,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 			pfCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if limiter != nil && res != nil {
-				if err := limiter.Commit(pfCtx, res, ratelimit.Observations{Tokens: tokens, Cancelled: cancelled}); err != nil {
+				if err := limiter.Commit(pfCtx, res, ratelimit.Observations{Tokens: tokenSum, Cancelled: cancelled}); err != nil {
 					slog.Warn("limit.Commit failed (async)", "err", err)
 					metricPostFlightCommitErrors.Inc()
 				}
@@ -323,8 +332,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 				"status", status,
 				"classification", "success",
 			)
-			peekTokens(firstMsg.Body, &tokensSeen)
-			peekTokensFull(firstMsg.Body, lc)
+			extractInto(firstMsg.Body, opts.TokenExtractor, tokens)
 			ttfb := time.Since(attemptStart).Milliseconds()
 			lc.Metrics["upstream_ttfb_ms"] = ttfb
 			ch.Out <- firstMsg
@@ -336,17 +344,18 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 					latencyMS := time.Since(attemptStart).Milliseconds()
 					result.UpstreamDuration = time.Since(attemptStart)
 					appendAttempt(lc, secret, "success", status, latencyMS)
+					lc.Tokens = tokens
 					return result, ctx.Err()
 				default:
 				}
-				peekTokens(msg.Body, &tokensSeen)
-				peekTokensFull(msg.Body, lc)
+				extractInto(msg.Body, opts.TokenExtractor, tokens)
 				ch.Out <- msg
 			}
 			<-outboundErr
 			latencyMS := time.Since(attemptStart).Milliseconds()
 			result.UpstreamDuration = time.Duration(latencyMS) * time.Millisecond
 			lc.Metrics["upstream_total_ms"] = latencyMS
+			lc.Tokens = tokens
 			appendAttempt(lc, secret, "success", status, latencyMS)
 			// If ctx was cancelled while draining inter, report that.
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -505,21 +514,15 @@ func terminatedByFromFailureKind(kind keypool.FailureKind) usage.TerminatedBy {
 	}
 }
 
-// peekTokensFull extracts full token block from message body into lifecycle.
-func peekTokensFull(b []byte, lc *usage.Lifecycle) {
-	if len(b) == 0 {
+// extractInto calls extractor on b (if non-nil) and merges the result into dst.
+// This is the shape-agnostic token extraction step; each shape handler wires
+// its own extractor function via RunOptions.TokenExtractor.
+func extractInto(b []byte, extractor func([]byte) usage.Tokens, dst usage.Tokens) {
+	if len(b) == 0 || extractor == nil {
 		return
 	}
-	tb, ok := ratelimit.ParseTokensFull(b)
-	if !ok {
-		return
-	}
-	if tb.Total > lc.Tokens.Total {
-		lc.Tokens = usage.TokenBlock{
-			Prompt:     tb.Prompt,
-			Completion: tb.Completion,
-			Total:      tb.Total,
-		}
+	if got := extractor(b); got != nil {
+		dst.Add(got)
 	}
 }
 
@@ -694,14 +697,3 @@ func sendGenericErrorEnvelope(out chan<- *transport.Message) {
 	}
 }
 
-// peekTokens extracts token usage from a message body and accumulates into *acc.
-// Only updates if tokens are found and are greater than the current value.
-func peekTokens(b []byte, acc *int64) {
-	if len(b) == 0 {
-		return
-	}
-	n, ok := ratelimit.ParseTokens(b)
-	if ok && n > *acc {
-		*acc = n
-	}
-}

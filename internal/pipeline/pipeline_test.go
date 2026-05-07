@@ -69,6 +69,32 @@ func sendInbound(ch *transport.Channel) {
 	close(ch.In)
 }
 
+// testOpenAIExtractTokens is a minimal token extractor for pipeline tests.
+// It avoids importing internal/api/openai (which would create an import cycle)
+// while still exercising the TokenExtractor path.
+func testOpenAIExtractTokens(body []byte) usage.Tokens {
+	var resp struct {
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(body, &resp) != nil {
+		return nil
+	}
+	if resp.Usage.PromptTokens == 0 && resp.Usage.CompletionTokens == 0 {
+		return nil
+	}
+	t := usage.Tokens{}
+	if v := resp.Usage.PromptTokens; v > 0 {
+		t["input"] = v
+	}
+	if v := resp.Usage.CompletionTokens; v > 0 {
+		t["output"] = v
+	}
+	return t
+}
+
 func collectOut(ch *transport.Channel) []*transport.Message {
 	var msgs []*transport.Message
 	for m := range ch.Out {
@@ -1024,6 +1050,7 @@ func TestLifecycle_SingleSuccess(t *testing.T) {
 	defer cleanup()
 	opts.Model = &catalog.Model{Metadata: catalog.Metadata{Name: "gpt-4o"}}
 	opts.Provider = &catalog.Provider{Metadata: catalog.Metadata{Name: "openai"}}
+	opts.TokenExtractor = testOpenAIExtractTokens
 
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
@@ -1058,8 +1085,11 @@ func TestLifecycle_SingleSuccess(t *testing.T) {
 		}
 	}
 	tokens, _ := ev["tokens"].(map[string]interface{})
-	if tokens["total"] != float64(30) {
-		t.Errorf("tokens.total want 30, got %v", tokens["total"])
+	if tokens["input"] != float64(10) {
+		t.Errorf("tokens.input want 10, got %v", tokens["input"])
+	}
+	if tokens["output"] != float64(20) {
+		t.Errorf("tokens.output want 20, got %v", tokens["output"])
 	}
 
 	spans := sr.Ended()
