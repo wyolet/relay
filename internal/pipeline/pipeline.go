@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,11 @@ import (
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/internal/usage"
 )
+
+// postFlightHook is called synchronously at the end of every async post-flight
+// goroutine. Tests set this to a sync.WaitGroup.Done or similar to wait for
+// the goroutine before making assertions. Production code never sets it.
+var postFlightHook func()
 
 var (
 	ErrNoInboundMessage  = errors.New("pipeline: no inbound message on Channel.In")
@@ -135,14 +141,17 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 		lc.Pool = opts.Pool.Metadata.Name
 	}
 
-	// Rate limiting: Reserve before the retry loop; Commit via defer regardless of path.
+	// Rate limiting: Reserve before the retry loop; Commit is dispatched async
+	// after the response is sent so it doesn't add latency to the caller.
 	var tokensSeen int64
+	var reservation *ratelimit.Reservation // non-nil only when Limiter is active
 	if opts.Limiter != nil && len(opts.Rules) > 0 {
 		poolName := ""
 		if opts.Pool != nil {
 			poolName = opts.Pool.Metadata.Name
 		}
-		reservation, err := opts.Limiter.Reserve(ctx, poolName, opts.Rules)
+		var err error
+		reservation, err = opts.Limiter.Reserve(ctx, poolName, opts.Rules)
 		if err != nil {
 			var exceeded *ratelimit.ExceededError
 			if errors.As(err, &exceeded) {
@@ -153,13 +162,48 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 			lc.TerminatedBy = usage.TerminatedRateLimited
 			return result, err
 		}
-		defer func() {
-			cancelled := ctx.Err() != nil
-			commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			opts.Limiter.Commit(commitCtx, reservation, ratelimit.Observations{Tokens: tokensSeen, Cancelled: cancelled})
-		}()
 	}
+
+	// successKeyHash is set when the retry loop exits via the success path.
+	// Captured in the post-flight closure to call RecordSuccess asynchronously.
+	var successKeyHash string
+
+	// Post-flight goroutine: runs Commit and RecordSuccess after the response is
+	// fully sent, using a detached context so it outlives the request ctx.
+	// Registered here (LIFO: runs before the usage.Record emit defer above) so
+	// the goroutine launches while lc fields are still being stamped — but it
+	// only reads tokensSeen and successKeyHash which are fully written by the
+	// time run() returns.
+	defer func() {
+		// Snapshot mutable state before the goroutine reads it.
+		res := reservation
+		tokens := tokensSeen
+		cancelled := ctx.Err() != nil
+		keyHash := successKeyHash
+		limiter := opts.Limiter
+		sel := opts.Selector
+
+		go func() {
+			start := time.Now()
+			defer func() {
+				metricPostFlightDuration.Observe(time.Since(start).Seconds())
+				if postFlightHook != nil {
+					postFlightHook()
+				}
+			}()
+			pfCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if limiter != nil && res != nil {
+				if err := limiter.Commit(pfCtx, res, ratelimit.Observations{Tokens: tokens, Cancelled: cancelled}); err != nil {
+					slog.Warn("limit.Commit failed (async)", "err", err)
+					metricPostFlightCommitErrors.Inc()
+				}
+			}
+			if keyHash != "" {
+				sel.RecordSuccess(pfCtx, keyHash)
+			}
+		}()
+	}()
 
 	preUpstreamStart := time.Now()
 
@@ -262,7 +306,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 
 		switch cls {
 		case classSuccess:
-			opts.Selector.RecordSuccess(ctx, secret.KeyHash)
+			successKeyHash = secret.KeyHash // RecordSuccess dispatched async in post-flight
 			log.Debug("pipeline attempt",
 				"attempt", attempt,
 				"key_hash", secret.KeyHash,
