@@ -118,16 +118,7 @@ type Config struct {
 // Shutdown is a function that tears down the TracerProvider.
 type Shutdown func(context.Context) error
 
-// droppedSpans counts spans dropped by the custom counting exporter shim.
-// TODO(PER-239): wire to Prometheus gauge.
-// Triggered when the batch processor queue is full and the exporter's Export
-// call returns an error that the shim treats as a drop signal.
-var droppedSpans atomic.Uint64
-
-// DroppedSpans returns the cumulative count of dropped spans since process start.
-func DroppedSpans() uint64 { return droppedSpans.Load() }
-
-// countingExporter wraps an SpanExporter and increments droppedSpans when
+// countingExporter wraps an SpanExporter and increments metricDroppedSpans when
 // the underlying exporter returns an error (batch overflow manifests here).
 type countingExporter struct {
 	sdktrace.SpanExporter
@@ -136,7 +127,6 @@ type countingExporter struct {
 func (c *countingExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
 	err := c.SpanExporter.ExportSpans(ctx, spans)
 	if err != nil {
-		droppedSpans.Add(uint64(len(spans)))
 		metricDroppedSpans.Add(float64(len(spans)))
 	}
 	return err

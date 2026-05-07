@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -213,14 +214,14 @@ func TestRecord_EventlogFull(t *testing.T) {
 	defaultEventLogger = el
 	defer func() { defaultEventLogger = orig }()
 
-	before := DroppedEvents()
+	before := testutil.ToFloat64(metricDroppedEvents)
 	for i := 0; i < 5; i++ {
 		lc := newTestLC(tp)
 		Record(context.Background(), lc)
 	}
-	after := DroppedEvents()
+	after := testutil.ToFloat64(metricDroppedEvents)
 	if after-before < 5 {
-		t.Errorf("DroppedEvents should have increased by at least 5, before=%d after=%d", before, after)
+		t.Errorf("metricDroppedEvents should have increased by at least 5, before=%v after=%v", before, after)
 	}
 }
 

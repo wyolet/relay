@@ -88,22 +88,13 @@ type Config struct {
 	Clock       func() time.Time
 }
 
-type Stats struct {
-	Written     uint64
-	Dropped     uint64
-	LastWriteAt time.Time
-	CurrentFile string
-}
-
 // Logger appends events to the configured backend via a bounded async channel.
 type Logger struct {
-	cfg     Config
-	sk      sink
-	ch      chan []byte
-	done    chan struct{}
-	closed  atomic.Bool
-	written atomic.Uint64
-	dropped atomic.Uint64
+	cfg    Config
+	sk     sink
+	ch     chan []byte
+	done   chan struct{}
+	closed atomic.Bool
 
 	mu          sync.Mutex
 	lastWriteAt time.Time
@@ -175,7 +166,6 @@ func New(cfg Config) (*Logger, error) {
 // non-nil returns.
 func (l *Logger) Append(_ context.Context, ev Event) error {
 	if l.closed.Load() {
-		l.dropped.Add(1)
 		metricDropped.Inc()
 		return ErrLoggerClosed
 	}
@@ -184,7 +174,6 @@ func (l *Logger) Append(_ context.Context, ev Event) error {
 	if err != nil {
 		// Event is a concrete struct; this branch is unreachable in practice
 		// but we keep the drop counter consistent.
-		l.dropped.Add(1)
 		metricDropped.Inc()
 		return fmt.Errorf("%w: %v", ErrMarshalFailed, err)
 	}
@@ -193,7 +182,6 @@ func (l *Logger) Append(_ context.Context, ev Event) error {
 	case l.ch <- b:
 		return nil
 	default:
-		l.dropped.Add(1)
 		metricDropped.Inc()
 		return ErrBufferFull
 	}
@@ -204,18 +192,11 @@ func (l *Logger) Ping(ctx context.Context) error {
 	return l.sk.ping(ctx)
 }
 
-// Stats returns a snapshot of writer state.
-func (l *Logger) Stats() Stats {
+// Stats returns a snapshot of writer state (last write time and current file name).
+func (l *Logger) Stats() (lastWriteAt time.Time, currentFile string) {
 	l.mu.Lock()
-	lwAt := l.lastWriteAt
-	cf := l.currentFile
-	l.mu.Unlock()
-	return Stats{
-		Written:     l.written.Load(),
-		Dropped:     l.dropped.Load(),
-		LastWriteAt: lwAt,
-		CurrentFile: cf,
-	}
+	defer l.mu.Unlock()
+	return l.lastWriteAt, l.currentFile
 }
 
 // Close drains remaining events and flushes the backend. Idempotent.
@@ -255,13 +236,11 @@ func (l *Logger) run() {
 
 func (l *Logger) writeOne(b []byte) {
 	if err := l.sk.write(b); err != nil {
-		l.dropped.Add(1)
 		metricDropped.Inc()
 		fmt.Fprintf(os.Stderr, "eventlog: write: %v\n", err)
 		return
 	}
 	now := l.cfg.Clock().UTC()
-	l.written.Add(1)
 	metricWritten.Inc()
 	l.mu.Lock()
 	l.lastWriteAt = now

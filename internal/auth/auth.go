@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync/atomic"
 )
 
 // Rejection reason labels for relay_auth_rejected_total.
@@ -18,30 +17,11 @@ const (
 	ReasonInvalid = "invalid"
 )
 
-var (
-	rejectedMissing atomic.Uint64
-	rejectedInvalid atomic.Uint64
-)
-
-// AuthRejected returns the cumulative count for the given reason label.
-// Valid reason values are ReasonMissing and ReasonInvalid.
-func AuthRejected(reason string) uint64 {
-	switch reason {
-	case ReasonMissing:
-		return rejectedMissing.Load()
-	case ReasonInvalid:
-		return rejectedInvalid.Load()
-	}
-	return 0
-}
-
 func incRejected(reason string) {
 	switch reason {
 	case ReasonMissing:
-		rejectedMissing.Add(1)
 		metricRejectedMissing.Inc()
 	case ReasonInvalid:
-		rejectedInvalid.Add(1)
 		metricRejectedInvalid.Inc()
 	}
 }

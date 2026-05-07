@@ -152,13 +152,15 @@ func TestClickHouseSink_DropSemantics(t *testing.T) {
 	}
 	defer l.Close(ctx)
 
+	var dropped int
 	for i := 0; i < 20; i++ {
-		l.Append(ctx, makeEvent(i))
+		if err := l.Append(ctx, makeEvent(i)); err != nil {
+			dropped++
+		}
 	}
 
-	s := l.Stats()
-	if s.Dropped == 0 {
-		t.Error("expected Dropped > 0 with tiny buffer")
+	if dropped == 0 {
+		t.Error("expected drops > 0 with tiny buffer")
 	}
 }
 

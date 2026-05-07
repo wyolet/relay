@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"runtime/debug"
-	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -34,15 +33,10 @@ func attemptsToRecords(as []Attempt) []eventlog.AttemptRecord {
 }
 
 var (
-	droppedEvents atomic.Uint64
-
 	cachedInstanceID   string
 	cachedRelayVersion string
 	defaultEventLogger *eventlog.Logger
 )
-
-// DroppedEvents returns the cumulative count of events dropped due to eventlog errors.
-func DroppedEvents() uint64 { return droppedEvents.Load() }
 
 // InstanceID returns the resolved instance ID (RELAY_INSTANCE_ID → hostname → "unknown").
 func InstanceID() string { return cachedInstanceID }
@@ -115,7 +109,6 @@ func Record(ctx context.Context, lc *Lifecycle) {
 
 	if defaultEventLogger != nil {
 		if err := defaultEventLogger.Append(ctx, rec); err != nil {
-			droppedEvents.Add(1)
 			metricDroppedEvents.Inc()
 			slog.WarnContext(ctx, "usage.Record: eventlog drop", "err", err)
 		}

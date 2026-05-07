@@ -89,7 +89,6 @@ func Parse(_ context.Context, body []byte, _ http.Header) (*ChatRequest, error) 
 // Returns nil on any violation (drop-on-violation policy).
 func validateBodyMetadata(m map[string]string) map[string]string {
 	if len(m) > 16 {
-		usage.MetadataRejected(usage.ReasonOversize) // just read; we call incRejected indirectly
 		incBodyRejected(usage.ReasonOversize)
 		return nil
 	}

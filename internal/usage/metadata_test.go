@@ -3,12 +3,20 @@ package usage
 import (
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-func resetCounters() {
-	rejectedOversize.Store(0)
-	rejectedBadCharset.Store(0)
-	rejectedMalformed.Store(0)
+func metadataRejected(reason string) float64 {
+	switch reason {
+	case ReasonOversize:
+		return testutil.ToFloat64(metricMetadataRejectedOversize)
+	case ReasonBadCharset:
+		return testutil.ToFloat64(metricMetadataRejectedBadCharset)
+	case ReasonMalformed:
+		return testutil.ToFloat64(metricMetadataRejectedMalformed)
+	}
+	return 0
 }
 
 func TestParseMetadataHeader_ValidCounts(t *testing.T) {
@@ -139,15 +147,14 @@ func TestParseMetadataHeader_DropOnViolation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resetCounters()
-			before := MetadataRejected(tc.reason)
+			before := metadataRejected(tc.reason)
 			m := ParseMetadataHeader(tc.input)
-			after := MetadataRejected(tc.reason)
+			after := metadataRejected(tc.reason)
 			if tc.expectNil && m != nil {
 				t.Error("expected nil map")
 			}
 			if after != before+1 {
-				t.Errorf("counter %q: got %d, want %d", tc.reason, after, before+1)
+				t.Errorf("counter %q: got %v, want %v", tc.reason, after, before+1)
 			}
 		})
 	}
@@ -163,24 +170,24 @@ func TestParseMetadataHeader_ExactLimits(t *testing.T) {
 	}
 
 	// key 65 chars — oversize
-	resetCounters()
 	k65 := strings.Repeat("a", 65)
+	before65 := metadataRejected(ReasonOversize)
 	m = ParseMetadataHeader(k65 + "=v")
 	if m != nil {
 		t.Error("expected nil for 65-char key")
 	}
-	if MetadataRejected(ReasonOversize) != 1 {
+	if metadataRejected(ReasonOversize) != before65+1 {
 		t.Error("oversize counter not incremented")
 	}
 
 	// value 257 chars — oversize
-	resetCounters()
 	v257 := strings.Repeat("b", 257)
+	before257 := metadataRejected(ReasonOversize)
 	m = ParseMetadataHeader("k=" + v257)
 	if m != nil {
 		t.Error("expected nil for 257-char value")
 	}
-	if MetadataRejected(ReasonOversize) != 1 {
+	if metadataRejected(ReasonOversize) != before257+1 {
 		t.Error("oversize counter not incremented")
 	}
 }

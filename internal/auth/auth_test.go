@@ -2,7 +2,7 @@
 // Constant-time compare (crypto/subtle.ConstantTimeCompare) is NOT unit-tested
 // here because it is a well-trodden standard-library primitive. Its use is
 // verified by code inspection and vet/race clean builds.
-package auth_test
+package auth
 
 import (
 	"encoding/json"
@@ -10,41 +10,36 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyolet/relay/internal/auth"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func ok200(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
-
-func resetCounters() {
-	// drain by reading; actual reset not exposed by design — run each case in
-	// a fresh process isn't practical; instead we capture before/after deltas.
-}
 
 func TestMiddleware(t *testing.T) {
 	key1 := []byte("key-one")
 	key2 := []byte("key-two")
 
-	mw := auth.Middleware([][]byte{key1, key2})
+	mw := Middleware([][]byte{key1, key2})
 	handler := mw(http.HandlerFunc(ok200))
 
 	cases := []struct {
-		name          string
-		header        string
-		wantStatus    int
-		wantReason    string // "" means no counter increment expected
+		name       string
+		header     string
+		wantStatus int
+		wantReason string // "" means no counter increment expected
 	}{
-		{"missing header", "", 401, auth.ReasonMissing},
-		{"malformed no bearer prefix", "Token key-one", 401, auth.ReasonInvalid},
-		{"bearer prefix only", "Bearer ", 401, auth.ReasonInvalid},
-		{"wrong key", "Bearer wrongkey", 401, auth.ReasonInvalid},
+		{"missing header", "", 401, ReasonMissing},
+		{"malformed no bearer prefix", "Token key-one", 401, ReasonInvalid},
+		{"bearer prefix only", "Bearer ", 401, ReasonInvalid},
+		{"wrong key", "Bearer wrongkey", 401, ReasonInvalid},
 		{"matching key1", "Bearer key-one", 200, ""},
 		{"matching key2", "Bearer key-two", 200, ""},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			missBefore := auth.AuthRejected(auth.ReasonMissing)
-			invBefore := auth.AuthRejected(auth.ReasonInvalid)
+			missBefore := testutil.ToFloat64(metricRejectedMissing)
+			invBefore := testutil.ToFloat64(metricRejectedInvalid)
 
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 			if tc.header != "" {
@@ -81,19 +76,19 @@ func TestMiddleware(t *testing.T) {
 			}
 
 			// counter assertions
-			missAfter := auth.AuthRejected(auth.ReasonMissing)
-			invAfter := auth.AuthRejected(auth.ReasonInvalid)
+			missAfter := testutil.ToFloat64(metricRejectedMissing)
+			invAfter := testutil.ToFloat64(metricRejectedInvalid)
 			switch tc.wantReason {
-			case auth.ReasonMissing:
+			case ReasonMissing:
 				if missAfter-missBefore != 1 {
-					t.Errorf("missing counter: delta %d want 1", missAfter-missBefore)
+					t.Errorf("missing counter: delta %v want 1", missAfter-missBefore)
 				}
 				if invAfter != invBefore {
 					t.Error("invalid counter should not increment")
 				}
-			case auth.ReasonInvalid:
+			case ReasonInvalid:
 				if invAfter-invBefore != 1 {
-					t.Errorf("invalid counter: delta %d want 1", invAfter-invBefore)
+					t.Errorf("invalid counter: delta %v want 1", invAfter-invBefore)
 				}
 				if missAfter != missBefore {
 					t.Error("missing counter should not increment")
@@ -109,11 +104,11 @@ func TestMiddleware(t *testing.T) {
 
 func TestMiddlewareFailOpen(t *testing.T) {
 	// keys empty → passthrough, no counters
-	mw := auth.Middleware(nil)
+	mw := Middleware(nil)
 	handler := mw(http.HandlerFunc(ok200))
 
-	missBefore := auth.AuthRejected(auth.ReasonMissing)
-	invBefore := auth.AuthRejected(auth.ReasonInvalid)
+	missBefore := testutil.ToFloat64(metricRejectedMissing)
+	invBefore := testutil.ToFloat64(metricRejectedInvalid)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -122,16 +117,16 @@ func TestMiddlewareFailOpen(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("fail-open: got %d want 200", rec.Code)
 	}
-	if auth.AuthRejected(auth.ReasonMissing) != missBefore || auth.AuthRejected(auth.ReasonInvalid) != invBefore {
+	if testutil.ToFloat64(metricRejectedMissing) != missBefore || testutil.ToFloat64(metricRejectedInvalid) != invBefore {
 		t.Error("fail-open: counters must not increment")
 	}
 }
 
 func TestMiddlewareMultiKeyNoneMatch(t *testing.T) {
-	mw := auth.Middleware([][]byte{[]byte("aaa"), []byte("bbb")})
+	mw := Middleware([][]byte{[]byte("aaa"), []byte("bbb")})
 	handler := mw(http.HandlerFunc(ok200))
 
-	invBefore := auth.AuthRejected(auth.ReasonInvalid)
+	invBefore := testutil.ToFloat64(metricRejectedInvalid)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	req.Header.Set("Authorization", "Bearer ccc")
@@ -141,7 +136,7 @@ func TestMiddlewareMultiKeyNoneMatch(t *testing.T) {
 	if rec.Code != 401 {
 		t.Fatalf("got %d want 401", rec.Code)
 	}
-	if auth.AuthRejected(auth.ReasonInvalid)-invBefore != 1 {
+	if testutil.ToFloat64(metricRejectedInvalid)-invBefore != 1 {
 		t.Error("invalid counter delta must be 1")
 	}
 }
@@ -164,7 +159,7 @@ func TestParseKeys(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := auth.ParseKeys(tc.input...)
+			got := ParseKeys(tc.input...)
 			if len(got) != tc.want {
 				t.Errorf("len=%d want %d (input=%v)", len(got), tc.want, tc.input)
 			}

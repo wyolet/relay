@@ -2,7 +2,6 @@ package usage
 
 import (
 	"strings"
-	"sync/atomic"
 )
 
 // Rejection reason labels for relay_metadata_rejected_total.
@@ -12,36 +11,13 @@ const (
 	ReasonMalformed  = "malformed"
 )
 
-var (
-	rejectedOversize   atomic.Uint64
-	rejectedBadCharset atomic.Uint64
-	rejectedMalformed  atomic.Uint64
-)
-
-// MetadataRejected returns the cumulative count for the given reason label.
-// Valid reason values are ReasonOversize, ReasonBadCharset, ReasonMalformed.
-func MetadataRejected(reason string) uint64 {
-	switch reason {
-	case ReasonOversize:
-		return rejectedOversize.Load()
-	case ReasonBadCharset:
-		return rejectedBadCharset.Load()
-	case ReasonMalformed:
-		return rejectedMalformed.Load()
-	}
-	return 0
-}
-
 func incRejected(reason string) {
 	switch reason {
 	case ReasonOversize:
-		rejectedOversize.Add(1)
 		metricMetadataRejectedOversize.Inc()
 	case ReasonBadCharset:
-		rejectedBadCharset.Add(1)
 		metricMetadataRejectedBadCharset.Inc()
 	case ReasonMalformed:
-		rejectedMalformed.Add(1)
 		metricMetadataRejectedMalformed.Inc()
 	}
 }
