@@ -75,20 +75,20 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	apiopenai "github.com/wyolet/relay/pkg/api/openai"
-	"github.com/wyolet/relay/pkg/auth"
+	apiopenai "github.com/wyolet/relay/internal/api/openai"
+	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
-	"github.com/wyolet/relay/pkg/keypool"
-	"github.com/wyolet/relay/pkg/limit"
-	"github.com/wyolet/relay/pkg/pipeline"
-	"github.com/wyolet/relay/pkg/provider"
-	providerOpenAI "github.com/wyolet/relay/pkg/provider/openai"
+	"github.com/wyolet/relay/internal/keypool"
+	"github.com/wyolet/relay/internal/ratelimit"
+	"github.com/wyolet/relay/internal/pipeline"
+	"github.com/wyolet/relay/internal/provider"
+	providerOpenAI "github.com/wyolet/relay/internal/provider/openai"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/internal/usage"
 )
 
 // chatInput mirrors the production input struct in cmd/relay/openapi.go.
@@ -232,7 +232,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	reg.Register(catalog.PKOpenAI, providerOpenAI.New(stubURL))
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	limiter := limit.New(st, logger, nil)
+	limiter := ratelimit.New(st, logger, nil)
 	sel := keypool.New(st, logger, nil, limiter, cfg, nil)
 
 	resolve := func(modelAlias string) (*apiopenai.RequestPlan, bool) {

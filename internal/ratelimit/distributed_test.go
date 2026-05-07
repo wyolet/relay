@@ -1,6 +1,6 @@
 //go:build integration
 
-package limit_test
+package ratelimit_test
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/pkg/limit"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -96,8 +96,8 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 	clock := func() time.Time { return now }
 	log := discardLogger()
 
-	l1 := limit.New(s1, log, clock)
-	l2 := limit.New(s2, log, clock)
+	l1 := ratelimit.New(s1, log, clock)
+	l2 := ratelimit.New(s2, log, clock)
 
 	const budget = 200
 	const goroutines = 1000
@@ -117,13 +117,13 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 			}
 			res, err := l.Reserve(context.Background(), "test-pool", rules)
 			if err != nil {
-				if !errors.Is(err, limit.ErrExceeded) {
+				if !errors.Is(err, ratelimit.ErrExceeded) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				return
 			}
 			admitted.Add(1)
-			_ = l.Commit(context.Background(), res, limit.Observations{})
+			_ = l.Commit(context.Background(), res, ratelimit.Observations{})
 		}(i)
 	}
 	wg.Wait()
@@ -140,30 +140,30 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 
 // ---- contract tests: same bodies as MemStore, now running against RedisStore ----
 
-type storeFactoryFn func(t *testing.T) *limit.Limiter
+type storeFactoryFn func(t *testing.T) *ratelimit.Limiter
 
 // redisLimiterFactory returns a factory that creates a fresh RedisStore per call.
 // Each call creates a new store so sub-tests are isolated.
-func redisLimiterFactory(addr string) func(t *testing.T, now *time.Time) *limit.Limiter {
-	return func(t *testing.T, now *time.Time) *limit.Limiter {
+func redisLimiterFactory(addr string) func(t *testing.T, now *time.Time) *ratelimit.Limiter {
+	return func(t *testing.T, now *time.Time) *ratelimit.Limiter {
 		s, err := kv.NewRedis(context.Background(), kv.RedisConfig{Addr: addr})
 		if err != nil {
 			t.Fatalf("NewRedis: %v", err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
 		clock := func() time.Time { return *now }
-		return limit.New(s, discardLogger(), clock)
+		return ratelimit.New(s, discardLogger(), clock)
 	}
 }
 
-func memLimiterFactory(t *testing.T, now *time.Time) *limit.Limiter {
+func memLimiterFactory(t *testing.T, now *time.Time) *ratelimit.Limiter {
 	s := kv.NewMem()
 	t.Cleanup(func() { _ = s.Close() })
 	clock := func() time.Time { return *now }
-	return limit.New(s, discardLogger(), clock)
+	return ratelimit.New(s, discardLogger(), clock)
 }
 
-func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.T, now *time.Time) *limit.Limiter) {
+func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.T, now *time.Time) *ratelimit.Limiter) {
 	t.Run(name+"/Requests_HappyPath", func(t *testing.T) {
 		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 		l := factory(t, &now)
@@ -175,10 +175,10 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			if err != nil {
 				t.Fatalf("reserve %d: %v", i+1, err)
 			}
-			_ = l.Commit(ctx, res, limit.Observations{})
+			_ = l.Commit(ctx, res, ratelimit.Observations{})
 		}
 		_, err := l.Reserve(ctx, "test-pool", rules)
-		if !errors.Is(err, limit.ErrExceeded) {
+		if !errors.Is(err, ratelimit.ErrExceeded) {
 			t.Fatalf("expected ErrExceeded on 11th reserve, got %v", err)
 		}
 	})
@@ -189,7 +189,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		ctx := context.Background()
 		rule := makeRuleNamed(catalog.MeterConcurrency, 3, time.Minute, "route-con-cap")
 		rules := []catalog.ResolvedRule{rule}
-		var r [3]*limit.Reservation
+		var r [3]*ratelimit.Reservation
 		for i := 0; i < 3; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
@@ -198,17 +198,17 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			r[i] = res
 		}
 		_, err := l.Reserve(ctx, "test-pool", rules)
-		if !errors.Is(err, limit.ErrExceeded) {
+		if !errors.Is(err, ratelimit.ErrExceeded) {
 			t.Fatalf("expected ErrExceeded on 4th, got %v", err)
 		}
-		if err := l.Commit(ctx, r[0], limit.Observations{}); err != nil {
+		if err := l.Commit(ctx, r[0], ratelimit.Observations{}); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 		res, err := l.Reserve(ctx, "test-pool", rules)
 		if err != nil {
 			t.Fatalf("reserve after commit: %v", err)
 		}
-		_ = l.Commit(ctx, res, limit.Observations{})
+		_ = l.Commit(ctx, res, ratelimit.Observations{})
 	})
 
 	t.Run(name+"/Tokens_PostHoc", func(t *testing.T) {
@@ -217,7 +217,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		ctx := context.Background()
 		rule := makeRuleNamed(catalog.MeterTokens, 100, time.Minute, "route-tok-posthoc")
 		rules := []catalog.ResolvedRule{rule}
-		var reservations [5]*limit.Reservation
+		var reservations [5]*ratelimit.Reservation
 		for i := 0; i < 5; i++ {
 			res, err := l.Reserve(ctx, "test-pool", rules)
 			if err != nil {
@@ -226,12 +226,12 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			reservations[i] = res
 		}
 		for i, res := range reservations {
-			if err := l.Commit(ctx, res, limit.Observations{Tokens: 20}); err != nil {
+			if err := l.Commit(ctx, res, ratelimit.Observations{Tokens: 20}); err != nil {
 				t.Fatalf("commit %d: %v", i+1, err)
 			}
 		}
 		_, err := l.Reserve(ctx, "test-pool", rules)
-		if !errors.Is(err, limit.ErrExceeded) {
+		if !errors.Is(err, ratelimit.ErrExceeded) {
 			t.Fatalf("expected ErrExceeded after 100 tokens, got %v", err)
 		}
 	})
@@ -248,11 +248,11 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if err != nil {
 			t.Fatalf("reserve: %v", err)
 		}
-		if err := l.Commit(ctx, res, limit.Observations{Tokens: 50}); err != nil {
+		if err := l.Commit(ctx, res, ratelimit.Observations{Tokens: 50}); err != nil {
 			t.Fatalf("commit 1: %v", err)
 		}
 		// Duplicate commit — must be no-op.
-		if err := l.Commit(ctx, res, limit.Observations{Tokens: 50}); err != nil {
+		if err := l.Commit(ctx, res, ratelimit.Observations{Tokens: 50}); err != nil {
 			t.Fatalf("commit 2: %v", err)
 		}
 		// Concurrency should be 1 (slot fully released once; counter at 0 → remaining=1).
@@ -276,10 +276,10 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		rules := []catalog.ResolvedRule{rule0, rule1}
 
 		_, err := l.Reserve(ctx, "test-pool", rules)
-		if !errors.Is(err, limit.ErrExceeded) {
+		if !errors.Is(err, ratelimit.ErrExceeded) {
 			t.Fatalf("expected exceeded, got %v", err)
 		}
-		var ee *limit.ExceededError
+		var ee *ratelimit.ExceededError
 		errors.As(err, &ee)
 		if ee.Rule.RateLimit.Metadata.Name != "rl-rule1" {
 			t.Fatalf("expected rule1 to be violated, got %s", ee.Rule.RateLimit.Metadata.Name)

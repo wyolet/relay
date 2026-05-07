@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/pkg/limit"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -59,7 +59,7 @@ type Selector struct {
 	state   kv.Store
 	log     *slog.Logger
 	clock   func() time.Time
-	limiter *limit.Limiter
+	limiter *ratelimit.Limiter
 	cfg     catalog.Store
 	rng     *rand.Rand
 }
@@ -67,7 +67,7 @@ type Selector struct {
 // New constructs a Selector. clock, limiter, cfg, and rng may be nil.
 // When limiter and cfg are nil, Pick falls back to round-robin (M2 behavior).
 // When rng is nil, a new rand seeded from time.Now().UnixNano() is used.
-func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *limit.Limiter, cfg catalog.Store, rng *rand.Rand) *Selector {
+func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *ratelimit.Limiter, cfg catalog.Store, rng *rand.Rand) *Selector {
 	if clock == nil {
 		clock = time.Now
 	}

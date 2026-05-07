@@ -15,7 +15,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/internal/usage"
 )
 
 // RequestPlan holds the resolved model, provider, pool, secrets, and rate-limit

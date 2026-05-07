@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/pkg/limit"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -27,12 +27,12 @@ func (m *mockReloader) Reload(_ context.Context) error {
 	return m.err
 }
 
-func newTestLimiter() *limit.Limiter {
+func newTestLimiter() *ratelimit.Limiter {
 	st := kv.NewMem()
-	return limit.New(st, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	return ratelimit.New(st, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 }
 
-func newAdminRouter(tok string, store reloader, lim *limit.Limiter) http.Handler {
+func newAdminRouter(tok string, store reloader, lim *ratelimit.Limiter) http.Handler {
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	if tok != "" && store != nil {

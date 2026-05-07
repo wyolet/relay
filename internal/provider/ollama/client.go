@@ -9,7 +9,7 @@ import (
 	"strconv"
 
 	"github.com/wyolet/relay/pkg/httpheader"
-	"github.com/wyolet/relay/pkg/provider"
+	"github.com/wyolet/relay/internal/provider"
 	"github.com/wyolet/relay/pkg/transport"
 )
 

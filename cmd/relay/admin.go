@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/pkg/limit"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -76,7 +76,7 @@ func sourceIP(r *http.Request) string {
 // adminReloadHandler returns an http.HandlerFunc that calls store.Reload.
 // token must be non-empty; callers are responsible for not registering when token is empty.
 // lim enforces a per-source-IP rate limit (10 RPM by default, RELAY_ADMIN_RELOAD_RPM to override).
-func adminReloadHandler(token string, store reloader, lim *limit.Limiter) http.HandlerFunc {
+func adminReloadHandler(token string, store reloader, lim *ratelimit.Limiter) http.HandlerFunc {
 	tok := []byte(token)
 	rpm := adminReloadRPM()
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +104,7 @@ func adminReloadHandler(token string, store reloader, lim *limit.Limiter) http.H
 
 		res, err := lim.Reserve(ctx, "admin", rules)
 		if err != nil {
-			var exceeded *limit.ExceededError
+			var exceeded *ratelimit.ExceededError
 			if errors.As(err, &exceeded) {
 				retryAfterSec := int(exceeded.RetryAfter.Seconds())
 				if retryAfterSec < 1 {
@@ -126,7 +126,7 @@ func adminReloadHandler(token string, store reloader, lim *limit.Limiter) http.H
 			// Reserve error (non-exceeded): log and proceed fail-open.
 			log.Warn("admin/reload: limiter reserve error (fail-open)", "ip", ip, "err", err)
 		} else {
-			defer func() { _ = lim.Commit(ctx, res, limit.Observations{}) }()
+			defer func() { _ = lim.Commit(ctx, res, ratelimit.Observations{}) }()
 		}
 
 		if err := store.Reload(r.Context()); err != nil {

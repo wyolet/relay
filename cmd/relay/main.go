@@ -15,23 +15,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	apiopenai "github.com/wyolet/relay/pkg/api/openai"
-	"github.com/wyolet/relay/pkg/auth"
+	apiopenai "github.com/wyolet/relay/internal/api/openai"
+	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/internal/catalog"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
-	"github.com/wyolet/relay/pkg/keypool"
-	"github.com/wyolet/relay/pkg/limit"
-	"github.com/wyolet/relay/pkg/pipeline"
-	"github.com/wyolet/relay/pkg/provider"
-	"github.com/wyolet/relay/pkg/provider/ollama"
-	"github.com/wyolet/relay/pkg/provider/openai"
+	"github.com/wyolet/relay/internal/keypool"
+	"github.com/wyolet/relay/internal/ratelimit"
+	"github.com/wyolet/relay/internal/pipeline"
+	"github.com/wyolet/relay/internal/provider"
+	"github.com/wyolet/relay/internal/provider/ollama"
+	"github.com/wyolet/relay/internal/provider/openai"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/internal/usage"
 )
 
 // masterKey holds the parsed RELAY_MASTER_KEY (32 bytes) or nil if unset.
@@ -259,7 +259,7 @@ func main() {
 		st = kv.NewMem()
 	}
 
-	limiter := limit.New(st, slog.Default(), nil)
+	limiter := ratelimit.New(st, slog.Default(), nil)
 	sel := keypool.New(st, slog.Default(), nil, limiter, cfg, nil)
 
 	reg := provider.NewRegistry()

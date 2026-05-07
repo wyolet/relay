@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/pkg/httpheader"
-	"github.com/wyolet/relay/pkg/provider/openai"
+	"github.com/wyolet/relay/internal/provider/openai"
 	"github.com/wyolet/relay/pkg/transport"
 )
 

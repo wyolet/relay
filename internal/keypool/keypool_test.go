@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/pkg/limit"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -355,11 +355,11 @@ func makeRule(name string, meter catalog.Meter, amount int64) catalog.ResolvedRu
 }
 
 // newWeightedSel builds a Selector with a limiter and stubCfg.
-func newWeightedSel(t *testing.T, cfg *stubCfg, rng *rand.Rand) (*Selector, *limit.Limiter, *kv.Mem) {
+func newWeightedSel(t *testing.T, cfg *stubCfg, rng *rand.Rand) (*Selector, *ratelimit.Limiter, *kv.Mem) {
 	t.Helper()
 	ms := kv.NewMem()
 	t.Cleanup(func() { ms.Close() })
-	l := limit.New(ms, noopLogger(), nil)
+	l := ratelimit.New(ms, noopLogger(), nil)
 	sel := New(ms, noopLogger(), frozenClock(t0), l, cfg, rng)
 	return sel, l, ms
 }
@@ -514,7 +514,7 @@ func TestPickWeighted_DeterministicWithSeededRNG(t *testing.T) {
 		rng := rand.New(rand.NewSource(seed))
 		ms := kv.NewMem()
 		defer ms.Close()
-		l := limit.New(ms, noopLogger(), nil)
+		l := ratelimit.New(ms, noopLogger(), nil)
 		sel := New(ms, noopLogger(), frozenClock(t0), l, cfg, rng)
 		var out []string
 		for i := 0; i < 20; i++ {

@@ -16,11 +16,11 @@ import (
 
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/eventlog"
-	"github.com/wyolet/relay/pkg/keypool"
-	"github.com/wyolet/relay/pkg/limit"
+	"github.com/wyolet/relay/internal/keypool"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/internal/usage"
 )
 
 // fakeOutbound is a controllable provider.Outbound for tests.
@@ -516,11 +516,11 @@ func TestRun_NetworkError(t *testing.T) {
 // fakeLimiter tracks Reserve/Commit calls for pipeline rate-limit tests.
 type fakeLimiter struct {
 	reserveErr  error
-	commitCalls []limit.Observations
+	commitCalls []ratelimit.Observations
 	reserveCalls int
 }
 
-func (f *fakeLimiter) reserve(ctx context.Context, rules []catalog.ResolvedRule) (*limit.Reservation, error) {
+func (f *fakeLimiter) reserve(ctx context.Context, rules []catalog.ResolvedRule) (*ratelimit.Reservation, error) {
 	f.reserveCalls++
 	if f.reserveErr != nil {
 		return nil, f.reserveErr
@@ -532,10 +532,10 @@ func (f *fakeLimiter) reserve(ctx context.Context, rules []catalog.ResolvedRule)
 
 // testLimiterSetup creates a real Limiter backed by MemStore, plus a rule set.
 // The rule allows 1000 requests/min so tests pass through unless forced to fail.
-func testLimiterSetup(t *testing.T) (*limit.Limiter, []catalog.ResolvedRule, func()) {
+func testLimiterSetup(t *testing.T) (*ratelimit.Limiter, []catalog.ResolvedRule, func()) {
 	t.Helper()
 	st := kv.NewMem()
-	l := limit.New(st, slog.Default(), nil)
+	l := ratelimit.New(st, slog.Default(), nil)
 	rules := []catalog.ResolvedRule{
 		{
 			ParentKind: catalog.KindPool,
@@ -554,7 +554,7 @@ func testLimiterSetup(t *testing.T) (*limit.Limiter, []catalog.ResolvedRule, fun
 	return l, rules, func() { st.Close() }
 }
 
-func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rules []catalog.ResolvedRule) RunOptions {
+func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *ratelimit.Limiter, rules []catalog.ResolvedRule) RunOptions {
 	t.Helper()
 	st := kv.NewMem()
 	t.Cleanup(func() { st.Close() })
@@ -574,13 +574,13 @@ func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *limit.Limiter, rule
 	}
 }
 
-func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRule, *limit.Limiter, func()) {
+func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRule, *ratelimit.Limiter, func()) {
 	st := kv.NewMem()
 	window := time.Minute
 	amount := int64(1)
 	// Use a fixed clock so the window bucket is deterministic.
 	now := time.Now()
-	l := limit.New(st, slog.Default(), func() time.Time { return now })
+	l := ratelimit.New(st, slog.Default(), func() time.Time { return now })
 	rule := catalog.ResolvedRule{
 		ParentKind: catalog.KindPool,
 		ParentName: "test-pool",
@@ -608,7 +608,7 @@ func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRu
 		if res != nil {
 			commitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			l.Commit(commitCtx, res, limit.Observations{Tokens: amount})
+			l.Commit(commitCtx, res, ratelimit.Observations{Tokens: amount})
 		}
 	}
 	return rules, l, func() { st.Close() }
@@ -888,7 +888,7 @@ spec:
 
 	st3 := kv.NewMem()
 	defer st3.Close()
-	lim3 := limit.New(st3, slog.Default(), nil)
+	lim3 := ratelimit.New(st3, slog.Default(), nil)
 	sel3 := keypool.New(st3, slog.Default(), nil, lim3, cfg, nil)
 
 	sec := cfg.Secrets()[0]

@@ -8,12 +8,12 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/pkg/keypool"
-	"github.com/wyolet/relay/pkg/limit"
-	"github.com/wyolet/relay/pkg/provider"
+	"github.com/wyolet/relay/internal/keypool"
+	"github.com/wyolet/relay/internal/ratelimit"
+	"github.com/wyolet/relay/internal/provider"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/internal/usage"
 )
 
 var (
@@ -38,7 +38,7 @@ type RunOptions struct {
 	// limiting is skipped (preserves M2 behavior for configs without limits).
 	// Rules should be pre-resolved by the caller for Pool+Model scope.
 	// Secret-level rules are M4+ work.
-	Limiter *limit.Limiter
+	Limiter *ratelimit.Limiter
 	Rules   []catalog.ResolvedRule
 }
 
@@ -125,7 +125,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 		}
 		res, err := opts.Limiter.Reserve(ctx, poolName, opts.Rules)
 		if err != nil {
-			var exceeded *limit.ExceededError
+			var exceeded *ratelimit.ExceededError
 			if errors.As(err, &exceeded) {
 				send429LimitEnvelope(ch.Out, exceeded)
 			} else {
@@ -138,7 +138,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			cancelled := ctx.Err() != nil
 			commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			opts.Limiter.Commit(commitCtx, res, limit.Observations{Tokens: tokensSeen, Cancelled: cancelled})
+			opts.Limiter.Commit(commitCtx, res, ratelimit.Observations{Tokens: tokensSeen, Cancelled: cancelled})
 		}()
 	}
 
@@ -429,7 +429,7 @@ func peekTokensFull(b []byte, lc *usage.Lifecycle) {
 	if len(b) == 0 {
 		return
 	}
-	tb, ok := limit.ParseTokensFull(b)
+	tb, ok := ratelimit.ParseTokensFull(b)
 	if !ok {
 		return
 	}
@@ -574,7 +574,7 @@ func sendPoolExhausted(out chan<- *transport.Message) {
 }
 
 // send429LimitEnvelope emits an OpenAI-shaped 429 for a relay-side limit violation.
-func send429LimitEnvelope(out chan<- *transport.Message, exceeded *limit.ExceededError) {
+func send429LimitEnvelope(out chan<- *transport.Message, exceeded *ratelimit.ExceededError) {
 	code := meterToCode(exceeded.Rule.Meter)
 	msg := "rate limit exceeded: " + string(exceeded.Rule.Meter)
 	headers := map[string]string{
@@ -619,7 +619,7 @@ func peekTokens(b []byte, acc *int64) {
 	if len(b) == 0 {
 		return
 	}
-	n, ok := limit.ParseTokens(b)
+	n, ok := ratelimit.ParseTokens(b)
 	if ok && n > *acc {
 		*acc = n
 	}

@@ -2,7 +2,7 @@
 // two-phase Reserve/Commit API. Three meters are supported: requests,
 // tokens, concurrency. State is persisted via pkg/state using a single
 // RunScript call per phase (Lua on Redis, Go-emulator on MemStore).
-package limit
+package ratelimit
 
 import (
 	"context"

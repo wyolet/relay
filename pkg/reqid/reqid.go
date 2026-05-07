@@ -10,7 +10,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel"
 
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/internal/usage"
 )
 
 const (

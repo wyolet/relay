@@ -1,4 +1,4 @@
-package limit
+package ratelimit
 
 // storeFactory produces a kv.Store for parameterized tests.
 // The concrete type is defined per build tag (mem vs integration).

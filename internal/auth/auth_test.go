@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/auth"
+	"github.com/wyolet/relay/internal/auth"
 )
 
 func ok200(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
