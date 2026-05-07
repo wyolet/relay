@@ -487,17 +487,25 @@ func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, name stri
 }
 
 // secretPatch builds a catalog.Patch for pre-commit snapshot validation of a
-// secret write. The patch uses only the fields the validator checks (provider
-// name); the actual stored value is irrelevant for cross-reference validation.
+// secret write. The patch must mirror the value mode (env-ref or stored) the
+// real upsert will apply, otherwise the validator rejects the synthetic Secret
+// for "exactly one of valueFrom.env or value required".
 func secretPatch(inp SecretWriteBody) catalog.Patch {
 	provider := inp.Provider
 	if provider == "" {
 		provider = "default"
 	}
+	spec := catalog.SecretSpec{Provider: provider}
+	switch inp.ValueFrom.Kind {
+	case "env":
+		spec.ValueFrom = &catalog.SecretValueFrom{Env: inp.ValueFrom.Env}
+	case "stored":
+		spec.Value = inp.ValueFrom.Value
+	}
 	return catalog.Patch{
 		UpsertSecret: &catalog.Secret{
 			Metadata: catalog.Metadata{Name: inp.Name},
-			Spec:     catalog.SecretSpec{Provider: provider},
+			Spec:     spec,
 		},
 	}
 }
