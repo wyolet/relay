@@ -30,30 +30,45 @@ type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan
 // to a RequestPlan; runPipeline orchestrates the message flow.
 func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		statusCode := 200
+		var modelName string
+		defer func() {
+			metricChatRequests.WithLabelValues(safeLabel(modelName), statusClass(statusCode)).Inc()
+			metricChatDuration.WithLabelValues(safeLabel(modelName)).Observe(time.Since(start).Seconds())
+		}()
+
 		httpheader.StripInbound(r.Header)
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			if httpmw.IsBodyTooLargeError(err) {
-				writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error",
+				statusCode = http.StatusRequestEntityTooLarge
+				writeError(w, statusCode, "invalid_request_error",
 					fmt.Sprintf("request body exceeds %d bytes", httpmw.DefaultMaxRequestBytes), "request_too_large")
 				return
 			}
-			writeError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body", "")
+			statusCode = http.StatusBadRequest
+			writeError(w, statusCode, "invalid_request_error", "failed to read request body", "")
 			return
 		}
 
 		cr, parseErr := Parse(r.Context(), body, r.Header)
 		if parseErr != nil {
 			if status, pbody, ok := ParseError(parseErr); ok {
+				statusCode = status
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(status)
 				w.Write(pbody)
 				return
 			}
-			writeError(w, http.StatusBadRequest, "invalid_request_error", parseErr.Error(), "")
+			statusCode = http.StatusBadRequest
+			writeError(w, statusCode, "invalid_request_error", parseErr.Error(), "")
 			return
 		}
+
+		// Model is known after a successful parse.
+		modelName = cr.Model
 
 		ctx := r.Context()
 		ctx = ContextWithChatRequest(ctx, cr)
@@ -65,19 +80,24 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		if resolveErr != nil {
 			switch {
 			case errors.Is(resolveErr, routing.ErrUnknownRoute):
-				writeError(w, http.StatusNotFound, "invalid_request_error",
+				statusCode = http.StatusNotFound
+				writeError(w, statusCode, "invalid_request_error",
 					resolveErr.Error(), "route_not_found")
 			case errors.Is(resolveErr, routing.ErrModelNotInRoute):
-				writeError(w, http.StatusBadRequest, "invalid_request_error",
+				statusCode = http.StatusBadRequest
+				writeError(w, statusCode, "invalid_request_error",
 					resolveErr.Error(), "model_not_in_route")
 			case errors.Is(resolveErr, routing.ErrUnknownModel):
-				writeError(w, http.StatusNotFound, "invalid_request_error",
+				statusCode = http.StatusNotFound
+				writeError(w, statusCode, "invalid_request_error",
 					fmt.Sprintf("model %q not found", cr.Model), "model_not_found")
 			case errors.Is(resolveErr, routing.ErrNoModelSpecified):
-				writeError(w, http.StatusBadRequest, "invalid_request_error",
+				statusCode = http.StatusBadRequest
+				writeError(w, statusCode, "invalid_request_error",
 					resolveErr.Error(), "model_not_specified")
 			default:
-				writeError(w, http.StatusInternalServerError, "api_error",
+				statusCode = http.StatusInternalServerError
+				writeError(w, statusCode, "api_error",
 					resolveErr.Error(), "")
 			}
 			return
@@ -148,6 +168,7 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 							status = code
 						}
 					}
+					statusCode = status
 					ct := outMsg.Headers["Content-Type"]
 					if ct != "" {
 						w.Header().Set("Content-Type", ct)
