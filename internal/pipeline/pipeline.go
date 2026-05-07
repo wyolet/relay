@@ -77,6 +77,14 @@ type RunOptions struct {
 	// Nil means "no extraction" (legacy / providers without usage blocks).
 	// PR 2 will change Commit to pass per-meter typed observations.
 	TokenExtractor func(chunk []byte) usage.Tokens
+
+	// InboundAdapter and UpstreamAdapter enable cross-shape transform.
+	// If both are non-nil and their names differ, the pipeline transforms the
+	// request body via the OpenAI canonical hub before forwarding upstream, and
+	// applies the inverse transform on the response.
+	// If either is nil, or names match, the existing passthrough path is used.
+	InboundAdapter  TransformAdapter
+	UpstreamAdapter TransformAdapter
 }
 
 // Run reads the inbound Message from ch.In and orchestrates upstream calls
@@ -232,6 +240,22 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 		}()
 	}()
 
+	// Apply cross-shape transform if adapters are set and differ.
+	// Same-shape: outboundBody == inboundMsg.Body (zero-copy).
+	// Cross-shape streaming: error out immediately before any upstream attempt.
+	outboundBody := inboundMsg.Body
+	var responseFinisher func(*transport.Message) (*transport.Message, error)
+	if opts.InboundAdapter != nil && opts.UpstreamAdapter != nil {
+		tr, err := ApplyTransform(opts.InboundAdapter, opts.UpstreamAdapter, inboundMsg.Body)
+		if err != nil {
+			sendTransformErrorEnvelope(ch.Out, err)
+			lc.TerminatedBy = usage.TerminatedRelayError
+			return result, err
+		}
+		outboundBody = tr.Body
+		responseFinisher = tr.Finisher
+	}
+
 	preUpstreamStart := time.Now()
 
 	log := reqid.Logger(ctx)
@@ -288,9 +312,9 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 				}
 			}()
 			if opts.DoUpstream != nil {
-				outboundErr <- opts.DoUpstream(ctx, inboundMsg.Body, secret.Resolved, inter)
+				outboundErr <- opts.DoUpstream(ctx, outboundBody, secret.Resolved, inter)
 			} else {
-				outboundErr <- opts.Outbound.ChatCompletions(ctx, inboundMsg.Body, secret.Resolved, inter)
+				outboundErr <- opts.Outbound.ChatCompletions(ctx, outboundBody, secret.Resolved, inter)
 			}
 		}()
 
@@ -344,10 +368,18 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 				"status", status,
 				"classification", "success",
 			)
-			extractInto(firstMsg.Body, opts.TokenExtractor, tokens)
+			firstOut, ferr := applyFinisher(responseFinisher, firstMsg)
+			if ferr != nil {
+				sendTransformErrorEnvelope(ch.Out, ferr)
+				go drain(inter)
+				<-outboundErr
+				lc.TerminatedBy = usage.TerminatedRelayError
+				return result, ferr
+			}
+			extractInto(firstOut.Body, opts.TokenExtractor, tokens)
 			ttfb := time.Since(attemptStart).Milliseconds()
 			lc.Metrics["upstream_ttfb_ms"] = ttfb
-			ch.Out <- firstMsg
+			ch.Out <- firstOut
 			for msg := range inter {
 				select {
 				case <-ctx.Done():
@@ -360,8 +392,14 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 					return result, ctx.Err()
 				default:
 				}
-				extractInto(msg.Body, opts.TokenExtractor, tokens)
-				ch.Out <- msg
+				out, ferr := applyFinisher(responseFinisher, msg)
+				if ferr != nil {
+					// Mid-stream transform error: log and forward original.
+					slog.Warn("response transform error (mid-stream)", "err", ferr)
+					out = msg
+				}
+				extractInto(out.Body, opts.TokenExtractor, tokens)
+				ch.Out <- out
 			}
 			<-outboundErr
 			latencyMS := time.Since(attemptStart).Milliseconds()
@@ -699,6 +737,34 @@ func meterToCode(m catalog.Meter) string {
 		return "concurrency_exceeded"
 	default:
 		return "rate_limit_exceeded"
+	}
+}
+
+// applyFinisher runs finisher on msg if non-nil; otherwise returns msg unchanged.
+func applyFinisher(finisher func(*transport.Message) (*transport.Message, error), msg *transport.Message) (*transport.Message, error) {
+	if finisher == nil {
+		return msg, nil
+	}
+	return finisher(msg)
+}
+
+// sendTransformErrorEnvelope emits a 400 or 501 depending on the error type.
+func sendTransformErrorEnvelope(out chan<- *transport.Message, err error) {
+	status := "400"
+	code := "transform_error"
+	msg := "request transform failed: " + err.Error()
+	if errors.Is(err, ErrCrossShapeStreamingNotSupported) {
+		status = "501"
+		code = "cross_shape_streaming_not_supported"
+		msg = "streaming cross-shape transform not supported"
+	}
+	out <- &transport.Message{
+		Headers: map[string]string{
+			"X-Relay-Status": status,
+			"Content-Type":   "application/json",
+			"X-Relay-Final":  "true",
+		},
+		Body: []byte(`{"error":{"message":"` + msg + `","type":"transform_error","code":"` + code + `"}}`),
 	}
 }
 

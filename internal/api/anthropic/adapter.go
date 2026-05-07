@@ -4,6 +4,7 @@ package anthropic
 // (AnthropicConfig.transform_request / transform_response)
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/wyolet/relay/internal/api/openai"
@@ -40,4 +41,33 @@ func (AnthropicAdapter) ToOpenAIResponse(v any) (*openai.ChatResponse, error) {
 
 func (AnthropicAdapter) FromOpenAIResponse(r *openai.ChatResponse) (any, error) {
 	return FromOpenAIResponse(r)
+}
+
+func (AnthropicAdapter) ParseResponse(body []byte) (any, error) {
+	var r MessagesResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("anthropic: ParseResponse: %w", err)
+	}
+	return &r, nil
+}
+
+// Shim wraps AnthropicAdapter so it satisfies pipeline.TransformAdapter
+// (which uses any return types to avoid import cycles).
+type Shim struct{ AnthropicAdapter }
+
+func (s Shim) ToOpenAI(req any) (any, error)         { return s.AnthropicAdapter.ToOpenAI(req) }
+func (s Shim) FromOpenAI(req any) (any, error) {
+	r, ok := req.(*openai.FullChatRequest)
+	if !ok {
+		return nil, fmt.Errorf("anthropic shim: FromOpenAI: expected *openai.FullChatRequest, got %T", req)
+	}
+	return s.AnthropicAdapter.FromOpenAI(r)
+}
+func (s Shim) ToOpenAIResponse(resp any) (any, error) { return s.AnthropicAdapter.ToOpenAIResponse(resp) }
+func (s Shim) FromOpenAIResponse(resp any) (any, error) {
+	r, ok := resp.(*openai.ChatResponse)
+	if !ok {
+		return nil, fmt.Errorf("anthropic shim: FromOpenAIResponse: expected *openai.ChatResponse, got %T", resp)
+	}
+	return s.AnthropicAdapter.FromOpenAIResponse(r)
 }

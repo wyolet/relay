@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -40,4 +41,33 @@ func (OpenAIAdapter) ToOpenAIResponse(resp any) (*ChatResponse, error) {
 
 func (OpenAIAdapter) FromOpenAIResponse(resp *ChatResponse) (any, error) {
 	return resp, nil
+}
+
+func (OpenAIAdapter) ParseResponse(body []byte) (any, error) {
+	var r ChatResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, fmt.Errorf("openai adapter: ParseResponse: %w", err)
+	}
+	return &r, nil
+}
+
+// Shim wraps OpenAIAdapter so it satisfies pipeline.TransformAdapter
+// (which uses any return types to avoid import cycles).
+type Shim struct{ OpenAIAdapter }
+
+func (s Shim) ToOpenAI(req any) (any, error)           { return s.OpenAIAdapter.ToOpenAI(req) }
+func (s Shim) FromOpenAI(req any) (any, error) {
+	r, ok := req.(*FullChatRequest)
+	if !ok {
+		return nil, fmt.Errorf("openai shim: FromOpenAI: expected *FullChatRequest, got %T", req)
+	}
+	return s.OpenAIAdapter.FromOpenAI(r)
+}
+func (s Shim) ToOpenAIResponse(resp any) (any, error)  { return s.OpenAIAdapter.ToOpenAIResponse(resp) }
+func (s Shim) FromOpenAIResponse(resp any) (any, error) {
+	r, ok := resp.(*ChatResponse)
+	if !ok {
+		return nil, fmt.Errorf("openai shim: FromOpenAIResponse: expected *ChatResponse, got %T", resp)
+	}
+	return s.OpenAIAdapter.FromOpenAIResponse(r)
 }
