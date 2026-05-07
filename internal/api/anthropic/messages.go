@@ -218,18 +218,6 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 	}
 }
 
-// capturePassthroughHeaders returns a copy of the headers that are in
-// OutboundPassthroughExtra, for forwarding on passthrough pool requests.
-func capturePassthroughHeaders(h http.Header) map[string]string {
-	out := make(map[string]string)
-	for name, vals := range h {
-		if httpheader.Match(name, httpheader.OutboundPassthroughExtra) && len(vals) > 0 {
-			out[name] = vals[0]
-		}
-	}
-	return out
-}
-
 // writeAnthropicError writes an Anthropic-shaped error response.
 func writeAnthropicError(w http.ResponseWriter, status int, errType, msg string) {
 	w.Header().Set("Content-Type", "application/json")

@@ -77,16 +77,6 @@ var OutboundAllowlist = []string{
 	"Anthropic-Beta",
 }
 
-// OutboundPassthroughExtra is appended to OutboundAllowlist for passthrough pools.
-// These headers are forwarded verbatim from the client — they carry client identity
-// signals that upstream providers (e.g. Anthropic) inspect.
-var OutboundPassthroughExtra = []string{
-	"Anthropic-Dangerous-Direct-Browser-Access",
-	"X-App",
-	"X-Claude-Code-Session-Id",
-	"X-Stainless-*",
-}
-
 // StripInbound removes every header from h that is not in InboundAllowlist.
 // Hop-by-hop headers listed in Connection are also removed (per RFC 7230).
 // Returns the same map for chaining.
