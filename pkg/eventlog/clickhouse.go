@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
     instance_id       LowCardinality(String),
     relay_version     LowCardinality(String),
     started_at        DateTime64(9, 'UTC') CODEC(DoubleDelta),
-    ended_at          DateTime64(9, 'UTC') CODEC(DoubleDelta)
+    ended_at          DateTime64(9, 'UTC') CODEC(DoubleDelta),
+    cost              Decimal(18, 8),
+    currency          LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(started_at)
 ORDER BY (started_at, model, pool)
@@ -147,6 +149,8 @@ func (cs *clickHouseSink) flushBuf() {
 			ev.RelayVersion,
 			startedAt,
 			endedAt,
+			ev.Cost,
+			ev.Currency,
 		); err != nil {
 			cs.logger.Warn("eventlog: clickhouse batch append", "err", err)
 			_ = batch.Abort()
@@ -196,16 +200,22 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 
 	hasTokensMap := false
 	hasLegacy := false
+	hasCost := false
+	hasCurrency := false
 	for _, row := range rows {
 		switch row.Name {
 		case "tokens":
 			hasTokensMap = true
 		case "tokens_prompt", "tokens_completion", "tokens_total", "tokens_cached":
 			hasLegacy = true
+		case "cost":
+			hasCost = true
+		case "currency":
+			hasCurrency = true
 		}
 	}
 
-	if !hasTokensMap || hasLegacy {
+	if !hasTokensMap || hasLegacy || !hasCost || !hasCurrency {
 		// Schema is incompatible — drop and recreate.
 		slog.Default().Warn("eventlog: usage_events schema incompatible, dropping and recreating table")
 		if err := conn.Exec(ctx, "DROP TABLE IF EXISTS relay.usage_events"); err != nil {

@@ -67,6 +67,10 @@ type RunOptions struct {
 	Limiter *ratelimit.Limiter
 	Rules   []catalog.ResolvedRule
 
+	// CatalogStore, when non-nil, is used to look up the effective pricing for
+	// the model so cost can be computed at emit time.
+	CatalogStore catalog.Store
+
 	// TokenExtractor, when non-nil, is called on each response chunk body.
 	// It returns a Tokens map (nil = no usage in this chunk). The pipeline
 	// accumulates results via Tokens.Add into a running map per request.
@@ -152,6 +156,12 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	}
 	if opts.Pool != nil {
 		lc.Pool = opts.Pool.Metadata.Name
+	}
+	// Wire effective pricing so Record can compute cost.
+	if opts.CatalogStore != nil && lc.Model != "" {
+		if ep, ok := opts.CatalogStore.EffectivePricing(lc.Model); ok {
+			lc.EffectivePricing = ep
+		}
 	}
 
 	// Rate limiting: Reserve before the retry loop; Commit is dispatched async

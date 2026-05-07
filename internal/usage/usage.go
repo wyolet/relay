@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/eventlog"
 )
 
@@ -72,6 +73,14 @@ type Lifecycle struct {
 	EndedAt       time.Time         `json:"ended_at"`
 	InstanceID    string            `json:"instance_id"`
 	RelayVersion  string            `json:"relay_version"`
+
+	// Cost is the computed request cost, populated by Record.
+	Cost     float64 `json:"cost,omitempty"`
+	Currency string  `json:"currency,omitempty"`
+
+	// EffectivePricing is the merged pricing for the model, set by the pipeline
+	// before calling Record. Record uses it to compute Cost + Currency.
+	EffectivePricing *catalog.Pricing `json:"-"`
 
 	span trace.Span
 }

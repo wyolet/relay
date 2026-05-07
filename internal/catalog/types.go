@@ -44,6 +44,19 @@ type ProviderSpec struct {
 	BaseURL     string       `yaml:"baseURL"     json:"baseURL"`
 	Default     bool         `yaml:"default,omitempty"     json:"default,omitempty"`
 	DefaultPool string       `yaml:"defaultPool,omitempty" json:"defaultPool,omitempty"`
+
+	// Display metadata — operator-set, optional.
+	DisplayName   string `yaml:"displayName,omitempty"   json:"displayName,omitempty"`
+	Description   string `yaml:"description,omitempty"   json:"description,omitempty"`
+	HomepageURL   string `yaml:"homepageURL,omitempty"   json:"homepageURL,omitempty"`
+	DocsURL       string `yaml:"docsURL,omitempty"       json:"docsURL,omitempty"`
+	ConsoleURL    string `yaml:"consoleURL,omitempty"    json:"consoleURL,omitempty"`
+	StatusPageURL string `yaml:"statusPageURL,omitempty" json:"statusPageURL,omitempty"`
+	LogoURL       string `yaml:"logoURL,omitempty"       json:"logoURL,omitempty"`
+
+	// DefaultPricing is merged with Model.Spec.Pricing at snapshot load.
+	// Model-level rates win on collision per-key.
+	DefaultPricing *Pricing `yaml:"defaultPricing,omitempty" json:"defaultPricing,omitempty"`
 }
 
 type Secret struct {
@@ -100,31 +113,63 @@ type ModelSpec struct {
 	Capabilities Capabilities `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 	Modalities   Modalities   `yaml:"modalities,omitempty"   json:"modalities,omitempty"`
 
+	// ContextWindow is the legacy field (alias for ContextWindowTotal). Kept for backward compat.
 	ContextWindow   int `yaml:"contextWindow,omitempty"   json:"contextWindow,omitempty"`
 	MaxOutputTokens int `yaml:"maxOutputTokens,omitempty" json:"maxOutputTokens,omitempty"`
 
+	// Context window split. ContextWindow continues to parse as ContextWindowTotal alias.
+	ContextWindowInput  int `yaml:"contextWindowInput,omitempty"  json:"contextWindowInput,omitempty"`
+	ContextWindowOutput int `yaml:"contextWindowOutput,omitempty" json:"contextWindowOutput,omitempty"`
+	ContextWindowTotal  int `yaml:"contextWindowTotal,omitempty"  json:"contextWindowTotal,omitempty"`
+
 	Pricing *Pricing `yaml:"pricing,omitempty" json:"pricing,omitempty"`
 
-	KnowledgeCutoff string `yaml:"knowledgeCutoff,omitempty" json:"knowledgeCutoff,omitempty"`
-	ReleaseDate     string `yaml:"releaseDate,omitempty"     json:"releaseDate,omitempty"`
-	DeprecationDate string `yaml:"deprecationDate,omitempty" json:"deprecationDate,omitempty"`
+	KnowledgeCutoff string      `yaml:"knowledgeCutoff,omitempty" json:"knowledgeCutoff,omitempty"`
+	ReleaseDate     string      `yaml:"releaseDate,omitempty"     json:"releaseDate,omitempty"`
+	DeprecationDate string      `yaml:"deprecationDate,omitempty" json:"deprecationDate,omitempty"`
+	Deprecation     *Deprecation `yaml:"deprecation,omitempty"    json:"deprecation,omitempty"`
 
 	Documentation string `yaml:"documentation,omitempty" json:"documentation,omitempty"`
 	License       string `yaml:"license,omitempty"       json:"license,omitempty"`
 
+	// Display metadata.
+	DisplayName          string   `yaml:"displayName,omitempty"          json:"displayName,omitempty"`
+	Aliases              []string `yaml:"aliases,omitempty"              json:"aliases,omitempty"`
+	Tags                 []string `yaml:"tags,omitempty"                 json:"tags,omitempty"`
+	ProviderModelPageURL string   `yaml:"providerModelPageURL,omitempty" json:"providerModelPageURL,omitempty"`
+
 	RateLimits []RateLimitAttachment `yaml:"rateLimits,omitempty" json:"rateLimits,omitempty"`
+}
+
+// Deprecation describes the lifecycle state of a model.
+type Deprecation struct {
+	Status      string `yaml:"status,omitempty"      json:"status,omitempty"` // active | deprecated | sunset
+	SunsetDate  string `yaml:"sunsetDate,omitempty"  json:"sunsetDate,omitempty"`
+	Replacement string `yaml:"replacement,omitempty" json:"replacement,omitempty"`
 }
 
 type Capabilities struct {
 	Chat             bool `yaml:"chat,omitempty"             json:"chat,omitempty"`
 	Embeddings       bool `yaml:"embeddings,omitempty"       json:"embeddings,omitempty"`
+	Streaming        bool `yaml:"streaming,omitempty"        json:"streaming,omitempty"`
 	Tools            bool `yaml:"tools,omitempty"            json:"tools,omitempty"`
+	ParallelTools    bool `yaml:"parallelTools,omitempty"    json:"parallelTools,omitempty"`
 	Vision           bool `yaml:"vision,omitempty"           json:"vision,omitempty"`
 	Audio            bool `yaml:"audio,omitempty"            json:"audio,omitempty"`
-	Streaming        bool `yaml:"streaming,omitempty"        json:"streaming,omitempty"`
+	PromptCache      bool `yaml:"promptCache,omitempty"      json:"promptCache,omitempty"`
+	Reasoning        bool `yaml:"reasoning,omitempty"        json:"reasoning,omitempty"`
 	JSONMode         bool `yaml:"jsonMode,omitempty"         json:"jsonMode,omitempty"`
 	StructuredOutput bool `yaml:"structuredOutput,omitempty" json:"structuredOutput,omitempty"`
-	Reasoning        bool `yaml:"reasoning,omitempty"        json:"reasoning,omitempty"`
+	// StructuredOutputs is a preferred alias for StructuredOutput; both are accepted.
+	StructuredOutputs bool `yaml:"structuredOutputs,omitempty" json:"structuredOutputs,omitempty"`
+	Batch             bool `yaml:"batch,omitempty"             json:"batch,omitempty"`
+	ComputerUse       bool `yaml:"computerUse,omitempty"       json:"computerUse,omitempty"`
+	WebSearch         bool `yaml:"webSearch,omitempty"         json:"webSearch,omitempty"`
+	FileInput         bool `yaml:"fileInput,omitempty"         json:"fileInput,omitempty"`
+	AudioInput        bool `yaml:"audioInput,omitempty"        json:"audioInput,omitempty"`
+	AudioOutput       bool `yaml:"audioOutput,omitempty"       json:"audioOutput,omitempty"`
+	SystemMessages    bool `yaml:"systemMessages,omitempty"    json:"systemMessages,omitempty"`
+	AssistantPrefill  bool `yaml:"assistantPrefill,omitempty"  json:"assistantPrefill,omitempty"`
 }
 
 type Modalities struct {
@@ -132,12 +177,23 @@ type Modalities struct {
 	Output []string `yaml:"output,omitempty" json:"output,omitempty"`
 }
 
-// Pricing in USD per million tokens.
+// Pricing describes per-unit costs for a model or provider default.
+// Keys in Rates are open-ended meter names (e.g. "tokens.input", "tokens.output",
+// "tokens.cache_read", "requests", "images").
 type Pricing struct {
-	Input       float64 `yaml:"input"                json:"input"`
-	CachedInput float64 `yaml:"cachedInput,omitempty" json:"cachedInput,omitempty"`
-	Output      float64 `yaml:"output"               json:"output"`
+	Currency string             `yaml:"currency"           json:"currency"` // ISO 4217 code e.g. "USD"
+	Unit     PricingUnit        `yaml:"unit"               json:"unit"`     // per_million | per_thousand | per_unit
+	Rates    map[string]float64 `yaml:"rates,omitempty"    json:"rates,omitempty"`
 }
+
+// PricingUnit is the denominator for rates.
+type PricingUnit string
+
+const (
+	PricingUnitPerMillion  PricingUnit = "per_million"
+	PricingUnitPerThousand PricingUnit = "per_thousand"
+	PricingUnitPerUnit     PricingUnit = "per_unit"
+)
 
 type Route struct {
 	APIVersion string    `yaml:"apiVersion" json:"apiVersion,omitempty"`

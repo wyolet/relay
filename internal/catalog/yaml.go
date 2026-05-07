@@ -45,6 +45,7 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 	if err := validate(snap); err != nil {
 		return nil, err
 	}
+	snap.buildEffectivePricing()
 	return &YAMLStore{snap: snap}, nil
 }
 
@@ -99,6 +100,9 @@ func (s *YAMLStore) ProviderForModel(modelName string) (*Provider, bool) {
 func (s *YAMLStore) SecretsForPool(p *Pool) []*Secret { return s.snap.secretsForPool(p) }
 func (s *YAMLStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
 	return s.snap.rateLimitsForRequest(provider, pool, model, secret)
+}
+func (s *YAMLStore) EffectivePricing(modelName string) (*Pricing, bool) {
+	return s.snap.effectivePricingByModel(modelName)
 }
 
 type rawDoc struct {

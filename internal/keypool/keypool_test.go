@@ -335,7 +335,8 @@ func (c *stubCfg) Pools() []*catalog.Pool                             { return n
 func (c *stubCfg) DefaultProvider() *catalog.Provider                 { return nil }
 func (c *stubCfg) DefaultRoute() *catalog.Route                       { return nil }
 func (c *stubCfg) ProviderForModel(_ string) (*catalog.Provider, bool) { return nil, false }
-func (c *stubCfg) SecretsForPool(_ *catalog.Pool) []*catalog.Secret { return nil }
+func (c *stubCfg) SecretsForPool(_ *catalog.Pool) []*catalog.Secret   { return nil }
+func (c *stubCfg) EffectivePricing(_ string) (*catalog.Pricing, bool)  { return nil, false }
 
 // makeRule creates a ResolvedRule with a given meter and amount.
 func makeRule(name string, meter catalog.Meter, amount int64) catalog.ResolvedRule {

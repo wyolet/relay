@@ -6,6 +6,28 @@ import (
 )
 
 var (
+	// metricCostTotal tracks total cost by provider, model, and currency.
+	metricCostTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: "cost",
+			Name:      "total",
+			Help:      "Total computed request cost, by provider, model, and currency.",
+		},
+		[]string{"provider", "model", "currency"},
+	)
+
+	// metricUnpricedMeter counts occurrences where a meter has tokens but no configured rate.
+	metricUnpricedMeter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: "cost",
+			Name:      "unpriced_meter_total",
+			Help:      "Total requests where a token meter had no configured pricing rate.",
+		},
+		[]string{"meter"},
+	)
+
 	// metricTokensTotal counts tokens consumed, broken out by provider and token type.
 	// Label "type" matches the Tokens map key convention (input, output, cache_read, …).
 	metricTokensTotal = prometheus.NewCounterVec(
@@ -52,6 +74,8 @@ var (
 
 func init() {
 	metrics.Register(
+		metricCostTotal,
+		metricUnpricedMeter,
 		metricTokensTotal,
 		metricMetadataRejectedOversize,
 		metricMetadataRejectedBadCharset,

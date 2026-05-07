@@ -6,12 +6,19 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 )
 
 // meterRE matches valid multi-rule meter strings.
 // Accepted forms: requests, concurrency, tokens, tokens.<suffix>
 var meterRE = regexp.MustCompile(`^(requests|concurrency|tokens|tokens\.[a-z][a-z0-9_]*)$`)
+
+// pricingRateKeyRE matches valid Pricing.Rates keys.
+var pricingRateKeyRE = regexp.MustCompile(`^[a-z][a-z0-9_.]*$`)
+
+// isoCurrencyRE matches 3-letter uppercase ISO 4217 currency codes.
+var isoCurrencyRE = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // sourceRE matches the optional attribution source field.
 var sourceRE = regexp.MustCompile(`^attribution\.[a-z][a-z0-9_]*$`)
@@ -109,6 +116,37 @@ func validatePools(s *snapshot) error {
 	return nil
 }
 
+func validateURL(field, val string) error {
+	u, err := url.Parse(val)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("%s invalid (%q)", field, val)
+	}
+	return nil
+}
+
+func validatePricing(context string, pr *Pricing) error {
+	if pr == nil {
+		return nil
+	}
+	if pr.Currency != "" && !isoCurrencyRE.MatchString(pr.Currency) {
+		return fmt.Errorf("%s: pricing.currency %q must be a 3-letter uppercase ISO code or empty", context, pr.Currency)
+	}
+	switch pr.Unit {
+	case PricingUnitPerMillion, PricingUnitPerThousand, PricingUnitPerUnit, "":
+	default:
+		return fmt.Errorf("%s: pricing.unit %q must be one of per_million, per_thousand, per_unit", context, pr.Unit)
+	}
+	for k, v := range pr.Rates {
+		if !pricingRateKeyRE.MatchString(k) {
+			return fmt.Errorf("%s: pricing.rates key %q must match ^[a-z][a-z0-9_.]*$", context, k)
+		}
+		if v < 0 {
+			return fmt.Errorf("%s: pricing.rates[%q] must be >= 0", context, k)
+		}
+	}
+	return nil
+}
+
 func validateProviders(s *snapshot) error {
 	defaults := 0
 	for _, p := range s.providers {
@@ -123,9 +161,25 @@ func validateProviders(s *snapshot) error {
 		if p.Spec.BaseURL == "" {
 			return fmt.Errorf("Provider %q: baseURL required", p.Metadata.Name)
 		}
-		u, err := url.Parse(p.Spec.BaseURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("Provider %q: baseURL invalid (%q)", p.Metadata.Name, p.Spec.BaseURL)
+		if err := validateURL(fmt.Sprintf("Provider %q: baseURL", p.Metadata.Name), p.Spec.BaseURL); err != nil {
+			return err
+		}
+		// Validate optional URL fields.
+		for field, val := range map[string]string{
+			"homepageURL":   p.Spec.HomepageURL,
+			"docsURL":       p.Spec.DocsURL,
+			"consoleURL":    p.Spec.ConsoleURL,
+			"statusPageURL": p.Spec.StatusPageURL,
+			"logoURL":       p.Spec.LogoURL,
+		} {
+			if val != "" {
+				if err := validateURL(fmt.Sprintf("Provider %q: %s", p.Metadata.Name, field), val); err != nil {
+					return err
+				}
+			}
+		}
+		if err := validatePricing(fmt.Sprintf("Provider %q", p.Metadata.Name), p.Spec.DefaultPricing); err != nil {
+			return err
 		}
 	}
 	if defaults > 1 {
@@ -147,6 +201,20 @@ func validateProviders(s *snapshot) error {
 }
 
 func validateModels(s *snapshot) error {
+	// Build a lookup of all names and aliases to check for collisions.
+	allNames := make(map[string]string) // name/alias -> model name
+	for _, m := range s.models {
+		allNames[m.Metadata.Name] = m.Metadata.Name
+	}
+	for _, m := range s.models {
+		for _, alias := range m.Spec.Aliases {
+			if existing, ok := allNames[alias]; ok && existing != m.Metadata.Name {
+				return fmt.Errorf("Model %q: alias %q collides with model or alias %q", m.Metadata.Name, alias, existing)
+			}
+			allNames[alias] = m.Metadata.Name
+		}
+	}
+
 	for _, m := range s.models {
 		if m.Spec.Provider == "" {
 			return fmt.Errorf("Model %q: provider required", m.Metadata.Name)
@@ -156,6 +224,37 @@ func validateModels(s *snapshot) error {
 		}
 		if m.Spec.UpstreamName == "" {
 			return fmt.Errorf("Model %q: upstreamName required", m.Metadata.Name)
+		}
+		// Validate context window fields.
+		if m.Spec.ContextWindow < 0 || m.Spec.ContextWindowInput < 0 || m.Spec.ContextWindowOutput < 0 || m.Spec.ContextWindowTotal < 0 {
+			return fmt.Errorf("Model %q: context window values must be non-negative", m.Metadata.Name)
+		}
+		// Validate pricing.
+		if err := validatePricing(fmt.Sprintf("Model %q", m.Metadata.Name), m.Spec.Pricing); err != nil {
+			return err
+		}
+		// Validate deprecation status.
+		if m.Spec.Deprecation != nil {
+			switch m.Spec.Deprecation.Status {
+			case "", "active", "deprecated", "sunset":
+			default:
+				return fmt.Errorf("Model %q: deprecation.status %q must be one of active, deprecated, sunset", m.Metadata.Name, m.Spec.Deprecation.Status)
+			}
+		}
+		// Validate optional URL fields.
+		if m.Spec.ProviderModelPageURL != "" {
+			if err := validateURL(fmt.Sprintf("Model %q: providerModelPageURL", m.Metadata.Name), m.Spec.ProviderModelPageURL); err != nil {
+				return err
+			}
+		}
+		// Validate alias uniqueness within the model.
+		seen := make(map[string]struct{}, len(m.Spec.Aliases))
+		for _, alias := range m.Spec.Aliases {
+			aliasLower := strings.ToLower(alias)
+			if _, dup := seen[aliasLower]; dup {
+				return fmt.Errorf("Model %q: duplicate alias %q", m.Metadata.Name, alias)
+			}
+			seen[aliasLower] = struct{}{}
 		}
 	}
 	return nil

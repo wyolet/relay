@@ -28,6 +28,7 @@ func NewMemStore(objects ...any) *MemStore {
 			snap.rateLimits[v.Metadata.Name] = v
 		}
 	}
+	snap.buildEffectivePricing()
 	return &MemStore{snap: snap}
 }
 
@@ -51,4 +52,7 @@ func (m *MemStore) ProviderForModel(modelName string) (*Provider, bool) {
 func (m *MemStore) SecretsForPool(p *Pool) []*Secret { return m.snap.secretsForPool(p) }
 func (m *MemStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
 	return m.snap.rateLimitsForRequest(provider, pool, model, secret)
+}
+func (m *MemStore) EffectivePricing(modelName string) (*Pricing, bool) {
+	return m.snap.effectivePricingByModel(modelName)
 }

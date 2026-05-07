@@ -4,12 +4,13 @@ import "sort"
 
 // snapshot is the in-memory view of the catalog, shared by YAMLStore and PGStore.
 type snapshot struct {
-	providers  map[string]*Provider
-	models     map[string]*Model
-	routes     map[string]*Route
-	rateLimits map[string]*RateLimit
-	secrets    map[string]*Secret
-	pools      map[string]*Pool
+	providers       map[string]*Provider
+	models          map[string]*Model
+	routes          map[string]*Route
+	rateLimits      map[string]*RateLimit
+	secrets         map[string]*Secret
+	pools           map[string]*Pool
+	effectivePrices map[string]*Pricing // keyed by model name; populated by buildEffectivePricing
 }
 
 func labelsMatch(selector, labels map[string]string) bool {
@@ -23,13 +24,74 @@ func labelsMatch(selector, labels map[string]string) bool {
 
 func newSnapshot() *snapshot {
 	return &snapshot{
-		providers:  map[string]*Provider{},
-		models:     map[string]*Model{},
-		routes:     map[string]*Route{},
-		rateLimits: map[string]*RateLimit{},
-		secrets:    map[string]*Secret{},
-		pools:      map[string]*Pool{},
+		providers:       map[string]*Provider{},
+		models:          map[string]*Model{},
+		routes:          map[string]*Route{},
+		rateLimits:      map[string]*RateLimit{},
+		secrets:         map[string]*Secret{},
+		pools:           map[string]*Pool{},
+		effectivePrices: map[string]*Pricing{},
 	}
+}
+
+// buildEffectivePricing pre-computes the merged pricing for every model.
+// Must be called after providers and models are fully populated.
+func (s *snapshot) buildEffectivePricing() {
+	s.effectivePrices = make(map[string]*Pricing, len(s.models))
+	for name, m := range s.models {
+		p := s.providers[m.Spec.Provider]
+		ep := effectivePricing(p, m)
+		if ep != nil {
+			s.effectivePrices[name] = ep
+		}
+	}
+}
+
+// effectivePricing merges Provider.DefaultPricing with Model.Spec.Pricing.
+// Model-level values win on collision. Returns nil if neither is set.
+func effectivePricing(p *Provider, m *Model) *Pricing {
+	var provPricing *Pricing
+	if p != nil {
+		provPricing = p.Spec.DefaultPricing
+	}
+	modelPricing := m.Spec.Pricing
+
+	if provPricing == nil && modelPricing == nil {
+		return nil
+	}
+	if provPricing == nil {
+		return modelPricing
+	}
+	if modelPricing == nil {
+		return provPricing
+	}
+
+	// Merge: start with a copy of provider pricing, overlay model.
+	merged := &Pricing{
+		Currency: provPricing.Currency,
+		Unit:     provPricing.Unit,
+		Rates:    make(map[string]float64, len(provPricing.Rates)+len(modelPricing.Rates)),
+	}
+	for k, v := range provPricing.Rates {
+		merged.Rates[k] = v
+	}
+	// Model wins.
+	if modelPricing.Currency != "" {
+		merged.Currency = modelPricing.Currency
+	}
+	if modelPricing.Unit != "" {
+		merged.Unit = modelPricing.Unit
+	}
+	for k, v := range modelPricing.Rates {
+		merged.Rates[k] = v
+	}
+	return merged
+}
+
+// effectivePricingByModel returns the pre-computed effective pricing for a model.
+func (s *snapshot) effectivePricingByModel(modelName string) (*Pricing, bool) {
+	ep, ok := s.effectivePrices[modelName]
+	return ep, ok
 }
 
 func (s *snapshot) providerByName(name string) (*Provider, bool) {

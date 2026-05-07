@@ -55,6 +55,8 @@ type Event struct {
 	RelayVersion string            `json:"relay_version"`
 	StartedAt    string            `json:"started_at"`
 	EndedAt      string            `json:"ended_at"`
+	Cost         float64           `json:"cost,omitempty"`
+	Currency     string            `json:"currency,omitempty"`
 }
 
 // sink is the internal backend interface. It receives pre-marshaled JSON bytes.

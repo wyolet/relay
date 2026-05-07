@@ -51,6 +51,8 @@ var InboundAllowlist = []string{
 	"X-Request-ID",
 	"X-Relay-Metadata",
 	"Authorization",
+	"Anthropic-Version",
+	"Anthropic-Beta",
 }
 
 // OutboundAllowlist is the set of headers forwarded on upstream requests.
@@ -66,6 +68,8 @@ var OutboundAllowlist = []string{
 	"User-Agent",
 	"X-Request-ID",
 	"OpenAI-Beta",
+	"Anthropic-Version",
+	"Anthropic-Beta",
 }
 
 // StripInbound removes every header from h that is not in InboundAllowlist.

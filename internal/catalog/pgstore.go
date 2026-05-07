@@ -102,6 +102,7 @@ func (s *PGStore) Reload(ctx context.Context) error {
 	if err := validate(snap); err != nil {
 		return fmt.Errorf("catalog.PGStore.Reload: catalog invalid: %w", err)
 	}
+	snap.buildEffectivePricing()
 	s.mu.Lock()
 	s.snap = snap
 	s.mu.Unlock()
@@ -135,6 +136,9 @@ func (s *PGStore) ProviderForModel(modelName string) (*Provider, bool) {
 func (s *PGStore) SecretsForPool(p *Pool) []*Secret { return s.cur().secretsForPool(p) }
 func (s *PGStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, sec *Secret) []ResolvedRule {
 	return s.cur().rateLimitsForRequest(provider, pool, model, sec)
+}
+func (s *PGStore) EffectivePricing(modelName string) (*Pricing, bool) {
+	return s.cur().effectivePricingByModel(modelName)
 }
 
 func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {

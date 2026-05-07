@@ -18,4 +18,7 @@ type Store interface {
 	ProviderForModel(modelName string) (*Provider, bool)
 	SecretsForPool(p *Pool) []*Secret
 	RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule
+	// EffectivePricing returns the merged pricing for a model (provider default +
+	// model-level overlay). Returns nil, false when no pricing is configured.
+	EffectivePricing(modelName string) (*Pricing, bool)
 }

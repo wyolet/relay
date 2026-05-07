@@ -87,6 +87,13 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		relayVersion = cachedRelayVersion
 	}
 
+	// Compute cost from effective pricing if available.
+	if cost, currency, ok := Cost(lc.Tokens, lc.EffectivePricing); ok && cost > 0 {
+		lc.Cost = cost
+		lc.Currency = currency
+		metricCostTotal.WithLabelValues(lc.Provider, lc.Model, currency).Add(cost)
+	}
+
 	rec := eventlog.Event{
 		EventVersion: 1,
 		RequestID:    lc.RequestID,
@@ -95,7 +102,7 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		Pool:         lc.Pool,
 		SecretHash:   lc.SecretHash,
 		TerminatedBy: string(lc.TerminatedBy),
-		Tokens: map[string]int64(lc.Tokens),
+		Tokens:       map[string]int64(lc.Tokens),
 		Attempts:     attemptsToRecords(lc.Attempts),
 		Attribution:  lc.Attribution,
 		Metrics:      lc.Metrics,
@@ -103,6 +110,8 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		RelayVersion: relayVersion,
 		StartedAt:    lc.StartedAt.UTC().Format("2006-01-02T15:04:05.999999999Z"),
 		EndedAt:      lc.EndedAt.UTC().Format("2006-01-02T15:04:05.999999999Z"),
+		Cost:         lc.Cost,
+		Currency:     lc.Currency,
 	}
 
 	if defaultEventLogger != nil {
@@ -140,6 +149,12 @@ func Record(ctx context.Context, lc *Lifecycle) {
 	}
 	for k, v := range lc.Tokens {
 		attrs = append(attrs, attribute.Int64("relay.tokens."+k, v))
+	}
+	if lc.Cost > 0 {
+		attrs = append(attrs,
+			attribute.Float64("relay.cost", lc.Cost),
+			attribute.String("relay.currency", lc.Currency),
+		)
 	}
 	for k, v := range lc.Metrics {
 		attrs = append(attrs, attribute.Int64("relay.metrics."+k, v))

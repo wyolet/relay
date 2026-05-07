@@ -347,6 +347,7 @@ func main() {
 				Limiter:        limiter,
 				Rules:          plan.Rules,
 				TokenExtractor: apiopenai.ExtractTokens,
+				CatalogStore:   catalogStore,
 			})
 		}
 		emptySecret := &catalog.Secret{
@@ -383,6 +384,7 @@ func main() {
 				Limiter:        limiter,
 				Rules:          plan.Rules,
 				TokenExtractor: apianthropic.ExtractTokens,
+				CatalogStore:   catalogStore,
 			})
 		}
 		emptySecret := &catalog.Secret{

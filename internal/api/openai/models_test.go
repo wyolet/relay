@@ -33,6 +33,7 @@ func (f *fakeStore) SecretsForPool(*catalog.Pool) []*catalog.Secret            {
 func (f *fakeStore) RateLimitsForRequest(*catalog.Provider, *catalog.Pool, *catalog.Model, *catalog.Secret) []catalog.ResolvedRule {
 	return nil
 }
+func (f *fakeStore) EffectivePricing(string) (*catalog.Pricing, bool) { return nil, false }
 
 func makeModel(name, provider string) *catalog.Model {
 	return &catalog.Model{
