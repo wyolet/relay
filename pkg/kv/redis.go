@@ -101,6 +101,10 @@ func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Dura
 	return r.client.Set(ctx, key, value, ttl).Err()
 }
 
+func (r *Redis) Del(ctx context.Context, key string) error {
+	return r.client.Del(ctx, key).Err()
+}
+
 func (r *Redis) Incr(ctx context.Context, key string, delta int64) (int64, error) {
 	return r.client.IncrBy(ctx, key, delta).Result()
 }

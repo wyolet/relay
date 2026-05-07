@@ -8,15 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/keypool"
+	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 const relayVersion = "0.1.0"
@@ -86,6 +89,7 @@ type adminCRUD struct {
 	kinds   *adminKinds
 	deps    *crud.Deps
 	pgStore *catalog.PGStore // for secrets/attachment typed handlers
+	kvStore kv.Store         // for best-effort Redis cleanup on secret delete
 }
 
 // mountHuma wraps chiRouter in a humachi-backed huma API and registers all operations.
@@ -332,7 +336,7 @@ func mountHuma(
 
 		// --- Secret endpoints ---
 		if crudArg.pgStore != nil {
-			registerTypedSecretOps(api, crudArg.pgStore, crudArg.deps, adminAuth)
+			registerTypedSecretOps(api, crudArg.pgStore, crudArg.deps, crudArg.kvStore, adminAuth)
 
 			// --- Attachment endpoint ---
 			registerTypedAttachmentOps(api, crudArg.pgStore, adminAuth)
@@ -444,7 +448,7 @@ func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, name stri
 	}
 }
 
-func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Deps, adminAuth huma.Middlewares) {
+func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Deps, kvStore kv.Store, adminAuth huma.Middlewares) {
 	// List
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_secret_list",
@@ -562,9 +566,11 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		Middlewares:   adminAuth,
 		DefaultStatus: http.StatusNoContent,
 	}, func(ctx context.Context, in *secretNamePathInput) (*struct{}, error) {
-		if _, ok := store.SecretByName(in.Name); !ok {
+		sec, ok := store.SecretByName(in.Name)
+		if !ok {
 			return nil, huma.NewError(http.StatusNotFound, fmt.Sprintf("Secret %q not found", in.Name))
 		}
+		keyHash := sec.KeyHash
 		if verr := deps.Patcher.ValidateWithPatch(catalog.Patch{DeleteSecret: in.Name}); verr != nil {
 			return nil, huma.NewError(http.StatusBadRequest, verr.Error())
 		}
@@ -575,6 +581,14 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())
+		}
+		// Best-effort: delete the orphaned circuit-breaker key from Redis (R-8).
+		// The catalog write already succeeded; a Redis error is non-fatal.
+		if kvStore != nil && keyHash != "" {
+			if err := keypool.ClearCircuit(ctx, kvStore, keyHash); err != nil {
+				slog.Warn("secret delete: could not clear circuit-breaker key from Redis",
+					"secret", in.Name, "keyHash", keyHash, "err", err)
+			}
 		}
 		return nil, nil
 	})

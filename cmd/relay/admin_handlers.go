@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/admin/crud"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 // adminKinds bundles the five kind handlers produced by the PER-265 factory.
@@ -303,12 +304,13 @@ func adminTokenGate(token string) func(http.Handler) http.Handler {
 }
 
 // buildAdminCRUD constructs the adminCRUD bundle used by mountHuma.
-func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore) *adminCRUD {
+func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore, kvStore kv.Store) *adminCRUD {
 	depsCopy := deps
 	kindsCopy := kinds
 	return &adminCRUD{
 		kinds:   &kindsCopy,
 		deps:    &depsCopy,
 		pgStore: store,
+		kvStore: kvStore,
 	}
 }

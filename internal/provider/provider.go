@@ -23,25 +23,34 @@ type Outbound interface {
 	ChatCompletions(ctx context.Context, body []byte, secret string, out chan<- *transport.Message) error
 }
 
-// Registry maps a catalog.ProviderKind to an Outbound implementation.
+// registryKey uniquely identifies a provider client by kind and base URL.
+// Caching by (Kind, BaseURL) means that a baseURL change in the catalog
+// automatically produces a cache miss and causes outboundFor to create a
+// fresh client — no explicit invalidation needed on admin writes.
+type registryKey struct {
+	Kind    catalog.ProviderKind
+	BaseURL string
+}
+
+// Registry maps a (catalog.ProviderKind, baseURL) pair to an Outbound implementation.
 type Registry struct {
-	byKind map[catalog.ProviderKind]Outbound
+	byKey map[registryKey]Outbound
 }
 
 func NewRegistry() *Registry {
-	return &Registry{byKind: make(map[catalog.ProviderKind]Outbound)}
+	return &Registry{byKey: make(map[registryKey]Outbound)}
 }
 
-// Register associates a kind with an Outbound. Last write wins.
-func (r *Registry) Register(kind catalog.ProviderKind, o Outbound) {
-	r.byKind[kind] = o
+// Register associates a (kind, baseURL) pair with an Outbound. Last write wins.
+func (r *Registry) Register(kind catalog.ProviderKind, baseURL string, o Outbound) {
+	r.byKey[registryKey{Kind: kind, BaseURL: baseURL}] = o
 }
 
-// Get returns the Outbound for a kind, or an error if none registered.
-func (r *Registry) Get(kind catalog.ProviderKind) (Outbound, error) {
-	o, ok := r.byKind[kind]
+// Get returns the Outbound for a (kind, baseURL) pair, or an error if none registered.
+func (r *Registry) Get(kind catalog.ProviderKind, baseURL string) (Outbound, error) {
+	o, ok := r.byKey[registryKey{Kind: kind, BaseURL: baseURL}]
 	if !ok {
-		return nil, fmt.Errorf("provider: no outbound registered for kind %q", kind)
+		return nil, fmt.Errorf("provider: no outbound registered for kind %q baseURL %q", kind, baseURL)
 	}
 	return o, nil
 }

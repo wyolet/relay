@@ -239,6 +239,16 @@ func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *c
 	return chosen.secret, nil
 }
 
+// ClearCircuit deletes the circuit-breaker record for a secret from the KV
+// store. This is best-effort: if the DEL fails the error is returned to the
+// caller, who should log a warning but not fail the outer operation.
+//
+// Use this when a secret is permanently deleted from the catalog so that
+// orphaned secret_health:* keys do not accumulate in Redis indefinitely (R-8).
+func ClearCircuit(ctx context.Context, store kv.Store, keyHash string) error {
+	return store.Del(ctx, circuitKey(keyHash))
+}
+
 // RecordSuccess transitions a key to CircuitClosed and resets backoff.
 func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 	now := s.clock()

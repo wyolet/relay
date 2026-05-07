@@ -58,7 +58,7 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, 
 
 	deps := crudDeps(st, store)
 	kinds := buildAdminKinds(store, st)
-	crudH := buildAdminCRUD(kinds, deps, store)
+	crudH := buildAdminCRUD(kinds, deps, store, nil)
 
 	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	authMW := auth.Middleware(nil)

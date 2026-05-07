@@ -259,37 +259,40 @@ func main() {
 	for _, p := range catalogStore.Providers() {
 		switch p.Spec.Kind {
 		case catalog.PKOllama:
-			reg.Register(catalog.PKOllama, ollama.New(p.Spec.BaseURL))
+			reg.Register(catalog.PKOllama, p.Spec.BaseURL, ollama.New(p.Spec.BaseURL))
 		case catalog.PKOpenAI:
 			baseURL := p.Spec.BaseURL
 			if baseURL == "" {
 				baseURL = "https://api.openai.com"
 			}
-			reg.Register(catalog.PKOpenAI, openai.New(baseURL))
+			reg.Register(catalog.PKOpenAI, baseURL, openai.New(baseURL))
 		}
 	}
 
-	// outboundFor resolves the provider adapter for a request plan, registering
-	// it on-demand when the catalog was empty at startup (admin-API bootstrap).
+	// outboundFor resolves the provider adapter for a request plan.
+	// The registry is keyed by (Kind, BaseURL): a baseURL change in the catalog
+	// produces a cache miss, so the updated client is created and cached on the
+	// next request without any explicit invalidation.
 	outboundFor := func(plan *apiopenai.RequestPlan) (provider.Outbound, error) {
-		ob, err := reg.Get(plan.Provider.Spec.Kind)
+		// Normalise the baseURL exactly as we do at boot so the lookup key matches.
+		baseURL := plan.Provider.Spec.BaseURL
+		if plan.Provider.Spec.Kind == catalog.PKOpenAI && baseURL == "" {
+			baseURL = "https://api.openai.com"
+		}
+		ob, err := reg.Get(plan.Provider.Spec.Kind, baseURL)
 		if err == nil {
 			return ob, nil
 		}
 		// Not yet registered — create and cache it now.
 		switch plan.Provider.Spec.Kind {
 		case catalog.PKOllama:
-			ob = ollama.New(plan.Provider.Spec.BaseURL)
+			ob = ollama.New(baseURL)
 		case catalog.PKOpenAI:
-			baseURL := plan.Provider.Spec.BaseURL
-			if baseURL == "" {
-				baseURL = "https://api.openai.com"
-			}
 			ob = openai.New(baseURL)
 		default:
 			return nil, fmt.Errorf("provider: no outbound registered for kind %q", plan.Provider.Spec.Kind)
 		}
-		reg.Register(plan.Provider.Spec.Kind, ob)
+		reg.Register(plan.Provider.Spec.Kind, baseURL, ob)
 		return ob, nil
 	}
 
@@ -357,7 +360,7 @@ func main() {
 
 		deps := crudDeps(storageForAdmin, pgStoreForAdmin)
 		kinds := buildAdminKinds(pgStoreForAdmin, storageForAdmin)
-		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin)
+		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin, st)
 	}
 
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,

@@ -85,6 +85,11 @@ func (m *Mem) Get(_ context.Context, key string) ([]byte, error) {
 	return e.value, nil
 }
 
+func (m *Mem) Del(_ context.Context, key string) error {
+	m.data.Delete(key)
+	return nil
+}
+
 func (m *Mem) Set(_ context.Context, key string, value []byte, ttl time.Duration) error {
 	e := entry{value: value}
 	if ttl > 0 {

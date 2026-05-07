@@ -230,7 +230,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	}
 
 	reg := provider.NewRegistry()
-	reg.Register(catalog.PKOpenAI, providerOpenAI.New(stubURL))
+	reg.Register(catalog.PKOpenAI, stubURL, providerOpenAI.New(stubURL))
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	limiter := ratelimit.New(st, logger, nil)
@@ -239,7 +239,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	resolver := routing.New(cfg)
 
 	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) (pipeline.RunResult, error) {
-		ob, err := reg.Get(plan.Provider.Spec.Kind)
+		ob, err := reg.Get(plan.Provider.Spec.Kind, plan.Provider.Spec.BaseURL)
 		if err != nil {
 			return pipeline.RunResult{}, err
 		}
