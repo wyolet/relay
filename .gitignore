@@ -34,3 +34,4 @@ bench/litellm/.env
 # bench output artifacts
 bench/*.json
 
+/replay
