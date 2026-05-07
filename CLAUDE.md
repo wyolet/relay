@@ -84,6 +84,12 @@ Full guide: `docs/kv.md`.
 
 Full guide: `docs/storage.md`.
 
+### Cluster mode
+
+`RELAY_CLUSTER_MODE=on` enables multi-pod coordination — currently a PG NOTIFY/LISTEN catalog watcher; future: leader election, Redis Cluster client. Default `off` for single-pod. Producers (NOTIFY emit on catalog write) are unconditional; only consumers/listeners are gated by the flag.
+
+Full guide: `docs/cluster.md`.
+
 ### Streaming
 - Tee model: bytes pass through, parser goroutine extracts usage from a copy
 - Cross-format reserialize is a slower path; same-format passthrough is the 95% case

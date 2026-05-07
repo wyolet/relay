@@ -207,6 +207,24 @@ func main() {
 		if err := seedDefaultProviders(bootCtx, pgStore, st); err != nil {
 			slog.Warn("default provider seed failed", "err", err)
 		}
+
+		// Cluster mode: subscribe to PG NOTIFY relay_catalog so that catalog
+		// writes on any pod fan out to all other pods within ~100ms.
+		// The NOTIFY producer (in storage/catalog.go) is unconditional; only
+		// the LISTEN consumer is gated here.
+		if cfg.ClusterMode {
+			watcher, err := storagemod.NewCatalogWatcher(bootCtx, cfg.PGDSN, func() {
+				if err := pgStore.Reload(bootCtx); err != nil {
+					slog.Warn("cluster: catalog reload after NOTIFY failed", "err", err)
+				}
+			}, slog.Default())
+			if err != nil {
+				slog.Error("cluster: NewCatalogWatcher failed", "err", err)
+				os.Exit(1)
+			}
+			defer watcher.Close()
+			slog.Info("cluster mode enabled: subscribed to relay_catalog NOTIFY")
+		}
 	} else {
 		yamlStore, err := catalog.LoadYAML(cfg.ConfigDir)
 		if err != nil {

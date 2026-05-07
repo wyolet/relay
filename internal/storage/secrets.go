@@ -31,7 +31,10 @@ func (r *catalogRepo) UpsertSecretEnv(ctx context.Context, name, envVar, provide
 		Metadata:     metaJSON,
 		Spec:         specJSON,
 	})
-	return translateCatalogErr(err)
+	if err := translateCatalogErr(err); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // UpsertSecretStored inserts or updates a secret in stored (encrypted) mode.
@@ -52,7 +55,10 @@ func (r *catalogRepo) UpsertSecretStored(ctx context.Context, name, provider str
 		Metadata:        metaJSON,
 		Spec:            specJSON,
 	})
-	return translateCatalogErr(err)
+	if err := translateCatalogErr(err); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // UpdateSecretEnv changes an existing secret to env-ref mode.
@@ -61,7 +67,10 @@ func (r *catalogRepo) UpdateSecretEnv(ctx context.Context, name, envVar string) 
 		Name:         name,
 		ValueFromEnv: pgtype.Text{String: envVar, Valid: true},
 	})
-	return translateCatalogErr(err)
+	if err := translateCatalogErr(err); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // UpdateSecretStored rotates the ciphertext for a stored-mode secret.
@@ -72,10 +81,16 @@ func (r *catalogRepo) UpdateSecretStored(ctx context.Context, name string, ciphe
 		ValueCiphertext: ciphertext,
 		ValueNonce:      nonce,
 	})
-	return translateCatalogErr(err)
+	if err := translateCatalogErr(err); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // DeleteSecret removes a secret by name.
 func (r *catalogRepo) DeleteSecret(ctx context.Context, name string) error {
-	return translateCatalogErr(gen.New(r.db).DeleteSecret(ctx, name))
+	if err := translateCatalogErr(gen.New(r.db).DeleteSecret(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -28,7 +29,10 @@ func (r *catalogRepo) UpsertProvider(ctx context.Context, p catalog.Provider) er
 		Metadata: meta,
 		Spec:     spec,
 	})
-	return translateCatalogErr(err)
+	if err := translateCatalogErr(err); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 func (r *catalogRepo) ListProviders(ctx context.Context) ([]catalog.Provider, error) {
@@ -48,7 +52,10 @@ func (r *catalogRepo) ListProviders(ctx context.Context) ([]catalog.Provider, er
 }
 
 func (r *catalogRepo) DeleteProvider(ctx context.Context, name string) error {
-	return translateCatalogErr(gen.New(r.db).DeleteProvider(ctx, name))
+	if err := translateCatalogErr(gen.New(r.db).DeleteProvider(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // ── Pool ──────────────────────────────────────────────────────────────────────
@@ -58,11 +65,14 @@ func (r *catalogRepo) UpsertPool(ctx context.Context, p catalog.Pool) error {
 	if err != nil {
 		return fmt.Errorf("storage: UpsertPool %q: %w", p.Metadata.Name, err)
 	}
-	return translateCatalogErr(gen.New(r.db).UpsertPool(ctx, gen.UpsertPoolParams{
+	if err := translateCatalogErr(gen.New(r.db).UpsertPool(ctx, gen.UpsertPoolParams{
 		Name:     p.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
-	}))
+	})); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 func (r *catalogRepo) ListPools(ctx context.Context) ([]catalog.Pool, error) {
@@ -88,7 +98,10 @@ func (r *catalogRepo) ListPools(ctx context.Context) ([]catalog.Pool, error) {
 }
 
 func (r *catalogRepo) DeletePool(ctx context.Context, name string) error {
-	return translateCatalogErr(gen.New(r.db).DeletePool(ctx, name))
+	if err := translateCatalogErr(gen.New(r.db).DeletePool(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // ── Secret reads ──────────────────────────────────────────────────────────────
@@ -129,11 +142,14 @@ func (r *catalogRepo) UpsertModel(ctx context.Context, m catalog.Model) error {
 	if err != nil {
 		return fmt.Errorf("storage: UpsertModel %q: %w", m.Metadata.Name, err)
 	}
-	return translateCatalogErr(gen.New(r.db).UpsertModel(ctx, gen.UpsertModelParams{
+	if err := translateCatalogErr(gen.New(r.db).UpsertModel(ctx, gen.UpsertModelParams{
 		Name:     m.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
-	}))
+	})); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 func (r *catalogRepo) ListModels(ctx context.Context) ([]catalog.Model, error) {
@@ -159,7 +175,10 @@ func (r *catalogRepo) ListModels(ctx context.Context) ([]catalog.Model, error) {
 }
 
 func (r *catalogRepo) DeleteModel(ctx context.Context, name string) error {
-	return translateCatalogErr(gen.New(r.db).DeleteModel(ctx, name))
+	if err := translateCatalogErr(gen.New(r.db).DeleteModel(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -169,11 +188,14 @@ func (r *catalogRepo) UpsertRoute(ctx context.Context, rt catalog.Route) error {
 	if err != nil {
 		return fmt.Errorf("storage: UpsertRoute %q: %w", rt.Metadata.Name, err)
 	}
-	return translateCatalogErr(gen.New(r.db).UpsertRoute(ctx, gen.UpsertRouteParams{
+	if err := translateCatalogErr(gen.New(r.db).UpsertRoute(ctx, gen.UpsertRouteParams{
 		Name:     rt.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
-	}))
+	})); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 func (r *catalogRepo) ListRoutes(ctx context.Context) ([]catalog.Route, error) {
@@ -199,7 +221,10 @@ func (r *catalogRepo) ListRoutes(ctx context.Context) ([]catalog.Route, error) {
 }
 
 func (r *catalogRepo) DeleteRoute(ctx context.Context, name string) error {
-	return translateCatalogErr(gen.New(r.db).DeleteRoute(ctx, name))
+	if err := translateCatalogErr(gen.New(r.db).DeleteRoute(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // ── RateLimit ─────────────────────────────────────────────────────────────────
@@ -209,11 +234,14 @@ func (r *catalogRepo) UpsertRateLimit(ctx context.Context, rl catalog.RateLimit)
 	if err != nil {
 		return fmt.Errorf("storage: UpsertRateLimit %q: %w", rl.Metadata.Name, err)
 	}
-	return translateCatalogErr(gen.New(r.db).UpsertRateLimit(ctx, gen.UpsertRateLimitParams{
+	if err := translateCatalogErr(gen.New(r.db).UpsertRateLimit(ctx, gen.UpsertRateLimitParams{
 		Name:     rl.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
-	}))
+	})); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 func (r *catalogRepo) ListRateLimits(ctx context.Context) ([]catalog.RateLimit, error) {
@@ -239,7 +267,10 @@ func (r *catalogRepo) ListRateLimits(ctx context.Context) ([]catalog.RateLimit, 
 }
 
 func (r *catalogRepo) DeleteRateLimit(ctx context.Context, name string) error {
-	return translateCatalogErr(gen.New(r.db).DeleteRateLimit(ctx, name))
+	if err := translateCatalogErr(gen.New(r.db).DeleteRateLimit(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // ── UpsertSecret (legacy seed path) ──────────────────────────────────────────
@@ -255,11 +286,14 @@ func (r *catalogRepo) UpsertSecretRaw(ctx context.Context, name string, meta cat
 	if err != nil {
 		return fmt.Errorf("storage: UpsertSecretRaw %q: marshal spec: %w", name, err)
 	}
-	return translateCatalogErr(gen.New(r.db).UpsertSecret(ctx, gen.UpsertSecretParams{
+	if err := translateCatalogErr(gen.New(r.db).UpsertSecret(ctx, gen.UpsertSecretParams{
 		Name:     name,
 		Metadata: mb,
 		Spec:     sb,
-	}))
+	})); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
 }
 
 // ── IsEmpty ───────────────────────────────────────────────────────────────────
@@ -308,6 +342,24 @@ func (r *catalogRepo) IsEmpty(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return len(rls) == 0, nil
+}
+
+// ── notifyCatalogChange ───────────────────────────────────────────────────────
+
+// notifyCatalogChange fires NOTIFY relay_catalog. Called by every write method
+// inside the same execution context (pool conn or tx). With no listeners the
+// message is dropped at commit; cost is microseconds. The producer is
+// unconditional — the consumer side is gated by RELAY_CLUSTER_MODE.
+//
+// Design choice: notify is best-effort. If it fails we log a warning and
+// return nil so the data write is still considered successful. Coupling the
+// data write to notify success would break single-pod deployments (no listeners)
+// by adding a failure mode with no benefit.
+func (r *catalogRepo) notifyCatalogChange(ctx context.Context) error {
+	if _, err := r.db.Exec(ctx, "SELECT pg_notify('relay_catalog', '')"); err != nil {
+		slog.Warn("storage: pg_notify relay_catalog failed (non-fatal)", "err", err)
+	}
+	return nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
