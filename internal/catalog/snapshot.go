@@ -100,8 +100,17 @@ func (s *snapshot) providerByName(name string) (*Provider, bool) {
 }
 
 func (s *snapshot) modelByName(name string) (*Model, bool) {
-	m, ok := s.models[name]
-	return m, ok
+	if m, ok := s.models[name]; ok {
+		return m, true
+	}
+	for _, m := range s.models {
+		for _, a := range m.Spec.Aliases {
+			if a == name {
+				return m, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (s *snapshot) routeByName(name string) (*Route, bool) {
