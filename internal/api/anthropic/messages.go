@@ -51,7 +51,9 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 
 		httpheader.StripInbound(r.Header)
 
+		tStrip := time.Now()
 		body, err := io.ReadAll(r.Body)
+		tRead := time.Now()
 		if err != nil {
 			if httpmw.IsBodyTooLargeError(err) {
 				statusCode = http.StatusRequestEntityTooLarge
@@ -64,7 +66,9 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			return
 		}
 
+		tParseStart := time.Now()
 		mr, parseErr := pkganthropic.Parse(body)
+		tParseEnd := time.Now()
 		if parseErr != nil {
 			if status, pbody, ok := pkganthropic.ParseError(parseErr); ok {
 				statusCode = status
@@ -81,6 +85,15 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		modelName = mr.Model
 
 		ctx := r.Context()
+
+		// TEMP instrumentation: log size + per-stage latency for big bodies.
+		if len(body) > 1<<20 {
+			reqid.Logger(ctx).Info("messages: big body",
+				"bytes", len(body),
+				"strip_to_read_ms", tRead.Sub(tStrip).Milliseconds(),
+				"parse_ms", tParseEnd.Sub(tParseStart).Milliseconds(),
+			)
+		}
 
 		plan, resolveErr := resolver.Resolve(routing.Request{
 			RouteHeader: r.Header.Get("X-Relay-Route"),
