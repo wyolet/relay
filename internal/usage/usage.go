@@ -137,6 +137,7 @@ func (c *countingExporter) ExportSpans(ctx context.Context, spans []sdktrace.Rea
 	err := c.SpanExporter.ExportSpans(ctx, spans)
 	if err != nil {
 		droppedSpans.Add(uint64(len(spans)))
+		metricDroppedSpans.Add(float64(len(spans)))
 	}
 	return err
 }

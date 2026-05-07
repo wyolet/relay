@@ -36,10 +36,13 @@ func incRejected(reason string) {
 	switch reason {
 	case ReasonOversize:
 		rejectedOversize.Add(1)
+		metricMetadataRejectedOversize.Inc()
 	case ReasonBadCharset:
 		rejectedBadCharset.Add(1)
+		metricMetadataRejectedBadCharset.Inc()
 	case ReasonMalformed:
 		rejectedMalformed.Add(1)
+		metricMetadataRejectedMalformed.Inc()
 	}
 }
 

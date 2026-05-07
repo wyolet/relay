@@ -116,6 +116,7 @@ func Record(ctx context.Context, lc *Lifecycle) {
 	if defaultEventLogger != nil {
 		if err := defaultEventLogger.Append(ctx, rec); err != nil {
 			droppedEvents.Add(1)
+			metricDroppedEvents.Inc()
 			slog.WarnContext(ctx, "usage.Record: eventlog drop", "err", err)
 		}
 	}

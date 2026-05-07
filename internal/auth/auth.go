@@ -39,8 +39,10 @@ func incRejected(reason string) {
 	switch reason {
 	case ReasonMissing:
 		rejectedMissing.Add(1)
+		metricRejectedMissing.Inc()
 	case ReasonInvalid:
 		rejectedInvalid.Add(1)
+		metricRejectedInvalid.Inc()
 	}
 }
 

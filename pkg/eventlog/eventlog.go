@@ -176,6 +176,7 @@ func New(cfg Config) (*Logger, error) {
 func (l *Logger) Append(_ context.Context, ev Event) error {
 	if l.closed.Load() {
 		l.dropped.Add(1)
+		metricDropped.Inc()
 		return ErrLoggerClosed
 	}
 
@@ -184,6 +185,7 @@ func (l *Logger) Append(_ context.Context, ev Event) error {
 		// Event is a concrete struct; this branch is unreachable in practice
 		// but we keep the drop counter consistent.
 		l.dropped.Add(1)
+		metricDropped.Inc()
 		return fmt.Errorf("%w: %v", ErrMarshalFailed, err)
 	}
 
@@ -192,6 +194,7 @@ func (l *Logger) Append(_ context.Context, ev Event) error {
 		return nil
 	default:
 		l.dropped.Add(1)
+		metricDropped.Inc()
 		return ErrBufferFull
 	}
 }
@@ -253,11 +256,13 @@ func (l *Logger) run() {
 func (l *Logger) writeOne(b []byte) {
 	if err := l.sk.write(b); err != nil {
 		l.dropped.Add(1)
+		metricDropped.Inc()
 		fmt.Fprintf(os.Stderr, "eventlog: write: %v\n", err)
 		return
 	}
 	now := l.cfg.Clock().UTC()
 	l.written.Add(1)
+	metricWritten.Inc()
 	l.mu.Lock()
 	l.lastWriteAt = now
 	l.mu.Unlock()

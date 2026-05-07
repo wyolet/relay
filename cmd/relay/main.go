@@ -31,6 +31,7 @@ import (
 	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/internal/usage"
 )
@@ -381,6 +382,10 @@ func main() {
 
 	// Mount the operator admin UI at /ui (unauthenticated static assets; PER-274 gates API calls).
 	mountUI(r)
+
+	// Prometheus metrics endpoint. No auth — scrapers reach this over the cluster
+	// network; protecting /metrics is a deployment concern, not application concern.
+	r.Method(http.MethodGet, "/metrics", metrics.Handler())
 
 	addr := ":8080"
 	srv := &http.Server{Addr: addr, Handler: r}
