@@ -49,11 +49,11 @@ func runSeedTo(out io.Writer, args []string) error {
 	if fromDir == "" {
 		return fmt.Errorf("--from <yaml-dir> is required")
 	}
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	if dsn == "" {
-		cfg, err := config.Load()
-		if err != nil {
-			return fmt.Errorf("config: %w", err)
-		}
 		dsn = cfg.PGDSN
 	}
 	if dsn == "" {
@@ -77,6 +77,9 @@ func runSeedTo(out io.Writer, args []string) error {
 	pgStore, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
 		return fmt.Errorf("pg store: %w", err)
+	}
+	if len(cfg.MasterKey) > 0 {
+		pgStore.SetMasterKey(cfg.MasterKey)
 	}
 
 	diff, err := pgStore.Diff(ctx, src)

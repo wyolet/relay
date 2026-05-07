@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+
+	"github.com/wyolet/relay/pkg/crypto"
 )
 
 // SeedDiff holds the human-readable diff between a source Store and the current PG state.
@@ -92,8 +94,24 @@ func (s *PGStore) Seed(ctx context.Context, src Store) error {
 			}
 		}
 		for _, sec := range src.Secrets() {
-			if err := db.UpsertSecretRaw(ctx, sec.Metadata.Name, sec.Metadata, sec.Spec); err != nil {
-				return fmt.Errorf("Seed: UpsertSecret %q: %w", sec.Metadata.Name, err)
+			switch {
+			case sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "":
+				if err := db.UpsertSecretEnv(ctx, sec.Metadata.Name, sec.Spec.ValueFrom.Env, sec.Spec.Provider, sec.Metadata); err != nil {
+					return fmt.Errorf("Seed: UpsertSecret %q: %w", sec.Metadata.Name, err)
+				}
+			case sec.Spec.Value != "":
+				if len(s.masterKey) == 0 {
+					return fmt.Errorf("Seed: secret %q uses stored value but RELAY_MASTER_KEY not set", sec.Metadata.Name)
+				}
+				ct, nonce, err := crypto.Encrypt(s.masterKey, []byte(sec.Spec.Value))
+				if err != nil {
+					return fmt.Errorf("Seed: secret %q: encrypt: %w", sec.Metadata.Name, err)
+				}
+				if err := db.UpsertSecretStored(ctx, sec.Metadata.Name, sec.Spec.Provider, sec.Metadata, ct, nonce); err != nil {
+					return fmt.Errorf("Seed: UpsertSecret %q: %w", sec.Metadata.Name, err)
+				}
+			default:
+				return fmt.Errorf("Seed: secret %q has no valueFrom.env or value", sec.Metadata.Name)
 			}
 		}
 		for _, m := range src.Models() {
