@@ -28,6 +28,7 @@ import (
 	"github.com/wyolet/relay/internal/provider"
 	"github.com/wyolet/relay/internal/provider/ollama"
 	"github.com/wyolet/relay/internal/provider/openai"
+	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/transport"
@@ -300,25 +301,7 @@ func main() {
 		return ob, nil
 	}
 
-	resolve := func(modelName string) (*apiopenai.RequestPlan, bool) {
-		m, ok := cfg.ModelByName(modelName)
-		if !ok {
-			return nil, false
-		}
-		p, ok := cfg.ProviderForModel(modelName)
-		if !ok {
-			return nil, false
-		}
-		plan := &apiopenai.RequestPlan{Model: m, Provider: p}
-		if poolName := p.Spec.DefaultPool; poolName != "" {
-			if pool, ok := cfg.PoolByName(poolName); ok {
-				plan.Pool = pool
-				plan.Secrets = cfg.SecretsForPool(pool)
-				plan.Rules = cfg.RateLimitsForRequest(p, pool, m, nil)
-			}
-		}
-		return plan, true
-	}
+	resolver := routing.New(cfg)
 
 	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) error {
 		ob, err := outboundFor(plan)
@@ -391,7 +374,7 @@ func main() {
 		r,
 		authMW,
 		healthzHandler(healthzBackends, healthzDeadlineMS, len(masterKey) > 0),
-		apiopenai.ChatCompletions(resolve, runPipeline),
+		apiopenai.ChatCompletions(resolver, runPipeline),
 		apiopenai.ListModels(cfg),
 		adminH,
 		adminCRUDHandlers,

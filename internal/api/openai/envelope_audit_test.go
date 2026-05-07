@@ -283,7 +283,7 @@ func TestEnvelopeAudit(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
 
-			handler := http.Handler(ChatCompletions(fakeResolve, row.pipeline))
+			handler := http.Handler(ChatCompletions(fakeResolver(), row.pipeline))
 			if row.wrapMiddleware != nil {
 				handler = row.wrapMiddleware(handler)
 			}

@@ -78,6 +78,7 @@ import (
 	apiopenai "github.com/wyolet/relay/internal/api/openai"
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/internal/keypool"
@@ -235,25 +236,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	limiter := ratelimit.New(st, logger, nil)
 	sel := keypool.New(st, logger, nil, limiter, cfg, nil)
 
-	resolve := func(modelAlias string) (*apiopenai.RequestPlan, bool) {
-		m, ok := cfg.ModelByName(modelAlias)
-		if !ok {
-			return nil, false
-		}
-		p, ok := cfg.ProviderForModel(modelAlias)
-		if !ok {
-			return nil, false
-		}
-		plan := &apiopenai.RequestPlan{Model: m, Provider: p}
-		if poolN := p.Spec.DefaultPool; poolN != "" {
-			if pl, ok2 := cfg.PoolByName(poolN); ok2 {
-				plan.Pool = pl
-				plan.Secrets = cfg.SecretsForPool(pl)
-				plan.Rules = cfg.RateLimitsForRequest(p, pl, m, nil)
-			}
-		}
-		return plan, true
-	}
+	resolver := routing.New(cfg)
 
 	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) error {
 		ob, err := reg.Get(plan.Provider.Spec.Kind)
@@ -295,7 +278,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	r.Use(reqid.Middleware(logger))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 
-	mountBenchHuma(r, authMW, apiopenai.ChatCompletions(resolve, runPipeline), apiopenai.ListModels(cfg))
+	mountBenchHuma(r, authMW, apiopenai.ChatCompletions(resolver, runPipeline), apiopenai.ListModels(cfg))
 
 	return r
 }

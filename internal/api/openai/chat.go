@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,34 +11,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/routing"
+	"github.com/wyolet/relay/internal/usage"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/internal/usage"
 )
 
-// RequestPlan holds the resolved model, provider, pool, secrets, and rate-limit
-// rules for a request. Rules are pre-resolved for Pool+Model scope at plan time;
-// Secret-level rules are M4+ work.
-type RequestPlan struct {
-	Model    *catalog.Model
-	Provider *catalog.Provider
-	Pool     *catalog.Pool
-	Secrets  []*catalog.Secret
-	Rules    []catalog.ResolvedRule
-}
-
-// PlanResolver resolves a model name to a RequestPlan. ok=false means unknown model.
-type PlanResolver func(modelName string) (*RequestPlan, bool)
+// RequestPlan is an alias for routing.RequestPlan so existing callers don't break.
+// Canonical definition lives in internal/routing to keep the import graph cycle-free.
+type RequestPlan = routing.RequestPlan
 
 // Pipeline orchestrates message flow for one request through a Channel.
 type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error
 
-// ChatCompletions returns an http.HandlerFunc. resolve builds the RequestPlan;
-// runPipeline orchestrates the message flow.
-func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFunc {
+// ChatCompletions returns an http.HandlerFunc. resolver resolves the routing.Request
+// to a RequestPlan; runPipeline orchestrates the message flow.
+func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		httpheader.StripInbound(r.Header)
 
@@ -67,10 +58,28 @@ func ChatCompletions(resolve PlanResolver, runPipeline Pipeline) http.HandlerFun
 		ctx := r.Context()
 		ctx = ContextWithChatRequest(ctx, cr)
 
-		plan, ok := resolve(cr.Model)
-		if !ok {
-			writeError(w, http.StatusNotFound, "invalid_request_error",
-				fmt.Sprintf("model %q not found", cr.Model), "model_not_found")
+		plan, resolveErr := resolver.Resolve(routing.Request{
+			RouteHeader: r.Header.Get("X-Relay-Route"),
+			ModelName:   cr.Model,
+		})
+		if resolveErr != nil {
+			switch {
+			case errors.Is(resolveErr, routing.ErrUnknownRoute):
+				writeError(w, http.StatusNotFound, "invalid_request_error",
+					resolveErr.Error(), "route_not_found")
+			case errors.Is(resolveErr, routing.ErrModelNotInRoute):
+				writeError(w, http.StatusBadRequest, "invalid_request_error",
+					resolveErr.Error(), "model_not_in_route")
+			case errors.Is(resolveErr, routing.ErrUnknownModel):
+				writeError(w, http.StatusNotFound, "invalid_request_error",
+					fmt.Sprintf("model %q not found", cr.Model), "model_not_found")
+			case errors.Is(resolveErr, routing.ErrNoModelSpecified):
+				writeError(w, http.StatusBadRequest, "invalid_request_error",
+					resolveErr.Error(), "model_not_specified")
+			default:
+				writeError(w, http.StatusInternalServerError, "api_error",
+					resolveErr.Error(), "")
+			}
 			return
 		}
 

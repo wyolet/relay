@@ -69,7 +69,7 @@ func TestRequestIDPresentOnEveryLogLine(t *testing.T) {
 	mw := reqid.Middleware(logger)
 	innerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r
-		ChatCompletions(fakeResolve, runPipeline)(w, r)
+		ChatCompletions(fakeResolver(), runPipeline)(w, r)
 	})
 	rec := httptest.NewRecorder()
 	mw(innerHandler).ServeHTTP(rec, req)

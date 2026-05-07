@@ -10,25 +10,36 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
 // --- ChatCompletions handler tests ---
 
-func fakeResolve(name string) (*RequestPlan, bool) {
-	known := map[string]*RequestPlan{
-		"gpt-4": {
-			Model:    &catalog.Model{Spec: catalog.ModelSpec{UpstreamName: "gpt-4"}},
-			Provider: &catalog.Provider{Spec: catalog.ProviderSpec{Kind: catalog.PKOpenAI}},
+// fakeResolver returns a *routing.Resolver backed by an in-memory catalog
+// containing two models: "gpt-4" (provider openai) and "mymodel" (provider
+// ollama, upstream "upstream-model").
+func fakeResolver() *routing.Resolver {
+	store := catalog.NewMemStore(
+		&catalog.Provider{
+			Metadata: catalog.Metadata{Name: "openai"},
+			Spec:     catalog.ProviderSpec{Kind: catalog.PKOpenAI},
 		},
-		"mymodel": {
-			Model:    &catalog.Model{Spec: catalog.ModelSpec{UpstreamName: "upstream-model"}},
-			Provider: &catalog.Provider{Spec: catalog.ProviderSpec{Kind: catalog.PKOllama}},
+		&catalog.Provider{
+			Metadata: catalog.Metadata{Name: "ollama"},
+			Spec:     catalog.ProviderSpec{Kind: catalog.PKOllama},
 		},
-	}
-	p, ok := known[name]
-	return p, ok
+		&catalog.Model{
+			Metadata: catalog.Metadata{Name: "gpt-4"},
+			Spec:     catalog.ModelSpec{Provider: "openai", UpstreamName: "gpt-4"},
+		},
+		&catalog.Model{
+			Metadata: catalog.Metadata{Name: "mymodel"},
+			Spec:     catalog.ModelSpec{Provider: "ollama", UpstreamName: "upstream-model"},
+		},
+	)
+	return routing.New(store)
 }
 
 func TestChatCompletions_HappyPath(t *testing.T) {
@@ -50,7 +61,7 @@ func TestChatCompletions_HappyPath(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+	ChatCompletions(fakeResolver(), runPipeline)(rec, req)
 
 	if rec.Code != 200 {
 		t.Errorf("status = %d, want 200", rec.Code)
@@ -80,7 +91,7 @@ func TestChatCompletions_StreamingPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+	ChatCompletions(fakeResolver(), runPipeline)(rec, req)
 
 	want := "data: chunk1\ndata: chunk2\ndata: chunk3\n"
 	if rec.Body.String() != want {
@@ -95,7 +106,7 @@ func TestChatCompletions_ModelNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+	ChatCompletions(fakeResolver(), runPipeline)(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
@@ -115,7 +126,7 @@ func TestChatCompletions_BadJSON(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not json"))
 	rec := httptest.NewRecorder()
 
-	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+	ChatCompletions(fakeResolver(), runPipeline)(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
@@ -144,7 +155,7 @@ func TestChatCompletions_StreamingMidstreamError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+	ChatCompletions(fakeResolver(), runPipeline)(rec, req)
 
 	if rec.Code != 200 {
 		t.Errorf("status = %d, want 200 (already committed)", rec.Code)
@@ -186,7 +197,7 @@ func TestChatCompletions_StreamingClientCancel(t *testing.T) {
 		cancel()
 	}()
 
-	ChatCompletions(fakeResolve, runPipeline)(rec, req)
+	ChatCompletions(fakeResolver(), runPipeline)(rec, req)
 
 	got := rec.Body.String()
 	// No SSE error event should be emitted on client cancel.
@@ -197,7 +208,7 @@ func TestChatCompletions_StreamingClientCancel(t *testing.T) {
 
 func TestChatCompletions_AttributionFlowsFromContext(t *testing.T) {
 	var capturedAttribution map[string]string
-	innerHandler := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+	innerHandler := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
 		defer close(ch.Out)
 		msg := <-ch.In
 		capturedAttribution = msg.Attribution
@@ -227,7 +238,7 @@ func TestChatCompletions_AttributionFlowsFromContext(t *testing.T) {
 func TestChatCompletions_BodyAttributionRichMode(t *testing.T) {
 	withRich(true, func() {
 		var capturedAttribution map[string]string
-		h := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+		h := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
 			defer close(ch.Out)
 			msg := <-ch.In
 			capturedAttribution = msg.Attribution
@@ -250,7 +261,7 @@ func TestChatCompletions_BodyAttributionRichMode(t *testing.T) {
 func TestChatCompletions_HeaderWinsOverBody(t *testing.T) {
 	withRich(true, func() {
 		var capturedAttribution map[string]string
-		innerHandler := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+		innerHandler := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
 			defer close(ch.Out)
 			msg := <-ch.In
 			capturedAttribution = msg.Attribution
@@ -275,7 +286,7 @@ func TestChatCompletions_HeaderWinsOverBody(t *testing.T) {
 func TestChatCompletions_MinimalModeBodyAttributionIgnored(t *testing.T) {
 	withRich(false, func() {
 		var capturedAttribution map[string]string
-		h := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+		h := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
 			defer close(ch.Out)
 			msg := <-ch.In
 			capturedAttribution = msg.Attribution
@@ -298,7 +309,7 @@ func TestChatCompletions_MinimalModeBodyAttributionIgnored(t *testing.T) {
 func TestChatCompletions_RawBodyForwarded(t *testing.T) {
 	withRich(true, func() {
 		var capturedBody []byte
-		h := ChatCompletions(fakeResolve, func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+		h := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
 			defer close(ch.Out)
 			msg := <-ch.In
 			capturedBody = msg.Body
