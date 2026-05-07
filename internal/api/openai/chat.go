@@ -121,16 +121,8 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			attribution = reqid.Attribution(ctx)
 		}
 
-		// Forward the raw body to upstream; rewrite model field if upstream name differs.
+		// Forward the raw body verbatim; consumer's model name is authoritative.
 		forwardBody := cr.Raw
-		upstream := plan.Model.Spec.UpstreamName
-		if upstream != cr.Model {
-			var generic map[string]json.RawMessage
-			if err := json.Unmarshal(body, &generic); err == nil {
-				generic["model"], _ = json.Marshal(upstream)
-				forwardBody, _ = json.Marshal(generic)
-			}
-		}
 
 		msg := &transport.Message{
 			ID:          reqid.From(ctx),
