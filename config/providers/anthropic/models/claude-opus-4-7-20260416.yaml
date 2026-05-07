@@ -1,25 +1,25 @@
 apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
-    name: gpt-4o-mini
+    name: claude-opus-4-7-20260416
     labels:
-        family: gpt
+        family: claude
         source: litellm
         source_version: "2026-05-07"
 spec:
-    provider: openai
-    upstreamName: gpt-4o-mini
-    family: gpt
+    provider: anthropic
+    upstreamName: claude-opus-4-7-20260416
+    family: claude
     capabilities:
         chat: true
         streaming: true
         tools: true
-        parallelTools: true
         vision: true
         promptCache: true
+        reasoning: true
         structuredOutput: true
+        computerUse: true
         fileInput: true
-        systemMessages: true
     modalities:
         input:
             - text
@@ -27,15 +27,16 @@ spec:
             - file
         output:
             - text
-    contextWindowInput: 128000
-    contextWindowOutput: 16384
-    contextWindowTotal: 128000
+    contextWindowInput: 1000000
+    contextWindowOutput: 128000
+    contextWindowTotal: 1000000
     pricing:
         currency: USD
         unit: per_million
         rates:
-            tokens.batch_input: 0.075
-            tokens.batch_output: 0.3
-            tokens.cache_read: 0.075
-            tokens.input: 0.15
-            tokens.output: 0.6
+            tokens.cache_creation: 6.25
+            tokens.cache_read: 0.5
+            tokens.input: 5
+            tokens.output: 25
+    aliases:
+        - claude-opus-4-7

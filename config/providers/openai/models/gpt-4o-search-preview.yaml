@@ -1,14 +1,14 @@
 apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
-    name: gpt-4o-mini
+    name: gpt-4o-search-preview
     labels:
         family: gpt
         source: litellm
         source_version: "2026-05-07"
 spec:
     provider: openai
-    upstreamName: gpt-4o-mini
+    upstreamName: gpt-4o-search-preview
     family: gpt
     capabilities:
         chat: true
@@ -18,6 +18,7 @@ spec:
         vision: true
         promptCache: true
         structuredOutput: true
+        webSearch: true
         fileInput: true
         systemMessages: true
     modalities:
@@ -34,8 +35,8 @@ spec:
         currency: USD
         unit: per_million
         rates:
-            tokens.batch_input: 0.075
-            tokens.batch_output: 0.3
-            tokens.cache_read: 0.075
-            tokens.input: 0.15
-            tokens.output: 0.6
+            tokens.batch_input: 1.25
+            tokens.batch_output: 5
+            tokens.cache_read: 1.25
+            tokens.input: 2.5
+            tokens.output: 10

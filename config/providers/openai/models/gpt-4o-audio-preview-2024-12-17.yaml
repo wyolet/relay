@@ -1,32 +1,30 @@
 apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
-    name: gpt-4o-mini
+    name: gpt-4o-audio-preview-2024-12-17
     labels:
         family: gpt
         source: litellm
         source_version: "2026-05-07"
 spec:
     provider: openai
-    upstreamName: gpt-4o-mini
+    upstreamName: gpt-4o-audio-preview-2024-12-17
     family: gpt
     capabilities:
         chat: true
         streaming: true
         tools: true
         parallelTools: true
-        vision: true
-        promptCache: true
-        structuredOutput: true
-        fileInput: true
+        audioInput: true
+        audioOutput: true
         systemMessages: true
     modalities:
         input:
             - text
-            - image
-            - file
+            - audio
         output:
             - text
+            - audio
     contextWindowInput: 128000
     contextWindowOutput: 16384
     contextWindowTotal: 128000
@@ -34,8 +32,7 @@ spec:
         currency: USD
         unit: per_million
         rates:
-            tokens.batch_input: 0.075
-            tokens.batch_output: 0.3
-            tokens.cache_read: 0.075
-            tokens.input: 0.15
-            tokens.output: 0.6
+            tokens.audio_input: 40
+            tokens.audio_output: 80
+            tokens.input: 2.5
+            tokens.output: 10

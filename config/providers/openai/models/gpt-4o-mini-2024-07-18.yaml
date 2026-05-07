@@ -1,14 +1,14 @@
 apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
-    name: gpt-4o-mini
+    name: gpt-4o-mini-2024-07-18
     labels:
         family: gpt
         source: litellm
         source_version: "2026-05-07"
 spec:
     provider: openai
-    upstreamName: gpt-4o-mini
+    upstreamName: gpt-4o-mini-2024-07-18
     family: gpt
     capabilities:
         chat: true

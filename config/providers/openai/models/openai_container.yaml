@@ -1,0 +1,20 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: openai/container
+    labels:
+        family: openai/container
+        source: litellm
+        source_version: "2026-05-07"
+spec:
+    provider: openai
+    upstreamName: openai/container
+    family: openai/container
+    capabilities:
+        chat: true
+        streaming: true
+    modalities:
+        input:
+            - text
+        output:
+            - text

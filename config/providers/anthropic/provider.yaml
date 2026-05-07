@@ -1,0 +1,14 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+    name: anthropic
+spec:
+    kind: anthropic
+    baseURL: https://api.anthropic.com
+    displayName: Anthropic
+    description: Claude models from Anthropic.
+    homepageURL: https://www.anthropic.com
+    docsURL: https://docs.anthropic.com
+    consoleURL: https://console.anthropic.com
+    statusPageURL: https://status.anthropic.com
+    logoURL: https://wyolet.dev/logos/anthropic.svg
