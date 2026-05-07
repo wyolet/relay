@@ -22,14 +22,31 @@ var (
 			Subsystem: "chat",
 			Name:      "request_duration_seconds",
 			Help:      "End-to-end chat request latency (handler entry to handler exit).",
-			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 12),
+			// Wide buckets to capture real LLM latencies from cached/error responses
+			// through long generation runs. Matches relay_upstream_duration_seconds.
+			Buckets: []float64{
+				0.001, 0.005, 0.01, 0.05, 0.1,       // sub-second (cached / errors)
+				0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, // typical LLM range
+			},
+		},
+		[]string{"model"},
+	)
+
+	metricChatOverhead = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: metrics.Namespace,
+			Subsystem: "chat",
+			Name:      "overhead_seconds",
+			Help:      "Per-request Relay overhead = total handler time minus upstream HTTP call duration. Only observed when upstream was reached (UpstreamDuration > 0).",
+			// Tight buckets for sub-second overhead: 100µs → 500ms.
+			Buckets: []float64{0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5},
 		},
 		[]string{"model"},
 	)
 )
 
 func init() {
-	metrics.Register(metricChatRequests, metricChatDuration)
+	metrics.Register(metricChatRequests, metricChatDuration, metricChatOverhead)
 }
 
 // statusClass returns a bounded status label ("2xx", "4xx", "5xx", etc.)

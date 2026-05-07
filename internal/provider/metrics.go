@@ -13,16 +13,20 @@ import (
 //   - provider: "openai" | "ollama" (matches catalog.ProviderKind)
 //   - status:   "2xx" | "4xx" | "5xx" | "error" (network failure → "error")
 //
-// Buckets: same as relay_chat_request_duration_seconds — exp 1ms→~4s, 12 steps.
-// Subtract this histogram from relay_chat_request_duration_seconds in PromQL
-// to estimate Relay's own overhead.
+// Buckets: same as relay_chat_request_duration_seconds — wide range to capture
+// real LLM latencies from sub-second cached/error responses through long generation.
 var MetricUpstreamDuration = prometheus.NewHistogramVec(
 	prometheus.HistogramOpts{
 		Namespace: metrics.Namespace,
 		Subsystem: "upstream",
 		Name:      "duration_seconds",
 		Help:      "Time spent in upstream provider HTTP calls (request fire to response close).",
-		Buckets:   prometheus.ExponentialBuckets(0.001, 2, 12),
+		// Wide buckets matching relay_chat_request_duration_seconds so the two
+		// histograms remain comparable in Grafana panels.
+		Buckets: []float64{
+			0.001, 0.005, 0.01, 0.05, 0.1,       // sub-second (cached / errors)
+			0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, // typical LLM range
+		},
 	},
 	[]string{"provider", "status"},
 )

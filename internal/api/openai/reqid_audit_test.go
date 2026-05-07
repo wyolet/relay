@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -37,7 +38,7 @@ func TestRequestIDPresentOnEveryLogLine(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	// Build a pipeline that does some logging via reqid.Logger.
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error {
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) {
 		defer close(ch.Out)
 		log := reqid.Logger(ctx)
 		log.Debug("pipeline: test debug", "phase", "start")
@@ -51,7 +52,7 @@ func TestRequestIDPresentOnEveryLogLine(t *testing.T) {
 			Body: []byte(`{"choices":[]}`),
 		}
 		log.Debug("pipeline: test debug", "phase", "done")
-		return nil
+		return pipeline.RunResult{}, nil
 	}
 
 	body := `{"model":"gpt-4","messages":[]}`

@@ -90,7 +90,7 @@ func TestRun_Success(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestRun_5xxThen200_SameKey(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestRun_AuthFailover(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRun_429Short_RetrySameKey(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestRun_429Long_Failover(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestRun_AllExhausted(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
@@ -287,7 +287,7 @@ func TestRun_AllAuthFailed_AuthFailedEnvelope(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
@@ -323,7 +323,7 @@ func TestRun_AllRateLimited_RateLimitEnvelope(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
@@ -355,7 +355,7 @@ func TestRun_All5xx_ServerErrorEnvelope(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
@@ -388,7 +388,7 @@ func TestRun_NoKeysFromStart_NoHealthyKeysEnvelope(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != keypool.ErrNoHealthyKeys {
 		t.Fatalf("expected ErrNoHealthyKeys, got %v", err)
 	}
@@ -421,7 +421,7 @@ func TestRun_NoHealthyKeys(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != keypool.ErrNoHealthyKeys {
 		t.Fatalf("expected ErrNoHealthyKeys, got %v", err)
 	}
@@ -450,7 +450,7 @@ func TestRun_ContextCancel(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Run(ctx, ch, opts)
+		res, err := Run(ctx, ch, opts); _ = res; errCh <- err
 	}()
 
 	// Give Run time to start, then cancel.
@@ -492,7 +492,7 @@ func TestRun_NetworkError(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -627,7 +627,7 @@ func TestRun_LimiterNil_NoGating(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -661,7 +661,7 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err == nil {
 		t.Fatal("expected error from rate limit, got nil")
 	}
@@ -708,7 +708,7 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err == nil {
 		t.Fatal("expected error from concurrency limit")
 	}
@@ -746,7 +746,7 @@ func TestRun_TokensCommittedFromResponseUsage(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -788,7 +788,7 @@ func TestRun_StreamingTokensCommitted(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -827,7 +827,7 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Run(ctx, ch, opts)
+		res, err := Run(ctx, ch, opts); _ = res; errCh <- err
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -914,7 +914,7 @@ spec:
 	ch.In <- &transport.Message{ID: "x", Body: []byte(`{"model":"m"}`)}
 	close(ch.In)
 
-	runErr := Run(ctx, ch, RunOptions{
+	_, runErr := Run(ctx, ch, RunOptions{
 		Pool:    p2,
 		Secrets: []*catalog.Secret{sec},
 		Selector: sel3,
@@ -1027,7 +1027,7 @@ func TestLifecycle_SingleSuccess(t *testing.T) {
 
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
-	if err := Run(ctx, ch, opts); err != nil {
+	if _, err := Run(ctx, ch, opts); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	collectOut(ch)
@@ -1084,7 +1084,7 @@ func TestLifecycle_FailoverThenSuccess(t *testing.T) {
 
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
-	if err := Run(ctx, ch, opts); err != nil {
+	if _, err := Run(ctx, ch, opts); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	collectOut(ch)
@@ -1124,7 +1124,7 @@ func TestLifecycle_RateLimitedByReserve(t *testing.T) {
 
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
-	Run(ctx, ch, opts)
+	_, _ = Run(ctx, ch, opts)
 	collectOut(ch)
 
 	evs := flush()
@@ -1152,7 +1152,7 @@ func TestLifecycle_PoolExhausted(t *testing.T) {
 
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
-	Run(ctx, ch, opts)
+	_, _ = Run(ctx, ch, opts)
 	collectOut(ch)
 
 	evs := flush()
@@ -1180,7 +1180,7 @@ func TestLifecycle_ClientCancelMidStream(t *testing.T) {
 	sendInbound(ch)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- Run(cancelCtx, ch, opts) }()
+	go func() { _, err := Run(cancelCtx, ch, opts); errCh <- err }()
 
 	time.Sleep(20 * time.Millisecond)
 	cancel()
@@ -1235,7 +1235,7 @@ func TestLifecycle_PanicInProvider(t *testing.T) {
 	ch := newTestChannel(ctx)
 	sendInbound(ch)
 
-	err := Run(ctx, ch, opts)
+	_, err := Run(ctx, ch, opts)
 	if err == nil {
 		t.Fatal("expected error from recovered panic")
 	}

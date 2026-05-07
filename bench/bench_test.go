@@ -238,10 +238,10 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 
 	resolver := routing.New(cfg)
 
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) error {
+	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) (pipeline.RunResult, error) {
 		ob, err := reg.Get(plan.Provider.Spec.Kind)
 		if err != nil {
-			return err
+			return pipeline.RunResult{}, err
 		}
 		if plan.Pool != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{

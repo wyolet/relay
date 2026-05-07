@@ -17,9 +17,23 @@ import (
 )
 
 var (
-	ErrNoInboundMessage = errors.New("pipeline: no inbound message on Channel.In")
+	ErrNoInboundMessage  = errors.New("pipeline: no inbound message on Channel.In")
 	ErrAttemptsExhausted = errors.New("pipeline: all attempts exhausted")
 )
+
+// RunResult carries per-request output from Run beyond the error.
+type RunResult struct {
+	// UpstreamDuration is the wall-clock time spent in the last upstream HTTP
+	// call that was actually served (request fire → body close). It is set even
+	// on error paths (failed attempt, network error) — the caller should treat a
+	// non-zero value as "we reached upstream". Zero means the request never
+	// reached upstream (rate-limited, no healthy keys, etc.) and overhead
+	// observation should be skipped.
+	//
+	// When retries occur, only the LAST attempt's duration is recorded; summing
+	// retry durations would conflate failover latency with the serving latency.
+	UpstreamDuration time.Duration
+}
 
 const defaultMaxAttempts = 3
 const shortRateLimitThreshold = 5 * time.Second
@@ -46,7 +60,12 @@ type RunOptions struct {
 // with retry/failover. It closes ch.Out before returning. Pre-first-byte
 // retry only: once a non-error first response chunk is forwarded, the
 // response is committed.
-func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr error) {
+func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (RunResult, error) {
+	res, err := run(ctx, ch, opts)
+	return res, err
+}
+
+func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result RunResult, retErr error) {
 	maxAttempts := opts.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
@@ -91,11 +110,11 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 	select {
 	case msg, ok := <-ch.In:
 		if !ok {
-			return ErrNoInboundMessage
+			return result, ErrNoInboundMessage
 		}
 		inboundMsg = msg
 	case <-ctx.Done():
-		return ctx.Err()
+		return result, ctx.Err()
 	}
 
 	// Attribution: prefer the message-level attribution (which may include
@@ -123,7 +142,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 		if opts.Pool != nil {
 			poolName = opts.Pool.Metadata.Name
 		}
-		res, err := opts.Limiter.Reserve(ctx, poolName, opts.Rules)
+		reservation, err := opts.Limiter.Reserve(ctx, poolName, opts.Rules)
 		if err != nil {
 			var exceeded *ratelimit.ExceededError
 			if errors.As(err, &exceeded) {
@@ -132,13 +151,13 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 				sendGenericErrorEnvelope(ch.Out)
 			}
 			lc.TerminatedBy = usage.TerminatedRateLimited
-			return err
+			return result, err
 		}
 		defer func() {
 			cancelled := ctx.Err() != nil
 			commitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			opts.Limiter.Commit(commitCtx, res, ratelimit.Observations{Tokens: tokensSeen, Cancelled: cancelled})
+			opts.Limiter.Commit(commitCtx, reservation, ratelimit.Observations{Tokens: tokensSeen, Cancelled: cancelled})
 		}()
 	}
 
@@ -163,15 +182,15 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 				if errors.Is(err, keypool.ErrNoHealthyKeys) {
 					sendExhaustedEnvelope(ch.Out, keypool.FailureKind(-2), 0)
 					lc.TerminatedBy = usage.TerminatedPoolExhausted
-					return err
+					return result, err
 				}
 				if errors.Is(err, keypool.ErrPoolOutOfCapacity) {
 					sendPoolOutOfCapacityEnvelope(ch.Out)
 					lc.TerminatedBy = usage.TerminatedPoolExhausted
-					return err
+					return result, err
 				}
 				lc.TerminatedBy = usage.TerminatedRelayError
-				return err
+				return result, err
 			}
 			sameKeyAttempt = 0
 		}
@@ -208,6 +227,8 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 				// Channel closed without message — treat as network failure.
 				latencyMS := time.Since(attemptStart).Milliseconds()
 				<-outboundErr
+				// Record last attempt duration even on failure.
+				result.UpstreamDuration = time.Since(attemptStart)
 				opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureNetwork, 0)
 				lastFailureKind = keypool.FailureNetwork
 				appendAttempt(lc, secret, "network_error", 0, latencyMS)
@@ -227,7 +248,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			firstMsg = msg
 		case <-ctx.Done():
 			go drain(inter)
-			return ctx.Err()
+			return result, ctx.Err()
 		}
 
 		status := parseStatus(firstMsg.Headers["X-Relay-Status"])
@@ -259,8 +280,9 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 					go drain(inter)
 					<-outboundErr
 					latencyMS := time.Since(attemptStart).Milliseconds()
+					result.UpstreamDuration = time.Since(attemptStart)
 					appendAttempt(lc, secret, "success", status, latencyMS)
-					return ctx.Err()
+					return result, ctx.Err()
 				default:
 				}
 				peekTokens(msg.Body, &tokensSeen)
@@ -269,18 +291,20 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			}
 			<-outboundErr
 			latencyMS := time.Since(attemptStart).Milliseconds()
+			result.UpstreamDuration = time.Duration(latencyMS) * time.Millisecond
 			lc.Metrics["upstream_total_ms"] = latencyMS
 			appendAttempt(lc, secret, "success", status, latencyMS)
 			// If ctx was cancelled while draining inter, report that.
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
+				return result, ctxErr
 			}
-			return nil
+			return result, nil
 
 		case classAuth:
 			latencyMS := time.Since(attemptStart).Milliseconds()
 			go drain(inter)
 			<-outboundErr
+			result.UpstreamDuration = time.Duration(latencyMS) * time.Millisecond
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureAuth, 0)
 			lastFailureKind = keypool.FailureAuth
 			log.Debug("pipeline attempt",
@@ -297,6 +321,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			latencyMS := time.Since(attemptStart).Milliseconds()
 			go drain(inter)
 			<-outboundErr
+			result.UpstreamDuration = time.Duration(latencyMS) * time.Millisecond
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureRateLimitShort, retryAfter)
 			lastFailureKind = keypool.FailureRateLimitShort
 			if retryAfter > maxRetryAfter {
@@ -314,7 +339,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 				select {
 				case <-time.After(retryAfter):
 				case <-ctx.Done():
-					return ctx.Err()
+					return result, ctx.Err()
 				}
 			}
 			sameKeyAttempt++
@@ -324,6 +349,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			latencyMS := time.Since(attemptStart).Milliseconds()
 			go drain(inter)
 			<-outboundErr
+			result.UpstreamDuration = time.Duration(latencyMS) * time.Millisecond
 			opts.Selector.RecordFailure(ctx, secret.KeyHash, keypool.FailureRateLimitLong, retryAfter)
 			lastFailureKind = keypool.FailureRateLimitLong
 			if retryAfter > maxRetryAfter {
@@ -344,6 +370,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 			latencyMS := time.Since(attemptStart).Milliseconds()
 			go drain(inter)
 			<-outboundErr
+			result.UpstreamDuration = time.Duration(latencyMS) * time.Millisecond
 			kind := keypool.FailureServerError
 			classification := "5xx"
 			outcome := "http_5xx"
@@ -376,7 +403,7 @@ func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (retErr er
 	} else {
 		lc.TerminatedBy = terminatedByFromFailureKind(lastFailureKind)
 	}
-	return ErrAttemptsExhausted
+	return result, ErrAttemptsExhausted
 }
 
 // appendAttempt adds an Attempt to lc, capped at AttemptsCap.

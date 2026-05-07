@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/internal/usage"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -24,7 +25,8 @@ import (
 type RequestPlan = routing.RequestPlan
 
 // Pipeline orchestrates message flow for one request through a Channel.
-type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) error
+// It returns a RunResult carrying upstream duration alongside any error.
+type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error)
 
 // ChatCompletions returns an http.HandlerFunc. resolver resolves the routing.Request
 // to a RequestPlan; runPipeline orchestrates the message flow.
@@ -33,9 +35,14 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		start := time.Now()
 		statusCode := 200
 		var modelName string
+		var upstreamDur time.Duration
 		defer func() {
+			total := time.Since(start)
 			metricChatRequests.WithLabelValues(safeLabel(modelName), statusClass(statusCode)).Inc()
-			metricChatDuration.WithLabelValues(safeLabel(modelName)).Observe(time.Since(start).Seconds())
+			metricChatDuration.WithLabelValues(safeLabel(modelName)).Observe(total.Seconds())
+			if upstreamDur > 0 && upstreamDur < total {
+				metricChatOverhead.WithLabelValues(safeLabel(modelName)).Observe((total - upstreamDur).Seconds())
+			}
 		}()
 
 		httpheader.StripInbound(r.Header)
@@ -139,9 +146,14 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		ch.In <- msg
 		close(ch.In)
 
-		pipeErr := make(chan error, 1)
+		type pipelineResult struct {
+			res pipeline.RunResult
+			err error
+		}
+		pipeResultCh := make(chan pipelineResult, 1)
 		go func() {
-			pipeErr <- runPipeline(ch.Ctx, ch, plan)
+			res, err := runPipeline(ch.Ctx, ch, plan)
+			pipeResultCh <- pipelineResult{res: res, err: err}
 		}()
 
 		flusher, _ := w.(http.Flusher)
@@ -198,8 +210,10 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		}
 	done:
 
-		if err := <-pipeErr; err != nil {
-			reqid.Logger(r.Context()).Warn("pipeline error", "err", err)
+		pr := <-pipeResultCh
+		upstreamDur = pr.res.UpstreamDuration
+		if pr.err != nil {
+			reqid.Logger(r.Context()).Warn("pipeline error", "err", pr.err)
 		}
 	}
 }

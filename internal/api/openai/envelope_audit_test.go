@@ -40,6 +40,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -95,7 +96,7 @@ func makeJSON(body string) *http.Request {
 // status, errType, code, and message — simulating what pkg/pipeline does for
 // various terminal error states.
 func envelopePipeline(status, errType, code, msg string) Pipeline {
-	return func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+	return func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
 		defer close(ch.Out)
 		body, _ := json.Marshal(errEnvelope{Error: errBody{
 			Message: msg,
@@ -110,14 +111,14 @@ func envelopePipeline(status, errType, code, msg string) Pipeline {
 			},
 			Body: body,
 		}
-		return nil
+		return pipeline.RunResult{}, nil
 	}
 }
 
 // panicPipeline simulates a provider that panics; the pipeline's recover
 // defer (PER-240) must catch it and still close ch.Out so the handler
 // doesn't deadlock.
-func panicPipeline(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+func panicPipeline(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Emit a generic internal-error envelope; do NOT include the panic value.
@@ -137,9 +138,9 @@ func panicPipeline(_ context.Context, ch *transport.Channel, _ *RequestPlan) err
 }
 
 func TestEnvelopeAudit(t *testing.T) {
-	noPipeline := func(_ context.Context, ch *transport.Channel, _ *RequestPlan) error {
+	noPipeline := func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
 		close(ch.Out)
-		return nil
+		return pipeline.RunResult{}, nil
 	}
 
 	rows := []auditRow{
