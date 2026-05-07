@@ -61,12 +61,12 @@ func Middleware(keys [][]byte) func(http.Handler) http.Handler {
 			var token string
 
 			// Header priority:
-			//  1. X-Relay-API-Key — lets clients that use Authorization for their
+			//  1. X-WR-API-Key — lets clients that use Authorization for their
 			//     own upstream auth (e.g. Claude Code OAuth Bearer) send the Relay
 			//     customer key out-of-band.
 			//  2. Authorization: Bearer <token> — OpenAI SDK convention.
 			//  3. x-api-key — Anthropic SDK convention.
-			if xrk := r.Header.Get("X-Relay-API-Key"); xrk != "" {
+			if xrk := r.Header.Get("X-WR-API-Key"); xrk != "" {
 				token = xrk
 			} else if raw := r.Header.Get("Authorization"); raw != "" {
 				if !strings.HasPrefix(raw, "Bearer ") {

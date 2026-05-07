@@ -50,7 +50,7 @@ var InboundAllowlist = []string{
 	"User-Agent",
 	"X-Request-ID",
 	"X-Relay-Metadata",
-	"X-Relay-API-Key",
+	"X-WR-API-Key",
 	"Authorization",
 	"Anthropic-Version",
 	"Anthropic-Beta",
