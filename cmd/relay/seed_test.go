@@ -112,8 +112,8 @@ func TestSeed_DryRun(t *testing.T) {
 
 	// Verify no rows were written.
 	ctx := context.Background()
-	pool := storagemod.MustOpenPool(ctx, t, dsn)
-	n, err := storagemod.CountProviders(ctx, pool)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	n, err := storagemod.CountProviders(ctx, st)
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -137,8 +137,8 @@ func TestSeed_Apply_And_Idempotent(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pool := storagemod.MustOpenPool(ctx, t, dsn)
-	n1, err := storagemod.CountProviders(ctx, pool)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	n1, err := storagemod.CountProviders(ctx, st)
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestSeed_Apply_And_Idempotent(t *testing.T) {
 		t.Logf("second apply output: %s", buf.String())
 	}
 
-	n2, err := storagemod.CountProviders(ctx, pool)
+	n2, err := storagemod.CountProviders(ctx, st)
 	if err != nil {
 		t.Fatalf("count2: %v", err)
 	}
@@ -182,8 +182,8 @@ func TestSeed_BrokenYAML(t *testing.T) {
 
 	// No transaction should have been opened — verify providers empty.
 	ctx2 := context.Background()
-	pool2 := storagemod.MustOpenPool(ctx2, t, dsn)
-	n, err2 := storagemod.CountProviders(ctx2, pool2)
+	st2 := storagemod.MustOpenStorage(ctx2, t, dsn)
+	n, err2 := storagemod.CountProviders(ctx2, st2)
 	if err2 != nil {
 		t.Fatalf("count: %v", err2)
 	}
@@ -206,8 +206,8 @@ func TestAutoSeed_FirstBoot_ThenNoop(t *testing.T) {
 		t.Fatalf("first auto-seed: %v", err)
 	}
 
-	pool := storagemod.MustOpenPool(ctx, t, dsn)
-	n1, err := storagemod.CountProviders(ctx, pool)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	n1, err := storagemod.CountProviders(ctx, st)
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestAutoSeed_FirstBoot_ThenNoop(t *testing.T) {
 		t.Fatalf("second auto-seed: %v", err)
 	}
 
-	n2, err := storagemod.CountProviders(ctx, pool)
+	n2, err := storagemod.CountProviders(ctx, st)
 	if err != nil {
 		t.Fatalf("count2: %v", err)
 	}

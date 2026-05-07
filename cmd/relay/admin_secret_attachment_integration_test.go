@@ -34,8 +34,8 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, 
 	runMigrationsForTest(t, dsn)
 
 	// Seed a default provider so catalog validator passes.
-	pool := storagemod.MustOpenPool(ctx, t, dsn)
-	if err := storagemod.SeedProviderRow(ctx, pool,
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	if err := storagemod.SeedProviderRow(ctx, st,
 		"seed-prov", `{"Name":"seed-prov"}`, `{"kind":"ollama","baseURL":"http://localhost:11434","default":true}`); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
@@ -47,8 +47,6 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, 
 			mk[i] = byte(i + 1)
 		}
 	}
-
-	st := storagemod.WrapPool(pool)
 	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
 		t.Fatalf("configstore: %v", err)
@@ -227,7 +225,7 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	}
 
 	// Verify PG row has ciphertext populated.
-	ct, envNull, err := storagemod.QuerySecretStoredRow(ctx, st.RawPool(), "test-stored-secret")
+	ct, envNull, err := storagemod.QuerySecretStoredRow(ctx, st, "test-stored-secret")
 	if err != nil {
 		t.Fatalf("scan pg row: %v", err)
 	}
@@ -269,7 +267,7 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	ct2, err := storagemod.QuerySecretStoredCiphertext(ctx, st.RawPool(), "test-stored-secret")
+	ct2, err := storagemod.QuerySecretStoredCiphertext(ctx, st, "test-stored-secret")
 	if err != nil {
 		t.Fatalf("scan pg row after update: %v", err)
 	}

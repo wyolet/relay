@@ -29,18 +29,13 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 	runMigrationsForTest(t, dsn)
 
 	// Seed a minimal provider so the catalog validator is satisfied on Reload.
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	if err := storagemod.SeedProviderRow(ctx, pool,
+	seedSt := storagemod.MustOpenStorage(ctx, t, dsn)
+	if err := storagemod.SeedProviderRow(ctx, seedSt,
 		"seed-prov", `{"Name":"seed-prov"}`, `{"kind":"ollama","baseURL":"http://localhost:11434","default":true}`); err != nil {
-		pool.Close()
 		t.Fatalf("seed provider: %v", err)
 	}
-	pool.Close()
 
-	st := storagemod.WrapPool(storagemod.MustOpenPool(ctx, t, dsn))
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
 	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
 		t.Fatalf("configstore: %v", err)

@@ -11,19 +11,10 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 )
 
-// OpenPool opens a raw pgxpool.Pool without running migrations.
-// Intended for tests that manage the schema themselves.
-func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+// openPool opens a raw pgxpool.Pool without running migrations.
+// Package-internal; used by MustOpenStorage and MustOpenPool.
+func openPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return pgxpool.New(ctx, dsn)
-}
-
-// PostgresFromPool wraps an existing pool into a *catalog.PGStore.
-// Migrations must have been applied before calling.
-// The caller owns the pool lifetime; the returned store must NOT be closed
-// (Close() is a no-op since the pool is not owned by the store).
-func PostgresFromPool(ctx context.Context, pool *pgxpool.Pool) (*catalog.PGStore, error) {
-	st := WrapPool(pool)
-	return catalog.NewPGStoreNoReload(st.Catalog, st)
 }
 
 // Postgres opens a pool, runs migrations, and returns a *catalog.PGStore.

@@ -64,10 +64,8 @@ func (s *Storage) Ping(ctx context.Context) error {
 	return s.pool.Ping(ctx)
 }
 
-// RawPool returns the underlying pool.
-// Intended for narrow use in legacy callers that still manage their own transactions
-// during the migration period. New code should use WithTx.
-func (s *Storage) RawPool() *pgxpool.Pool { return s.pool }
+// rawPool returns the underlying pool for same-package use only.
+func (s *Storage) rawPool() *pgxpool.Pool { return s.pool }
 
 // WrapPool wraps an existing *pgxpool.Pool into a *Storage without opening a new
 // pool or running migrations. Intended for tests and the seed CLI that open their

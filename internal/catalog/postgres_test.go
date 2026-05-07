@@ -62,14 +62,8 @@ func runMigrations(t *testing.T, dsn string) {
 func seedMinimal(t *testing.T, dsn string) {
 	t.Helper()
 	ctx := context.Background()
-
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	if err := storagemod.SeedMinimalCatalog(ctx, pool); err != nil {
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	if err := storagemod.SeedMinimalCatalog(ctx, st); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 }
@@ -137,13 +131,8 @@ func TestPGStore_Reload(t *testing.T) {
 	defer store.Close()
 
 	// Insert a second provider via the storage helper.
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	if err := storagemod.SeedProviderRow2(ctx, pool,
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	if err := storagemod.SeedProviderRow(ctx, st,
 		"ollama2", `{"Name":"ollama2","Labels":{}}`, `{"kind":"ollama","baseURL":"http://localhost:11435"}`); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -172,18 +161,14 @@ func TestPGStore_MalformedSpec(t *testing.T) {
 	runMigrations(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
 
 	// Insert a provider with a spec where "kind" is a number (wrong type for ProviderKind string).
-	if err := storagemod.SeedMalformedProvider(ctx, pool); err != nil {
+	if err := storagemod.SeedMalformedProvider(ctx, st); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
-	_, err = storagemod.Postgres(ctx, dsn, nil)
+	_, err := storagemod.Postgres(ctx, dsn, nil)
 	if err == nil {
 		t.Fatal("expected error from malformed spec, got nil")
 	}
@@ -265,14 +250,10 @@ func TestMigration000002_Backfill(t *testing.T) {
 	m.Close()
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
 
 	// Insert a legacy secret row using the old schema (no value_kind columns yet).
-	if err := storagemod.SeedLegacySecretRow(ctx, pool); err != nil {
+	if err := storagemod.SeedLegacySecretRow(ctx, st); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
 
@@ -291,7 +272,7 @@ func TestMigration000002_Backfill(t *testing.T) {
 	}
 
 	// Verify backfill.
-	valueKind, valueFromEnv, err := storagemod.QuerySecretBackfill(ctx, pool, "legacy-env")
+	valueKind, valueFromEnv, err := storagemod.QuerySecretBackfill(ctx, st, "legacy-env")
 	if err != nil {
 		t.Fatalf("query backfilled row: %v", err)
 	}
@@ -308,14 +289,10 @@ func TestMigration000002_CheckConstraintViolation(t *testing.T) {
 	runMigrations(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
 
 	// Attempt to insert a row that violates the check constraint (env + ciphertext) — must fail.
-	if err := storagemod.SeedBadConstraintSecret(ctx, pool); err == nil {
+	if err := storagemod.SeedBadConstraintSecret(ctx, st); err == nil {
 		t.Fatal("expected CHECK constraint violation, got nil")
 	}
 }
@@ -337,15 +314,10 @@ func TestResolver_EnvMode_Set(t *testing.T) {
 	t.Setenv("RELAY_SECRET_TESTVAR", "supersecret")
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	store, err := storagemod.PostgresFromPool(ctx, pool)
-	if err != nil {
-		t.Fatalf("PostgresFromPool: %v", err)
+		t.Fatalf("NewPGStoreNoReload: %v", err)
 	}
 
 	if err := store.UpsertSecretEnv(ctx, "test-env", "RELAY_SECRET_TESTVAR", "ollama", catalog.Metadata{Name: "test-env"}); err != nil {
@@ -374,15 +346,10 @@ func TestResolver_EnvMode_MissingVar(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	store, err := storagemod.PostgresFromPool(ctx, pool)
-	if err != nil {
-		t.Fatalf("PostgresFromPool: %v", err)
+		t.Fatalf("NewPGStoreNoReload: %v", err)
 	}
 
 	os.Unsetenv("RELAY_SECRET_MISSING")
@@ -403,15 +370,10 @@ func TestResolver_StoredMode_OK(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	store, err := storagemod.PostgresFromPool(ctx, pool)
-	if err != nil {
-		t.Fatalf("PostgresFromPool: %v", err)
+		t.Fatalf("NewPGStoreNoReload: %v", err)
 	}
 	store.SetMasterKey(testMasterKey)
 
@@ -441,18 +403,14 @@ func TestResolver_StoredMode_NoMasterKey(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
 
 	// Insert stored-mode row directly (bypassing encryption layer).
 	ct, nonce, err := crypto.Encrypt(testMasterKey, []byte("secret"))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	if err := storagemod.SeedStoredSecret(ctx, pool, "stored-nokey", ct, nonce); err != nil {
+	if err := storagemod.SeedStoredSecret(ctx, st, "stored-nokey", ct, nonce); err != nil {
 		t.Fatalf("insert stored row: %v", err)
 	}
 
@@ -469,11 +427,7 @@ func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
 
 	ct, nonce, err := crypto.Encrypt(testMasterKey, []byte("secret"))
 	if err != nil {
@@ -481,7 +435,7 @@ func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
 	}
 	ct[0] ^= 0xFF // tamper
 
-	if err := storagemod.SeedStoredSecret(ctx, pool, "stored-tampered", ct, nonce); err != nil {
+	if err := storagemod.SeedStoredSecret(ctx, st, "stored-tampered", ct, nonce); err != nil {
 		t.Fatalf("insert tampered row: %v", err)
 	}
 
@@ -500,15 +454,10 @@ func TestUpsertSecretStored_EncryptsBeforeWrite(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	store, err := storagemod.PostgresFromPool(ctx, pool)
-	if err != nil {
-		t.Fatalf("PostgresFromPool: %v", err)
+		t.Fatalf("NewPGStoreNoReload: %v", err)
 	}
 	store.SetMasterKey(testMasterKey)
 
@@ -518,7 +467,7 @@ func TestUpsertSecretStored_EncryptsBeforeWrite(t *testing.T) {
 	}
 
 	// Read ciphertext from DB directly and verify it's NOT plaintext bytes.
-	ct, nonce, err := storagemod.QuerySecretCiphertext(ctx, pool, "enc-test")
+	ct, nonce, err := storagemod.QuerySecretCiphertext(ctx, st, "enc-test")
 	if err != nil {
 		t.Fatalf("query ciphertext: %v", err)
 	}
@@ -542,22 +491,17 @@ func TestUpsertSecretEnv_NoCiphertext(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	store, err := storagemod.PostgresFromPool(ctx, pool)
-	if err != nil {
-		t.Fatalf("PostgresFromPool: %v", err)
+		t.Fatalf("NewPGStoreNoReload: %v", err)
 	}
 
 	if err := store.UpsertSecretEnv(ctx, "env-test", "MY_ENV_VAR", "ollama", catalog.Metadata{Name: "env-test"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
-	valueKind, valueFromEnv, ct, err := storagemod.QuerySecretEnvRow(ctx, pool, "env-test")
+	valueKind, valueFromEnv, ct, err := storagemod.QuerySecretEnvRow(ctx, st, "env-test")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -578,15 +522,10 @@ func TestDeleteSecret(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := storagemod.OpenPool(ctx, dsn)
+	st := storagemod.MustOpenStorage(ctx, t, dsn)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	store, err := storagemod.PostgresFromPool(ctx, pool)
-	if err != nil {
-		t.Fatalf("PostgresFromPool: %v", err)
+		t.Fatalf("NewPGStoreNoReload: %v", err)
 	}
 
 	if err := store.UpsertSecretEnv(ctx, "del-test", "DEL_VAR", "ollama", catalog.Metadata{Name: "del-test"}); err != nil {
@@ -596,7 +535,7 @@ func TestDeleteSecret(t *testing.T) {
 		t.Fatalf("DeleteSecret: %v", err)
 	}
 
-	count, err := storagemod.CountSecrets(ctx, pool, "del-test")
+	count, err := storagemod.CountSecrets(ctx, st, "del-test")
 	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
