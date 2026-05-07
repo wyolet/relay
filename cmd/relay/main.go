@@ -17,23 +17,23 @@ import (
 
 	apiopenai "github.com/wyolet/relay/internal/api/openai"
 	"github.com/wyolet/relay/internal/auth"
-	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/internal/catalog"
-	storagemod "github.com/wyolet/relay/internal/storage"
-	"github.com/wyolet/relay/pkg/eventlog"
-	"github.com/wyolet/relay/pkg/httpmw"
+	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/keypool"
-	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/provider"
 	"github.com/wyolet/relay/internal/provider/ollama"
 	"github.com/wyolet/relay/internal/provider/openai"
+	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/internal/routing"
-	"github.com/wyolet/relay/pkg/reqid"
+	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/usage"
+	"github.com/wyolet/relay/pkg/eventlog"
+	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/metrics"
+	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
-	"github.com/wyolet/relay/internal/usage"
 )
 
 // masterKey holds the parsed RELAY_MASTER_KEY (32 bytes) or nil if unset.
@@ -123,56 +123,31 @@ func main() {
 		}
 	}
 
-	// Parse RELAY_MASTER_KEY if present. Optional — env-ref secrets work without it.
-	// PER-266 consumers will read masterKey.
-	if raw := os.Getenv("RELAY_MASTER_KEY"); raw != "" {
-		var err error
-		masterKey, err = crypto.ParseMasterKey(raw)
-		if err != nil {
-			slog.Error("RELAY_MASTER_KEY invalid", "err", err)
-			os.Exit(1)
-		}
-	}
-
-	// RELAY_RICH_PARSING: "on" (default) enables full body parse to ChatRequest.
-	// "off" reverts to minimal-parse (model/stream/user/raw only, metadata ignored).
-	// Any other value exits with a clear error.
-	switch rp := os.Getenv("RELAY_RICH_PARSING"); rp {
-	case "", "on":
-		apiopenai.SetRichParsing(true)
-	case "off":
-		apiopenai.SetRichParsing(false)
-	default:
-		slog.Error("RELAY_RICH_PARSING must be \"on\" or \"off\"", "got", rp)
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("config invalid", "err", err)
 		os.Exit(1)
 	}
 
+	// Apply settings
+	apiopenai.SetRichParsing(cfg.RichParsing)
+	masterKey = cfg.MasterKey
+
 	bootCtx := context.Background()
 
-	catalogBackend := os.Getenv("RELAY_CATALOG_BACKEND")
-	if catalogBackend == "" {
-		catalogBackend = "yaml"
+	// Event log — BackendFile by default; BackendClickHouse when cfg.EventlogBackend=clickhouse.
+	elCfg := eventlog.Config{
+		Dir: cfg.EventlogDir,
 	}
-	stateBackend := os.Getenv("RELAY_STATE_BACKEND")
-	if stateBackend == "" {
-		stateBackend = "memory"
-	}
-	eventlogBackend := os.Getenv("RELAY_EVENTLOG_BACKEND")
-	if eventlogBackend == "" {
-		eventlogBackend = "file"
-	}
-
-	// Event log — BackendFile by default; BackendClickHouse when RELAY_EVENTLOG_BACKEND=clickhouse.
-	elCfg := eventlog.Config{}
-	if eventlogBackend == "clickhouse" {
+	if cfg.EventlogBackend == "clickhouse" {
 		elCfg.Backend = eventlog.BackendClickHouse
-		elCfg.DSN = os.Getenv("RELAY_CH_DSN")
+		elCfg.DSN = cfg.CHDSN
 		if elCfg.DSN == "" {
 			slog.Error("RELAY_CH_DSN not set (required when RELAY_EVENTLOG_BACKEND=clickhouse)")
 			os.Exit(1)
 		}
-		if days := envInt("RELAY_CH_RETENTION_DAYS", 90); days > 0 {
-			elCfg.RetentionDays = days
+		if cfg.CHRetentionDays > 0 {
+			elCfg.RetentionDays = cfg.CHRetentionDays
 		}
 	}
 	el, err := eventlog.New(elCfg)
@@ -183,28 +158,28 @@ func main() {
 
 	// OTel TracerProvider — no-op when RELAY_OTLP_ENDPOINT is unset.
 	usageShutdown, err := usage.Init(bootCtx, usage.Config{
-		OTLPEndpoint:    os.Getenv("RELAY_OTLP_ENDPOINT"),
+		OTLPEndpoint:    cfg.OTLPEndpoint,
 		EventLog:        el,
-		CatalogBackend:  catalogBackend,
-		StateBackend:    stateBackend,
-		EventlogBackend: eventlogBackend,
+		CatalogBackend:  cfg.CatalogBackend,
+		StateBackend:    cfg.StateBackend,
+		EventlogBackend: cfg.EventlogBackend,
+		InstanceID:      cfg.InstanceID,
 	})
 	if err != nil {
 		log.Fatalf("usage.Init: %v", err)
 	}
 
-	var cfg catalog.Store
+	var catalogStore catalog.Store
 	var pgStoreForAdmin *catalog.PGStore
 	var storageForAdmin *storagemod.Storage
 	var pgPinger pinger
-	if catalogBackend == "pg" {
-		pgDSN := os.Getenv("RELAY_PG_DSN")
-		if pgDSN == "" {
+	if cfg.CatalogBackend == "pg" {
+		if cfg.PGDSN == "" {
 			slog.Error("RELAY_PG_DSN not set (required when RELAY_CATALOG_BACKEND=pg)")
 			os.Exit(1)
 		}
 		// Open storage first (runs migrations), then optionally auto-seed.
-		st, err := storagemod.Open(bootCtx, pgDSN)
+		st, err := storagemod.Open(bootCtx, cfg.PGDSN)
 		if err != nil {
 			slog.Error("storage.Open failed", "err", err)
 			os.Exit(1)
@@ -217,13 +192,12 @@ func main() {
 		}
 		pgStoreForAdmin = pgStore
 		storageForAdmin = st
-		cfg = pgStore
+		catalogStore = pgStore
 		pgPinger = pgStore
 
 		// Auto-seed from config dir if DB is empty (RELAY_AUTO_SEED_IF_EMPTY=1).
-		autoSeed := os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
-		if autoSeed {
-			if err := maybeAutoSeed(bootCtx, pgDSN); err != nil {
+		if cfg.AutoSeedIfEmpty {
+			if err := maybeAutoSeed(bootCtx, cfg.PGDSN, cfg.ConfigDir); err != nil {
 				log.Fatalf("auto-seed: %v", err)
 			}
 		}
@@ -234,23 +208,22 @@ func main() {
 			slog.Warn("default provider seed failed", "err", err)
 		}
 	} else {
-		yamlStore, err := catalog.LoadYAML("config")
+		yamlStore, err := catalog.LoadYAML(cfg.ConfigDir)
 		if err != nil {
 			log.Fatalf("config: %v", err)
 		}
-		cfg = yamlStore
+		catalogStore = yamlStore
 	}
 
 	// State store — Redis when RELAY_STATE_BACKEND=redis, else in-memory.
 	var st kv.Store
 	var redisPinger pinger
-	if stateBackend == "redis" {
-		addr := os.Getenv("RELAY_REDIS_ADDR")
-		if addr == "" {
+	if cfg.StateBackend == "redis" {
+		if cfg.RedisAddr == "" {
 			slog.Error("RELAY_REDIS_ADDR not set (required when RELAY_STATE_BACKEND=redis)")
 			os.Exit(1)
 		}
-		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{Addr: addr})
+		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{Addr: cfg.RedisAddr})
 		if err != nil {
 			slog.Error("state(redis) init failed", "err", err)
 			os.Exit(1)
@@ -262,10 +235,10 @@ func main() {
 	}
 
 	limiter := ratelimit.New(st, slog.Default(), nil)
-	sel := keypool.New(st, slog.Default(), nil, limiter, cfg, nil)
+	sel := keypool.New(st, slog.Default(), nil, limiter, catalogStore, nil)
 
 	reg := provider.NewRegistry()
-	for _, p := range cfg.Providers() {
+	for _, p := range catalogStore.Providers() {
 		switch p.Spec.Kind {
 		case catalog.PKOllama:
 			reg.Register(catalog.PKOllama, ollama.New(p.Spec.BaseURL))
@@ -302,7 +275,7 @@ func main() {
 		return ob, nil
 	}
 
-	resolver := routing.New(cfg)
+	resolver := routing.New(catalogStore)
 
 	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) error {
 		ob, err := outboundFor(plan)
@@ -338,14 +311,18 @@ func main() {
 	}
 
 	// Healthcheck backends: nil pinger = unconditionally healthy (memory/file).
-	healthzDeadlineMS := envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
 	healthzBackends := map[string]pinger{
 		"catalog":  pgPinger,    // nil when yaml
 		"state":    redisPinger, // nil when memory
 		"eventlog": el,          // always non-nil; fileSink.ping returns nil
 	}
 
-	apiKeys := auth.ParseKeys(os.Getenv("RELAY_API_KEY"), os.Getenv("RELAY_API_KEYS"))
+	maxReqBytes := cfg.MaxRequestBytes
+	if maxReqBytes == 0 {
+		maxReqBytes = httpmw.DefaultMaxRequestBytes
+	}
+
+	apiKeys := cfg.APIKeys
 	if len(apiKeys) == 0 {
 		slog.Warn("auth: no API keys configured — running fail-open (RELAY_API_KEY/RELAY_API_KEYS unset)")
 	}
@@ -353,12 +330,12 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(maxReqBytes))
 
 	var adminH http.HandlerFunc
 	var adminCRUDHandlers *adminCRUD
-	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
-		adminH = adminReloadHandler(tok, pgStoreForAdmin, limiter)
+	if cfg.AdminToken != "" && pgStoreForAdmin != nil {
+		adminH = adminReloadHandler(cfg.AdminToken, pgStoreForAdmin, limiter, cfg.AdminReloadRPM)
 
 		deps := crudDeps(storageForAdmin, pgStoreForAdmin)
 		kinds := buildAdminKinds(pgStoreForAdmin, storageForAdmin)
@@ -372,12 +349,12 @@ func main() {
 	mountHuma(
 		r,
 		authMW,
-		healthzHandler(healthzBackends, healthzDeadlineMS, len(masterKey) > 0),
+		healthzHandler(healthzBackends, cfg.HealthzDeadlineMS, len(masterKey) > 0),
 		apiopenai.ChatCompletions(resolver, runPipeline),
-		apiopenai.ListModels(cfg),
+		apiopenai.ListModels(catalogStore),
 		adminH,
 		adminCRUDHandlers,
-		os.Getenv("RELAY_ADMIN_TOKEN"),
+		cfg.AdminToken,
 	)
 
 	// Mount the operator admin UI at /ui (unauthenticated static assets; PER-274 gates API calls).
@@ -405,10 +382,10 @@ func main() {
 		}
 	}
 
-	totalDeadline := time.Duration(envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)) * time.Second
+	totalDeadline := time.Duration(cfg.ShutdownDeadlineS) * time.Second
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), totalDeadline)
 	defer shutCancel()
-	shutdown(shutCtx, srv, usageShutdown, el, st, cfg)
+	shutdown(shutCtx, srv, usageShutdown, el, st, catalogStore)
 }
 
 // shutdown executes the ordered drain sequence within the provided context deadline.

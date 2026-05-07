@@ -132,7 +132,7 @@ func buildHumaTestRouterWithAdmin(crud *adminCRUD) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 
@@ -155,7 +155,7 @@ func buildHumaTestRouter() http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 

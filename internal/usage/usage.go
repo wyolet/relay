@@ -113,6 +113,10 @@ type Config struct {
 	CatalogBackend  string
 	StateBackend    string
 	EventlogBackend string
+
+	// InstanceID overrides the instance identifier used in events and spans.
+	// When empty, hostname is used. Corresponds to RELAY_INSTANCE_ID.
+	InstanceID string
 }
 
 // Shutdown is a function that tears down the TracerProvider.
@@ -143,6 +147,9 @@ func storageBackend(s, def string) string {
 // When cfg.OTLPEndpoint is empty a no-op provider is used.
 // Returns a Shutdown function that is safe to call multiple times.
 func Init(ctx context.Context, cfg Config) (Shutdown, error) {
+	// Populate package-level instance ID from caller-provided value (or hostname).
+	cachedInstanceID = resolveInstanceIDFallback(cfg.InstanceID)
+
 	if cfg.OTLPEndpoint == "" {
 		otel.SetTracerProvider(noop.NewTracerProvider())
 		defaultEventLogger = cfg.EventLog

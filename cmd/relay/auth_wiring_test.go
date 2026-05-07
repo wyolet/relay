@@ -20,7 +20,7 @@ func buildTestRouter(keys [][]byte) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 

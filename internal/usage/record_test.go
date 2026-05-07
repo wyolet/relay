@@ -263,16 +263,14 @@ func TestSecretHash(t *testing.T) {
 }
 
 func TestResolveInstanceID(t *testing.T) {
-	t.Run("env override", func(t *testing.T) {
-		t.Setenv("RELAY_INSTANCE_ID", "my-pod-42")
-		got := resolveInstanceID()
+	t.Run("hint override", func(t *testing.T) {
+		got := resolveInstanceIDFallback("my-pod-42")
 		if got != "my-pod-42" {
 			t.Errorf("want my-pod-42, got %s", got)
 		}
 	})
 	t.Run("fallback hostname", func(t *testing.T) {
-		t.Setenv("RELAY_INSTANCE_ID", "")
-		got := resolveInstanceID()
+		got := resolveInstanceIDFallback("")
 		h, _ := os.Hostname()
 		if h != "" && got != h {
 			t.Errorf("want hostname %s, got %s", h, got)

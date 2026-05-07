@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 
+	"github.com/wyolet/relay/internal/config"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
 
@@ -17,8 +17,11 @@ func runMigrate(args []string) {
 		log.Fatal("usage: relay migrate <up|version>")
 	}
 
-	dsn := os.Getenv("RELAY_PG_DSN")
-	if dsn == "" {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if cfg.PGDSN == "" {
 		log.Fatal("RELAY_PG_DSN not set")
 	}
 
@@ -27,7 +30,7 @@ func runMigrate(args []string) {
 		log.Fatalf("migrate: open source: %v", err)
 	}
 
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	m, err := migrate.NewWithSourceInstance("iofs", src, cfg.PGDSN)
 	if err != nil {
 		log.Fatalf("migrate: init: %v", err)
 	}

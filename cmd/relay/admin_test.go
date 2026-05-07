@@ -36,7 +36,7 @@ func newAdminRouter(tok string, store reloader, lim *ratelimit.Limiter) http.Han
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	if tok != "" && store != nil {
-		r.Post("/admin/reload", adminReloadHandler(tok, store, lim))
+		r.Post("/admin/reload", adminReloadHandler(tok, store, lim, 10))
 	}
 	return r
 }
@@ -196,14 +196,16 @@ func TestAdminReload_RateLimit_DifferentIPs(t *testing.T) {
 	}
 }
 
-// TestAdminReload_RateLimit_EnvOverride verifies RELAY_ADMIN_RELOAD_RPM=3 produces
+// TestAdminReload_RateLimit_RPMOverride verifies that passing rpm=3 produces
 // 429 on the 4th request.
-func TestAdminReload_RateLimit_EnvOverride(t *testing.T) {
-	t.Setenv("RELAY_ADMIN_RELOAD_RPM", "3")
-
+func TestAdminReload_RateLimit_RPMOverride(t *testing.T) {
 	store := &mockReloader{}
 	lim := newTestLimiter()
-	r := newAdminRouter("secret", store, lim)
+
+	// Build router with rpm=3 directly (config.Load sets this from RELAY_ADMIN_RELOAD_RPM).
+	r := chi.NewRouter()
+	r.Use(reqid.Middleware(slog.Default()))
+	r.Post("/admin/reload", adminReloadHandler("secret", store, lim, 3))
 
 	doReq := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)

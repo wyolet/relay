@@ -38,20 +38,23 @@ var (
 	defaultEventLogger *eventlog.Logger
 )
 
-// InstanceID returns the resolved instance ID (RELAY_INSTANCE_ID → hostname → "unknown").
+// InstanceID returns the resolved instance ID set during Init.
 func InstanceID() string { return cachedInstanceID }
 
 // RelayVersion returns the version string from Go build info, or "dev".
 func RelayVersion() string { return cachedRelayVersion }
 
 func init() {
-	cachedInstanceID = resolveInstanceID()
 	cachedRelayVersion = resolveRelayVersion()
+	// InstanceID is populated by Init; fall back to hostname until then.
+	cachedInstanceID = resolveInstanceIDFallback("")
 }
 
-func resolveInstanceID() string {
-	if v := os.Getenv("RELAY_INSTANCE_ID"); v != "" {
-		return v
+// resolveInstanceIDFallback resolves instance ID: use hint if non-empty,
+// else hostname, else "unknown". Does NOT read env vars.
+func resolveInstanceIDFallback(hint string) string {
+	if hint != "" {
+		return hint
 	}
 	if h, err := os.Hostname(); err == nil && h != "" {
 		return h

@@ -123,11 +123,7 @@ func New(cfg Config) (*Logger, error) {
 	switch cfg.Backend {
 	case BackendFile:
 		if cfg.Dir == "" {
-			if d := os.Getenv("RELAY_EVENTLOG_DIR"); d != "" {
-				cfg.Dir = d
-			} else {
-				cfg.Dir = "./events"
-			}
+			cfg.Dir = "./events"
 		}
 		fs, err := newFileSink(cfg)
 		if err != nil {

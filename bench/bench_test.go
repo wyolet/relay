@@ -276,7 +276,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(logger))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	mountBenchHuma(r, authMW, apiopenai.ChatCompletions(resolver, runPipeline), apiopenai.ListModels(cfg))
 

@@ -29,3 +29,4 @@ bench/results*.json
 .env
 .env.*
 !.env.example
+bench/litellm/.env

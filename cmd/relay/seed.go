@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/storage"
 )
 
@@ -49,7 +50,11 @@ func runSeedTo(out io.Writer, args []string) error {
 		return fmt.Errorf("--from <yaml-dir> is required")
 	}
 	if dsn == "" {
-		dsn = os.Getenv("RELAY_PG_DSN")
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		dsn = cfg.PGDSN
 	}
 	if dsn == "" {
 		return fmt.Errorf("RELAY_PG_DSN not set and --dsn not provided")
@@ -99,12 +104,7 @@ func runSeedTo(out io.Writer, args []string) error {
 }
 
 // maybeAutoSeed runs the seed path if every catalog table is empty.
-func maybeAutoSeed(ctx context.Context, dsn string) error {
-	configDir := os.Getenv("RELAY_CONFIG_DIR")
-	if configDir == "" {
-		configDir = "config"
-	}
-
+func maybeAutoSeed(ctx context.Context, dsn, configDir string) error {
 	st, err := storage.Open(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("open storage: %w", err)

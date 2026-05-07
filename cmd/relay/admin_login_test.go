@@ -22,7 +22,7 @@ const loginTestToken = "login-test-secret-token"
 func buildLoginTestServer(tok string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	gate := adminTokenGate(tok)
 

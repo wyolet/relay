@@ -54,7 +54,7 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, 
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	deps := crudDeps(st, store)
 	kinds := buildAdminKinds(store, st)

@@ -104,26 +104,3 @@ func TestIsBodyTooLargeError(t *testing.T) {
 		t.Fatalf("expected true for *http.MaxBytesError, got %T: %v", err, err)
 	}
 }
-
-func TestMaxRequestBytesFromEnv(t *testing.T) {
-	t.Run("unset", func(t *testing.T) {
-		t.Setenv("RELAY_MAX_REQUEST_BYTES", "")
-		if got := httpmw.MaxRequestBytesFromEnv(); got != httpmw.DefaultMaxRequestBytes {
-			t.Fatalf("expected %d, got %d", httpmw.DefaultMaxRequestBytes, got)
-		}
-	})
-
-	t.Run("valid", func(t *testing.T) {
-		t.Setenv("RELAY_MAX_REQUEST_BYTES", "12345")
-		if got := httpmw.MaxRequestBytesFromEnv(); got != 12345 {
-			t.Fatalf("expected 12345, got %d", got)
-		}
-	})
-
-	t.Run("garbage", func(t *testing.T) {
-		t.Setenv("RELAY_MAX_REQUEST_BYTES", "not-a-number")
-		if got := httpmw.MaxRequestBytesFromEnv(); got != httpmw.DefaultMaxRequestBytes {
-			t.Fatalf("expected %d, got %d", httpmw.DefaultMaxRequestBytes, got)
-		}
-	})
-}

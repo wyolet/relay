@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,16 +19,6 @@ import (
 
 type reloader interface {
 	Reload(ctx context.Context) error
-}
-
-// adminReloadRPM returns the configured RPM for /admin/reload (RELAY_ADMIN_RELOAD_RPM, default 10).
-func adminReloadRPM() int64 {
-	if v := os.Getenv("RELAY_ADMIN_RELOAD_RPM"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 10
 }
 
 // adminReloadRules constructs the synthetic ResolvedRule slice for the /admin/reload limiter.
@@ -75,10 +64,12 @@ func sourceIP(r *http.Request) string {
 
 // adminReloadHandler returns an http.HandlerFunc that calls store.Reload.
 // token must be non-empty; callers are responsible for not registering when token is empty.
-// lim enforces a per-source-IP rate limit (10 RPM by default, RELAY_ADMIN_RELOAD_RPM to override).
-func adminReloadHandler(token string, store reloader, lim *ratelimit.Limiter) http.HandlerFunc {
+// lim enforces a per-source-IP rate limit using the provided rpm (default 10).
+func adminReloadHandler(token string, store reloader, lim *ratelimit.Limiter, rpm int) http.HandlerFunc {
 	tok := []byte(token)
-	rpm := adminReloadRPM()
+	if rpm <= 0 {
+		rpm = 10
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		log := reqid.Logger(ctx)
@@ -98,7 +89,7 @@ func adminReloadHandler(token string, store reloader, lim *ratelimit.Limiter) ht
 		}
 
 		// Rate-limit by source IP. Build rules with IP-scoped parent name.
-		rules := adminReloadRules(rpm)
+		rules := adminReloadRules(int64(rpm))
 		// Scope state key to source IP by embedding it in ParentName.
 		rules[0].ParentName = fmt.Sprintf("reload:%s", ip)
 

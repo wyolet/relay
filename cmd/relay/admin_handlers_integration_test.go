@@ -48,7 +48,7 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
+	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	deps := crudDeps(st, store)
 	kinds := buildAdminKinds(store, st)
