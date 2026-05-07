@@ -17,6 +17,7 @@ import (
 	pkganthropic "github.com/wyolet/relay/pkg/api/anthropic"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -36,10 +37,10 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		var upstreamDur time.Duration
 		defer func() {
 			total := time.Since(start)
-			metricMessagesRequests.WithLabelValues(safeLabel(modelName), statusClass(statusCode)).Inc()
-			metricMessagesDuration.WithLabelValues(safeLabel(modelName)).Observe(total.Seconds())
+			metrics.RequestTotal.WithLabelValues("anthropic", metrics.SafeLabel(modelName), metrics.StatusClass(statusCode)).Inc()
+			metrics.RequestDuration.WithLabelValues("anthropic", metrics.SafeLabel(modelName)).Observe(total.Seconds())
 			if upstreamDur > 0 && upstreamDur < total {
-				metricMessagesOverhead.WithLabelValues(safeLabel(modelName)).Observe((total - upstreamDur).Seconds())
+				metrics.RequestOverhead.WithLabelValues("anthropic", metrics.SafeLabel(modelName)).Observe((total - upstreamDur).Seconds())
 			}
 		}()
 

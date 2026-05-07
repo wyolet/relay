@@ -17,6 +17,7 @@ import (
 	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/httpmw"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -39,10 +40,10 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		var upstreamDur time.Duration
 		defer func() {
 			total := time.Since(start)
-			metricChatRequests.WithLabelValues(safeLabel(modelName), statusClass(statusCode)).Inc()
-			metricChatDuration.WithLabelValues(safeLabel(modelName)).Observe(total.Seconds())
+			metrics.RequestTotal.WithLabelValues("openai", metrics.SafeLabel(modelName), metrics.StatusClass(statusCode)).Inc()
+			metrics.RequestDuration.WithLabelValues("openai", metrics.SafeLabel(modelName)).Observe(total.Seconds())
 			if upstreamDur > 0 && upstreamDur < total {
-				metricChatOverhead.WithLabelValues(safeLabel(modelName)).Observe((total - upstreamDur).Seconds())
+				metrics.RequestOverhead.WithLabelValues("openai", metrics.SafeLabel(modelName)).Observe((total - upstreamDur).Seconds())
 			}
 		}()
 
