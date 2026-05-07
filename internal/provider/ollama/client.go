@@ -7,9 +7,10 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
-	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/internal/provider"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/transport"
 )
 
@@ -33,6 +34,11 @@ func New(baseURL string) *Client {
 // body chunks; the final message carries X-Relay-Final="true".
 func (c *Client) ChatCompletions(ctx context.Context, body []byte, secret string, out chan<- *transport.Message) error {
 	defer close(out)
+	start := time.Now()
+	statusCode := 0
+	defer func() {
+		provider.MetricUpstreamDuration.WithLabelValues("ollama", provider.StatusClass(statusCode)).Observe(time.Since(start).Seconds())
+	}()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -47,6 +53,7 @@ func (c *Client) ChatCompletions(ctx context.Context, body []byte, secret string
 		return fmt.Errorf("upstream: %w", err)
 	}
 	defer resp.Body.Close()
+	statusCode = resp.StatusCode
 
 	firstHeaders := map[string]string{
 		"X-Relay-Status": strconv.Itoa(resp.StatusCode),
