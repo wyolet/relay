@@ -3,6 +3,6 @@ kind: Pool
 metadata:
   name: ollama-default
 spec:
-  provider: dev-ollama
-  secrets:
-    - ollama-anon
+  provider: ollama
+  secrets: []
+  skipDefaultLimits: true

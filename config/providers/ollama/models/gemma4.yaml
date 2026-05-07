@@ -6,7 +6,7 @@ metadata:
     family: gemma
     runtime: ollama
 spec:
-  provider: dev-ollama
+  provider: ollama
   upstreamName: gemma4:latest
   description: "Gemma 4 8B (Ollama, Q4_K_M)"
   family: gemma4

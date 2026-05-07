@@ -5,6 +5,7 @@ metadata:
 spec:
     kind: openai
     baseURL: https://api.openai.com
+    defaultPool: openai-default
     displayName: OpenAI
     description: GPT models from OpenAI.
     homepageURL: https://openai.com

@@ -3,6 +3,7 @@ kind: Pool
 metadata:
   name: openai-default
 spec:
-  provider: openai-prod
+  provider: openai
   secrets:
     - openai-key-1
+  skipDefaultLimits: true

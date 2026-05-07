@@ -1,7 +1,7 @@
 apiVersion: relay.wyolet.dev/v1
 kind: Provider
 metadata:
-  name: dev-ollama
+  name: ollama
 spec:
   kind: ollama
   baseURL: https://ollama.wyolet.dev
