@@ -90,8 +90,14 @@ func effectivePricing(p *Provider, m *Model) *Pricing {
 
 // effectivePricingByModel returns the pre-computed effective pricing for a model.
 func (s *snapshot) effectivePricingByModel(modelName string) (*Pricing, bool) {
-	ep, ok := s.effectivePrices[modelName]
-	return ep, ok
+	if ep, ok := s.effectivePrices[modelName]; ok {
+		return ep, true
+	}
+	if m, ok := s.modelByName(modelName); ok {
+		ep, ok := s.effectivePrices[m.Metadata.Name]
+		return ep, ok
+	}
+	return nil, false
 }
 
 func (s *snapshot) providerByName(name string) (*Provider, bool) {
@@ -270,7 +276,7 @@ func (s *snapshot) defaultRoute() *Route {
 }
 
 func (s *snapshot) providerForModel(modelName string) (*Provider, bool) {
-	m, ok := s.models[modelName]
+	m, ok := s.modelByName(modelName)
 	if !ok {
 		return nil, false
 	}
