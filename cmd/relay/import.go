@@ -7,10 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
-	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/wyolet/relay/internal/catalog"
 	litellmimport "github.com/wyolet/relay/internal/import/litellm"
@@ -35,8 +32,9 @@ func runImport(args []string) {
 
 func runImportLiteLLM(args []string) {
 	fs := flag.NewFlagSet("import litellm", flag.ExitOnError)
-	apply := fs.Bool("apply", false, "Write to storage. Without this flag, prints YAML to stdout (dry-run).")
-	mode := fs.String("mode", "upsert", "How to handle existing entries: upsert | skip-existing | overwrite")
+	apply := fs.Bool("apply", false, "Push imported entities to PG via storage layer. Mutually exclusive with --out (--apply wins).")
+	out := fs.String("out", "config", `Output directory for YAML files (default: "config"). Use "-" to write to stdout. Ignored when --apply is set.`)
+	mode := fs.String("mode", "upsert", "Behavior when a file (or PG row) already exists: upsert | skip-existing | overwrite")
 	providers := fs.String("providers", "", "Comma-separated litellm_provider values to include (default: all)")
 	models := fs.String("models", "", "Regex to filter model names (default: all)")
 	sourceURL := fs.String("source-url", litellmimport.DefaultLiteLLMURL, "Override the LiteLLM JSON URL")
@@ -94,16 +92,48 @@ func runImportLiteLLM(args []string) {
 	}
 
 	if !*apply {
-		// Dry-run: print YAML to stdout.
-		if err := printDryRun(result); err != nil {
-			slog.Error("import litellm: dry-run print failed", "err", err)
+		if *out == "-" {
+			// Stdout mode: emit providers then models, alphabetically, separated by ---.
+			if err := litellmimport.WriteToStdout(result); err != nil {
+				slog.Error("import litellm: stdout write failed", "err", err)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "\nimport litellm (stdout): %d models, %d providers, %d skipped (mode/provider).\nsource_version=%s\n",
+				len(result.Models), len(result.Providers),
+				result.SkippedMode+result.SkippedProvider, version)
+			return
+		}
+
+		// Default: write YAML files to --out directory.
+		applyMode := litellmimport.ApplyMode(*mode)
+		wr, err := litellmimport.WriteToDisk(*out, result, applyMode)
+		if err != nil {
+			slog.Error("import litellm: write-to-disk failed", "err", err)
 			os.Exit(1)
 		}
-		// Print summary to stderr so it doesn't pollute stdout YAML.
-		fmt.Fprintf(os.Stderr, "\nimport litellm (dry-run): %d models, %d providers, %d skipped (mode/provider).\nsource_version=%s\n",
-			len(result.Models), len(result.Providers),
-			result.SkippedMode+result.SkippedProvider, version)
+		slog.Info("import litellm: complete",
+			"models_written", wr.ModelsWritten,
+			"providers_written", wr.ProvidersWritten,
+			"skipped_existing", wr.Skipped,
+			"skipped_mode", result.SkippedMode,
+			"skipped_provider", result.SkippedProvider,
+			"errors", wr.Errors,
+			"out", *out,
+			"source_version", version,
+			"mode", string(applyMode),
+		)
+		fmt.Fprintf(os.Stderr, "import litellm: %d models written, %d providers written, %d skipped (mode/provider), %d skipped (existing files), %d errors.\nsource_version=%s\n",
+			wr.ModelsWritten, wr.ProvidersWritten,
+			result.SkippedMode+result.SkippedProvider, wr.Skipped, wr.Errors, version)
+		if *out != "config" {
+			// Not the default — remind the operator.
+		}
 		return
+	}
+
+	// --apply and --out both set: warn and proceed with apply.
+	if *out != "config" {
+		slog.Warn("import litellm: --apply set, ignoring --out", "out", *out)
 	}
 
 	// Apply — needs PG.
@@ -152,36 +182,6 @@ func runImportLiteLLM(args []string) {
 		result.SkippedMode, result.SkippedProvider, version)
 }
 
-func printDryRun(result *litellmimport.TranslateResult) error {
-	// Sort providers and models alphabetically for consistent diffs.
-	provs := make([]*catalog.Provider, len(result.Providers))
-	copy(provs, result.Providers)
-	sort.Slice(provs, func(i, j int) bool {
-		return provs[i].Metadata.Name < provs[j].Metadata.Name
-	})
-
-	mods := make([]*catalog.Model, len(result.Models))
-	copy(mods, result.Models)
-	sort.Slice(mods, func(i, j int) bool {
-		return mods[i].Metadata.Name < mods[j].Metadata.Name
-	})
-
-	for _, p := range provs {
-		b, err := yaml.Marshal(p)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("---\n%s", b)
-	}
-	for _, m := range mods {
-		b, err := yaml.Marshal(m)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("---\n%s", b)
-	}
-	return nil
-}
 
 func sourceFileOrURL(file, url string) string {
 	if file != "" {
