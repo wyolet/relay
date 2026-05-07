@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	apianthropic "github.com/wyolet/relay/internal/api/anthropic"
 	apiopenai "github.com/wyolet/relay/internal/api/openai"
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
@@ -22,6 +23,7 @@ import (
 	"github.com/wyolet/relay/internal/keypool"
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/provider"
+	provideranthropicpkg "github.com/wyolet/relay/internal/provider/anthropic"
 	"github.com/wyolet/relay/internal/provider/ollama"
 	"github.com/wyolet/relay/internal/provider/openai"
 	"github.com/wyolet/relay/internal/ratelimit"
@@ -266,7 +268,26 @@ func main() {
 				baseURL = "https://api.openai.com"
 			}
 			reg.Register(catalog.PKOpenAI, baseURL, openai.New(baseURL))
+		case catalog.PKAnthropic:
+			baseURL := p.Spec.BaseURL
+			if baseURL == "" {
+				baseURL = "https://api.anthropic.com"
+			}
+			reg.RegisterMessages(catalog.PKAnthropic, baseURL, provideranthropicpkg.New(baseURL))
 		}
+	}
+
+	// normalizeBaseURL returns the canonical baseURL for a provider kind.
+	normalizeBaseURL := func(kind catalog.ProviderKind, baseURL string) string {
+		if baseURL == "" {
+			switch kind {
+			case catalog.PKOpenAI:
+				return "https://api.openai.com"
+			case catalog.PKAnthropic:
+				return "https://api.anthropic.com"
+			}
+		}
+		return baseURL
 	}
 
 	// outboundFor resolves the provider adapter for a request plan.
@@ -274,11 +295,7 @@ func main() {
 	// produces a cache miss, so the updated client is created and cached on the
 	// next request without any explicit invalidation.
 	outboundFor := func(plan *apiopenai.RequestPlan) (provider.Outbound, error) {
-		// Normalise the baseURL exactly as we do at boot so the lookup key matches.
-		baseURL := plan.Provider.Spec.BaseURL
-		if plan.Provider.Spec.Kind == catalog.PKOpenAI && baseURL == "" {
-			baseURL = "https://api.openai.com"
-		}
+		baseURL := normalizeBaseURL(plan.Provider.Spec.Kind, plan.Provider.Spec.BaseURL)
 		ob, err := reg.Get(plan.Provider.Spec.Kind, baseURL)
 		if err == nil {
 			return ob, nil
@@ -294,6 +311,22 @@ func main() {
 		}
 		reg.Register(plan.Provider.Spec.Kind, baseURL, ob)
 		return ob, nil
+	}
+
+	// messagesOutboundFor resolves a MessagesOutbound for an Anthropic plan.
+	messagesOutboundFor := func(plan *apianthropic.RequestPlan) (provider.MessagesOutbound, error) {
+		baseURL := normalizeBaseURL(plan.Provider.Spec.Kind, plan.Provider.Spec.BaseURL)
+		ob, err := reg.GetMessages(plan.Provider.Spec.Kind, baseURL)
+		if err == nil {
+			return ob, nil
+		}
+		// Not yet registered — create and cache it now.
+		if plan.Provider.Spec.Kind == catalog.PKAnthropic {
+			client := provideranthropicpkg.New(baseURL)
+			reg.RegisterMessages(catalog.PKAnthropic, baseURL, client)
+			return client, nil
+		}
+		return nil, fmt.Errorf("provider: no messages outbound for kind %q", plan.Provider.Spec.Kind)
 	}
 
 	resolver := routing.New(catalogStore)
@@ -328,6 +361,40 @@ func main() {
 			Secrets:  []*catalog.Secret{emptySecret},
 			Selector: sel,
 			Outbound: ob,
+		})
+	}
+
+	runAnthropicPipeline := func(ctx context.Context, ch *transport.Channel, plan *apianthropic.RequestPlan) (pipeline.RunResult, error) {
+		mob, err := messagesOutboundFor(plan)
+		if err != nil {
+			return pipeline.RunResult{}, err
+		}
+		doUpstream := mob.Messages
+		if plan.Pool != nil && len(plan.Secrets) > 0 {
+			return pipeline.Run(ctx, ch, pipeline.RunOptions{
+				Provider:   plan.Provider,
+				Pool:       plan.Pool,
+				Model:      plan.Model,
+				Secrets:    plan.Secrets,
+				Selector:   sel,
+				DoUpstream: doUpstream,
+				Limiter:    limiter,
+				Rules:      plan.Rules,
+			})
+		}
+		emptySecret := &catalog.Secret{
+			Metadata: catalog.Metadata{Name: "anon"},
+			Resolved: "",
+			KeyHash:  "anon",
+		}
+		syntheticPool := &catalog.Pool{
+			Metadata: catalog.Metadata{Name: "anon-pool"},
+		}
+		return pipeline.Run(ctx, ch, pipeline.RunOptions{
+			Pool:       syntheticPool,
+			Secrets:    []*catalog.Secret{emptySecret},
+			Selector:   sel,
+			DoUpstream: doUpstream,
 		})
 	}
 
@@ -373,6 +440,7 @@ func main() {
 		healthzHandler(healthzBackends, cfg.HealthzDeadlineMS, len(masterKey) > 0),
 		apiopenai.ChatCompletions(resolver, runPipeline),
 		apiopenai.ListModels(catalogStore),
+		apianthropic.MessagesHandler(resolver, runAnthropicPipeline),
 		adminH,
 		adminCRUDHandlers,
 		cfg.AdminToken,

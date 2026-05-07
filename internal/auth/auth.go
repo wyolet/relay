@@ -58,20 +58,33 @@ func Middleware(keys [][]byte) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			raw := r.Header.Get("Authorization")
-			if raw == "" {
+			var token string
+
+			// Accept both "Authorization: Bearer <token>" (OpenAI convention) and
+			// "x-api-key: <token>" (Anthropic convention) so that Anthropic-SDK
+			// clients (e.g. Claude Code with ANTHROPIC_BASE_URL) can reach Relay
+			// without reconfiguring their auth header.
+			if raw := r.Header.Get("Authorization"); raw != "" {
+				if !strings.HasPrefix(raw, "Bearer ") {
+					reject(w, ReasonInvalid)
+					return
+				}
+				token = raw[len("Bearer "):]
+				if token == "" {
+					// "Bearer " with no value is treated as an invalid credential,
+					// not a missing one — matches original behaviour.
+					reject(w, ReasonInvalid)
+					return
+				}
+			} else if xak := r.Header.Get("x-api-key"); xak != "" {
+				token = xak
+			}
+
+			if token == "" {
 				reject(w, ReasonMissing)
 				return
 			}
-			if !strings.HasPrefix(raw, "Bearer ") {
-				reject(w, ReasonInvalid)
-				return
-			}
-			token := raw[len("Bearer "):]
-			if token == "" {
-				reject(w, ReasonInvalid)
-				return
-			}
+
 			tok := []byte(token)
 			for _, k := range keys {
 				if subtle.ConstantTimeCompare(tok, k) == 1 {

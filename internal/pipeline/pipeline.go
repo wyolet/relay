@@ -44,6 +44,11 @@ type RunResult struct {
 const defaultMaxAttempts = 3
 const shortRateLimitThreshold = 5 * time.Second
 
+// UpstreamFunc is a shape-agnostic upstream call. Each shape handler builds
+// the appropriate closure (ChatCompletions for OpenAI, Messages for Anthropic).
+// This makes pipeline.Run independent of the wire format.
+type UpstreamFunc func(ctx context.Context, body []byte, secret string, out chan<- *transport.Message) error
+
 // RunOptions configures a Run invocation.
 type RunOptions struct {
 	Provider    *catalog.Provider
@@ -52,7 +57,8 @@ type RunOptions struct {
 	Secrets     []*catalog.Secret
 	Selector    *keypool.Selector
 	Outbound    provider.Outbound
-	MaxAttempts int // 0 → 3
+	DoUpstream  UpstreamFunc // overrides Outbound.ChatCompletions when non-nil
+	MaxAttempts int          // 0 → 3
 
 	// Limiter and Rules enable rate limiting. If either is nil/empty, rate
 	// limiting is skipped (preserves M2 behavior for configs without limits).
@@ -260,7 +266,11 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 					outboundErr <- errors.New("outbound panic recovered")
 				}
 			}()
-			outboundErr <- opts.Outbound.ChatCompletions(ctx, inboundMsg.Body, secret.Resolved, inter)
+			if opts.DoUpstream != nil {
+				outboundErr <- opts.DoUpstream(ctx, inboundMsg.Body, secret.Resolved, inter)
+			} else {
+				outboundErr <- opts.Outbound.ChatCompletions(ctx, inboundMsg.Body, secret.Resolved, inter)
+			}
 		}()
 
 		// Read first message.

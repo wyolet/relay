@@ -13,3 +13,11 @@ metadata:
 spec:
   kind: ollama
   baseURL: http://host.docker.internal:11434
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+  name: anthropic
+spec:
+  kind: anthropic
+  baseURL: https://api.anthropic.com

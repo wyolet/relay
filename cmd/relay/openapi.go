@@ -103,6 +103,7 @@ func mountHuma(
 	healthzH http.HandlerFunc,
 	chatH http.HandlerFunc,
 	modelsH http.HandlerFunc,
+	messagesH http.HandlerFunc,
 	adminH http.HandlerFunc,
 	crudArg *adminCRUD,
 	adminTok string,
@@ -140,6 +141,28 @@ func mountHuma(
 	}
 	delegateBody := func(h http.HandlerFunc) func(context.Context, *chatInput) (*huma.StreamResponse, error) {
 		return func(_ context.Context, inp *chatInput) (*huma.StreamResponse, error) {
+			raw := inp.RawBody
+			return &huma.StreamResponse{
+				Body: func(ctx huma.Context) {
+					r, w := humachi.Unwrap(ctx)
+					r.Body = io.NopCloser(bytes.NewReader(raw))
+					r.ContentLength = int64(len(raw))
+					h.ServeHTTP(w, r)
+				},
+			}, nil
+		}
+	}
+
+	// delegateMessagesBody wraps an http.HandlerFunc as a huma stream handler for Anthropic shape.
+	type anthropicInput struct {
+		RawBody   json.RawMessage   `doc:"Anthropic-compatible messages request."`
+		Model     string            `json:"model" doc:"ID of the model to use (required)."`
+		MaxTokens int               `json:"max_tokens" doc:"Maximum number of tokens to generate (required)."`
+		Stream    bool              `json:"stream,omitempty" doc:"If true, events are sent as SSE."`
+		Metadata  map[string]string `json:"metadata,omitempty" doc:"Optional metadata including user_id."`
+	}
+	delegateMessagesBody := func(h http.HandlerFunc) func(context.Context, *anthropicInput) (*huma.StreamResponse, error) {
+		return func(_ context.Context, inp *anthropicInput) (*huma.StreamResponse, error) {
 			raw := inp.RawBody
 			return &huma.StreamResponse{
 				Body: func(ctx huma.Context) {
@@ -206,6 +229,21 @@ func mountHuma(
 			}
 		}
 	}
+
+	// POST /v1/messages (Anthropic API)
+	huma.Register(api, huma.Operation{
+		OperationID: "create-message",
+		Method:      http.MethodPost,
+		Path:        "/v1/messages",
+		Summary:     "Create message (Anthropic)",
+		Description: "Proxies to the configured Anthropic upstream following the Anthropic Messages " +
+			"API shape (https://docs.anthropic.com/en/api/messages). " +
+			"Returns text/event-stream when stream=true, application/json otherwise. " +
+			"Accepts x-api-key header in addition to Authorization: Bearer for SDK compatibility.",
+		Tags:        []string{"anthropic"},
+		Errors:      []int{400, 401, 404, 429, 500},
+		Middlewares: auth,
+	}, delegateMessagesBody(messagesH))
 
 	// GET /v1/models
 	huma.Register(api, huma.Operation{
