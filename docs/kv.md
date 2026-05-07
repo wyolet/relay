@@ -6,7 +6,7 @@ Audience: engineers (and Claude when pointed at this file) writing new consumers
 
 ## 1. Purpose
 
-`pkg/kv` is a generic key-value store abstraction with two backends: an in-process `Mem` backend (used in tests and local dev) and a `Redis` backend that is compatible with any RESP-speaking server (Redis, Valkey, Dragonfly). The package is a pure library — it contains no Relay business logic, no domain types, no knowledge of pools, routes, or API keys. Consumers such as `pkg/limit`, `internal/keypool`, and future packages like `internal/idempotency` and `internal/batch` build all domain semantics on top of the primitives `pkg/kv` exposes (get, set, delete, atomic Lua script execution, and distributed locking).
+`pkg/kv` is a generic key-value store abstraction with two backends: an in-process `Mem` backend (used in tests and local dev) and a `Redis` backend that is compatible with any RESP-speaking server (Redis, Valkey, Dragonfly). The package is a pure library — it contains no Relay business logic, no domain types, no knowledge of pools, routes, or API keys. Consumers such as `internal/ratelimit`, `internal/keypool`, and future packages like `internal/idempotency` and `internal/batch` build all domain semantics on top of the primitives `pkg/kv` exposes (get, set, delete, atomic Lua script execution, and distributed locking).
 
 ---
 
@@ -32,8 +32,8 @@ The shard key should equal the **atomicity boundary** — the smallest scope wit
 
 | Consumer | Shard key | Rationale |
 |---|---|---|
-| `pkg/limit` (rate-limit buckets) | `{pool:NAME}` | `Reserve` atomically touches multiple bucket and meter keys for one pool in a single Lua call. All must be on the same slot. |
-| `internal/keypool` (circuit breakers, round-robin counters) | `{pool:NAME}` | Shares the pool boundary with `pkg/limit` and may participate in a joint Lua call in the future (e.g., select key + decrement quota in one round trip). |
+| `internal/ratelimit` (rate-limit buckets) | `{pool:NAME}` | `Reserve` atomically touches multiple bucket and meter keys for one pool in a single Lua call. All must be on the same slot. |
+| `internal/keypool` (circuit breakers, round-robin counters) | `{pool:NAME}` | Shares the pool boundary with `internal/ratelimit` and may participate in a joint Lua call in the future (e.g., select key + decrement quota in one round trip). |
 | `internal/idempotency` (future) | `{req:ID}` | Idempotency checks are per-request; no atomic op ever spans two different request IDs, so a request-scoped tag is the right granularity. |
 | `internal/batch` (future) | `{job:ID}` | All state for a batch job (status, result pointer, retry counter) is job-scoped; no cross-job atomicity is needed. |
 | Global counters | `{global}` | Last resort only. A global tag pins **all** such keys to a single shard forever. Acceptable for a handful of truly global counters; never for high-cardinality data. Document the cost in a code comment. |
