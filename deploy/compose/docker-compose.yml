@@ -66,6 +66,7 @@ services:
         condition: service_healthy
     ports:
       - "8081:8080"
+    networks: [default, dev-net]
 
   relay-b:
     build:
@@ -88,6 +89,7 @@ services:
         condition: service_healthy
     ports:
       - "8082:8080"
+    networks: [default, dev-net]
 
   nginx:
     image: nginx:alpine
@@ -102,3 +104,8 @@ services:
 volumes:
   pg-data:
   ch-data:
+
+networks:
+  default:
+  dev-net:
+    external: true
