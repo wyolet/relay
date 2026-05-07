@@ -81,38 +81,10 @@ func humaAuth(authMW func(http.Handler) http.Handler) func(huma.Context, func(hu
 	}
 }
 
-// adminHandlers holds the five http.HandlerFuncs produced by the crud factory for one kind.
-// Used by mountAdminRoutes (chi) only; mountHuma uses RegisterOps directly when kinds are set.
-type adminHandlers struct {
-	list   http.HandlerFunc
-	get    http.HandlerFunc
-	create http.HandlerFunc
-	update http.HandlerFunc
-	del    http.HandlerFunc
-}
-
-// adminCRUD bundles all five kinds' handler sets, typed kind factories, and deps.
+// adminCRUD bundles the typed kind factories, deps, and store for mountHuma.
 type adminCRUD struct {
-	// chi http.HandlerFuncs — used by mountAdminRoutes.
-	provider  adminHandlers
-	pool      adminHandlers
-	model     adminHandlers
-	route     adminHandlers
-	rateLimit adminHandlers
-
-	secretList     http.HandlerFunc
-	secretGet      http.HandlerFunc
-	secretCreate   http.HandlerFunc
-	secretUpdate   http.HandlerFunc
-	secretDelete   http.HandlerFunc
-	attachmentList http.HandlerFunc
-	version        http.HandlerFunc
-	masterKeyGenerate http.HandlerFunc
-
-	// Typed kind factories — used by mountHuma for full OpenAPI schema generation.
-	// Nil when admin is not configured or when built from stubs (tests).
-	kinds *adminKinds
-	deps  *crud.Deps
+	kinds   *adminKinds
+	deps    *crud.Deps
 	pgStore *catalog.PGStore // for secrets/attachment typed handlers
 }
 
@@ -347,106 +319,23 @@ func mountHuma(
 
 	// Admin CRUD
 	if crudArg != nil {
-		if crudArg.kinds != nil && crudArg.deps != nil {
-			// Full typed registration with schema generation.
-			crud.RegisterOps(api, "/admin/providers", "provider", "providers",
-				crudArg.kinds.provider, *crudArg.deps, adminAuth)
-			crud.RegisterOps(api, "/admin/pools", "pool", "pools",
-				crudArg.kinds.pool, *crudArg.deps, adminAuth)
-			crud.RegisterOps(api, "/admin/models", "model", "models",
-				crudArg.kinds.model, *crudArg.deps, adminAuth)
-			crud.RegisterOps(api, "/admin/routes", "route", "routes",
-				crudArg.kinds.route, *crudArg.deps, adminAuth)
-			crud.RegisterOps(api, "/admin/ratelimits", "ratelimit", "ratelimits",
-				crudArg.kinds.rateLimit, *crudArg.deps, adminAuth)
-		} else {
-			// Fallback: delegate-based registration (no body schemas).
-			// Used in openapi_test.go stubs.
-			type kindSpec struct {
-				singular string
-				plural   string
-				h        adminHandlers
-			}
-			kinds := []kindSpec{
-				{"provider", "providers", crudArg.provider},
-				{"pool", "pools", crudArg.pool},
-				{"model", "models", crudArg.model},
-				{"route", "routes", crudArg.route},
-				{"ratelimit", "ratelimits", crudArg.rateLimit},
-			}
-			for _, k := range kinds {
-				k := k
-				base := "/admin/" + k.plural
-				nameParam := base + "/{name}"
-				huma.Register(api, huma.Operation{
-					OperationID: "admin_" + k.singular + "_list",
-					Method: http.MethodGet, Path: base,
-					Summary: "List " + k.plural, Tags: []string{"admin"},
-					Errors: []int{500}, Middlewares: adminAuth,
-				}, delegate(k.h.list))
-				huma.Register(api, huma.Operation{
-					OperationID: "admin_" + k.singular + "_get",
-					Method: http.MethodGet, Path: nameParam,
-					Summary: "Get " + k.singular, Tags: []string{"admin"},
-					Errors: []int{404, 500}, Middlewares: adminAuth,
-				}, delegate(k.h.get))
-				huma.Register(api, huma.Operation{
-					OperationID: "admin_" + k.singular + "_create",
-					Method: http.MethodPost, Path: base,
-					Summary: "Create " + k.singular, Tags: []string{"admin"},
-					Errors: []int{400, 500}, Middlewares: adminAuth,
-				}, delegate(k.h.create))
-				huma.Register(api, huma.Operation{
-					OperationID: "admin_" + k.singular + "_update",
-					Method: http.MethodPut, Path: nameParam,
-					Summary: "Update " + k.singular, Tags: []string{"admin"},
-					Errors: []int{400, 404, 500}, Middlewares: adminAuth,
-				}, delegate(k.h.update))
-				huma.Register(api, huma.Operation{
-					OperationID: "admin_" + k.singular + "_delete",
-					Method: http.MethodDelete, Path: nameParam,
-					Summary: "Delete " + k.singular, Tags: []string{"admin"},
-					Errors: []int{404, 500}, Middlewares: adminAuth,
-				}, delegate(k.h.del))
-			}
-		}
+		crud.RegisterOps(api, "/admin/providers", "provider", "providers",
+			crudArg.kinds.provider, *crudArg.deps, adminAuth)
+		crud.RegisterOps(api, "/admin/pools", "pool", "pools",
+			crudArg.kinds.pool, *crudArg.deps, adminAuth)
+		crud.RegisterOps(api, "/admin/models", "model", "models",
+			crudArg.kinds.model, *crudArg.deps, adminAuth)
+		crud.RegisterOps(api, "/admin/routes", "route", "routes",
+			crudArg.kinds.route, *crudArg.deps, adminAuth)
+		crud.RegisterOps(api, "/admin/ratelimits", "ratelimit", "ratelimits",
+			crudArg.kinds.rateLimit, *crudArg.deps, adminAuth)
 
 		// --- Secret endpoints ---
-		if crudArg.pgStore != nil && crudArg.deps != nil {
-			registerTypedSecretOps(api, crudArg.pgStore, crudArg.deps, adminAuth)
-		} else {
-			huma.Register(api, huma.Operation{
-				OperationID: "admin_secret_list", Method: http.MethodGet, Path: "/admin/secrets",
-				Summary: "List secrets", Tags: []string{"admin"}, Errors: []int{500}, Middlewares: adminAuth,
-			}, delegate(crudArg.secretList))
-			huma.Register(api, huma.Operation{
-				OperationID: "admin_secret_get", Method: http.MethodGet, Path: "/admin/secrets/{name}",
-				Summary: "Get secret", Tags: []string{"admin"}, Errors: []int{404, 500}, Middlewares: adminAuth,
-			}, delegate(crudArg.secretGet))
-			huma.Register(api, huma.Operation{
-				OperationID: "admin_secret_create", Method: http.MethodPost, Path: "/admin/secrets",
-				Summary: "Create secret", Tags: []string{"admin"}, Errors: []int{400, 500}, Middlewares: adminAuth,
-			}, delegate(crudArg.secretCreate))
-			huma.Register(api, huma.Operation{
-				OperationID: "admin_secret_update", Method: http.MethodPut, Path: "/admin/secrets/{name}",
-				Summary: "Update secret", Tags: []string{"admin"}, Errors: []int{400, 404, 500}, Middlewares: adminAuth,
-			}, delegate(crudArg.secretUpdate))
-			huma.Register(api, huma.Operation{
-				OperationID: "admin_secret_delete", Method: http.MethodDelete, Path: "/admin/secrets/{name}",
-				Summary: "Delete secret", Tags: []string{"admin"}, Errors: []int{404, 500}, Middlewares: adminAuth,
-			}, delegate(crudArg.secretDelete))
-		}
-
-		// --- Attachment endpoint ---
 		if crudArg.pgStore != nil {
+			registerTypedSecretOps(api, crudArg.pgStore, crudArg.deps, adminAuth)
+
+			// --- Attachment endpoint ---
 			registerTypedAttachmentOps(api, crudArg.pgStore, adminAuth)
-		} else {
-			huma.Register(api, huma.Operation{
-				OperationID: "admin_attachment_list", Method: http.MethodGet, Path: "/admin/attachments",
-				Summary: "List attachments (derived, read-only)",
-				Description: "Returns all rate-limit attachments derived from inline rateLimits on Pool/Secret/Model specs.",
-				Tags: []string{"admin"}, Errors: []int{400, 500}, Middlewares: adminAuth,
-			}, delegate(crudArg.attachmentList))
 		}
 
 		// --- Misc ---

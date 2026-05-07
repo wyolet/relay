@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -52,7 +53,10 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 	deps := crudDeps(st, store)
 	kinds := buildAdminKinds(store, st)
 	crudH := buildAdminCRUD(kinds, deps, store)
-	mountAdminRoutes(r, adminTestToken, crudH, store, deps)
+
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	authMW := auth.Middleware(nil) // no API-key auth needed for admin tests
+	mountHuma(r, authMW, stub, stub, stub, nil, crudH, adminTestToken)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

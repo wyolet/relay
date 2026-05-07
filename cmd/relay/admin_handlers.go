@@ -9,8 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/admin/crud"
@@ -284,88 +282,6 @@ func crudDeps(st *storage.Storage, store *catalog.PGStore) crud.Deps {
 	}
 }
 
-// buildAdminCRUD calls Handlers() on each kind and bundles the results.
-func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore) *adminCRUD {
-	pl, pg, pc, pu, pd := kinds.provider.Handlers(deps)
-	ol, og, oc, ou, od := kinds.pool.Handlers(deps)
-	ml, mg, mc, mu, md := kinds.model.Handlers(deps)
-	rl, rg, rc, ru, rd := kinds.route.Handlers(deps)
-	ll, lg, lc, lu, ld := kinds.rateLimit.Handlers(deps)
-	depsCopy := deps
-	kindsCopy := kinds
-	return &adminCRUD{
-		provider:  adminHandlers{pl, pg, pc, pu, pd},
-		pool:      adminHandlers{ol, og, oc, ou, od},
-		model:     adminHandlers{ml, mg, mc, mu, md},
-		route:     adminHandlers{rl, rg, rc, ru, rd},
-		rateLimit: adminHandlers{ll, lg, lc, lu, ld},
-
-		secretList:     secretListHandler(store),
-		secretGet:      secretGetHandler(store),
-		secretCreate:   secretCreateHandler(store, deps),
-		secretUpdate:   secretUpdateHandler(store, deps),
-		secretDelete:   secretDeleteHandler(store, deps),
-		attachmentList: attachmentListHandler(store, deps),
-
-		version:           versionHandler(),
-		masterKeyGenerate: masterKeyGenerateHandler(),
-
-		// Typed fields for mountHuma full-schema registration.
-		kinds:   &kindsCopy,
-		deps:    &depsCopy,
-		pgStore: store,
-	}
-}
-
-// mountAdminRoutes registers chi routes for all admin CRUD endpoints, gated by token check.
-// Also mounts the unauthenticated POST /admin/login (cookie auth bootstrap).
-func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *catalog.PGStore, deps crud.Deps) {
-	gate := adminTokenGate(tok)
-
-	// Login is NOT gated — it is the mechanism by which clients obtain a session cookie.
-	r.Post("/admin/login", adminLoginHandler(tok))
-	r.With(gate).Post("/admin/logout", adminLogoutHandler())
-	r.With(gate).Get("/admin/whoami", adminWhoamiHandler())
-
-	type kindRoutes struct {
-		plural   string
-		handlers adminHandlers
-	}
-	kinds := []kindRoutes{
-		{"providers", h.provider},
-		{"pools", h.pool},
-		{"models", h.model},
-		{"routes", h.route},
-		{"ratelimits", h.rateLimit},
-	}
-	for _, k := range kinds {
-		k := k
-		base := "/admin/" + k.plural
-		r.With(gate).Get(base, k.handlers.list)
-		r.With(gate).Post(base, k.handlers.create)
-		r.With(gate).Get(base+"/{name}", k.handlers.get)
-		r.With(gate).Put(base+"/{name}", k.handlers.update)
-		r.With(gate).Delete(base+"/{name}", k.handlers.del)
-	}
-
-	// Secret endpoints (custom shapes, not via Kind[T] factory).
-	r.With(gate).Get("/admin/secrets", h.secretList)
-	r.With(gate).Post("/admin/secrets", h.secretCreate)
-	r.With(gate).Get("/admin/secrets/{name}", h.secretGet)
-	r.With(gate).Put("/admin/secrets/{name}", h.secretUpdate)
-	r.With(gate).Delete("/admin/secrets/{name}", h.secretDelete)
-
-	// Attachment endpoint — read-only derived view.
-	r.With(gate).Get("/admin/attachments", h.attachmentList)
-
-	// Misc admin endpoints.
-	r.With(gate).Get("/admin/version", versionHandler())
-	r.With(gate).Get("/admin/master-key/generate", masterKeyGenerateHandler())
-
-	_ = store
-	_ = deps
-}
-
 // adminTokenGate returns a chi middleware that checks the admin token.
 func adminTokenGate(token string) func(http.Handler) http.Handler {
 	tok := []byte(token)
@@ -383,5 +299,16 @@ func adminTokenGate(token string) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// buildAdminCRUD constructs the adminCRUD bundle used by mountHuma.
+func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore) *adminCRUD {
+	depsCopy := deps
+	kindsCopy := kinds
+	return &adminCRUD{
+		kinds:   &kindsCopy,
+		deps:    &depsCopy,
+		pgStore: store,
 	}
 }

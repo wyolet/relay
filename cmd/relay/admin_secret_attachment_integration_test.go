@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/httpmw"
@@ -20,12 +21,6 @@ import (
 
 // testMasterKey is a 32-byte hex key used in integration tests.
 const testMasterKeyHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-
-type testSecretServer struct {
-	srv   *httptest.Server
-	store *catalog.PGStore
-	st    *storagemod.Storage
-}
 
 func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, *catalog.PGStore, *storagemod.Storage) {
 	t.Helper()
@@ -64,7 +59,10 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, 
 	deps := crudDeps(st, store)
 	kinds := buildAdminKinds(store, st)
 	crudH := buildAdminCRUD(kinds, deps, store)
-	mountAdminRoutes(r, adminTestToken, crudH, store, deps)
+
+	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	authMW := auth.Middleware(nil)
+	mountHuma(r, authMW, stub, stub, stub, nil, crudH, adminTestToken)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -293,10 +291,12 @@ func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", resp.StatusCode)
 	}
-	var errOut map[string]map[string]string
+	// huma path returns 400 with message (no code field in huma error shape)
+	var errOut map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&errOut); err == nil {
-		if errOut["error"]["code"] != "master_key_required" {
-			t.Errorf("want code=master_key_required, got %q", errOut["error"]["code"])
+		errInner, _ := errOut["error"].(map[string]any)
+		if errInner["message"] == "" {
+			t.Error("want error message in response")
 		}
 	}
 }

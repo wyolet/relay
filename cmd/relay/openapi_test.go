@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,9 +12,119 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/internal/auth"
+	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 )
+
+// stubAdminCRUD builds a real adminCRUD with no-op callbacks — no PG/storage needed.
+// Sufficient for OpenAPI schema generation via RegisterOps.
+func stubAdminCRUD() *adminCRUD {
+	nopDeps := crud.Deps{
+		Tx:       &nopTxRunner{},
+		Patcher:  &nopPatcher{},
+		Reloader: &nopReloader{},
+		Logger:   slog.Default(),
+	}
+	kinds := adminKinds{
+		provider:  stubProviderKind(),
+		pool:      stubPoolKind(),
+		model:     stubModelKind(),
+		route:     stubRouteKind(),
+		rateLimit: stubRateLimitKind(),
+	}
+	depsCopy := nopDeps
+	kindsCopy := kinds
+	return &adminCRUD{
+		kinds:   &kindsCopy,
+		deps:    &depsCopy,
+		pgStore: nil, // secrets/attachments registered via pgStore path; use nil to skip
+	}
+}
+
+// --- no-op impls ---
+
+type nopTxRunner struct{}
+
+func (n *nopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+type nopPatcher struct{}
+
+func (n *nopPatcher) ValidateWithPatch(_ catalog.Patch) error { return nil }
+
+type nopReloader struct{}
+
+func (n *nopReloader) Reload(_ context.Context) error { return nil }
+
+// --- stub Kind[T] factories ---
+
+func stubProviderKind() *crud.Kind[*catalog.Provider] {
+	return &crud.Kind[*catalog.Provider]{
+		Name:       "Provider",
+		Decode:     func(r *http.Request) (*catalog.Provider, error) { return &catalog.Provider{}, nil },
+		List:       func(_ context.Context) ([]*catalog.Provider, error) { return nil, nil },
+		Get:        func(_ context.Context, _ string) (*catalog.Provider, error) { return nil, crud.ErrNotFound },
+		Insert:     func(_ context.Context, _ *catalog.Provider) error { return nil },
+		Update:     func(_ context.Context, _ string, _ *catalog.Provider) error { return nil },
+		Delete:     func(_ context.Context, _ string) error { return nil },
+		ResourceID: func(v *catalog.Provider) string { return v.Metadata.Name },
+	}
+}
+
+func stubPoolKind() *crud.Kind[*catalog.Pool] {
+	return &crud.Kind[*catalog.Pool]{
+		Name:       "Pool",
+		Decode:     func(r *http.Request) (*catalog.Pool, error) { return &catalog.Pool{}, nil },
+		List:       func(_ context.Context) ([]*catalog.Pool, error) { return nil, nil },
+		Get:        func(_ context.Context, _ string) (*catalog.Pool, error) { return nil, crud.ErrNotFound },
+		Insert:     func(_ context.Context, _ *catalog.Pool) error { return nil },
+		Update:     func(_ context.Context, _ string, _ *catalog.Pool) error { return nil },
+		Delete:     func(_ context.Context, _ string) error { return nil },
+		ResourceID: func(v *catalog.Pool) string { return v.Metadata.Name },
+	}
+}
+
+func stubModelKind() *crud.Kind[*catalog.Model] {
+	return &crud.Kind[*catalog.Model]{
+		Name:       "Model",
+		Decode:     func(r *http.Request) (*catalog.Model, error) { return &catalog.Model{}, nil },
+		List:       func(_ context.Context) ([]*catalog.Model, error) { return nil, nil },
+		Get:        func(_ context.Context, _ string) (*catalog.Model, error) { return nil, crud.ErrNotFound },
+		Insert:     func(_ context.Context, _ *catalog.Model) error { return nil },
+		Update:     func(_ context.Context, _ string, _ *catalog.Model) error { return nil },
+		Delete:     func(_ context.Context, _ string) error { return nil },
+		ResourceID: func(v *catalog.Model) string { return v.Metadata.Name },
+	}
+}
+
+func stubRouteKind() *crud.Kind[*catalog.Route] {
+	return &crud.Kind[*catalog.Route]{
+		Name:       "Route",
+		Decode:     func(r *http.Request) (*catalog.Route, error) { return &catalog.Route{}, nil },
+		List:       func(_ context.Context) ([]*catalog.Route, error) { return nil, nil },
+		Get:        func(_ context.Context, _ string) (*catalog.Route, error) { return nil, crud.ErrNotFound },
+		Insert:     func(_ context.Context, _ *catalog.Route) error { return nil },
+		Update:     func(_ context.Context, _ string, _ *catalog.Route) error { return nil },
+		Delete:     func(_ context.Context, _ string) error { return nil },
+		ResourceID: func(v *catalog.Route) string { return v.Metadata.Name },
+	}
+}
+
+func stubRateLimitKind() *crud.Kind[*catalog.RateLimit] {
+	return &crud.Kind[*catalog.RateLimit]{
+		Name:       "RateLimit",
+		Decode:     func(r *http.Request) (*catalog.RateLimit, error) { return &catalog.RateLimit{}, nil },
+		List:       func(_ context.Context) ([]*catalog.RateLimit, error) { return nil, nil },
+		Get:        func(_ context.Context, _ string) (*catalog.RateLimit, error) { return nil, crud.ErrNotFound },
+		Insert:     func(_ context.Context, _ *catalog.RateLimit) error { return nil },
+		Update:     func(_ context.Context, _ string, _ *catalog.RateLimit) error { return nil },
+		Delete:     func(_ context.Context, _ string) error { return nil },
+		ResourceID: func(v *catalog.RateLimit) string { return v.Metadata.Name },
+	}
+}
 
 // buildHumaTestRouterWithAdmin mirrors the production mount order with admin CRUD enabled.
 func buildHumaTestRouterWithAdmin(crud *adminCRUD) http.Handler {
@@ -173,17 +284,7 @@ func TestOpenAPI_ChatCompletions401WithoutBearer(t *testing.T) {
 
 // TestOpenAPI_AdminCRUD_25Paths verifies all 25 admin CRUD operations appear in the spec.
 func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
-	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-	stubH := adminHandlers{stub, stub, stub, stub, stub}
-	crud := &adminCRUD{
-		provider:  stubH,
-		pool:      stubH,
-		model:     stubH,
-		route:     stubH,
-		rateLimit: stubH,
-	}
-
-	srv := httptest.NewServer(buildHumaTestRouterWithAdmin(crud))
+	srv := httptest.NewServer(buildHumaTestRouterWithAdmin(stubAdminCRUD()))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/openapi.json")

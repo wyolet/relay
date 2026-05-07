@@ -362,8 +362,6 @@ func main() {
 		deps := crudDeps(storageForAdmin, pgStoreForAdmin)
 		kinds := buildAdminKinds(pgStoreForAdmin, storageForAdmin)
 		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin)
-		// mountAdminRoutes is NOT called here: huma owns all admin routes in production.
-		// Integration tests call mountAdminRoutes directly (bypassing huma) so they still work.
 	}
 
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,
