@@ -112,11 +112,22 @@ Full guide: `docs/cluster.md`.
 
 ## Performance contract
 
-- p50 overhead: <1ms (internal)
-- p99 overhead: 5ms (internal SLO), 10ms (public claim)
-- RPS per pod: 5–10k
+Two regimes — be precise about which one you're quoting:
+
+**Live distributed deployment** (real Redis Lua RTT, real PG, two-pod fleet, nginx LB):
+- p50 overhead: < 2 ms
+- p99 overhead: 10 ms (internal SLO), 15 ms (public claim)
+
+**In-process bench** (`bench/bench_test.go`, in-memory `kv.Mem`, no network):
+- p50 overhead: < 100 µs
+- p99 overhead: < 500 µs
+
+The 18× gap between the two is unavoidable I/O — Redis Reserve Lua RTT, nginx hop, container network, retry/circuit logic against real Redis. Use bench numbers as a regression gate (architecture's lower bound); use live numbers for SLO conversations.
+
+- RPS per pod: 5–10k (unchanged)
 - Tier-3 totals via horizontal scale, not per-pod heroics
 - Load-test on every PR; fail builds on p99 regression
+- Post-flight (rate-limit Commit, keypool RecordSuccess) runs in a detached goroutine — does NOT block the response. Tracked via `relay_pipeline_post_flight_duration_seconds`.
 
 ## Code style and conventions
 

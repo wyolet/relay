@@ -30,3 +30,7 @@ bench/results*.json
 .env.*
 !.env.example
 bench/litellm/.env
+
+# bench output artifacts
+bench/*.json
+
