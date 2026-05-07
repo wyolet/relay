@@ -8,6 +8,17 @@ import (
 	"github.com/wyolet/relay/pkg/transport"
 )
 
+// streamTransformerFactories maps (inbound, upstream) shape-name pairs to a
+// factory that produces a stateful per-chunk SSE transform function. Packages
+// register themselves at init time via RegisterStreamTransformerFactory.
+var streamTransformerFactories = map[[2]string]func() func([]byte) ([]byte, error){}
+
+// RegisterStreamTransformerFactory registers a factory for the given
+// (inbound, upstream) shape pair. Call from init() in the shape package.
+func RegisterStreamTransformerFactory(inbound, upstream string, factory func() func([]byte) ([]byte, error)) {
+	streamTransformerFactories[[2]string{inbound, upstream}] = factory
+}
+
 // ErrCrossShapeStreamingNotSupported is returned when inbound and upstream
 // shapes differ and the request is streaming. Streaming cross-shape transform
 // is deferred to a follow-up PR; callers should surface this as a 501.
@@ -57,7 +68,51 @@ func ApplyTransform(inbound, upstream TransformAdapter, body []byte) (TransformR
 	}
 
 	if isStreaming(body) {
-		return TransformResult{}, ErrCrossShapeStreamingNotSupported
+		factory, ok := streamTransformerFactories[[2]string{inbound.Name(), upstream.Name()}]
+		if !ok {
+			return TransformResult{}, ErrCrossShapeStreamingNotSupported
+		}
+		// Transform the request body (inbound→upstream shape) for upstream forwarding.
+		inboundReq, err := inbound.ParseRequest(body)
+		if err != nil {
+			return TransformResult{}, err
+		}
+		hub, err := inbound.ToOpenAI(inboundReq)
+		if err != nil {
+			return TransformResult{}, err
+		}
+		upstreamReq, err := upstream.FromOpenAI(hub)
+		if err != nil {
+			return TransformResult{}, err
+		}
+		upstreamBody, err := json.Marshal(upstreamReq)
+		if err != nil {
+			return TransformResult{}, err
+		}
+
+		chunkFn := factory()
+		finisher := func(msg *transport.Message) (*transport.Message, error) {
+			if len(msg.Body) == 0 {
+				return msg, nil
+			}
+			out, err := chunkFn(msg.Body)
+			if err != nil {
+				return nil, err
+			}
+			if out == nil {
+				// No-op chunk (ping, etc.) — return empty body so pipeline skips emission.
+				return &transport.Message{Headers: msg.Headers}, nil
+			}
+			result := &transport.Message{
+				Headers: make(map[string]string, len(msg.Headers)),
+				Body:    out,
+			}
+			for k, v := range msg.Headers {
+				result.Headers[k] = v
+			}
+			return result, nil
+		}
+		return TransformResult{Body: upstreamBody, Finisher: finisher}, nil
 	}
 
 	// Parse inbound → hub → upstream native.
