@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/internal/catalog"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -28,27 +29,23 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 	runMigrationsForTest(t, dsn)
 
 	// Seed a minimal provider so the catalog validator is satisfied on Reload.
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
-	_, err = pool.Exec(ctx, `
-		INSERT INTO providers (name, metadata, spec)
-		VALUES ('seed-prov', '{"Name":"seed-prov"}', '{"kind":"ollama","baseURL":"http://localhost:11434","default":true}')
-		ON CONFLICT DO NOTHING;
-	`)
-	if err != nil {
+	if err := storagemod.SeedProviderRow(ctx, pool,
+		"seed-prov", `{"Name":"seed-prov"}`, `{"kind":"ollama","baseURL":"http://localhost:11434","default":true}`); err != nil {
 		pool.Close()
 		t.Fatalf("seed provider: %v", err)
 	}
+	pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	st := storagemod.WrapPool(storagemod.MustOpenPool(ctx, t, dsn))
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		pool.Close()
 		t.Fatalf("configstore: %v", err)
 	}
 	if err := store.Reload(ctx); err != nil {
-		pool.Close()
 		t.Fatalf("reload: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
@@ -57,8 +54,8 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 
-	deps := crudDeps(store.RawPool(), store)
-	kinds := buildAdminKinds(store, nil)
+	deps := crudDeps(st, store)
+	kinds := buildAdminKinds(store, st)
 	crudH := buildAdminCRUD(kinds, deps, store)
 	mountAdminRoutes(r, adminTestToken, crudH, store, deps)
 

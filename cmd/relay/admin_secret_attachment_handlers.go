@@ -10,9 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/internal/catalog"
 )
@@ -138,13 +136,13 @@ func decodeSecretInput(r *http.Request) (secretInput, error) {
 	return v, nil
 }
 
-func applySecretWrite(ctx context.Context, store *catalog.PGStore, tx pgx.Tx, name string, inp secretInput) error {
+func applySecretWrite(ctx context.Context, store *catalog.PGStore, name string, inp secretInput) error {
 	meta := catalog.Metadata{Name: name}
 	switch inp.ValueFrom.Kind {
 	case "env":
-		return store.UpsertSecretEnv(ctx, tx, name, inp.ValueFrom.Env, inp.Provider, meta)
+		return store.UpsertSecretEnv(ctx, name, inp.ValueFrom.Env, inp.Provider, meta)
 	case "stored":
-		return store.UpsertSecretStored(ctx, tx, name, inp.ValueFrom.Value, inp.Provider, meta)
+		return store.UpsertSecretStored(ctx, name, inp.ValueFrom.Value, inp.Provider, meta)
 	default:
 		return fmt.Errorf("unknown kind %q", inp.ValueFrom.Kind)
 	}
@@ -166,21 +164,10 @@ func secretCreateHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFun
 			return
 		}
 
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())
-			return
-		}
-
-		if err := applySecretWrite(ctx, store, tx, inp.Name, inp); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return applySecretWrite(ctx, store, inp.Name, inp)
+		}); err != nil {
 			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "commit: "+err.Error())
 			return
 		}
 
@@ -227,21 +214,10 @@ func secretUpdateHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFun
 			return
 		}
 
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())
-			return
-		}
-
-		if err := applySecretWrite(ctx, store, tx, name, inp); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return applySecretWrite(ctx, store, name, inp)
+		}); err != nil {
 			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "commit: "+err.Error())
 			return
 		}
 
@@ -280,21 +256,10 @@ func secretDeleteHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFun
 			return
 		}
 
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())
-			return
-		}
-
-		if err := gen.New(tx).DeleteSecret(ctx, name); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return store.DeleteSecret(ctx, name)
+		}); err != nil {
 			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			adminWriteErr(w, http.StatusInternalServerError, "server_error", "internal_error", "commit: "+err.Error())
 			return
 		}
 
@@ -312,8 +277,6 @@ func secretDeleteHandler(store *catalog.PGStore, deps crud.Deps) http.HandlerFun
 
 // --- Attachment response type ---
 
-// attachmentResponse is the shape for a single attachment record.
-// id is the composite key encoded as "parentKind:parentName:ratelimitName:meter".
 type attachmentResponse struct {
 	ID            string `json:"id"`
 	ParentKind    string `json:"parentKind"`
@@ -326,23 +289,17 @@ func attachmentID(parentKind, parentName, rlName, meter string) string {
 	return parentKind + ":" + parentName + ":" + rlName + ":" + meter
 }
 
-// attachmentListHandler is a read-only audit endpoint that derives attachment rows
-// from the in-memory snapshot (Pools, Secrets, Models inline rateLimits).
-// Optional query params parent_kind + parent_name (both required together) filter to one parent.
-// The attachments DB table no longer exists; this view is derived entirely from inline spec data.
 func attachmentListHandler(store *catalog.PGStore, _ crud.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parentKind := r.URL.Query().Get("parent_kind")
 		parentName := r.URL.Query().Get("parent_name")
 
-		// Both or neither must be supplied.
 		if (parentKind == "") != (parentName == "") {
 			adminWriteErr(w, http.StatusBadRequest, "invalid_request_error", "invalid_query",
 				"parent_kind and parent_name must be provided together (or both omitted to list all)")
 			return
 		}
 
-		// Unknown parentKind with a non-empty filter.
 		if parentKind != "" {
 			wantKind := catalog.Kind(parentKind)
 			if wantKind != catalog.KindPool && wantKind != catalog.KindSecret && wantKind != catalog.KindModel {

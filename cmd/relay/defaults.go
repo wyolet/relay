@@ -8,10 +8,10 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
 	"gopkg.in/yaml.v3"
 
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/storage"
 )
 
 //go:embed defaults/providers.yaml
@@ -21,7 +21,7 @@ var defaultProvidersYAML []byte
 // has none. No-op once the operator has created any provider — defaults
 // never overwrite. Runs before the admin API comes online so the operator
 // always sees a non-empty Providers list on first launch.
-func seedDefaultProviders(ctx context.Context, store *catalog.PGStore) error {
+func seedDefaultProviders(ctx context.Context, store *catalog.PGStore, st *storage.Storage) error {
 	if len(store.Providers()) > 0 {
 		return nil
 	}
@@ -47,18 +47,15 @@ func seedDefaultProviders(ctx context.Context, store *catalog.PGStore) error {
 		return nil
 	}
 
-	tx, err := store.RawPool().BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	for _, p := range providers {
-		if err := upsertProvider(ctx, tx, p); err != nil {
-			return fmt.Errorf("upsert default provider %q: %w", p.Metadata.Name, err)
+	if err := st.WithTx(ctx, func(tx *storage.Storage) error {
+		for _, p := range providers {
+			if err := tx.Catalog.UpsertProvider(ctx, *p); err != nil {
+				return fmt.Errorf("upsert default provider %q: %w", p.Metadata.Name, err)
+			}
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seed defaults tx: %w", err)
 	}
 
 	if err := store.Reload(ctx); err != nil {

@@ -10,12 +10,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/internal/storage/gen"
-	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/admin/crud"
 )
 
 // adminKinds bundles the five kind handlers produced by the PER-265 factory.
@@ -27,19 +25,19 @@ type adminKinds struct {
 	rateLimit *crud.Kind[*catalog.RateLimit]
 }
 
-func buildAdminKinds(store *catalog.PGStore, q *gen.Queries) adminKinds {
+func buildAdminKinds(store *catalog.PGStore, st *storage.Storage) adminKinds {
 	return adminKinds{
-		provider:  providerKind(store, q),
-		pool:      poolKind(store, q),
-		model:     modelKind(store, q),
-		route:     routeKind(store, q),
-		rateLimit: rateLimitKind(store, q),
+		provider:  providerKind(store, st),
+		pool:      poolKind(store, st),
+		model:     modelKind(store, st),
+		route:     routeKind(store, st),
+		rateLimit: rateLimitKind(store, st),
 	}
 }
 
 // --- Provider ---
 
-func providerKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Provider] {
+func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Provider] {
 	return &crud.Kind[*catalog.Provider]{
 		Name: "Provider",
 		Decode: func(r *http.Request) (*catalog.Provider, error) {
@@ -60,14 +58,14 @@ func providerKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Pr
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Provider) error {
-			return upsertProvider(ctx, tx, v)
+		Insert: func(ctx context.Context, v *catalog.Provider) error {
+			return st.Catalog.UpsertProvider(ctx, *v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Provider) error {
-			return upsertProvider(ctx, tx, v)
+		Update: func(ctx context.Context, name string, v *catalog.Provider) error {
+			return st.Catalog.UpsertProvider(ctx, *v)
 		},
-		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return gen.New(tx).DeleteProvider(ctx, name)
+		Delete: func(ctx context.Context, name string) error {
+			return st.Catalog.DeleteProvider(ctx, name)
 		},
 		ResourceID: func(v *catalog.Provider) string { return v.Metadata.Name },
 		Patch: func(v *catalog.Provider) catalog.Patch {
@@ -79,25 +77,9 @@ func providerKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Pr
 	}
 }
 
-func upsertProvider(ctx context.Context, tx pgx.Tx, v *catalog.Provider) error {
-	meta, err := json.Marshal(v.Metadata)
-	if err != nil {
-		return err
-	}
-	spec, err := json.Marshal(v.Spec)
-	if err != nil {
-		return err
-	}
-	return gen.New(tx).UpsertProvider(ctx, gen.UpsertProviderParams{
-		Name:     v.Metadata.Name,
-		Metadata: meta,
-		Spec:     spec,
-	})
-}
-
 // --- Pool ---
 
-func poolKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Pool] {
+func poolKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Pool] {
 	return &crud.Kind[*catalog.Pool]{
 		Name: "Pool",
 		Decode: func(r *http.Request) (*catalog.Pool, error) {
@@ -118,14 +100,14 @@ func poolKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Pool] 
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Pool) error {
-			return upsertPool(ctx, tx, v)
+		Insert: func(ctx context.Context, v *catalog.Pool) error {
+			return st.Catalog.UpsertPool(ctx, *v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Pool) error {
-			return upsertPool(ctx, tx, v)
+		Update: func(ctx context.Context, name string, v *catalog.Pool) error {
+			return st.Catalog.UpsertPool(ctx, *v)
 		},
-		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return gen.New(tx).DeletePool(ctx, name)
+		Delete: func(ctx context.Context, name string) error {
+			return st.Catalog.DeletePool(ctx, name)
 		},
 		ResourceID: func(v *catalog.Pool) string { return v.Metadata.Name },
 		Patch: func(v *catalog.Pool) catalog.Patch {
@@ -137,25 +119,9 @@ func poolKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Pool] 
 	}
 }
 
-func upsertPool(ctx context.Context, tx pgx.Tx, v *catalog.Pool) error {
-	meta, err := json.Marshal(v.Metadata)
-	if err != nil {
-		return err
-	}
-	spec, err := json.Marshal(v.Spec)
-	if err != nil {
-		return err
-	}
-	return gen.New(tx).UpsertPool(ctx, gen.UpsertPoolParams{
-		Name:     v.Metadata.Name,
-		Metadata: meta,
-		Spec:     spec,
-	})
-}
-
 // --- Model ---
 
-func modelKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Model] {
+func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Model] {
 	return &crud.Kind[*catalog.Model]{
 		Name: "Model",
 		Decode: func(r *http.Request) (*catalog.Model, error) {
@@ -176,14 +142,14 @@ func modelKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Model
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Model) error {
-			return upsertModel(ctx, tx, v)
+		Insert: func(ctx context.Context, v *catalog.Model) error {
+			return st.Catalog.UpsertModel(ctx, *v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Model) error {
-			return upsertModel(ctx, tx, v)
+		Update: func(ctx context.Context, name string, v *catalog.Model) error {
+			return st.Catalog.UpsertModel(ctx, *v)
 		},
-		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return gen.New(tx).DeleteModel(ctx, name)
+		Delete: func(ctx context.Context, name string) error {
+			return st.Catalog.DeleteModel(ctx, name)
 		},
 		ResourceID: func(v *catalog.Model) string { return v.Metadata.Name },
 		Patch: func(v *catalog.Model) catalog.Patch {
@@ -195,25 +161,9 @@ func modelKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Model
 	}
 }
 
-func upsertModel(ctx context.Context, tx pgx.Tx, v *catalog.Model) error {
-	meta, err := json.Marshal(v.Metadata)
-	if err != nil {
-		return err
-	}
-	spec, err := json.Marshal(v.Spec)
-	if err != nil {
-		return err
-	}
-	return gen.New(tx).UpsertModel(ctx, gen.UpsertModelParams{
-		Name:     v.Metadata.Name,
-		Metadata: meta,
-		Spec:     spec,
-	})
-}
-
 // --- Route ---
 
-func routeKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Route] {
+func routeKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Route] {
 	return &crud.Kind[*catalog.Route]{
 		Name: "Route",
 		Decode: func(r *http.Request) (*catalog.Route, error) {
@@ -234,14 +184,14 @@ func routeKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Route
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.Route) error {
-			return upsertRoute(ctx, tx, v)
+		Insert: func(ctx context.Context, v *catalog.Route) error {
+			return st.Catalog.UpsertRoute(ctx, *v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.Route) error {
-			return upsertRoute(ctx, tx, v)
+		Update: func(ctx context.Context, name string, v *catalog.Route) error {
+			return st.Catalog.UpsertRoute(ctx, *v)
 		},
-		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return gen.New(tx).DeleteRoute(ctx, name)
+		Delete: func(ctx context.Context, name string) error {
+			return st.Catalog.DeleteRoute(ctx, name)
 		},
 		ResourceID: func(v *catalog.Route) string { return v.Metadata.Name },
 		Patch: func(v *catalog.Route) catalog.Patch {
@@ -253,25 +203,9 @@ func routeKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.Route
 	}
 }
 
-func upsertRoute(ctx context.Context, tx pgx.Tx, v *catalog.Route) error {
-	meta, err := json.Marshal(v.Metadata)
-	if err != nil {
-		return err
-	}
-	spec, err := json.Marshal(v.Spec)
-	if err != nil {
-		return err
-	}
-	return gen.New(tx).UpsertRoute(ctx, gen.UpsertRouteParams{
-		Name:     v.Metadata.Name,
-		Metadata: meta,
-		Spec:     spec,
-	})
-}
-
 // --- RateLimit ---
 
-func rateLimitKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.RateLimit] {
+func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.RateLimit] {
 	return &crud.Kind[*catalog.RateLimit]{
 		Name: "RateLimit",
 		Decode: func(r *http.Request) (*catalog.RateLimit, error) {
@@ -292,14 +226,14 @@ func rateLimitKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.R
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, tx pgx.Tx, v *catalog.RateLimit) error {
-			return upsertRateLimit(ctx, tx, v)
+		Insert: func(ctx context.Context, v *catalog.RateLimit) error {
+			return st.Catalog.UpsertRateLimit(ctx, *v)
 		},
-		Update: func(ctx context.Context, tx pgx.Tx, name string, v *catalog.RateLimit) error {
-			return upsertRateLimit(ctx, tx, v)
+		Update: func(ctx context.Context, name string, v *catalog.RateLimit) error {
+			return st.Catalog.UpsertRateLimit(ctx, *v)
 		},
-		Delete: func(ctx context.Context, tx pgx.Tx, name string) error {
-			return gen.New(tx).DeleteRateLimit(ctx, name)
+		Delete: func(ctx context.Context, name string) error {
+			return st.Catalog.DeleteRateLimit(ctx, name)
 		},
 		ResourceID: func(v *catalog.RateLimit) string { return v.Metadata.Name },
 		Patch: func(v *catalog.RateLimit) catalog.Patch {
@@ -309,22 +243,6 @@ func rateLimitKind(store *catalog.PGStore, q *gen.Queries) *crud.Kind[*catalog.R
 			return catalog.Patch{DeleteRateLimit: name}
 		},
 	}
-}
-
-func upsertRateLimit(ctx context.Context, tx pgx.Tx, v *catalog.RateLimit) error {
-	meta, err := json.Marshal(v.Metadata)
-	if err != nil {
-		return err
-	}
-	spec, err := json.Marshal(v.Spec)
-	if err != nil {
-		return err
-	}
-	return gen.New(tx).UpsertRateLimit(ctx, gen.UpsertRateLimitParams{
-		Name:     v.Metadata.Name,
-		Metadata: meta,
-		Spec:     spec,
-	})
 }
 
 // --- helpers ---
@@ -345,14 +263,28 @@ func decodeBody[T any](r *http.Request, validate func(*T) error) (*T, error) {
 	return &v, nil
 }
 
-// crudDeps constructs crud.Deps from the PGStore and its underlying pool.
-func crudDeps(pool *pgxpool.Pool, store *catalog.PGStore) crud.Deps {
-	return crud.DepsFromPGStore(pool, store, slog.Default())
+// storageTxRunner adapts *storage.Storage to the crud.TxRunner interface.
+type storageTxRunner struct {
+	st *storage.Storage
+}
+
+func (r *storageTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	return r.st.WithTx(ctx, func(_ *storage.Storage) error {
+		return fn(ctx)
+	})
+}
+
+// crudDeps constructs crud.Deps from the PGStore and underlying storage.
+func crudDeps(st *storage.Storage, store *catalog.PGStore) crud.Deps {
+	return crud.Deps{
+		Tx:       &storageTxRunner{st: st},
+		Patcher:  store,
+		Reloader: store,
+		Logger:   slog.Default(),
+	}
 }
 
 // buildAdminCRUD calls Handlers() on each kind and bundles the results.
-// It also populates the typed fields (kinds, deps, pgStore) used by mountHuma
-// for full OpenAPI schema generation.
 func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore) *adminCRUD {
 	pl, pg, pc, pu, pd := kinds.provider.Handlers(deps)
 	ol, og, oc, ou, od := kinds.pool.Handlers(deps)
@@ -391,9 +323,7 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *catalog.PGS
 	gate := adminTokenGate(tok)
 
 	// Login is NOT gated — it is the mechanism by which clients obtain a session cookie.
-	// 401 is returned on wrong token (endpoint is publicly discoverable).
 	r.Post("/admin/login", adminLoginHandler(tok))
-	// Logout and whoami ARE gated — they require an existing valid session.
 	r.With(gate).Post("/admin/logout", adminLogoutHandler())
 	r.With(gate).Get("/admin/whoami", adminWhoamiHandler())
 
@@ -426,10 +356,9 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *catalog.PGS
 	r.With(gate).Delete("/admin/secrets/{name}", h.secretDelete)
 
 	// Attachment endpoint — read-only derived view.
-	// Attachments are managed inline on Pool/Secret/Model specs; no POST/DELETE here.
 	r.With(gate).Get("/admin/attachments", h.attachmentList)
 
-	// Misc admin endpoints (PER-275 version, PER-280 master-key generation).
+	// Misc admin endpoints.
 	r.With(gate).Get("/admin/version", versionHandler())
 	r.With(gate).Get("/admin/master-key/generate", masterKeyGenerateHandler())
 
@@ -438,10 +367,6 @@ func mountAdminRoutes(r chi.Router, tok string, h *adminCRUD, store *catalog.PGS
 }
 
 // adminTokenGate returns a chi middleware that checks the admin token.
-// Accepted sources (in order): X-Relay-Admin-Token header, relay_admin cookie
-// (set by POST /admin/login). Authorization: Bearer is reserved for the
-// caller-API-key auth tier; it is not read here.
-// Returns 404 on mismatch — security-through-obscurity posture matching /admin/reload.
 func adminTokenGate(token string) func(http.Handler) http.Handler {
 	tok := []byte(token)
 	return func(next http.Handler) http.Handler {

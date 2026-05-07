@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/pkg/auth"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/internal/catalog"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/eventlog"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/keypool"
@@ -192,6 +193,7 @@ func main() {
 
 	var cfg catalog.Store
 	var pgStoreForAdmin *catalog.PGStore
+	var storageForAdmin *storagemod.Storage
 	var pgPinger pinger
 	if catalogBackend == "pg" {
 		pgDSN := os.Getenv("RELAY_PG_DSN")
@@ -199,24 +201,34 @@ func main() {
 			slog.Error("RELAY_PG_DSN not set (required when RELAY_CATALOG_BACKEND=pg)")
 			os.Exit(1)
 		}
+		// Open storage first (runs migrations), then optionally auto-seed.
+		st, err := storagemod.Open(bootCtx, pgDSN)
+		if err != nil {
+			slog.Error("storage.Open failed", "err", err)
+			os.Exit(1)
+		}
+		pgStore, err := catalog.NewPGStore(st.Catalog, st, masterKey)
+		if err != nil {
+			st.Close()
+			slog.Error("configstore(pg) init failed", "err", err)
+			os.Exit(1)
+		}
+		pgStoreForAdmin = pgStore
+		storageForAdmin = st
+		cfg = pgStore
+		pgPinger = pgStore
+
+		// Auto-seed from config dir if DB is empty (RELAY_AUTO_SEED_IF_EMPTY=1).
 		autoSeed := os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
 		if autoSeed {
 			if err := maybeAutoSeed(bootCtx, pgDSN); err != nil {
 				log.Fatalf("auto-seed: %v", err)
 			}
 		}
-		pgStore, err := catalog.Postgres(bootCtx, pgDSN, masterKey)
-		if err != nil {
-			slog.Error("configstore(pg) init failed", "err", err)
-			os.Exit(1)
-		}
-		pgStoreForAdmin = pgStore
-		cfg = pgStore
-		pgPinger = pgStore
 
 		// Seed bundled default providers (openai, ollama) on first launch.
 		// No-op once the operator has created any provider.
-		if err := seedDefaultProviders(bootCtx, pgStore); err != nil {
+		if err := seedDefaultProviders(bootCtx, pgStore, st); err != nil {
 			slog.Warn("default provider seed failed", "err", err)
 		}
 	} else {
@@ -364,8 +376,8 @@ func main() {
 	if tok := os.Getenv("RELAY_ADMIN_TOKEN"); tok != "" && pgStoreForAdmin != nil {
 		adminH = adminReloadHandler(tok, pgStoreForAdmin, limiter)
 
-		deps := crudDeps(pgStoreForAdmin.RawPool(), pgStoreForAdmin)
-		kinds := buildAdminKinds(pgStoreForAdmin, nil)
+		deps := crudDeps(storageForAdmin, pgStoreForAdmin)
+		kinds := buildAdminKinds(pgStoreForAdmin, storageForAdmin)
 		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin)
 		// mountAdminRoutes is NOT called here: huma owns all admin routes in production.
 		// Integration tests call mountAdminRoutes directly (bypassing huma) so they still work.
@@ -445,7 +457,7 @@ func shutdown(
 	// 4. Drain in-flight Lua scripts.
 	step("state", func(_ context.Context) error { return st.Close() }, 5*time.Second)
 
-	// 5. Close pgxpool.
+	// 5. Close the storage pool.
 	step("configstore", func(_ context.Context) error {
 		if pg, ok := cfg.(*catalog.PGStore); ok {
 			pg.Close()

@@ -13,9 +13,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 
-	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/crypto"
@@ -541,7 +539,7 @@ func validateSecretWriteBody(inp SecretWriteBody) error {
 	return nil
 }
 
-func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, tx pgx.Tx, name string, inp SecretWriteBody) error {
+func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, name string, inp SecretWriteBody) error {
 	provider := inp.Provider
 	if provider == "" {
 		provider = "default"
@@ -549,9 +547,9 @@ func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, tx pgx.Tx
 	meta := catalog.Metadata{Name: name}
 	switch inp.ValueFrom.Kind {
 	case "env":
-		return store.UpsertSecretEnv(ctx, tx, name, inp.ValueFrom.Env, provider, meta)
+		return store.UpsertSecretEnv(ctx, name, inp.ValueFrom.Env, provider, meta)
 	case "stored":
-		return store.UpsertSecretStored(ctx, tx, name, inp.ValueFrom.Value, provider, meta)
+		return store.UpsertSecretStored(ctx, name, inp.ValueFrom.Value, provider, meta)
 	default:
 		return fmt.Errorf("unknown kind %q", inp.ValueFrom.Kind)
 	}
@@ -613,17 +611,10 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		if inp.ValueFrom.Kind == "stored" && !store.HasMasterKey() {
 			return nil, huma.NewError(http.StatusBadRequest, "stored-mode secret requires RELAY_MASTER_KEY to be set")
 		}
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, "begin tx: "+err.Error())
-		}
-		if err := applySecretWriteToTx(ctx, store, tx, inp.Name, inp); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return applySecretWriteToTx(ctx, store, inp.Name, inp)
+		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
-		}
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, huma.NewError(http.StatusInternalServerError, "commit: "+err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())
@@ -656,17 +647,10 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		if inp.ValueFrom.Kind == "stored" && !store.HasMasterKey() {
 			return nil, huma.NewError(http.StatusBadRequest, "stored-mode secret requires RELAY_MASTER_KEY to be set")
 		}
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, "begin tx: "+err.Error())
-		}
-		if err := applySecretWriteToTx(ctx, store, tx, in.Name, inp); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return applySecretWriteToTx(ctx, store, in.Name, inp)
+		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
-		}
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, huma.NewError(http.StatusInternalServerError, "commit: "+err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())
@@ -695,17 +679,10 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 		if verr := deps.Patcher.ValidateWithPatch(catalog.Patch{DeleteSecret: in.Name}); verr != nil {
 			return nil, huma.NewError(http.StatusBadRequest, verr.Error())
 		}
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, "begin tx: "+err.Error())
-		}
-		if err := gen.New(tx).DeleteSecret(ctx, in.Name); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return store.DeleteSecret(ctx, in.Name)
+		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
-		}
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, huma.NewError(http.StatusInternalServerError, "commit: "+err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "mutation committed but reload failed: "+err.Error())

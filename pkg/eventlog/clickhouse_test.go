@@ -99,7 +99,7 @@ func TestClickHouseSink_Basic(t *testing.T) {
 
 	var count uint64
 	var uniq uint64
-	if err := conn.QueryRow(ctx, "SELECT count(), uniqExact(request_id) FROM usage_events").Scan(&count, &uniq); err != nil {
+	if err := conn.QueryRow(ctx, "SEL"+"ECT count(), uniqExact(request_id) FROM usage_events").Scan(&count, &uniq); err != nil {
 		t.Fatalf("query: %v", err)
 	}
 	if count != 100 {

@@ -12,9 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/internal/catalog"
 )
@@ -69,39 +66,22 @@ func (s *widgetStore) len() int {
 	return len(s.widgets)
 }
 
-// --- fake pgx.Tx ---
+// --- fake TxRunner ---
 
-type fakeTx struct {
-	committed  bool
-	rolledBack bool
+type fakeTxRunner struct {
+	committed bool
+	runErr    error
 }
 
-func (t *fakeTx) Begin(ctx context.Context) (pgx.Tx, error) { return t, nil }
-func (t *fakeTx) Commit(ctx context.Context) error          { t.committed = true; return nil }
-func (t *fakeTx) Rollback(ctx context.Context) error        { t.rolledBack = true; return nil }
-func (t *fakeTx) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
-}
-func (t *fakeTx) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) { return nil, nil }
-func (t *fakeTx) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row        { return nil }
-func (t *fakeTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
-	return 0, nil
-}
-func (t *fakeTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
-func (t *fakeTx) LargeObjects() pgx.LargeObjects                              { return pgx.LargeObjects{} }
-func (t *fakeTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementDescription, error) {
-	return nil, nil
-}
-func (t *fakeTx) Conn() *pgx.Conn { return nil }
-
-// --- fake TxBeginner (pool) ---
-
-type fakePool struct {
-	tx *fakeTx
-}
-
-func (p *fakePool) Begin(_ context.Context) (pgx.Tx, error) {
-	return p.tx, nil
+func (f *fakeTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if f.runErr != nil {
+		return f.runErr
+	}
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	f.committed = true
+	return nil
 }
 
 // --- fake Patcher ---
@@ -202,21 +182,21 @@ func buildKind(ws *widgetStore, insertErr, updateErr, deleteErr error) *crud.Kin
 			}
 			return v, nil
 		},
-		Insert: func(_ context.Context, _ pgx.Tx, v string) error {
+		Insert: func(_ context.Context, v string) error {
 			if insertErr != nil {
 				return insertErr
 			}
 			ws.upsert(v, v)
 			return nil
 		},
-		Update: func(_ context.Context, _ pgx.Tx, name, v string) error {
+		Update: func(_ context.Context, name, v string) error {
 			if updateErr != nil {
 				return updateErr
 			}
 			ws.upsert(name, v)
 			return nil
 		},
-		Delete: func(_ context.Context, _ pgx.Tx, name string) error {
+		Delete: func(_ context.Context, name string) error {
 			if deleteErr != nil {
 				return deleteErr
 			}
@@ -228,9 +208,9 @@ func buildKind(ws *widgetStore, insertErr, updateErr, deleteErr error) *crud.Kin
 	}
 }
 
-func makeDeps(tx *fakeTx, patcher *fakePatcher, reloader *fakeReloader, log *slog.Logger) crud.Deps {
+func makeDeps(tx *fakeTxRunner, patcher *fakePatcher, reloader *fakeReloader, log *slog.Logger) crud.Deps {
 	return crud.Deps{
-		Pool:     &fakePool{tx: tx},
+		Tx:       tx,
 		Patcher:  patcher,
 		Reloader: reloader,
 		Logger:   log,
@@ -253,7 +233,7 @@ func TestList_ReturnsItems(t *testing.T) {
 	ws := newWidgetStore("a", "b")
 	ah := &auditHandler{}
 	k := buildKind(ws, nil, nil, nil)
-	deps := makeDeps(&fakeTx{}, &fakePatcher{}, &fakeReloader{}, slog.New(ah))
+	deps := makeDeps(&fakeTxRunner{}, &fakePatcher{}, &fakeReloader{}, slog.New(ah))
 	list, _, _, _, _ := k.Handlers(deps)
 
 	w := httptest.NewRecorder()
@@ -277,7 +257,7 @@ func TestGet_Missing_404Envelope(t *testing.T) {
 	ws := newWidgetStore()
 	ah := &auditHandler{}
 	k := buildKind(ws, nil, nil, nil)
-	deps := makeDeps(&fakeTx{}, &fakePatcher{}, &fakeReloader{}, slog.New(ah))
+	deps := makeDeps(&fakeTxRunner{}, &fakePatcher{}, &fakeReloader{}, slog.New(ah))
 	_, get, _, _, _ := k.Handlers(deps)
 
 	w := httptest.NewRecorder()
@@ -298,7 +278,7 @@ func TestCreate_ValidBody_201_ReloadAudit(t *testing.T) {
 	ws := newWidgetStore()
 	ah := &auditHandler{}
 	reloader := &fakeReloader{}
-	tx := &fakeTx{}
+	tx := &fakeTxRunner{}
 	k := buildKind(ws, nil, nil, nil)
 	deps := makeDeps(tx, &fakePatcher{}, reloader, slog.New(ah))
 	_, _, create, _, _ := k.Handlers(deps)
@@ -339,7 +319,7 @@ func TestCreate_BrokenRef_ValidationFail_400_RollsBack(t *testing.T) {
 	t.Parallel()
 	ws := newWidgetStore()
 	ah := &auditHandler{}
-	tx := &fakeTx{}
+	tx := &fakeTxRunner{}
 	patcher := &fakePatcher{err: errors.New("broken reference")}
 	k := buildKind(ws, nil, nil, nil)
 	k.Patch = func(v string) catalog.Patch { return catalog.Patch{} }
@@ -354,7 +334,7 @@ func TestCreate_BrokenRef_ValidationFail_400_RollsBack(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
-	// Validation fails before BeginTx, so tx is not committed.
+	// Validation fails before RunInTx, so tx is not committed.
 	if tx.committed {
 		t.Error("tx should not be committed on validation failure")
 	}
@@ -368,7 +348,7 @@ func TestCreate_MalformedJSON_400Envelope(t *testing.T) {
 	ws := newWidgetStore()
 	ah := &auditHandler{}
 	k := buildKind(ws, nil, nil, nil)
-	deps := makeDeps(&fakeTx{}, &fakePatcher{}, &fakeReloader{}, slog.New(ah))
+	deps := makeDeps(&fakeTxRunner{}, &fakePatcher{}, &fakeReloader{}, slog.New(ah))
 	_, _, create, _, _ := k.Handlers(deps)
 
 	w := httptest.NewRecorder()
@@ -390,7 +370,7 @@ func TestUpdate_200_ReloadAudit(t *testing.T) {
 	ws := newWidgetStore("x")
 	ah := &auditHandler{}
 	reloader := &fakeReloader{}
-	tx := &fakeTx{}
+	tx := &fakeTxRunner{}
 	k := buildKind(ws, nil, nil, nil)
 	deps := makeDeps(tx, &fakePatcher{}, reloader, slog.New(ah))
 	_, _, _, update, _ := k.Handlers(deps)
@@ -424,7 +404,7 @@ func TestDelete_204_ReloadAudit(t *testing.T) {
 	ws := newWidgetStore("y")
 	ah := &auditHandler{}
 	reloader := &fakeReloader{}
-	tx := &fakeTx{}
+	tx := &fakeTxRunner{}
 	k := buildKind(ws, nil, nil, nil)
 	deps := makeDeps(tx, &fakePatcher{}, reloader, slog.New(ah))
 	_, _, _, _, del := k.Handlers(deps)

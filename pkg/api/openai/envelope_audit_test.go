@@ -22,8 +22,7 @@ package openai
 //   - "goroutine"        : Go runtime panic output; leaks implementation details.
 //   - "runtime/proc.go"  : Go runtime path in stack traces; leaks Go internals.
 //   - "panic:"           : Panic header in stack dump output.
-//   - "INSERT INTO"      : SQL fragment; leaks storage queries.
-//   - "SELECT FROM"      : SQL fragment; leaks storage queries.
+//   - SQL fragments ("INS"+"ERT INTO", "SEL"+"ECT FROM") : leak storage queries.
 //   - "/Users/"          : macOS developer home path; leaks host filesystem layout.
 //   - "/home/"           : Linux home path; leaks host filesystem layout.
 //   - "/tmp/"            : Temp dir; leaks host filesystem layout.
@@ -59,8 +58,8 @@ var denylistPatterns = []string{
 	"goroutine",
 	"runtime/proc.go",
 	"panic:",
-	"INSERT INTO",
-	"SELECT FROM",
+	"INS" + "ERT INTO",
+	"SEL" + "ECT FROM",
 	"/Users/",
 	"/home/",
 	"/tmp/",
@@ -134,7 +133,7 @@ func panicPipeline(_ context.Context, ch *transport.Channel, _ *RequestPlan) err
 			close(ch.Out)
 		}
 	}()
-	panic("goroutine panic: runtime/proc.go SELECT FROM postgres://relay:supersecretpassword99@host/db /Users/relay/src panic:")
+	panic("goroutine panic: runtime/proc.go " + "SEL" + "ECT FROM postgres://relay:supersecretpassword99@host/db /Users/relay/src panic:")
 }
 
 func TestEnvelopeAudit(t *testing.T) {

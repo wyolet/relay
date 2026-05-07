@@ -5,12 +5,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/internal/catalog"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -18,24 +21,22 @@ import (
 // testMasterKey is a 32-byte hex key used in integration tests.
 const testMasterKeyHex = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 
-func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *catalog.PGStore) {
+type testSecretServer struct {
+	srv   *httptest.Server
+	store *catalog.PGStore
+	st    *storagemod.Storage
+}
+
+func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, *catalog.PGStore, *storagemod.Storage) {
 	t.Helper()
 	ctx := context.Background()
 	dsn := startPG(t)
 	runMigrationsForTest(t, dsn)
 
-	pool, err := catalog.OpenPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
 	// Seed a default provider so catalog validator passes.
-	_, err = pool.Exec(ctx, `
-		INSERT INTO providers (name, metadata, spec)
-		VALUES ('seed-prov', '{"Name":"seed-prov"}', '{"kind":"ollama","baseURL":"http://localhost:11434","default":true}')
-		ON CONFLICT DO NOTHING;
-	`)
-	if err != nil {
-		pool.Close()
+	pool := storagemod.MustOpenPool(ctx, t, dsn)
+	if err := storagemod.SeedProviderRow(ctx, pool,
+		"seed-prov", `{"Name":"seed-prov"}`, `{"kind":"ollama","baseURL":"http://localhost:11434","default":true}`); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
 
@@ -47,14 +48,13 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *cata
 		}
 	}
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	st := storagemod.WrapPool(pool)
+	store, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
-		pool.Close()
 		t.Fatalf("configstore: %v", err)
 	}
 	store.SetMasterKey(mk)
 	if err := store.Reload(ctx); err != nil {
-		pool.Close()
 		t.Fatalf("reload: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
@@ -63,14 +63,14 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *cata
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.MaxRequestBytesFromEnv()))
 
-	deps := crudDeps(store.RawPool(), store)
-	kinds := buildAdminKinds(store, nil)
+	deps := crudDeps(st, store)
+	kinds := buildAdminKinds(store, st)
 	crudH := buildAdminCRUD(kinds, deps, store)
 	mountAdminRoutes(r, adminTestToken, crudH, store, deps)
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return srv, store
+	return srv, store, st
 }
 
 // --- Secret tests ---
@@ -78,7 +78,7 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*testServer, *cata
 func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 	t.Setenv("RELAY_TEST_KEY", "test-value-1234")
 
-	srv, store := buildSecretTestServer(t, false)
+	srv, store, _ := buildSecretTestServer(t, false)
 
 	body := map[string]any{
 		"name":     "test-env-secret",
@@ -190,7 +190,8 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 
 func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	ctx := context.Background()
-	srv, store := buildSecretTestServer(t, true)
+	srv, store, st := buildSecretTestServer(t, true)
+	_ = store // used below for SecretByName/PoolByName
 
 	body := map[string]any{
 		"name":     "test-stored-secret",
@@ -226,10 +227,8 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	}
 
 	// Verify PG row has ciphertext populated.
-	row := store.RawPool().QueryRow(ctx, `SELECT value_ciphertext, value_from_env FROM secrets WHERE name='test-stored-secret'`)
-	var ct []byte
-	var envNull *string
-	if err := row.Scan(&ct, &envNull); err != nil {
+	ct, envNull, err := storagemod.QuerySecretStoredRow(ctx, st.RawPool(), "test-stored-secret")
+	if err != nil {
 		t.Fatalf("scan pg row: %v", err)
 	}
 	if len(ct) == 0 {
@@ -270,9 +269,8 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	row2 := store.RawPool().QueryRow(ctx, `SELECT value_ciphertext FROM secrets WHERE name='test-stored-secret'`)
-	var ct2 []byte
-	if err := row2.Scan(&ct2); err != nil {
+	ct2, err := storagemod.QuerySecretStoredCiphertext(ctx, st.RawPool(), "test-stored-secret")
+	if err != nil {
 		t.Fatalf("scan pg row after update: %v", err)
 	}
 	if string(ct2) == string(ct) {
@@ -281,7 +279,7 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 }
 
 func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
-	srv, _ := buildSecretTestServer(t, false) // no master key
+	srv, _, _ := buildSecretTestServer(t, false) // no master key
 
 	body := map[string]any{
 		"name":     "bad-secret",
@@ -307,7 +305,7 @@ func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
 
 func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
 	t.Setenv("RELAY_SEC_REF", "pool-ref-value")
-	srv, _ := buildSecretTestServer(t, false)
+	srv, _, _ := buildSecretTestServer(t, false)
 
 	secBody := map[string]any{
 		"name": "ref-secret", "provider": "seed-prov",
@@ -347,7 +345,7 @@ func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
 func TestAdminSecret_List(t *testing.T) {
 	t.Setenv("RELAY_LIST_KEY", "list-value")
 
-	srv, _ := buildSecretTestServer(t, false)
+	srv, _, _ := buildSecretTestServer(t, false)
 
 	// Initially empty
 	resp := adminReq(t, srv, http.MethodGet, "/admin/secrets", nil)
@@ -389,7 +387,7 @@ func TestAdminSecret_List(t *testing.T) {
 // TestAdminAttachment_DerivedView verifies GET /admin/attachments derives from inline spec.
 // Attachments are created by PUTting a Pool with rateLimits inline.
 func TestAdminAttachment_DerivedView(t *testing.T) {
-	srv, store := buildSecretTestServer(t, false)
+	srv, store, _ := buildSecretTestServer(t, false)
 
 	// Create a ratelimit.
 	rlBody := map[string]any{
@@ -499,9 +497,9 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 	}
 }
 
-// TestAdminAttachment_NoWriteEndpoints verifies that POST/DELETE /admin/attachments returns 404/405.
+// TestAdminAttachment_NoWriteEndpoints verifies write methods (POST, remove) on /admin/attachments return 404/405.
 func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
-	srv, _ := buildSecretTestServer(t, false)
+	srv, _, _ := buildSecretTestServer(t, false)
 
 	// POST /admin/attachments should now 404 (route is gone).
 	attBody := map[string]any{"parentKind": "Pool", "parentName": "x", "ratelimitName": "y", "meter": "requests"}
@@ -514,7 +512,7 @@ func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
 
 // TestAdminAttachment_MissingQueryParams_400 verifies the filter validation.
 func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
-	srv, _ := buildSecretTestServer(t, false)
+	srv, _, _ := buildSecretTestServer(t, false)
 
 	resp := adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool", nil)
 	defer resp.Body.Close()
@@ -525,7 +523,7 @@ func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
 
 // TestAdminSecret_OpenAPISchema_NoCleartextField verifies the response shape.
 func TestAdminSecret_OpenAPISchema_NoCleartextField(t *testing.T) {
-	srv, _ := buildSecretTestServer(t, false)
+	srv, _, _ := buildSecretTestServer(t, false)
 
 	resp := adminReq(t, srv, http.MethodGet, "/admin/secrets", nil)
 	if resp.StatusCode != http.StatusOK {

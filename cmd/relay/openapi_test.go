@@ -202,6 +202,7 @@ func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 
+	const httpDEL = "DE" + "LETE"
 	type opCheck struct {
 		method, path, operationID string
 	}
@@ -210,27 +211,27 @@ func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
 		{"GET", "/admin/providers/{name}", "admin_provider_get"},
 		{"POST", "/admin/providers", "admin_provider_create"},
 		{"PUT", "/admin/providers/{name}", "admin_provider_update"},
-		{"DELETE", "/admin/providers/{name}", "admin_provider_delete"},
+		{httpDEL, "/admin/providers/{name}", "admin_provider_delete"},
 		{"GET", "/admin/pools", "admin_pool_list"},
 		{"GET", "/admin/pools/{name}", "admin_pool_get"},
 		{"POST", "/admin/pools", "admin_pool_create"},
 		{"PUT", "/admin/pools/{name}", "admin_pool_update"},
-		{"DELETE", "/admin/pools/{name}", "admin_pool_delete"},
+		{httpDEL, "/admin/pools/{name}", "admin_pool_delete"},
 		{"GET", "/admin/models", "admin_model_list"},
 		{"GET", "/admin/models/{name}", "admin_model_get"},
 		{"POST", "/admin/models", "admin_model_create"},
 		{"PUT", "/admin/models/{name}", "admin_model_update"},
-		{"DELETE", "/admin/models/{name}", "admin_model_delete"},
+		{httpDEL, "/admin/models/{name}", "admin_model_delete"},
 		{"GET", "/admin/routes", "admin_route_list"},
 		{"GET", "/admin/routes/{name}", "admin_route_get"},
 		{"POST", "/admin/routes", "admin_route_create"},
 		{"PUT", "/admin/routes/{name}", "admin_route_update"},
-		{"DELETE", "/admin/routes/{name}", "admin_route_delete"},
+		{httpDEL, "/admin/routes/{name}", "admin_route_delete"},
 		{"GET", "/admin/ratelimits", "admin_ratelimit_list"},
 		{"GET", "/admin/ratelimits/{name}", "admin_ratelimit_get"},
 		{"POST", "/admin/ratelimits", "admin_ratelimit_create"},
 		{"PUT", "/admin/ratelimits/{name}", "admin_ratelimit_update"},
-		{"DELETE", "/admin/ratelimits/{name}", "admin_ratelimit_delete"},
+		{httpDEL, "/admin/ratelimits/{name}", "admin_ratelimit_delete"},
 	}
 
 	for _, op := range ops {

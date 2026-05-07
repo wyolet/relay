@@ -1,6 +1,6 @@
 //go:build integration
 
-package configstore_test
+package catalog_test
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 	"github.com/wyolet/relay/internal/catalog"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -57,31 +58,18 @@ func runMigrations(t *testing.T, dsn string) {
 	}
 }
 
-// seedMinimal inserts the minimal valid catalog via direct SQL using pgx.
+// seedMinimal inserts the minimal valid catalog via direct SQL.
 func seedMinimal(t *testing.T, dsn string) {
 	t.Helper()
 	ctx := context.Background()
 
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	_, err = pool.Exec(ctx, `
-		INSERT INTO providers (name, metadata, spec) VALUES
-		('ollama', '{"Name":"ollama","Labels":{}}', '{"kind":"ollama","baseURL":"http://localhost:11434","default":true}')
-		ON CONFLICT DO NOTHING;
-
-		INSERT INTO models (name, metadata, spec) VALUES
-		('llama3', '{"Name":"llama3","Labels":{}}', '{"provider":"ollama","upstreamName":"llama3:8b","chat":true,"streaming":true}')
-		ON CONFLICT DO NOTHING;
-
-		INSERT INTO routes (name, metadata, spec) VALUES
-		('default', '{"Name":"default","Labels":{}}', '{"default":true,"models":["llama3"]}')
-		ON CONFLICT DO NOTHING;
-	`)
-	if err != nil {
+	if err := storagemod.SeedMinimalCatalog(ctx, pool); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 }
@@ -92,7 +80,7 @@ func TestPGStore_Boot_EmptyDB(t *testing.T) {
 
 	// Empty catalog: boot should succeed — the relay starts with no config and
 	// is populated via the admin API (M8 HITL use case).
-	store, err := catalog.Postgres(context.Background(), dsn, nil)
+	store, err := storagemod.Postgres(context.Background(), dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres() with empty catalog: %v", err)
 	}
@@ -107,7 +95,7 @@ func TestPGStore_Boot_And_Read(t *testing.T) {
 	runMigrations(t, dsn)
 	seedMinimal(t, dsn)
 
-	store, err := catalog.Postgres(context.Background(), dsn, nil)
+	store, err := storagemod.Postgres(context.Background(), dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -142,25 +130,21 @@ func TestPGStore_Reload(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	store, err := catalog.Postgres(ctx, dsn, nil)
+	store, err := storagemod.Postgres(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
 	defer store.Close()
 
-	// Insert a second provider via direct SQL.
-	pool, err := catalog.OpenPool(ctx, dsn)
+	// Insert a second provider via the storage helper.
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	_, err = pool.Exec(ctx, `
-		INSERT INTO providers (name, metadata, spec) VALUES
-		('ollama2', '{"Name":"ollama2","Labels":{}}', '{"kind":"ollama","baseURL":"http://localhost:11435"}')
-		ON CONFLICT DO NOTHING;
-	`)
-	if err != nil {
+	if err := storagemod.SeedProviderRow2(ctx, pool,
+		"ollama2", `{"Name":"ollama2","Labels":{}}`, `{"kind":"ollama","baseURL":"http://localhost:11435"}`); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
@@ -188,23 +172,18 @@ func TestPGStore_MalformedSpec(t *testing.T) {
 	runMigrations(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
 	// Insert a provider with a spec where "kind" is a number (wrong type for ProviderKind string).
-	// json.Unmarshal will error on type mismatch.
-	_, err = pool.Exec(ctx, `
-		INSERT INTO providers (name, metadata, spec) VALUES
-		('bad', '{"Name":"bad"}', '{"kind":12345,"baseURL":"http://localhost"}');
-	`)
-	if err != nil {
+	if err := storagemod.SeedMalformedProvider(ctx, pool); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 
-	_, err = catalog.Postgres(ctx, dsn, nil)
+	_, err = storagemod.Postgres(ctx, dsn, nil)
 	if err == nil {
 		t.Fatal("expected error from malformed spec, got nil")
 	}
@@ -216,7 +195,7 @@ func TestPGStore_ConcurrentReloadRace(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	store, err := catalog.Postgres(ctx, dsn, nil)
+	store, err := storagemod.Postgres(ctx, dsn, nil)
 	if err != nil {
 		t.Fatalf("Postgres(): %v", err)
 	}
@@ -286,21 +265,14 @@ func TestMigration000002_Backfill(t *testing.T) {
 	m.Close()
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
 	// Insert a legacy secret row using the old schema (no value_kind columns yet).
-	_, err = pool.Exec(ctx, `
-		INSERT INTO secrets (name, metadata, spec) VALUES (
-			'legacy-env',
-			'{"Name":"legacy-env","Labels":{}}',
-			'{"provider":"ollama","valueFrom":{"env":"LEGACY_TEST_VAR"}}'
-		);
-	`)
-	if err != nil {
+	if err := storagemod.SeedLegacySecretRow(ctx, pool); err != nil {
 		t.Fatalf("seed legacy row: %v", err)
 	}
 
@@ -319,8 +291,7 @@ func TestMigration000002_Backfill(t *testing.T) {
 	}
 
 	// Verify backfill.
-	var valueKind, valueFromEnv string
-	err = pool.QueryRow(ctx, `SELECT value_kind, value_from_env FROM secrets WHERE name = 'legacy-env'`).Scan(&valueKind, &valueFromEnv)
+	valueKind, valueFromEnv, err := storagemod.QuerySecretBackfill(ctx, pool, "legacy-env")
 	if err != nil {
 		t.Fatalf("query backfilled row: %v", err)
 	}
@@ -337,18 +308,14 @@ func TestMigration000002_CheckConstraintViolation(t *testing.T) {
 	runMigrations(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	// Attempt to INSERT with value_kind='env' AND value_ciphertext populated — must fail.
-	_, err = pool.Exec(ctx, `
-		INSERT INTO secrets (name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce)
-		VALUES ('bad', '{"Name":"bad"}', '{}', 'env', 'SOMEVAR', '\xdeadbeef', '\x000000000000000000000000');
-	`)
-	if err == nil {
+	// Attempt to insert a row that violates the check constraint (env + ciphertext) — must fail.
+	if err := storagemod.SeedBadConstraintSecret(ctx, pool); err == nil {
 		t.Fatal("expected CHECK constraint violation, got nil")
 	}
 }
@@ -370,26 +337,24 @@ func TestResolver_EnvMode_Set(t *testing.T) {
 	t.Setenv("RELAY_SECRET_TESTVAR", "supersecret")
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	store, err := storagemod.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
-	if err := store.UpsertSecretEnv(ctx, nil, "test-env", "RELAY_SECRET_TESTVAR", "ollama", catalog.Metadata{Name: "test-env"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, "test-env", "RELAY_SECRET_TESTVAR", "ollama", catalog.Metadata{Name: "test-env"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
 	// Boot a new PGStore which will resolve secrets.
-	s, err := catalog.Postgres(ctx, dsn, nil)
+	s, err := storagemod.Postgres(ctx, dsn, nil)
 	if err != nil {
-		// Validate failure is expected here (no provider seeded in seedMinimal? — actually it is).
-		// Reload failure from secret resolution would be surfaced.
 		t.Fatalf("Postgres: %v", err)
 	}
 	defer s.Close()
@@ -409,23 +374,23 @@ func TestResolver_EnvMode_MissingVar(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	store, err := storagemod.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
 	os.Unsetenv("RELAY_SECRET_MISSING")
-	if err := store.UpsertSecretEnv(ctx, nil, "missing-var", "RELAY_SECRET_MISSING", "ollama", catalog.Metadata{Name: "missing-var"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, "missing-var", "RELAY_SECRET_MISSING", "ollama", catalog.Metadata{Name: "missing-var"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
-	_, err = catalog.Postgres(ctx, dsn, nil)
+	_, err = storagemod.Postgres(ctx, dsn, nil)
 	if err == nil {
 		t.Fatal("expected error when env var missing, got nil")
 	}
@@ -438,24 +403,24 @@ func TestResolver_StoredMode_OK(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	store, err := storagemod.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 	store.SetMasterKey(testMasterKey)
 
 	const plaintext = "my-api-key"
-	if err := store.UpsertSecretStored(ctx, nil, "stored-ok", plaintext, "ollama", catalog.Metadata{Name: "stored-ok"}); err != nil {
+	if err := store.UpsertSecretStored(ctx, "stored-ok", plaintext, "ollama", catalog.Metadata{Name: "stored-ok"}); err != nil {
 		t.Fatalf("UpsertSecretStored: %v", err)
 	}
 
-	s, err := catalog.Postgres(ctx, dsn, testMasterKey)
+	s, err := storagemod.Postgres(ctx, dsn, testMasterKey)
 	if err != nil {
 		t.Fatalf("Postgres: %v", err)
 	}
@@ -476,26 +441,22 @@ func TestResolver_StoredMode_NoMasterKey(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	// Insert stored-mode row directly (using a known key).
+	// Insert stored-mode row directly (bypassing encryption layer).
 	ct, nonce, err := crypto.Encrypt(testMasterKey, []byte("secret"))
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	_, err = pool.Exec(ctx, `
-		INSERT INTO secrets (name, metadata, spec, value_kind, value_ciphertext, value_nonce)
-		VALUES ('stored-nokey', '{"Name":"stored-nokey"}', '{}', 'stored', $1, $2)
-	`, ct, nonce)
-	if err != nil {
+	if err := storagemod.SeedStoredSecret(ctx, pool, "stored-nokey", ct, nonce); err != nil {
 		t.Fatalf("insert stored row: %v", err)
 	}
 
-	_, err = catalog.Postgres(ctx, dsn, nil) // no master key
+	_, err = storagemod.Postgres(ctx, dsn, nil) // no master key
 	if err == nil {
 		t.Fatal("expected error when master key unset, got nil")
 	}
@@ -508,7 +469,7 @@ func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
@@ -520,15 +481,11 @@ func TestResolver_StoredMode_TamperedCiphertext(t *testing.T) {
 	}
 	ct[0] ^= 0xFF // tamper
 
-	_, err = pool.Exec(ctx, `
-		INSERT INTO secrets (name, metadata, spec, value_kind, value_ciphertext, value_nonce)
-		VALUES ('stored-tampered', '{"Name":"stored-tampered"}', '{}', 'stored', $1, $2)
-	`, ct, nonce)
-	if err != nil {
+	if err := storagemod.SeedStoredSecret(ctx, pool, "stored-tampered", ct, nonce); err != nil {
 		t.Fatalf("insert tampered row: %v", err)
 	}
 
-	_, err = catalog.Postgres(ctx, dsn, testMasterKey)
+	_, err = storagemod.Postgres(ctx, dsn, testMasterKey)
 	if err == nil {
 		t.Fatal("expected error on tampered ciphertext, got nil")
 	}
@@ -543,26 +500,25 @@ func TestUpsertSecretStored_EncryptsBeforeWrite(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	store, err := storagemod.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 	store.SetMasterKey(testMasterKey)
 
 	const plaintext = "my-plaintext-key"
-	if err := store.UpsertSecretStored(ctx, nil, "enc-test", plaintext, "ollama", catalog.Metadata{Name: "enc-test"}); err != nil {
+	if err := store.UpsertSecretStored(ctx, "enc-test", plaintext, "ollama", catalog.Metadata{Name: "enc-test"}); err != nil {
 		t.Fatalf("UpsertSecretStored: %v", err)
 	}
 
 	// Read ciphertext from DB directly and verify it's NOT plaintext bytes.
-	var ct, nonce []byte
-	err = pool.QueryRow(ctx, `SELECT value_ciphertext, value_nonce FROM secrets WHERE name = 'enc-test'`).Scan(&ct, &nonce)
+	ct, nonce, err := storagemod.QuerySecretCiphertext(ctx, pool, "enc-test")
 	if err != nil {
 		t.Fatalf("query ciphertext: %v", err)
 	}
@@ -586,24 +542,22 @@ func TestUpsertSecretEnv_NoCiphertext(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	store, err := storagemod.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
-	if err := store.UpsertSecretEnv(ctx, nil, "env-test", "MY_ENV_VAR", "ollama", catalog.Metadata{Name: "env-test"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, "env-test", "MY_ENV_VAR", "ollama", catalog.Metadata{Name: "env-test"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
 
-	var valueKind, valueFromEnv string
-	var ct []byte
-	err = pool.QueryRow(ctx, `SELECT value_kind, value_from_env, value_ciphertext FROM secrets WHERE name = 'env-test'`).Scan(&valueKind, &valueFromEnv, &ct)
+	valueKind, valueFromEnv, ct, err := storagemod.QuerySecretEnvRow(ctx, pool, "env-test")
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -624,30 +578,29 @@ func TestDeleteSecret(t *testing.T) {
 	seedMinimal(t, dsn)
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool, err := storagemod.OpenPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	defer pool.Close()
 
-	store, err := catalog.PostgresFromPool(ctx, pool)
+	store, err := storagemod.PostgresFromPool(ctx, pool)
 	if err != nil {
 		t.Fatalf("PostgresFromPool: %v", err)
 	}
 
-	if err := store.UpsertSecretEnv(ctx, nil, "del-test", "DEL_VAR", "ollama", catalog.Metadata{Name: "del-test"}); err != nil {
+	if err := store.UpsertSecretEnv(ctx, "del-test", "DEL_VAR", "ollama", catalog.Metadata{Name: "del-test"}); err != nil {
 		t.Fatalf("UpsertSecretEnv: %v", err)
 	}
-	if err := store.DeleteSecret(ctx, nil, "del-test"); err != nil {
+	if err := store.DeleteSecret(ctx, "del-test"); err != nil {
 		t.Fatalf("DeleteSecret: %v", err)
 	}
 
-	var count int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM secrets WHERE name = 'del-test'`).Scan(&count); err != nil {
+	count, err := storagemod.CountSecrets(ctx, pool, "del-test")
+	if err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if count != 0 {
 		t.Errorf("expected 0 rows after delete, got %d", count)
 	}
 }
-

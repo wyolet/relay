@@ -13,9 +13,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -33,22 +30,18 @@ type Reloader interface {
 	Reload(ctx context.Context) error
 }
 
-// TxBeginner begins a transaction. Implemented by *pgxpool.Pool.
-type TxBeginner interface {
-	Begin(ctx context.Context) (pgx.Tx, error)
+// TxRunner runs fn inside a transaction, committing on nil error and rolling back on error.
+// Implemented by the storage adapter in cmd/relay (wrapping *storage.Storage.WithTx).
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
 // Deps holds dependencies shared across all Kind handlers.
 type Deps struct {
-	Pool    TxBeginner
-	Patcher Patcher
+	Tx       TxRunner
+	Patcher  Patcher
 	Reloader Reloader
-	Logger  *slog.Logger
-}
-
-// DepsFromPGStore constructs Deps from the concrete pgxpool.Pool and PGStore types.
-func DepsFromPGStore(pool *pgxpool.Pool, store *catalog.PGStore, logger *slog.Logger) Deps {
-	return Deps{Pool: pool, Patcher: store, Reloader: store, Logger: logger}
+	Logger   *slog.Logger
 }
 
 // Kind is a generic admin CRUD factory for resource type T.
@@ -66,14 +59,14 @@ type Kind[T any] struct {
 	// Returns ErrNotFound if missing.
 	Get func(ctx context.Context, name string) (T, error)
 
-	// Insert persists a new resource inside tx.
-	Insert func(ctx context.Context, tx pgx.Tx, v T) error
+	// Insert persists a new resource. Called inside a managed transaction.
+	Insert func(ctx context.Context, v T) error
 
-	// Update persists changes to an existing resource inside tx.
-	Update func(ctx context.Context, tx pgx.Tx, name string, v T) error
+	// Update persists changes to an existing resource. Called inside a managed transaction.
+	Update func(ctx context.Context, name string, v T) error
 
-	// Delete removes a resource inside tx.
-	Delete func(ctx context.Context, tx pgx.Tx, name string) error
+	// Delete removes a resource. Called inside a managed transaction.
+	Delete func(ctx context.Context, name string) error
 
 	// ResourceID extracts the resource name from a value (e.g. v.Metadata.Name).
 	ResourceID func(T) string
@@ -151,21 +144,10 @@ func (k *Kind[T]) createHandler(deps Deps) http.HandlerFunc {
 			}
 		}
 
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())
-			return
-		}
-
-		if err := k.Insert(ctx, tx, v); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return k.Insert(ctx, v)
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", "commit: "+err.Error())
 			return
 		}
 
@@ -219,21 +201,10 @@ func (k *Kind[T]) updateHandler(deps Deps) http.HandlerFunc {
 			}
 		}
 
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())
-			return
-		}
-
-		if err := k.Update(ctx, tx, name, v); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return k.Update(ctx, name, v)
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", "commit: "+err.Error())
 			return
 		}
 
@@ -273,21 +244,10 @@ func (k *Kind[T]) deleteHandler(deps Deps) http.HandlerFunc {
 			}
 		}
 
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", "begin tx: "+err.Error())
-			return
-		}
-
-		if err := k.Delete(ctx, tx, name); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return k.Delete(ctx, name)
+		}); err != nil {
 			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", err.Error())
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			writeErr(w, http.StatusInternalServerError, "server_error", "internal_error", "commit: "+err.Error())
 			return
 		}
 

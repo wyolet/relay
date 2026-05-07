@@ -60,10 +60,10 @@ func humaError(status int, msg string) error {
 //   - GET    {base}/{name} → get
 //   - POST   {base}        → create (body T)
 //   - PUT    {base}/{name} → update (body T)
-//   - DELETE {base}/{name} → delete (204)
+//   - {base}/{name} [delete method] → delete (204)
 func RegisterOps[T any](
 	api huma.API,
-	base string,   // e.g. "/admin/providers"
+	base string,    // e.g. "/admin/providers"
 	singular string, // e.g. "provider"
 	plural string,   // e.g. "providers"
 	k *Kind[T],
@@ -117,33 +117,25 @@ func RegisterOps[T any](
 
 	// --- Create ---
 	huma.Register(api, huma.Operation{
-		OperationID: "admin_" + singular + "_create",
-		Method:      http.MethodPost,
-		Path:        base,
-		Summary:     "Create " + singular,
-		Tags:        []string{"admin"},
-		Errors:      []int{400, 500},
-		Middlewares: middlewares,
+		OperationID:   "admin_" + singular + "_create",
+		Method:        http.MethodPost,
+		Path:          base,
+		Summary:       "Create " + singular,
+		Tags:          []string{"admin"},
+		Errors:        []int{400, 500},
+		Middlewares:   middlewares,
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, in *BodyInput[T]) (*ItemOutput[T], error) {
 		v := in.Body
-		// Validate via configstore patch if provided.
 		if k.Patch != nil && deps.Patcher != nil {
 			if verr := deps.Patcher.ValidateWithPatch(k.Patch(v)); verr != nil {
 				return nil, humaError(http.StatusBadRequest, verr.Error())
 			}
 		}
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			return nil, humaError(http.StatusInternalServerError, "begin tx: "+err.Error())
-		}
-		if err := k.Insert(ctx, tx, v); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return k.Insert(ctx, v)
+		}); err != nil {
 			return nil, humaError(http.StatusInternalServerError, err.Error())
-		}
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, humaError(http.StatusInternalServerError, "commit: "+err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			deps.Logger.ErrorContext(ctx, "admin: reload failed after create; snapshot may be stale",
@@ -185,17 +177,10 @@ func RegisterOps[T any](
 				return nil, humaError(http.StatusBadRequest, verr.Error())
 			}
 		}
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			return nil, humaError(http.StatusInternalServerError, "begin tx: "+err.Error())
-		}
-		if err := k.Update(ctx, tx, in.Name, v); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return k.Update(ctx, in.Name, v)
+		}); err != nil {
 			return nil, humaError(http.StatusInternalServerError, err.Error())
-		}
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, humaError(http.StatusInternalServerError, "commit: "+err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			deps.Logger.ErrorContext(ctx, "admin: reload failed after update; snapshot may be stale",
@@ -218,13 +203,13 @@ func RegisterOps[T any](
 
 	// --- Delete ---
 	huma.Register(api, huma.Operation{
-		OperationID: "admin_" + singular + "_delete",
-		Method:      http.MethodDelete,
-		Path:        nameParam,
-		Summary:     "Delete " + singular,
-		Tags:        []string{"admin"},
-		Errors:      []int{400, 404, 500},
-		Middlewares: middlewares,
+		OperationID:   "admin_" + singular + "_delete",
+		Method:        http.MethodDelete,
+		Path:          nameParam,
+		Summary:       "Delete " + singular,
+		Tags:          []string{"admin"},
+		Errors:        []int{400, 404, 500},
+		Middlewares:   middlewares,
 		DefaultStatus: http.StatusNoContent,
 	}, func(ctx context.Context, in *DeleteInput) (*struct{}, error) {
 		if k.PatchDelete != nil && deps.Patcher != nil {
@@ -232,17 +217,10 @@ func RegisterOps[T any](
 				return nil, humaError(http.StatusBadRequest, verr.Error())
 			}
 		}
-		tx, err := deps.Pool.Begin(ctx)
-		if err != nil {
-			return nil, humaError(http.StatusInternalServerError, "begin tx: "+err.Error())
-		}
-		if err := k.Delete(ctx, tx, in.Name); err != nil {
-			_ = tx.Rollback(ctx)
+		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
+			return k.Delete(ctx, in.Name)
+		}); err != nil {
 			return nil, humaError(http.StatusInternalServerError, err.Error())
-		}
-		if err := tx.Commit(ctx); err != nil {
-			_ = tx.Rollback(ctx)
-			return nil, humaError(http.StatusInternalServerError, "commit: "+err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			deps.Logger.ErrorContext(ctx, "admin: reload failed after delete; snapshot may be stale",

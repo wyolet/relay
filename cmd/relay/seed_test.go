@@ -16,7 +16,8 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
-	"github.com/wyolet/relay/internal/catalog"
+
+	storagemod "github.com/wyolet/relay/internal/storage"
 )
 
 func startPG(t *testing.T) string {
@@ -111,13 +112,9 @@ func TestSeed_DryRun(t *testing.T) {
 
 	// Verify no rows were written.
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool := storagemod.MustOpenPool(ctx, t, dsn)
+	n, err := storagemod.CountProviders(ctx, pool)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-	var n int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM providers").Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n != 0 {
@@ -140,23 +137,13 @@ func TestSeed_Apply_And_Idempotent(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool := storagemod.MustOpenPool(ctx, t, dsn)
+	n1, err := storagemod.CountProviders(ctx, pool)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-	var n1 int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM providers").Scan(&n1); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n1 == 0 {
 		t.Fatal("expected rows after --apply, got 0")
-	}
-
-	// Get current txid.
-	var txid1 int64
-	if err := pool.QueryRow(ctx, "SELECT txid_current()").Scan(&txid1); err != nil {
-		t.Fatalf("txid: %v", err)
 	}
 
 	// Second apply (no-op).
@@ -168,8 +155,8 @@ func TestSeed_Apply_And_Idempotent(t *testing.T) {
 		t.Logf("second apply output: %s", buf.String())
 	}
 
-	var n2 int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM providers").Scan(&n2); err != nil {
+	n2, err := storagemod.CountProviders(ctx, pool)
+	if err != nil {
 		t.Fatalf("count2: %v", err)
 	}
 	if n1 != n2 {
@@ -194,14 +181,10 @@ func TestSeed_BrokenYAML(t *testing.T) {
 	}
 
 	// No transaction should have been opened — verify providers empty.
-	ctx := context.Background()
-	pool, err2 := catalog.OpenPool(ctx, dsn)
+	ctx2 := context.Background()
+	pool2 := storagemod.MustOpenPool(ctx2, t, dsn)
+	n, err2 := storagemod.CountProviders(ctx2, pool2)
 	if err2 != nil {
-		t.Fatalf("open pool: %v", err2)
-	}
-	defer pool.Close()
-	var n int
-	if err2 := pool.QueryRow(ctx, "SELECT COUNT(*) FROM providers").Scan(&n); err2 != nil {
 		t.Fatalf("count: %v", err2)
 	}
 	if n != 0 {
@@ -223,14 +206,9 @@ func TestAutoSeed_FirstBoot_ThenNoop(t *testing.T) {
 		t.Fatalf("first auto-seed: %v", err)
 	}
 
-	pool, err := catalog.OpenPool(ctx, dsn)
+	pool := storagemod.MustOpenPool(ctx, t, dsn)
+	n1, err := storagemod.CountProviders(ctx, pool)
 	if err != nil {
-		t.Fatalf("open pool: %v", err)
-	}
-	defer pool.Close()
-
-	var n1 int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM providers").Scan(&n1); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n1 == 0 {
@@ -242,8 +220,8 @@ func TestAutoSeed_FirstBoot_ThenNoop(t *testing.T) {
 		t.Fatalf("second auto-seed: %v", err)
 	}
 
-	var n2 int
-	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM providers").Scan(&n2); err != nil {
+	n2, err := storagemod.CountProviders(ctx, pool)
+	if err != nil {
 		t.Fatalf("count2: %v", err)
 	}
 	if n1 != n2 {

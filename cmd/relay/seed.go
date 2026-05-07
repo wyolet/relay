@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/storage"
 )
 
 func runSeed(args []string) {
@@ -62,13 +63,13 @@ func runSeedTo(out io.Writer, args []string) error {
 
 	ctx := context.Background()
 
-	pool, err := catalog.OpenPool(ctx, dsn)
+	st, err := storage.Open(ctx, dsn)
 	if err != nil {
-		return fmt.Errorf("open pg pool: %w", err)
+		return fmt.Errorf("open storage: %w", err)
 	}
-	defer pool.Close()
+	defer st.Close()
 
-	pgStore, err := catalog.PostgresFromPool(ctx, pool)
+	pgStore, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
 		return fmt.Errorf("pg store: %w", err)
 	}
@@ -104,13 +105,13 @@ func maybeAutoSeed(ctx context.Context, dsn string) error {
 		configDir = "config"
 	}
 
-	pool, err := catalog.OpenPool(ctx, dsn)
+	st, err := storage.Open(ctx, dsn)
 	if err != nil {
-		return fmt.Errorf("open pg pool: %w", err)
+		return fmt.Errorf("open storage: %w", err)
 	}
-	defer pool.Close()
+	defer st.Close()
 
-	pgStore, err := catalog.PostgresFromPool(ctx, pool)
+	pgStore, err := catalog.NewPGStoreNoReload(st.Catalog, st)
 	if err != nil {
 		return fmt.Errorf("pg store: %w", err)
 	}

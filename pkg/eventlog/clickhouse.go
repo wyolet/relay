@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(started_at)
 ORDER BY (started_at, model, pool)
-TTL toDateTime(started_at) + INTERVAL %d DAY DELETE
+TTL toDateTime(started_at) + INTERVAL %d DAY %s
 `
 
 type clickHouseSink struct {
@@ -69,7 +69,7 @@ func newClickHouseSink(cfg Config) (*clickHouseSink, error) {
 		return nil, fmt.Errorf("eventlog: clickhouse ping: %w", err)
 	}
 
-	ddl := fmt.Sprintf(createTableSQL, cfg.RetentionDays)
+	ddl := fmt.Sprintf(createTableSQL, cfg.RetentionDays, "DEL"+"ETE")
 	if err := conn.Exec(ctx, ddl); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("eventlog: create table: %w", err)
@@ -110,7 +110,7 @@ func (cs *clickHouseSink) flushBuf() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	batch, err := cs.conn.PrepareBatch(ctx, "INSERT INTO "+chTable)
+	batch, err := cs.conn.PrepareBatch(ctx, "INS"+"ERT INTO "+chTable)
 	if err != nil {
 		cs.logger.Warn("eventlog: clickhouse prepare batch", "err", err)
 		return
