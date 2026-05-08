@@ -15,6 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/control"
+	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/keypool"
 	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/pkg/crypto"
@@ -91,11 +93,9 @@ type adminCRUD struct {
 	kvStore kv.Store         // for best-effort Redis cleanup on secret delete
 }
 
-// mountHuma wraps chiRouter in a humachi-backed huma API and registers all operations.
-// Returns the huma API (used in tests to inspect the spec).
-//
-// adminH may be nil (admin not configured); its op is skipped.
-// crudArg may be nil; its ops are skipped.
+// mountHuma wraps chiRouter in a humachi-backed huma API for the data plane
+// and registers /healthz and the /v1/* operations. Control-plane operations
+// live on a separate huma API mounted by mountControlHuma.
 func mountHuma(
 	chiRouter chi.Router,
 	authMW func(http.Handler) http.Handler,
@@ -103,9 +103,6 @@ func mountHuma(
 	chatH http.HandlerFunc,
 	modelsH http.HandlerFunc,
 	messagesH http.HandlerFunc,
-	adminH http.HandlerFunc,
-	crudArg *adminCRUD,
-	adminTok string,
 ) huma.API {
 	cfg := huma.DefaultConfig("Wyolet Relay", relayVersion)
 	cfg.Info.Description = "High-throughput LLM router. " +
@@ -116,7 +113,6 @@ func mountHuma(
 
 	api := humachi.New(chiRouter, cfg)
 	auth := huma.Middlewares{humaAuth(authMW)}
-	adminAuth := huma.Middlewares{humaAuth(adminTokenGate(adminTok))}
 
 	// delegate wraps an http.HandlerFunc as a huma stream handler (no request body).
 	delegate := func(h http.HandlerFunc) func(context.Context, *struct{}) (*huma.StreamResponse, error) {
@@ -256,26 +252,140 @@ func mountHuma(
 		Middlewares: auth,
 	}, delegate(modelsH))
 
-	// POST /admin/reload
+	return api
+}
+
+// mountControlHuma wraps controlRouter in a separate humachi-backed huma API
+// for the control plane and registers every /control/* operation: login,
+// logout, whoami, reload, and the full admin CRUD surface. The control API
+// has its own /openapi.json and /docs distinct from the data plane.
+//
+// adminH may be nil (reload not configured); its op is skipped.
+// crudArg may be nil; its ops are skipped.
+// idStore may be nil (login disabled).
+func mountControlHuma(
+	controlRouter chi.Router,
+	adminH http.HandlerFunc,
+	crudArg *adminCRUD,
+	adminTok string,
+	idStore *identity.Store,
+) huma.API {
+	cfg := huma.DefaultConfig("Wyolet Relay — Control API", relayVersion)
+	cfg.Info.Description = "Operator-facing control plane. Manages providers, pools, secrets, models, routes, " +
+		"rate limits, and identity. Authentication is cookie-based: POST /control/login with " +
+		"{username, password} sets relay_admin; subsequent calls send the cookie automatically. " +
+		"Machine clients may also pass X-Relay-Admin-Token or Authorization: Bearer."
+
+	api := humachi.New(controlRouter, cfg)
+	adminAuth := huma.Middlewares{humaAuth(adminTokenGate(adminTok))}
+
+	delegate := func(h http.HandlerFunc) func(context.Context, *struct{}) (*huma.StreamResponse, error) {
+		return func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+			return &huma.StreamResponse{
+				Body: func(ctx huma.Context) {
+					r, w := humachi.Unwrap(ctx)
+					h.ServeHTTP(w, r)
+				},
+			}, nil
+		}
+	}
+
+	// POST /control/login — username + password, sets cookie on success.
+	type loginInput struct {
+		Body struct {
+			Username string `json:"username" doc:"User name as declared in the User YAML." minLength:"1"`
+			Password string `json:"password" doc:"User password (plain over TLS)." minLength:"1"`
+		}
+	}
+	type loginBodyOut struct {
+		Username string   `json:"username" doc:"Authenticated user name."`
+		Roles    []string `json:"roles,omitempty" doc:"Roles attached to the user."`
+	}
+	type loginOutput struct {
+		SetCookie string `header:"Set-Cookie" doc:"Session cookie set on success."`
+		Body      loginBodyOut
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "control-login",
+		Method:      http.MethodPost,
+		Path:        "/control/login",
+		Summary:     "Login (username + password)",
+		Description: "Validates credentials against the identity store and sets a relay_admin session cookie " +
+			"(HttpOnly, Secure, SameSite=Strict, 24 h). Returns 401 on bad credentials.",
+		Tags:   []string{"control"},
+		Errors: []int{400, 401, 503},
+	}, func(_ context.Context, in *loginInput) (*loginOutput, error) {
+		if idStore == nil || adminTok == "" {
+			return nil, huma.NewError(http.StatusServiceUnavailable, "login not configured")
+		}
+		u, err := control.ValidateLogin(idStore, in.Body.Username, in.Body.Password)
+		if err != nil {
+			return nil, huma.NewError(http.StatusUnauthorized, "invalid credentials")
+		}
+		return &loginOutput{
+			SetCookie: control.NewSessionCookie(adminTok).String(),
+			Body:      loginBodyOut{Username: u.Metadata.Name, Roles: u.Spec.Roles},
+		}, nil
+	})
+
+	// POST /control/logout — clears cookie. Gated so anonymous probing returns 401.
+	huma.Register(api, huma.Operation{
+		OperationID:   "control-logout",
+		Method:        http.MethodPost,
+		Path:          "/control/logout",
+		Summary:       "Logout",
+		Description:   "Clears the relay_admin session cookie. Requires an active session.",
+		Tags:          []string{"control"},
+		Errors:        []int{401},
+		Middlewares:   adminAuth,
+		DefaultStatus: http.StatusNoContent,
+	}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				_, w := humachi.Unwrap(ctx)
+				http.SetCookie(w, control.NewClearCookie())
+				w.WriteHeader(http.StatusNoContent)
+			},
+		}, nil
+	})
+
+	// GET /control/whoami — gated; reports authenticated status.
+	type whoamiOutput struct {
+		Body struct {
+			Authenticated bool `json:"authenticated" doc:"Always true when this gated endpoint responds."`
+		}
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "control-whoami",
+		Method:      http.MethodGet,
+		Path:        "/control/whoami",
+		Summary:     "Whoami",
+		Description: "Returns {authenticated: true} if the session is valid.",
+		Tags:        []string{"control"},
+		Errors:      []int{401},
+		Middlewares: adminAuth,
+	}, func(_ context.Context, _ *struct{}) (*whoamiOutput, error) {
+		out := &whoamiOutput{}
+		out.Body.Authenticated = true
+		return out, nil
+	})
+
+	// POST /control/reload — admin reload handler.
 	if adminH != nil {
 		huma.Register(api, huma.Operation{
-			OperationID:   "admin-reload",
+			OperationID:   "control-reload",
 			Method:        http.MethodPost,
 			Path:          "/control/reload",
 			Summary:       "Reload catalog",
-			Description:   "Triggers a live config reload from the Postgres catalog. Requires admin bearer token.",
-			Tags:          []string{"admin"},
+			Description:   "Triggers a live config reload from the Postgres catalog.",
+			Tags:          []string{"control"},
 			Errors:        []int{401, 429, 500},
 			Middlewares:   adminAuth,
 			DefaultStatus: http.StatusOK,
 		}, delegate(adminH))
 	}
 
-	// Login / logout / whoami live exclusively on the control listener
-	// (internal/control on RELAY_CONTROL_PORT). The data plane does not
-	// host those operations.
-
-	// Admin CRUD
+	// CRUD + secrets + attachments + misc.
 	if crudArg != nil {
 		crud.RegisterOps(api, "/control/providers", "provider", "providers",
 			crudArg.kinds.provider, *crudArg.deps, adminAuth)
@@ -288,15 +398,10 @@ func mountHuma(
 		crud.RegisterOps(api, "/control/ratelimits", "ratelimit", "ratelimits",
 			crudArg.kinds.rateLimit, *crudArg.deps, adminAuth)
 
-		// --- Secret endpoints ---
 		if crudArg.pgStore != nil {
 			registerTypedSecretOps(api, crudArg.pgStore, crudArg.deps, crudArg.kvStore, adminAuth)
-
-			// --- Attachment endpoint ---
 			registerTypedAttachmentOps(api, crudArg.pgStore, adminAuth)
 		}
-
-		// --- Misc ---
 		registerTypedMiscOps(api, adminAuth)
 	}
 

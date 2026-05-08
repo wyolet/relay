@@ -127,25 +127,17 @@ func stubRateLimitKind() *crud.Kind[*catalog.RateLimit] {
 }
 
 // buildHumaTestRouterWithAdmin mirrors the production mount order with admin CRUD enabled.
-func buildHumaTestRouterWithAdmin(crud *adminCRUD) http.Handler {
-	authMW := auth.Middleware([][]byte{[]byte("test-secret")})
-
+// buildHumaTestRouterWithAdmin returns a control-only router (separate from
+// the data-plane router built by buildHumaTestRouter). Production wires them
+// on separate http.Servers; tests that need to assert control-plane paths
+// hit this router directly.
+func buildHumaTestRouterWithAdmin(crudArg *adminCRUD) http.Handler {
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
-
-	mountHuma(r, authMW,
-		http.HandlerFunc(stub), // healthz
-		http.HandlerFunc(stub), // chat completions
-		http.HandlerFunc(stub), // models
-		http.HandlerFunc(stub), // messages (anthropic)
-		http.HandlerFunc(stub), // admin reload
-		crud,
-		"test-admin-token",
-	)
-
+	mountControlHuma(r, http.HandlerFunc(stub), crudArg, "test-admin-token", nil)
 	return r
 }
 
@@ -165,9 +157,6 @@ func buildHumaTestRouter() http.Handler {
 		http.HandlerFunc(stub), // chat completions
 		http.HandlerFunc(stub), // models
 		http.HandlerFunc(stub), // messages (anthropic)
-		nil,                    // admin — not configured
-		nil,                    // crud — not configured
-		"",                     // adminTok — not configured
 	)
 
 	return r

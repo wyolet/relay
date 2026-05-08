@@ -5,8 +5,8 @@ metadata:
   labels:
     role: bootstrap
 spec:
-  username: admin
-  email: admin@wyolet.dev
+  username: aaliboyev
+  email: abror@aliboyev.com
   password:
     valueFrom:
       env: RELAY_ADMIN_PASSWORD

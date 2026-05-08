@@ -22,7 +22,6 @@ import (
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/config"
-	"github.com/wyolet/relay/internal/control"
 	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/keypool"
 	"github.com/wyolet/relay/internal/pipeline"
@@ -472,9 +471,6 @@ func main() {
 		apiopenai.ChatCompletions(resolver, runPipeline),
 		apiopenai.ListModels(catalogStore),
 		apianthropic.MessagesHandler(resolver, runAnthropicPipeline),
-		adminH,
-		adminCRUDHandlers,
-		cfg.AdminToken,
 	)
 
 	// Mount the operator admin UI at /ui (unauthenticated static assets; PER-274 gates API calls).
@@ -491,15 +487,14 @@ func main() {
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.ListenAndServe() }()
 
-	// Control plane: separate router and listener so the surface can be
-	// firewalled independently and lifted into cmd/relay-control verbatim
-	// when the binary split happens. Disabled if RELAY_CONTROL_PORT="off".
+	// Control plane: separate huma API on its own router and listener so the
+	// surface can be firewalled independently and lifted into
+	// cmd/relay-control verbatim when the binary split happens. Disabled if
+	// RELAY_CONTROL_PORT="off".
 	var ctrlSrv *http.Server
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
-		ctrlRouter := control.NewRouter(control.LoginDeps{
-			Identity:     idStore,
-			SessionToken: cfg.AdminToken,
-		})
+		ctrlRouter := chi.NewRouter()
+		mountControlHuma(ctrlRouter, adminH, adminCRUDHandlers, cfg.AdminToken, idStore)
 		ctrlAddr := ":" + cfg.ControlPort
 		ctrlSrv = &http.Server{Addr: ctrlAddr, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlAddr, "users", len(idStore.Users()))
