@@ -13,11 +13,13 @@ func mustStore(t *testing.T) *identity.Store {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("RELAY_TEST_PW", "hunter2hunter2")
+	// metadata.name is the resource id; spec.username is the login credential.
+	// Use distinct values so tests exercise the distinction.
 	body := `apiVersion: relay.wyolet.dev/v1
 kind: User
-metadata: {name: admin}
+metadata: {name: bootstrap-admin}
 spec:
-  username: admin
+  username: aaliboyev
   email: admin@example.com
   password: {valueFrom: {env: RELAY_TEST_PW}}
   roles: [admin]
@@ -33,17 +35,17 @@ spec:
 }
 
 func TestValidateLogin_Success(t *testing.T) {
-	u, err := ValidateLogin(mustStore(t), "admin", "hunter2hunter2")
+	u, err := ValidateLogin(mustStore(t), "aaliboyev", "hunter2hunter2")
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
-	if u.Metadata.Name != "admin" {
+	if u.Metadata.Name != "bootstrap-admin" {
 		t.Errorf("name=%q", u.Metadata.Name)
 	}
 }
 
 func TestValidateLogin_BadPassword(t *testing.T) {
-	_, err := ValidateLogin(mustStore(t), "admin", "wrong")
+	_, err := ValidateLogin(mustStore(t), "aaliboyev", "wrong")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("err=%v", err)
 	}
@@ -53,6 +55,16 @@ func TestValidateLogin_UnknownUser(t *testing.T) {
 	_, err := ValidateLogin(mustStore(t), "nobody", "hunter2hunter2")
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// TestValidateLogin_RejectsMetadataName guards against regressing to the
+// pre-fix behavior where login looked up by metadata.name instead of
+// spec.username.
+func TestValidateLogin_RejectsMetadataName(t *testing.T) {
+	_, err := ValidateLogin(mustStore(t), "bootstrap-admin", "hunter2hunter2")
+	if !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("metadata.name should not be a valid login id; err=%v", err)
 	}
 }
 

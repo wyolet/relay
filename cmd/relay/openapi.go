@@ -324,7 +324,7 @@ func mountControlHuma(
 		}
 		return &loginOutput{
 			SetCookie: control.NewSessionCookie(adminTok).String(),
-			Body:      loginBodyOut{Username: u.Metadata.Name, Roles: u.Spec.Roles},
+			Body:      loginBodyOut{Username: u.Spec.Username.Get(), Roles: u.Spec.Roles},
 		}, nil
 	})
 

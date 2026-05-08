@@ -36,7 +36,7 @@ func ValidateLogin(store *identity.Store, username, password string) (*identity.
 	}
 	const dummy = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 	var expected string
-	u, ok := store.ByName(username)
+	u, ok := store.ByUsername(username)
 	if ok {
 		expected = u.Spec.Password.Get()
 	} else {

@@ -35,6 +35,21 @@ func (s *Store) ByName(name string) (*User, bool) {
 	return u, ok
 }
 
+// ByUsername looks up a user by their login credential (spec.username), as
+// distinct from ByName which uses the YAML metadata.name. The metadata.name
+// is the resource id; spec.username is what the user types into a login form.
+func (s *Store) ByUsername(username string) (*User, bool) {
+	if username == "" {
+		return nil, false
+	}
+	for _, u := range s.users {
+		if u.Spec.Username.Get() == username {
+			return u, true
+		}
+	}
+	return nil, false
+}
+
 // LoadYAML walks dir and parses every .yaml/.yml file, picking up only
 // kind=User documents. Other kinds are silently skipped so this can run over
 // the same tree the catalog loader walks.
