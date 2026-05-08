@@ -1,0 +1,23 @@
+# Load-test overlay. Adds a fake Anthropic upstream with simulated latency.
+# Used in conjunction with the loadtest provider/route YAMLs under config/providers/loadtest.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d --build fakeanthropic
+#   then run the loadgen against http://localhost:5100 with model=loadtest-model.
+services:
+  fakeanthropic:
+    build:
+      context: ../..
+      dockerfile: bench/fakeanthropic/Dockerfile
+    command:
+      - --session
+      - /session.jsonl
+      - --listen
+      - :9999
+      - --min-latency
+      - 2s
+      - --max-latency
+      - 20s
+    ports:
+      - "5103:9999"
+    networks: [default]

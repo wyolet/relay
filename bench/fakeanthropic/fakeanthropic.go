@@ -9,12 +9,14 @@ package fakeanthropic
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"os"
 	"sync/atomic"
+	"time"
 )
 
 // message is the subset of the Anthropic Messages response we care about.
@@ -38,6 +40,11 @@ type sessionLine struct {
 type Server struct {
 	responses []json.RawMessage
 	idx       atomic.Uint64
+
+	// LatencyMin/Max inject a uniform-random sleep before each response.
+	// Zero values disable. Applied to both streaming and non-streaming.
+	LatencyMin time.Duration
+	LatencyMax time.Duration
 }
 
 // LoadSession reads a Claude Code JSONL session file and extracts assistant turns.
@@ -76,6 +83,29 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+func (s *Server) injectLatency(ctx context.Context) {
+	if s.LatencyMax <= 0 {
+		return
+	}
+	min, max := s.LatencyMin, s.LatencyMax
+	if min < 0 {
+		min = 0
+	}
+	if max < min {
+		max = min
+	}
+	d := min
+	if span := max - min; span > 0 {
+		d += time.Duration(rand.Int64N(int64(span)))
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
 func (s *Server) next() json.RawMessage {
 	if len(s.responses) == 0 {
 		return json.RawMessage(`{"id":"msg_empty","type":"message","role":"assistant","model":"claude-opus-4-7","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}`)
@@ -89,6 +119,8 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"type":"error","error":{"type":"authentication_error","message":"missing x-api-key"}}`, http.StatusUnauthorized)
 		return
 	}
+
+	s.injectLatency(r.Context())
 
 	raw := s.next()
 

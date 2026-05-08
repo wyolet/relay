@@ -1,0 +1,9 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Provider
+metadata:
+  name: loadtest-anthropic
+spec:
+  kind: anthropic
+  baseURL: http://fakeanthropic:9999
+  default: false
+  defaultPool: loadtest-pool

@@ -1,0 +1,8 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pool
+metadata:
+  name: loadtest-pool
+spec:
+  provider: loadtest-anthropic
+  secrets:
+    - loadtest-anon

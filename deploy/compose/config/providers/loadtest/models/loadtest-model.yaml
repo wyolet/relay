@@ -1,0 +1,16 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+  name: loadtest-model
+spec:
+  provider: loadtest-anthropic
+  upstreamName: claude-opus-4-7
+  description: "Load-test model (fakeanthropic upstream with 2-20s simulated latency)"
+  family: claude
+  capabilities:
+    chat: true
+    streaming: true
+  modalities:
+    input: [text]
+    output: [text]
+  contextWindow: 200000

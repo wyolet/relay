@@ -1,0 +1,7 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Route
+metadata:
+  name: loadtest
+spec:
+  default: false
+  models: [loadtest-model]
