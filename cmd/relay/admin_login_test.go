@@ -27,12 +27,12 @@ func buildLoginTestServer(tok string) http.Handler {
 	gate := adminTokenGate(tok)
 
 	// Login — unauthenticated
-	r.Post("/admin/login", adminLoginHandler(tok))
+	r.Post("/control/login", adminLoginHandler(tok))
 	// Logout and whoami — gated
-	r.With(gate).Post("/admin/logout", adminLogoutHandler())
-	r.With(gate).Get("/admin/whoami", adminWhoamiHandler())
+	r.With(gate).Post("/control/logout", adminLogoutHandler())
+	r.With(gate).Get("/control/whoami", adminWhoamiHandler())
 	// Regression: generic gated endpoint
-	r.With(gate).Get("/admin/providers", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	r.With(gate).Get("/control/providers", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		adminWriteJSON(w, http.StatusOK, map[string]any{"items": []any{}})
 	}))
 
@@ -81,7 +81,7 @@ func TestAdminLogin_CorrectToken_200_SetsCookie(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	resp := doLoginReq(t, srv, http.MethodPost, "/admin/login", map[string]any{"token": loginTestToken}, nil)
+	resp := doLoginReq(t, srv, http.MethodPost, "/control/login", map[string]any{"token": loginTestToken}, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
@@ -111,7 +111,7 @@ func TestAdminLogin_WrongToken_401(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	resp := doLoginReq(t, srv, http.MethodPost, "/admin/login", map[string]any{"token": "bad-token"}, nil)
+	resp := doLoginReq(t, srv, http.MethodPost, "/control/login", map[string]any{"token": "bad-token"}, nil)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", resp.StatusCode)
 	}
@@ -122,7 +122,7 @@ func TestAdminLogin_EmptyBody_400(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Empty token field.
-	resp := doLoginReq(t, srv, http.MethodPost, "/admin/login", map[string]any{"token": ""}, nil)
+	resp := doLoginReq(t, srv, http.MethodPost, "/control/login", map[string]any{"token": ""}, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("empty token: want 400, got %d", resp.StatusCode)
 	}
@@ -132,7 +132,7 @@ func TestAdminLogin_MalformedBody_400(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/admin/login", strings.NewReader("{bad json"))
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/control/login", strings.NewReader("{bad json"))
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -150,14 +150,14 @@ func TestAdminLogout_WithCookie_204_ClearesCookie(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// Login first to get cookie.
-	loginResp := doLoginReq(t, srv, http.MethodPost, "/admin/login", map[string]any{"token": loginTestToken}, nil)
+	loginResp := doLoginReq(t, srv, http.MethodPost, "/control/login", map[string]any{"token": loginTestToken}, nil)
 	c := findCookie(loginResp, adminLoginCookieName)
 	if c == nil {
 		t.Fatal("no cookie from login")
 	}
 
 	// Logout.
-	resp := doLoginReq(t, srv, http.MethodPost, "/admin/logout", nil, []*http.Cookie{c})
+	resp := doLoginReq(t, srv, http.MethodPost, "/control/logout", nil, []*http.Cookie{c})
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", resp.StatusCode)
 	}
@@ -176,13 +176,13 @@ func TestAdminWhoami_WithCookie_200(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	loginResp := doLoginReq(t, srv, http.MethodPost, "/admin/login", map[string]any{"token": loginTestToken}, nil)
+	loginResp := doLoginReq(t, srv, http.MethodPost, "/control/login", map[string]any{"token": loginTestToken}, nil)
 	c := findCookie(loginResp, adminLoginCookieName)
 	if c == nil {
 		t.Fatal("no cookie from login")
 	}
 
-	resp := doLoginReq(t, srv, http.MethodGet, "/admin/whoami", nil, []*http.Cookie{c})
+	resp := doLoginReq(t, srv, http.MethodGet, "/control/whoami", nil, []*http.Cookie{c})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("want 200, got %d", resp.StatusCode)
 	}
@@ -200,7 +200,7 @@ func TestAdminWhoami_NoCookieNoHeader_404(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	resp := doLoginReq(t, srv, http.MethodGet, "/admin/whoami", nil, nil)
+	resp := doLoginReq(t, srv, http.MethodGet, "/control/whoami", nil, nil)
 	// adminTokenGate returns 404 on unauthorized (security-through-obscurity).
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
@@ -211,14 +211,14 @@ func TestAdminProviders_CookieAuth_200(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	loginResp := doLoginReq(t, srv, http.MethodPost, "/admin/login", map[string]any{"token": loginTestToken}, nil)
+	loginResp := doLoginReq(t, srv, http.MethodPost, "/control/login", map[string]any{"token": loginTestToken}, nil)
 	c := findCookie(loginResp, adminLoginCookieName)
 	if c == nil {
 		t.Fatal("no cookie from login")
 	}
 
 	// Cookie-authenticated request to a generic gated endpoint.
-	resp := doLoginReq(t, srv, http.MethodGet, "/admin/providers", nil, []*http.Cookie{c})
+	resp := doLoginReq(t, srv, http.MethodGet, "/control/providers", nil, []*http.Cookie{c})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("cookie auth on /admin/providers: want 200, got %d", resp.StatusCode)
 	}
@@ -228,7 +228,7 @@ func TestAdminProviders_HeaderAuth_200(t *testing.T) {
 	srv := httptest.NewServer(buildLoginTestServer(loginTestToken))
 	t.Cleanup(srv.Close)
 
-	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/admin/providers", nil)
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/control/providers", nil)
 	req.Header.Set("X-Relay-Admin-Token", loginTestToken)
 	client := &http.Client{}
 	resp, err := client.Do(req)

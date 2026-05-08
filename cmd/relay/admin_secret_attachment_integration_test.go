@@ -86,7 +86,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 	}
 
 	// Create → 201
-	resp := adminReq(t, srv, http.MethodPost, "/admin/secrets", body)
+	resp := adminReq(t, srv, http.MethodPost, "/control/secrets", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create: want 201 got %d", resp.StatusCode)
@@ -110,7 +110,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 	}
 
 	// GET → 200, same shape
-	resp = adminReq(t, srv, http.MethodGet, "/admin/secrets/test-env-secret", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/secrets/test-env-secret", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get: want 200 got %d", resp.StatusCode)
 	}
@@ -143,7 +143,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 			"env":  "RELAY_TEST_KEY2",
 		},
 	}
-	resp = adminReq(t, srv, http.MethodPut, "/admin/secrets/test-env-secret", updateBody)
+	resp = adminReq(t, srv, http.MethodPut, "/control/secrets/test-env-secret", updateBody)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("update: want 200 got %d", resp.StatusCode)
@@ -156,7 +156,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 	}
 
 	// GET reflects change
-	resp = adminReq(t, srv, http.MethodGet, "/admin/secrets/test-env-secret", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/secrets/test-env-secret", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get after update: want 200 got %d", resp.StatusCode)
 	}
@@ -169,7 +169,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 	resp.Body.Close()
 
 	// Delete → 204
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/secrets/test-env-secret", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/secrets/test-env-secret", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("delete: want 204 got %d", resp.StatusCode)
@@ -177,7 +177,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 	resp.Body.Close()
 
 	// GET after delete → 404
-	resp = adminReq(t, srv, http.MethodGet, "/admin/secrets/test-env-secret", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/secrets/test-env-secret", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -199,7 +199,7 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	}
 
 	// Create → 201
-	resp := adminReq(t, srv, http.MethodPost, "/admin/secrets", body)
+	resp := adminReq(t, srv, http.MethodPost, "/control/secrets", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create stored: want 201 got %d", resp.StatusCode)
@@ -235,7 +235,7 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	}
 
 	// GET → 200, value_masked present, no cleartext
-	resp = adminReq(t, srv, http.MethodGet, "/admin/secrets/test-stored-secret", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/secrets/test-stored-secret", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get stored: want 200 got %d", resp.StatusCode)
 	}
@@ -258,7 +258,7 @@ func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 			"value": "sk-newvalue9876",
 		},
 	}
-	resp = adminReq(t, srv, http.MethodPut, "/admin/secrets/test-stored-secret", updateBody)
+	resp = adminReq(t, srv, http.MethodPut, "/control/secrets/test-stored-secret", updateBody)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("update stored: want 200 got %d", resp.StatusCode)
@@ -286,7 +286,7 @@ func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
 		},
 	}
 
-	resp := adminReq(t, srv, http.MethodPost, "/admin/secrets", body)
+	resp := adminReq(t, srv, http.MethodPost, "/control/secrets", body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", resp.StatusCode)
@@ -309,7 +309,7 @@ func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
 		"name": "ref-secret", "provider": "seed-prov",
 		"valueFrom": map[string]any{"kind": "env", "env": "RELAY_SEC_REF"},
 	}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/secrets", secBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/secrets", secBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create secret: want 201 got %d", resp.StatusCode)
@@ -320,20 +320,20 @@ func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
 		"metadata": map[string]string{"name": "ref-pool"},
 		"spec":     map[string]any{"provider": "seed-prov", "secrets": []string{"ref-secret"}},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/admin/pools", poolBody)
+	resp = adminReq(t, srv, http.MethodPost, "/control/pools", poolBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create pool: want 201 got %d", resp.StatusCode)
 	}
 
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/secrets/ref-secret", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/secrets/ref-secret", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("delete referenced secret: want 400 got %d", resp.StatusCode)
 	}
 
 	// Secret must still be present (no PG mutation happened).
-	resp2 := adminReq(t, srv, http.MethodGet, "/admin/secrets/ref-secret", nil)
+	resp2 := adminReq(t, srv, http.MethodGet, "/control/secrets/ref-secret", nil)
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("secret should still exist after rejected delete: got %d", resp2.StatusCode)
@@ -346,7 +346,7 @@ func TestAdminSecret_List(t *testing.T) {
 	srv, _, _ := buildSecretTestServer(t, false)
 
 	// Initially empty
-	resp := adminReq(t, srv, http.MethodGet, "/admin/secrets", nil)
+	resp := adminReq(t, srv, http.MethodGet, "/control/secrets", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list empty: want 200 got %d", resp.StatusCode)
 	}
@@ -361,11 +361,11 @@ func TestAdminSecret_List(t *testing.T) {
 		"name": "list-secret", "provider": "seed-prov",
 		"valueFrom": map[string]any{"kind": "env", "env": "RELAY_LIST_KEY"},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/admin/secrets", secBody)
+	resp = adminReq(t, srv, http.MethodPost, "/control/secrets", secBody)
 	resp.Body.Close()
 
 	// List again
-	resp = adminReq(t, srv, http.MethodGet, "/admin/secrets", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/secrets", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: want 200 got %d", resp.StatusCode)
 	}
@@ -397,7 +397,7 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 			"amount":   100,
 		},
 	}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/ratelimits", rlBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/ratelimits", rlBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create ratelimit: want 201 got %d", resp.StatusCode)
@@ -413,7 +413,7 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 			"rateLimits":        []map[string]any{{"ref": "att-rl", "meter": "requests"}},
 		},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/admin/pools", poolBody)
+	resp = adminReq(t, srv, http.MethodPost, "/control/pools", poolBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create pool with rateLimits: want 201 got %d", resp.StatusCode)
@@ -431,7 +431,7 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 	}
 
 	// GET /admin/attachments — all → includes our pool attachment.
-	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/attachments", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list all: want 200 got %d", resp.StatusCode)
 	}
@@ -448,7 +448,7 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 	}
 
 	// GET /admin/attachments?parent_kind=Pool&parent_name=att-pool → filtered.
-	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool&parent_name=att-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Pool&parent_name=att-pool", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list filtered: want 200 got %d", resp.StatusCode)
 	}
@@ -478,13 +478,13 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 			"skipDefaultLimits": true,
 		},
 	}
-	resp = adminReq(t, srv, http.MethodPut, "/admin/pools/att-pool", poolBodyNoRL)
+	resp = adminReq(t, srv, http.MethodPut, "/control/pools/att-pool", poolBodyNoRL)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("update pool: want 200 got %d", resp.StatusCode)
 	}
 
-	resp = adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool&parent_name=att-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Pool&parent_name=att-pool", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list after remove: want 200 got %d", resp.StatusCode)
 	}
@@ -501,7 +501,7 @@ func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
 
 	// POST /admin/attachments should now 404 (route is gone).
 	attBody := map[string]any{"parentKind": "Pool", "parentName": "x", "ratelimitName": "y", "meter": "requests"}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/attachments", attBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/attachments", attBody)
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
 		t.Error("POST /admin/attachments should not succeed (write API removed)")
@@ -512,7 +512,7 @@ func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
 func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
 	srv, _, _ := buildSecretTestServer(t, false)
 
-	resp := adminReq(t, srv, http.MethodGet, "/admin/attachments?parent_kind=Pool", nil)
+	resp := adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Pool", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing parent_name: want 400 got %d", resp.StatusCode)
@@ -523,7 +523,7 @@ func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
 func TestAdminSecret_OpenAPISchema_NoCleartextField(t *testing.T) {
 	srv, _, _ := buildSecretTestServer(t, false)
 
-	resp := adminReq(t, srv, http.MethodGet, "/admin/secrets", nil)
+	resp := adminReq(t, srv, http.MethodGet, "/control/secrets", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: want 200 got %d", resp.StatusCode)
 	}
@@ -568,7 +568,7 @@ func TestAdminSecret_InvalidProvider_Rejected(t *testing.T) {
 				},
 			}
 
-			resp := adminReq(t, srv, http.MethodPost, "/admin/secrets", body)
+			resp := adminReq(t, srv, http.MethodPost, "/control/secrets", body)
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Errorf("want 400, got %d", resp.StatusCode)

@@ -36,7 +36,7 @@ func newAdminRouter(tok string, store reloader, lim *ratelimit.Limiter) http.Han
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
 	if tok != "" && store != nil {
-		r.Post("/admin/reload", adminReloadHandler(tok, store, lim, 10))
+		r.Post("/control/reload", adminReloadHandler(tok, store, lim, 10))
 	}
 	return r
 }
@@ -44,7 +44,7 @@ func newAdminRouter(tok string, store reloader, lim *ratelimit.Limiter) http.Han
 func TestAdminReload_TokenUnset_Returns404(t *testing.T) {
 	// No token → endpoint not registered → 404.
 	r := newAdminRouter("", nil, newTestLimiter())
-	req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+	req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -55,7 +55,7 @@ func TestAdminReload_TokenUnset_Returns404(t *testing.T) {
 func TestAdminReload_MissingToken_Returns404(t *testing.T) {
 	store := &mockReloader{}
 	r := newAdminRouter("secret", store, newTestLimiter())
-	req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+	req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -69,7 +69,7 @@ func TestAdminReload_MissingToken_Returns404(t *testing.T) {
 func TestAdminReload_WrongToken_Returns404(t *testing.T) {
 	store := &mockReloader{}
 	r := newAdminRouter("correct", store, newTestLimiter())
-	req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+	req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 	req.Header.Set("Authorization", "Bearer wrong")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -84,7 +84,7 @@ func TestAdminReload_WrongToken_Returns404(t *testing.T) {
 func TestAdminReload_CorrectToken_Returns200(t *testing.T) {
 	store := &mockReloader{}
 	r := newAdminRouter("secret", store, newTestLimiter())
-	req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+	req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -99,7 +99,7 @@ func TestAdminReload_CorrectToken_Returns200(t *testing.T) {
 func TestAdminReload_ReloadError_Returns500(t *testing.T) {
 	store := &mockReloader{err: errors.New("db gone")}
 	r := newAdminRouter("secret", store, newTestLimiter())
-	req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+	req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -111,7 +111,7 @@ func TestAdminReload_ReloadError_Returns500(t *testing.T) {
 func TestAdminReload_YAMLBackend_Returns404(t *testing.T) {
 	// When pgStoreForAdmin is nil (YAML backend), endpoint is not registered.
 	r := newAdminRouter("", nil, newTestLimiter()) // token set but no store simulated by not registering
-	req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+	req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -128,7 +128,7 @@ func TestAdminReload_RateLimit_10RPM(t *testing.T) {
 	r := newAdminRouter("secret", store, lim)
 
 	doReq := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+		req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.RemoteAddr = "1.2.3.4:9999"
 		w := httptest.NewRecorder()
@@ -171,7 +171,7 @@ func TestAdminReload_RateLimit_DifferentIPs(t *testing.T) {
 	r := newAdminRouter("secret", store, lim)
 
 	doReqIP := func(ip string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+		req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.Header.Set("X-Forwarded-For", ip)
 		req.RemoteAddr = "10.0.0.1:9999"
@@ -205,10 +205,10 @@ func TestAdminReload_RateLimit_RPMOverride(t *testing.T) {
 	// Build router with rpm=3 directly (config.Load sets this from RELAY_ADMIN_RELOAD_RPM).
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
-	r.Post("/admin/reload", adminReloadHandler("secret", store, lim, 3))
+	r.Post("/control/reload", adminReloadHandler("secret", store, lim, 3))
 
 	doReq := func() *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/admin/reload", nil)
+		req := httptest.NewRequest(http.MethodPost, "/control/reload", nil)
 		req.Header.Set("Authorization", "Bearer secret")
 		req.RemoteAddr = "5.6.7.8:9999"
 		w := httptest.NewRecorder()

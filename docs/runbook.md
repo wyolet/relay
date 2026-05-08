@@ -147,7 +147,7 @@ Boot fails with a non-zero exit code if a required DSN is missing for the config
 
 | Var | Default | Required when | Semantics |
 |---|---|---|---|
-| `RELAY_ADMIN_RELOAD_RPM` | `10` | optional | Rate limit (requests per minute) on `POST /admin/reload`, enforced per source IP. Default 10 RPM. |
+| `RELAY_ADMIN_RELOAD_RPM` | `10` | optional | Rate limit (requests per minute) on `POST /control/reload`, enforced per source IP. Default 10 RPM. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | optional | Per-backend ping timeout for `/healthz` in milliseconds. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | optional | Total graceful shutdown budget in seconds. Covers all drain steps. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | optional | Set to `1` to seed Postgres from `RELAY_CONFIG_DIR` on first boot if all catalog tables are empty. Subsequent boots with any rows are no-ops. |
@@ -178,39 +178,39 @@ Without caller auth configured, `Authorization: Bearer` carries the admin token 
 
 ### URL shape
 
-Six resource kinds, all under `/admin/`:
+Six resource kinds, all under `/control/`:
 
 | Kind | Path prefix |
 |---|---|
-| `providers` | `/admin/providers` |
-| `pools` | `/admin/pools` |
-| `secrets` | `/admin/secrets` |
-| `models` | `/admin/models` |
-| `routes` | `/admin/routes` |
-| `ratelimits` | `/admin/ratelimits` |
+| `providers` | `/control/providers` |
+| `pools` | `/control/pools` |
+| `secrets` | `/control/secrets` |
+| `models` | `/control/models` |
+| `routes` | `/control/routes` |
+| `ratelimits` | `/control/ratelimits` |
 
 Standard CRUD per kind:
 
 | Verb | Path | Action |
 |---|---|---|
-| `GET` | `/admin/{kind}` | List all (returns `{"items":[...]}`) |
-| `POST` | `/admin/{kind}` | Create (201 on success) |
-| `GET` | `/admin/{kind}/{name}` | Get one (404 if absent) |
-| `PUT` | `/admin/{kind}/{name}` | Upsert / update |
-| `DELETE` | `/admin/{kind}/{name}` | Hard delete (204 on success) |
+| `GET` | `/control/{kind}` | List all (returns `{"items":[...]}`) |
+| `POST` | `/control/{kind}` | Create (201 on success) |
+| `GET` | `/control/{kind}/{name}` | Get one (404 if absent) |
+| `PUT` | `/control/{kind}/{name}` | Upsert / update |
+| `DELETE` | `/control/{kind}/{name}` | Hard delete (204 on success) |
 
 **Attachments** (rate-limit → resource links) are polymorphic — one endpoint for all parent kinds:
 
 | Verb | Path | Notes |
 |---|---|---|
-| `GET` | `/admin/attachments?parent_kind=Pool&parent_name=my-pool` | `parent_kind` and `parent_name` required |
-| `POST` | `/admin/attachments` | Body: `{parentKind, parentName, ratelimitName, meter}` |
-| `DELETE` | `/admin/attachments/{id}` | `id` is `parentKind:parentName:ratelimitName:meter` |
+| `GET` | `/control/attachments?parent_kind=Pool&parent_name=my-pool` | `parent_kind` and `parent_name` required |
+| `POST` | `/control/attachments` | Body: `{parentKind, parentName, ratelimitName, meter}` |
+| `DELETE` | `/control/attachments/{id}` | `id` is `parentKind:parentName:ratelimitName:meter` |
 
 ### curl example — create a Provider
 
 ```bash
-curl -s -X POST http://localhost:8080/admin/providers \
+curl -s -X POST http://localhost:8080/control/providers \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -219,13 +219,13 @@ curl -s -X POST http://localhost:8080/admin/providers \
   }'
 
 # List providers
-curl -s http://localhost:8080/admin/providers \
+curl -s http://localhost:8080/control/providers \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
 ```
 
 ### Auto-reload
 
-Every successful admin write (create, update, delete) atomically commits to Postgres and then triggers a snapshot reload before responding. Subsequent requests see the new state immediately — no manual `/admin/reload` required.
+Every successful admin write (create, update, delete) atomically commits to Postgres and then triggers a snapshot reload before responding. Subsequent requests see the new state immediately — no manual `/control/reload` required.
 
 ### Error envelope
 
@@ -334,7 +334,7 @@ Deferred to a future milestone. Workaround: after rotating `RELAY_MASTER_KEY` in
 
 ```bash
 # Re-encrypt a stored secret with the new master key
-curl -s -X PUT http://localhost:8080/admin/secrets/openai-key-1 \
+curl -s -X PUT http://localhost:8080/control/secrets/openai-key-1 \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "openai-key-1", "valueFrom": {"kind": "stored", "value": "sk-..."}}'
@@ -419,7 +419,7 @@ livenessProbe:
 
 ### Postgres down
 
-The in-memory snapshot loaded at startup continues to serve all routing decisions. Request traffic is unaffected — Postgres is never on the hot path. `POST /admin/reload` fails with 500 (cannot re-read catalog), and `relay seed --apply` fails at connection time. `/healthz` flips to 503 with `"catalog": "error: ..."`. Symptoms: healthcheck 503 with catalog error; all requests continue to succeed using the cached snapshot; reload and seed operations fail.
+The in-memory snapshot loaded at startup continues to serve all routing decisions. Request traffic is unaffected — Postgres is never on the hot path. `POST /control/reload` fails with 500 (cannot re-read catalog), and `relay seed --apply` fails at connection time. `/healthz` flips to 503 with `"catalog": "error: ..."`. Symptoms: healthcheck 503 with catalog error; all requests continue to succeed using the cached snapshot; reload and seed operations fail.
 
 Check first: `psql $RELAY_PG_DSN -c '\conninfo'` to confirm connectivity. Verify PG container/service health. Inspect relay logs for `configstore(pg) ping` error messages.
 
@@ -495,17 +495,17 @@ relay seed --from config/ --apply
 curl -s -X POST \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
-  http://localhost:8081/admin/reload
+  http://localhost:8081/control/reload
 curl -s -X POST \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
-  http://localhost:8082/admin/reload
+  http://localhost:8082/control/reload
 
 # Without caller auth (RELAY_API_KEY unset), use Authorization for the admin token:
 curl -s -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
-  http://localhost:8081/admin/reload
+  http://localhost:8081/control/reload
 curl -s -X POST -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
-  http://localhost:8082/admin/reload
+  http://localhost:8082/control/reload
 ```
 
 3. Confirm the change landed in PG:
@@ -607,7 +607,7 @@ Redis connection pool size is set by the client library defaults; override via `
 
 ### TLS
 
-Relay listens on plain HTTP (`:8080`). TLS terminates at the load balancer or ingress. Do not expose the relay port directly to the internet. The admin endpoint (`/admin/reload`) must be on a private network or behind mTLS/IP allowlist — operator's ingress concern.
+Relay listens on plain HTTP (`:8080`). TLS terminates at the load balancer or ingress. Do not expose the relay port directly to the internet. The admin endpoint (`/control/reload`) must be on a private network or behind mTLS/IP allowlist — operator's ingress concern.
 
 ### API key rotation
 
@@ -630,16 +630,16 @@ Relay supports multiple inbound keys via `RELAY_API_KEYS` (comma-separated). Zer
 The admin token is a single bearer secret (`RELAY_ADMIN_TOKEN`). Rotation procedure:
 
 1. Deploy new relay instances with the new token value.
-2. Update any automation or scripts that call `/admin/reload`.
+2. Update any automation or scripts that call `/control/reload`.
 3. Decommission old instances.
 
 There is no multi-token support for the admin endpoint today — rotation requires a rolling deploy.
 
 ### Admin endpoint hardening
 
-- All `/admin/*` routes are only registered when `RELAY_ADMIN_TOKEN` is set AND `RELAY_CATALOG_BACKEND=pg`.
+- All `/control/*` routes are only registered when `RELAY_ADMIN_TOKEN` is set AND `RELAY_CATALOG_BACKEND=pg`.
 - A wrong or missing admin token returns 404 (obscures endpoint existence).
-- Rate limiting on `POST /admin/reload`: 10 RPM per source IP by default (configurable via `RELAY_ADMIN_RELOAD_RPM`). The 11th request in a 60s window returns 429 with `Retry-After`.
+- Rate limiting on `POST /control/reload`: 10 RPM per source IP by default (configurable via `RELAY_ADMIN_RELOAD_RPM`). The 11th request in a 60s window returns 429 with `Retry-After`.
 - When caller auth is active (`RELAY_API_KEY`/`RELAY_API_KEYS`), pass the caller bearer key in `Authorization: Bearer` and the admin secret in `X-Relay-Admin-Token`. Without caller auth, use `Authorization: Bearer` for the admin token directly.
 - Restrict network access to the admin port via your LB/ingress CIDR allowlist or a private-only VPC subnet.
 - `RELAY_MASTER_KEY` must be kept separate from Postgres — if both are compromised together, stored-mode secrets are fully exposed.
@@ -652,4 +652,4 @@ Relay does not implement application-layer IP allowlisting. Use one of:
 - **Ingress CIDR rules**: restrict inbound traffic to known client CIDR ranges at the LB or Kubernetes NetworkPolicy level.
 - **mTLS**: terminate mTLS at the ingress and pass a client-cert header to relay for audit.
 
-The API surface (`/v1/chat/completions`, `/v1/messages`, `/v1/batches`, `/v1/models`, `/healthz`) and the admin surface (`/admin/*`) should be on separate listener ports or subdomains when possible, so the admin surface can be allowlisted independently.
+The API surface (`/v1/chat/completions`, `/v1/messages`, `/v1/batches`, `/v1/models`, `/healthz`) and the admin surface (`/control/*`) should be on separate listener ports or subdomains when possible, so the admin surface can be allowlisted independently.

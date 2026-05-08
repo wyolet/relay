@@ -63,7 +63,7 @@ func humaError(status int, msg string) error {
 //   - {base}/{name} [delete method] → delete (204)
 func RegisterOps[T any](
 	api huma.API,
-	base string,    // e.g. "/admin/providers"
+	base string,    // e.g. "/control/providers"
 	singular string, // e.g. "provider"
 	plural string,   // e.g. "providers"
 	k *Kind[T],

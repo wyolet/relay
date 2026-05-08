@@ -262,7 +262,7 @@ func mountHuma(
 		huma.Register(api, huma.Operation{
 			OperationID:   "admin-reload",
 			Method:        http.MethodPost,
-			Path:          "/admin/reload",
+			Path:          "/control/reload",
 			Summary:       "Reload catalog",
 			Description:   "Triggers a live config reload from the Postgres catalog. Requires admin bearer token.",
 			Tags:          []string{"admin"},
@@ -288,7 +288,7 @@ func mountHuma(
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_login",
 		Method:      http.MethodPost,
-		Path:        "/admin/login",
+		Path:        "/control/login",
 		Summary:     "Admin login (cookie auth)",
 		Description: "Validates the admin token and sets a relay_admin session cookie (HttpOnly, Secure, SameSite=Strict, 24 h). Returns 401 on wrong token.",
 		Tags:        []string{"admin"},
@@ -313,7 +313,7 @@ func mountHuma(
 	huma.Register(api, huma.Operation{
 		OperationID:   "admin_logout",
 		Method:        http.MethodPost,
-		Path:          "/admin/logout",
+		Path:          "/control/logout",
 		Summary:       "Admin logout",
 		Description:   "Clears the relay_admin session cookie. Requires an active session.",
 		Tags:          []string{"admin"},
@@ -347,7 +347,7 @@ func mountHuma(
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_whoami",
 		Method:      http.MethodGet,
-		Path:        "/admin/whoami",
+		Path:        "/control/whoami",
 		Summary:     "Admin whoami",
 		Description: "Returns {authenticated: true} if the admin session is valid.",
 		Tags:        []string{"admin"},
@@ -361,15 +361,15 @@ func mountHuma(
 
 	// Admin CRUD
 	if crudArg != nil {
-		crud.RegisterOps(api, "/admin/providers", "provider", "providers",
+		crud.RegisterOps(api, "/control/providers", "provider", "providers",
 			crudArg.kinds.provider, *crudArg.deps, adminAuth)
-		crud.RegisterOps(api, "/admin/pools", "pool", "pools",
+		crud.RegisterOps(api, "/control/pools", "pool", "pools",
 			crudArg.kinds.pool, *crudArg.deps, adminAuth)
-		crud.RegisterOps(api, "/admin/models", "model", "models",
+		crud.RegisterOps(api, "/control/models", "model", "models",
 			crudArg.kinds.model, *crudArg.deps, adminAuth)
-		crud.RegisterOps(api, "/admin/routes", "route", "routes",
+		crud.RegisterOps(api, "/control/routes", "route", "routes",
 			crudArg.kinds.route, *crudArg.deps, adminAuth)
-		crud.RegisterOps(api, "/admin/ratelimits", "ratelimit", "ratelimits",
+		crud.RegisterOps(api, "/control/ratelimits", "ratelimit", "ratelimits",
 			crudArg.kinds.rateLimit, *crudArg.deps, adminAuth)
 
 		// --- Secret endpoints ---
@@ -515,7 +515,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_secret_list",
 		Method:      http.MethodGet,
-		Path:        "/admin/secrets",
+		Path:        "/control/secrets",
 		Summary:     "List secrets",
 		Tags:        []string{"admin"},
 		Errors:      []int{500},
@@ -534,7 +534,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_secret_get",
 		Method:      http.MethodGet,
-		Path:        "/admin/secrets/{name}",
+		Path:        "/control/secrets/{name}",
 		Summary:     "Get secret",
 		Tags:        []string{"admin"},
 		Errors:      []int{404, 500},
@@ -551,7 +551,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 	huma.Register(api, huma.Operation{
 		OperationID:   "admin_secret_create",
 		Method:        http.MethodPost,
-		Path:          "/admin/secrets",
+		Path:          "/control/secrets",
 		Summary:       "Create secret",
 		Description:   "Creates a new secret. For stored-mode, RELAY_MASTER_KEY must be set; the value is AES-GCM-256 encrypted before storage.",
 		Tags:          []string{"admin"},
@@ -589,7 +589,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_secret_update",
 		Method:      http.MethodPut,
-		Path:        "/admin/secrets/{name}",
+		Path:        "/control/secrets/{name}",
 		Summary:     "Update secret",
 		Tags:        []string{"admin"},
 		Errors:      []int{400, 404, 500},
@@ -629,7 +629,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 	huma.Register(api, huma.Operation{
 		OperationID:   "admin_secret_delete",
 		Method:        http.MethodDelete,
-		Path:          "/admin/secrets/{name}",
+		Path:          "/control/secrets/{name}",
 		Summary:       "Delete secret",
 		Tags:          []string{"admin"},
 		Errors:        []int{400, 404, 500},
@@ -693,7 +693,7 @@ func registerTypedAttachmentOps(api huma.API, store *catalog.PGStore, adminAuth 
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_attachment_list",
 		Method:      http.MethodGet,
-		Path:        "/admin/attachments",
+		Path:        "/control/attachments",
 		Summary:     "List attachments (derived, read-only)",
 		Description: "Returns all rate-limit attachments derived from inline rateLimits on Pool/Secret/Model specs. " +
 			"Optional query params parent_kind + parent_name (both required together) filter to one parent. " +
@@ -788,7 +788,7 @@ func registerTypedMiscOps(api huma.API, adminAuth huma.Middlewares) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_version",
 		Method:      http.MethodGet,
-		Path:        "/admin/version",
+		Path:        "/control/version",
 		Summary:     "Get relay version",
 		Tags:        []string{"admin"},
 		Errors:      []int{401},
@@ -800,7 +800,7 @@ func registerTypedMiscOps(api huma.API, adminAuth huma.Middlewares) {
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_master_key_generate",
 		Method:      http.MethodGet,
-		Path:        "/admin/master-key/generate",
+		Path:        "/control/master-key/generate",
 		Summary:     "Generate a fresh master key",
 		Description: "Returns a freshly generated 32-byte master key, base64-encoded. " +
 			"Relay does not persist it — operator must store it in their secret store before navigating away.",

@@ -107,7 +107,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 	}
 
 	// Create → 201
-	resp := adminReq(t, srv, http.MethodPost, "/admin/providers", body)
+	resp := adminReq(t, srv, http.MethodPost, "/control/providers", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create: want 201 got %d", resp.StatusCode)
@@ -119,14 +119,14 @@ func TestAdminProvider_CRUD(t *testing.T) {
 	}
 
 	// GET → 200
-	resp = adminReq(t, srv, http.MethodGet, "/admin/providers/test-prov", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/providers/test-prov", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get: want 200 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
 	// List → includes new resource
-	resp = adminReq(t, srv, http.MethodGet, "/admin/providers", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/providers", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: want 200 got %d", resp.StatusCode)
 	}
@@ -144,7 +144,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 
 	// Update → 200
 	body["spec"] = map[string]any{"kind": "openai", "baseURL": "https://api.openai.com"}
-	resp = adminReq(t, srv, http.MethodPut, "/admin/providers/test-prov", body)
+	resp = adminReq(t, srv, http.MethodPut, "/control/providers/test-prov", body)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("update: want 200 got %d", resp.StatusCode)
@@ -165,7 +165,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 	}
 
 	// Delete → 204
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/providers/test-prov", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/providers/test-prov", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("delete: want 204 got %d", resp.StatusCode)
@@ -173,7 +173,7 @@ func TestAdminProvider_CRUD(t *testing.T) {
 	resp.Body.Close()
 
 	// GET after delete → 404
-	resp = adminReq(t, srv, http.MethodGet, "/admin/providers/test-prov", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/providers/test-prov", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -192,7 +192,7 @@ func TestAdminPool_CRUD(t *testing.T) {
 		"metadata":   map[string]string{"name": "pool-prov"},
 		"spec":       map[string]any{"kind": "ollama", "baseURL": "http://localhost:11434"},
 	}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/providers", provBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/providers", provBody)
 	resp.Body.Close()
 
 	body := map[string]any{
@@ -202,14 +202,14 @@ func TestAdminPool_CRUD(t *testing.T) {
 		"spec":       map[string]any{"provider": "pool-prov"},
 	}
 
-	resp = adminReq(t, srv, http.MethodPost, "/admin/pools", body)
+	resp = adminReq(t, srv, http.MethodPost, "/control/pools", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create pool: want 201 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/admin/pools/test-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/pools/test-pool", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get pool: want 200 got %d", resp.StatusCode)
 	}
@@ -220,14 +220,14 @@ func TestAdminPool_CRUD(t *testing.T) {
 		t.Fatal("auto-reload: pool not in snapshot")
 	}
 
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/pools/test-pool", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/pools/test-pool", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("delete pool: want 204 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/admin/pools/test-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/pools/test-pool", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -245,7 +245,7 @@ func TestAdminModel_CRUD(t *testing.T) {
 		"metadata": map[string]string{"name": "model-prov"},
 		"spec":     map[string]any{"kind": "ollama", "baseURL": "http://localhost:11434"},
 	}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/providers", provBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/providers", provBody)
 	resp.Body.Close()
 
 	body := map[string]any{
@@ -255,7 +255,7 @@ func TestAdminModel_CRUD(t *testing.T) {
 		"spec":       map[string]any{"provider": "model-prov", "upstreamName": "llama3:8b"},
 	}
 
-	resp = adminReq(t, srv, http.MethodPost, "/admin/models", body)
+	resp = adminReq(t, srv, http.MethodPost, "/control/models", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create model: want 201 got %d", resp.StatusCode)
@@ -263,7 +263,7 @@ func TestAdminModel_CRUD(t *testing.T) {
 	resp.Body.Close()
 
 	body["spec"] = map[string]any{"provider": "model-prov", "upstreamName": "llama3:70b"}
-	resp = adminReq(t, srv, http.MethodPut, "/admin/models/test-model", body)
+	resp = adminReq(t, srv, http.MethodPut, "/control/models/test-model", body)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("update model: want 200 got %d", resp.StatusCode)
@@ -282,14 +282,14 @@ func TestAdminModel_CRUD(t *testing.T) {
 		t.Errorf("auto-reload: want upstreamName=llama3:70b, got %q", m.Spec.UpstreamName)
 	}
 
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/models/test-model", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/models/test-model", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("delete model: want 204 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/admin/models/test-model", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/models/test-model", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -307,7 +307,7 @@ func TestAdminRoute_CRUD(t *testing.T) {
 		"metadata": map[string]string{"name": "route-model"},
 		"spec":     map[string]any{"provider": "seed-prov", "upstreamName": "llama3:8b"},
 	}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/models", modelBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/models", modelBody)
 	resp.Body.Close()
 
 	body := map[string]any{
@@ -317,7 +317,7 @@ func TestAdminRoute_CRUD(t *testing.T) {
 		"spec":       map[string]any{"models": []string{"route-model"}},
 	}
 
-	resp = adminReq(t, srv, http.MethodPost, "/admin/routes", body)
+	resp = adminReq(t, srv, http.MethodPost, "/control/routes", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create route: want 201 got %d", resp.StatusCode)
@@ -329,14 +329,14 @@ func TestAdminRoute_CRUD(t *testing.T) {
 		t.Fatal("auto-reload: route not in snapshot")
 	}
 
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/routes/test-route", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/routes/test-route", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("delete route: want 204 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/admin/routes/test-route", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/routes/test-route", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -359,7 +359,7 @@ func TestAdminRateLimit_CRUD(t *testing.T) {
 		},
 	}
 
-	resp := adminReq(t, srv, http.MethodPost, "/admin/ratelimits", body)
+	resp := adminReq(t, srv, http.MethodPost, "/control/ratelimits", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
 		t.Fatalf("create ratelimit: want 201 got %d", resp.StatusCode)
@@ -371,14 +371,14 @@ func TestAdminRateLimit_CRUD(t *testing.T) {
 		t.Fatal("auto-reload: ratelimit not in snapshot")
 	}
 
-	resp = adminReq(t, srv, http.MethodDelete, "/admin/ratelimits/test-rl", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/ratelimits/test-rl", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("delete ratelimit: want 204 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/admin/ratelimits/test-rl", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/ratelimits/test-rl", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -391,11 +391,11 @@ func TestAdminCRUD_Auth(t *testing.T) {
 	srv, _ := buildAdminTestServer(t)
 
 	endpoints := []struct{ method, path string }{
-		{http.MethodGet, "/admin/providers"},
-		{http.MethodGet, "/admin/providers/x"},
-		{http.MethodPost, "/admin/providers"},
-		{http.MethodPut, "/admin/providers/x"},
-		{http.MethodDelete, "/admin/providers/x"},
+		{http.MethodGet, "/control/providers"},
+		{http.MethodGet, "/control/providers/x"},
+		{http.MethodPost, "/control/providers"},
+		{http.MethodPut, "/control/providers/x"},
+		{http.MethodDelete, "/control/providers/x"},
 	}
 
 	for _, ep := range endpoints {
@@ -432,7 +432,7 @@ func TestAdminPool_BrokenSecretRef_400(t *testing.T) {
 		"metadata": map[string]string{"name": "ref-prov"},
 		"spec":     map[string]any{"kind": "ollama", "baseURL": "http://localhost:11434"},
 	}
-	resp := adminReq(t, srv, http.MethodPost, "/admin/providers", provBody)
+	resp := adminReq(t, srv, http.MethodPost, "/control/providers", provBody)
 	resp.Body.Close()
 
 	// Pool referencing a non-existent secret → 400 (validator catches dangling secret ref)
@@ -442,7 +442,7 @@ func TestAdminPool_BrokenSecretRef_400(t *testing.T) {
 		"metadata":   map[string]string{"name": "bad-pool"},
 		"spec":       map[string]any{"provider": "ref-prov", "secrets": []string{"nonexistent-secret"}},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/admin/pools", body)
+	resp = adminReq(t, srv, http.MethodPost, "/control/pools", body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("broken ref: want 400 got %d", resp.StatusCode)

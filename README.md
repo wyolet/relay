@@ -324,17 +324,17 @@ Subsequent boots that find any rows in any table are no-ops.
 
 When `RELAY_CATALOG_BACKEND=pg` and `RELAY_ADMIN_TOKEN` is set, Relay exposes a full CRUD API for managing catalog resources without restarts. Full reference: [docs/runbook.md §3](docs/runbook.md#3-admin-api).
 
-Six resource kinds: `providers`, `pools`, `secrets`, `models`, `routes`, `ratelimits`. Plus `/admin/attachments` for rate-limit → resource links. Every successful write triggers an automatic snapshot reload — no manual `/admin/reload` needed.
+Six resource kinds: `providers`, `pools`, `secrets`, `models`, `routes`, `ratelimits`. Plus `/control/attachments` for rate-limit → resource links. Every successful write triggers an automatic snapshot reload — no manual `/control/reload` needed.
 
 ```bash
 # Create a provider
-curl -s -X POST http://localhost:8080/admin/providers \
+curl -s -X POST http://localhost:8080/control/providers \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"metadata":{"name":"openai"},"spec":{"kind":"openai","baseURL":"https://api.openai.com/v1"}}'
 
 # List providers
-curl -s http://localhost:8080/admin/providers \
+curl -s http://localhost:8080/control/providers \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
 ```
 
@@ -422,18 +422,18 @@ make smoke-down    # tear down, remove volumes
 | `RELAY_EVENTLOG_BACKEND` | `clickhouse` | CH for usage events |
 | `RELAY_CH_DSN` | `clickhouse://relay:relay@clickhouse:9000/relay` | CH connection |
 | `RELAY_OTLP_ENDPOINT` | `jaeger:4317` | OTLP gRPC collector |
-| `RELAY_ADMIN_TOKEN` | `smoke-admin-token` | Bearer token for `/admin/reload` |
+| `RELAY_ADMIN_TOKEN` | `smoke-admin-token` | Bearer token for `/control/reload` |
 | `RELAY_INSTANCE_ID` | `relay-a` / `relay-b` | Per-pod identity in events and spans |
 | `RELAY_AUTO_SEED_IF_EMPTY` | `1` (relay-a only) | Seeds catalog from `/config` on first boot |
 
 ### Fixture catalog
 
-`deploy/compose/config/` contains a minimal catalog: one Provider (Ollama at `host.docker.internal:11434`), one Pool, one Model (`smoke-model`) with a 60 RPM rate limit, and a default Route. Edit the YAML, run `make smoke-seed`, then `POST /admin/reload` to both pods to apply changes without restart.
+`deploy/compose/config/` contains a minimal catalog: one Provider (Ollama at `host.docker.internal:11434`), one Pool, one Model (`smoke-model`) with a 60 RPM rate limit, and a default Route. Edit the YAML, run `make smoke-seed`, then `POST /control/reload` to both pods to apply changes without restart.
 
 ```bash
 # Admin reload
-curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8081/admin/reload
-curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/admin/reload
+curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8081/control/reload
+curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/control/reload
 ```
 
 ### Ports summary
@@ -465,14 +465,14 @@ RELAY_API_KEY=your-secret-key ./relay
 
 Unauthenticated endpoints (always open): `GET /healthz`, `GET /openapi.json`, `GET /docs`.
 
-Protected endpoints (require `Authorization: Bearer <key>`): `POST /v1/chat/completions`, `GET /v1/models`, `POST /admin/reload`.
+Protected endpoints (require `Authorization: Bearer <key>`): `POST /v1/chat/completions`, `GET /v1/models`, `POST /control/reload`.
 
 Zero-downtime key rotation: set both old and new keys in `RELAY_API_KEYS`, migrate clients, then remove the old key.
 
-When both caller auth and `RELAY_ADMIN_TOKEN` are active, call `/admin/reload` with:
+When both caller auth and `RELAY_ADMIN_TOKEN` are active, call `/control/reload` with:
 
 ```bash
-curl -X POST http://localhost:8080/admin/reload \
+curl -X POST http://localhost:8080/control/reload \
   -H "Authorization: Bearer $RELAY_API_KEY" \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
 ```
