@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -272,92 +271,9 @@ func mountHuma(
 		}, delegate(adminH))
 	}
 
-	// POST /admin/login
-	type loginBody struct {
-		Token string `json:"token" doc:"Admin token." minLength:"1"`
-	}
-	type loginInput struct {
-		Body loginBody
-	}
-	type loginOutput struct {
-		SetCookie string `header:"Set-Cookie" doc:"Session cookie set on success."`
-		Body      struct{}
-	}
-
-	tok := []byte(adminTok)
-	huma.Register(api, huma.Operation{
-		OperationID: "admin_login",
-		Method:      http.MethodPost,
-		Path:        "/control/login",
-		Summary:     "Admin login (cookie auth)",
-		Description: "Validates the admin token and sets a relay_admin session cookie (HttpOnly, Secure, SameSite=Strict, 24 h). Returns 401 on wrong token.",
-		Tags:        []string{"admin"},
-		Errors:      []int{400, 401},
-	}, func(_ context.Context, in *loginInput) (*loginOutput, error) {
-		if subtle.ConstantTimeCompare([]byte(in.Body.Token), tok) != 1 {
-			return nil, huma.NewError(http.StatusUnauthorized, "invalid admin token")
-		}
-		cookie := &http.Cookie{
-			Name:     adminLoginCookieName,
-			Value:    in.Body.Token,
-			Path:     "/",
-			MaxAge:   86400,
-			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteStrictMode,
-		}
-		return &loginOutput{SetCookie: cookie.String()}, nil
-	})
-
-	// POST /admin/logout — uses StreamResponse to set the clear-cookie header.
-	huma.Register(api, huma.Operation{
-		OperationID:   "admin_logout",
-		Method:        http.MethodPost,
-		Path:          "/control/logout",
-		Summary:       "Admin logout",
-		Description:   "Clears the relay_admin session cookie. Requires an active session.",
-		Tags:          []string{"admin"},
-		Errors:        []int{401},
-		Middlewares:   adminAuth,
-		DefaultStatus: http.StatusNoContent,
-	}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
-		return &huma.StreamResponse{
-			Body: func(ctx huma.Context) {
-				_, w := humachi.Unwrap(ctx)
-				http.SetCookie(w, &http.Cookie{
-					Name:     adminLoginCookieName,
-					Value:    "",
-					Path:     "/",
-					MaxAge:   0,
-					HttpOnly: true,
-					Secure:   true,
-					SameSite: http.SameSiteStrictMode,
-				})
-				w.WriteHeader(http.StatusNoContent)
-			},
-		}, nil
-	})
-
-	// GET /admin/whoami
-	type whoamiOutput struct {
-		Body struct {
-			Authenticated bool `json:"authenticated" doc:"Always true when this gated endpoint responds."`
-		}
-	}
-	huma.Register(api, huma.Operation{
-		OperationID: "admin_whoami",
-		Method:      http.MethodGet,
-		Path:        "/control/whoami",
-		Summary:     "Admin whoami",
-		Description: "Returns {authenticated: true} if the admin session is valid.",
-		Tags:        []string{"admin"},
-		Errors:      []int{401},
-		Middlewares: adminAuth,
-	}, func(_ context.Context, _ *struct{}) (*whoamiOutput, error) {
-		out := &whoamiOutput{}
-		out.Body.Authenticated = true
-		return out, nil
-	})
+	// Login / logout / whoami live exclusively on the control listener
+	// (internal/control on RELAY_CONTROL_PORT). The data plane does not
+	// host those operations.
 
 	// Admin CRUD
 	if crudArg != nil {
