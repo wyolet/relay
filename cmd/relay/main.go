@@ -22,6 +22,7 @@ import (
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/internal/control"
 	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/keypool"
 	"github.com/wyolet/relay/internal/pipeline"
@@ -494,6 +495,9 @@ func main() {
 	var ctrlSrv *http.Server
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlRouter := chi.NewRouter()
+		if len(cfg.ControlAllowOrigins) > 0 {
+			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
+		}
 		mountControlHuma(ctrlRouter, adminH, adminCRUDHandlers, cfg.AdminToken, idStore)
 		ctrlAddr := ":" + cfg.ControlPort
 		ctrlSrv = &http.Server{Addr: ctrlAddr, Handler: ctrlRouter}

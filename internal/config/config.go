@@ -10,6 +10,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/pkg/crypto"
@@ -51,6 +52,11 @@ type Config struct {
 	// ControlPort is the listener port for the control-plane HTTP server.
 	// Empty disables the control listener entirely (data plane only).
 	ControlPort string
+
+	// ControlAllowOrigins is the CORS allowlist for the control API. Comma-
+	// separated list of exact origin strings (no wildcards — credentialed
+	// CORS forbids them). Empty disables CORS entirely.
+	ControlAllowOrigins []string
 }
 
 // Load reads every RELAY_* environment variable, validates them, and returns
@@ -135,6 +141,14 @@ func Load() (*Config, error) {
 	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
 	if cfg.ControlPort == "" {
 		cfg.ControlPort = "8081"
+	}
+
+	if raw := os.Getenv("RELAY_CONTROL_ALLOW_ORIGINS"); raw != "" {
+		for _, o := range strings.Split(raw, ",") {
+			if t := strings.TrimSpace(o); t != "" {
+				cfg.ControlAllowOrigins = append(cfg.ControlAllowOrigins, t)
+			}
+		}
 	}
 
 	return cfg, nil
