@@ -22,6 +22,8 @@ import (
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/internal/control"
+	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/keypool"
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/provider"
@@ -238,6 +240,16 @@ func main() {
 			log.Fatalf("config: %v", err)
 		}
 		catalogStore = yamlStore
+	}
+
+	// Identity is loaded from the same YAML tree. Failures are fatal — a
+	// misconfigured user file would otherwise silently disable login.
+	idStore, err := identity.LoadYAML(cfg.ConfigDir)
+	if err != nil {
+		log.Fatalf("identity: %v", err)
+	}
+	if n := len(idStore.Users()); n > 0 {
+		slog.Info("identity: loaded users", "count", n)
 	}
 
 	// State store — Redis when RELAY_STATE_BACKEND=redis, else in-memory.
@@ -479,6 +491,25 @@ func main() {
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.ListenAndServe() }()
 
+	// Control plane: separate router and listener so the surface can be
+	// firewalled independently and lifted into cmd/relay-control verbatim
+	// when the binary split happens. Disabled if RELAY_CONTROL_PORT="off".
+	var ctrlSrv *http.Server
+	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
+		ctrlRouter := control.NewRouter(control.LoginDeps{
+			Identity:     idStore,
+			SessionToken: cfg.AdminToken,
+		})
+		ctrlAddr := ":" + cfg.ControlPort
+		ctrlSrv = &http.Server{Addr: ctrlAddr, Handler: ctrlRouter}
+		slog.Info("relay control listening", "addr", ctrlAddr, "users", len(idStore.Users()))
+		go func() {
+			if err := ctrlSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("relay control: server error", "err", err)
+			}
+		}()
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	select {
@@ -493,6 +524,9 @@ func main() {
 	totalDeadline := time.Duration(cfg.ShutdownDeadlineS) * time.Second
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), totalDeadline)
 	defer shutCancel()
+	if ctrlSrv != nil {
+		_ = ctrlSrv.Shutdown(shutCtx)
+	}
 	shutdown(shutCtx, srv, usageShutdown, el, st, catalogStore)
 }
 

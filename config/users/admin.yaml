@@ -1,0 +1,14 @@
+apiVersion: relay.wyolet.dev/v1
+kind: User
+metadata:
+  name: admin
+  labels:
+    role: bootstrap
+spec:
+  username: admin
+  email: admin@wyolet.dev
+  password:
+    valueFrom:
+      env: RELAY_ADMIN_PASSWORD
+  roles:
+    - admin

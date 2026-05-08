@@ -47,6 +47,10 @@ type Config struct {
 	MaxRequestBytes   int64 // 0 = use httpmw.DefaultMaxRequestBytes
 	HealthzDeadlineMS int
 	ShutdownDeadlineS int
+
+	// ControlPort is the listener port for the control-plane HTTP server.
+	// Empty disables the control listener entirely (data plane only).
+	ControlPort string
 }
 
 // Load reads every RELAY_* environment variable, validates them, and returns
@@ -127,6 +131,11 @@ func Load() (*Config, error) {
 
 	cfg.HealthzDeadlineMS = envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
 	cfg.ShutdownDeadlineS = envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)
+
+	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
+	if cfg.ControlPort == "" {
+		cfg.ControlPort = "8081"
+	}
 
 	return cfg, nil
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/internal/identity"
 	"github.com/wyolet/relay/internal/storage"
 )
 
@@ -64,6 +65,21 @@ func runSeedTo(out io.Writer, args []string) error {
 	src, err := catalog.LoadYAML(fromDir)
 	if err != nil {
 		return fmt.Errorf("validate: %w", err)
+	}
+
+	// Identity is parsed and resolved alongside the catalog. Postgres tables
+	// for users do not exist yet — we report what was found so the schema
+	// can be exercised before storage lands.
+	idStore, err := identity.LoadYAML(fromDir)
+	if err != nil {
+		return fmt.Errorf("identity: %w", err)
+	}
+	for _, u := range idStore.Users() {
+		fmt.Fprintf(out, "User %q (username=%s, email=%s, password=%s)\n",
+			u.Metadata.Name,
+			u.Spec.Username.Source(),
+			u.Spec.Email.Source(),
+			u.Spec.Password.Source())
 	}
 
 	ctx := context.Background()
