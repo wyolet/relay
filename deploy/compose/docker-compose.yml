@@ -58,6 +58,7 @@ services:
         required: false
     environment:
       RELAY_INSTANCE_ID: relay-a
+      RELAY_CONTROL_PORT: "8081"
     volumes:
       - ./config:/config:ro
     depends_on:
@@ -69,6 +70,7 @@ services:
         condition: service_healthy
     ports:
       - "5101:8080"
+      - "5103:8081"
     networks: [default, dev-net]
 
   relay-b:

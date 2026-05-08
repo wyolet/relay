@@ -19,5 +19,5 @@ services:
       - --max-latency
       - 20s
     ports:
-      - "5103:9999"
+      - "5710:9999"
     networks: [default]
