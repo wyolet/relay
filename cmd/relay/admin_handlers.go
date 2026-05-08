@@ -295,7 +295,9 @@ func adminTokenGate(token string) func(http.Handler) http.Handler {
 				}
 			}
 			if subtle.ConstantTimeCompare([]byte(adminTok), tok) != 1 {
-				http.NotFound(w, r)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"type":"authentication_error","message":"unauthenticated"}}`))
 				return
 			}
 			next.ServeHTTP(w, r)

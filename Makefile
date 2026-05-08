@@ -1,9 +1,16 @@
 .PHONY: sqlc-generate test test-integration \
         smoke-up smoke-migrate smoke-seed smoke-down \
+        control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean
 
 COMPOSE_FILE := deploy/compose/docker-compose.yml
 PG_DSN       := postgres://relay:relay@localhost:5432/relay?sslmode=disable
+
+# Control plane (operator-facing API on :5103, fronted by relay-control-api.wyolet.dev).
+CONTROL_LOCAL  := http://localhost:5103
+CONTROL_PUBLIC := https://relay-control-api.wyolet.dev
+CONTROL_HOST   ?= $(CONTROL_PUBLIC)
+COOKIE_JAR     := /tmp/relay-control-cookie.txt
 
 # UI release to embed. PER-272 publishes v0.0.1 in wyolet/relay-ui; bump here on each UI release.
 UI_VERSION ?= v0.0.1
@@ -30,6 +37,39 @@ smoke-seed:
 
 smoke-down:
 	docker compose --env-file .env -f $(COMPOSE_FILE) down -v --remove-orphans
+
+# control-rebuild rebuilds relay-a only (control listener lives on it) and
+# force-recreates the container. Use after editing internal/control/* or
+# anything else affecting the control surface.
+control-rebuild:
+	docker compose --env-file .env -f $(COMPOSE_FILE) up -d --build --force-recreate relay-a
+	@echo "Waiting for control listener..."
+	@until curl -sfo /dev/null $(CONTROL_LOCAL)/openapi.json; do sleep 1; done
+	@echo "Control listener up at $(CONTROL_LOCAL) ($(CONTROL_PUBLIC))."
+
+control-logs:
+	docker compose --env-file .env -f $(COMPOSE_FILE) logs -f relay-a
+
+# control-login posts {username, password} to /control/login. Override the
+# host with CONTROL_HOST=$(CONTROL_LOCAL) for in-pod testing without DNS.
+# Reads RELAY_ADMIN_USERNAME and RELAY_ADMIN_PASSWORD from the local .env.
+control-login:
+	@test -f .env || (echo "no .env; create one with RELAY_ADMIN_USERNAME and RELAY_ADMIN_PASSWORD" && exit 1)
+	@USERNAME=$$(grep '^RELAY_ADMIN_USERNAME=' .env | cut -d= -f2-); \
+	 PASSWORD=$$(grep '^RELAY_ADMIN_PASSWORD=' .env | cut -d= -f2-); \
+	 if [ -z "$$USERNAME" ]; then USERNAME=aaliboyev; fi; \
+	 rm -f $(COOKIE_JAR); \
+	 curl -sS -c $(COOKIE_JAR) -X POST $(CONTROL_HOST)/control/login \
+	   -H 'content-type: application/json' \
+	   -d "{\"username\":\"$$USERNAME\",\"password\":\"$$PASSWORD\"}" \
+	   -w "\nstatus=%{http_code}\n"
+
+control-whoami:
+	@curl -sS -b $(COOKIE_JAR) -w "\nstatus=%{http_code}\n" $(CONTROL_HOST)/control/whoami
+
+control-openapi:
+	@curl -sS $(CONTROL_HOST)/openapi.json | python3 -c \
+	  "import json,sys; d=json.load(sys.stdin); print('title:', d['info']['title']); print('paths:'); [print(' ', p) for p in sorted(d['paths'])]"
 
 sqlc-generate:
 	sqlc generate
