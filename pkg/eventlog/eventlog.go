@@ -2,7 +2,6 @@ package eventlog
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,7 +37,6 @@ type AttemptRecord struct {
 }
 
 // Event is the structured event type passed to Append.
-// fileSink writes it as JSON; clickhouseSink uses typed column inserts.
 type Event struct {
 	EventVersion int               `json:"event_version"`
 	RequestID    string            `json:"request_id"`
@@ -59,17 +57,17 @@ type Event struct {
 	Currency     string            `json:"currency,omitempty"`
 }
 
-// sink is the internal backend interface. It receives pre-marshaled JSON bytes.
+// sink is the internal backend interface. Implementations receive whole
+// batches from the dedicated flusher goroutine and must be safe to call
+// only from that single goroutine.
 type sink interface {
-	write(b []byte) error
-	flush()
+	writeBatch(events []Event)
 	ping(ctx context.Context) error
 	close(ctx context.Context) error
 }
 
 // Config tunes the Logger. Zero values fall back to defaults.
 type Config struct {
-	// Backend selects the storage backend. Defaults to BackendFile.
 	Backend Backend
 
 	// DSN is required when Backend == BackendClickHouse.
@@ -78,20 +76,44 @@ type Config struct {
 	// RetentionDays sets the TTL for ClickHouse rows. Defaults to 90.
 	RetentionDays int
 
-	// Dir is required when Backend == BackendFile (or empty Backend).
+	// Dir is required when Backend == BackendFile.
 	Dir string
 
-	BufferSize  int
+	// BufferSize is the capacity of the intake channel. Default 1024.
+	BufferSize int
+
+	// BatchSize is the row count that triggers a flush. Default 500.
+	BatchSize int
+
+	// FlushPeriod is the max age of buffered events before a flush.
+	// Default 5s.
 	FlushPeriod time.Duration
-	Clock       func() time.Time
+
+	Clock func() time.Time
 }
 
-// Logger appends events to the configured backend via a bounded async channel.
+// Logger appends events to the configured backend via a bounded async pipeline.
+//
+// Pipeline:
+//
+//	Append → ch (chan Event, cap=BufferSize)
+//	         └─► intake goroutine: accumulates into a slice; on BatchSize
+//	             or FlushPeriod, swap-and-hand-off to flushCh
+//	             └─► flushCh (chan []Event, cap=4)
+//	                  └─► flusher goroutine: calls sk.writeBatch (network I/O)
+//
+// The intake goroutine never blocks on network I/O, so a slow backend cannot
+// cause hot-path Append drops unless flushCh fills (visible via
+// metricBatchDropped).
 type Logger struct {
-	cfg    Config
-	sk     sink
-	ch     chan []byte
-	done   chan struct{}
+	cfg     Config
+	sk      sink
+	ch      chan Event
+	flushCh chan []Event
+
+	intakeDone  chan struct{}
+	flusherDone chan struct{}
+
 	closed atomic.Bool
 
 	mu          sync.Mutex
@@ -99,13 +121,16 @@ type Logger struct {
 	currentFile string
 }
 
-// New constructs a Logger and starts the writer goroutine.
+// New constructs a Logger and starts intake + flusher goroutines.
 func New(cfg Config) (*Logger, error) {
 	if cfg.Backend == "" {
 		cfg.Backend = BackendFile
 	}
 	if cfg.BufferSize <= 0 {
 		cfg.BufferSize = 1024
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 500
 	}
 	if cfg.FlushPeriod <= 0 {
 		cfg.FlushPeriod = 5 * time.Second
@@ -142,38 +167,30 @@ func New(cfg Config) (*Logger, error) {
 	}
 
 	l := &Logger{
-		cfg:  cfg,
-		sk:   sk,
-		ch:   make(chan []byte, cfg.BufferSize),
-		done: make(chan struct{}),
+		cfg:         cfg,
+		sk:          sk,
+		ch:          make(chan Event, cfg.BufferSize),
+		flushCh:     make(chan []Event, 4),
+		intakeDone:  make(chan struct{}),
+		flusherDone: make(chan struct{}),
 	}
 	if fs, ok := sk.(*fileSink); ok {
 		fs.setLogger(l)
 	}
-	go l.run()
+	go l.runIntake()
+	go l.runFlusher()
 	return l, nil
 }
 
-// Append marshals ev to JSON and enqueues it. Never blocks.
-// Returns ErrLoggerClosed if the logger has been closed, or ErrBufferFull if
-// the internal channel is full — callers should increment a drop counter on
-// non-nil returns.
+// Append enqueues ev. Never blocks. Returns ErrLoggerClosed if closed,
+// or ErrBufferFull if the intake channel is at capacity.
 func (l *Logger) Append(_ context.Context, ev Event) error {
 	if l.closed.Load() {
 		metricDropped.Inc()
 		return ErrLoggerClosed
 	}
-
-	b, err := json.Marshal(ev)
-	if err != nil {
-		// Event is a concrete struct; this branch is unreachable in practice
-		// but we keep the drop counter consistent.
-		metricDropped.Inc()
-		return fmt.Errorf("%w: %v", ErrMarshalFailed, err)
-	}
-
 	select {
-	case l.ch <- b:
+	case l.ch <- ev:
 		return nil
 	default:
 		metricDropped.Inc()
@@ -186,59 +203,92 @@ func (l *Logger) Ping(ctx context.Context) error {
 	return l.sk.ping(ctx)
 }
 
-// Stats returns a snapshot of writer state (last write time and current file name).
+// Stats returns a snapshot of writer state.
 func (l *Logger) Stats() (lastWriteAt time.Time, currentFile string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.lastWriteAt, l.currentFile
 }
 
-// Close drains remaining events and flushes the backend. Idempotent.
+// Close drains and shuts down the pipeline. Idempotent.
 func (l *Logger) Close(ctx context.Context) error {
 	if !l.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	close(l.ch)
 
+	// Wait for intake to drain and close flushCh.
 	select {
-	case <-l.done:
+	case <-l.intakeDone:
 	case <-ctx.Done():
-		fmt.Fprintf(os.Stderr, "eventlog: Close deadline exceeded, some events may be lost\n")
+		fmt.Fprintf(os.Stderr, "eventlog: Close deadline exceeded during intake drain\n")
+		return ctx.Err()
+	}
+	// Wait for flusher to drain pending batches.
+	select {
+	case <-l.flusherDone:
+	case <-ctx.Done():
+		fmt.Fprintf(os.Stderr, "eventlog: Close deadline exceeded during flush drain\n")
 		return ctx.Err()
 	}
 	return l.sk.close(ctx)
 }
 
-func (l *Logger) run() {
-	defer close(l.done)
+// runIntake owns the in-memory accumulator. It does NOT do network I/O;
+// it hands off full batches to the flusher via flushCh.
+func (l *Logger) runIntake() {
+	defer close(l.intakeDone)
+	defer close(l.flushCh)
 
+	buf := make([]Event, 0, l.cfg.BatchSize)
 	ticker := time.NewTicker(l.cfg.FlushPeriod)
 	defer ticker.Stop()
 
+	handoff := func() {
+		if len(buf) == 0 {
+			return
+		}
+		batch := buf
+		buf = make([]Event, 0, l.cfg.BatchSize)
+		select {
+		case l.flushCh <- batch:
+		default:
+			// Flusher backed up — drop the whole batch rather than block intake.
+			metricBatchDropped.Inc()
+			metricDropped.Add(float64(len(batch)))
+		}
+	}
+
 	for {
 		select {
-		case b, ok := <-l.ch:
+		case ev, ok := <-l.ch:
 			if !ok {
+				handoff()
 				return
 			}
-			l.writeOne(b)
+			buf = append(buf, ev)
+			if len(buf) >= l.cfg.BatchSize {
+				handoff()
+			}
 		case <-ticker.C:
-			l.sk.flush()
+			handoff()
 		}
 	}
 }
 
-func (l *Logger) writeOne(b []byte) {
-	if err := l.sk.write(b); err != nil {
-		metricDropped.Inc()
-		fmt.Fprintf(os.Stderr, "eventlog: write: %v\n", err)
-		return
+// runFlusher serializes all sink I/O.
+func (l *Logger) runFlusher() {
+	defer close(l.flusherDone)
+	for batch := range l.flushCh {
+		start := time.Now()
+		l.sk.writeBatch(batch)
+		metricFlushDuration.Observe(time.Since(start).Seconds())
+		metricWritten.Add(float64(len(batch)))
+		now := l.cfg.Clock().UTC()
+		l.mu.Lock()
+		l.lastWriteAt = now
+		l.mu.Unlock()
 	}
-	now := l.cfg.Clock().UTC()
-	metricWritten.Inc()
-	l.mu.Lock()
-	l.lastWriteAt = now
-	l.mu.Unlock()
 }
 
 // setCurrentFile is called by fileSink to update the Stats field.

@@ -119,11 +119,14 @@ func TestBufferOverflow(t *testing.T) {
 		cfg: Config{
 			Dir:         dir,
 			BufferSize:  4,
+			BatchSize:   500,
 			FlushPeriod: time.Hour,
 			Clock:       time.Now,
 		},
-		ch:   make(chan []byte, 4),
-		done: make(chan struct{}),
+		ch:          make(chan Event, 4),
+		flushCh:     make(chan []Event, 4),
+		intakeDone:  make(chan struct{}),
+		flusherDone: make(chan struct{}),
 	}
 	// Don't start the writer goroutine — channel fills immediately.
 	ctx := context.Background()

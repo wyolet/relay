@@ -10,10 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
-const (
-	chBatchSize = 1000
-	chTable     = "usage_events"
-)
+const chTable = "usage_events"
 
 var createTableSQL = `
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -42,7 +39,6 @@ TTL toDateTime(started_at) + INTERVAL %d DAY %s
 
 type clickHouseSink struct {
 	conn   clickhouse.Conn
-	buf    []Event
 	logger *slog.Logger
 }
 
@@ -54,6 +50,17 @@ func newClickHouseSink(cfg Config) (*clickHouseSink, error) {
 	opts.MaxOpenConns = 4
 	opts.MaxIdleConns = 2
 	opts.ConnMaxLifetime = time.Hour
+
+	// Server-side async insert: CH coalesces concurrent INSERTs into larger
+	// MergeTree parts (default flush 200ms / 10MB / 100k rows). Avoids the
+	// "one part per INSERT" pathology and the merge-CPU spikes that come
+	// with it. wait_for_async_insert=1 keeps the ack path honest — we still
+	// learn about queue-admit failures.
+	if opts.Settings == nil {
+		opts.Settings = clickhouse.Settings{}
+	}
+	opts.Settings["async_insert"] = 1
+	opts.Settings["wait_for_async_insert"] = 1
 
 	conn, err := clickhouse.Open(opts)
 	if err != nil {
@@ -75,42 +82,23 @@ func newClickHouseSink(cfg Config) (*clickHouseSink, error) {
 
 	return &clickHouseSink{
 		conn:   conn,
-		buf:    make([]Event, 0, chBatchSize),
 		logger: slog.Default(),
 	}, nil
 }
 
-func (cs *clickHouseSink) write(b []byte) error {
-	var ev Event
-	if err := json.Unmarshal(b, &ev); err != nil {
-		return fmt.Errorf("eventlog: unmarshal event: %w", err)
-	}
-	cs.buf = append(cs.buf, ev)
-	if len(cs.buf) >= chBatchSize {
-		cs.flushBuf()
-	}
-	return nil
-}
-
-func (cs *clickHouseSink) flush() {
-	if len(cs.buf) > 0 {
-		cs.flushBuf()
-	}
-}
-
-func (cs *clickHouseSink) flushBuf() {
-	if len(cs.buf) == 0 {
+func (cs *clickHouseSink) writeBatch(events []Event) {
+	if len(events) == 0 {
 		return
 	}
-	events := cs.buf
-	cs.buf = make([]Event, 0, chBatchSize)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	batch, err := cs.conn.PrepareBatch(ctx, "INS"+"ERT INTO "+chTable)
 	if err != nil {
-		cs.logger.Warn("eventlog: clickhouse prepare batch", "err", err)
+		cs.logger.Warn("eventlog: clickhouse prepare batch", "err", err, "dropped", len(events))
+		metricSendError.Inc()
+		metricDropped.Add(float64(len(events)))
 		return
 	}
 
@@ -130,7 +118,6 @@ func (cs *clickHouseSink) flushBuf() {
 
 		startedAt := parseEventTime(ev.StartedAt)
 		endedAt := parseEventTime(ev.EndedAt)
-
 		tokensMap := tokensToUInt32(ev.Tokens)
 
 		if err := batch.Append(
@@ -154,12 +141,16 @@ func (cs *clickHouseSink) flushBuf() {
 		); err != nil {
 			cs.logger.Warn("eventlog: clickhouse batch append", "err", err)
 			_ = batch.Abort()
+			metricSendError.Inc()
+			metricDropped.Add(float64(len(events)))
 			return
 		}
 	}
 
 	if err := batch.Send(); err != nil {
 		cs.logger.Warn("eventlog: clickhouse batch send", "err", err, "dropped", len(events))
+		metricSendError.Inc()
+		metricDropped.Add(float64(len(events)))
 	}
 }
 
@@ -168,7 +159,6 @@ func (cs *clickHouseSink) ping(ctx context.Context) error {
 }
 
 func (cs *clickHouseSink) close(_ context.Context) error {
-	cs.flushBuf()
 	return cs.conn.Close()
 }
 
@@ -183,10 +173,7 @@ func parseEventTime(s string) time.Time {
 // ensureSchema checks whether usage_events has the new map-based tokens column.
 // If the table is missing the tokens column, or still has the legacy scalar
 // columns (tokens_prompt etc.), it drops and recreates the table.
-// This is pragmatic for dev. Production migrations are an operator concern —
-// see commit message for DROP TABLE instructions before deploying.
 func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
-	// Check columns via DESCRIBE TABLE. If table does not exist, CREATE will handle it.
 	type colRow struct {
 		Name string `ch:"name"`
 		Type string `ch:"type"`
@@ -194,7 +181,6 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	var rows []colRow
 	descErr := conn.Select(ctx, &rows, "DESCRIBE TABLE relay.usage_events")
 	if descErr != nil {
-		// Table doesn't exist yet — just create it.
 		ddl := fmt.Sprintf(createTableSQL, retentionDays, "DEL"+"ETE")
 		return conn.Exec(ctx, ddl)
 	}
@@ -212,7 +198,6 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 			hasLegacy = true
 		case "cost":
 			hasCost = true
-			// Legacy schema used Decimal(18,8); current schema uses Float64.
 			if row.Type != "Float64" {
 				costIsDecimal = true
 			}
@@ -222,7 +207,6 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	}
 
 	if !hasTokensMap || hasLegacy || !hasCost || !hasCurrency || costIsDecimal {
-		// Schema is incompatible — drop and recreate.
 		slog.Default().Warn("eventlog: usage_events schema incompatible, dropping and recreating table")
 		if err := conn.Exec(ctx, "DROP TABLE IF EXISTS relay.usage_events"); err != nil {
 			return fmt.Errorf("drop table: %w", err)
@@ -233,8 +217,6 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	return conn.Exec(ctx, ddl)
 }
 
-// tokensToUInt32 converts a map[string]int64 token map to map[string]uint32
-// for ClickHouse binding. Values are clamped to zero on negative.
 func tokensToUInt32(t map[string]int64) map[string]uint32 {
 	if len(t) == 0 {
 		return map[string]uint32{}
@@ -249,7 +231,6 @@ func tokensToUInt32(t map[string]int64) map[string]uint32 {
 	return out
 }
 
-// padFixedString returns s truncated or zero-padded to exactly n bytes.
 func padFixedString(s string, n int) string {
 	if len(s) >= n {
 		return s[:n]

@@ -3,6 +3,7 @@ package eventlog
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,21 +27,26 @@ func newFileSink(cfg Config) (*fileSink, error) {
 
 func (fs *fileSink) setLogger(l *Logger) { fs.logger = l }
 
-func (fs *fileSink) write(b []byte) error {
-	now := fs.cfg.Clock().UTC()
-	d := now.Format("2006-01-02")
-	if d != fs.date {
-		fs.closeFile()
-		if err := fs.openFile(d); err != nil {
-			return err
+func (fs *fileSink) writeBatch(events []Event) {
+	for _, ev := range events {
+		now := fs.cfg.Clock().UTC()
+		d := now.Format("2006-01-02")
+		if d != fs.date {
+			fs.closeFile()
+			if err := fs.openFile(d); err != nil {
+				fmt.Fprintf(os.Stderr, "eventlog: openFile: %v\n", err)
+				metricSendError.Inc()
+				return
+			}
 		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			metricDropped.Inc()
+			continue
+		}
+		fs.bw.Write(b)
+		fs.bw.WriteByte('\n')
 	}
-	fs.bw.Write(b)
-	fs.bw.WriteByte('\n')
-	return nil
-}
-
-func (fs *fileSink) flush() {
 	if fs.bw != nil {
 		fs.bw.Flush()
 	}
