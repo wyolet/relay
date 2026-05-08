@@ -290,6 +290,25 @@ func mountControlHuma(
 		}
 	}
 
+	// GET /healthz — unauthenticated liveness probe for the control listener.
+	type healthzOutput struct {
+		Body struct {
+			Status string `json:"status" doc:"\"ok\" while the control listener is serving."`
+		}
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "control-healthz",
+		Method:      http.MethodGet,
+		Path:        "/healthz",
+		Summary:     "Health check",
+		Description: "Liveness probe for the control listener. Returns 200 while the process is up.",
+		Tags:        []string{"system"},
+	}, func(_ context.Context, _ *struct{}) (*healthzOutput, error) {
+		out := &healthzOutput{}
+		out.Body.Status = "ok"
+		return out, nil
+	})
+
 	// POST /control/login — username + password, sets cookie on success.
 	type loginInput struct {
 		Body struct {
