@@ -39,12 +39,22 @@ local now_ms   = tonumber(ARGV[1])
 local rules    = cjson.decode(ARGV[2])
 local tok      = ARGV[3]
 
-local inc_con  = {}  -- {key, ttl_ms} — concurrency keys incremented
-local inc_req  = {}  -- {key, ttl_ms} — request/fixed-window keys incremented
+local inc_con   = {}  -- {key, ttl_ms} — concurrency keys incremented
+local inc_req   = {}  -- {key, ttl_ms} — request/fixed-window keys incremented
+local inc_state = {}  -- {key, field, delta_to_reverse, upper_cap_or_neg1} — TB/LB/SW state hash mutations
 
 local function rollback()
   for _, v in ipairs(inc_req) do redis.call('INCRBY', v[1], -1) end
   for _, v in ipairs(inc_con) do redis.call('INCRBY', v[1], -1) end
+  for _, s in ipairs(inc_state) do
+    local cur = tonumber(redis.call('HGET', s[1], s[2]))
+    if cur ~= nil then
+      local new_v = cur + s[3]
+      if new_v < 0 then new_v = 0 end
+      if s[4] >= 0 and new_v > s[4] then new_v = s[4] end
+      redis.call('HSET', s[1], s[2], new_v)
+    end
+  end
 end
 
 for i, r in ipairs(rules) do
@@ -180,6 +190,7 @@ for i, r in ipairs(rules) do
     tokens = tokens - cost
     redis.call('HMSET', state_key, 'tokens', tokens, 'last_ms', now_ms)
     redis.call('PEXPIRE', state_key, ttl_ms)
+    table.insert(inc_state, {state_key, 'tokens', cost, amount * 1000})
 
   elseif strategy == "leaky-bucket" then
     -- State hash: {level (scaled *1000), last_ms}
@@ -218,6 +229,7 @@ for i, r in ipairs(rules) do
     level = level + cost
     redis.call('HMSET', state_key, 'level', level, 'last_ms', now_ms)
     redis.call('PEXPIRE', state_key, ttl_ms)
+    table.insert(inc_state, {state_key, 'level', -cost, -1})
 
   elseif strategy == "session-window" then
     -- State hash: {count, anchor_ms}. Window arms on first request after a
@@ -248,6 +260,7 @@ for i, r in ipairs(rules) do
 
     redis.call('HMSET', state_key, 'count', count, 'anchor_ms', anchor_ms)
     redis.call('PEXPIRE', state_key, ttl_ms)
+    table.insert(inc_state, {state_key, 'count', -1, -1})
   end
 end
 
@@ -481,8 +494,15 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 	}
 
 	type incEntry struct{ key string }
+	type stateEntry struct {
+		key      string
+		field    string
+		delta    int64 // amount to add to current to reverse the original mutation
+		upperCap int64 // upper bound after reversal; -1 = no cap
+	}
 	var incReq []incEntry
 	var incCon []incEntry
+	var incState []stateEntry
 
 	var result reserveResult
 
@@ -493,6 +513,20 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 			}
 			for _, v := range incCon {
 				_, _ = store.Incr(ctx, v.key, -1)
+			}
+			for _, s := range incState {
+				cur, err := memHGetInt(ctx, store, s.key, s.field)
+				if err != nil || cur < 0 {
+					continue
+				}
+				newV := cur + s.delta
+				if newV < 0 {
+					newV = 0
+				}
+				if s.upperCap >= 0 && newV > s.upperCap {
+					newV = s.upperCap
+				}
+				_ = store.HSet(ctx, s.key, s.field, []byte(strconv.FormatInt(newV, 10)), 0)
 			}
 		}
 
@@ -670,6 +704,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					tokens -= cost
 					_ = memHSetInt(ctx, store, stateKey, "tokens", tokens, ttl)
 					_ = memHSetInt(ctx, store, stateKey, "last_ms", nowMs, ttl)
+					incState = append(incState, stateEntry{key: stateKey, field: "tokens", delta: cost, upperCap: amount * 1000})
 
 				case StrategyLeakyBucket:
 					stateKey := keys[r.LbKeyIdx-1]
@@ -717,6 +752,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					level += cost
 					_ = memHSetInt(ctx, store, stateKey, "level", level, ttl)
 					_ = memHSetInt(ctx, store, stateKey, "last_ms", nowMs, ttl)
+					incState = append(incState, stateEntry{key: stateKey, field: "level", delta: -cost, upperCap: -1})
 
 				case StrategySessionWindow:
 					stateKey := keys[r.SwKeyIdx-1]
@@ -755,6 +791,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					}
 					_ = memHSetInt(ctx, store, stateKey, "count", count, ttl)
 					_ = memHSetInt(ctx, store, stateKey, "anchor_ms", anchorMs, ttl)
+					incState = append(incState, stateEntry{key: stateKey, field: "count", delta: -1, upperCap: -1})
 				}
 			}
 		}
