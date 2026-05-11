@@ -271,7 +271,7 @@ func mountControlHuma(
 	idStore *identity.Store,
 ) huma.API {
 	cfg := huma.DefaultConfig("Wyolet Relay — Control API", relayVersion)
-	cfg.Info.Description = "Operator-facing control plane. Manages providers, pools, secrets, models, routes, " +
+	cfg.Info.Description = "Operator-facing control plane. Manages providers, policies, secrets, models, routes, " +
 		"rate limits, and identity. Authentication is cookie-based: POST /control/login with " +
 		"{username, password} sets relay_admin; subsequent calls send the cookie automatically. " +
 		"Machine clients may also pass X-Relay-Admin-Token or Authorization: Bearer."
@@ -408,8 +408,8 @@ func mountControlHuma(
 	if crudArg != nil {
 		crud.RegisterOps(api, "/control/providers", "provider", "providers",
 			crudArg.kinds.provider, *crudArg.deps, adminAuth)
-		crud.RegisterOps(api, "/control/pools", "pool", "pools",
-			crudArg.kinds.pool, *crudArg.deps, adminAuth)
+		crud.RegisterOps(api, "/control/policies", "policy", "policies",
+			crudArg.kinds.policy, *crudArg.deps, adminAuth)
 		crud.RegisterOps(api, "/control/models", "model", "models",
 			crudArg.kinds.model, *crudArg.deps, adminAuth)
 		crud.RegisterOps(api, "/control/routes", "route", "routes",
@@ -715,7 +715,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 // AttachmentResponse is the shape for a single attachment record.
 type AttachmentResponse struct {
 	ID            string `json:"id" doc:"Composite key: parentKind:parentName:ratelimitName:meter."`
-	ParentKind    string `json:"parentKind" doc:"Resource kind that owns the rate-limit (Pool, Secret, or Model)."`
+	ParentKind    string `json:"parentKind" doc:"Resource kind that owns the rate-limit (Policy, Secret, or Model)."`
 	ParentName    string `json:"parentName" doc:"Name of the parent resource."`
 	RatelimitName string `json:"ratelimitName" doc:"Name of the referenced RateLimit resource."`
 	Meter         string `json:"meter" doc:"Meter type: requests, tokens, or concurrency."`
@@ -728,7 +728,7 @@ type attachmentListOutput struct {
 }
 
 type attachmentQueryInput struct {
-	ParentKind string `query:"parent_kind" doc:"Filter by parent kind (Pool, Secret, or Model). Must be combined with parent_name."`
+	ParentKind string `query:"parent_kind" doc:"Filter by parent kind (Policy, Secret, or Model). Must be combined with parent_name."`
 	ParentName string `query:"parent_name" doc:"Filter by parent resource name. Must be combined with parent_kind."`
 }
 
@@ -738,7 +738,7 @@ func registerTypedAttachmentOps(api huma.API, store *catalog.PGStore, adminAuth 
 		Method:      http.MethodGet,
 		Path:        "/control/attachments",
 		Summary:     "List attachments (derived, read-only)",
-		Description: "Returns all rate-limit attachments derived from inline rateLimits on Pool/Secret/Model specs. " +
+		Description: "Returns all rate-limit attachments derived from inline rateLimits on Policy/Secret/Model specs. " +
 			"Optional query params parent_kind + parent_name (both required together) filter to one parent. " +
 			"To create or remove attachments, PUT the parent resource with an updated rateLimits array.",
 		Tags:        []string{"admin"},
@@ -753,9 +753,9 @@ func registerTypedAttachmentOps(api huma.API, store *catalog.PGStore, adminAuth 
 		}
 		if parentKind != "" {
 			wk := catalog.Kind(parentKind)
-			if wk != catalog.KindPool && wk != catalog.KindSecret && wk != catalog.KindModel {
+			if wk != catalog.KindPolicy && wk != catalog.KindSecret && wk != catalog.KindModel {
 				return nil, huma.NewError(http.StatusBadRequest,
-					fmt.Sprintf("parent_kind %q not supported (must be Pool, Secret, or Model)", parentKind))
+					fmt.Sprintf("parent_kind %q not supported (must be Policy, Secret, or Model)", parentKind))
 			}
 		}
 
@@ -772,12 +772,12 @@ func registerTypedAttachmentOps(api huma.API, store *catalog.PGStore, adminAuth 
 			}
 		}
 		wantKind := catalog.Kind(parentKind)
-		if parentKind == "" || wantKind == catalog.KindPool {
-			for _, p := range store.Pools() {
+		if parentKind == "" || wantKind == catalog.KindPolicy {
+			for _, p := range store.Policies() {
 				if parentName != "" && p.Metadata.Name != parentName {
 					continue
 				}
-				emit(string(catalog.KindPool), p.Metadata.Name, p.Spec.RateLimits)
+				emit(string(catalog.KindPolicy), p.Metadata.Name, p.Spec.RateLimits)
 			}
 		}
 		if parentKind == "" || wantKind == catalog.KindSecret {

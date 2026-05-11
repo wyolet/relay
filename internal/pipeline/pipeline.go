@@ -54,7 +54,7 @@ type UpstreamFunc func(ctx context.Context, body []byte, secret string, out chan
 // RunOptions configures a Run invocation.
 type RunOptions struct {
 	Provider    *catalog.Provider
-	Pool        *catalog.Pool
+	Policy        *catalog.Policy
 	Model       *catalog.Model
 	Secrets     []*catalog.Secret
 	Selector    *keypool.Selector
@@ -64,7 +64,7 @@ type RunOptions struct {
 
 	// Limiter and Rules enable rate limiting. If either is nil/empty, rate
 	// limiting is skipped (preserves M2 behavior for configs without limits).
-	// Rules should be pre-resolved by the caller for Pool+Model scope.
+	// Rules should be pre-resolved by the caller for Policy+Model scope.
 	// Secret-level rules are M4+ work.
 	Limiter *ratelimit.Limiter
 	Rules   []catalog.ResolvedRule
@@ -171,8 +171,8 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	if opts.Provider != nil {
 		lc.Provider = opts.Provider.Metadata.Name
 	}
-	if opts.Pool != nil {
-		lc.Pool = opts.Pool.Metadata.Name
+	if opts.Policy != nil {
+		lc.Policy = opts.Policy.Metadata.Name
 	}
 	// Wire effective pricing so Record can compute cost.
 	if opts.CatalogStore != nil && lc.Model != "" {
@@ -187,8 +187,8 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	var reservation *ratelimit.Reservation // non-nil only when Limiter is active
 	if opts.Limiter != nil && len(opts.Rules) > 0 {
 		poolName := ""
-		if opts.Pool != nil {
-			poolName = opts.Pool.Metadata.Name
+		if opts.Policy != nil {
+			poolName = opts.Policy.Metadata.Name
 		}
 		var err error
 		reservation, err = opts.Limiter.Reserve(ctx, poolName, opts.Rules)
@@ -269,7 +269,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 
 	// Passthrough mode: synthesize a pseudo-secret from the inbound auth value.
 	// The resolved value is forwarded verbatim; sha256[:12] is the metric key_hash.
-	// Key selection and pool circuit breakers are bypassed entirely.
+	// Key selection and policy circuit breakers are bypassed entirely.
 	var passthroughKey *catalog.Secret
 	if opts.PassthroughAuth != "" {
 		sum := sha256.Sum256([]byte(opts.PassthroughAuth))
@@ -304,7 +304,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 		// Pick a key if we don't have one.
 		if chosenKey == nil {
 			var err error
-			chosenKey, err = opts.Selector.Pick(ctx, opts.Provider, opts.Pool, opts.Model, opts.Secrets)
+			chosenKey, err = opts.Selector.Pick(ctx, opts.Provider, opts.Policy, opts.Model, opts.Secrets)
 			if err != nil {
 				if errors.Is(err, keypool.ErrNoHealthyKeys) {
 					sendExhaustedEnvelope(ch.Out, keypool.FailureKind(-2), 0)
@@ -700,7 +700,7 @@ func sendExhaustedEnvelope(out chan<- *transport.Message, kind keypool.FailureKi
 		status = "502"
 		errType = "upstream_error"
 		code = "pool_exhausted"
-		msg = "all keys in pool exhausted"
+		msg = "all keys in policy exhausted"
 	}
 
 	headers := map[string]string{
@@ -724,7 +724,7 @@ func sendPoolOutOfCapacityEnvelope(out chan<- *transport.Message) {
 			"X-Relay-Final":  "true",
 			"Retry-After":    "30",
 		},
-		Body: []byte(`{"error":{"message":"pool out of capacity: all secrets at zero remaining quota","type":"rate_limit_exceeded","code":"pool_out_of_capacity"}}`),
+		Body: []byte(`{"error":{"message":"policy out of capacity: all secrets at zero remaining quota","type":"rate_limit_exceeded","code":"pool_out_of_capacity"}}`),
 	}
 }
 
@@ -735,7 +735,7 @@ func sendPoolExhausted(out chan<- *transport.Message) {
 			"Content-Type":   "application/json",
 			"X-Relay-Final":  "true",
 		},
-		Body: []byte(`{"error":{"message":"all keys in pool exhausted","type":"upstream_error","code":"pool_exhausted"}}`),
+		Body: []byte(`{"error":{"message":"all keys in policy exhausted","type":"upstream_error","code":"pool_exhausted"}}`),
 	}
 }
 

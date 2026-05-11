@@ -194,7 +194,7 @@ func TestEnvelopeAudit(t *testing.T) {
 			wantCode:    "rpm_exceeded",
 		},
 		{
-			// Row 6: Pool exhausted — no healthy keys
+			// Row 6: Policy exhausted — no healthy keys
 			name:     "pool_exhausted_no_healthy_keys",
 			buildReq: func() *http.Request { return makeJSON(`{"model":"gpt-4","messages":[]}`) },
 			pipeline: envelopePipeline("503", "upstream_error", "no_healthy_keys",
@@ -204,11 +204,11 @@ func TestEnvelopeAudit(t *testing.T) {
 			wantCode:    "no_healthy_keys",
 		},
 		{
-			// Row 7: Pool out of capacity (quota exhausted)
+			// Row 7: Policy out of capacity (quota exhausted)
 			name:     "pool_out_of_capacity",
 			buildReq: func() *http.Request { return makeJSON(`{"model":"gpt-4","messages":[]}`) },
 			pipeline: envelopePipeline("429", "rate_limit_exceeded", "pool_out_of_capacity",
-				"pool out of capacity: all secrets at zero remaining quota"),
+				"policy out of capacity: all secrets at zero remaining quota"),
 			wantStatus:  http.StatusTooManyRequests,
 			wantErrType: "rate_limit_exceeded",
 			wantCode:    "pool_out_of_capacity",

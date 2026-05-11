@@ -587,7 +587,7 @@ type ProviderSpec struct {
     Kind        ProviderKind `yaml:"kind"        json:"kind"`
     BaseURL     string       `yaml:"baseURL"     json:"baseURL"`
     Default     bool         `yaml:"default,omitempty"     json:"default,omitempty"`
-    DefaultPool string       `yaml:"defaultPool,omitempty" json:"defaultPool,omitempty"`
+    DefaultPool string       `yaml:"defaultPolicy,omitempty" json:"defaultPolicy,omitempty"`
 
     // Display (NEW)
     DisplayName   string `yaml:"displayName,omitempty"   json:"displayName,omitempty"`
@@ -788,7 +788,7 @@ metadata:
 spec:
   kind: anthropic
   baseURL: https://api.anthropic.com
-  defaultPool: anthropic-default
+  defaultPolicy: anthropic-default
   displayName: Anthropic
   description: "AI safety company building reliable, interpretable, and steerable AI systems."
   homepageURL: https://www.anthropic.com
@@ -862,7 +862,7 @@ metadata:
 spec:
   kind: openai
   baseURL: https://api.openai.com
-  defaultPool: openai-default
+  defaultPolicy: openai-default
   displayName: OpenAI
   description: "Creator of the GPT model family and the de facto standard OpenAI API."
   homepageURL: https://openai.com
@@ -933,7 +933,7 @@ spec:
   kind: ollama
   baseURL: http://localhost:11434
   default: true
-  defaultPool: ollama-default
+  defaultPolicy: ollama-default
   displayName: Ollama (local)
   description: "Local model inference via Ollama. Self-hosted; no API keys required."
   # homepageURL, docsURL, consoleURL, statusPageURL, logoURL: omitted — not applicable for local runner

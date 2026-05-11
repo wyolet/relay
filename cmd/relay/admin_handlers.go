@@ -18,7 +18,7 @@ import (
 // adminKinds bundles the five kind handlers produced by the PER-265 factory.
 type adminKinds struct {
 	provider  *crud.Kind[*catalog.Provider]
-	pool      *crud.Kind[*catalog.Pool]
+	policy      *crud.Kind[*catalog.Policy]
 	model     *crud.Kind[*catalog.Model]
 	route     *crud.Kind[*catalog.Route]
 	rateLimit *crud.Kind[*catalog.RateLimit]
@@ -27,7 +27,7 @@ type adminKinds struct {
 func buildAdminKinds(store *catalog.PGStore, st *storage.Storage) adminKinds {
 	return adminKinds{
 		provider:  providerKind(store, st),
-		pool:      poolKind(store, st),
+		policy:      policyKind(store, st),
 		model:     modelKind(store, st),
 		route:     routeKind(store, st),
 		rateLimit: rateLimitKind(store, st),
@@ -76,44 +76,44 @@ func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 	}
 }
 
-// --- Pool ---
+// --- Policy ---
 
-func poolKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Pool] {
-	return &crud.Kind[*catalog.Pool]{
-		Name: "Pool",
-		Decode: func(r *http.Request) (*catalog.Pool, error) {
-			return decodeBody[catalog.Pool](r, func(v *catalog.Pool) error {
+func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Policy] {
+	return &crud.Kind[*catalog.Policy]{
+		Name: "Policy",
+		Decode: func(r *http.Request) (*catalog.Policy, error) {
+			return decodeBody[catalog.Policy](r, func(v *catalog.Policy) error {
 				if v.Metadata.Name == "" {
 					return errors.New("metadata.name required")
 				}
 				return nil
 			})
 		},
-		List: func(ctx context.Context) ([]*catalog.Pool, error) {
-			return store.Pools(), nil
+		List: func(ctx context.Context) ([]*catalog.Policy, error) {
+			return store.Policies(), nil
 		},
-		Get: func(ctx context.Context, name string) (*catalog.Pool, error) {
-			v, ok := store.PoolByName(name)
+		Get: func(ctx context.Context, name string) (*catalog.Policy, error) {
+			v, ok := store.PolicyByName(name)
 			if !ok {
 				return nil, crud.ErrNotFound
 			}
 			return v, nil
 		},
-		Insert: func(ctx context.Context, v *catalog.Pool) error {
-			return st.Catalog.UpsertPool(ctx, *v)
+		Insert: func(ctx context.Context, v *catalog.Policy) error {
+			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.Pool) error {
-			return st.Catalog.UpsertPool(ctx, *v)
+		Update: func(ctx context.Context, name string, v *catalog.Policy) error {
+			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
 		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeletePool(ctx, name)
+			return st.Catalog.DeletePolicy(ctx, name)
 		},
-		ResourceID: func(v *catalog.Pool) string { return v.Metadata.Name },
-		Patch: func(v *catalog.Pool) catalog.Patch {
-			return catalog.Patch{UpsertPool: v}
+		ResourceID: func(v *catalog.Policy) string { return v.Metadata.Name },
+		Patch: func(v *catalog.Policy) catalog.Patch {
+			return catalog.Patch{UpsertPolicy: v}
 		},
 		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeletePool: name}
+			return catalog.Patch{DeletePolicy: name}
 		},
 	}
 }

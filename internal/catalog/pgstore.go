@@ -16,7 +16,7 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
-// Closer is anything with a Close method (e.g. a connection pool).
+// Closer is anything with a Close method (e.g. a connection policy).
 type Closer interface {
 	Close()
 }
@@ -121,21 +121,21 @@ func (s *PGStore) ModelByName(name string) (*Model, bool)         { return s.cur
 func (s *PGStore) RouteByName(name string) (*Route, bool)         { return s.cur().routeByName(name) }
 func (s *PGStore) RateLimitByName(name string) (*RateLimit, bool) { return s.cur().rateLimitByName(name) }
 func (s *PGStore) SecretByName(name string) (*Secret, bool)       { return s.cur().secretByName(name) }
-func (s *PGStore) PoolByName(name string) (*Pool, bool)           { return s.cur().poolByName(name) }
+func (s *PGStore) PolicyByName(name string) (*Policy, bool)           { return s.cur().policyByName(name) }
 func (s *PGStore) Providers() []*Provider                         { return s.cur().listProviders() }
 func (s *PGStore) Models() []*Model                               { return s.cur().listModels() }
 func (s *PGStore) Routes() []*Route                               { return s.cur().listRoutes() }
 func (s *PGStore) RateLimits() []*RateLimit                       { return s.cur().listRateLimits() }
 func (s *PGStore) Secrets() []*Secret                             { return s.cur().listSecrets() }
-func (s *PGStore) Pools() []*Pool                                 { return s.cur().listPools() }
+func (s *PGStore) Policies() []*Policy                                 { return s.cur().listPolicies() }
 func (s *PGStore) DefaultProvider() *Provider                     { return s.cur().defaultProvider() }
 func (s *PGStore) DefaultRoute() *Route                           { return s.cur().defaultRoute() }
 func (s *PGStore) ProviderForModel(modelName string) (*Provider, bool) {
 	return s.cur().providerForModel(modelName)
 }
-func (s *PGStore) SecretsForPool(p *Pool) []*Secret { return s.cur().secretsForPool(p) }
-func (s *PGStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, sec *Secret) []ResolvedRule {
-	return s.cur().rateLimitsForRequest(provider, pool, model, sec)
+func (s *PGStore) SecretsForPolicy(p *Policy) []*Secret { return s.cur().secretsForPolicy(p) }
+func (s *PGStore) RateLimitsForRequest(provider *Provider, policy *Policy, model *Model, sec *Secret) []ResolvedRule {
+	return s.cur().rateLimitsForRequest(provider, policy, model, sec)
 }
 func (s *PGStore) EffectivePricing(modelName string) (*Pricing, bool) {
 	return s.cur().effectivePricingByModel(modelName)
@@ -153,13 +153,13 @@ func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
 		snap.providers[p.Metadata.Name] = &pp
 	}
 
-	pools, err := s.db.ListPools(ctx)
+	policies, err := s.db.ListPolicies(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("ListPools: %w", err)
+		return nil, fmt.Errorf("ListPolicies: %w", err)
 	}
-	for _, p := range pools {
+	for _, p := range policies {
 		pp := p
-		snap.pools[p.Metadata.Name] = &pp
+		snap.policies[p.Metadata.Name] = &pp
 	}
 
 	secRows, err := s.db.ListSecretRows(ctx)

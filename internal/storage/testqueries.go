@@ -14,30 +14,30 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// MustOpenPool opens a pgxpool.Pool and registers t.Cleanup to close it.
+// MustOpenPool opens a pgxpool.Policy and registers t.Cleanup to close it.
 // Prefer MustOpenStorage; this exists for callers that must pass *Storage to
 // WrapPool before migrations have run.
-func MustOpenPool(ctx context.Context, t *testing.T, dsn string) *pgxpool.Pool {
+func MustOpenPool(ctx context.Context, t *testing.T, dsn string) *pgxpool.Policy {
 	t.Helper()
-	pool, err := openPool(ctx, dsn)
+	policy, err := openPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("MustOpenPool: %v", err)
 	}
-	t.Cleanup(pool.Close)
-	return pool
+	t.Cleanup(policy.Close)
+	return policy
 }
 
-// MustOpenStorage opens a *Storage backed by a test pool without running
+// MustOpenStorage opens a *Storage backed by a test policy without running
 // migrations. Callers seed the schema or rely on prior runs. t.Cleanup is
 // registered automatically.
 func MustOpenStorage(ctx context.Context, t *testing.T, dsn string) *Storage {
 	t.Helper()
-	pool, err := openPool(ctx, dsn)
+	policy, err := openPool(ctx, dsn)
 	if err != nil {
 		t.Fatalf("MustOpenStorage: %v", err)
 	}
-	t.Cleanup(pool.Close)
-	return WrapPool(pool)
+	t.Cleanup(policy.Close)
+	return WrapPool(policy)
 }
 
 // MustOpenStorageMigrated opens a *Storage and runs migrations.

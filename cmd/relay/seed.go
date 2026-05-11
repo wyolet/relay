@@ -161,7 +161,7 @@ func maybeAutoSeed(ctx context.Context, dsn, configDir string) error {
 		return fmt.Errorf("seed: %w", err)
 	}
 
-	total := len(src.Providers()) + len(src.Pools()) + len(src.Secrets()) +
+	total := len(src.Providers()) + len(src.Policies()) + len(src.Secrets()) +
 		len(src.Models()) + len(src.Routes()) + len(src.RateLimits())
 	slog.Info("auto-seed: applied", "rows", total, "dir", configDir)
 	return nil
@@ -169,7 +169,7 @@ func maybeAutoSeed(ctx context.Context, dsn, configDir string) error {
 
 func printDiff(out io.Writer, d *catalog.SeedDiff) {
 	for _, kd := range []catalog.KindDiff{
-		d.Providers, d.Pools, d.Secrets, d.Models, d.Routes, d.RateLimits,
+		d.Providers, d.Policies, d.Secrets, d.Models, d.Routes, d.RateLimits,
 	} {
 		if kd.Empty() {
 			continue

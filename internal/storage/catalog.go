@@ -58,14 +58,14 @@ func (r *catalogRepo) DeleteProvider(ctx context.Context, name string) error {
 	return r.notifyCatalogChange(ctx)
 }
 
-// ── Pool ──────────────────────────────────────────────────────────────────────
+// ── Policy ──────────────────────────────────────────────────────────────────────
 
-func (r *catalogRepo) UpsertPool(ctx context.Context, p catalog.Pool) error {
+func (r *catalogRepo) UpsertPolicy(ctx context.Context, p catalog.Policy) error {
 	meta, spec, err := marshalMetaSpec(p.Metadata, p.Spec)
 	if err != nil {
-		return fmt.Errorf("storage: UpsertPool %q: %w", p.Metadata.Name, err)
+		return fmt.Errorf("storage: UpsertPolicy %q: %w", p.Metadata.Name, err)
 	}
-	if err := translateCatalogErr(gen.New(r.db).UpsertPool(ctx, gen.UpsertPoolParams{
+	if err := translateCatalogErr(gen.New(r.db).UpsertPolicy(ctx, gen.UpsertPolicyParams{
 		Name:     p.Metadata.Name,
 		Metadata: meta,
 		Spec:     spec,
@@ -75,21 +75,21 @@ func (r *catalogRepo) UpsertPool(ctx context.Context, p catalog.Pool) error {
 	return r.notifyCatalogChange(ctx)
 }
 
-func (r *catalogRepo) ListPools(ctx context.Context) ([]catalog.Pool, error) {
-	rows, err := gen.New(r.db).ListPools(ctx)
+func (r *catalogRepo) ListPolicies(ctx context.Context) ([]catalog.Policy, error) {
+	rows, err := gen.New(r.db).ListPolicies(ctx)
 	if err != nil {
 		return nil, translateCatalogErr(err)
 	}
-	out := make([]catalog.Pool, 0, len(rows))
+	out := make([]catalog.Policy, 0, len(rows))
 	for _, row := range rows {
 		var meta catalog.Metadata
-		var spec catalog.PoolSpec
+		var spec catalog.PolicySpec
 		if err := unmarshalJSON2(row.Metadata, &meta, row.Spec, &spec); err != nil {
-			return nil, fmt.Errorf("storage: pool %q: %w", row.Name, err)
+			return nil, fmt.Errorf("storage: policy %q: %w", row.Name, err)
 		}
-		out = append(out, catalog.Pool{
+		out = append(out, catalog.Policy{
 			APIVersion: catalog.APIVersion,
-			Kind:       catalog.KindPool,
+			Kind:       catalog.KindPolicy,
 			Metadata:   meta,
 			Spec:       spec,
 		})
@@ -97,8 +97,8 @@ func (r *catalogRepo) ListPools(ctx context.Context) ([]catalog.Pool, error) {
 	return out, nil
 }
 
-func (r *catalogRepo) DeletePool(ctx context.Context, name string) error {
-	if err := translateCatalogErr(gen.New(r.db).DeletePool(ctx, name)); err != nil {
+func (r *catalogRepo) DeletePolicy(ctx context.Context, name string) error {
+	if err := translateCatalogErr(gen.New(r.db).DeletePolicy(ctx, name)); err != nil {
 		return err
 	}
 	return r.notifyCatalogChange(ctx)
@@ -309,11 +309,11 @@ func (r *catalogRepo) IsEmpty(ctx context.Context) (bool, error) {
 	if len(provs) > 0 {
 		return false, nil
 	}
-	pools, err := r.ListPools(ctx)
+	policies, err := r.ListPolicies(ctx)
 	if err != nil {
 		return false, err
 	}
-	if len(pools) > 0 {
+	if len(policies) > 0 {
 		return false, nil
 	}
 	secs, err := r.ListSecretRows(ctx)
@@ -347,7 +347,7 @@ func (r *catalogRepo) IsEmpty(ctx context.Context) (bool, error) {
 // ── notifyCatalogChange ───────────────────────────────────────────────────────
 
 // notifyCatalogChange fires NOTIFY relay_catalog. Called by every write method
-// inside the same execution context (pool conn or tx). With no listeners the
+// inside the same execution context (policy conn or tx). With no listeners the
 // message is dropped at commit; cost is microseconds. The producer is
 // unconditional — the consumer side is gated by RELAY_CLUSTER_MODE.
 //

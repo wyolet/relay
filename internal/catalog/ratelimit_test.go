@@ -148,9 +148,9 @@ spec:
     - req-rl
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: ollama-pool
+  name: ollama-policy
 spec:
   provider: dev-ollama
   secrets:
@@ -260,9 +260,9 @@ spec:
     env: KEY
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: my-pool
+  name: my-policy
 spec:
   provider: openai-prod
   secrets:
@@ -288,9 +288,9 @@ spec:
     env: KEY
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: my-pool
+  name: my-policy
 spec:
   provider: openai-prod
   secrets:
@@ -315,9 +315,9 @@ spec:
   value: ""
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: ollama-pool
+  name: ollama-policy
 spec:
   provider: dev-ollama
   secrets:
@@ -365,9 +365,9 @@ spec:
     - rpm-rl
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: my-pool
+  name: my-policy
 spec:
   provider: openai-prod
   secrets:
@@ -389,9 +389,9 @@ spec:
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec, _ := s.SecretByName("my-key")
-	pool, _ := s.PoolByName("my-pool")
+	policy, _ := s.PolicyByName("my-policy")
 	model, _ := s.ModelByName("gpt-4o")
-	rules := s.RateLimitsForRequest(nil, pool, model, sec)
+	rules := s.RateLimitsForRequest(nil, policy, model, sec)
 	if len(rules) != 2 {
 		t.Fatalf("expected 2 resolved rules, got %d", len(rules))
 	}
@@ -449,9 +449,9 @@ spec:
     - rl-a
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: my-pool
+  name: my-policy
 spec:
   provider: openai-prod
   secrets:
@@ -475,17 +475,17 @@ spec:
 		t.Fatalf("unexpected error: %v", err)
 	}
 	sec, _ := s.SecretByName("my-key")
-	pool, _ := s.PoolByName("my-pool")
+	policy, _ := s.PolicyByName("my-policy")
 	model, _ := s.ModelByName("gpt-4o")
-	rules := s.RateLimitsForRequest(nil, pool, model, sec)
+	rules := s.RateLimitsForRequest(nil, policy, model, sec)
 	if len(rules) != 3 {
 		t.Fatalf("expected 3 rules, got %d", len(rules))
 	}
 	if rules[0].ParentKind != KindSecret {
 		t.Errorf("first rule should be Secret, got %v", rules[0].ParentKind)
 	}
-	if rules[1].ParentKind != KindPool {
-		t.Errorf("second rule should be Pool, got %v", rules[1].ParentKind)
+	if rules[1].ParentKind != KindPolicy {
+		t.Errorf("second rule should be Policy, got %v", rules[1].ParentKind)
 	}
 	if rules[2].ParentKind != KindModel {
 		t.Errorf("third rule should be Model, got %v", rules[2].ParentKind)
@@ -513,9 +513,9 @@ spec:
       amount: 50000
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: ollama-pool
+  name: ollama-policy
 spec:
   provider: dev-ollama
   rateLimits:
@@ -525,8 +525,8 @@ spec:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	pool, _ := s.PoolByName("ollama-pool")
-	rules := s.RateLimitsForRequest(nil, pool, nil, nil)
+	policy, _ := s.PolicyByName("ollama-policy")
+	rules := s.RateLimitsForRequest(nil, policy, nil, nil)
 	if len(rules) != 3 {
 		t.Fatalf("expected 3 resolved rules (one per Rule in tier-1), got %d", len(rules))
 	}

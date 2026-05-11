@@ -112,7 +112,7 @@ func (s *Selector) writeRecord(ctx context.Context, keyHash string, r circuitRec
 // Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
 // eligible. Concurrent Picks may both pick the same half-open key; the
 // caller's RecordSuccess/RecordFailure resolves the outcome (acceptable in M2).
-func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *catalog.Pool, model *catalog.Model, secrets []*catalog.Secret) (*catalog.Secret, error) {
+func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *catalog.Policy, model *catalog.Model, secrets []*catalog.Secret) (*catalog.Secret, error) {
 	now := s.clock()
 
 	type candidate struct {

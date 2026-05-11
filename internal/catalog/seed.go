@@ -11,7 +11,7 @@ import (
 // SeedDiff holds the human-readable diff between a source Store and the current PG state.
 type SeedDiff struct {
 	Providers  KindDiff
-	Pools      KindDiff
+	Policies      KindDiff
 	Secrets    KindDiff
 	Models     KindDiff
 	Routes     KindDiff
@@ -33,7 +33,7 @@ func (d KindDiff) Empty() bool {
 
 // Empty reports whether the diff contains no changes.
 func (d *SeedDiff) Empty() bool {
-	return d.Providers.Empty() && d.Pools.Empty() && d.Secrets.Empty() &&
+	return d.Providers.Empty() && d.Policies.Empty() && d.Secrets.Empty() &&
 		d.Models.Empty() && d.Routes.Empty() && d.RateLimits.Empty()
 }
 
@@ -46,7 +46,7 @@ func (s *PGStore) Diff(ctx context.Context, src Store) (*SeedDiff, error) {
 
 	diff := &SeedDiff{}
 	diff.Providers = diffNames("Provider", pgSnap.providers, src.Providers(), func(v *Provider) string { return v.Metadata.Name })
-	diff.Pools = diffNames("Pool", pgSnap.pools, src.Pools(), func(v *Pool) string { return v.Metadata.Name })
+	diff.Policies = diffNames("Policy", pgSnap.policies, src.Policies(), func(v *Policy) string { return v.Metadata.Name })
 	diff.Secrets = diffNames("Secret", pgSnap.secrets, src.Secrets(), func(v *Secret) string { return v.Metadata.Name })
 	diff.Models = diffNames("Model", pgSnap.models, src.Models(), func(v *Model) string { return v.Metadata.Name })
 	diff.Routes = diffNames("Route", pgSnap.routes, src.Routes(), func(v *Route) string { return v.Metadata.Name })
@@ -88,9 +88,9 @@ func (s *PGStore) Seed(ctx context.Context, src Store) error {
 				return fmt.Errorf("Seed: UpsertProvider %q: %w", p.Metadata.Name, err)
 			}
 		}
-		for _, p := range src.Pools() {
-			if err := db.UpsertPool(ctx, *p); err != nil {
-				return fmt.Errorf("Seed: UpsertPool %q: %w", p.Metadata.Name, err)
+		for _, p := range src.Policies() {
+			if err := db.UpsertPolicy(ctx, *p); err != nil {
+				return fmt.Errorf("Seed: UpsertPolicy %q: %w", p.Metadata.Name, err)
 			}
 		}
 		for _, sec := range src.Secrets() {

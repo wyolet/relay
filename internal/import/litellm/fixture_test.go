@@ -363,9 +363,9 @@ func (m *memDB) DeleteProvider(_ context.Context, name string) error {
 	return nil
 }
 
-func (m *memDB) UpsertPool(_ context.Context, _ catalog.Pool) error        { return nil }
-func (m *memDB) ListPools(_ context.Context) ([]catalog.Pool, error)       { return nil, nil }
-func (m *memDB) DeletePool(_ context.Context, _ string) error              { return nil }
+func (m *memDB) UpsertPolicy(_ context.Context, _ catalog.Policy) error        { return nil }
+func (m *memDB) ListPolicies(_ context.Context) ([]catalog.Policy, error)       { return nil, nil }
+func (m *memDB) DeletePolicy(_ context.Context, _ string) error              { return nil }
 func (m *memDB) ListSecretRows(_ context.Context) ([]catalog.SecretRow, error) { return nil, nil }
 func (m *memDB) UpsertSecretEnv(_ context.Context, _, _, _ string, _ catalog.Metadata) error {
 	return nil

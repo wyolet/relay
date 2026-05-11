@@ -29,7 +29,7 @@ func stubAdminCRUD() *adminCRUD {
 	}
 	kinds := adminKinds{
 		provider:  stubProviderKind(),
-		pool:      stubPoolKind(),
+		policy:      stubPoolKind(),
 		model:     stubModelKind(),
 		route:     stubRouteKind(),
 		rateLimit: stubRateLimitKind(),
@@ -74,16 +74,16 @@ func stubProviderKind() *crud.Kind[*catalog.Provider] {
 	}
 }
 
-func stubPoolKind() *crud.Kind[*catalog.Pool] {
-	return &crud.Kind[*catalog.Pool]{
-		Name:       "Pool",
-		Decode:     func(r *http.Request) (*catalog.Pool, error) { return &catalog.Pool{}, nil },
-		List:       func(_ context.Context) ([]*catalog.Pool, error) { return nil, nil },
-		Get:        func(_ context.Context, _ string) (*catalog.Pool, error) { return nil, crud.ErrNotFound },
-		Insert:     func(_ context.Context, _ *catalog.Pool) error { return nil },
-		Update:     func(_ context.Context, _ string, _ *catalog.Pool) error { return nil },
+func stubPoolKind() *crud.Kind[*catalog.Policy] {
+	return &crud.Kind[*catalog.Policy]{
+		Name:       "Policy",
+		Decode:     func(r *http.Request) (*catalog.Policy, error) { return &catalog.Policy{}, nil },
+		List:       func(_ context.Context) ([]*catalog.Policy, error) { return nil, nil },
+		Get:        func(_ context.Context, _ string) (*catalog.Policy, error) { return nil, crud.ErrNotFound },
+		Insert:     func(_ context.Context, _ *catalog.Policy) error { return nil },
+		Update:     func(_ context.Context, _ string, _ *catalog.Policy) error { return nil },
 		Delete:     func(_ context.Context, _ string) error { return nil },
-		ResourceID: func(v *catalog.Pool) string { return v.Metadata.Name },
+		ResourceID: func(v *catalog.Policy) string { return v.Metadata.Name },
 	}
 }
 
@@ -304,11 +304,11 @@ func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
 		{"POST", "/control/providers", "admin_provider_create"},
 		{"PUT", "/control/providers/{name}", "admin_provider_update"},
 		{httpDEL, "/control/providers/{name}", "admin_provider_delete"},
-		{"GET", "/control/pools", "admin_pool_list"},
-		{"GET", "/control/pools/{name}", "admin_pool_get"},
-		{"POST", "/control/pools", "admin_pool_create"},
-		{"PUT", "/control/pools/{name}", "admin_pool_update"},
-		{httpDEL, "/control/pools/{name}", "admin_pool_delete"},
+		{"GET", "/control/policies", "admin_policy_list"},
+		{"GET", "/control/policies/{name}", "admin_policy_get"},
+		{"POST", "/control/policies", "admin_policy_create"},
+		{"PUT", "/control/policies/{name}", "admin_policy_update"},
+		{httpDEL, "/control/policies/{name}", "admin_policy_delete"},
 		{"GET", "/control/models", "admin_model_list"},
 		{"GET", "/control/models/{name}", "admin_model_get"},
 		{"POST", "/control/models", "admin_model_create"},

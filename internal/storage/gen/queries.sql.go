@@ -45,11 +45,11 @@ func (q *Queries) DeleteModel(ctx context.Context, name string) error {
 	return err
 }
 
-const deletePool = `-- name: DeletePool :exec
-DELETE FROM pools WHERE name = $1
+const deletePool = `-- name: DeletePolicy :exec
+DELETE FROM policies WHERE name = $1
 `
 
-func (q *Queries) DeletePool(ctx context.Context, name string) error {
+func (q *Queries) DeletePolicy(ctx context.Context, name string) error {
 	_, err := q.db.Exec(ctx, deletePool, name)
 	return err
 }
@@ -321,25 +321,25 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 	return items, nil
 }
 
-const listPools = `-- name: ListPools :many
-SELECT name, metadata, spec FROM pools ORDER BY name
+const listPolicies = `-- name: ListPolicies :many
+SELECT name, metadata, spec FROM policies ORDER BY name
 `
 
-type ListPoolsRow struct {
+type ListPoliciesRow struct {
 	Name     string `db:"name" json:"name"`
 	Metadata []byte `db:"metadata" json:"metadata"`
 	Spec     []byte `db:"spec" json:"spec"`
 }
 
-func (q *Queries) ListPools(ctx context.Context) ([]ListPoolsRow, error) {
-	rows, err := q.db.Query(ctx, listPools)
+func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
+	rows, err := q.db.Query(ctx, listPolicies)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPoolsRow
+	var items []ListPoliciesRow
 	for rows.Next() {
-		var i ListPoolsRow
+		var i ListPoliciesRow
 		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
 			return nil, err
 		}
@@ -606,19 +606,19 @@ func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error 
 	return err
 }
 
-const upsertPool = `-- name: UpsertPool :exec
-INSERT INTO pools (name, metadata, spec, updated_at)
+const upsertPool = `-- name: UpsertPolicy :exec
+INSERT INTO policies (name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, NOW())
 ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
 `
 
-type UpsertPoolParams struct {
+type UpsertPolicyParams struct {
 	Name     string `db:"name" json:"name"`
 	Metadata []byte `db:"metadata" json:"metadata"`
 	Spec     []byte `db:"spec" json:"spec"`
 }
 
-func (q *Queries) UpsertPool(ctx context.Context, arg UpsertPoolParams) error {
+func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) error {
 	_, err := q.db.Exec(ctx, upsertPool, arg.Name, arg.Metadata, arg.Spec)
 	return err
 }

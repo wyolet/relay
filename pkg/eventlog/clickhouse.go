@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     request_id        String CODEC(ZSTD),
     model             LowCardinality(String),
     provider          LowCardinality(String),
-    pool              LowCardinality(String),
+    policy              LowCardinality(String),
     secret_hash       FixedString(12),
     terminated_by     LowCardinality(String),
     tokens            Map(LowCardinality(String), UInt32) CODEC(ZSTD(1)),
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
     currency          LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(started_at)
-ORDER BY (started_at, model, pool)
+ORDER BY (started_at, model, policy)
 TTL toDateTime(started_at) + INTERVAL %d DAY %s
 `
 
@@ -125,7 +125,7 @@ func (cs *clickHouseSink) writeBatch(events []Event) {
 			ev.RequestID,
 			ev.Model,
 			ev.Provider,
-			ev.Pool,
+			ev.Policy,
 			padFixedString(ev.SecretHash, 12),
 			ev.TerminatedBy,
 			tokensMap,

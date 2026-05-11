@@ -23,7 +23,7 @@ type Model struct {
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
-type Pool struct {
+type Policy struct {
 	Name      string             `db:"name" json:"name"`
 	Metadata  []byte             `db:"metadata" json:"metadata"`
 	Spec      []byte             `db:"spec" json:"spec"`

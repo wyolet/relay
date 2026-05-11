@@ -6,18 +6,18 @@ type Store interface {
 	RouteByName(name string) (*Route, bool)
 	RateLimitByName(name string) (*RateLimit, bool)
 	SecretByName(name string) (*Secret, bool)
-	PoolByName(name string) (*Pool, bool)
+	PolicyByName(name string) (*Policy, bool)
 	Providers() []*Provider
 	Models() []*Model
 	Routes() []*Route
 	RateLimits() []*RateLimit
 	Secrets() []*Secret
-	Pools() []*Pool
+	Policies() []*Policy
 	DefaultProvider() *Provider
 	DefaultRoute() *Route
 	ProviderForModel(modelName string) (*Provider, bool)
-	SecretsForPool(p *Pool) []*Secret
-	RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule
+	SecretsForPolicy(p *Policy) []*Secret
+	RateLimitsForRequest(provider *Provider, policy *Policy, model *Model, secret *Secret) []ResolvedRule
 	// EffectivePricing returns the merged pricing for a model (provider default +
 	// model-level overlay). Returns nil, false when no pricing is configured.
 	EffectivePricing(modelName string) (*Pricing, bool)

@@ -1,8 +1,8 @@
 -- name: ListProviders :many
 SELECT name, metadata, spec FROM providers ORDER BY name;
 
--- name: ListPools :many
-SELECT name, metadata, spec FROM pools ORDER BY name;
+-- name: ListPolicies :many
+SELECT name, metadata, spec FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
 SELECT name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets ORDER BY name;
@@ -24,8 +24,8 @@ INSERT INTO providers (name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, NOW())
 ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW();
 
--- name: UpsertPool :exec
-INSERT INTO pools (name, metadata, spec, updated_at)
+-- name: UpsertPolicy :exec
+INSERT INTO policies (name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, NOW())
 ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW();
 
@@ -123,8 +123,8 @@ WHERE parent_kind = $1 AND parent_name = $2 AND ratelimit_name = $3 AND meter = 
 -- name: DeleteProvider :exec
 DELETE FROM providers WHERE name = $1;
 
--- name: DeletePool :exec
-DELETE FROM pools WHERE name = $1;
+-- name: DeletePolicy :exec
+DELETE FROM policies WHERE name = $1;
 
 -- name: DeleteModel :exec
 DELETE FROM models WHERE name = $1;

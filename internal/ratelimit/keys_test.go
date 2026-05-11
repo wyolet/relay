@@ -14,8 +14,8 @@ var hashTagRE = regexp.MustCompile(`^[^{}]*\{[^{}]+\}[^{}]*$`)
 
 func TestBucketKey_HashTag(t *testing.T) {
 	r := catalog.ResolvedRule{
-		ParentKind: catalog.KindPool,
-		ParentName: "prod-pool",
+		ParentKind: catalog.KindPolicy,
+		ParentName: "prod-policy",
 		Meter:      catalog.MeterRequests,
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: "per-minute"},
@@ -27,9 +27,9 @@ func TestBucketKey_HashTag(t *testing.T) {
 		},
 	}
 	ts := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
-	key := bucketKey("prod-pool", r, ts)
+	key := bucketKey("prod-policy", r, ts)
 
-	// Sample: limit:{pool:prod-pool}:Pool:prod-pool:per-minute:requests:2024-01-15T10:00:00Z
+	// Sample: limit:{policy:prod-policy}:Policy:prod-policy:per-minute:requests:2024-01-15T10:00:00Z
 	if !hashTagRE.MatchString(key) {
 		t.Errorf("bucketKey does not match hash-tag pattern: %q", key)
 	}
@@ -49,18 +49,18 @@ func TestConcurrencyKey_HashTag(t *testing.T) {
 			},
 		},
 	}
-	key := concurrencyKey("prod-pool", r)
+	key := concurrencyKey("prod-policy", r)
 
-	// Sample: limit:{pool:prod-pool}:Secret:sk-abc123:max-concurrent:concurrency
+	// Sample: limit:{policy:prod-policy}:Secret:sk-abc123:max-concurrent:concurrency
 	if !hashTagRE.MatchString(key) {
 		t.Errorf("concurrencyKey does not match hash-tag pattern: %q", key)
 	}
 }
 
 func TestCommitGuardKey_HashTag(t *testing.T) {
-	key := commitGuardKey("prod-pool", "res-uuid-1234")
+	key := commitGuardKey("prod-policy", "res-uuid-1234")
 
-	// Sample: limit:{pool:prod-pool}:committed:res-uuid-1234
+	// Sample: limit:{policy:prod-policy}:committed:res-uuid-1234
 	if !hashTagRE.MatchString(key) {
 		t.Errorf("commitGuardKey does not match hash-tag pattern: %q", key)
 	}

@@ -15,12 +15,12 @@ type CatalogDB interface {
 	// DeleteProvider removes a provider.
 	DeleteProvider(ctx context.Context, name string) error
 
-	// UpsertPool inserts or updates a pool.
-	UpsertPool(ctx context.Context, p Pool) error
-	// ListPools returns all pools.
-	ListPools(ctx context.Context) ([]Pool, error)
-	// DeletePool removes a pool.
-	DeletePool(ctx context.Context, name string) error
+	// UpsertPolicy inserts or updates a policy.
+	UpsertPolicy(ctx context.Context, p Policy) error
+	// ListPolicies returns all policies.
+	ListPolicies(ctx context.Context) ([]Policy, error)
+	// DeletePolicy removes a policy.
+	DeletePolicy(ctx context.Context, name string) error
 
 	// ListSecretRows returns raw secret rows (with encrypted bytes) for snapshot loading.
 	ListSecretRows(ctx context.Context) ([]SecretRow, error)

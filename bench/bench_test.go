@@ -164,7 +164,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	const (
 		providerName = "bench-provider"
 		modelName    = "gpt-bench"
-		poolName     = "bench-pool"
+		poolName     = "bench-policy"
 		secretName   = "bench-secret"
 	)
 
@@ -176,7 +176,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 			Kind:        catalog.PKOpenAI,
 			BaseURL:     stubURL,
 			Default:     true,
-			DefaultPool: poolName,
+			DefaultPolicy: poolName,
 		},
 	}
 	sec := &catalog.Secret{
@@ -190,11 +190,11 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 		Resolved: "bench-api-key",
 		KeyHash:  "benchhash",
 	}
-	pool := &catalog.Pool{
+	policy := &catalog.Policy{
 		APIVersion: catalog.APIVersion,
-		Kind:       catalog.KindPool,
+		Kind:       catalog.KindPolicy,
 		Metadata:   catalog.Metadata{Name: poolName},
-		Spec: catalog.PoolSpec{
+		Spec: catalog.PolicySpec{
 			Provider: providerName,
 			Secrets:  []string{secretName},
 		},
@@ -209,7 +209,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 		},
 	}
 
-	cfg := catalog.NewMemStore(prov, sec, pool, model)
+	cfg := catalog.NewMemStore(prov, sec, policy, model)
 	st := kv.NewMem()
 
 	el, err := eventlog.New(eventlog.Config{
@@ -244,10 +244,10 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 		if err != nil {
 			return pipeline.RunResult{}, err
 		}
-		if plan.Pool != nil && len(plan.Secrets) > 0 {
+		if plan.Policy != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
 				Provider: plan.Provider,
-				Pool:     plan.Pool,
+				Policy:     plan.Policy,
 				Model:    plan.Model,
 				Secrets:  plan.Secrets,
 				Selector: sel,
@@ -261,11 +261,11 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 			Resolved: "",
 			KeyHash:  "anon",
 		}
-		syntheticPool := &catalog.Pool{
-			Metadata: catalog.Metadata{Name: "anon-pool"},
+		syntheticPool := &catalog.Policy{
+			Metadata: catalog.Metadata{Name: "anon-policy"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Pool:     syntheticPool,
+			Policy:     syntheticPool,
 			Secrets:  []*catalog.Secret{emptySecret},
 			Selector: sel,
 			Outbound: ob,

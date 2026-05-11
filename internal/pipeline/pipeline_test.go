@@ -42,8 +42,8 @@ func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
 	st := kv.NewMem()
 	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
 
-	pool := &catalog.Pool{
-		Metadata: catalog.Metadata{Name: "test-pool"},
+	policy := &catalog.Policy{
+		Metadata: catalog.Metadata{Name: "test-policy"},
 	}
 	secrets := []*catalog.Secret{
 		{Metadata: catalog.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
@@ -51,7 +51,7 @@ func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
 	}
 
 	opts := RunOptions{
-		Pool:        pool,
+		Policy:        policy,
 		Secrets:     secrets,
 		Selector:    sel,
 		Outbound:    ob,
@@ -564,8 +564,8 @@ func testLimiterSetup(t *testing.T) (*ratelimit.Limiter, []catalog.ResolvedRule,
 	l := ratelimit.New(st, slog.Default(), nil)
 	rules := []catalog.ResolvedRule{
 		{
-			ParentKind: catalog.KindPool,
-			ParentName: "test-pool",
+			ParentKind: catalog.KindPolicy,
+			ParentName: "test-policy",
 			Meter:      catalog.MeterRequests,
 			RateLimit: &catalog.RateLimit{
 				Metadata: catalog.Metadata{Name: "rpm"},
@@ -585,12 +585,12 @@ func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *ratelimit.Limiter, 
 	st := kv.NewMem()
 	t.Cleanup(func() { st.Close() })
 	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
-	pool := &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}}
+	policy := &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}}
 	secrets := []*catalog.Secret{
 		{Metadata: catalog.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
 	}
 	return RunOptions{
-		Pool:        pool,
+		Policy:        policy,
 		Secrets:     secrets,
 		Selector:    sel,
 		Outbound:    ob,
@@ -608,8 +608,8 @@ func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRu
 	now := time.Now()
 	l := ratelimit.New(st, slog.Default(), func() time.Time { return now })
 	rule := catalog.ResolvedRule{
-		ParentKind: catalog.KindPool,
-		ParentName: "test-pool",
+		ParentKind: catalog.KindPolicy,
+		ParentName: "test-policy",
 		Meter:      meter,
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: string(meter) + "-limit"},
@@ -624,13 +624,13 @@ func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRu
 	ctx := context.Background()
 	// Exhaust the budget: Reserve once (succeeds), then the next Reserve will fail.
 	if meter == catalog.MeterRequests {
-		l.Reserve(ctx, "test-pool", rules)
+		l.Reserve(ctx, "test-policy", rules)
 	} else if meter == catalog.MeterConcurrency {
-		l.Reserve(ctx, "test-pool", rules)
+		l.Reserve(ctx, "test-policy", rules)
 	}
 	// For tokens: set the counter via a successful Reserve+Commit with tokens=amount.
 	if meter == catalog.MeterTokens {
-		res, _ := l.Reserve(ctx, "test-pool", rules)
+		res, _ := l.Reserve(ctx, "test-policy", rules)
 		if res != nil {
 			commitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -674,7 +674,7 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}},
+		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -721,7 +721,7 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}},
+		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -839,7 +839,7 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
 	opts := RunOptions{
-		Pool:        &catalog.Pool{Metadata: catalog.Metadata{Name: "test-pool"}},
+		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -918,7 +918,7 @@ spec:
 	sel3 := keypool.New(st3, slog.Default(), nil, lim3, cfg, nil)
 
 	sec := cfg.Secrets()[0]
-	p2 := &catalog.Pool{Metadata: catalog.Metadata{Name: "pp"}}
+	p2 := &catalog.Policy{Metadata: catalog.Metadata{Name: "pp"}}
 
 	// Pre-exhaust the budget.
 	rule3 := catalog.ResolvedRule{
@@ -941,7 +941,7 @@ spec:
 	close(ch.In)
 
 	_, runErr := Run(ctx, ch, RunOptions{
-		Pool:    p2,
+		Policy:    p2,
 		Secrets: []*catalog.Secret{sec},
 		Selector: sel3,
 		Outbound: ob,
@@ -1302,9 +1302,9 @@ func TestRun_PassthroughAuth(t *testing.T) {
 	close(ch.In)
 
 	opts := RunOptions{
-		Pool: &catalog.Pool{
-			Metadata: catalog.Metadata{Name: "pt-pool"},
-			Spec:     catalog.PoolSpec{Passthrough: true},
+		Policy: &catalog.Policy{
+			Metadata: catalog.Metadata{Name: "pt-policy"},
+			Spec:     catalog.PolicySpec{Passthrough: true},
 		},
 		Selector:        sel,
 		Outbound:        ob,

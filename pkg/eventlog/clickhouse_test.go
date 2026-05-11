@@ -55,7 +55,7 @@ func makeEvent(i int) eventlog.Event {
 		RequestID:    fmt.Sprintf("req-%04d", i),
 		Model:        "gpt-4o",
 		Provider:     "openai",
-		Pool:         "pool-a",
+		Policy:         "policy-a",
 		SecretHash:   "abc123def456",
 		TerminatedBy: "clean",
 		Tokens:       eventlog.TokenCounts{Prompt: 10, Completion: 20, Total: 30},

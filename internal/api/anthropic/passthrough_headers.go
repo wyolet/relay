@@ -7,7 +7,7 @@ import (
 )
 
 // passthroughHeaders are forwarded verbatim from inbound to upstream when a
-// pool is in passthrough mode. They carry Anthropic/Claude-Code client-identity
+// policy is in passthrough mode. They carry Anthropic/Claude-Code client-identity
 // signals that upstream inspects (OAuth beta gating, billing UA, session id).
 var passthroughHeaders = []string{
 	"Anthropic-Beta",

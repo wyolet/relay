@@ -203,9 +203,9 @@ spec:
     env: KEY1
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: my-pool
+  name: my-policy
 spec:
   provider: openai-prod
   secrets:
@@ -217,11 +217,11 @@ spec:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	pool, ok := s.PoolByName("my-pool")
+	policy, ok := s.PolicyByName("my-policy")
 	if !ok {
-		t.Fatal("pool not found")
+		t.Fatal("policy not found")
 	}
-	secs := s.SecretsForPool(pool)
+	secs := s.SecretsForPolicy(policy)
 	if len(secs) != 2 {
 		t.Fatalf("expected 2 secrets, got %d", len(secs))
 	}
@@ -258,9 +258,9 @@ spec:
     env: KEY2
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: prod-pool
+  name: prod-policy
 spec:
   provider: openai-prod
   secretSelector:
@@ -271,8 +271,8 @@ spec:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	pool, _ := s.PoolByName("prod-pool")
-	secs := s.SecretsForPool(pool)
+	policy, _ := s.PolicyByName("prod-policy")
+	secs := s.SecretsForPolicy(policy)
 	if len(secs) != 1 || secs[0].Metadata.Name != "prod-key" {
 		t.Errorf("expected only prod-key, got %v", secs)
 	}
@@ -316,9 +316,9 @@ spec:
     env: K3
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: combo-pool
+  name: combo-policy
 spec:
   provider: openai-prod
   secrets:
@@ -331,8 +331,8 @@ spec:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	pool, _ := s.PoolByName("combo-pool")
-	secs := s.SecretsForPool(pool)
+	policy, _ := s.PolicyByName("combo-policy")
+	secs := s.SecretsForPolicy(policy)
 	if len(secs) != 3 {
 		t.Fatalf("expected 3 secrets (union), got %d", len(secs))
 	}
@@ -353,9 +353,9 @@ spec:
     env: KEY1
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: bad-pool
+  name: bad-policy
 spec:
   provider: openai-prod
   secrets:
@@ -371,9 +371,9 @@ func TestPool_AuthRequiredEmpty(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "all.yaml", openaiProvider+`---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: empty-pool
+  name: empty-policy
 spec:
   provider: openai-prod
 `)
@@ -395,9 +395,9 @@ spec:
   value: ""
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: ollama-pool
+  name: ollama-policy
 spec:
   provider: dev-ollama
   secrets:
@@ -405,7 +405,7 @@ spec:
 `)
 	_, err := LoadYAML(dir)
 	if err != nil {
-		t.Fatalf("unexpected error for anonymous ollama pool: %v", err)
+		t.Fatalf("unexpected error for anonymous ollama policy: %v", err)
 	}
 }
 
@@ -419,11 +419,11 @@ spec:
   kind: ollama
   baseURL: http://localhost:11434
   default: true
-  defaultPool: nonexistent-pool
+  defaultPolicy: nonexistent-policy
 `)
 	_, err := LoadYAML(dir)
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
-		t.Fatalf("expected defaultPool not found error, got: %v", err)
+		t.Fatalf("expected defaultPolicy not found error, got: %v", err)
 	}
 }
 
@@ -440,9 +440,9 @@ spec:
   value: ""
 ---
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
-  name: ollama-pool
+  name: ollama-policy
 spec:
   provider: dev-ollama
   secrets:
@@ -455,7 +455,7 @@ metadata:
 spec:
   kind: ollama
   baseURL: http://localhost:11435
-  defaultPool: ollama-pool
+  defaultPolicy: ollama-policy
 `)
 	_, err := LoadYAML(dir)
 	if err == nil || !strings.Contains(err.Error(), "belongs to provider") {

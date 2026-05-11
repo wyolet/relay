@@ -31,7 +31,7 @@ func newTestLC(tp *sdktrace.TracerProvider) *Lifecycle {
 		RequestID:    "req-1",
 		Model:        "gpt-4o",
 		Provider:     "openai",
-		Pool:         "pool-a",
+		Policy:         "policy-a",
 		SecretHash:   SecretHash("sk-secret"),
 		TerminatedBy: TerminatedClean,
 		Tokens:       Tokens{"input": 10, "output": 20, "cache_read": 5},
@@ -83,7 +83,7 @@ func TestRecord_HappyPath(t *testing.T) {
 	assertStr(t, ev, "request_id", "req-1")
 	assertStr(t, ev, "model", "gpt-4o")
 	assertStr(t, ev, "provider", "openai")
-	assertStr(t, ev, "pool", "pool-a")
+	assertStr(t, ev, "policy", "policy-a")
 	assertStr(t, ev, "terminated_by", "clean")
 	assertStr(t, ev, "instance_id", "pod-1")
 	assertStr(t, ev, "relay_version", "v0.1.0")

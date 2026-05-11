@@ -353,10 +353,10 @@ func main() {
 		if err != nil {
 			return pipeline.RunResult{}, err
 		}
-		if plan.Pool != nil && len(plan.Secrets) > 0 {
+		if plan.Policy != nil && len(plan.Secrets) > 0 {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
 				Provider:       plan.Provider,
-				Pool:           plan.Pool,
+				Policy:           plan.Policy,
 				Model:          plan.Model,
 				Secrets:        plan.Secrets,
 				Selector:       sel,
@@ -372,11 +372,11 @@ func main() {
 			Resolved: "",
 			KeyHash:  "anon",
 		}
-		syntheticPool := &catalog.Pool{
-			Metadata: catalog.Metadata{Name: "anon-pool"},
+		syntheticPool := &catalog.Policy{
+			Metadata: catalog.Metadata{Name: "anon-policy"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Pool:           syntheticPool,
+			Policy:           syntheticPool,
 			Secrets:        []*catalog.Secret{emptySecret},
 			Selector:       sel,
 			Outbound:       ob,
@@ -397,10 +397,10 @@ func main() {
 			})
 		}
 		doUpstream := mob.Messages
-		if plan.Pool != nil && (len(plan.Secrets) > 0 || plan.Passthrough) {
+		if plan.Policy != nil && (len(plan.Secrets) > 0 || plan.Passthrough) {
 			return pipeline.Run(ctx, ch, pipeline.RunOptions{
 				Provider:        plan.Provider,
-				Pool:            plan.Pool,
+				Policy:            plan.Policy,
 				Model:           plan.Model,
 				Secrets:         plan.Secrets,
 				Selector:        sel,
@@ -417,11 +417,11 @@ func main() {
 			Resolved: "",
 			KeyHash:  "anon",
 		}
-		syntheticPool := &catalog.Pool{
-			Metadata: catalog.Metadata{Name: "anon-pool"},
+		syntheticPool := &catalog.Policy{
+			Metadata: catalog.Metadata{Name: "anon-policy"},
 		}
 		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Pool:           syntheticPool,
+			Policy:           syntheticPool,
 			Secrets:        []*catalog.Secret{emptySecret},
 			Selector:       sel,
 			DoUpstream:     doUpstream,
@@ -561,7 +561,7 @@ func shutdown(
 	// 4. Drain in-flight Lua scripts.
 	step("state", func(_ context.Context) error { return st.Close() }, 5*time.Second)
 
-	// 5. Close the storage pool.
+	// 5. Close the storage policy.
 	step("configstore", func(_ context.Context) error {
 		if pg, ok := cfg.(*catalog.PGStore); ok {
 			pg.Close()

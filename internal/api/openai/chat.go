@@ -104,6 +104,10 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 				statusCode = http.StatusBadRequest
 				writeError(w, statusCode, "invalid_request_error",
 					resolveErr.Error(), "model_not_specified")
+			case errors.Is(resolveErr, routing.ErrModelNotAllowed):
+				statusCode = http.StatusForbidden
+				writeError(w, statusCode, "invalid_request_error",
+					fmt.Sprintf("model %q not allowed by policy", cr.Model), "model_not_allowed")
 			default:
 				statusCode = http.StatusInternalServerError
 				writeError(w, statusCode, "api_error",

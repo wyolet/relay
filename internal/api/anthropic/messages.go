@@ -45,7 +45,7 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		}()
 
 		// Capture passthrough auth and extra headers before StripInbound removes them.
-		// These are forwarded verbatim to upstream when pool.passthrough=true.
+		// These are forwarded verbatim to upstream when policy.passthrough=true.
 		inboundAuth := r.Header.Get("Authorization")
 		inboundPassthroughHeaders := capturePassthroughHeaders(r.Header)
 
@@ -113,6 +113,9 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			case errors.Is(resolveErr, routing.ErrNoModelSpecified):
 				statusCode = http.StatusBadRequest
 				writeAnthropicError(w, statusCode, "invalid_request_error", resolveErr.Error())
+			case errors.Is(resolveErr, routing.ErrModelNotAllowed):
+				statusCode = http.StatusForbidden
+				writeAnthropicError(w, statusCode, "permission_error", fmt.Sprintf("model %q not allowed by policy", mr.Model))
 			default:
 				statusCode = http.StatusInternalServerError
 				writeAnthropicError(w, statusCode, "api_error", resolveErr.Error())

@@ -20,17 +20,17 @@ func (f *fakeStore) ModelByName(string) (*catalog.Model, bool)                  
 func (f *fakeStore) RouteByName(string) (*catalog.Route, bool)                     { return nil, false }
 func (f *fakeStore) RateLimitByName(string) (*catalog.RateLimit, bool)             { return nil, false }
 func (f *fakeStore) SecretByName(string) (*catalog.Secret, bool)                   { return nil, false }
-func (f *fakeStore) PoolByName(string) (*catalog.Pool, bool)                       { return nil, false }
+func (f *fakeStore) PolicyByName(string) (*catalog.Policy, bool)                       { return nil, false }
 func (f *fakeStore) Providers() []*catalog.Provider                                { return nil }
 func (f *fakeStore) Routes() []*catalog.Route                                      { return nil }
 func (f *fakeStore) RateLimits() []*catalog.RateLimit                              { return nil }
 func (f *fakeStore) Secrets() []*catalog.Secret                                    { return nil }
-func (f *fakeStore) Pools() []*catalog.Pool                                        { return nil }
+func (f *fakeStore) Policies() []*catalog.Policy                                        { return nil }
 func (f *fakeStore) DefaultProvider() *catalog.Provider                            { return nil }
 func (f *fakeStore) DefaultRoute() *catalog.Route                                  { return nil }
 func (f *fakeStore) ProviderForModel(string) (*catalog.Provider, bool)             { return nil, false }
-func (f *fakeStore) SecretsForPool(*catalog.Pool) []*catalog.Secret            { return nil }
-func (f *fakeStore) RateLimitsForRequest(*catalog.Provider, *catalog.Pool, *catalog.Model, *catalog.Secret) []catalog.ResolvedRule {
+func (f *fakeStore) SecretsForPolicy(*catalog.Policy) []*catalog.Secret            { return nil }
+func (f *fakeStore) RateLimitsForRequest(*catalog.Provider, *catalog.Policy, *catalog.Model, *catalog.Secret) []catalog.ResolvedRule {
 	return nil
 }
 func (f *fakeStore) EffectivePricing(string) (*catalog.Pricing, bool) { return nil, false }

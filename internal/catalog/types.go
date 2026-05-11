@@ -16,7 +16,7 @@ const (
 	KindRoute     Kind = "Route"
 	KindRateLimit Kind = "RateLimit"
 	KindSecret    Kind = "Secret"
-	KindPool      Kind = "Pool"
+	KindPolicy      Kind = "Policy"
 )
 
 type ProviderKind string
@@ -49,7 +49,7 @@ type ProviderSpec struct {
 	Kind        ProviderKind `yaml:"kind"        json:"kind"`
 	BaseURL     string       `yaml:"baseURL"     json:"baseURL"`
 	Default     bool         `yaml:"default,omitempty"     json:"default,omitempty"`
-	DefaultPool string       `yaml:"defaultPool,omitempty" json:"defaultPool,omitempty"`
+	DefaultPolicy string       `yaml:"defaultPolicy,omitempty" json:"defaultPolicy,omitempty"`
 
 	// Enabled defaults to true when nil. False disables the resource at the
 	// data plane (filtered from routing/keypool selection); admin reads still
@@ -92,20 +92,25 @@ type SecretValueFrom struct {
 	Env string `yaml:"env" json:"env,omitempty"`
 }
 
-type Pool struct {
+type Policy struct {
 	APIVersion string   `yaml:"apiVersion" json:"apiVersion,omitempty"`
 	Kind       Kind     `yaml:"kind"       json:"kind,omitempty"`
 	Metadata   Metadata `yaml:"metadata"   json:"metadata"`
-	Spec       PoolSpec `yaml:"spec"       json:"spec"`
+	Spec       PolicySpec `yaml:"spec"       json:"spec"`
 }
 
-type PoolSpec struct {
+type PolicySpec struct {
 	Provider          string                `yaml:"provider"              json:"provider"`
 	Secrets           []string              `yaml:"secrets,omitempty"     json:"secrets,omitempty"`
 	SecretSelector    map[string]string     `yaml:"secretSelector,omitempty" json:"secretSelector,omitempty"`
+	// Models is the allowed-list of model names callable through this policy.
+	// Empty/nil = any model registered for the policy's provider.
+	// Populated = only listed model names allowed; unknown model rejected
+	// at dispatch time with model_not_allowed.
+	Models            []string              `yaml:"models,omitempty"      json:"models,omitempty"`
 	RateLimits        []RateLimitAttachment `yaml:"rateLimits,omitempty"  json:"rateLimits,omitempty"`
 	SkipDefaultLimits bool                  `yaml:"skipDefaultLimits,omitempty" json:"skipDefaultLimits,omitempty"`
-	// Passthrough, when true, means the pool has no relay-managed keys.
+	// Passthrough, when true, means the policy has no relay-managed keys.
 	// The inbound Authorization header is forwarded verbatim to upstream.
 	// Secrets and SecretSelector must be empty.
 	Passthrough bool  `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
@@ -289,7 +294,7 @@ const (
 	SourceSystemMirrored RateLimitSource = "system_mirrored"
 )
 
-// RateLimitAttachment is a reference by name from a Pool/Secret/Model to a RateLimit.
+// RateLimitAttachment is a reference by name from a Policy/Secret/Model to a RateLimit.
 // It accepts two YAML/JSON shapes for backward compatibility:
 //
 //	New:    "my-rate-limit"                 (plain string)

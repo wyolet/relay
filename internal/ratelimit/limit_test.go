@@ -58,14 +58,14 @@ func TestRequests_RPMWindow_HappyPath(t *testing.T) {
 	rules := []catalog.ResolvedRule{rule}
 
 	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("reserve %d: unexpected error: %v", i+1, err)
 		}
 		_ = l.Commit(ctx, res, Observations{})
 	}
 
-	_, err := l.Reserve(ctx, "test-pool", rules)
+	_, err := l.Reserve(ctx, "test-policy", rules)
 	if err == nil {
 		t.Fatal("expected ExceededError on 11th reserve")
 	}
@@ -92,7 +92,7 @@ func TestRequests_SlidingInterpolation(t *testing.T) {
 
 	// Fill 10 requests in the first bucket.
 	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("fill reserve %d: %v", i+1, err)
 		}
@@ -106,7 +106,7 @@ func TestRequests_SlidingInterpolation(t *testing.T) {
 	now = base.Add(time.Minute + 30*time.Second)
 	okCount := 0
 	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			if !errors.Is(err, ErrExceeded) {
 				t.Fatalf("unexpected error: %v", err)
@@ -125,13 +125,13 @@ func TestRequests_SlidingInterpolation(t *testing.T) {
 	// Fresh start — 10 slots available.
 	now = base.Add(3 * time.Minute)
 	for i := 0; i < 10; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("new window reserve %d: %v", i+1, err)
 		}
 		_ = l.Commit(ctx, res, Observations{})
 	}
-	_, err := l.Reserve(ctx, "test-pool", rules)
+	_, err := l.Reserve(ctx, "test-policy", rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected exceeded after 10 in new window, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestTokens_PostHocOnly(t *testing.T) {
 	// 5 reserves succeed (tokens not yet consumed).
 	var reservations [5]*Reservation
 	for i := 0; i < 5; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("reserve %d: %v", i+1, err)
 		}
@@ -163,7 +163,7 @@ func TestTokens_PostHocOnly(t *testing.T) {
 	}
 
 	// 6th Reserve should fail: tokens=100 >= 100.
-	_, err := l.Reserve(ctx, "test-pool", rules)
+	_, err := l.Reserve(ctx, "test-policy", rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected ErrExceeded after 100 tokens consumed, got %v", err)
 	}
@@ -183,14 +183,14 @@ func TestConcurrency_BudgetCap(t *testing.T) {
 
 	var r [3]*Reservation
 	for i := 0; i < 3; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("reserve %d: %v", i+1, err)
 		}
 		r[i] = res
 	}
 
-	_, err := l.Reserve(ctx, "test-pool", rules)
+	_, err := l.Reserve(ctx, "test-policy", rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected ErrExceeded on 4th, got %v", err)
 	}
@@ -201,7 +201,7 @@ func TestConcurrency_BudgetCap(t *testing.T) {
 	}
 
 	// 5th should succeed.
-	res, err := l.Reserve(ctx, "test-pool", rules)
+	res, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve after commit: %v", err)
 	}
@@ -216,13 +216,13 @@ func TestConcurrency_CommitOnCancel_DecreasesCounter(t *testing.T) {
 	rule := makeRule(catalog.MeterConcurrency, 1, time.Minute)
 	rules := []catalog.ResolvedRule{rule}
 
-	res, err := l.Reserve(ctx, "test-pool", rules)
+	res, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
 
 	// Second should fail.
-	_, err = l.Reserve(ctx, "test-pool", rules)
+	_, err = l.Reserve(ctx, "test-policy", rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected exceeded, got %v", err)
 	}
@@ -233,7 +233,7 @@ func TestConcurrency_CommitOnCancel_DecreasesCounter(t *testing.T) {
 	}
 
 	// Now should succeed.
-	res2, err := l.Reserve(ctx, "test-pool", rules)
+	res2, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve after cancel commit: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 
 	rules := []catalog.ResolvedRule{rule0, rule1, rule2}
 
-	_, err := l.Reserve(ctx, "test-pool", rules)
+	_, err := l.Reserve(ctx, "test-policy", rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected exceeded, got %v", err)
 	}
@@ -267,7 +267,7 @@ func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 	}
 
 	// rule0's requests counter should be rolled back → still 0.
-	rem, err := l.RemainingByMeter(ctx, "test-pool", []catalog.ResolvedRule{rule0})
+	rem, err := l.RemainingByMeter(ctx, "test-policy", []catalog.ResolvedRule{rule0})
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 	}
 
 	// rule2 should be untouched (rule1 failed before rule2 was evaluated).
-	rem2, err := l.RemainingByMeter(ctx, "test-pool", []catalog.ResolvedRule{rule2})
+	rem2, err := l.RemainingByMeter(ctx, "test-policy", []catalog.ResolvedRule{rule2})
 	if err != nil {
 		t.Fatalf("remaining rule2: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestIdempotentCommit(t *testing.T) {
 	rule := makeRule(catalog.MeterConcurrency, 1, time.Minute)
 	rules := []catalog.ResolvedRule{rule}
 
-	res, err := l.Reserve(ctx, "test-pool", rules)
+	res, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestIdempotentCommit(t *testing.T) {
 	}
 
 	// Concurrency counter should be 0 now (decremented once, not twice).
-	rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
+	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
@@ -329,14 +329,14 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 		ctx := context.Background()
 		rules := []catalog.ResolvedRule{rule}
 		for i := 0; i < 5; i++ {
-			res, err := l.Reserve(ctx, "test-pool", rules)
+			res, err := l.Reserve(ctx, "test-policy", rules)
 			if err != nil {
 				t.Fatalf("fill %d: %v", i+1, err)
 			}
 			_ = l.Commit(ctx, res, Observations{})
 		}
 		// 6th should fail.
-		_, err := l.Reserve(ctx, "test-pool", rules)
+		_, err := l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
 			t.Fatalf("expected exceeded at t=0.5s, got %v", err)
 		}
@@ -351,13 +351,13 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 		// Fill 5 in this window.
 		rules := []catalog.ResolvedRule{rule}
 		for i := 0; i < 5; i++ {
-			res, err := l.Reserve(ctx, "test-pool", rules)
+			res, err := l.Reserve(ctx, "test-policy", rules)
 			if err != nil {
 				t.Fatalf("fill at 59.999s %d: %v", i+1, err)
 			}
 			_ = l.Commit(ctx, res, Observations{})
 		}
-		_, err := l.Reserve(ctx, "test-pool", rules)
+		_, err := l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
 			t.Fatalf("expected exceeded at t=59.999s, got %v", err)
 		}
@@ -370,7 +370,7 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 		ctx := context.Background()
 		rules := []catalog.ResolvedRule{rule}
 		// New bucket, nothing in it.
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("expected success in new bucket, got %v", err)
 		}
@@ -393,14 +393,14 @@ func TestRemainingByMeter_MinAcrossRules(t *testing.T) {
 
 	// 3 reserves → consumes from both rules.
 	for i := 0; i < 3; i++ {
-		res, err := l.Reserve(ctx, "test-pool", rules)
+		res, err := l.Reserve(ctx, "test-policy", rules)
 		if err != nil {
 			t.Fatalf("reserve %d: %v", i+1, err)
 		}
 		_ = l.Commit(ctx, res, Observations{})
 	}
 
-	rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
+	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
@@ -420,11 +420,11 @@ func TestReserve_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	res1, err := l.Reserve(ctx, "test-pool", rules)
+	res1, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve 1: %v", err)
 	}
-	res2, err := l.Reserve(ctx, "test-pool", rules)
+	res2, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve 2: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestReserve_ContextCancel(t *testing.T) {
 	_ = l.Commit(context.Background(), res2, Observations{})
 
 	// After commits, counter should be 0.
-	rem, err := l.RemainingByMeter(context.Background(), "test-pool", rules)
+	rem, err := l.RemainingByMeter(context.Background(), "test-policy", rules)
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
@@ -448,7 +448,7 @@ func TestReserve_ContextCancel(t *testing.T) {
 // makeMultiRule builds a ResolvedRule using the new Rule field for multi-rule RateLimits.
 func makeMultiRule(parentName, rlName string, ruleMeter string, amount int64, window time.Duration) catalog.ResolvedRule {
 	return catalog.ResolvedRule{
-		ParentKind:    catalog.KindPool,
+		ParentKind:    catalog.KindPolicy,
 		ParentName:    parentName,
 		RateLimitName: rlName,
 		Strategy:      catalog.StrategySlidingWindow,
@@ -476,12 +476,12 @@ func TestMultiRule_AllGranted(t *testing.T) {
 	ctx := context.Background()
 
 	rules := []catalog.ResolvedRule{
-		makeMultiRule("test-pool", "tier-1", "requests", 10, time.Minute),
-		makeMultiRule("test-pool", "tier-1", "tokens.input", 100000, time.Minute),
-		makeMultiRule("test-pool", "tier-1", "tokens.output", 50000, time.Minute),
+		makeMultiRule("test-policy", "tier-1", "requests", 10, time.Minute),
+		makeMultiRule("test-policy", "tier-1", "tokens.input", 100000, time.Minute),
+		makeMultiRule("test-policy", "tier-1", "tokens.output", 50000, time.Minute),
 	}
 
-	res, err := l.Reserve(ctx, "test-pool", rules)
+	res, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("expected reservation to succeed, got: %v", err)
 	}
@@ -499,19 +499,19 @@ func TestMultiRule_ViolatingRuleNamed(t *testing.T) {
 	ctx := context.Background()
 
 	rules := []catalog.ResolvedRule{
-		makeMultiRule("test-pool", "tier-1", "requests", 1, time.Minute),
-		makeMultiRule("test-pool", "tier-1", "tokens.input", 100000, time.Minute),
+		makeMultiRule("test-policy", "tier-1", "requests", 1, time.Minute),
+		makeMultiRule("test-policy", "tier-1", "tokens.input", 100000, time.Minute),
 	}
 
 	// First reservation exhausts the requests budget.
-	res1, err := l.Reserve(ctx, "test-pool", rules)
+	res1, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("first reserve: %v", err)
 	}
 	_ = l.Commit(ctx, res1, Observations{Tokens: usage.Tokens{"input": 100}})
 
 	// Second should fail on requests.
-	_, err = l.Reserve(ctx, "test-pool", rules)
+	_, err = l.Reserve(ctx, "test-policy", rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected ErrExceeded, got: %v", err)
 	}
@@ -528,11 +528,11 @@ func TestMultiRule_PerMeterCommit(t *testing.T) {
 	l := newLimiter(t, &now)
 	ctx := context.Background()
 
-	inputRule := makeMultiRule("test-pool", "tier-1", "tokens.input", 1000, time.Minute)
-	outputRule := makeMultiRule("test-pool", "tier-1", "tokens.output", 500, time.Minute)
+	inputRule := makeMultiRule("test-policy", "tier-1", "tokens.input", 1000, time.Minute)
+	outputRule := makeMultiRule("test-policy", "tier-1", "tokens.output", 500, time.Minute)
 	rules := []catalog.ResolvedRule{inputRule, outputRule}
 
-	res, err := l.Reserve(ctx, "test-pool", rules)
+	res, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestMultiRule_PerMeterCommit(t *testing.T) {
 	}
 
 	// input: 1000-900=100 remaining; output: 500-400=100 remaining.
-	rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
+	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}
@@ -562,10 +562,10 @@ func TestMultiRule_BareTokensMeter(t *testing.T) {
 	l := newLimiter(t, &now)
 	ctx := context.Background()
 
-	rule := makeMultiRule("test-pool", "tier-1", "tokens", 1000, time.Minute)
+	rule := makeMultiRule("test-policy", "tier-1", "tokens", 1000, time.Minute)
 	rules := []catalog.ResolvedRule{rule}
 
-	res, err := l.Reserve(ctx, "test-pool", rules)
+	res, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("reserve: %v", err)
 	}
@@ -576,7 +576,7 @@ func TestMultiRule_BareTokensMeter(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	rem, err := l.RemainingByMeter(ctx, "test-pool", rules)
+	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
 	if err != nil {
 		t.Fatalf("remaining: %v", err)
 	}

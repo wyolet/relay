@@ -23,7 +23,7 @@ func makeTestEvent(requestID string) Event {
 		RequestID:    requestID,
 		Model:        "gpt-4o",
 		Provider:     "openai",
-		Pool:         "default",
+		Policy:         "default",
 		SecretHash:   "abc123def456",
 		TerminatedBy: "clean",
 		Tokens:       TokenCounts{"input": 10, "output": 20},

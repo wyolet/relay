@@ -29,7 +29,7 @@ func validate(s *snapshot) error {
 	// An entirely empty catalog is valid — the relay starts without config and
 	// is populated via the admin API. Only validate cross-entity consistency
 	// when there is at least one object present.
-	if len(s.providers) == 0 && len(s.secrets) == 0 && len(s.pools) == 0 &&
+	if len(s.providers) == 0 && len(s.secrets) == 0 && len(s.policies) == 0 &&
 		len(s.models) == 0 && len(s.routes) == 0 && len(s.rateLimits) == 0 {
 		return nil
 	}
@@ -40,7 +40,7 @@ func validate(s *snapshot) error {
 	if err := validateSecrets(s); err != nil {
 		return err
 	}
-	if err := validatePools(s); err != nil {
+	if err := validatePolicies(s); err != nil {
 		return err
 	}
 	if err := validateProviders(s); err != nil {
@@ -89,34 +89,43 @@ func validateSecrets(s *snapshot) error {
 	return nil
 }
 
-func validatePools(s *snapshot) error {
-	for _, pool := range s.pools {
-		if pool.Spec.Provider == "" {
-			return fmt.Errorf("Pool %q: provider required", pool.Metadata.Name)
+func validatePolicies(s *snapshot) error {
+	for _, policy := range s.policies {
+		if policy.Spec.Provider == "" {
+			return fmt.Errorf("Policy %q: provider required", policy.Metadata.Name)
 		}
-		prov, ok := s.providers[pool.Spec.Provider]
+		prov, ok := s.providers[policy.Spec.Provider]
 		if !ok {
-			return fmt.Errorf("Pool %q: unknown provider %q", pool.Metadata.Name, pool.Spec.Provider)
+			return fmt.Errorf("Policy %q: unknown provider %q", policy.Metadata.Name, policy.Spec.Provider)
 		}
-		for _, secName := range pool.Spec.Secrets {
+		for _, secName := range policy.Spec.Secrets {
 			sec, ok := s.secrets[secName]
 			if !ok {
-				return fmt.Errorf("Pool %q: unknown secret %q", pool.Metadata.Name, secName)
+				return fmt.Errorf("Policy %q: unknown secret %q", policy.Metadata.Name, secName)
 			}
-			if sec.Spec.Provider != pool.Spec.Provider {
-				return fmt.Errorf("Pool %q: secret %q belongs to provider %q, not %q", pool.Metadata.Name, secName, sec.Spec.Provider, pool.Spec.Provider)
+			if sec.Spec.Provider != policy.Spec.Provider {
+				return fmt.Errorf("Policy %q: secret %q belongs to provider %q, not %q", policy.Metadata.Name, secName, sec.Spec.Provider, policy.Spec.Provider)
 			}
 		}
-		if pool.Spec.Passthrough {
-			if len(pool.Spec.Secrets) > 0 || len(pool.Spec.SecretSelector) > 0 {
-				return fmt.Errorf("Pool %q: passthrough pool must not specify secrets or secretSelector", pool.Metadata.Name)
+		for _, modelName := range policy.Spec.Models {
+			m, ok := s.models[modelName]
+			if !ok {
+				return fmt.Errorf("Policy %q: unknown model %q", policy.Metadata.Name, modelName)
+			}
+			if m.Spec.Provider != policy.Spec.Provider {
+				return fmt.Errorf("Policy %q: model %q belongs to provider %q, not %q", policy.Metadata.Name, modelName, m.Spec.Provider, policy.Spec.Provider)
+			}
+		}
+		if policy.Spec.Passthrough {
+			if len(policy.Spec.Secrets) > 0 || len(policy.Spec.SecretSelector) > 0 {
+				return fmt.Errorf("Policy %q: passthrough policy must not specify secrets or secretSelector", policy.Metadata.Name)
 			}
 			continue
 		}
-		effective := s.secretsForPool(pool)
+		effective := s.secretsForPolicy(policy)
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
 		if authRequired && len(effective) == 0 {
-			return fmt.Errorf("Pool %q: provider %q requires auth but pool has no effective secrets", pool.Metadata.Name, pool.Spec.Provider)
+			return fmt.Errorf("Policy %q: provider %q requires auth but policy has no effective secrets", policy.Metadata.Name, policy.Spec.Provider)
 		}
 	}
 	return nil
@@ -192,15 +201,15 @@ func validateProviders(s *snapshot) error {
 		return errors.New("at most one Provider may be default")
 	}
 	for _, p := range s.providers {
-		if p.Spec.DefaultPool == "" {
+		if p.Spec.DefaultPolicy == "" {
 			continue
 		}
-		pool, ok := s.pools[p.Spec.DefaultPool]
+		policy, ok := s.policies[p.Spec.DefaultPolicy]
 		if !ok {
-			return fmt.Errorf("Provider %q: defaultPool %q does not exist", p.Metadata.Name, p.Spec.DefaultPool)
+			return fmt.Errorf("Provider %q: defaultPolicy %q does not exist", p.Metadata.Name, p.Spec.DefaultPolicy)
 		}
-		if pool.Spec.Provider != p.Metadata.Name {
-			return fmt.Errorf("Provider %q: defaultPool %q belongs to provider %q", p.Metadata.Name, p.Spec.DefaultPool, pool.Spec.Provider)
+		if policy.Spec.Provider != p.Metadata.Name {
+			return fmt.Errorf("Provider %q: defaultPolicy %q belongs to provider %q", p.Metadata.Name, p.Spec.DefaultPolicy, policy.Spec.Provider)
 		}
 	}
 	return nil
@@ -349,8 +358,8 @@ func validateAttachments(s *snapshot) error {
 			return err
 		}
 	}
-	for _, pool := range s.pools {
-		if err := checkAttachments(KindPool, pool.Metadata.Name, pool.Spec.RateLimits); err != nil {
+	for _, policy := range s.policies {
+		if err := checkAttachments(KindPolicy, policy.Metadata.Name, policy.Spec.RateLimits); err != nil {
 			return err
 		}
 	}
@@ -363,13 +372,13 @@ func validateAttachments(s *snapshot) error {
 }
 
 func validatePoolDefaultLimits(s *snapshot) error {
-	for _, pool := range s.pools {
-		prov, ok := s.providers[pool.Spec.Provider]
+	for _, policy := range s.policies {
+		prov, ok := s.providers[policy.Spec.Provider]
 		if !ok {
 			continue
 		}
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
-		if !authRequired || pool.Spec.SkipDefaultLimits || pool.Spec.Passthrough {
+		if !authRequired || policy.Spec.SkipDefaultLimits || policy.Spec.Passthrough {
 			continue
 		}
 		hasRequests := false
@@ -392,12 +401,12 @@ func validatePoolDefaultLimits(s *snapshot) error {
 				}
 			}
 		}
-		checkRules(pool.Spec.RateLimits)
-		for _, sec := range s.secretsForPool(pool) {
+		checkRules(policy.Spec.RateLimits)
+		for _, sec := range s.secretsForPolicy(policy) {
 			checkRules(sec.Spec.RateLimits)
 		}
 		if !hasRequests || !hasTokens {
-			return fmt.Errorf("Pool %q: auth-required provider needs at least one requests and one tokens rate-limit attachment (set skipDefaultLimits: true to opt out)", pool.Metadata.Name)
+			return fmt.Errorf("Policy %q: auth-required provider needs at least one requests and one tokens rate-limit attachment (set skipDefaultLimits: true to opt out)", policy.Metadata.Name)
 		}
 	}
 	return nil

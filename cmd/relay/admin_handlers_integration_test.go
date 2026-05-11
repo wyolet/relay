@@ -180,16 +180,16 @@ func TestAdminProvider_CRUD(t *testing.T) {
 	resp.Body.Close()
 }
 
-// --- Pool ---
+// --- Policy ---
 
 func TestAdminPool_CRUD(t *testing.T) {
 	srv, store := buildAdminTestServer(t)
 
-	// Insert a provider first (Pool.provider ref not validated by validate() unless strict)
+	// Insert a provider first (Policy.provider ref not validated by validate() unless strict)
 	provBody := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1",
 		"kind":       "Provider",
-		"metadata":   map[string]string{"name": "pool-prov"},
+		"metadata":   map[string]string{"name": "policy-prov"},
 		"spec":       map[string]any{"kind": "ollama", "baseURL": "http://localhost:11434"},
 	}
 	resp := adminReq(t, srv, http.MethodPost, "/control/providers", provBody)
@@ -197,37 +197,37 @@ func TestAdminPool_CRUD(t *testing.T) {
 
 	body := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1",
-		"kind":       "Pool",
-		"metadata":   map[string]string{"name": "test-pool"},
-		"spec":       map[string]any{"provider": "pool-prov"},
+		"kind":       "Policy",
+		"metadata":   map[string]string{"name": "test-policy"},
+		"spec":       map[string]any{"provider": "policy-prov"},
 	}
 
-	resp = adminReq(t, srv, http.MethodPost, "/control/pools", body)
+	resp = adminReq(t, srv, http.MethodPost, "/control/policies", body)
 	if resp.StatusCode != http.StatusCreated {
 		resp.Body.Close()
-		t.Fatalf("create pool: want 201 got %d", resp.StatusCode)
+		t.Fatalf("create policy: want 201 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/control/pools/test-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/policies/test-policy", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("get pool: want 200 got %d", resp.StatusCode)
+		t.Fatalf("get policy: want 200 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	_, ok := store.PoolByName("test-pool")
+	_, ok := store.PolicyByName("test-policy")
 	if !ok {
-		t.Fatal("auto-reload: pool not in snapshot")
+		t.Fatal("auto-reload: policy not in snapshot")
 	}
 
-	resp = adminReq(t, srv, http.MethodDelete, "/control/pools/test-pool", nil)
+	resp = adminReq(t, srv, http.MethodDelete, "/control/policies/test-policy", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
-		t.Fatalf("delete pool: want 204 got %d", resp.StatusCode)
+		t.Fatalf("delete policy: want 204 got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 
-	resp = adminReq(t, srv, http.MethodGet, "/control/pools/test-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/policies/test-policy", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after delete: want 404 got %d", resp.StatusCode)
 	}
@@ -426,7 +426,7 @@ func TestAdminCRUD_Auth(t *testing.T) {
 func TestAdminPool_BrokenSecretRef_400(t *testing.T) {
 	srv, _ := buildAdminTestServer(t)
 
-	// First insert a provider so pool.provider ref resolves
+	// First insert a provider so policy.provider ref resolves
 	provBody := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1", "kind": "Provider",
 		"metadata": map[string]string{"name": "ref-prov"},
@@ -435,14 +435,14 @@ func TestAdminPool_BrokenSecretRef_400(t *testing.T) {
 	resp := adminReq(t, srv, http.MethodPost, "/control/providers", provBody)
 	resp.Body.Close()
 
-	// Pool referencing a non-existent secret → 400 (validator catches dangling secret ref)
+	// Policy referencing a non-existent secret → 400 (validator catches dangling secret ref)
 	body := map[string]any{
 		"apiVersion": "relay.wyolet.dev/v1",
-		"kind":       "Pool",
-		"metadata":   map[string]string{"name": "bad-pool"},
+		"kind":       "Policy",
+		"metadata":   map[string]string{"name": "bad-policy"},
 		"spec":       map[string]any{"provider": "ref-prov", "secrets": []string{"nonexistent-secret"}},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/control/pools", body)
+	resp = adminReq(t, srv, http.MethodPost, "/control/policies", body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("broken ref: want 400 got %d", resp.StatusCode)

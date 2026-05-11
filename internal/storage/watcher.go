@@ -11,7 +11,7 @@ import (
 // CatalogWatcher subscribes to PG NOTIFY relay_catalog and invokes onNotify
 // for every notification. Construct via NewCatalogWatcher; close via Close.
 //
-// The watcher holds a dedicated *pgx.Conn (NOT from the pool — LISTEN occupies
+// The watcher holds a dedicated *pgx.Conn (NOT from the policy — LISTEN occupies
 // a connection for its lifetime). Reconnects on connection loss with backoff.
 type CatalogWatcher struct {
 	dsn      string

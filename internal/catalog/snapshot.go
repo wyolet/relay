@@ -9,7 +9,7 @@ type snapshot struct {
 	routes          map[string]*Route
 	rateLimits      map[string]*RateLimit
 	secrets         map[string]*Secret
-	pools           map[string]*Pool
+	policies           map[string]*Policy
 	effectivePrices map[string]*Pricing // keyed by model name; populated by buildEffectivePricing
 }
 
@@ -29,7 +29,7 @@ func newSnapshot() *snapshot {
 		routes:          map[string]*Route{},
 		rateLimits:      map[string]*RateLimit{},
 		secrets:         map[string]*Secret{},
-		pools:           map[string]*Pool{},
+		policies:           map[string]*Policy{},
 		effectivePrices: map[string]*Pricing{},
 	}
 }
@@ -134,8 +134,8 @@ func (s *snapshot) secretByName(name string) (*Secret, bool) {
 	return sec, ok
 }
 
-func (s *snapshot) poolByName(name string) (*Pool, bool) {
-	p, ok := s.pools[name]
+func (s *snapshot) policyByName(name string) (*Policy, bool) {
+	p, ok := s.policies[name]
 	return p, ok
 }
 
@@ -184,16 +184,16 @@ func (s *snapshot) listSecrets() []*Secret {
 	return out
 }
 
-func (s *snapshot) listPools() []*Pool {
-	out := make([]*Pool, 0, len(s.pools))
-	for _, p := range s.pools {
+func (s *snapshot) listPolicies() []*Policy {
+	out := make([]*Policy, 0, len(s.policies))
+	for _, p := range s.policies {
 		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
 	return out
 }
 
-func (s *snapshot) secretsForPool(p *Pool) []*Secret {
+func (s *snapshot) secretsForPolicy(p *Policy) []*Secret {
 	seen := map[string]struct{}{}
 	var out []*Secret
 	for _, name := range p.Spec.Secrets {
@@ -224,7 +224,7 @@ func (s *snapshot) secretsForPool(p *Pool) []*Secret {
 	return out
 }
 
-func (s *snapshot) rateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
+func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, model *Model, secret *Secret) []ResolvedRule {
 	var out []ResolvedRule
 
 	expand := func(parentKind Kind, parentName string, attachments []RateLimitAttachment) {
@@ -251,8 +251,8 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, pool *Pool, model *M
 	if secret != nil {
 		expand(KindSecret, secret.Metadata.Name, secret.Spec.RateLimits)
 	}
-	if pool != nil {
-		expand(KindPool, pool.Metadata.Name, pool.Spec.RateLimits)
+	if policy != nil {
+		expand(KindPolicy, policy.Metadata.Name, policy.Spec.RateLimits)
 	}
 	if model != nil {
 		expand(KindModel, model.Metadata.Name, model.Spec.RateLimits)

@@ -29,10 +29,10 @@ type Patch struct {
 	// DeleteSecret removes the named secret.
 	DeleteSecret string
 
-	// UpsertPool inserts or replaces the named pool.
-	UpsertPool *Pool
-	// DeletePool removes the named pool.
-	DeletePool string
+	// UpsertPolicy inserts or replaces the named policy.
+	UpsertPolicy *Policy
+	// DeletePolicy removes the named policy.
+	DeletePolicy string
 }
 
 // ValidateWithPatch clones the current in-memory snapshot, applies patch, and
@@ -52,7 +52,7 @@ func cloneSnapshot(src *snapshot) *snapshot {
 		routes:     make(map[string]*Route, len(src.routes)),
 		rateLimits: make(map[string]*RateLimit, len(src.rateLimits)),
 		secrets:    make(map[string]*Secret, len(src.secrets)),
-		pools:      make(map[string]*Pool, len(src.pools)),
+		policies:      make(map[string]*Policy, len(src.policies)),
 	}
 	for k, v := range src.providers {
 		dst.providers[k] = v
@@ -69,8 +69,8 @@ func cloneSnapshot(src *snapshot) *snapshot {
 	for k, v := range src.secrets {
 		dst.secrets[k] = v
 	}
-	for k, v := range src.pools {
-		dst.pools[k] = v
+	for k, v := range src.policies {
+		dst.policies[k] = v
 	}
 	return dst
 }
@@ -106,10 +106,10 @@ func applyPatch(s *snapshot, p Patch) {
 	if p.DeleteSecret != "" {
 		delete(s.secrets, p.DeleteSecret)
 	}
-	if p.UpsertPool != nil {
-		s.pools[p.UpsertPool.Metadata.Name] = p.UpsertPool
+	if p.UpsertPolicy != nil {
+		s.policies[p.UpsertPolicy.Metadata.Name] = p.UpsertPolicy
 	}
-	if p.DeletePool != "" {
-		delete(s.pools, p.DeletePool)
+	if p.DeletePolicy != "" {
+		delete(s.policies, p.DeletePolicy)
 	}
 }

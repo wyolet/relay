@@ -6,4 +6,4 @@ spec:
   kind: ollama
   baseURL: https://ollama.wyolet.dev
   default: true
-  defaultPool: ollama-default
+  defaultPolicy: ollama-default

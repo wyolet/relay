@@ -6,4 +6,4 @@ spec:
   kind: ollama
   baseURL: http://host.docker.internal:11434
   default: true
-  defaultPool: smoke-pool
+  defaultPolicy: smoke-pool

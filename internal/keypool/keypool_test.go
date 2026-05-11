@@ -35,8 +35,8 @@ func secret(name, hash string) *catalog.Secret {
 	}
 }
 
-func pool(name string) *catalog.Pool {
-	return &catalog.Pool{Metadata: catalog.Metadata{Name: name}}
+func pool(name string) *catalog.Policy {
+	return &catalog.Policy{Metadata: catalog.Metadata{Name: name}}
 }
 
 // frozen clock helpers
@@ -314,7 +314,7 @@ type stubCfg struct {
 	rules map[string][]catalog.ResolvedRule // keyed by secret name
 }
 
-func (c *stubCfg) RateLimitsForRequest(_ *catalog.Provider, _ *catalog.Pool, _ *catalog.Model, sec *catalog.Secret) []catalog.ResolvedRule {
+func (c *stubCfg) RateLimitsForRequest(_ *catalog.Provider, _ *catalog.Policy, _ *catalog.Model, sec *catalog.Secret) []catalog.ResolvedRule {
 	if sec == nil {
 		return nil
 	}
@@ -325,17 +325,17 @@ func (c *stubCfg) ModelByName(_ string) (*catalog.Model, bool)        { return n
 func (c *stubCfg) RouteByName(_ string) (*catalog.Route, bool)        { return nil, false }
 func (c *stubCfg) RateLimitByName(_ string) (*catalog.RateLimit, bool) { return nil, false }
 func (c *stubCfg) SecretByName(_ string) (*catalog.Secret, bool)      { return nil, false }
-func (c *stubCfg) PoolByName(_ string) (*catalog.Pool, bool)          { return nil, false }
+func (c *stubCfg) PolicyByName(_ string) (*catalog.Policy, bool)          { return nil, false }
 func (c *stubCfg) Providers() []*catalog.Provider                     { return nil }
 func (c *stubCfg) Models() []*catalog.Model                           { return nil }
 func (c *stubCfg) Routes() []*catalog.Route                           { return nil }
 func (c *stubCfg) RateLimits() []*catalog.RateLimit                   { return nil }
 func (c *stubCfg) Secrets() []*catalog.Secret                         { return nil }
-func (c *stubCfg) Pools() []*catalog.Pool                             { return nil }
+func (c *stubCfg) Policies() []*catalog.Policy                             { return nil }
 func (c *stubCfg) DefaultProvider() *catalog.Provider                 { return nil }
 func (c *stubCfg) DefaultRoute() *catalog.Route                       { return nil }
 func (c *stubCfg) ProviderForModel(_ string) (*catalog.Provider, bool) { return nil, false }
-func (c *stubCfg) SecretsForPool(_ *catalog.Pool) []*catalog.Secret   { return nil }
+func (c *stubCfg) SecretsForPolicy(_ *catalog.Policy) []*catalog.Secret   { return nil }
 func (c *stubCfg) EffectivePricing(_ string) (*catalog.Pricing, bool)  { return nil, false }
 
 // makeRule creates a ResolvedRule with a given meter and amount.

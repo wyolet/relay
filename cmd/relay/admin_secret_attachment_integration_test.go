@@ -187,7 +187,7 @@ func TestAdminSecret_EnvMode_CRUD(t *testing.T) {
 func TestAdminSecret_StoredMode_WithMasterKey(t *testing.T) {
 	ctx := context.Background()
 	srv, store, st := buildSecretTestServer(t, true)
-	_ = store // used below for SecretByName/PoolByName
+	_ = store // used below for SecretByName/PolicyByName
 
 	body := map[string]any{
 		"name":     "test-stored-secret",
@@ -302,7 +302,7 @@ func TestAdminSecret_StoredMode_NoMasterKey_400(t *testing.T) {
 }
 
 func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
-	t.Setenv("RELAY_SEC_REF", "pool-ref-value")
+	t.Setenv("RELAY_SEC_REF", "policy-ref-value")
 	srv, _, _ := buildSecretTestServer(t, false)
 
 	secBody := map[string]any{
@@ -316,14 +316,14 @@ func TestAdminSecret_DeleteReferenced_400(t *testing.T) {
 	}
 
 	poolBody := map[string]any{
-		"apiVersion": "relay.wyolet.dev/v1", "kind": "Pool",
-		"metadata": map[string]string{"name": "ref-pool"},
+		"apiVersion": "relay.wyolet.dev/v1", "kind": "Policy",
+		"metadata": map[string]string{"name": "ref-policy"},
 		"spec":     map[string]any{"provider": "seed-prov", "secrets": []string{"ref-secret"}},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/control/pools", poolBody)
+	resp = adminReq(t, srv, http.MethodPost, "/control/policies", poolBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create pool: want 201 got %d", resp.StatusCode)
+		t.Fatalf("create policy: want 201 got %d", resp.StatusCode)
 	}
 
 	resp = adminReq(t, srv, http.MethodDelete, "/control/secrets/ref-secret", nil)
@@ -383,7 +383,7 @@ func TestAdminSecret_List(t *testing.T) {
 // --- Attachment (derived view) tests ---
 
 // TestAdminAttachment_DerivedView verifies GET /admin/attachments derives from inline spec.
-// Attachments are created by PUTting a Pool with rateLimits inline.
+// Attachments are created by PUTting a Policy with rateLimits inline.
 func TestAdminAttachment_DerivedView(t *testing.T) {
 	srv, store, _ := buildSecretTestServer(t, false)
 
@@ -403,34 +403,34 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 		t.Fatalf("create ratelimit: want 201 got %d", resp.StatusCode)
 	}
 
-	// Create a pool WITH inline rateLimits.
+	// Create a policy WITH inline rateLimits.
 	poolBody := map[string]any{
-		"apiVersion": "relay.wyolet.dev/v1", "kind": "Pool",
-		"metadata": map[string]string{"name": "att-pool"},
+		"apiVersion": "relay.wyolet.dev/v1", "kind": "Policy",
+		"metadata": map[string]string{"name": "att-policy"},
 		"spec": map[string]any{
 			"provider":          "seed-prov",
 			"skipDefaultLimits": true,
 			"rateLimits":        []map[string]any{{"ref": "att-rl", "meter": "requests"}},
 		},
 	}
-	resp = adminReq(t, srv, http.MethodPost, "/control/pools", poolBody)
+	resp = adminReq(t, srv, http.MethodPost, "/control/policies", poolBody)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create pool with rateLimits: want 201 got %d", resp.StatusCode)
+		t.Fatalf("create policy with rateLimits: want 201 got %d", resp.StatusCode)
 	}
 
 	// Verify snapshot reflects inline rateLimits.
-	pool, ok := store.PoolByName("att-pool")
+	policy, ok := store.PolicyByName("att-policy")
 	if !ok {
-		t.Fatal("pool not in snapshot")
+		t.Fatal("policy not in snapshot")
 	}
-	if len(pool.Spec.RateLimits) == 0 {
-		t.Error("pool spec missing RateLimits")
-	} else if pool.Spec.RateLimits[0].Ref != "att-rl" {
-		t.Errorf("want ref=att-rl, got %q", pool.Spec.RateLimits[0].Ref)
+	if len(policy.Spec.RateLimits) == 0 {
+		t.Error("policy spec missing RateLimits")
+	} else if policy.Spec.RateLimits[0].Ref != "att-rl" {
+		t.Errorf("want ref=att-rl, got %q", policy.Spec.RateLimits[0].Ref)
 	}
 
-	// GET /admin/attachments — all → includes our pool attachment.
+	// GET /admin/attachments — all → includes our policy attachment.
 	resp = adminReq(t, srv, http.MethodGet, "/control/attachments", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list all: want 200 got %d", resp.StatusCode)
@@ -439,16 +439,16 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 	decodeResp(t, resp, &listAll)
 	found := false
 	for _, item := range listAll.Items {
-		if item["parentKind"] == "Pool" && item["parentName"] == "att-pool" && item["ratelimitName"] == "att-rl" {
+		if item["parentKind"] == "Policy" && item["parentName"] == "att-policy" && item["ratelimitName"] == "att-rl" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected attachment for att-pool in list-all response, got %+v", listAll.Items)
+		t.Errorf("expected attachment for att-policy in list-all response, got %+v", listAll.Items)
 	}
 
-	// GET /admin/attachments?parent_kind=Pool&parent_name=att-pool → filtered.
-	resp = adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Pool&parent_name=att-pool", nil)
+	// GET /admin/attachments?parent_kind=Policy&parent_name=att-policy → filtered.
+	resp = adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Policy&parent_name=att-policy", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list filtered: want 200 got %d", resp.StatusCode)
 	}
@@ -464,27 +464,27 @@ func TestAdminAttachment_DerivedView(t *testing.T) {
 	if item["meter"] != "requests" {
 		t.Errorf("want meter=requests, got %v", item["meter"])
 	}
-	expectedID := "Pool:att-pool:att-rl:requests"
+	expectedID := "Policy:att-policy:att-rl:requests"
 	if item["id"] != expectedID {
 		t.Errorf("want id=%q, got %q", expectedID, item["id"])
 	}
 
 	// Removing the rateLimits via PUT removes it from the derived view.
 	poolBodyNoRL := map[string]any{
-		"apiVersion": "relay.wyolet.dev/v1", "kind": "Pool",
-		"metadata": map[string]string{"name": "att-pool"},
+		"apiVersion": "relay.wyolet.dev/v1", "kind": "Policy",
+		"metadata": map[string]string{"name": "att-policy"},
 		"spec": map[string]any{
 			"provider":          "seed-prov",
 			"skipDefaultLimits": true,
 		},
 	}
-	resp = adminReq(t, srv, http.MethodPut, "/control/pools/att-pool", poolBodyNoRL)
+	resp = adminReq(t, srv, http.MethodPut, "/control/policies/att-policy", poolBodyNoRL)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("update pool: want 200 got %d", resp.StatusCode)
+		t.Fatalf("update policy: want 200 got %d", resp.StatusCode)
 	}
 
-	resp = adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Pool&parent_name=att-pool", nil)
+	resp = adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Policy&parent_name=att-policy", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list after remove: want 200 got %d", resp.StatusCode)
 	}
@@ -500,7 +500,7 @@ func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
 	srv, _, _ := buildSecretTestServer(t, false)
 
 	// POST /admin/attachments should now 404 (route is gone).
-	attBody := map[string]any{"parentKind": "Pool", "parentName": "x", "ratelimitName": "y", "meter": "requests"}
+	attBody := map[string]any{"parentKind": "Policy", "parentName": "x", "ratelimitName": "y", "meter": "requests"}
 	resp := adminReq(t, srv, http.MethodPost, "/control/attachments", attBody)
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK {
@@ -512,7 +512,7 @@ func TestAdminAttachment_NoWriteEndpoints(t *testing.T) {
 func TestAdminAttachment_MissingQueryParams_400(t *testing.T) {
 	srv, _, _ := buildSecretTestServer(t, false)
 
-	resp := adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Pool", nil)
+	resp := adminReq(t, srv, http.MethodGet, "/control/attachments?parent_kind=Policy", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing parent_name: want 400 got %d", resp.StatusCode)

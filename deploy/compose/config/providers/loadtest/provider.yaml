@@ -6,4 +6,4 @@ spec:
   kind: anthropic
   baseURL: http://fakeanthropic:9999
   default: false
-  defaultPool: loadtest-pool
+  defaultPolicy: loadtest-pool

@@ -85,21 +85,21 @@ func (s *YAMLStore) ModelByName(name string) (*Model, bool)          { return s.
 func (s *YAMLStore) RouteByName(name string) (*Route, bool)          { return s.snap.routeByName(name) }
 func (s *YAMLStore) RateLimitByName(name string) (*RateLimit, bool)  { return s.snap.rateLimitByName(name) }
 func (s *YAMLStore) SecretByName(name string) (*Secret, bool)        { return s.snap.secretByName(name) }
-func (s *YAMLStore) PoolByName(name string) (*Pool, bool)            { return s.snap.poolByName(name) }
+func (s *YAMLStore) PolicyByName(name string) (*Policy, bool)            { return s.snap.policyByName(name) }
 func (s *YAMLStore) Providers() []*Provider                          { return s.snap.listProviders() }
 func (s *YAMLStore) Models() []*Model                                { return s.snap.listModels() }
 func (s *YAMLStore) Routes() []*Route                                { return s.snap.listRoutes() }
 func (s *YAMLStore) RateLimits() []*RateLimit                        { return s.snap.listRateLimits() }
 func (s *YAMLStore) Secrets() []*Secret                              { return s.snap.listSecrets() }
-func (s *YAMLStore) Pools() []*Pool                                  { return s.snap.listPools() }
+func (s *YAMLStore) Policies() []*Policy                                  { return s.snap.listPolicies() }
 func (s *YAMLStore) DefaultProvider() *Provider                      { return s.snap.defaultProvider() }
 func (s *YAMLStore) DefaultRoute() *Route                            { return s.snap.defaultRoute() }
 func (s *YAMLStore) ProviderForModel(modelName string) (*Provider, bool) {
 	return s.snap.providerForModel(modelName)
 }
-func (s *YAMLStore) SecretsForPool(p *Pool) []*Secret { return s.snap.secretsForPool(p) }
-func (s *YAMLStore) RateLimitsForRequest(provider *Provider, pool *Pool, model *Model, secret *Secret) []ResolvedRule {
-	return s.snap.rateLimitsForRequest(provider, pool, model, secret)
+func (s *YAMLStore) SecretsForPolicy(p *Policy) []*Secret { return s.snap.secretsForPolicy(p) }
+func (s *YAMLStore) RateLimitsForRequest(provider *Provider, policy *Policy, model *Model, secret *Secret) []ResolvedRule {
+	return s.snap.rateLimitsForRequest(provider, policy, model, secret)
 }
 func (s *YAMLStore) EffectivePricing(modelName string) (*Pricing, bool) {
 	return s.snap.effectivePricingByModel(modelName)
@@ -201,15 +201,15 @@ func dispatchKind(path string, idx int, raw *rawDoc, snap *snapshot) error {
 		}
 		snap.secrets[name] = &Secret{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
-	case KindPool:
-		var spec PoolSpec
+	case KindPolicy:
+		var spec PolicySpec
 		if err := raw.Spec.Decode(&spec); err != nil {
-			return fmt.Errorf("%s [doc %d] Pool %s: %w", path, idx, name, err)
+			return fmt.Errorf("%s [doc %d] Policy %s: %w", path, idx, name, err)
 		}
-		if _, dup := snap.pools[name]; dup {
-			return fmt.Errorf("%s [doc %d]: duplicate Pool %q", path, idx, name)
+		if _, dup := snap.policies[name]; dup {
+			return fmt.Errorf("%s [doc %d]: duplicate Policy %q", path, idx, name)
 		}
-		snap.pools[name] = &Pool{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
+		snap.policies[name] = &Policy{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	default:
 		return fmt.Errorf("%s [doc %d]: unknown kind %q", path, idx, raw.Kind)

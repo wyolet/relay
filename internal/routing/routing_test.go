@@ -13,14 +13,14 @@ import (
 func provider(name string) *catalog.Provider {
 	return &catalog.Provider{
 		Metadata: catalog.Metadata{Name: name},
-		Spec:     catalog.ProviderSpec{Kind: catalog.PKOpenAI, DefaultPool: name + "-pool"},
+		Spec:     catalog.ProviderSpec{Kind: catalog.PKOpenAI, DefaultPolicy: name + "-policy"},
 	}
 }
 
-func pool(name, providerName string) *catalog.Pool {
-	return &catalog.Pool{
+func policy(name, providerName string) *catalog.Policy {
+	return &catalog.Policy{
 		Metadata: catalog.Metadata{Name: name},
-		Spec:     catalog.PoolSpec{Provider: providerName},
+		Spec:     catalog.PolicySpec{Provider: providerName},
 	}
 }
 
@@ -39,13 +39,13 @@ func route(name string, defaultRoute bool, models ...string) *catalog.Route {
 }
 
 // catalog fixture shared by most tests:
-//   provider: "openai"  pool: "openai-pool"
+//   provider: "openai"  policy: "openai-policy"
 //   models:   "gpt-4", "gpt-3.5"
 //   routes:   "fast" → [gpt-4], "cheap" → [gpt-3.5], "default-route" (default) → [gpt-3.5]
 func fixture() *catalog.MemStore {
 	return catalog.NewMemStore(
 		provider("openai"),
-		pool("openai-pool", "openai"),
+		policy("openai-policy", "openai"),
 		model("gpt-4", "openai"),
 		model("gpt-3.5", "openai"),
 		route("fast", false, "gpt-4"),
@@ -110,7 +110,7 @@ func TestNoHeaderNoBody_DefaultRouteExists(t *testing.T) {
 func TestNoHeaderNoBody_NoDefaultRoute_ErrNoModelSpecified(t *testing.T) {
 	store := catalog.NewMemStore(
 		provider("openai"),
-		pool("openai-pool", "openai"),
+		policy("openai-policy", "openai"),
 		model("gpt-4", "openai"),
 	)
 	r := routing.New(store)
@@ -133,7 +133,7 @@ func TestPlanHasPoolAndSecrets(t *testing.T) {
 		Metadata: catalog.Metadata{Name: "sk-1"},
 		Spec:     catalog.SecretSpec{Provider: "openai"},
 	}
-	p := pool("openai-pool", "openai")
+	p := policy("openai-policy", "openai")
 	p.Spec.Secrets = []string{"sk-1"}
 	store := catalog.NewMemStore(
 		provider("openai"),
@@ -146,8 +146,8 @@ func TestPlanHasPoolAndSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if plan.Pool == nil {
-		t.Fatal("expected pool to be set")
+	if plan.Policy == nil {
+		t.Fatal("expected policy to be set")
 	}
 	if len(plan.Secrets) != 1 {
 		t.Fatalf("expected 1 secret, got %d", len(plan.Secrets))

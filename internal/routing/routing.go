@@ -14,22 +14,22 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 )
 
-// RequestPlan holds the resolved model, provider, pool, secrets, and rate-limit
-// rules for a single request. Rules are pre-resolved for Pool+Model scope at plan
+// RequestPlan holds the resolved model, provider, policy, secrets, and rate-limit
+// rules for a single request. Rules are pre-resolved for Policy+Model scope at plan
 // time; secret-level rules are M4+ work.
 type RequestPlan struct {
 	Model    *catalog.Model
 	Provider *catalog.Provider
-	Pool     *catalog.Pool
+	Policy     *catalog.Policy
 	Secrets  []*catalog.Secret
 	Rules    []catalog.ResolvedRule
-	// Passthrough is true when Pool.Spec.Passthrough is set. The pipeline
+	// Passthrough is true when Policy.Spec.Passthrough is set. The pipeline
 	// skips key selection and forwards the inbound Authorization header as-is.
 	Passthrough bool
 	// PassthroughAuth is the inbound Authorization header value to forward.
 	// Set by the HTTP handler when Passthrough is true.
 	PassthroughAuth string
-	// PassthroughHeaders are additional inbound headers to forward for passthrough pools.
+	// PassthroughHeaders are additional inbound headers to forward for passthrough policies.
 	// Set by the HTTP handler from the subset of inbound headers in OutboundPassthroughExtra.
 	PassthroughHeaders map[string]string
 	// RawQuery is the inbound request query string, forwarded to upstream.
@@ -44,9 +44,9 @@ type Catalog interface {
 	RouteByName(name string) (*catalog.Route, bool)
 	ModelByName(name string) (*catalog.Model, bool)
 	ProviderForModel(modelName string) (*catalog.Provider, bool)
-	PoolByName(name string) (*catalog.Pool, bool)
-	SecretsForPool(pool *catalog.Pool) []*catalog.Secret
-	RateLimitsForRequest(provider *catalog.Provider, pool *catalog.Pool, model *catalog.Model, secret *catalog.Secret) []catalog.ResolvedRule
+	PolicyByName(name string) (*catalog.Policy, bool)
+	SecretsForPolicy(policy *catalog.Policy) []*catalog.Secret
+	RateLimitsForRequest(provider *catalog.Provider, policy *catalog.Policy, model *catalog.Model, secret *catalog.Secret) []catalog.ResolvedRule
 }
 
 // Sentinel errors returned by Resolve.
@@ -56,7 +56,8 @@ var (
 	ErrUnknownModel     = errors.New("routing: unknown model")
 	ErrNoModelSpecified = errors.New("routing: no model specified")
 	ErrUnknownProvider  = errors.New("routing: unknown provider")
-	ErrUnknownPool      = errors.New("routing: unknown pool")
+	ErrUnknownPolicy      = errors.New("routing: unknown policy")
+	ErrModelNotAllowed    = errors.New("routing: model not allowed by policy")
 )
 
 // Request is what the HTTP layer hands to the resolver.
@@ -121,7 +122,7 @@ func (res *Resolver) pickModel(req Request) (string, error) {
 	return dr.Spec.Models[0], nil
 }
 
-// buildPlan resolves provider, pool, secrets, and rate limits for a model name.
+// buildPlan resolves provider, policy, secrets, and rate limits for a model name.
 func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
 	m, ok := res.catalog.ModelByName(modelName)
 	if !ok || !catalog.IsEnabled(m.Spec.Enabled) {
@@ -132,18 +133,21 @@ func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
 		return nil, ErrUnknownProvider
 	}
 	plan := &RequestPlan{Model: m, Provider: p}
-	if poolName := p.Spec.DefaultPool; poolName != "" {
-		pool, ok := res.catalog.PoolByName(poolName)
-		if !ok || !catalog.IsEnabled(pool.Spec.Enabled) {
-			return nil, ErrUnknownPool
+	if poolName := p.Spec.DefaultPolicy; poolName != "" {
+		policy, ok := res.catalog.PolicyByName(poolName)
+		if !ok || !catalog.IsEnabled(policy.Spec.Enabled) {
+			return nil, ErrUnknownPolicy
 		}
-		plan.Pool = pool
-		if pool.Spec.Passthrough {
+		if len(policy.Spec.Models) > 0 && !modelAllowed(modelName, policy.Spec.Models) {
+			return nil, ErrModelNotAllowed
+		}
+		plan.Policy = policy
+		if policy.Spec.Passthrough {
 			plan.Passthrough = true
 		} else {
-			plan.Secrets = res.catalog.SecretsForPool(pool)
+			plan.Secrets = res.catalog.SecretsForPolicy(policy)
 		}
-		plan.Rules = res.catalog.RateLimitsForRequest(p, pool, m, nil)
+		plan.Rules = res.catalog.RateLimitsForRequest(p, policy, m, nil)
 	}
 	return plan, nil
 }
@@ -151,6 +155,16 @@ func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
 // modelInRoute reports whether modelName is listed in route.Spec.Models.
 func modelInRoute(modelName string, route *catalog.Route) bool {
 	for _, m := range route.Spec.Models {
+		if m == modelName {
+			return true
+		}
+	}
+	return false
+}
+
+// modelAllowed reports whether modelName is in the allowed list.
+func modelAllowed(modelName string, allowed []string) bool {
+	for _, m := range allowed {
 		if m == modelName {
 			return true
 		}

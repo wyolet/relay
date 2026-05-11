@@ -49,7 +49,7 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time) *Limiter {
 // Reservation is returned by a successful Reserve call.
 type Reservation struct {
 	ID       string
-	poolName string // Redis Cluster hash-tag anchor; all keys share {pool:<poolName>}
+	poolName string // Redis Cluster hash-tag anchor; all keys share {policy:<poolName>}
 	rules    []catalog.ResolvedRule
 	// conKeys holds the concurrency state keys incremented at Reserve time.
 	// Used by Commit to decrement them.
@@ -84,7 +84,7 @@ var ErrExceeded = errors.New("limit: budget exceeded")
 
 // Reserve checks all rules and increments counters atomically via one RunScript call.
 // On violation, all increments from this call are rolled back and *ExceededError is returned.
-// poolName is the pool that anchors all Redis Cluster hash tags for this call; pass an
+// poolName is the policy that anchors all Redis Cluster hash tags for this call; pass an
 // empty string only in tests or non-Cluster deployments.
 func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []catalog.ResolvedRule) (*Reservation, error) {
 	now := l.clock()

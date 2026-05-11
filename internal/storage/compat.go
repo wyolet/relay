@@ -17,7 +17,7 @@ func openPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return pgxpool.New(ctx, dsn)
 }
 
-// Postgres opens a pool, runs migrations, and returns a *catalog.PGStore.
+// Postgres opens a policy, runs migrations, and returns a *catalog.PGStore.
 // masterKey may be nil when stored-mode secrets are not in use.
 func Postgres(ctx context.Context, dsn string, masterKey []byte) (*catalog.PGStore, error) {
 	st, err := Open(ctx, dsn)

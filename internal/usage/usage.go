@@ -62,7 +62,7 @@ type Lifecycle struct {
 	RequestID     string            `json:"request_id"`
 	Model         string            `json:"model"`
 	Provider      string            `json:"provider"`
-	Pool          string            `json:"pool"`
+	Policy          string            `json:"policy"`
 	SecretHash    string            `json:"secret_hash"`
 	Attempts      []Attempt         `json:"attempts,omitempty"`
 	Tokens        Tokens            `json:"tokens"`
