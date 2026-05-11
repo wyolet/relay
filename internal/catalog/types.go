@@ -247,39 +247,81 @@ type RateLimitRule struct {
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
 }
 
+// RateLimitSpec is the canonical multi-rule shape. Top-level amount/meter/source
+// were retired (see issue #78); legacy inputs are silently lifted into a
+// one-element Rules list by UnmarshalJSON / UnmarshalYAML for backward compat
+// with stored JSONB rows and YAML fixtures.
 type RateLimitSpec struct {
 	Strategy RateLimitStrategy `yaml:"strategy" json:"strategy"`
 	Window   time.Duration     `yaml:"window"   json:"window"`
-
-	// Rules is the multi-rule list. If non-empty it is the canonical shape.
-	Rules []RateLimitRule `yaml:"rules,omitempty" json:"rules,omitempty"`
-
-	// Legacy single-rule fields. Still accepted on input; lifted into Rules
-	// by NormalizedRules(). Marshalled only when Rules is empty.
-	Amount int64           `yaml:"amount,omitempty" json:"amount,omitempty"`
-	Meter  string          `yaml:"meter,omitempty"  json:"meter,omitempty"`
-	Source RateLimitSource `yaml:"source,omitempty" json:"source,omitempty"`
-
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Rules    []RateLimitRule   `yaml:"rules"    json:"rules"`
+	Enabled  *bool             `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
-// NormalizedRules returns the effective rule list for a spec.
-// If Rules is non-empty it is returned unchanged. Otherwise the legacy
-// Amount/Meter/Source fields are wrapped in a one-element list so all
-// downstream code paths are uniform. Read-only — never mutates the spec.
+// rateLimitSpecJSON is the legacy-tolerant unmarshal shim. It accepts either
+// the canonical {strategy, window, rules[], enabled?} shape or the legacy
+// {strategy, window, amount, meter?, source?, enabled?} shape and lifts the
+// latter into a single-element rules list.
+type rateLimitSpecJSON struct {
+	Strategy RateLimitStrategy `json:"strategy"`
+	Window   time.Duration     `json:"window"`
+	Rules    []RateLimitRule   `json:"rules,omitempty"`
+	Amount   int64             `json:"amount,omitempty"`
+	Meter    string            `json:"meter,omitempty"`
+	Source   string            `json:"source,omitempty"`
+	Enabled  *bool             `json:"enabled,omitempty"`
+}
+
+func (s *RateLimitSpec) UnmarshalJSON(b []byte) error {
+	var raw rateLimitSpecJSON
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	s.Strategy = raw.Strategy
+	s.Window = raw.Window
+	s.Enabled = raw.Enabled
+	s.Rules = raw.Rules
+	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "" || raw.Source != "") {
+		meter := raw.Meter
+		if meter == "" {
+			meter = string(MeterRequests)
+		}
+		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount, Source: raw.Source}}
+	}
+	return nil
+}
+
+func (s *RateLimitSpec) UnmarshalYAML(unmarshal func(any) error) error {
+	var raw struct {
+		Strategy RateLimitStrategy `yaml:"strategy"`
+		Window   time.Duration     `yaml:"window"`
+		Rules    []RateLimitRule   `yaml:"rules,omitempty"`
+		Amount   int64             `yaml:"amount,omitempty"`
+		Meter    string            `yaml:"meter,omitempty"`
+		Source   string            `yaml:"source,omitempty"`
+		Enabled  *bool             `yaml:"enabled,omitempty"`
+	}
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	s.Strategy = raw.Strategy
+	s.Window = raw.Window
+	s.Enabled = raw.Enabled
+	s.Rules = raw.Rules
+	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "" || raw.Source != "") {
+		meter := raw.Meter
+		if meter == "" {
+			meter = string(MeterRequests)
+		}
+		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount, Source: raw.Source}}
+	}
+	return nil
+}
+
+// NormalizedRules returns the effective rule list. Retained as a stable
+// accessor; equivalent to s.Rules now that the spec is canonical.
 func (s *RateLimitSpec) NormalizedRules() []RateLimitRule {
-	if len(s.Rules) > 0 {
-		return s.Rules
-	}
-	meter := s.Meter
-	if meter == "" {
-		meter = string(MeterRequests)
-	}
-	return []RateLimitRule{{
-		Meter:  meter,
-		Amount: s.Amount,
-		Source: string(s.Source),
-	}}
+	return s.Rules
 }
 
 type RateLimitStrategy string

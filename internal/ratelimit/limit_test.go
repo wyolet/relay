@@ -32,9 +32,10 @@ func makeRule(meter catalog.Meter, amount int64, window time.Duration) catalog.R
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
-				Amount:   amount,
+				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
 			},
 		},
+		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
 	}
 }
 
@@ -463,7 +464,7 @@ func makeMultiRule(parentName, rlName string, ruleMeter string, amount int64, wi
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
-				Amount:   amount,
+				Rules:    []catalog.RateLimitRule{{Meter: ruleMeter, Amount: amount}},
 			},
 		},
 	}

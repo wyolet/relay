@@ -22,7 +22,7 @@ func TestBucketKey_HashTag(t *testing.T) {
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   60_000_000_000,
-				Amount:   100,
+				Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: 100}},
 			},
 		},
 	}
@@ -45,7 +45,7 @@ func TestConcurrencyKey_HashTag(t *testing.T) {
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   60_000_000_000,
-				Amount:   10,
+				Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterConcurrency), Amount: 10}},
 			},
 		},
 	}

@@ -235,9 +235,6 @@ func buildReserveArgs(poolName string, rules []catalog.ResolvedRule, now time.Ti
 			meter = string(rule.Meter) // legacy fallback
 		}
 		amount := rule.Rule.Amount
-		if amount == 0 && rule.RateLimit != nil {
-			amount = rule.RateLimit.Spec.Amount // legacy fallback
-		}
 		ra := ruleArg{
 			Meter:      meter,
 			Amount:     amount,

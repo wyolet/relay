@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -49,11 +50,11 @@ spec:
 		if rl.Spec.Window != time.Minute {
 			t.Errorf("expected window 1m, got %v", rl.Spec.Window)
 		}
-		if rl.Spec.Amount != 100 {
-			t.Errorf("expected amount 100, got %d", rl.Spec.Amount)
+		if len(rl.Spec.Rules) != 1 || rl.Spec.Rules[0].Amount != 100 {
+			t.Errorf("expected lifted rules[0].Amount=100, got %+v", rl.Spec.Rules)
 		}
-		if rl.Spec.Source != "" {
-			t.Errorf("expected empty source, got %q", rl.Spec.Source)
+		if len(rl.Spec.Rules) > 0 && rl.Spec.Rules[0].Source != "" {
+			t.Errorf("expected empty source, got %q", rl.Spec.Rules[0].Source)
 		}
 	})
 
@@ -558,37 +559,26 @@ spec:
 	}
 }
 
-// TestNormalizedRules_LegacyLift verifies that the legacy single-field shape
-// is lifted transparently by NormalizedRules.
-func TestNormalizedRules_LegacyLift(t *testing.T) {
-	spec := RateLimitSpec{
-		Strategy: StrategySlidingWindow,
-		Window:   time.Minute,
-		Amount:   100,
-		Meter:    "tokens",
+// TestRateLimitSpec_LegacyJSONLift verifies that legacy top-level shape on
+// the wire is lifted into rules[] by UnmarshalJSON.
+func TestRateLimitSpec_LegacyJSONLift(t *testing.T) {
+	var spec RateLimitSpec
+	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":60000000000,"amount":100,"meter":"tokens"}`), &spec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	rules := spec.NormalizedRules()
-	if len(rules) != 1 {
-		t.Fatalf("expected 1 rule, got %d", len(rules))
-	}
-	if rules[0].Meter != "tokens" {
-		t.Errorf("expected meter tokens, got %q", rules[0].Meter)
-	}
-	if rules[0].Amount != 100 {
-		t.Errorf("expected amount 100, got %d", rules[0].Amount)
+	if len(spec.Rules) != 1 || spec.Rules[0].Meter != "tokens" || spec.Rules[0].Amount != 100 {
+		t.Errorf("expected single tokens rule with amount 100, got %+v", spec.Rules)
 	}
 }
 
-// TestNormalizedRules_DefaultMeter verifies that empty legacy Meter defaults to "requests".
-func TestNormalizedRules_DefaultMeter(t *testing.T) {
-	spec := RateLimitSpec{
-		Strategy: StrategySlidingWindow,
-		Window:   time.Minute,
-		Amount:   50,
+// TestRateLimitSpec_LegacyDefaultMeter verifies empty legacy Meter defaults to "requests".
+func TestRateLimitSpec_LegacyDefaultMeter(t *testing.T) {
+	var spec RateLimitSpec
+	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":60000000000,"amount":50}`), &spec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	rules := spec.NormalizedRules()
-	if len(rules) != 1 || rules[0].Meter != "requests" {
-		t.Fatalf("expected single requests rule, got %+v", rules)
+	if len(spec.Rules) != 1 || spec.Rules[0].Meter != "requests" {
+		t.Fatalf("expected single requests rule, got %+v", spec.Rules)
 	}
 }
 

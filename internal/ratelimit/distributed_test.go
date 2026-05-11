@@ -78,9 +78,10 @@ func makeRuleNamed(meter catalog.Meter, amount int64, window time.Duration, rout
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
-				Amount:   amount,
+				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
 			},
 		},
+		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
 	}
 }
 

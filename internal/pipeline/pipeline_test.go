@@ -572,9 +572,10 @@ func testLimiterSetup(t *testing.T) (*ratelimit.Limiter, []catalog.ResolvedRule,
 				Spec: catalog.RateLimitSpec{
 					Strategy: catalog.StrategySlidingWindow,
 					Window:   time.Minute,
-					Amount:   1000,
+					Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: 1000}},
 				},
 			},
+			Rule: catalog.RateLimitRule{Meter: string(catalog.MeterRequests), Amount: 1000},
 		},
 	}
 	return l, rules, func() { st.Close() }
@@ -616,9 +617,10 @@ func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRu
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   window,
-				Amount:   amount,
+				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
 			},
 		},
+		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
 	}
 	rules := []catalog.ResolvedRule{rule}
 	ctx := context.Background()
@@ -930,9 +932,10 @@ spec:
 			Spec: catalog.RateLimitSpec{
 				Strategy: catalog.StrategySlidingWindow,
 				Window:   time.Minute,
-				Amount:   1,
+				Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: 1}},
 			},
 		},
+		Rule: catalog.RateLimitRule{Meter: string(catalog.MeterRequests), Amount: 1},
 	}
 	lim3.Reserve(ctx, "pp", []catalog.ResolvedRule{rule3})
 

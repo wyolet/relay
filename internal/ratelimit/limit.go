@@ -233,9 +233,6 @@ func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules [
 			w = rule.RateLimit.Spec.Window
 		}
 		amount := rule.Rule.Amount
-		if amount == 0 && rule.RateLimit != nil {
-			amount = rule.RateLimit.Spec.Amount
-		}
 		cur, prev := windowBuckets(now, w)
 		frac := fractionElapsed(now, cur, w)
 
