@@ -419,11 +419,15 @@ func dataRequest(fx *fixture) (int, int) {
 		return 0, 0
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	rb, _ := io.ReadAll(resp.Body)
 
 	ra := 0
 	if h := resp.Header.Get("Retry-After"); h != "" {
 		fmt.Sscanf(h, "%d", &ra)
+	}
+	if os.Getenv("RELAY_DEBUG") != "" {
+		fmt.Printf("[debug] status=%d retry=%d xstatus=%s body=%s\n",
+			resp.StatusCode, ra, resp.Header.Get("X-Relay-Status"), string(rb[:min(200, len(rb))]))
 	}
 	return resp.StatusCode, ra
 }
