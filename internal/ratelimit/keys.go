@@ -101,6 +101,18 @@ func lbStateKey(poolName string, r catalog.ResolvedRule) string {
 	)
 }
 
+// swStateKey returns the state hash key for a session-window rule.
+// format: limit:{policy:<poolName>}:sw:<parentKind>:<parentName>:<rlName>:<meter>
+// Stores a Redis hash: {count, anchor_ms}.
+func swStateKey(poolName string, r catalog.ResolvedRule) string {
+	return fmt.Sprintf("limit:{policy:%s}:sw:%s:%s:%s:%s",
+		poolName,
+		r.ParentKind, r.ParentName,
+		resolvedRLName(r),
+		resolvedMeter(r),
+	)
+}
+
 // commitGuardKey returns the idempotency guard key for a reservation.
 // format: limit:{policy:<poolName>}:committed:<reservationID>
 // The policy hash tag must match the concurrency/token keys touched in the

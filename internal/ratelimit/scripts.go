@@ -30,6 +30,7 @@ import (
 //	"fixed-window"    — single counter per floor(now/window) bucket
 //	"token-bucket"    — lazy-refill hash {tokens, last_ms}; refund on cancel
 //	"leaky-bucket"    — lazy-drain hash {level, last_ms}; refund on cancel
+//	"session-window"  — anchored hash {count, anchor_ms}; refund on cancel
 //	"" (concurrency)  — gauge counter, ignores strategy
 const reserveLuaScript = `
 -- Reserve: per-rule strategy dispatch.
@@ -223,6 +224,37 @@ for i, r in ipairs(rules) do
     level = level + cost
     redis.call('HMSET', state_key, 'level', level, 'last_ms', now_ms)
     redis.call('PEXPIRE', state_key, ttl_ms)
+
+  elseif strategy == "session-window" then
+    -- State hash: {count, anchor_ms}. Window arms on first request after a
+    -- reset and runs for win_ms; counter is a hard integer (no refill).
+    local state_key = KEYS[r.sw_key_idx]
+    local ttl_ms    = win_ms * 2
+
+    local raw = redis.call('HMGET', state_key, 'count', 'anchor_ms')
+    local count_v  = tonumber(raw[1])
+    local anchor_v = tonumber(raw[2])
+
+    local count, anchor_ms
+    if count_v == nil or anchor_v == nil or now_ms >= anchor_v + win_ms then
+      count = 0
+      anchor_ms = now_ms
+    else
+      count = count_v
+      anchor_ms = anchor_v
+    end
+
+    count = count + 1
+    if count > amount then
+      rollback()
+      local retry_ms = anchor_ms + win_ms - now_ms
+      return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
+        parent_kind=r.parent_kind, parent_name=r.parent_name,
+        rule_name=r.rule_name, meter=meter})
+    end
+
+    redis.call('HMSET', state_key, 'count', count, 'anchor_ms', anchor_ms)
+    redis.call('PEXPIRE', state_key, ttl_ms)
   end
 end
 
@@ -245,8 +277,9 @@ return cjson.encode({exceeded=false, token=tok})
 //	ARGV[5] = tok_amounts_json
 //	ARGV[6] = tok_ttl_ms
 //	ARGV[7] = cancelled (0 or 1)
-//	ARGV[8] = tb_refunds_json  — array of {key_idx, cost_scaled} for token-bucket refunds
-//	ARGV[9] = lb_refunds_json  — array of {key_idx, cost_scaled} for leaky-bucket refunds
+//	ARGV[8]  = tb_refunds_json  — array of {key_idx, cost_scaled, burst} for token-bucket refunds
+//	ARGV[9]  = lb_refunds_json  — array of {key_idx, cost_scaled} for leaky-bucket refunds
+//	ARGV[10] = sw_refunds_json  — array of {key_idx, count} for session-window refunds
 //
 // Returns "ok" or "noop" (duplicate).
 const commitLuaScript = `
@@ -261,6 +294,7 @@ local tok_ttl_ms  = tonumber(ARGV[6])
 local cancelled   = tonumber(ARGV[7]) == 1
 local tb_refunds  = cjson.decode(ARGV[8])
 local lb_refunds  = cjson.decode(ARGV[9])
+local sw_refunds  = cjson.decode(ARGV[10])
 
 if redis.call('EXISTS', guard_key) == 1 then
   return "noop"
@@ -307,6 +341,17 @@ if cancelled then
       redis.call('HSET', KEYS[key_idx], 'level', new_l)
     end
   end
+
+  for _, entry in ipairs(sw_refunds) do
+    local key_idx = tonumber(entry[1])
+    local cost    = tonumber(entry[2])
+    local cur_i   = tonumber(redis.call('HGET', KEYS[key_idx], 'count'))
+    if cur_i ~= nil then
+      local new_c = cur_i - cost
+      if new_c < 0 then new_c = 0 end
+      redis.call('HSET', KEYS[key_idx], 'count', new_c)
+    end
+  end
 end
 
 redis.call('SET', guard_key, tok, 'PX', guard_ttl)
@@ -329,6 +374,7 @@ type ruleArg struct {
 	FwKeyIdx   int `json:"fw_key_idx,omitempty"`
 	TbKeyIdx   int `json:"tb_key_idx,omitempty"`
 	LbKeyIdx   int `json:"lb_key_idx,omitempty"`
+	SwKeyIdx   int `json:"sw_key_idx,omitempty"`
 }
 
 // reserveResult is decoded from the Reserve script return value.
@@ -408,6 +454,8 @@ func buildReserveArgs(poolName string, rules []catalog.ResolvedRule, now time.Ti
 				ra.TbKeyIdx = addKey(tbStateKey(poolName, rule))
 			case catalog.StrategyLeakyBucket:
 				ra.LbKeyIdx = addKey(lbStateKey(poolName, rule))
+			case catalog.StrategySessionWindow:
+				ra.SwKeyIdx = addKey(swStateKey(poolName, rule))
 			default: // sliding-window
 				cur, prev := windowBuckets(now, w)
 				ra.CurKeyIdx = addKey(bucketKey(poolName, rule, cur))
@@ -692,6 +740,45 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					level += cost
 					_ = memHSetInt(ctx, store, stateKey, "level", level, ttl)
 					_ = memHSetInt(ctx, store, stateKey, "last_ms", nowMs, ttl)
+
+				case catalog.StrategySessionWindow:
+					stateKey := keys[r.SwKeyIdx-1]
+					ttl := time.Duration(winMs*2) * time.Millisecond
+
+					countV, err := memHGetInt(ctx, store, stateKey, "count")
+					if err != nil {
+						return err
+					}
+					anchorV, err := memHGetInt(ctx, store, stateKey, "anchor_ms")
+					if err != nil {
+						return err
+					}
+
+					var count, anchorMs int64
+					if countV < 0 || anchorV < 0 || nowMs >= anchorV+winMs {
+						count = 0
+						anchorMs = nowMs
+					} else {
+						count = countV
+						anchorMs = anchorV
+					}
+
+					count++
+					if count > amount {
+						rollback()
+						retryMs := anchorMs + winMs - nowMs
+						result = reserveResult{
+							Exceeded:     true,
+							RetryAfterMs: retryMs,
+							ParentKind:   r.ParentKind,
+							ParentName:   r.ParentName,
+							RuleName:     r.RuleName,
+							Meter:        r.Meter,
+						}
+						return nil
+					}
+					_ = memHSetInt(ctx, store, stateKey, "count", count, ttl)
+					_ = memHSetInt(ctx, store, stateKey, "anchor_ms", anchorMs, ttl)
 				}
 			}
 		}
@@ -751,8 +838,8 @@ func isNotFound(err error) bool {
 
 // memCommitImpl is the Go emulator for commitLuaScript.
 func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any) ([]byte, error) {
-	if len(args) < 9 {
-		return nil, fmt.Errorf("limit.commit: expected 9 args, got %d", len(args))
+	if len(args) < 10 {
+		return nil, fmt.Errorf("limit.commit: expected 10 args, got %d", len(args))
 	}
 	tok, ok := args[0].(string)
 	if !ok {
@@ -791,6 +878,10 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 	if !ok4 {
 		return nil, fmt.Errorf("limit.commit: arg[8] lb_refunds_json must be string")
 	}
+	swRefundsJSON, ok5 := args[9].(string)
+	if !ok5 {
+		return nil, fmt.Errorf("limit.commit: arg[9] sw_refunds_json must be string")
+	}
 
 	var tokAmounts []int64
 	if err := json.Unmarshal([]byte(tokAmountsJSON), &tokAmounts); err != nil {
@@ -804,6 +895,10 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 	var lbRefunds [][2]int64
 	if err := json.Unmarshal([]byte(lbRefundsJSON), &lbRefunds); err != nil {
 		return nil, fmt.Errorf("limit.commit: parse lb_refunds: %w", err)
+	}
+	var swRefunds [][2]int64
+	if err := json.Unmarshal([]byte(swRefundsJSON), &swRefunds); err != nil {
+		return nil, fmt.Errorf("limit.commit: parse sw_refunds: %w", err)
 	}
 
 	guardKey := keys[0]
@@ -856,6 +951,18 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 					newL = 0
 				}
 				_ = store.HSet(ctx, stateKey, "level", []byte(strconv.FormatInt(newL, 10)), 0)
+			}
+		}
+		// swRefunds: [key_idx, count]
+		for _, entry := range swRefunds {
+			stateKey := keys[entry[0]-1]
+			curI, _ := memHGetInt(ctx, store, stateKey, "count")
+			if curI >= 0 {
+				newC := curI - entry[1]
+				if newC < 0 {
+					newC = 0
+				}
+				_ = store.HSet(ctx, stateKey, "count", []byte(strconv.FormatInt(newC, 10)), 0)
 			}
 		}
 	}
