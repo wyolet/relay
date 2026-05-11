@@ -411,12 +411,17 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 					// Default per-rule strategy is token-bucket.
 					strategy = StrategyTokenBucket
 				}
+				// Rule-level window overrides spec-level window; fall back to spec.Window.
+				w := rule.Window
+				if w == 0 {
+					w = rl.Spec.Window
+				}
 				out = append(out, ResolvedRule{
 					ParentKind:    parentKind,
 					ParentName:    parentName,
 					RateLimitName: rl.Metadata.Name,
 					Strategy:      strategy,
-					Window:        rl.Spec.Window,
+					Window:        w,
 					Rule:          rule,
 					RateLimit:     rl,
 					Meter:         Meter(rule.Meter),

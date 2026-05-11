@@ -53,8 +53,8 @@ spec:
 		if len(rl.Spec.Rules) != 1 || rl.Spec.Rules[0].Amount != 100 {
 			t.Errorf("expected lifted rules[0].Amount=100, got %+v", rl.Spec.Rules)
 		}
-		if len(rl.Spec.Rules) > 0 && rl.Spec.Rules[0].Source != "" {
-			t.Errorf("expected empty source, got %q", rl.Spec.Rules[0].Source)
+		if rl.Spec.Source != "" {
+			t.Errorf("expected empty spec.Source, got %q", rl.Spec.Source)
 		}
 	})
 
@@ -653,10 +653,10 @@ func TestMultiRuleRateLimit_ValidationErrors(t *testing.T) {
 		},
 		{
 			name: "bad source",
-			spec: `rules:
+			spec: `source: not-attribution
+  rules:
     - meter: requests
-      amount: 10
-      source: not-attribution`,
+      amount: 10`,
 			wantErr: "source",
 		},
 		{
