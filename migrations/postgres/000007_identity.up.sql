@@ -17,7 +17,10 @@ ALTER TABLE providers   DROP CONSTRAINT providers_pkey,
                         ADD PRIMARY KEY (id),
                         ADD CONSTRAINT providers_name_unique UNIQUE (name);
 
-ALTER TABLE policies    DROP CONSTRAINT policies_pkey,
+-- policies inherited the legacy "pools_pkey" constraint name from migration
+-- 000004 (RENAME TABLE preserves constraint names). Drop both possible names.
+ALTER TABLE policies    DROP CONSTRAINT IF EXISTS pools_pkey,
+                        DROP CONSTRAINT IF EXISTS policies_pkey,
                         ADD COLUMN id TEXT NOT NULL,
                         ADD COLUMN display_name TEXT NOT NULL DEFAULT '',
                         ADD PRIMARY KEY (id),
