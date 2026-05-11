@@ -93,6 +93,12 @@ Legacy YAML/JSON that sets `strategy` at the spec level is still accepted: the v
 
 `meter: concurrency` is a simple gauge (INCR on reserve, DECR on commit). Strategy is advisory and ignored at runtime. Set it to any valid value or omit it.
 
+## Tokens meter constraint
+
+`meter: tokens` and `meter: tokens.<suffix>` are **post-hoc** — the amount to charge is unknown at reserve time and arrives with the upstream response. Only `sliding-window` has a Commit-time increment path; the other strategies would silently no-op. Validation rejects `tokens` with `token-bucket` / `leaky-bucket` / `fixed-window`.
+
+Use `sliding-window` for any tokens-based limit. Use the other strategies for `requests` (or the gauge `concurrency`).
+
 ## RateLimit as a group
 
 One RateLimit object with multiple rules is the idiomatic way to express a tier. A single attachment from a Policy or Secret applies all rules at once:
@@ -114,7 +120,7 @@ spec:
       amount: 5
 ```
 
-All rules in a RateLimit share the same window. Rules with different windows require separate RateLimit objects.
+`window` is per-rule and falls back to `spec.window` when omitted. Different rules in the same RateLimit can carry different windows — useful for e.g. a daily token quota alongside a per-minute request rate.
 
 ## State TTLs
 

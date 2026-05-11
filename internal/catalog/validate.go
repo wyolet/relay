@@ -423,6 +423,14 @@ func validateRateLimits(s *snapshot) error {
 			if r.Strategy != "" && !validStrategies[r.Strategy] {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): unsupported strategy %q", rl.Metadata.Name, i, r.Meter, r.Strategy)
 			}
+			// tokens / tokens.<suffix> meters are post-hoc (amount known only after
+			// the upstream responds). Only sliding-window has a Commit-time increment
+			// path; token-bucket / leaky-bucket / fixed-window would silently no-op.
+			if (r.Meter == string(MeterTokens) || strings.HasPrefix(r.Meter, "tokens.")) &&
+				r.Strategy != "" && r.Strategy != StrategySlidingWindow {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): strategy %q is not supported for tokens meter; only sliding-window is supported (tokens are counted post-hoc)",
+					rl.Metadata.Name, i, r.Meter, r.Strategy)
+			}
 			meterSeen[r.Meter]++
 		}
 		for m, cnt := range meterSeen {
