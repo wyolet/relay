@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -392,6 +393,44 @@ func (r *catalogRepo) ListRelayKeys(ctx context.Context) ([]catalog.RelayKey, er
 
 func (r *catalogRepo) DeleteRelayKey(ctx context.Context, name string) error {
 	if err := translateCatalogErr(gen.New(r.db).DeleteRelayKey(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
+}
+
+// ── Passthrough (singleton) ──────────────────────────────────────────────────
+
+func (r *catalogRepo) GetPassthrough(ctx context.Context) (*catalog.Passthrough, error) {
+	row, err := gen.New(r.db).GetPassthrough(ctx, catalog.PassthroughSingletonName)
+	if err != nil {
+		// pgx.ErrNoRows is normalised by translateCatalogErr; the no-row case
+		// returns catalog.ErrNotFound which the caller treats as "use default".
+		if errors.Is(translateCatalogErr(err), catalog.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, translateCatalogErr(err)
+	}
+	var spec catalog.PassthroughSpec
+	if err := json.Unmarshal(row.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("storage: passthrough spec unmarshal: %w", err)
+	}
+	return &catalog.Passthrough{
+		APIVersion: catalog.APIVersion,
+		Kind:       catalog.KindPassthrough,
+		Metadata:   catalog.Metadata{Name: row.Name},
+		Spec:       spec,
+	}, nil
+}
+
+func (r *catalogRepo) SetPassthrough(ctx context.Context, p catalog.Passthrough) error {
+	specBytes, err := json.Marshal(p.Spec)
+	if err != nil {
+		return fmt.Errorf("storage: SetPassthrough marshal: %w", err)
+	}
+	if err := translateCatalogErr(gen.New(r.db).UpsertPassthrough(ctx, gen.UpsertPassthroughParams{
+		Name: catalog.PassthroughSingletonName,
+		Spec: specBytes,
+	})); err != nil {
 		return err
 	}
 	return r.notifyCatalogChange(ctx)

@@ -420,6 +420,7 @@ func mountControlHuma(
 			crudArg.kinds.relayKey, *crudArg.deps, adminAuth)
 		if crudArg.pgStore != nil {
 			registerRelayKeyRevokeRestoreOps(api, crudArg.pgStore, crudArg.deps, adminAuth)
+			registerPassthroughOps(api, crudArg.pgStore, crudArg.deps, adminAuth)
 		}
 
 		if crudArg.pgStore != nil {

@@ -125,3 +125,13 @@ ON CONFLICT (name) DO UPDATE SET
 
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE name = $1;
+
+-- name: GetPassthrough :one
+SELECT name, spec FROM passthrough_config WHERE name = $1;
+
+-- name: UpsertPassthrough :exec
+INSERT INTO passthrough_config (name, spec, updated_at)
+VALUES ($1, $2, NOW())
+ON CONFLICT (name) DO UPDATE SET
+    spec       = EXCLUDED.spec,
+    updated_at = NOW();

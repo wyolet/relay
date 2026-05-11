@@ -37,6 +37,7 @@ func (f *fakeStore) EffectivePricing(string) (*catalog.Pricing, bool) { return n
 func (f *fakeStore) RelayKeyByName(string) (*catalog.RelayKey, bool)  { return nil, false }
 func (f *fakeStore) RelayKeyByHash(string) (*catalog.RelayKey, bool)  { return nil, false }
 func (f *fakeStore) RelayKeys() []*catalog.RelayKey                   { return nil }
+func (f *fakeStore) Passthrough() *catalog.Passthrough                { return catalog.DefaultPassthrough() }
 
 func makeModel(name, provider string) *catalog.Model {
 	return &catalog.Model{

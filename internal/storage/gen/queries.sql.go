@@ -74,6 +74,22 @@ func (q *Queries) DeleteSecret(ctx context.Context, name string) error {
 	return err
 }
 
+const getPassthrough = `-- name: GetPassthrough :one
+SELECT name, spec FROM passthrough_config WHERE name = $1
+`
+
+type GetPassthroughRow struct {
+	Name string `db:"name" json:"name"`
+	Spec []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetPassthrough(ctx context.Context, name string) (GetPassthroughRow, error) {
+	row := q.db.QueryRow(ctx, getPassthrough, name)
+	var i GetPassthroughRow
+	err := row.Scan(&i.Name, &i.Spec)
+	return i, err
+}
+
 const insertSecretEnv = `-- name: InsertSecretEnv :one
 INSERT INTO secrets (name, value_kind, value_from_env, metadata, spec)
 VALUES ($1, 'env', $2, $3, $4)
@@ -503,6 +519,24 @@ type UpsertModelParams struct {
 
 func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error {
 	_, err := q.db.Exec(ctx, upsertModel, arg.Name, arg.Metadata, arg.Spec)
+	return err
+}
+
+const upsertPassthrough = `-- name: UpsertPassthrough :exec
+INSERT INTO passthrough_config (name, spec, updated_at)
+VALUES ($1, $2, NOW())
+ON CONFLICT (name) DO UPDATE SET
+    spec       = EXCLUDED.spec,
+    updated_at = NOW()
+`
+
+type UpsertPassthroughParams struct {
+	Name string `db:"name" json:"name"`
+	Spec []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertPassthrough(ctx context.Context, arg UpsertPassthroughParams) error {
+	_, err := q.db.Exec(ctx, upsertPassthrough, arg.Name, arg.Spec)
 	return err
 }
 

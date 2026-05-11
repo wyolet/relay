@@ -12,6 +12,7 @@ type snapshot struct {
 	policies        map[string]*Policy
 	relayKeys       map[string]*RelayKey // keyed by Metadata.Name
 	relayKeysByHash map[string]*RelayKey // keyed by Spec.KeyHash for hot-path auth lookup
+	passthrough     *Passthrough         // singleton; nil before first load, then always non-nil
 	effectivePrices map[string]*Pricing  // keyed by model name; populated by buildEffectivePricing
 }
 
@@ -61,6 +62,14 @@ func (s *snapshot) relayKeyByName(name string) (*RelayKey, bool) {
 func (s *snapshot) relayKeyByHash(hash string) (*RelayKey, bool) {
 	k, ok := s.relayKeysByHash[hash]
 	return k, ok
+}
+
+// passthroughOrDefault returns the singleton or DefaultPassthrough() when unset.
+func (s *snapshot) passthroughOrDefault() *Passthrough {
+	if s.passthrough != nil {
+		return s.passthrough
+	}
+	return DefaultPassthrough()
 }
 
 func (s *snapshot) listRelayKeys() []*RelayKey {

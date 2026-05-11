@@ -28,4 +28,7 @@ type Store interface {
 	// disabled — callers must check.
 	RelayKeyByHash(hash string) (*RelayKey, bool)
 	RelayKeys() []*RelayKey
+
+	// Passthrough returns the singleton config or DefaultPassthrough() when unset.
+	Passthrough() *Passthrough
 }

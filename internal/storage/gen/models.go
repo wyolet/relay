@@ -16,6 +16,13 @@ type Model struct {
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type PassthroughConfig struct {
+	Name      string             `db:"name" json:"name"`
+	Spec      []byte             `db:"spec" json:"spec"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Policy struct {
 	Name      string             `db:"name" json:"name"`
 	Metadata  []byte             `db:"metadata" json:"metadata"`

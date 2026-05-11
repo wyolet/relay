@@ -107,6 +107,7 @@ func (s *YAMLStore) EffectivePricing(modelName string) (*Pricing, bool) {
 func (s *YAMLStore) RelayKeyByName(name string) (*RelayKey, bool) { return s.snap.relayKeyByName(name) }
 func (s *YAMLStore) RelayKeyByHash(hash string) (*RelayKey, bool) { return s.snap.relayKeyByHash(hash) }
 func (s *YAMLStore) RelayKeys() []*RelayKey                       { return s.snap.listRelayKeys() }
+func (s *YAMLStore) Passthrough() *Passthrough                    { return s.snap.passthroughOrDefault() }
 
 type rawDoc struct {
 	APIVersion string    `yaml:"apiVersion"`

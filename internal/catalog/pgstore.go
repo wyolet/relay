@@ -143,6 +143,13 @@ func (s *PGStore) EffectivePricing(modelName string) (*Pricing, bool) {
 func (s *PGStore) RelayKeyByName(name string) (*RelayKey, bool) { return s.cur().relayKeyByName(name) }
 func (s *PGStore) RelayKeyByHash(hash string) (*RelayKey, bool) { return s.cur().relayKeyByHash(hash) }
 func (s *PGStore) RelayKeys() []*RelayKey                       { return s.cur().listRelayKeys() }
+func (s *PGStore) Passthrough() *Passthrough                    { return s.cur().passthroughOrDefault() }
+
+// SetPassthrough writes the singleton config and is intended to be called by
+// the admin handler after ValidateWithPatch succeeds.
+func (s *PGStore) SetPassthrough(ctx context.Context, p Passthrough) error {
+	return s.db.SetPassthrough(ctx, p)
+}
 
 // UpsertRelayKey writes a relay key. The caller must have already hashed the
 // bearer token into k.Spec.KeyHash; PGStore never sees the plaintext.
@@ -229,6 +236,12 @@ func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
 		snap.relayKeys[k.Metadata.Name] = &kk
 	}
 	snap.rebuildRelayKeyHashIndex()
+
+	pt, err := s.db.GetPassthrough(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetPassthrough: %w", err)
+	}
+	snap.passthrough = pt // may be nil — Passthrough() falls back to default
 
 	return snap, nil
 }

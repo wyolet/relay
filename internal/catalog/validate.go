@@ -59,6 +59,60 @@ func validate(s *snapshot) error {
 	if err := validateRelayKeys(s); err != nil {
 		return err
 	}
+	if err := validatePassthrough(s); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePassthrough(s *snapshot) error {
+	pt := s.passthrough
+	if pt == nil {
+		return nil // unset == default; nothing to check
+	}
+	if pt.Metadata.Name != PassthroughSingletonName {
+		return fmt.Errorf("Passthrough %q: name must be %q (singleton)", pt.Metadata.Name, PassthroughSingletonName)
+	}
+	if pt.Spec.Unauthenticated.Enabled {
+		if !pt.Spec.Enabled {
+			return fmt.Errorf("Passthrough: unauthenticated.enabled requires spec.enabled=true")
+		}
+		if pt.Spec.Unauthenticated.BucketBy == "" {
+			return fmt.Errorf("Passthrough: unauthenticated.bucketBy required when enabled")
+		}
+		switch pt.Spec.Unauthenticated.BucketBy {
+		case PassthroughBucketByCredentialHash:
+		default:
+			return fmt.Errorf("Passthrough: unsupported unauthenticated.bucketBy %q", pt.Spec.Unauthenticated.BucketBy)
+		}
+	}
+	switch pt.Spec.Models.Mode {
+	case PassthroughModelsModeAll:
+		// allow list ignored
+	case PassthroughModelsModeAllowlist:
+		if len(pt.Spec.Models.Allow) == 0 {
+			return fmt.Errorf("Passthrough: models.allow must be non-empty when mode=allowlist")
+		}
+		for _, name := range pt.Spec.Models.Allow {
+			if _, ok := s.models[name]; !ok {
+				return fmt.Errorf("Passthrough: models.allow references unknown model %q", name)
+			}
+		}
+	case "":
+		return fmt.Errorf("Passthrough: models.mode required (one of all, allowlist)")
+	default:
+		return fmt.Errorf("Passthrough: unsupported models.mode %q", pt.Spec.Models.Mode)
+	}
+	if pt.Spec.Enabled && len(pt.Spec.Transports) == 0 {
+		return fmt.Errorf("Passthrough: transports must be non-empty when spec.enabled=true")
+	}
+	for _, t := range pt.Spec.Transports {
+		switch t {
+		case "http", "ws", "amqp", "pubsub":
+		default:
+			return fmt.Errorf("Passthrough: unsupported transport %q", t)
+		}
+	}
 	return nil
 }
 

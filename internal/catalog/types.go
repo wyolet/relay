@@ -16,9 +16,14 @@ const (
 	KindRoute     Kind = "Route"
 	KindRateLimit Kind = "RateLimit"
 	KindSecret    Kind = "Secret"
-	KindPolicy   Kind = "Policy"
-	KindRelayKey Kind = "RelayKey"
+	KindPolicy      Kind = "Policy"
+	KindRelayKey    Kind = "RelayKey"
+	KindPassthrough Kind = "Passthrough"
 )
+
+// PassthroughSingletonName is the canonical Metadata.Name of the singleton
+// Passthrough resource. There is one Passthrough config per Relay instance.
+const PassthroughSingletonName = "default"
 
 type ProviderKind string
 
@@ -454,4 +459,81 @@ type RelayKeySpec struct {
 	RevokedAt *time.Time `yaml:"revokedAt,omitempty" json:"revokedAt,omitempty"`
 	// Enabled defaults to true when nil. False disables auth for this key.
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// Passthrough is the singleton config that controls BYO-credential request
+// handling: whether the relay forwards the inbound Authorization header
+// verbatim to upstream instead of selecting from relay-managed secrets.
+//
+// One Passthrough per relay instance, addressable as
+// /control/passthrough. The resource is k8s-shaped for consistency with
+// other catalog kinds; the singleton invariant is enforced by validation
+// (Metadata.Name must equal PassthroughSingletonName).
+type Passthrough struct {
+	APIVersion string          `yaml:"apiVersion" json:"apiVersion,omitempty"`
+	Kind       Kind            `yaml:"kind"       json:"kind,omitempty"`
+	Metadata   Metadata        `yaml:"metadata"   json:"metadata"`
+	Spec       PassthroughSpec `yaml:"spec"       json:"spec"`
+}
+
+type PassthroughSpec struct {
+	// Enabled is the master switch. When false, all passthrough behaviour is
+	// off regardless of the nested toggles.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	Unauthenticated PassthroughUnauthenticated `yaml:"unauthenticated" json:"unauthenticated"`
+	Models          PassthroughModels          `yaml:"models"          json:"models"`
+
+	// Transports lists which protocols accept passthrough requests. Today only
+	// "http" is wired in the data plane; the others are reserved.
+	Transports []string `yaml:"transports,omitempty" json:"transports,omitempty"`
+}
+
+type PassthroughUnauthenticated struct {
+	// Enabled allows passthrough requests with no Relay key (raw upstream
+	// Authorization only). When false, callers must present a valid Relay key
+	// (X-WR-API-Key) marked passthroughAllowed=true.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// BucketBy declares how unauthenticated callers are aggregated for rate
+	// limiting and accounting. Required when Enabled=true.
+	BucketBy PassthroughBucketBy `yaml:"bucketBy,omitempty" json:"bucketBy,omitempty"`
+}
+
+type PassthroughBucketBy string
+
+const (
+	PassthroughBucketByCredentialHash PassthroughBucketBy = "credential_hash"
+)
+
+type PassthroughModels struct {
+	// Mode selects between unrestricted ("all") and an explicit allow-list
+	// ("allowlist"). Empty array semantics ("[] = all") are intentionally not
+	// supported — the wire shape says what it means.
+	Mode PassthroughModelsMode `yaml:"mode" json:"mode"`
+	// Allow is the list of model names callable via passthrough when
+	// Mode="allowlist". Required (non-empty) in that mode; ignored otherwise.
+	Allow []string `yaml:"allow,omitempty" json:"allow,omitempty"`
+}
+
+type PassthroughModelsMode string
+
+const (
+	PassthroughModelsModeAll       PassthroughModelsMode = "all"
+	PassthroughModelsModeAllowlist PassthroughModelsMode = "allowlist"
+)
+
+// DefaultPassthrough is what GET /control/passthrough returns when no row
+// has been written. Disabled by default; safe-by-default posture.
+func DefaultPassthrough() *Passthrough {
+	return &Passthrough{
+		APIVersion: APIVersion,
+		Kind:       KindPassthrough,
+		Metadata:   Metadata{Name: PassthroughSingletonName},
+		Spec: PassthroughSpec{
+			Enabled:         false,
+			Unauthenticated: PassthroughUnauthenticated{Enabled: false},
+			Models:          PassthroughModels{Mode: PassthroughModelsModeAll},
+			Transports:      []string{"http"},
+		},
+	}
 }

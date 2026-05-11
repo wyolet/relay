@@ -68,6 +68,11 @@ type CatalogDB interface {
 	ListRelayKeys(ctx context.Context) ([]RelayKey, error)
 	// DeleteRelayKey removes a relay key.
 	DeleteRelayKey(ctx context.Context, name string) error
+
+	// GetPassthrough returns the singleton row, or (nil, nil) when unset.
+	GetPassthrough(ctx context.Context) (*Passthrough, error)
+	// SetPassthrough upserts the singleton row.
+	SetPassthrough(ctx context.Context, p Passthrough) error
 }
 
 // TxRunner runs fn inside a transaction, committing on nil error.

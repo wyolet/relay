@@ -408,6 +408,8 @@ func (m *memDB) IsEmpty(_ context.Context) (bool, error)                        
 func (m *memDB) UpsertRelayKey(_ context.Context, _ catalog.RelayKey) error      { return nil }
 func (m *memDB) ListRelayKeys(_ context.Context) ([]catalog.RelayKey, error)     { return nil, nil }
 func (m *memDB) DeleteRelayKey(_ context.Context, _ string) error                { return nil }
+func (m *memDB) GetPassthrough(_ context.Context) (*catalog.Passthrough, error)  { return nil, nil }
+func (m *memDB) SetPassthrough(_ context.Context, _ catalog.Passthrough) error   { return nil }
 
 // WithTxCatalog satisfies catalog.TxRunner by running fn directly (no real tx in tests).
 func (m *memDB) WithTxCatalog(ctx context.Context, fn func(db catalog.CatalogDB) error) error {

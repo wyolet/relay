@@ -28,6 +28,8 @@ func NewMemStore(objects ...any) *MemStore {
 			snap.rateLimits[v.Metadata.Name] = v
 		case *RelayKey:
 			snap.relayKeys[v.Metadata.Name] = v
+		case *Passthrough:
+			snap.passthrough = v
 		}
 	}
 	snap.buildEffectivePricing()
@@ -62,3 +64,4 @@ func (m *MemStore) EffectivePricing(modelName string) (*Pricing, bool) {
 func (m *MemStore) RelayKeyByName(name string) (*RelayKey, bool) { return m.snap.relayKeyByName(name) }
 func (m *MemStore) RelayKeyByHash(hash string) (*RelayKey, bool) { return m.snap.relayKeyByHash(hash) }
 func (m *MemStore) RelayKeys() []*RelayKey                       { return m.snap.listRelayKeys() }
+func (m *MemStore) Passthrough() *Passthrough                    { return m.snap.passthroughOrDefault() }

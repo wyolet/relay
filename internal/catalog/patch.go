@@ -38,6 +38,9 @@ type Patch struct {
 	UpsertRelayKey *RelayKey
 	// DeleteRelayKey removes the named relay key.
 	DeleteRelayKey string
+
+	// SetPassthrough replaces the singleton Passthrough config.
+	SetPassthrough *Passthrough
 }
 
 // ValidateWithPatch clones the current in-memory snapshot, applies patch, and
@@ -82,6 +85,7 @@ func cloneSnapshot(src *snapshot) *snapshot {
 		dst.relayKeys[k] = v
 	}
 	dst.rebuildRelayKeyHashIndex()
+	dst.passthrough = src.passthrough
 	return dst
 }
 
@@ -129,5 +133,8 @@ func applyPatch(s *snapshot, p Patch) {
 	if p.DeleteRelayKey != "" {
 		delete(s.relayKeys, p.DeleteRelayKey)
 		s.rebuildRelayKeyHashIndex()
+	}
+	if p.SetPassthrough != nil {
+		s.passthrough = p.SetPassthrough
 	}
 }

@@ -340,6 +340,7 @@ func (c *stubCfg) EffectivePricing(_ string) (*catalog.Pricing, bool)  { return 
 func (c *stubCfg) RelayKeyByName(_ string) (*catalog.RelayKey, bool)   { return nil, false }
 func (c *stubCfg) RelayKeyByHash(_ string) (*catalog.RelayKey, bool)   { return nil, false }
 func (c *stubCfg) RelayKeys() []*catalog.RelayKey                      { return nil }
+func (c *stubCfg) Passthrough() *catalog.Passthrough                   { return catalog.DefaultPassthrough() }
 
 // makeRule creates a ResolvedRule with a given meter and amount.
 func makeRule(name string, meter catalog.Meter, amount int64) catalog.ResolvedRule {
