@@ -269,13 +269,41 @@ type RateLimitSpec struct {
 	Enabled  *bool             `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
+// jsonDuration is a time.Duration that accepts both nanosecond integers and
+// human-readable strings ("1m", "30s") in JSON. Storage writes integers (Go
+// default); API callers often send strings.
+type jsonDuration time.Duration
+
+func (d *jsonDuration) UnmarshalJSON(b []byte) error {
+	// Try string first ("1m", "30s", etc.)
+	if len(b) > 1 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		v, err := time.ParseDuration(s)
+		if err != nil {
+			return err
+		}
+		*d = jsonDuration(v)
+		return nil
+	}
+	// Fall back to nanoseconds-as-integer (legacy / storage format).
+	var n int64
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*d = jsonDuration(n)
+	return nil
+}
+
 // rateLimitSpecJSON is the legacy-tolerant unmarshal shim. It accepts either
 // the canonical {strategy, window, rules[], enabled?} shape or the legacy
 // {strategy, window, amount, meter?, source?, enabled?} shape and lifts the
 // latter into a single-element rules list.
 type rateLimitSpecJSON struct {
 	Strategy RateLimitStrategy `json:"strategy"`
-	Window   time.Duration     `json:"window"`
+	Window   jsonDuration      `json:"window"`
 	Rules    []RateLimitRule   `json:"rules,omitempty"`
 	Amount   int64             `json:"amount,omitempty"`
 	Meter    string            `json:"meter,omitempty"`
@@ -289,7 +317,7 @@ func (s *RateLimitSpec) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	s.Strategy = raw.Strategy
-	s.Window = raw.Window
+	s.Window = time.Duration(raw.Window)
 	s.Enabled = raw.Enabled
 	s.Rules = raw.Rules
 	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "" || raw.Source != "") {
