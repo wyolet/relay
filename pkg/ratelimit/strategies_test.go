@@ -889,18 +889,99 @@ func TestMultiRule_MixedStrategies(t *testing.T) {
 	}
 }
 
-// TestMultiRule_MixedStrategies_TBRollback_BUGSKIP documents and skips the
-// token-bucket rollback bug exposed by mixed-strategy multi-rule failures.
-//
-// BUG: when token-bucket is rule[0] and a later rule fails, the TB state is NOT
-// rolled back. rollback() in the Reserve Lua script only decrements inc_req
-// (sliding-window / fixed-window) and inc_con (concurrency). Token-bucket,
-// leaky-bucket, and session-window state (HMSET keys) are not restored.
-//
-// Fix: capture pre-deduction TB/LB/SW state in the Lua script (and the Go
-// memReserveImpl emulator) and restore it in rollback() on failure.
-func TestMultiRule_MixedStrategies_TBRollback_BUGSKIP(t *testing.T) {
-	t.Skip("BUG: token-bucket/leaky-bucket/session-window not rolled back on later-rule failure")
+// TestMultiRule_TBRollbackOnLaterFailure verifies that a token-bucket
+// deduction is reversed when a later rule in the same Reserve call fails.
+// Without rollback, the TB state would permanently lose a token per failed
+// multi-rule attempt — a slow leak that biases enforcement over time.
+func TestMultiRule_TBRollbackOnLaterFailure(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l, _ := newScopedLimiter(t, start)
+
+	ruleTB := Rule{Key: "Route:tb-rb:rl-tb", Name: "requests tb", Meter: "requests", Strategy: StrategyTokenBucket, Amount: 100, Window: time.Minute}
+	ruleFW := Rule{Key: "Route:tb-rb:rl-fw", Name: "requests fw", Meter: "requests", Strategy: StrategyFixedWindow, Amount: 50, Window: time.Minute}
+
+	// Fill the fixed-window cap.
+	for i := 0; i < 50; i++ {
+		res := mustReserve(t, l, "tb-rb", []Rule{ruleTB, ruleFW})
+		mustCommit(t, l, res, Observations{})
+	}
+	// Token-bucket should now be at 50 tokens remaining.
+
+	// 51st: fw rejects. TB had already deducted within this script invocation;
+	// rollback() must reverse it.
+	_ = mustExceed(t, l, "tb-rb", []Rule{ruleTB, ruleFW})
+
+	// Verify TB rollback worked: with TB alone (no FW), exactly 50 reserves
+	// must succeed (TB = 50). If TB leaked one in the failed attempt, only 49
+	// would succeed.
+	okCount := 0
+	for i := 0; i < 51; i++ {
+		_, err := l.Reserve(context.Background(), "tb-rb", []Rule{ruleTB})
+		if err == nil {
+			okCount++
+		}
+	}
+	if okCount != 50 {
+		t.Errorf("expected 50 TB reserves to succeed after rollback, got %d (TB leaked tokens on failed multi-rule)", okCount)
+	}
+}
+
+// TestMultiRule_LBRollbackOnLaterFailure: same as above for leaky-bucket.
+func TestMultiRule_LBRollbackOnLaterFailure(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l, _ := newScopedLimiter(t, start)
+
+	ruleLB := Rule{Key: "Route:lb-rb:rl-lb", Name: "requests lb", Meter: "requests", Strategy: StrategyLeakyBucket, Amount: 10, Window: time.Minute}
+	ruleBlock := Rule{Key: "Route:lb-rb:rl-block", Name: "concurrency", Meter: "concurrency", Amount: 0, Window: time.Minute} // always fails
+
+	// Attempt a reserve that will fail at ruleBlock — LB must NOT retain its level increment.
+	for i := 0; i < 100; i++ {
+		_, err := l.Reserve(context.Background(), "lb-rb", []Rule{ruleLB, ruleBlock})
+		if err == nil {
+			t.Fatalf("iter %d: expected exceeded due to ruleBlock", i)
+		}
+	}
+
+	// If LB had not been rolled back, level would now be at capacity and the
+	// next LB-only reserve would fail. Verify exactly 10 succeed (full capacity).
+	okCount := 0
+	for i := 0; i < 11; i++ {
+		_, err := l.Reserve(context.Background(), "lb-rb", []Rule{ruleLB})
+		if err == nil {
+			okCount++
+		}
+	}
+	if okCount != 10 {
+		t.Errorf("expected 10 LB reserves after rollback, got %d (LB level leaked)", okCount)
+	}
+}
+
+// TestMultiRule_SWRollbackOnLaterFailure: same for session-window.
+func TestMultiRule_SWRollbackOnLaterFailure(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l, _ := newScopedLimiter(t, start)
+
+	ruleSW := Rule{Key: "Route:sw-rb:rl-sw", Name: "requests sw", Meter: "requests", Strategy: StrategySessionWindow, Amount: 3, Window: time.Hour}
+	ruleBlock := Rule{Key: "Route:sw-rb:rl-block", Name: "concurrency", Meter: "concurrency", Amount: 0, Window: time.Minute}
+
+	for i := 0; i < 5; i++ {
+		_, err := l.Reserve(context.Background(), "sw-rb", []Rule{ruleSW, ruleBlock})
+		if err == nil {
+			t.Fatalf("iter %d: expected exceeded due to ruleBlock", i)
+		}
+	}
+
+	// SW count must still be 0; full 3 should fit on a SW-only reserve.
+	okCount := 0
+	for i := 0; i < 4; i++ {
+		_, err := l.Reserve(context.Background(), "sw-rb", []Rule{ruleSW})
+		if err == nil {
+			okCount++
+		}
+	}
+	if okCount != 3 {
+		t.Errorf("expected 3 SW reserves after rollback, got %d (SW count leaked)", okCount)
+	}
 }
 
 // TestMultiRule_RollbackOnLaterFailure: 3 rules where rule[0] and rule[1] increment,
@@ -930,11 +1011,18 @@ func TestMultiRule_RollbackOnLaterFailure(t *testing.T) {
 		t.Errorf("rule0 not rolled back: remaining=%d, expected 100", rem0["requests"])
 	}
 
-	// BUG(ratelimit): same TB-rollback bug as noted in TestMultiRule_MixedStrategies.
-	// Token-bucket deductions are not rolled back when a later rule fails.
-	// After the multi-rule failure: rule1 (TB) shows 99 tokens instead of 100.
-	// The assertion below is SKIPPED until the bug is fixed.
-	t.Skip("BUG: token-bucket state not rolled back on later-rule failure (see TestMultiRule_MixedStrategies)")
+	// Verify rule1 (TB) also rolled back — try a TB-only reserve sequence.
+	// If TB leaked a token in the failed multi-rule attempt, only 99 succeed.
+	okCount := 0
+	for i := 0; i < 101; i++ {
+		_, err := l.Reserve(ctx, "multi-rb", []Rule{rule1})
+		if err == nil {
+			okCount++
+		}
+	}
+	if okCount != 100 {
+		t.Errorf("rule1 (TB) not rolled back: %d/100 succeeded, expected 100", okCount)
+	}
 }
 
 // ── STEADY-STATE STATISTICAL ─────────────────────────────────────────────────
