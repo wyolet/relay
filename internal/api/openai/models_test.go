@@ -34,6 +34,9 @@ func (f *fakeStore) RateLimitsForRequest(*catalog.Provider, *catalog.Policy, *ca
 	return nil
 }
 func (f *fakeStore) EffectivePricing(string) (*catalog.Pricing, bool) { return nil, false }
+func (f *fakeStore) RelayKeyByName(string) (*catalog.RelayKey, bool)  { return nil, false }
+func (f *fakeStore) RelayKeyByHash(string) (*catalog.RelayKey, bool)  { return nil, false }
+func (f *fakeStore) RelayKeys() []*catalog.RelayKey                   { return nil }
 
 func makeModel(name, provider string) *catalog.Model {
 	return &catalog.Model{

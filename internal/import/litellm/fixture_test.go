@@ -405,6 +405,9 @@ func (m *memDB) UpsertRateLimit(_ context.Context, _ catalog.RateLimit) error   
 func (m *memDB) ListRateLimits(_ context.Context) ([]catalog.RateLimit, error)  { return nil, nil }
 func (m *memDB) DeleteRateLimit(_ context.Context, _ string) error              { return nil }
 func (m *memDB) IsEmpty(_ context.Context) (bool, error)                         { return len(m.models) == 0 && len(m.providers) == 0, nil }
+func (m *memDB) UpsertRelayKey(_ context.Context, _ catalog.RelayKey) error      { return nil }
+func (m *memDB) ListRelayKeys(_ context.Context) ([]catalog.RelayKey, error)     { return nil, nil }
+func (m *memDB) DeleteRelayKey(_ context.Context, _ string) error                { return nil }
 
 // WithTxCatalog satisfies catalog.TxRunner by running fn directly (no real tx in tests).
 func (m *memDB) WithTxCatalog(ctx context.Context, fn func(db catalog.CatalogDB) error) error {

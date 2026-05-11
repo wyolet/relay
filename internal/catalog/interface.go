@@ -21,4 +21,11 @@ type Store interface {
 	// EffectivePricing returns the merged pricing for a model (provider default +
 	// model-level overlay). Returns nil, false when no pricing is configured.
 	EffectivePricing(modelName string) (*Pricing, bool)
+
+	RelayKeyByName(name string) (*RelayKey, bool)
+	// RelayKeyByHash returns the RelayKey whose Spec.KeyHash matches the given
+	// hex string. Hot-path auth lookup. The returned key MAY be revoked or
+	// disabled — callers must check.
+	RelayKeyByHash(hash string) (*RelayKey, bool)
+	RelayKeys() []*RelayKey
 }

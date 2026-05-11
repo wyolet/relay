@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,22 +17,24 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 )
 
-// adminKinds bundles the five kind handlers produced by the PER-265 factory.
+// adminKinds bundles the kind handlers produced by the PER-265 factory.
 type adminKinds struct {
 	provider  *crud.Kind[*catalog.Provider]
-	policy      *crud.Kind[*catalog.Policy]
+	policy    *crud.Kind[*catalog.Policy]
 	model     *crud.Kind[*catalog.Model]
 	route     *crud.Kind[*catalog.Route]
 	rateLimit *crud.Kind[*catalog.RateLimit]
+	relayKey  *crud.Kind[*catalog.RelayKey]
 }
 
 func buildAdminKinds(store *catalog.PGStore, st *storage.Storage) adminKinds {
 	return adminKinds{
 		provider:  providerKind(store, st),
-		policy:      policyKind(store, st),
+		policy:    policyKind(store, st),
 		model:     modelKind(store, st),
 		route:     routeKind(store, st),
 		rateLimit: rateLimitKind(store, st),
+		relayKey:  relayKeyKind(store, st),
 	}
 }
 
@@ -240,6 +244,88 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		},
 		PatchDelete: func(name string) catalog.Patch {
 			return catalog.Patch{DeleteRateLimit: name}
+		},
+	}
+}
+
+// --- RelayKey ---
+
+// relayKeyValueKey is the JSON field on the write body that carries the
+// cleartext bearer token. It is hashed server-side; only the hash is stored.
+const relayKeyValueField = "value"
+
+// relayKeyKind wires the standard CRUD factory for relay keys. The Decode
+// function understands a write-only "value" field on the request body: when
+// present, it's hashed with sha256 and stamped into Spec.KeyHash, the
+// cleartext is then dropped. Update calls preserve the existing hash by
+// reading the current snapshot when "value" is absent.
+func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.RelayKey] {
+	return &crud.Kind[*catalog.RelayKey]{
+		Name: "RelayKey",
+		Decode: func(r *http.Request) (*catalog.RelayKey, error) {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				return nil, err
+			}
+			// Decode into the typed shape first.
+			var v catalog.RelayKey
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return nil, err
+			}
+			if v.Metadata.Name == "" {
+				return nil, errors.New("metadata.name required")
+			}
+			// Look for a top-level "value" field carrying cleartext.
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &envelope); err == nil {
+				if rawVal, ok := envelope[relayKeyValueField]; ok {
+					var val string
+					if err := json.Unmarshal(rawVal, &val); err == nil && val != "" {
+						sum := sha256.Sum256([]byte(val))
+						v.Spec.KeyHash = hex.EncodeToString(sum[:])
+						if v.Spec.Prefix == "" && len(val) >= 4 {
+							v.Spec.Prefix = val[:min(8, len(val))]
+						}
+					}
+				}
+			}
+			// On update without value, inherit existing hash so the spec
+			// validates and the key keeps working.
+			if v.Spec.KeyHash == "" {
+				if existing, ok := store.RelayKeyByName(v.Metadata.Name); ok {
+					v.Spec.KeyHash = existing.Spec.KeyHash
+					if v.Spec.Prefix == "" {
+						v.Spec.Prefix = existing.Spec.Prefix
+					}
+				}
+			}
+			return &v, nil
+		},
+		List: func(ctx context.Context) ([]*catalog.RelayKey, error) {
+			return store.RelayKeys(), nil
+		},
+		Get: func(ctx context.Context, name string) (*catalog.RelayKey, error) {
+			v, ok := store.RelayKeyByName(name)
+			if !ok {
+				return nil, crud.ErrNotFound
+			}
+			return v, nil
+		},
+		Insert: func(ctx context.Context, v *catalog.RelayKey) error {
+			return st.Catalog.UpsertRelayKey(ctx, *v)
+		},
+		Update: func(ctx context.Context, name string, v *catalog.RelayKey) error {
+			return st.Catalog.UpsertRelayKey(ctx, *v)
+		},
+		Delete: func(ctx context.Context, name string) error {
+			return st.Catalog.DeleteRelayKey(ctx, name)
+		},
+		ResourceID: func(v *catalog.RelayKey) string { return v.Metadata.Name },
+		Patch: func(v *catalog.RelayKey) catalog.Patch {
+			return catalog.Patch{UpsertRelayKey: v}
+		},
+		PatchDelete: func(name string) catalog.Patch {
+			return catalog.Patch{DeleteRelayKey: name}
 		},
 	}
 }

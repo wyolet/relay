@@ -134,3 +134,18 @@ DELETE FROM routes WHERE name = $1;
 
 -- name: DeleteRateLimit :exec
 DELETE FROM rate_limits WHERE name = $1;
+
+-- name: ListRelayKeys :many
+SELECT name, key_hash, metadata, spec FROM relay_keys ORDER BY name;
+
+-- name: UpsertRelayKey :exec
+INSERT INTO relay_keys (name, key_hash, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, NOW())
+ON CONFLICT (name) DO UPDATE SET
+    key_hash   = EXCLUDED.key_hash,
+    metadata   = EXCLUDED.metadata,
+    spec       = EXCLUDED.spec,
+    updated_at = NOW();
+
+-- name: DeleteRelayKey :exec
+DELETE FROM relay_keys WHERE name = $1;

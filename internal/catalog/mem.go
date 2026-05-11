@@ -26,9 +26,12 @@ func NewMemStore(objects ...any) *MemStore {
 			snap.routes[v.Metadata.Name] = v
 		case *RateLimit:
 			snap.rateLimits[v.Metadata.Name] = v
+		case *RelayKey:
+			snap.relayKeys[v.Metadata.Name] = v
 		}
 	}
 	snap.buildEffectivePricing()
+	snap.rebuildRelayKeyHashIndex()
 	return &MemStore{snap: snap}
 }
 
@@ -56,3 +59,6 @@ func (m *MemStore) RateLimitsForRequest(provider *Provider, policy *Policy, mode
 func (m *MemStore) EffectivePricing(modelName string) (*Pricing, bool) {
 	return m.snap.effectivePricingByModel(modelName)
 }
+func (m *MemStore) RelayKeyByName(name string) (*RelayKey, bool) { return m.snap.relayKeyByName(name) }
+func (m *MemStore) RelayKeyByHash(hash string) (*RelayKey, bool) { return m.snap.relayKeyByHash(hash) }
+func (m *MemStore) RelayKeys() []*RelayKey                       { return m.snap.listRelayKeys() }

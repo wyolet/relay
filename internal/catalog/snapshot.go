@@ -9,8 +9,10 @@ type snapshot struct {
 	routes          map[string]*Route
 	rateLimits      map[string]*RateLimit
 	secrets         map[string]*Secret
-	policies           map[string]*Policy
-	effectivePrices map[string]*Pricing // keyed by model name; populated by buildEffectivePricing
+	policies        map[string]*Policy
+	relayKeys       map[string]*RelayKey // keyed by Metadata.Name
+	relayKeysByHash map[string]*RelayKey // keyed by Spec.KeyHash for hot-path auth lookup
+	effectivePrices map[string]*Pricing  // keyed by model name; populated by buildEffectivePricing
 }
 
 func labelsMatch(selector, labels map[string]string) bool {
@@ -29,9 +31,45 @@ func newSnapshot() *snapshot {
 		routes:          map[string]*Route{},
 		rateLimits:      map[string]*RateLimit{},
 		secrets:         map[string]*Secret{},
-		policies:           map[string]*Policy{},
+		policies:        map[string]*Policy{},
+		relayKeys:       map[string]*RelayKey{},
+		relayKeysByHash: map[string]*RelayKey{},
 		effectivePrices: map[string]*Pricing{},
 	}
+}
+
+// rebuildRelayKeyHashIndex repopulates relayKeysByHash from relayKeys.
+// Called after a snapshot mutation so hot-path auth lookups stay consistent.
+func (s *snapshot) rebuildRelayKeyHashIndex() {
+	s.relayKeysByHash = make(map[string]*RelayKey, len(s.relayKeys))
+	for _, k := range s.relayKeys {
+		if k.Spec.KeyHash == "" {
+			continue
+		}
+		s.relayKeysByHash[k.Spec.KeyHash] = k
+	}
+}
+
+func (s *snapshot) relayKeyByName(name string) (*RelayKey, bool) {
+	k, ok := s.relayKeys[name]
+	return k, ok
+}
+
+// relayKeyByHash returns the RelayKey whose Spec.KeyHash matches.
+// Disabled or revoked keys ARE returned — callers must check IsEnabled and RevokedAt.
+// Hot-path auth is the primary caller.
+func (s *snapshot) relayKeyByHash(hash string) (*RelayKey, bool) {
+	k, ok := s.relayKeysByHash[hash]
+	return k, ok
+}
+
+func (s *snapshot) listRelayKeys() []*RelayKey {
+	out := make([]*RelayKey, 0, len(s.relayKeys))
+	for _, k := range s.relayKeys {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Metadata.Name < out[j].Metadata.Name })
+	return out
 }
 
 // buildEffectivePricing pre-computes the merged pricing for every model.

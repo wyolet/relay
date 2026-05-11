@@ -344,6 +344,59 @@ func (r *catalogRepo) IsEmpty(ctx context.Context) (bool, error) {
 	return len(rls) == 0, nil
 }
 
+// ── RelayKey ──────────────────────────────────────────────────────────────────
+
+func (r *catalogRepo) UpsertRelayKey(ctx context.Context, k catalog.RelayKey) error {
+	meta, spec, err := marshalMetaSpec(k.Metadata, k.Spec)
+	if err != nil {
+		return fmt.Errorf("storage: UpsertRelayKey %q: %w", k.Metadata.Name, err)
+	}
+	if err := translateCatalogErr(gen.New(r.db).UpsertRelayKey(ctx, gen.UpsertRelayKeyParams{
+		Name:     k.Metadata.Name,
+		KeyHash:  k.Spec.KeyHash,
+		Metadata: meta,
+		Spec:     spec,
+	})); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
+}
+
+func (r *catalogRepo) ListRelayKeys(ctx context.Context) ([]catalog.RelayKey, error) {
+	rows, err := gen.New(r.db).ListRelayKeys(ctx)
+	if err != nil {
+		return nil, translateCatalogErr(err)
+	}
+	out := make([]catalog.RelayKey, 0, len(rows))
+	for _, row := range rows {
+		var meta catalog.Metadata
+		var spec catalog.RelayKeySpec
+		if err := unmarshalJSON2(row.Metadata, &meta, row.Spec, &spec); err != nil {
+			return nil, fmt.Errorf("storage: relay_key %q: %w", row.Name, err)
+		}
+		// Spec.KeyHash is the source of truth in the JSONB; the column is for
+		// the unique index. Reconcile the column value into the spec in case
+		// they ever diverge (defensive).
+		if spec.KeyHash == "" {
+			spec.KeyHash = row.KeyHash
+		}
+		out = append(out, catalog.RelayKey{
+			APIVersion: catalog.APIVersion,
+			Kind:       catalog.KindRelayKey,
+			Metadata:   meta,
+			Spec:       spec,
+		})
+	}
+	return out, nil
+}
+
+func (r *catalogRepo) DeleteRelayKey(ctx context.Context, name string) error {
+	if err := translateCatalogErr(gen.New(r.db).DeleteRelayKey(ctx, name)); err != nil {
+		return err
+	}
+	return r.notifyCatalogChange(ctx)
+}
+
 // ── notifyCatalogChange ───────────────────────────────────────────────────────
 
 // notifyCatalogChange fires NOTIFY relay_catalog. Called by every write method

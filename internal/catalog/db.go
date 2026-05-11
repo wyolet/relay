@@ -61,6 +61,13 @@ type CatalogDB interface {
 
 	// IsEmpty returns true when all catalog tables have zero rows.
 	IsEmpty(ctx context.Context) (bool, error)
+
+	// UpsertRelayKey inserts or updates a relay key.
+	UpsertRelayKey(ctx context.Context, k RelayKey) error
+	// ListRelayKeys returns all relay keys.
+	ListRelayKeys(ctx context.Context) ([]RelayKey, error)
+	// DeleteRelayKey removes a relay key.
+	DeleteRelayKey(ctx context.Context, name string) error
 }
 
 // TxRunner runs fn inside a transaction, committing on nil error.

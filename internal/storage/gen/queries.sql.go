@@ -691,3 +691,65 @@ func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) erro
 	_, err := q.db.Exec(ctx, upsertSecret, arg.Name, arg.Metadata, arg.Spec)
 	return err
 }
+
+const listRelayKeys = `-- name: ListRelayKeys :many
+SELECT name, key_hash, metadata, spec FROM relay_keys ORDER BY name
+`
+
+type ListRelayKeysRow struct {
+	Name     string `db:"name" json:"name"`
+	KeyHash  string `db:"key_hash" json:"key_hash"`
+	Metadata []byte `db:"metadata" json:"metadata"`
+	Spec     []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
+	rows, err := q.db.Query(ctx, listRelayKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRelayKeysRow
+	for rows.Next() {
+		var i ListRelayKeysRow
+		if err := rows.Scan(&i.Name, &i.KeyHash, &i.Metadata, &i.Spec); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertRelayKey = `-- name: UpsertRelayKey :exec
+INSERT INTO relay_keys (name, key_hash, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, NOW())
+ON CONFLICT (name) DO UPDATE SET
+    key_hash   = EXCLUDED.key_hash,
+    metadata   = EXCLUDED.metadata,
+    spec       = EXCLUDED.spec,
+    updated_at = NOW()
+`
+
+type UpsertRelayKeyParams struct {
+	Name     string `db:"name" json:"name"`
+	KeyHash  string `db:"key_hash" json:"key_hash"`
+	Metadata []byte `db:"metadata" json:"metadata"`
+	Spec     []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) error {
+	_, err := q.db.Exec(ctx, upsertRelayKey, arg.Name, arg.KeyHash, arg.Metadata, arg.Spec)
+	return err
+}
+
+const deleteRelayKey = `-- name: DeleteRelayKey :exec
+DELETE FROM relay_keys WHERE name = $1
+`
+
+func (q *Queries) DeleteRelayKey(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteRelayKey, name)
+	return err
+}

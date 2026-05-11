@@ -140,6 +140,20 @@ func (s *PGStore) RateLimitsForRequest(provider *Provider, policy *Policy, model
 func (s *PGStore) EffectivePricing(modelName string) (*Pricing, bool) {
 	return s.cur().effectivePricingByModel(modelName)
 }
+func (s *PGStore) RelayKeyByName(name string) (*RelayKey, bool) { return s.cur().relayKeyByName(name) }
+func (s *PGStore) RelayKeyByHash(hash string) (*RelayKey, bool) { return s.cur().relayKeyByHash(hash) }
+func (s *PGStore) RelayKeys() []*RelayKey                       { return s.cur().listRelayKeys() }
+
+// UpsertRelayKey writes a relay key. The caller must have already hashed the
+// bearer token into k.Spec.KeyHash; PGStore never sees the plaintext.
+func (s *PGStore) UpsertRelayKey(ctx context.Context, k RelayKey) error {
+	return s.db.UpsertRelayKey(ctx, k)
+}
+
+// DeleteRelayKey removes a relay key by name.
+func (s *PGStore) DeleteRelayKey(ctx context.Context, name string) error {
+	return s.db.DeleteRelayKey(ctx, name)
+}
 
 func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
 	snap := newSnapshot()
@@ -205,6 +219,16 @@ func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
 		rrl := rl
 		snap.rateLimits[rl.Metadata.Name] = &rrl
 	}
+
+	keys, err := s.db.ListRelayKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListRelayKeys: %w", err)
+	}
+	for _, k := range keys {
+		kk := k
+		snap.relayKeys[k.Metadata.Name] = &kk
+	}
+	snap.rebuildRelayKeyHashIndex()
 
 	return snap, nil
 }

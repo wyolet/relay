@@ -30,7 +30,8 @@ func validate(s *snapshot) error {
 	// is populated via the admin API. Only validate cross-entity consistency
 	// when there is at least one object present.
 	if len(s.providers) == 0 && len(s.secrets) == 0 && len(s.policies) == 0 &&
-		len(s.models) == 0 && len(s.routes) == 0 && len(s.rateLimits) == 0 {
+		len(s.models) == 0 && len(s.routes) == 0 && len(s.rateLimits) == 0 &&
+		len(s.relayKeys) == 0 {
 		return nil
 	}
 	if len(s.providers) == 0 {
@@ -54,6 +55,33 @@ func validate(s *snapshot) error {
 	}
 	if err := validateRateLimits(s); err != nil {
 		return err
+	}
+	if err := validateRelayKeys(s); err != nil {
+		return err
+	}
+	return nil
+}
+
+var relayKeyHashRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func validateRelayKeys(s *snapshot) error {
+	seenHash := make(map[string]string, len(s.relayKeys))
+	for _, k := range s.relayKeys {
+		if k.Spec.KeyHash == "" {
+			return fmt.Errorf("RelayKey %q: keyHash required", k.Metadata.Name)
+		}
+		if !relayKeyHashRE.MatchString(k.Spec.KeyHash) {
+			return fmt.Errorf("RelayKey %q: keyHash must be 64 lowercase hex chars (sha256)", k.Metadata.Name)
+		}
+		if other, dup := seenHash[k.Spec.KeyHash]; dup {
+			return fmt.Errorf("RelayKey %q: duplicate keyHash with %q", k.Metadata.Name, other)
+		}
+		seenHash[k.Spec.KeyHash] = k.Metadata.Name
+		if k.Spec.PolicyRef != "" {
+			if _, ok := s.policies[k.Spec.PolicyRef]; !ok {
+				return fmt.Errorf("RelayKey %q: unknown policyRef %q", k.Metadata.Name, k.Spec.PolicyRef)
+			}
+		}
 	}
 	return nil
 }

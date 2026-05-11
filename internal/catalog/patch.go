@@ -33,6 +33,11 @@ type Patch struct {
 	UpsertPolicy *Policy
 	// DeletePolicy removes the named policy.
 	DeletePolicy string
+
+	// UpsertRelayKey inserts or replaces the named relay key.
+	UpsertRelayKey *RelayKey
+	// DeleteRelayKey removes the named relay key.
+	DeleteRelayKey string
 }
 
 // ValidateWithPatch clones the current in-memory snapshot, applies patch, and
@@ -52,7 +57,8 @@ func cloneSnapshot(src *snapshot) *snapshot {
 		routes:     make(map[string]*Route, len(src.routes)),
 		rateLimits: make(map[string]*RateLimit, len(src.rateLimits)),
 		secrets:    make(map[string]*Secret, len(src.secrets)),
-		policies:      make(map[string]*Policy, len(src.policies)),
+		policies:   make(map[string]*Policy, len(src.policies)),
+		relayKeys:  make(map[string]*RelayKey, len(src.relayKeys)),
 	}
 	for k, v := range src.providers {
 		dst.providers[k] = v
@@ -72,6 +78,10 @@ func cloneSnapshot(src *snapshot) *snapshot {
 	for k, v := range src.policies {
 		dst.policies[k] = v
 	}
+	for k, v := range src.relayKeys {
+		dst.relayKeys[k] = v
+	}
+	dst.rebuildRelayKeyHashIndex()
 	return dst
 }
 
@@ -111,5 +121,13 @@ func applyPatch(s *snapshot, p Patch) {
 	}
 	if p.DeletePolicy != "" {
 		delete(s.policies, p.DeletePolicy)
+	}
+	if p.UpsertRelayKey != nil {
+		s.relayKeys[p.UpsertRelayKey.Metadata.Name] = p.UpsertRelayKey
+		s.rebuildRelayKeyHashIndex()
+	}
+	if p.DeleteRelayKey != "" {
+		delete(s.relayKeys, p.DeleteRelayKey)
+		s.rebuildRelayKeyHashIndex()
 	}
 }

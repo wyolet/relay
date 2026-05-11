@@ -16,7 +16,8 @@ const (
 	KindRoute     Kind = "Route"
 	KindRateLimit Kind = "RateLimit"
 	KindSecret    Kind = "Secret"
-	KindPolicy      Kind = "Policy"
+	KindPolicy   Kind = "Policy"
+	KindRelayKey Kind = "RelayKey"
 )
 
 type ProviderKind string
@@ -380,4 +381,35 @@ type ResolvedRule struct {
 	// Meter is the rule's meter as a catalog.Meter for legacy callers.
 	// Equal to Meter(Rule.Meter). Updated by snapshot.go.
 	Meter Meter
+}
+
+// RelayKey is a relay-managed API key. Plaintext is never stored; only the
+// sha256 hex of the bearer token (KeyHash) is persisted, plus a short Prefix
+// for UI display. PolicyRef optionally binds the key to a Policy whose
+// allowed-models list and rate limits will apply to requests authenticated
+// with this key (overriding the provider's defaultPolicy).
+type RelayKey struct {
+	APIVersion string       `yaml:"apiVersion" json:"apiVersion,omitempty"`
+	Kind       Kind         `yaml:"kind"       json:"kind,omitempty"`
+	Metadata   Metadata     `yaml:"metadata"   json:"metadata"`
+	Spec       RelayKeySpec `yaml:"spec"       json:"spec"`
+}
+
+type RelayKeySpec struct {
+	// KeyHash is the sha256 hex of the bearer token (lowercase, 64 chars).
+	// Required and immutable after creation.
+	KeyHash string `yaml:"keyHash" json:"keyHash"`
+	// Prefix is the leading visible portion of the token (e.g. "rk_a8b3f2"),
+	// retained so the UI can display a recognisable identifier without storing
+	// the cleartext.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	// PolicyRef binds this key to a named Policy. Optional; when set, dispatch
+	// uses the referenced Policy's allowed-models and rate limits in place of
+	// the provider's defaultPolicy.
+	PolicyRef string `yaml:"policyRef,omitempty" json:"policyRef,omitempty"`
+	// RevokedAt, when set, means the key is rejected at auth time. Use the
+	// restore endpoint to clear it.
+	RevokedAt *time.Time `yaml:"revokedAt,omitempty" json:"revokedAt,omitempty"`
+	// Enabled defaults to true when nil. False disables auth for this key.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }

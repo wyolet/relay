@@ -416,6 +416,11 @@ func mountControlHuma(
 			crudArg.kinds.route, *crudArg.deps, adminAuth)
 		crud.RegisterOps(api, "/control/ratelimits", "ratelimit", "ratelimits",
 			crudArg.kinds.rateLimit, *crudArg.deps, adminAuth)
+		crud.RegisterOps(api, "/control/keys", "key", "keys",
+			crudArg.kinds.relayKey, *crudArg.deps, adminAuth)
+		if crudArg.pgStore != nil {
+			registerRelayKeyRevokeRestoreOps(api, crudArg.pgStore, crudArg.deps, adminAuth)
+		}
 
 		if crudArg.pgStore != nil {
 			registerTypedSecretOps(api, crudArg.pgStore, crudArg.deps, crudArg.kvStore, adminAuth)

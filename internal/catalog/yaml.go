@@ -104,6 +104,9 @@ func (s *YAMLStore) RateLimitsForRequest(provider *Provider, policy *Policy, mod
 func (s *YAMLStore) EffectivePricing(modelName string) (*Pricing, bool) {
 	return s.snap.effectivePricingByModel(modelName)
 }
+func (s *YAMLStore) RelayKeyByName(name string) (*RelayKey, bool) { return s.snap.relayKeyByName(name) }
+func (s *YAMLStore) RelayKeyByHash(hash string) (*RelayKey, bool) { return s.snap.relayKeyByHash(hash) }
+func (s *YAMLStore) RelayKeys() []*RelayKey                       { return s.snap.listRelayKeys() }
 
 type rawDoc struct {
 	APIVersion string    `yaml:"apiVersion"`
