@@ -459,6 +459,11 @@ type RelayKeySpec struct {
 	RevokedAt *time.Time `yaml:"revokedAt,omitempty" json:"revokedAt,omitempty"`
 	// Enabled defaults to true when nil. False disables auth for this key.
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// PassthroughAllowed, when true, lets this key carry an upstream
+	// Authorization header that relay forwards verbatim. Gated by the global
+	// Passthrough singleton: takes effect only when Passthrough.spec.enabled
+	// is true. Default false; passthrough is opt-in per key.
+	PassthroughAllowed bool `yaml:"passthroughAllowed,omitempty" json:"passthroughAllowed,omitempty"`
 }
 
 // Passthrough is the singleton config that controls BYO-credential request
