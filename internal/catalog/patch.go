@@ -137,4 +137,5 @@ func applyPatch(s *snapshot, p Patch) {
 	if p.SetPassthrough != nil {
 		s.passthrough = p.SetPassthrough
 	}
+	s.buildByIDIndexes()
 }

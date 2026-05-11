@@ -46,6 +46,7 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 		return nil, err
 	}
 	snap.buildEffectivePricing()
+	snap.buildByIDIndexes()
 	return &YAMLStore{snap: snap}, nil
 }
 
@@ -86,6 +87,14 @@ func (s *YAMLStore) RouteByName(name string) (*Route, bool)          { return s.
 func (s *YAMLStore) RateLimitByName(name string) (*RateLimit, bool)  { return s.snap.rateLimitByName(name) }
 func (s *YAMLStore) SecretByName(name string) (*Secret, bool)        { return s.snap.secretByName(name) }
 func (s *YAMLStore) PolicyByName(name string) (*Policy, bool)            { return s.snap.policyByName(name) }
+
+func (s *YAMLStore) ProviderByID(id string) (*Provider, bool)   { return s.snap.providerByID(id) }
+func (s *YAMLStore) ModelByID(id string) (*Model, bool)         { return s.snap.modelByID(id) }
+func (s *YAMLStore) RouteByID(id string) (*Route, bool)         { return s.snap.routeByID(id) }
+func (s *YAMLStore) RateLimitByID(id string) (*RateLimit, bool) { return s.snap.rateLimitByID(id) }
+func (s *YAMLStore) SecretByID(id string) (*Secret, bool)       { return s.snap.secretByID(id) }
+func (s *YAMLStore) PolicyByID(id string) (*Policy, bool)       { return s.snap.policyByID(id) }
+func (s *YAMLStore) RelayKeyByID(id string) (*RelayKey, bool)   { return s.snap.relayKeyByID(id) }
 func (s *YAMLStore) Providers() []*Provider                          { return s.snap.listProviders() }
 func (s *YAMLStore) Models() []*Model                                { return s.snap.listModels() }
 func (s *YAMLStore) Routes() []*Route                                { return s.snap.listRoutes() }

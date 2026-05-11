@@ -33,9 +33,20 @@ const (
 	PKAnthropic ProviderKind = "anthropic"
 )
 
+// Metadata is the identity tuple for every catalog resource.
+//
+//   - ID is the immutable primary key (UUIDv7), server-stamped on create.
+//     PG joins and JSONB cross-references store this value.
+//   - Name is a stable, DNS-1123 slug. Auto-derived from DisplayName on create
+//     with a collision suffix; editable via id-routed PUT. URLs and YAML refs
+//     surface this; never used for cross-references in stored JSONB.
+//   - DisplayName is free text shown in UI. Editing it is cheap and never
+//     touches references.
 type Metadata struct {
-	Name   string            `yaml:"name"   json:"name"`
-	Labels map[string]string `yaml:"labels,omitempty" json:"labels,omitempty"`
+	ID          string            `yaml:"id,omitempty"          json:"id,omitempty"`
+	Name        string            `yaml:"name"                  json:"name"`
+	DisplayName string            `yaml:"displayName,omitempty" json:"displayName,omitempty"`
+	Labels      map[string]string `yaml:"labels,omitempty"      json:"labels,omitempty"`
 }
 
 type Provider struct {
@@ -63,7 +74,7 @@ type ProviderSpec struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 
 	// Display metadata — operator-set, optional.
-	DisplayName   string `yaml:"displayName,omitempty"   json:"displayName,omitempty"`
+	// (DisplayName lives on Metadata; do not duplicate here.)
 	Description   string `yaml:"description,omitempty"   json:"description,omitempty"`
 	HomepageURL   string `yaml:"homepageURL,omitempty"   json:"homepageURL,omitempty"`
 	DocsURL       string `yaml:"docsURL,omitempty"       json:"docsURL,omitempty"`
@@ -156,8 +167,7 @@ type ModelSpec struct {
 	Documentation string `yaml:"documentation,omitempty" json:"documentation,omitempty"`
 	License       string `yaml:"license,omitempty"       json:"license,omitempty"`
 
-	// Display metadata.
-	DisplayName          string   `yaml:"displayName,omitempty"          json:"displayName,omitempty"`
+	// Display metadata. (DisplayName lives on Metadata.)
 	Aliases              []string `yaml:"aliases,omitempty"              json:"aliases,omitempty"`
 	Tags                 []string `yaml:"tags,omitempty"                 json:"tags,omitempty"`
 	ProviderModelPageURL string   `yaml:"providerModelPageURL,omitempty" json:"providerModelPageURL,omitempty"`

@@ -465,12 +465,12 @@ func buildProvider(meta providerMeta) *catalog.Provider {
 		APIVersion: catalog.APIVersion,
 		Kind:       catalog.KindProvider,
 		Metadata: catalog.Metadata{
-			Name: meta.name,
+			Name:        meta.name,
+			DisplayName: meta.displayName,
 		},
 		Spec: catalog.ProviderSpec{
 			Kind:          meta.kind,
 			BaseURL:       meta.baseURL,
-			DisplayName:   meta.displayName,
 			Description:   meta.description,
 			HomepageURL:   meta.homepageURL,
 			DocsURL:       meta.docsURL,

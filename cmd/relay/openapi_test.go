@@ -63,66 +63,76 @@ func (n *nopReloader) Reload(_ context.Context) error { return nil }
 
 func stubProviderKind() *crud.Kind[*catalog.Provider] {
 	return &crud.Kind[*catalog.Provider]{
-		Name:       "Provider",
-		Decode:     func(r *http.Request) (*catalog.Provider, error) { return &catalog.Provider{}, nil },
-		List:       func(_ context.Context) ([]*catalog.Provider, error) { return nil, nil },
-		Get:        func(_ context.Context, _ string) (*catalog.Provider, error) { return nil, crud.ErrNotFound },
-		Insert:     func(_ context.Context, _ *catalog.Provider) error { return nil },
-		Update:     func(_ context.Context, _ string, _ *catalog.Provider) error { return nil },
-		Delete:     func(_ context.Context, _ string) error { return nil },
-		ResourceID: func(v *catalog.Provider) string { return v.Metadata.Name },
+		Name:            "Provider",
+		Decode:          func(r *http.Request) (*catalog.Provider, error) { return &catalog.Provider{}, nil },
+		List:            func(_ context.Context) ([]*catalog.Provider, error) { return nil, nil },
+		GetBySlugOrID:   func(_ context.Context, _ string) (*catalog.Provider, error) { return nil, crud.ErrNotFound },
+		GetByID:         func(_ context.Context, _ string) (*catalog.Provider, error) { return nil, crud.ErrNotFound },
+		Insert:          func(_ context.Context, _ *catalog.Provider) error { return nil },
+		UpdateByID:      func(_ context.Context, _ string, _ *catalog.Provider) error { return nil },
+		DeleteByID:      func(_ context.Context, _ string) error { return nil },
+		ResourceID:      func(v *catalog.Provider) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Provider) string { return v.Metadata.ID },
 	}
 }
 
 func stubPoolKind() *crud.Kind[*catalog.Policy] {
 	return &crud.Kind[*catalog.Policy]{
-		Name:       "Policy",
-		Decode:     func(r *http.Request) (*catalog.Policy, error) { return &catalog.Policy{}, nil },
-		List:       func(_ context.Context) ([]*catalog.Policy, error) { return nil, nil },
-		Get:        func(_ context.Context, _ string) (*catalog.Policy, error) { return nil, crud.ErrNotFound },
-		Insert:     func(_ context.Context, _ *catalog.Policy) error { return nil },
-		Update:     func(_ context.Context, _ string, _ *catalog.Policy) error { return nil },
-		Delete:     func(_ context.Context, _ string) error { return nil },
-		ResourceID: func(v *catalog.Policy) string { return v.Metadata.Name },
+		Name:            "Policy",
+		Decode:          func(r *http.Request) (*catalog.Policy, error) { return &catalog.Policy{}, nil },
+		List:            func(_ context.Context) ([]*catalog.Policy, error) { return nil, nil },
+		GetBySlugOrID:   func(_ context.Context, _ string) (*catalog.Policy, error) { return nil, crud.ErrNotFound },
+		GetByID:         func(_ context.Context, _ string) (*catalog.Policy, error) { return nil, crud.ErrNotFound },
+		Insert:          func(_ context.Context, _ *catalog.Policy) error { return nil },
+		UpdateByID:      func(_ context.Context, _ string, _ *catalog.Policy) error { return nil },
+		DeleteByID:      func(_ context.Context, _ string) error { return nil },
+		ResourceID:      func(v *catalog.Policy) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Policy) string { return v.Metadata.ID },
 	}
 }
 
 func stubModelKind() *crud.Kind[*catalog.Model] {
 	return &crud.Kind[*catalog.Model]{
-		Name:       "Model",
-		Decode:     func(r *http.Request) (*catalog.Model, error) { return &catalog.Model{}, nil },
-		List:       func(_ context.Context) ([]*catalog.Model, error) { return nil, nil },
-		Get:        func(_ context.Context, _ string) (*catalog.Model, error) { return nil, crud.ErrNotFound },
-		Insert:     func(_ context.Context, _ *catalog.Model) error { return nil },
-		Update:     func(_ context.Context, _ string, _ *catalog.Model) error { return nil },
-		Delete:     func(_ context.Context, _ string) error { return nil },
-		ResourceID: func(v *catalog.Model) string { return v.Metadata.Name },
+		Name:            "Model",
+		Decode:          func(r *http.Request) (*catalog.Model, error) { return &catalog.Model{}, nil },
+		List:            func(_ context.Context) ([]*catalog.Model, error) { return nil, nil },
+		GetBySlugOrID:   func(_ context.Context, _ string) (*catalog.Model, error) { return nil, crud.ErrNotFound },
+		GetByID:         func(_ context.Context, _ string) (*catalog.Model, error) { return nil, crud.ErrNotFound },
+		Insert:          func(_ context.Context, _ *catalog.Model) error { return nil },
+		UpdateByID:      func(_ context.Context, _ string, _ *catalog.Model) error { return nil },
+		DeleteByID:      func(_ context.Context, _ string) error { return nil },
+		ResourceID:      func(v *catalog.Model) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Model) string { return v.Metadata.ID },
 	}
 }
 
 func stubRouteKind() *crud.Kind[*catalog.Route] {
 	return &crud.Kind[*catalog.Route]{
-		Name:       "Route",
-		Decode:     func(r *http.Request) (*catalog.Route, error) { return &catalog.Route{}, nil },
-		List:       func(_ context.Context) ([]*catalog.Route, error) { return nil, nil },
-		Get:        func(_ context.Context, _ string) (*catalog.Route, error) { return nil, crud.ErrNotFound },
-		Insert:     func(_ context.Context, _ *catalog.Route) error { return nil },
-		Update:     func(_ context.Context, _ string, _ *catalog.Route) error { return nil },
-		Delete:     func(_ context.Context, _ string) error { return nil },
-		ResourceID: func(v *catalog.Route) string { return v.Metadata.Name },
+		Name:            "Route",
+		Decode:          func(r *http.Request) (*catalog.Route, error) { return &catalog.Route{}, nil },
+		List:            func(_ context.Context) ([]*catalog.Route, error) { return nil, nil },
+		GetBySlugOrID:   func(_ context.Context, _ string) (*catalog.Route, error) { return nil, crud.ErrNotFound },
+		GetByID:         func(_ context.Context, _ string) (*catalog.Route, error) { return nil, crud.ErrNotFound },
+		Insert:          func(_ context.Context, _ *catalog.Route) error { return nil },
+		UpdateByID:      func(_ context.Context, _ string, _ *catalog.Route) error { return nil },
+		DeleteByID:      func(_ context.Context, _ string) error { return nil },
+		ResourceID:      func(v *catalog.Route) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Route) string { return v.Metadata.ID },
 	}
 }
 
 func stubRateLimitKind() *crud.Kind[*catalog.RateLimit] {
 	return &crud.Kind[*catalog.RateLimit]{
-		Name:       "RateLimit",
-		Decode:     func(r *http.Request) (*catalog.RateLimit, error) { return &catalog.RateLimit{}, nil },
-		List:       func(_ context.Context) ([]*catalog.RateLimit, error) { return nil, nil },
-		Get:        func(_ context.Context, _ string) (*catalog.RateLimit, error) { return nil, crud.ErrNotFound },
-		Insert:     func(_ context.Context, _ *catalog.RateLimit) error { return nil },
-		Update:     func(_ context.Context, _ string, _ *catalog.RateLimit) error { return nil },
-		Delete:     func(_ context.Context, _ string) error { return nil },
-		ResourceID: func(v *catalog.RateLimit) string { return v.Metadata.Name },
+		Name:            "RateLimit",
+		Decode:          func(r *http.Request) (*catalog.RateLimit, error) { return &catalog.RateLimit{}, nil },
+		List:            func(_ context.Context) ([]*catalog.RateLimit, error) { return nil, nil },
+		GetBySlugOrID:   func(_ context.Context, _ string) (*catalog.RateLimit, error) { return nil, crud.ErrNotFound },
+		GetByID:         func(_ context.Context, _ string) (*catalog.RateLimit, error) { return nil, crud.ErrNotFound },
+		Insert:          func(_ context.Context, _ *catalog.RateLimit) error { return nil },
+		UpdateByID:      func(_ context.Context, _ string, _ *catalog.RateLimit) error { return nil },
+		DeleteByID:      func(_ context.Context, _ string) error { return nil },
+		ResourceID:      func(v *catalog.RateLimit) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.RateLimit) string { return v.Metadata.ID },
 	}
 }
 
@@ -273,8 +283,10 @@ func TestOpenAPI_ChatCompletions401WithoutBearer(t *testing.T) {
 	}
 }
 
-// TestOpenAPI_AdminCRUD_25Paths verifies all 25 admin CRUD operations appear in the spec.
-func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
+// TestOpenAPI_AdminCRUDPaths verifies the per-kind CRUD operations appear in
+// the spec. Identity refactor: GET routes are slug-or-id at /{ref}; PUT/DELETE
+// are id-routed at /by-id/{id}.
+func TestOpenAPI_AdminCRUDPaths(t *testing.T) {
 	srv := httptest.NewServer(buildHumaTestRouterWithAdmin(stubAdminCRUD()))
 	defer srv.Close()
 
@@ -300,30 +312,30 @@ func TestOpenAPI_AdminCRUD_25Paths(t *testing.T) {
 	}
 	ops := []opCheck{
 		{"GET", "/control/providers", "admin_provider_list"},
-		{"GET", "/control/providers/{name}", "admin_provider_get"},
+		{"GET", "/control/providers/{ref}", "admin_provider_get"},
 		{"POST", "/control/providers", "admin_provider_create"},
-		{"PUT", "/control/providers/{name}", "admin_provider_update"},
-		{httpDEL, "/control/providers/{name}", "admin_provider_delete"},
+		{"PUT", "/control/providers/by-id/{id}", "admin_provider_update"},
+		{httpDEL, "/control/providers/by-id/{id}", "admin_provider_delete"},
 		{"GET", "/control/policies", "admin_policy_list"},
-		{"GET", "/control/policies/{name}", "admin_policy_get"},
+		{"GET", "/control/policies/{ref}", "admin_policy_get"},
 		{"POST", "/control/policies", "admin_policy_create"},
-		{"PUT", "/control/policies/{name}", "admin_policy_update"},
-		{httpDEL, "/control/policies/{name}", "admin_policy_delete"},
+		{"PUT", "/control/policies/by-id/{id}", "admin_policy_update"},
+		{httpDEL, "/control/policies/by-id/{id}", "admin_policy_delete"},
 		{"GET", "/control/models", "admin_model_list"},
-		{"GET", "/control/models/{name}", "admin_model_get"},
+		{"GET", "/control/models/{ref}", "admin_model_get"},
 		{"POST", "/control/models", "admin_model_create"},
-		{"PUT", "/control/models/{name}", "admin_model_update"},
-		{httpDEL, "/control/models/{name}", "admin_model_delete"},
+		{"PUT", "/control/models/by-id/{id}", "admin_model_update"},
+		{httpDEL, "/control/models/by-id/{id}", "admin_model_delete"},
 		{"GET", "/control/routes", "admin_route_list"},
-		{"GET", "/control/routes/{name}", "admin_route_get"},
+		{"GET", "/control/routes/{ref}", "admin_route_get"},
 		{"POST", "/control/routes", "admin_route_create"},
-		{"PUT", "/control/routes/{name}", "admin_route_update"},
-		{httpDEL, "/control/routes/{name}", "admin_route_delete"},
+		{"PUT", "/control/routes/by-id/{id}", "admin_route_update"},
+		{httpDEL, "/control/routes/by-id/{id}", "admin_route_delete"},
 		{"GET", "/control/ratelimits", "admin_ratelimit_list"},
-		{"GET", "/control/ratelimits/{name}", "admin_ratelimit_get"},
+		{"GET", "/control/ratelimits/{ref}", "admin_ratelimit_get"},
 		{"POST", "/control/ratelimits", "admin_ratelimit_create"},
-		{"PUT", "/control/ratelimits/{name}", "admin_ratelimit_update"},
-		{httpDEL, "/control/ratelimits/{name}", "admin_ratelimit_delete"},
+		{"PUT", "/control/ratelimits/by-id/{id}", "admin_ratelimit_update"},
+		{httpDEL, "/control/ratelimits/by-id/{id}", "admin_ratelimit_delete"},
 	}
 
 	for _, op := range ops {

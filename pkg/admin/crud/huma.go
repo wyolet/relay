@@ -1,7 +1,13 @@
 // Package crud — huma.go
-// RegisterOps registers typed huma operations for a Kind[T].
-// This gives the generated OpenAPI spec full request/response schemas.
-// The existing Handlers() method (used by chi-mounted tests) is preserved.
+//
+// RegisterOps registers typed huma operations for a Kind[T]. The route surface
+// per kind:
+//
+//	GET    {base}                 list
+//	GET    {base}/{slugOrID}      read (slug or id; UUID form prefers id)
+//	POST   {base}                 create (server stamps id+slug)
+//	PUT    {base}/by-id/{id}      update (id-routed)
+//	DELETE {base}/by-id/{id}      delete (id-routed)
 package crud
 
 import (
@@ -25,52 +31,43 @@ type ItemOutput[T any] struct {
 	Body T
 }
 
-// NameInput is the path-param input for single-resource operations.
-type NameInput struct {
-	Name string `path:"name" doc:"Resource name."`
+// SlugOrIDInput is the path-param input for GET routes that accept either form.
+type SlugOrIDInput struct {
+	Ref string `path:"ref" doc:"Resource slug or id."`
 }
 
-// BodyInput is the request body input for create/update operations.
+// IDInput is the path-param input for id-routed PUT/DELETE.
+type IDInput struct {
+	ID string `path:"id" doc:"Resource id (UUIDv7)."`
+}
+
+// BodyInput is the request body input for create operations.
 type BodyInput[T any] struct {
 	Body T
 }
 
-// NameBodyInput combines path param + request body for update.
-type NameBodyInput[T any] struct {
-	Name string `path:"name" doc:"Resource name."`
+// IDBodyInput combines id path param + request body for id-routed update.
+type IDBodyInput[T any] struct {
+	ID   string `path:"id" doc:"Resource id (UUIDv7)."`
 	Body T
 }
 
-// DeleteInput contains just the path param; output is empty (204).
-type DeleteInput struct {
-	Name string `path:"name" doc:"Resource name."`
-}
-
-// humaError converts a status code + message into a huma error.
-// huma.NewError must already be overridden by the caller to produce OpenAI envelopes.
 func humaError(status int, msg string) error {
 	return huma.NewError(status, msg)
 }
 
-// RegisterOps registers the five standard CRUD operations for Kind[T] on the huma API.
-// It bypasses the http.HandlerFunc layer and calls domain logic directly, giving huma
-// full typed input/output structs for schema generation.
-//
-//   - GET    {base}        → list
-//   - GET    {base}/{name} → get
-//   - POST   {base}        → create (body T)
-//   - PUT    {base}/{name} → update (body T)
-//   - {base}/{name} [delete method] → delete (204)
+// RegisterOps registers the standard CRUD operations for Kind[T] on the huma API.
 func RegisterOps[T any](
 	api huma.API,
-	base string,    // e.g. "/control/providers"
+	base string, // e.g. "/control/providers"
 	singular string, // e.g. "provider"
-	plural string,   // e.g. "providers"
+	plural string, // e.g. "providers"
 	k *Kind[T],
 	deps Deps,
 	middlewares huma.Middlewares,
 ) {
-	nameParam := base + "/{name}"
+	getPath := base + "/{ref}"
+	idPath := base + "/by-id/{id}"
 
 	// --- List ---
 	huma.Register(api, huma.Operation{
@@ -94,21 +91,21 @@ func RegisterOps[T any](
 		return out, nil
 	})
 
-	// --- Get ---
+	// --- Get (slug or id) ---
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_" + singular + "_get",
 		Method:      http.MethodGet,
-		Path:        nameParam,
-		Summary:     "Get " + singular,
+		Path:        getPath,
+		Summary:     "Get " + singular + " by slug or id",
 		Tags:        []string{"admin"},
 		Errors:      []int{404, 500},
 		Middlewares: middlewares,
-	}, func(ctx context.Context, in *NameInput) (*ItemOutput[T], error) {
-		v, err := k.Get(ctx, in.Name)
+	}, func(ctx context.Context, in *SlugOrIDInput) (*ItemOutput[T], error) {
+		v, err := k.GetBySlugOrID(ctx, in.Ref)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return nil, humaError(http.StatusNotFound,
-					fmt.Sprintf("%s %q not found", k.Name, in.Name))
+					fmt.Sprintf("%s %q not found", k.Name, in.Ref))
 			}
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
@@ -127,6 +124,11 @@ func RegisterOps[T any](
 		DefaultStatus: http.StatusCreated,
 	}, func(ctx context.Context, in *BodyInput[T]) (*ItemOutput[T], error) {
 		v := in.Body
+		if k.StampID != nil {
+			if err := k.StampID(ctx, v); err != nil {
+				return nil, humaError(http.StatusBadRequest, err.Error())
+			}
+		}
 		if k.Patch != nil && deps.Patcher != nil {
 			if verr := deps.Patcher.ValidateWithPatch(k.Patch(v)); verr != nil {
 				return nil, humaError(http.StatusBadRequest, verr.Error())
@@ -141,9 +143,9 @@ func RegisterOps[T any](
 			deps.Logger.WarnContext(ctx, "admin: reload failed after create; snapshot may be stale",
 				"kind", k.Name, "name", k.ResourceID(v), "err", err)
 		}
-		name := k.ResourceID(v)
-		emitAuditCtx(deps.Logger, ctx, k.Name, name, "create", "")
-		created, err := k.Get(ctx, name)
+		id := k.ResourceIDValue(v)
+		emitAuditCtx(deps.Logger, ctx, k.Name, k.ResourceID(v), "create", "")
+		created, err := k.GetByID(ctx, id)
 		if err != nil {
 			return nil, humaError(http.StatusInternalServerError,
 				"created but could not read back: "+err.Error())
@@ -151,21 +153,21 @@ func RegisterOps[T any](
 		return &ItemOutput[T]{Body: created}, nil
 	})
 
-	// --- Update ---
+	// --- Update (by id) ---
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_" + singular + "_update",
 		Method:      http.MethodPut,
-		Path:        nameParam,
-		Summary:     "Update " + singular,
+		Path:        idPath,
+		Summary:     "Update " + singular + " by id",
 		Tags:        []string{"admin"},
 		Errors:      []int{400, 404, 500},
 		Middlewares: middlewares,
-	}, func(ctx context.Context, in *NameBodyInput[T]) (*ItemOutput[T], error) {
-		before, err := k.Get(ctx, in.Name)
+	}, func(ctx context.Context, in *IDBodyInput[T]) (*ItemOutput[T], error) {
+		before, err := k.GetByID(ctx, in.ID)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				return nil, humaError(http.StatusNotFound,
-					fmt.Sprintf("%s %q not found", k.Name, in.Name))
+					fmt.Sprintf("%s with id %q not found", k.Name, in.ID))
 			}
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
@@ -176,20 +178,20 @@ func RegisterOps[T any](
 			}
 		}
 		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
-			return k.Update(ctx, in.Name, v)
+			return k.UpdateByID(ctx, in.ID, v)
 		}); err != nil {
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			deps.Logger.WarnContext(ctx, "admin: reload failed after update; snapshot may be stale",
-				"kind", k.Name, "name", in.Name, "err", err)
+				"kind", k.Name, "id", in.ID, "err", err)
 		}
 		diff := ""
 		if k.Summarize != nil {
 			diff = k.Summarize(before, v)
 		}
-		emitAuditCtx(deps.Logger, ctx, k.Name, in.Name, "update", diff)
-		updated, err := k.Get(ctx, in.Name)
+		emitAuditCtx(deps.Logger, ctx, k.Name, k.ResourceID(v), "update", diff)
+		updated, err := k.GetByID(ctx, in.ID)
 		if err != nil {
 			return nil, humaError(http.StatusInternalServerError,
 				"updated but could not read back: "+err.Error())
@@ -197,37 +199,45 @@ func RegisterOps[T any](
 		return &ItemOutput[T]{Body: updated}, nil
 	})
 
-	// --- Delete ---
+	// --- Delete (by id) ---
 	huma.Register(api, huma.Operation{
 		OperationID:   "admin_" + singular + "_delete",
 		Method:        http.MethodDelete,
-		Path:          nameParam,
-		Summary:       "Delete " + singular,
+		Path:          idPath,
+		Summary:       "Delete " + singular + " by id",
 		Tags:          []string{"admin"},
 		Errors:        []int{400, 404, 500},
 		Middlewares:   middlewares,
 		DefaultStatus: http.StatusNoContent,
-	}, func(ctx context.Context, in *DeleteInput) (*struct{}, error) {
+	}, func(ctx context.Context, in *IDInput) (*struct{}, error) {
+		current, err := k.GetByID(ctx, in.ID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return nil, humaError(http.StatusNotFound,
+					fmt.Sprintf("%s with id %q not found", k.Name, in.ID))
+			}
+			return nil, humaError(http.StatusInternalServerError, err.Error())
+		}
+		slug := k.ResourceID(current)
 		if k.PatchDelete != nil && deps.Patcher != nil {
-			if verr := deps.Patcher.ValidateWithPatch(k.PatchDelete(in.Name)); verr != nil {
+			if verr := deps.Patcher.ValidateWithPatch(k.PatchDelete(slug)); verr != nil {
 				return nil, humaError(http.StatusBadRequest, verr.Error())
 			}
 		}
 		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
-			return k.Delete(ctx, in.Name)
+			return k.DeleteByID(ctx, in.ID)
 		}); err != nil {
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if err := deps.Reloader.Reload(ctx); err != nil {
 			deps.Logger.WarnContext(ctx, "admin: reload failed after delete; snapshot may be stale",
-				"kind", k.Name, "name", in.Name, "err", err)
+				"kind", k.Name, "id", in.ID, "err", err)
 		}
-		emitAuditCtx(deps.Logger, ctx, k.Name, in.Name, "delete", "")
+		emitAuditCtx(deps.Logger, ctx, k.Name, slug, "delete", "")
 		return nil, nil
 	})
 }
 
-// emitAuditCtx is a context-only variant of emitAudit (no *http.Request available).
 func emitAuditCtx(log interface {
 	InfoContext(ctx context.Context, msg string, args ...any)
 }, ctx context.Context, kind, name, action, diff string) {

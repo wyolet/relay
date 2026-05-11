@@ -7,6 +7,16 @@ type Store interface {
 	RateLimitByName(name string) (*RateLimit, bool)
 	SecretByName(name string) (*Secret, bool)
 	PolicyByName(name string) (*Policy, bool)
+	// ByID accessors. Used by the id-routed admin CRUD path
+	// (PUT/DELETE /control/{kind}/by-id/{id}) and by GET when the path
+	// component parses as a UUID.
+	ProviderByID(id string) (*Provider, bool)
+	ModelByID(id string) (*Model, bool)
+	RouteByID(id string) (*Route, bool)
+	RateLimitByID(id string) (*RateLimit, bool)
+	SecretByID(id string) (*Secret, bool)
+	PolicyByID(id string) (*Policy, bool)
+	RelayKeyByID(id string) (*RelayKey, bool)
 	Providers() []*Provider
 	Models() []*Model
 	Routes() []*Route

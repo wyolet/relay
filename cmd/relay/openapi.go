@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/internal/keypool"
 	"github.com/wyolet/relay/pkg/admin/crud"
 	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -524,12 +525,20 @@ func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, name stri
 	if provider == "" {
 		provider = "default"
 	}
-	meta := catalog.Metadata{Name: name}
+	meta := catalog.Metadata{Name: name, DisplayName: name}
+	if existing, ok := store.SecretByName(name); ok {
+		meta.ID = existing.Metadata.ID
+		if existing.Metadata.DisplayName != "" {
+			meta.DisplayName = existing.Metadata.DisplayName
+		}
+	} else {
+		meta.ID = ids.New()
+	}
 	switch inp.ValueFrom.Kind {
 	case "env":
-		return store.UpsertSecretEnv(ctx, name, inp.ValueFrom.Env, provider, meta)
+		return store.UpsertSecretEnv(ctx, inp.ValueFrom.Env, provider, meta)
 	case "stored":
-		return store.UpsertSecretStored(ctx, name, inp.ValueFrom.Value, provider, meta)
+		return store.UpsertSecretStored(ctx, inp.ValueFrom.Value, provider, meta)
 	default:
 		return fmt.Errorf("unknown kind %q", inp.ValueFrom.Kind)
 	}
@@ -694,7 +703,7 @@ func registerTypedSecretOps(api huma.API, store *catalog.PGStore, deps *crud.Dep
 			return nil, huma.NewError(http.StatusBadRequest, verr.Error())
 		}
 		if err := deps.Tx.RunInTx(ctx, func(ctx context.Context) error {
-			return store.DeleteSecret(ctx, in.Name)
+			return store.DeleteSecret(ctx, sec.Metadata.ID)
 		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}

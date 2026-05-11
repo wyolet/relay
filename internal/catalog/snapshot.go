@@ -3,6 +3,14 @@ package catalog
 import "sort"
 
 // snapshot is the in-memory view of the catalog, shared by YAMLStore and PGStore.
+//
+// Identity model: every resource has a Metadata.ID (UUIDv7, immutable PK) and a
+// Metadata.Name (DNS-label slug, stable, mutable via id-routed PUT).
+// Cross-references in spec fields use the slug — refs survive displayName edits
+// trivially; refs are rewritten only on the rare slug-edit path. The primary
+// in-memory maps are slug-keyed for the existing hot lookups; byID maps are
+// secondary indexes (id → slug) maintained by buildByIDIndexes after any load
+// or patch.
 type snapshot struct {
 	providers       map[string]*Provider
 	models          map[string]*Model
@@ -10,10 +18,21 @@ type snapshot struct {
 	rateLimits      map[string]*RateLimit
 	secrets         map[string]*Secret
 	policies        map[string]*Policy
-	relayKeys       map[string]*RelayKey // keyed by Metadata.Name
+	relayKeys       map[string]*RelayKey // keyed by Metadata.Name (slug)
 	relayKeysByHash map[string]*RelayKey // keyed by Spec.KeyHash for hot-path auth lookup
 	passthrough     *Passthrough         // singleton; nil before first load, then always non-nil
-	effectivePrices map[string]*Pricing  // keyed by model name; populated by buildEffectivePricing
+	effectivePrices map[string]*Pricing  // keyed by model slug; populated by buildEffectivePricing
+
+	// byID secondary indexes: id → slug. Built by buildByIDIndexes; used by the
+	// HTTP layer's id-routed PUT/DELETE and slug-or-id GET. Empty before the
+	// first build; rebuilt from scratch on each call (cheap, catalog is small).
+	providersByID  map[string]string
+	modelsByID     map[string]string
+	routesByID     map[string]string
+	rateLimitsByID map[string]string
+	secretsByID    map[string]string
+	policiesByID   map[string]string
+	relayKeysByID  map[string]string
 }
 
 func labelsMatch(selector, labels map[string]string) bool {
@@ -36,7 +55,113 @@ func newSnapshot() *snapshot {
 		relayKeys:       map[string]*RelayKey{},
 		relayKeysByHash: map[string]*RelayKey{},
 		effectivePrices: map[string]*Pricing{},
+		providersByID:   map[string]string{},
+		modelsByID:      map[string]string{},
+		routesByID:      map[string]string{},
+		rateLimitsByID:  map[string]string{},
+		secretsByID:     map[string]string{},
+		policiesByID:    map[string]string{},
+		relayKeysByID:   map[string]string{},
 	}
+}
+
+// buildByIDIndexes rebuilds the id→slug secondary indexes for every kind.
+// Call after any load or patch that mutates the slug-keyed primary maps.
+// Skips entries with empty Metadata.ID (legacy or in-flight rows).
+func (s *snapshot) buildByIDIndexes() {
+	s.providersByID = make(map[string]string, len(s.providers))
+	for slug, p := range s.providers {
+		if p.Metadata.ID != "" {
+			s.providersByID[p.Metadata.ID] = slug
+		}
+	}
+	s.modelsByID = make(map[string]string, len(s.models))
+	for slug, m := range s.models {
+		if m.Metadata.ID != "" {
+			s.modelsByID[m.Metadata.ID] = slug
+		}
+	}
+	s.routesByID = make(map[string]string, len(s.routes))
+	for slug, r := range s.routes {
+		if r.Metadata.ID != "" {
+			s.routesByID[r.Metadata.ID] = slug
+		}
+	}
+	s.rateLimitsByID = make(map[string]string, len(s.rateLimits))
+	for slug, rl := range s.rateLimits {
+		if rl.Metadata.ID != "" {
+			s.rateLimitsByID[rl.Metadata.ID] = slug
+		}
+	}
+	s.secretsByID = make(map[string]string, len(s.secrets))
+	for slug, sec := range s.secrets {
+		if sec.Metadata.ID != "" {
+			s.secretsByID[sec.Metadata.ID] = slug
+		}
+	}
+	s.policiesByID = make(map[string]string, len(s.policies))
+	for slug, p := range s.policies {
+		if p.Metadata.ID != "" {
+			s.policiesByID[p.Metadata.ID] = slug
+		}
+	}
+	s.relayKeysByID = make(map[string]string, len(s.relayKeys))
+	for slug, k := range s.relayKeys {
+		if k.Metadata.ID != "" {
+			s.relayKeysByID[k.Metadata.ID] = slug
+		}
+	}
+}
+
+// ── ByID accessors (secondary index) ──────────────────────────────────────────
+
+func (s *snapshot) providerByID(id string) (*Provider, bool) {
+	if slug, ok := s.providersByID[id]; ok {
+		return s.providerByName(slug)
+	}
+	return nil, false
+}
+
+func (s *snapshot) modelByID(id string) (*Model, bool) {
+	if slug, ok := s.modelsByID[id]; ok {
+		return s.modelByName(slug)
+	}
+	return nil, false
+}
+
+func (s *snapshot) routeByID(id string) (*Route, bool) {
+	if slug, ok := s.routesByID[id]; ok {
+		return s.routeByName(slug)
+	}
+	return nil, false
+}
+
+func (s *snapshot) rateLimitByID(id string) (*RateLimit, bool) {
+	if slug, ok := s.rateLimitsByID[id]; ok {
+		return s.rateLimitByName(slug)
+	}
+	return nil, false
+}
+
+func (s *snapshot) secretByID(id string) (*Secret, bool) {
+	if slug, ok := s.secretsByID[id]; ok {
+		return s.secretByName(slug)
+	}
+	return nil, false
+}
+
+func (s *snapshot) policyByID(id string) (*Policy, bool) {
+	if slug, ok := s.policiesByID[id]; ok {
+		return s.policyByName(slug)
+	}
+	return nil, false
+}
+
+func (s *snapshot) relayKeyByID(id string) (*RelayKey, bool) {
+	if slug, ok := s.relayKeysByID[id]; ok {
+		return s.relayKeyByName(slug)
+	}
+	return nil, false
 }
 
 // rebuildRelayKeyHashIndex repopulates relayKeysByHash from relayKeys.

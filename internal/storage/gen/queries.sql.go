@@ -12,65 +12,65 @@ import (
 )
 
 const deleteModel = `-- name: DeleteModel :exec
-DELETE FROM models WHERE name = $1
+DELETE FROM models WHERE id = $1
 `
 
-func (q *Queries) DeleteModel(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteModel, name)
+func (q *Queries) DeleteModel(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteModel, id)
 	return err
 }
 
 const deletePolicy = `-- name: DeletePolicy :exec
-DELETE FROM policies WHERE name = $1
+DELETE FROM policies WHERE id = $1
 `
 
-func (q *Queries) DeletePolicy(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deletePolicy, name)
+func (q *Queries) DeletePolicy(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deletePolicy, id)
 	return err
 }
 
 const deleteProvider = `-- name: DeleteProvider :exec
-DELETE FROM providers WHERE name = $1
+DELETE FROM providers WHERE id = $1
 `
 
-func (q *Queries) DeleteProvider(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteProvider, name)
+func (q *Queries) DeleteProvider(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteProvider, id)
 	return err
 }
 
 const deleteRateLimit = `-- name: DeleteRateLimit :exec
-DELETE FROM rate_limits WHERE name = $1
+DELETE FROM rate_limits WHERE id = $1
 `
 
-func (q *Queries) DeleteRateLimit(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteRateLimit, name)
+func (q *Queries) DeleteRateLimit(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteRateLimit, id)
 	return err
 }
 
 const deleteRelayKey = `-- name: DeleteRelayKey :exec
-DELETE FROM relay_keys WHERE name = $1
+DELETE FROM relay_keys WHERE id = $1
 `
 
-func (q *Queries) DeleteRelayKey(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteRelayKey, name)
+func (q *Queries) DeleteRelayKey(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteRelayKey, id)
 	return err
 }
 
 const deleteRoute = `-- name: DeleteRoute :exec
-DELETE FROM routes WHERE name = $1
+DELETE FROM routes WHERE id = $1
 `
 
-func (q *Queries) DeleteRoute(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteRoute, name)
+func (q *Queries) DeleteRoute(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteRoute, id)
 	return err
 }
 
 const deleteSecret = `-- name: DeleteSecret :exec
-DELETE FROM secrets WHERE name = $1
+DELETE FROM secrets WHERE id = $1
 `
 
-func (q *Queries) DeleteSecret(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteSecret, name)
+func (q *Queries) DeleteSecret(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteSecret, id)
 	return err
 }
 
@@ -91,28 +91,34 @@ func (q *Queries) GetPassthrough(ctx context.Context, name string) (GetPassthrou
 }
 
 const insertSecretEnv = `-- name: InsertSecretEnv :one
-INSERT INTO secrets (name, value_kind, value_from_env, metadata, spec)
-VALUES ($1, 'env', $2, $3, $4)
-ON CONFLICT (name) DO UPDATE
-    SET value_kind     = 'env',
+INSERT INTO secrets (id, name, display_name, value_kind, value_from_env, metadata, spec)
+VALUES ($1, $2, $3, 'env', $4, $5, $6)
+ON CONFLICT (id) DO UPDATE
+    SET name           = EXCLUDED.name,
+        display_name   = EXCLUDED.display_name,
+        value_kind     = 'env',
         value_from_env = EXCLUDED.value_from_env,
         value_ciphertext = NULL,
         value_nonce      = NULL,
         metadata         = EXCLUDED.metadata,
         spec             = EXCLUDED.spec,
         updated_at       = NOW()
-RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
 `
 
 type InsertSecretEnvParams struct {
+	ID           string      `db:"id" json:"id"`
 	Name         string      `db:"name" json:"name"`
+	DisplayName  string      `db:"display_name" json:"display_name"`
 	ValueFromEnv pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	Metadata     []byte      `db:"metadata" json:"metadata"`
 	Spec         []byte      `db:"spec" json:"spec"`
 }
 
 type InsertSecretEnvRow struct {
+	ID              string      `db:"id" json:"id"`
 	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
 	ValueKind       string      `db:"value_kind" json:"value_kind"`
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
@@ -123,14 +129,18 @@ type InsertSecretEnvRow struct {
 
 func (q *Queries) InsertSecretEnv(ctx context.Context, arg InsertSecretEnvParams) (InsertSecretEnvRow, error) {
 	row := q.db.QueryRow(ctx, insertSecretEnv,
+		arg.ID,
 		arg.Name,
+		arg.DisplayName,
 		arg.ValueFromEnv,
 		arg.Metadata,
 		arg.Spec,
 	)
 	var i InsertSecretEnvRow
 	err := row.Scan(
+		&i.ID,
 		&i.Name,
+		&i.DisplayName,
 		&i.ValueKind,
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
@@ -142,21 +152,25 @@ func (q *Queries) InsertSecretEnv(ctx context.Context, arg InsertSecretEnvParams
 }
 
 const insertSecretStored = `-- name: InsertSecretStored :one
-INSERT INTO secrets (name, value_kind, value_ciphertext, value_nonce, metadata, spec)
-VALUES ($1, 'stored', $2, $3, $4, $5)
-ON CONFLICT (name) DO UPDATE
-    SET value_kind       = 'stored',
+INSERT INTO secrets (id, name, display_name, value_kind, value_ciphertext, value_nonce, metadata, spec)
+VALUES ($1, $2, $3, 'stored', $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE
+    SET name             = EXCLUDED.name,
+        display_name     = EXCLUDED.display_name,
+        value_kind       = 'stored',
         value_from_env   = NULL,
         value_ciphertext = EXCLUDED.value_ciphertext,
         value_nonce      = EXCLUDED.value_nonce,
         metadata         = EXCLUDED.metadata,
         spec             = EXCLUDED.spec,
         updated_at       = NOW()
-RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
 `
 
 type InsertSecretStoredParams struct {
+	ID              string `db:"id" json:"id"`
 	Name            string `db:"name" json:"name"`
+	DisplayName     string `db:"display_name" json:"display_name"`
 	ValueCiphertext []byte `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte `db:"value_nonce" json:"value_nonce"`
 	Metadata        []byte `db:"metadata" json:"metadata"`
@@ -164,7 +178,9 @@ type InsertSecretStoredParams struct {
 }
 
 type InsertSecretStoredRow struct {
+	ID              string      `db:"id" json:"id"`
 	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
 	ValueKind       string      `db:"value_kind" json:"value_kind"`
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
@@ -175,7 +191,9 @@ type InsertSecretStoredRow struct {
 
 func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStoredParams) (InsertSecretStoredRow, error) {
 	row := q.db.QueryRow(ctx, insertSecretStored,
+		arg.ID,
 		arg.Name,
+		arg.DisplayName,
 		arg.ValueCiphertext,
 		arg.ValueNonce,
 		arg.Metadata,
@@ -183,7 +201,9 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 	)
 	var i InsertSecretStoredRow
 	err := row.Scan(
+		&i.ID,
 		&i.Name,
+		&i.DisplayName,
 		&i.ValueKind,
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
@@ -195,13 +215,15 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 }
 
 const listModels = `-- name: ListModels :many
-SELECT name, metadata, spec FROM models ORDER BY name
+SELECT id, name, display_name, metadata, spec FROM models ORDER BY name
 `
 
 type ListModelsRow struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
@@ -213,7 +235,13 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 	var items []ListModelsRow
 	for rows.Next() {
 		var i ListModelsRow
-		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -225,13 +253,15 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 }
 
 const listPolicies = `-- name: ListPolicies :many
-SELECT name, metadata, spec FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec FROM policies ORDER BY name
 `
 
 type ListPoliciesRow struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
@@ -243,7 +273,13 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 	var items []ListPoliciesRow
 	for rows.Next() {
 		var i ListPoliciesRow
-		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -255,13 +291,15 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT name, metadata, spec FROM providers ORDER BY name
+SELECT id, name, display_name, metadata, spec FROM providers ORDER BY name
 `
 
 type ListProvidersRow struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error) {
@@ -273,7 +311,13 @@ func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error)
 	var items []ListProvidersRow
 	for rows.Next() {
 		var i ListProvidersRow
-		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -285,13 +329,15 @@ func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error)
 }
 
 const listRateLimits = `-- name: ListRateLimits :many
-SELECT name, metadata, spec FROM rate_limits ORDER BY name
+SELECT id, name, display_name, metadata, spec FROM rate_limits ORDER BY name
 `
 
 type ListRateLimitsRow struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, error) {
@@ -303,7 +349,13 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 	var items []ListRateLimitsRow
 	for rows.Next() {
 		var i ListRateLimitsRow
-		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -315,14 +367,16 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 }
 
 const listRelayKeys = `-- name: ListRelayKeys :many
-SELECT name, key_hash, metadata, spec FROM relay_keys ORDER BY name
+SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys ORDER BY name
 `
 
 type ListRelayKeysRow struct {
-	Name     string `db:"name" json:"name"`
-	KeyHash  string `db:"key_hash" json:"key_hash"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	KeyHash     string `db:"key_hash" json:"key_hash"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
@@ -335,7 +389,9 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 	for rows.Next() {
 		var i ListRelayKeysRow
 		if err := rows.Scan(
+			&i.ID,
 			&i.Name,
+			&i.DisplayName,
 			&i.KeyHash,
 			&i.Metadata,
 			&i.Spec,
@@ -351,13 +407,15 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 }
 
 const listRoutes = `-- name: ListRoutes :many
-SELECT name, metadata, spec FROM routes ORDER BY name
+SELECT id, name, display_name, metadata, spec FROM routes ORDER BY name
 `
 
 type ListRoutesRow struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
@@ -369,7 +427,13 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
 	var items []ListRoutesRow
 	for rows.Next() {
 		var i ListRoutesRow
-		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -381,11 +445,13 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets ORDER BY name
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
+	ID              string      `db:"id" json:"id"`
 	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
 	ValueKind       string      `db:"value_kind" json:"value_kind"`
@@ -404,7 +470,9 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 	for rows.Next() {
 		var i ListSecretsRow
 		if err := rows.Scan(
+			&i.ID,
 			&i.Name,
+			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
 			&i.ValueKind,
@@ -429,17 +497,19 @@ SET value_kind       = 'env',
     value_ciphertext = NULL,
     value_nonce      = NULL,
     updated_at       = NOW()
-WHERE name = $1
-RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+WHERE id = $1
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
 `
 
 type UpdateSecretEnvParams struct {
-	Name         string      `db:"name" json:"name"`
+	ID           string      `db:"id" json:"id"`
 	ValueFromEnv pgtype.Text `db:"value_from_env" json:"value_from_env"`
 }
 
 type UpdateSecretEnvRow struct {
+	ID              string      `db:"id" json:"id"`
 	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
 	ValueKind       string      `db:"value_kind" json:"value_kind"`
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
@@ -449,10 +519,12 @@ type UpdateSecretEnvRow struct {
 }
 
 func (q *Queries) UpdateSecretEnv(ctx context.Context, arg UpdateSecretEnvParams) (UpdateSecretEnvRow, error) {
-	row := q.db.QueryRow(ctx, updateSecretEnv, arg.Name, arg.ValueFromEnv)
+	row := q.db.QueryRow(ctx, updateSecretEnv, arg.ID, arg.ValueFromEnv)
 	var i UpdateSecretEnvRow
 	err := row.Scan(
+		&i.ID,
 		&i.Name,
+		&i.DisplayName,
 		&i.ValueKind,
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
@@ -470,18 +542,20 @@ SET value_kind       = 'stored',
     value_ciphertext = $2,
     value_nonce      = $3,
     updated_at       = NOW()
-WHERE name = $1
-RETURNING name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+WHERE id = $1
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
 `
 
 type UpdateSecretStoredParams struct {
-	Name            string `db:"name" json:"name"`
+	ID              string `db:"id" json:"id"`
 	ValueCiphertext []byte `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte `db:"value_nonce" json:"value_nonce"`
 }
 
 type UpdateSecretStoredRow struct {
+	ID              string      `db:"id" json:"id"`
 	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
 	ValueKind       string      `db:"value_kind" json:"value_kind"`
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
@@ -491,10 +565,12 @@ type UpdateSecretStoredRow struct {
 }
 
 func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStoredParams) (UpdateSecretStoredRow, error) {
-	row := q.db.QueryRow(ctx, updateSecretStored, arg.Name, arg.ValueCiphertext, arg.ValueNonce)
+	row := q.db.QueryRow(ctx, updateSecretStored, arg.ID, arg.ValueCiphertext, arg.ValueNonce)
 	var i UpdateSecretStoredRow
 	err := row.Scan(
+		&i.ID,
 		&i.Name,
+		&i.DisplayName,
 		&i.ValueKind,
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
@@ -506,19 +582,32 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 }
 
 const upsertModel = `-- name: UpsertModel :exec
-INSERT INTO models (name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, NOW())
-ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
+INSERT INTO models (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
 `
 
 type UpsertModelParams struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error {
-	_, err := q.db.Exec(ctx, upsertModel, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertModel,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }
 
@@ -541,60 +630,101 @@ func (q *Queries) UpsertPassthrough(ctx context.Context, arg UpsertPassthroughPa
 }
 
 const upsertPolicy = `-- name: UpsertPolicy :exec
-INSERT INTO policies (name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, NOW())
-ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
+INSERT INTO policies (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
 `
 
 type UpsertPolicyParams struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) error {
-	_, err := q.db.Exec(ctx, upsertPolicy, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertPolicy,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }
 
 const upsertProvider = `-- name: UpsertProvider :exec
-INSERT INTO providers (name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, NOW())
-ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
+INSERT INTO providers (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
 `
 
 type UpsertProviderParams struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpsertProvider(ctx context.Context, arg UpsertProviderParams) error {
-	_, err := q.db.Exec(ctx, upsertProvider, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertProvider,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }
 
 const upsertRateLimit = `-- name: UpsertRateLimit :exec
-INSERT INTO rate_limits (name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, NOW())
-ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
+INSERT INTO rate_limits (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
 `
 
 type UpsertRateLimitParams struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpsertRateLimit(ctx context.Context, arg UpsertRateLimitParams) error {
-	_, err := q.db.Exec(ctx, upsertRateLimit, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertRateLimit,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }
 
 const upsertRelayKey = `-- name: UpsertRelayKey :exec
-INSERT INTO relay_keys (name, key_hash, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, NOW())
-ON CONFLICT (name) DO UPDATE SET
+INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
     key_hash   = EXCLUDED.key_hash,
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
@@ -602,15 +732,19 @@ ON CONFLICT (name) DO UPDATE SET
 `
 
 type UpsertRelayKeyParams struct {
-	Name     string `db:"name" json:"name"`
-	KeyHash  string `db:"key_hash" json:"key_hash"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	KeyHash     string `db:"key_hash" json:"key_hash"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) error {
 	_, err := q.db.Exec(ctx, upsertRelayKey,
+		arg.ID,
 		arg.Name,
+		arg.DisplayName,
 		arg.KeyHash,
 		arg.Metadata,
 		arg.Spec,
@@ -619,36 +753,62 @@ func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) 
 }
 
 const upsertRoute = `-- name: UpsertRoute :exec
-INSERT INTO routes (name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, NOW())
-ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
+INSERT INTO routes (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
 `
 
 type UpsertRouteParams struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpsertRoute(ctx context.Context, arg UpsertRouteParams) error {
-	_, err := q.db.Exec(ctx, upsertRoute, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertRoute,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }
 
 const upsertSecret = `-- name: UpsertSecret :exec
-INSERT INTO secrets (name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, NOW())
-ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
+INSERT INTO secrets (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
 `
 
 type UpsertSecretParams struct {
-	Name     string `db:"name" json:"name"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
 }
 
 // UpsertSecret is kept for the seed CLI (YAML-import path). Deprecated for new code; use InsertSecretEnv / InsertSecretStored.
 func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) error {
-	_, err := q.db.Exec(ctx, upsertSecret, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertSecret,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }

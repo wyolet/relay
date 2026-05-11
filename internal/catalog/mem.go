@@ -33,6 +33,7 @@ func NewMemStore(objects ...any) *MemStore {
 		}
 	}
 	snap.buildEffectivePricing()
+	snap.buildByIDIndexes()
 	snap.rebuildRelayKeyHashIndex()
 	return &MemStore{snap: snap}
 }
@@ -43,6 +44,14 @@ func (m *MemStore) RouteByName(name string) (*Route, bool)          { return m.s
 func (m *MemStore) RateLimitByName(name string) (*RateLimit, bool)  { return m.snap.rateLimitByName(name) }
 func (m *MemStore) SecretByName(name string) (*Secret, bool)        { return m.snap.secretByName(name) }
 func (m *MemStore) PolicyByName(name string) (*Policy, bool)            { return m.snap.policyByName(name) }
+
+func (m *MemStore) ProviderByID(id string) (*Provider, bool)   { return m.snap.providerByID(id) }
+func (m *MemStore) ModelByID(id string) (*Model, bool)         { return m.snap.modelByID(id) }
+func (m *MemStore) RouteByID(id string) (*Route, bool)         { return m.snap.routeByID(id) }
+func (m *MemStore) RateLimitByID(id string) (*RateLimit, bool) { return m.snap.rateLimitByID(id) }
+func (m *MemStore) SecretByID(id string) (*Secret, bool)       { return m.snap.secretByID(id) }
+func (m *MemStore) PolicyByID(id string) (*Policy, bool)       { return m.snap.policyByID(id) }
+func (m *MemStore) RelayKeyByID(id string) (*RelayKey, bool)   { return m.snap.relayKeyByID(id) }
 func (m *MemStore) Providers() []*Provider                          { return m.snap.listProviders() }
 func (m *MemStore) Models() []*Model                                { return m.snap.listModels() }
 func (m *MemStore) Routes() []*Route                                { return m.snap.listRoutes() }

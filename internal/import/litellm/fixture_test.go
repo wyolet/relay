@@ -367,16 +367,16 @@ func (m *memDB) UpsertPolicy(_ context.Context, _ catalog.Policy) error        {
 func (m *memDB) ListPolicies(_ context.Context) ([]catalog.Policy, error)       { return nil, nil }
 func (m *memDB) DeletePolicy(_ context.Context, _ string) error              { return nil }
 func (m *memDB) ListSecretRows(_ context.Context) ([]catalog.SecretRow, error) { return nil, nil }
-func (m *memDB) UpsertSecretEnv(_ context.Context, _, _, _ string, _ catalog.Metadata) error {
+func (m *memDB) UpsertSecretEnv(_ context.Context, _, _ string, _ catalog.Metadata) error {
 	return nil
 }
-func (m *memDB) UpsertSecretStored(_ context.Context, _, _ string, _ catalog.Metadata, _, _ []byte) error {
+func (m *memDB) UpsertSecretStored(_ context.Context, _ string, _ catalog.Metadata, _, _ []byte) error {
 	return nil
 }
 func (m *memDB) UpdateSecretEnv(_ context.Context, _, _ string) error                { return nil }
 func (m *memDB) UpdateSecretStored(_ context.Context, _ string, _, _ []byte) error    { return nil }
 func (m *memDB) DeleteSecret(_ context.Context, _ string) error                      { return nil }
-func (m *memDB) UpsertSecretRaw(_ context.Context, _ string, _ catalog.Metadata, _ catalog.SecretSpec) error {
+func (m *memDB) UpsertSecretRaw(_ context.Context, _ catalog.Metadata, _ catalog.SecretSpec) error {
 	return nil
 }
 

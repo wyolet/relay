@@ -342,6 +342,14 @@ func (c *stubCfg) RelayKeyByHash(_ string) (*catalog.RelayKey, bool)   { return 
 func (c *stubCfg) RelayKeys() []*catalog.RelayKey                      { return nil }
 func (c *stubCfg) Passthrough() *catalog.Passthrough                   { return catalog.DefaultPassthrough() }
 
+func (c *stubCfg) ProviderByID(string) (*catalog.Provider, bool)   { return nil, false }
+func (c *stubCfg) ModelByID(string) (*catalog.Model, bool)         { return nil, false }
+func (c *stubCfg) RouteByID(string) (*catalog.Route, bool)         { return nil, false }
+func (c *stubCfg) RateLimitByID(string) (*catalog.RateLimit, bool) { return nil, false }
+func (c *stubCfg) SecretByID(string) (*catalog.Secret, bool)       { return nil, false }
+func (c *stubCfg) PolicyByID(string) (*catalog.Policy, bool)       { return nil, false }
+func (c *stubCfg) RelayKeyByID(string) (*catalog.RelayKey, bool)   { return nil, false }
+
 // makeRule creates a ResolvedRule with a given meter and amount.
 func makeRule(name string, meter catalog.Meter, amount int64) catalog.ResolvedRule {
 	return catalog.ResolvedRule{

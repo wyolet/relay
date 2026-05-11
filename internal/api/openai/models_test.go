@@ -39,6 +39,14 @@ func (f *fakeStore) RelayKeyByHash(string) (*catalog.RelayKey, bool)  { return n
 func (f *fakeStore) RelayKeys() []*catalog.RelayKey                   { return nil }
 func (f *fakeStore) Passthrough() *catalog.Passthrough                { return catalog.DefaultPassthrough() }
 
+func (f *fakeStore) ProviderByID(string) (*catalog.Provider, bool)   { return nil, false }
+func (f *fakeStore) ModelByID(string) (*catalog.Model, bool)         { return nil, false }
+func (f *fakeStore) RouteByID(string) (*catalog.Route, bool)         { return nil, false }
+func (f *fakeStore) RateLimitByID(string) (*catalog.RateLimit, bool) { return nil, false }
+func (f *fakeStore) SecretByID(string) (*catalog.Secret, bool)       { return nil, false }
+func (f *fakeStore) PolicyByID(string) (*catalog.Policy, bool)       { return nil, false }
+func (f *fakeStore) RelayKeyByID(string) (*catalog.RelayKey, bool)   { return nil, false }
+
 func makeModel(name, provider string) *catalog.Model {
 	return &catalog.Model{
 		Metadata: catalog.Metadata{Name: name},

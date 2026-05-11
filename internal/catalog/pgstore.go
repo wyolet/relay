@@ -103,6 +103,7 @@ func (s *PGStore) Reload(ctx context.Context) error {
 		return fmt.Errorf("catalog.PGStore.Reload: catalog invalid: %w", err)
 	}
 	snap.buildEffectivePricing()
+	snap.buildByIDIndexes()
 	s.mu.Lock()
 	s.snap = snap
 	s.mu.Unlock()
@@ -122,6 +123,14 @@ func (s *PGStore) RouteByName(name string) (*Route, bool)         { return s.cur
 func (s *PGStore) RateLimitByName(name string) (*RateLimit, bool) { return s.cur().rateLimitByName(name) }
 func (s *PGStore) SecretByName(name string) (*Secret, bool)       { return s.cur().secretByName(name) }
 func (s *PGStore) PolicyByName(name string) (*Policy, bool)           { return s.cur().policyByName(name) }
+
+func (s *PGStore) ProviderByID(id string) (*Provider, bool)   { return s.cur().providerByID(id) }
+func (s *PGStore) ModelByID(id string) (*Model, bool)         { return s.cur().modelByID(id) }
+func (s *PGStore) RouteByID(id string) (*Route, bool)         { return s.cur().routeByID(id) }
+func (s *PGStore) RateLimitByID(id string) (*RateLimit, bool) { return s.cur().rateLimitByID(id) }
+func (s *PGStore) SecretByID(id string) (*Secret, bool)       { return s.cur().secretByID(id) }
+func (s *PGStore) PolicyByID(id string) (*Policy, bool)       { return s.cur().policyByID(id) }
+func (s *PGStore) RelayKeyByID(id string) (*RelayKey, bool)   { return s.cur().relayKeyByID(id) }
 func (s *PGStore) Providers() []*Provider                         { return s.cur().listProviders() }
 func (s *PGStore) Models() []*Model                               { return s.cur().listModels() }
 func (s *PGStore) Routes() []*Route                               { return s.cur().listRoutes() }
@@ -157,9 +166,9 @@ func (s *PGStore) UpsertRelayKey(ctx context.Context, k RelayKey) error {
 	return s.db.UpsertRelayKey(ctx, k)
 }
 
-// DeleteRelayKey removes a relay key by name.
-func (s *PGStore) DeleteRelayKey(ctx context.Context, name string) error {
-	return s.db.DeleteRelayKey(ctx, name)
+// DeleteRelayKey removes a relay key by id.
+func (s *PGStore) DeleteRelayKey(ctx context.Context, id string) error {
+	return s.db.DeleteRelayKey(ctx, id)
 }
 
 func (s *PGStore) loadSnapshot(ctx context.Context) (*snapshot, error) {
@@ -300,13 +309,14 @@ func (s *PGStore) resolveSecretSpec(sec *Secret) error {
 }
 
 // UpsertSecretEnv inserts or updates a secret in env-ref mode.
-func (s *PGStore) UpsertSecretEnv(ctx context.Context, name, envVar, provider string, meta Metadata) error {
-	return s.db.UpsertSecretEnv(ctx, name, envVar, provider, meta)
+// meta.ID must be set (caller stamps UUIDv7 on first create).
+func (s *PGStore) UpsertSecretEnv(ctx context.Context, envVar, provider string, meta Metadata) error {
+	return s.db.UpsertSecretEnv(ctx, envVar, provider, meta)
 }
 
 // UpsertSecretStored inserts or updates a secret in stored (encrypted) mode.
 // plaintext is encrypted here with s.masterKey before passing to storage.
-func (s *PGStore) UpsertSecretStored(ctx context.Context, name, plaintext, provider string, meta Metadata) error {
+func (s *PGStore) UpsertSecretStored(ctx context.Context, plaintext, provider string, meta Metadata) error {
 	if len(s.masterKey) == 0 {
 		return fmt.Errorf("UpsertSecretStored: stored mode requires RELAY_MASTER_KEY")
 	}
@@ -314,16 +324,16 @@ func (s *PGStore) UpsertSecretStored(ctx context.Context, name, plaintext, provi
 	if err != nil {
 		return fmt.Errorf("UpsertSecretStored: encrypt: %w", err)
 	}
-	return s.db.UpsertSecretStored(ctx, name, provider, meta, ct, nonce)
+	return s.db.UpsertSecretStored(ctx, provider, meta, ct, nonce)
 }
 
-// UpdateSecretEnv changes an existing secret to env-ref mode.
-func (s *PGStore) UpdateSecretEnv(ctx context.Context, name, envVar string) error {
-	return s.db.UpdateSecretEnv(ctx, name, envVar)
+// UpdateSecretEnv changes an existing secret to env-ref mode (id-routed).
+func (s *PGStore) UpdateSecretEnv(ctx context.Context, id, envVar string) error {
+	return s.db.UpdateSecretEnv(ctx, id, envVar)
 }
 
-// UpdateSecretStored rotates the ciphertext for a stored-mode secret.
-func (s *PGStore) UpdateSecretStored(ctx context.Context, name, plaintext string) error {
+// UpdateSecretStored rotates the ciphertext for a stored-mode secret (id-routed).
+func (s *PGStore) UpdateSecretStored(ctx context.Context, id, plaintext string) error {
 	if len(s.masterKey) == 0 {
 		return fmt.Errorf("UpdateSecretStored: stored mode requires RELAY_MASTER_KEY")
 	}
@@ -331,10 +341,10 @@ func (s *PGStore) UpdateSecretStored(ctx context.Context, name, plaintext string
 	if err != nil {
 		return fmt.Errorf("UpdateSecretStored: encrypt: %w", err)
 	}
-	return s.db.UpdateSecretStored(ctx, name, ct, nonce)
+	return s.db.UpdateSecretStored(ctx, id, ct, nonce)
 }
 
-// DeleteSecret removes a secret by name.
-func (s *PGStore) DeleteSecret(ctx context.Context, name string) error {
-	return s.db.DeleteSecret(ctx, name)
+// DeleteSecret removes a secret by id.
+func (s *PGStore) DeleteSecret(ctx context.Context, id string) error {
+	return s.db.DeleteSecret(ctx, id)
 }

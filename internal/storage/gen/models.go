@@ -9,11 +9,13 @@ import (
 )
 
 type Model struct {
-	Name      string             `db:"name" json:"name"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name        string             `db:"name" json:"name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID          string             `db:"id" json:"id"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
 type PassthroughConfig struct {
@@ -24,44 +26,54 @@ type PassthroughConfig struct {
 }
 
 type Policy struct {
-	Name      string             `db:"name" json:"name"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name        string             `db:"name" json:"name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID          string             `db:"id" json:"id"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
 type Provider struct {
-	Name      string             `db:"name" json:"name"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name        string             `db:"name" json:"name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID          string             `db:"id" json:"id"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
 type RateLimit struct {
-	Name      string             `db:"name" json:"name"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name        string             `db:"name" json:"name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID          string             `db:"id" json:"id"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
 type RelayKey struct {
-	Name      string             `db:"name" json:"name"`
-	KeyHash   string             `db:"key_hash" json:"key_hash"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name        string             `db:"name" json:"name"`
+	KeyHash     string             `db:"key_hash" json:"key_hash"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID          string             `db:"id" json:"id"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
 type Route struct {
-	Name      string             `db:"name" json:"name"`
-	Metadata  []byte             `db:"metadata" json:"metadata"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	Name        string             `db:"name" json:"name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID          string             `db:"id" json:"id"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
 type Secret struct {
@@ -74,4 +86,6 @@ type Secret struct {
 	ValueFromEnv    pgtype.Text        `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte             `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte             `db:"value_nonce" json:"value_nonce"`
+	ID              string             `db:"id" json:"id"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
 }

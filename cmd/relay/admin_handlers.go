@@ -14,7 +14,9 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/admin/crud"
+	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // adminKinds bundles the kind handlers produced by the PER-265 factory.
@@ -38,6 +40,23 @@ func buildAdminKinds(store *catalog.PGStore, st *storage.Storage) adminKinds {
 	}
 }
 
+// stampMetaID is the shared StampID implementation. It assigns a fresh UUIDv7
+// when meta.ID is empty and derives meta.Name from DisplayName when missing,
+// using the supplied lookup to avoid slug collisions per kind.
+func stampMetaID(meta *catalog.Metadata, slugTaken func(candidate string) bool) error {
+	if meta.ID == "" {
+		meta.ID = ids.New()
+	}
+	if meta.Name == "" {
+		base := slug.From(meta.DisplayName)
+		if base == "" {
+			return errors.New("metadata.name or metadata.displayName required")
+		}
+		meta.Name = slug.Unique(base, slugTaken)
+	}
+	return nil
+}
+
 // --- Provider ---
 
 func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Provider] {
@@ -45,8 +64,8 @@ func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 		Name: "Provider",
 		Decode: func(r *http.Request) (*catalog.Provider, error) {
 			return decodeBody[catalog.Provider](r, func(v *catalog.Provider) error {
-				if v.Metadata.Name == "" {
-					return errors.New("metadata.name required")
+				if v.Metadata.Name == "" && v.Metadata.DisplayName == "" {
+					return errors.New("metadata.name or metadata.displayName required")
 				}
 				return nil
 			})
@@ -54,28 +73,46 @@ func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 		List: func(ctx context.Context) ([]*catalog.Provider, error) {
 			return store.Providers(), nil
 		},
-		Get: func(ctx context.Context, name string) (*catalog.Provider, error) {
-			v, ok := store.ProviderByName(name)
-			if !ok {
-				return nil, crud.ErrNotFound
+		GetBySlugOrID: func(ctx context.Context, ref string) (*catalog.Provider, error) {
+			if ids.Valid(ref) {
+				if v, ok := store.ProviderByID(ref); ok {
+					return v, nil
+				}
 			}
-			return v, nil
+			if v, ok := store.ProviderByName(ref); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		GetByID: func(ctx context.Context, id string) (*catalog.Provider, error) {
+			if v, ok := store.ProviderByID(id); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		StampID: func(ctx context.Context, v *catalog.Provider) error {
+			return stampMetaID(&v.Metadata, func(s string) bool {
+				_, ok := store.ProviderByName(s)
+				return ok
+			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Provider) error {
 			return st.Catalog.UpsertProvider(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.Provider) error {
+		UpdateByID: func(ctx context.Context, id string, v *catalog.Provider) error {
+			v.Metadata.ID = id
 			return st.Catalog.UpsertProvider(ctx, *v)
 		},
-		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeleteProvider(ctx, name)
+		DeleteByID: func(ctx context.Context, id string) error {
+			return st.Catalog.DeleteProvider(ctx, id)
 		},
-		ResourceID: func(v *catalog.Provider) string { return v.Metadata.Name },
+		ResourceID:      func(v *catalog.Provider) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Provider) string { return v.Metadata.ID },
 		Patch: func(v *catalog.Provider) catalog.Patch {
 			return catalog.Patch{UpsertProvider: v}
 		},
-		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeleteProvider: name}
+		PatchDelete: func(slug string) catalog.Patch {
+			return catalog.Patch{DeleteProvider: slug}
 		},
 	}
 }
@@ -87,8 +124,8 @@ func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog
 		Name: "Policy",
 		Decode: func(r *http.Request) (*catalog.Policy, error) {
 			return decodeBody[catalog.Policy](r, func(v *catalog.Policy) error {
-				if v.Metadata.Name == "" {
-					return errors.New("metadata.name required")
+				if v.Metadata.Name == "" && v.Metadata.DisplayName == "" {
+					return errors.New("metadata.name or metadata.displayName required")
 				}
 				return nil
 			})
@@ -96,28 +133,46 @@ func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog
 		List: func(ctx context.Context) ([]*catalog.Policy, error) {
 			return store.Policies(), nil
 		},
-		Get: func(ctx context.Context, name string) (*catalog.Policy, error) {
-			v, ok := store.PolicyByName(name)
-			if !ok {
-				return nil, crud.ErrNotFound
+		GetBySlugOrID: func(ctx context.Context, ref string) (*catalog.Policy, error) {
+			if ids.Valid(ref) {
+				if v, ok := store.PolicyByID(ref); ok {
+					return v, nil
+				}
 			}
-			return v, nil
+			if v, ok := store.PolicyByName(ref); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		GetByID: func(ctx context.Context, id string) (*catalog.Policy, error) {
+			if v, ok := store.PolicyByID(id); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		StampID: func(ctx context.Context, v *catalog.Policy) error {
+			return stampMetaID(&v.Metadata, func(s string) bool {
+				_, ok := store.PolicyByName(s)
+				return ok
+			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Policy) error {
 			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.Policy) error {
+		UpdateByID: func(ctx context.Context, id string, v *catalog.Policy) error {
+			v.Metadata.ID = id
 			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
-		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeletePolicy(ctx, name)
+		DeleteByID: func(ctx context.Context, id string) error {
+			return st.Catalog.DeletePolicy(ctx, id)
 		},
-		ResourceID: func(v *catalog.Policy) string { return v.Metadata.Name },
+		ResourceID:      func(v *catalog.Policy) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Policy) string { return v.Metadata.ID },
 		Patch: func(v *catalog.Policy) catalog.Patch {
 			return catalog.Patch{UpsertPolicy: v}
 		},
-		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeletePolicy: name}
+		PatchDelete: func(slug string) catalog.Patch {
+			return catalog.Patch{DeletePolicy: slug}
 		},
 	}
 }
@@ -129,8 +184,8 @@ func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		Name: "Model",
 		Decode: func(r *http.Request) (*catalog.Model, error) {
 			return decodeBody[catalog.Model](r, func(v *catalog.Model) error {
-				if v.Metadata.Name == "" {
-					return errors.New("metadata.name required")
+				if v.Metadata.Name == "" && v.Metadata.DisplayName == "" {
+					return errors.New("metadata.name or metadata.displayName required")
 				}
 				return nil
 			})
@@ -138,28 +193,46 @@ func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		List: func(ctx context.Context) ([]*catalog.Model, error) {
 			return store.Models(), nil
 		},
-		Get: func(ctx context.Context, name string) (*catalog.Model, error) {
-			v, ok := store.ModelByName(name)
-			if !ok {
-				return nil, crud.ErrNotFound
+		GetBySlugOrID: func(ctx context.Context, ref string) (*catalog.Model, error) {
+			if ids.Valid(ref) {
+				if v, ok := store.ModelByID(ref); ok {
+					return v, nil
+				}
 			}
-			return v, nil
+			if v, ok := store.ModelByName(ref); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		GetByID: func(ctx context.Context, id string) (*catalog.Model, error) {
+			if v, ok := store.ModelByID(id); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		StampID: func(ctx context.Context, v *catalog.Model) error {
+			return stampMetaID(&v.Metadata, func(s string) bool {
+				_, ok := store.ModelByName(s)
+				return ok
+			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Model) error {
 			return st.Catalog.UpsertModel(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.Model) error {
+		UpdateByID: func(ctx context.Context, id string, v *catalog.Model) error {
+			v.Metadata.ID = id
 			return st.Catalog.UpsertModel(ctx, *v)
 		},
-		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeleteModel(ctx, name)
+		DeleteByID: func(ctx context.Context, id string) error {
+			return st.Catalog.DeleteModel(ctx, id)
 		},
-		ResourceID: func(v *catalog.Model) string { return v.Metadata.Name },
+		ResourceID:      func(v *catalog.Model) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Model) string { return v.Metadata.ID },
 		Patch: func(v *catalog.Model) catalog.Patch {
 			return catalog.Patch{UpsertModel: v}
 		},
-		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeleteModel: name}
+		PatchDelete: func(slug string) catalog.Patch {
+			return catalog.Patch{DeleteModel: slug}
 		},
 	}
 }
@@ -171,8 +244,8 @@ func routeKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		Name: "Route",
 		Decode: func(r *http.Request) (*catalog.Route, error) {
 			return decodeBody[catalog.Route](r, func(v *catalog.Route) error {
-				if v.Metadata.Name == "" {
-					return errors.New("metadata.name required")
+				if v.Metadata.Name == "" && v.Metadata.DisplayName == "" {
+					return errors.New("metadata.name or metadata.displayName required")
 				}
 				return nil
 			})
@@ -180,28 +253,46 @@ func routeKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		List: func(ctx context.Context) ([]*catalog.Route, error) {
 			return store.Routes(), nil
 		},
-		Get: func(ctx context.Context, name string) (*catalog.Route, error) {
-			v, ok := store.RouteByName(name)
-			if !ok {
-				return nil, crud.ErrNotFound
+		GetBySlugOrID: func(ctx context.Context, ref string) (*catalog.Route, error) {
+			if ids.Valid(ref) {
+				if v, ok := store.RouteByID(ref); ok {
+					return v, nil
+				}
 			}
-			return v, nil
+			if v, ok := store.RouteByName(ref); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		GetByID: func(ctx context.Context, id string) (*catalog.Route, error) {
+			if v, ok := store.RouteByID(id); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		StampID: func(ctx context.Context, v *catalog.Route) error {
+			return stampMetaID(&v.Metadata, func(s string) bool {
+				_, ok := store.RouteByName(s)
+				return ok
+			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Route) error {
 			return st.Catalog.UpsertRoute(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.Route) error {
+		UpdateByID: func(ctx context.Context, id string, v *catalog.Route) error {
+			v.Metadata.ID = id
 			return st.Catalog.UpsertRoute(ctx, *v)
 		},
-		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeleteRoute(ctx, name)
+		DeleteByID: func(ctx context.Context, id string) error {
+			return st.Catalog.DeleteRoute(ctx, id)
 		},
-		ResourceID: func(v *catalog.Route) string { return v.Metadata.Name },
+		ResourceID:      func(v *catalog.Route) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.Route) string { return v.Metadata.ID },
 		Patch: func(v *catalog.Route) catalog.Patch {
 			return catalog.Patch{UpsertRoute: v}
 		},
-		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeleteRoute: name}
+		PatchDelete: func(slug string) catalog.Patch {
+			return catalog.Patch{DeleteRoute: slug}
 		},
 	}
 }
@@ -213,8 +304,8 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		Name: "RateLimit",
 		Decode: func(r *http.Request) (*catalog.RateLimit, error) {
 			return decodeBody[catalog.RateLimit](r, func(v *catalog.RateLimit) error {
-				if v.Metadata.Name == "" {
-					return errors.New("metadata.name required")
+				if v.Metadata.Name == "" && v.Metadata.DisplayName == "" {
+					return errors.New("metadata.name or metadata.displayName required")
 				}
 				return nil
 			})
@@ -222,43 +313,54 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		List: func(ctx context.Context) ([]*catalog.RateLimit, error) {
 			return store.RateLimits(), nil
 		},
-		Get: func(ctx context.Context, name string) (*catalog.RateLimit, error) {
-			v, ok := store.RateLimitByName(name)
-			if !ok {
-				return nil, crud.ErrNotFound
+		GetBySlugOrID: func(ctx context.Context, ref string) (*catalog.RateLimit, error) {
+			if ids.Valid(ref) {
+				if v, ok := store.RateLimitByID(ref); ok {
+					return v, nil
+				}
 			}
-			return v, nil
+			if v, ok := store.RateLimitByName(ref); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		GetByID: func(ctx context.Context, id string) (*catalog.RateLimit, error) {
+			if v, ok := store.RateLimitByID(id); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		StampID: func(ctx context.Context, v *catalog.RateLimit) error {
+			return stampMetaID(&v.Metadata, func(s string) bool {
+				_, ok := store.RateLimitByName(s)
+				return ok
+			})
 		},
 		Insert: func(ctx context.Context, v *catalog.RateLimit) error {
 			return st.Catalog.UpsertRateLimit(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.RateLimit) error {
+		UpdateByID: func(ctx context.Context, id string, v *catalog.RateLimit) error {
+			v.Metadata.ID = id
 			return st.Catalog.UpsertRateLimit(ctx, *v)
 		},
-		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeleteRateLimit(ctx, name)
+		DeleteByID: func(ctx context.Context, id string) error {
+			return st.Catalog.DeleteRateLimit(ctx, id)
 		},
-		ResourceID: func(v *catalog.RateLimit) string { return v.Metadata.Name },
+		ResourceID:      func(v *catalog.RateLimit) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.RateLimit) string { return v.Metadata.ID },
 		Patch: func(v *catalog.RateLimit) catalog.Patch {
 			return catalog.Patch{UpsertRateLimit: v}
 		},
-		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeleteRateLimit: name}
+		PatchDelete: func(slug string) catalog.Patch {
+			return catalog.Patch{DeleteRateLimit: slug}
 		},
 	}
 }
 
 // --- RelayKey ---
 
-// relayKeyValueKey is the JSON field on the write body that carries the
-// cleartext bearer token. It is hashed server-side; only the hash is stored.
 const relayKeyValueField = "value"
 
-// relayKeyKind wires the standard CRUD factory for relay keys. The Decode
-// function understands a write-only "value" field on the request body: when
-// present, it's hashed with sha256 and stamped into Spec.KeyHash, the
-// cleartext is then dropped. Update calls preserve the existing hash by
-// reading the current snapshot when "value" is absent.
 func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.RelayKey] {
 	return &crud.Kind[*catalog.RelayKey]{
 		Name: "RelayKey",
@@ -267,15 +369,13 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 			if err != nil {
 				return nil, err
 			}
-			// Decode into the typed shape first.
 			var v catalog.RelayKey
 			if err := json.Unmarshal(raw, &v); err != nil {
 				return nil, err
 			}
-			if v.Metadata.Name == "" {
-				return nil, errors.New("metadata.name required")
+			if v.Metadata.Name == "" && v.Metadata.DisplayName == "" {
+				return nil, errors.New("metadata.name or metadata.displayName required")
 			}
-			// Look for a top-level "value" field carrying cleartext.
 			var envelope map[string]json.RawMessage
 			if err := json.Unmarshal(raw, &envelope); err == nil {
 				if rawVal, ok := envelope[relayKeyValueField]; ok {
@@ -289,50 +389,68 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 					}
 				}
 			}
-			// On update without value, inherit existing hash so the spec
-			// validates and the key keeps working.
+			// On update without a fresh value, the handler will inherit the
+			// existing hash from the by-id lookup before persistence.
+			return &v, nil
+		},
+		List: func(ctx context.Context) ([]*catalog.RelayKey, error) {
+			return store.RelayKeys(), nil
+		},
+		GetBySlugOrID: func(ctx context.Context, ref string) (*catalog.RelayKey, error) {
+			if ids.Valid(ref) {
+				if v, ok := store.RelayKeyByID(ref); ok {
+					return v, nil
+				}
+			}
+			if v, ok := store.RelayKeyByName(ref); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		GetByID: func(ctx context.Context, id string) (*catalog.RelayKey, error) {
+			if v, ok := store.RelayKeyByID(id); ok {
+				return v, nil
+			}
+			return nil, crud.ErrNotFound
+		},
+		StampID: func(ctx context.Context, v *catalog.RelayKey) error {
+			return stampMetaID(&v.Metadata, func(s string) bool {
+				_, ok := store.RelayKeyByName(s)
+				return ok
+			})
+		},
+		Insert: func(ctx context.Context, v *catalog.RelayKey) error {
+			return st.Catalog.UpsertRelayKey(ctx, *v)
+		},
+		UpdateByID: func(ctx context.Context, id string, v *catalog.RelayKey) error {
+			v.Metadata.ID = id
+			// Inherit existing hash/prefix when the update body omitted them.
 			if v.Spec.KeyHash == "" {
-				if existing, ok := store.RelayKeyByName(v.Metadata.Name); ok {
+				if existing, ok := store.RelayKeyByID(id); ok {
 					v.Spec.KeyHash = existing.Spec.KeyHash
 					if v.Spec.Prefix == "" {
 						v.Spec.Prefix = existing.Spec.Prefix
 					}
 				}
 			}
-			return &v, nil
-		},
-		List: func(ctx context.Context) ([]*catalog.RelayKey, error) {
-			return store.RelayKeys(), nil
-		},
-		Get: func(ctx context.Context, name string) (*catalog.RelayKey, error) {
-			v, ok := store.RelayKeyByName(name)
-			if !ok {
-				return nil, crud.ErrNotFound
-			}
-			return v, nil
-		},
-		Insert: func(ctx context.Context, v *catalog.RelayKey) error {
 			return st.Catalog.UpsertRelayKey(ctx, *v)
 		},
-		Update: func(ctx context.Context, name string, v *catalog.RelayKey) error {
-			return st.Catalog.UpsertRelayKey(ctx, *v)
+		DeleteByID: func(ctx context.Context, id string) error {
+			return st.Catalog.DeleteRelayKey(ctx, id)
 		},
-		Delete: func(ctx context.Context, name string) error {
-			return st.Catalog.DeleteRelayKey(ctx, name)
-		},
-		ResourceID: func(v *catalog.RelayKey) string { return v.Metadata.Name },
+		ResourceID:      func(v *catalog.RelayKey) string { return v.Metadata.Name },
+		ResourceIDValue: func(v *catalog.RelayKey) string { return v.Metadata.ID },
 		Patch: func(v *catalog.RelayKey) catalog.Patch {
 			return catalog.Patch{UpsertRelayKey: v}
 		},
-		PatchDelete: func(name string) catalog.Patch {
-			return catalog.Patch{DeleteRelayKey: name}
+		PatchDelete: func(slug string) catalog.Patch {
+			return catalog.Patch{DeleteRelayKey: slug}
 		},
 	}
 }
 
 // --- helpers ---
 
-// decodeBody reads r.Body, unmarshals into T, runs validate, returns pointer.
 func decodeBody[T any](r *http.Request, validate func(*T) error) (*T, error) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -348,7 +466,6 @@ func decodeBody[T any](r *http.Request, validate func(*T) error) (*T, error) {
 	return &v, nil
 }
 
-// storageTxRunner adapts *storage.Storage to the crud.TxRunner interface.
 type storageTxRunner struct {
 	st *storage.Storage
 }
@@ -359,7 +476,6 @@ func (r *storageTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Conte
 	})
 }
 
-// crudDeps constructs crud.Deps from the PGStore and underlying storage.
 func crudDeps(st *storage.Storage, store *catalog.PGStore) crud.Deps {
 	return crud.Deps{
 		Tx:       &storageTxRunner{st: st},
@@ -369,7 +485,6 @@ func crudDeps(st *storage.Storage, store *catalog.PGStore) crud.Deps {
 	}
 }
 
-// adminTokenGate returns a chi middleware that checks the admin token.
 func adminTokenGate(token string) func(http.Handler) http.Handler {
 	tok := []byte(token)
 	return func(next http.Handler) http.Handler {
@@ -391,7 +506,6 @@ func adminTokenGate(token string) func(http.Handler) http.Handler {
 	}
 }
 
-// buildAdminCRUD constructs the adminCRUD bundle used by mountHuma.
 func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore, kvStore kv.Store) *adminCRUD {
 	depsCopy := deps
 	kindsCopy := kinds
@@ -402,3 +516,4 @@ func buildAdminCRUD(kinds adminKinds, deps crud.Deps, store *catalog.PGStore, kv
 		kvStore: kvStore,
 	}
 }
+
