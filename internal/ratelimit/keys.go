@@ -7,6 +7,18 @@ import (
 	"github.com/wyolet/relay/internal/catalog"
 )
 
+// resolvedStrategy returns the effective strategy for a ResolvedRule.
+// Precedence: ResolvedRule.Strategy → RateLimit.Spec.Strategy → token-bucket.
+func resolvedStrategy(r catalog.ResolvedRule) catalog.RateLimitStrategy {
+	if r.Strategy != "" {
+		return r.Strategy
+	}
+	if r.RateLimit != nil && r.RateLimit.Spec.Strategy != "" {
+		return r.RateLimit.Spec.Strategy
+	}
+	return catalog.StrategyTokenBucket
+}
+
 // resolvedMeter returns the effective meter string for a ResolvedRule,
 // preferring the typed Rule.Meter over the legacy Meter field.
 func resolvedMeter(r catalog.ResolvedRule) string {
@@ -46,6 +58,42 @@ func bucketKey(poolName string, r catalog.ResolvedRule, bucketTS time.Time) stri
 // format: limit:{policy:<poolName>}:<parentKind>:<parentName>:<rlName>:<meter>
 func concurrencyKey(poolName string, r catalog.ResolvedRule) string {
 	return fmt.Sprintf("limit:{policy:%s}:%s:%s:%s:%s",
+		poolName,
+		r.ParentKind, r.ParentName,
+		resolvedRLName(r),
+		resolvedMeter(r),
+	)
+}
+
+// fixedWindowKey returns the state key for a fixed-window bucket.
+// format: limit:{policy:<poolName>}:fw:<parentKind>:<parentName>:<rlName>:<meter>:<bucketStartMs>
+func fixedWindowKey(poolName string, r catalog.ResolvedRule, bucketStartMs int64) string {
+	return fmt.Sprintf("limit:{policy:%s}:fw:%s:%s:%s:%s:%d",
+		poolName,
+		r.ParentKind, r.ParentName,
+		resolvedRLName(r),
+		resolvedMeter(r),
+		bucketStartMs,
+	)
+}
+
+// tbStateKey returns the state hash key for a token-bucket rule.
+// format: limit:{policy:<poolName>}:tb:<parentKind>:<parentName>:<rlName>:<meter>
+// Stores a Redis hash: {tokens, last_ms}.
+func tbStateKey(poolName string, r catalog.ResolvedRule) string {
+	return fmt.Sprintf("limit:{policy:%s}:tb:%s:%s:%s:%s",
+		poolName,
+		r.ParentKind, r.ParentName,
+		resolvedRLName(r),
+		resolvedMeter(r),
+	)
+}
+
+// lbStateKey returns the state hash key for a leaky-bucket rule.
+// format: limit:{policy:<poolName>}:lb:<parentKind>:<parentName>:<rlName>:<meter>
+// Stores a Redis hash: {level, last_ms}.
+func lbStateKey(poolName string, r catalog.ResolvedRule) string {
+	return fmt.Sprintf("limit:{policy:%s}:lb:%s:%s:%s:%s",
 		poolName,
 		r.ParentKind, r.ParentName,
 		resolvedRLName(r),

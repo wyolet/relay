@@ -455,8 +455,9 @@ func makeMultiRule(parentName, rlName string, ruleMeter string, amount int64, wi
 		Strategy:      catalog.StrategySlidingWindow,
 		Window:        window,
 		Rule: catalog.RateLimitRule{
-			Meter:  ruleMeter,
-			Amount: amount,
+			Meter:    ruleMeter,
+			Amount:   amount,
+			Strategy: catalog.StrategySlidingWindow,
 		},
 		Meter: catalog.Meter(ruleMeter),
 		RateLimit: &catalog.RateLimit{
@@ -468,6 +469,174 @@ func makeMultiRule(parentName, rlName string, ruleMeter string, amount int64, wi
 			},
 		},
 	}
+}
+
+// makeStrategyRule builds a ResolvedRule for testing a specific strategy.
+func makeStrategyRule(strategy catalog.RateLimitStrategy, meter catalog.Meter, amount int64, window time.Duration) catalog.ResolvedRule {
+	return catalog.ResolvedRule{
+		ParentKind:    catalog.KindRoute,
+		ParentName:    "test-route",
+		RateLimitName: "rl-" + string(strategy),
+		Strategy:      strategy,
+		Window:        window,
+		Rule: catalog.RateLimitRule{
+			Meter:    string(meter),
+			Amount:   amount,
+			Strategy: strategy,
+		},
+		Meter: meter,
+		RateLimit: &catalog.RateLimit{
+			Metadata: catalog.Metadata{Name: "rl-" + string(strategy)},
+			Spec: catalog.RateLimitSpec{
+				Strategy: strategy,
+				Window:   window,
+				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
+			},
+		},
+	}
+}
+
+// TestFixedWindow_HappyPath: amount=5, 5 requests succeed, 6th fails within same window.
+func TestFixedWindow_HappyPath(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC) // 30s into 1-minute window
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	rule := makeStrategyRule(catalog.StrategyFixedWindow, catalog.MeterRequests, 5, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
+
+	for i := 0; i < 5; i++ {
+		res, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("reserve %d: %v", i+1, err)
+		}
+		_ = l.Commit(ctx, res, Observations{})
+	}
+	_, err := l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded on 6th, got %v", err)
+	}
+
+	// New window: counter resets.
+	now = now.Add(time.Minute)
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("expected success in new window, got %v", err)
+	}
+	_ = l.Commit(ctx, res, Observations{})
+}
+
+// TestTokenBucket_Refill: burst=5, after exhausting wait for refill.
+func TestTokenBucket_Refill(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	// burst=5, window=1m → refill rate = 5 tokens/min = 1 token/12s
+	rule := makeStrategyRule(catalog.StrategyTokenBucket, catalog.MeterRequests, 5, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
+
+	for i := 0; i < 5; i++ {
+		res, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("reserve %d: %v", i+1, err)
+		}
+		_ = l.Commit(ctx, res, Observations{})
+	}
+	_, err := l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded after burst exhausted, got %v", err)
+	}
+
+	// Advance 12s → 1 token refilled
+	now = now.Add(12 * time.Second)
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("expected 1 refilled token to allow request, got %v", err)
+	}
+	_ = l.Commit(ctx, res, Observations{})
+}
+
+// TestTokenBucket_RefundOnCancel: cancelled reservation returns token.
+func TestTokenBucket_RefundOnCancel(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	rule := makeStrategyRule(catalog.StrategyTokenBucket, catalog.MeterRequests, 1, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
+
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	// bucket exhausted
+	_, err = l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded, got %v", err)
+	}
+
+	// Cancel → token refunded
+	_ = l.Commit(ctx, res, Observations{Cancelled: true})
+
+	res2, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("expected success after refund, got %v", err)
+	}
+	_ = l.Commit(ctx, res2, Observations{})
+}
+
+// TestLeakyBucket_DrainAndRefund: queue fills, drains over time, and refund works.
+func TestLeakyBucket_DrainAndRefund(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	// capacity=3, window=60s → leak_rate = 3/60s = 1 req/20s
+	rule := makeStrategyRule(catalog.StrategyLeakyBucket, catalog.MeterRequests, 3, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
+
+	for i := 0; i < 3; i++ {
+		res, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("reserve %d: %v", i+1, err)
+		}
+		_ = l.Commit(ctx, res, Observations{})
+	}
+	_, err := l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded after queue full, got %v", err)
+	}
+
+	// Advance 20s → 1 slot drained
+	now = now.Add(20 * time.Second)
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("expected slot after drain, got %v", err)
+	}
+	_ = l.Commit(ctx, res, Observations{})
+}
+
+// TestLeakyBucket_RefundOnCancel
+func TestLeakyBucket_RefundOnCancel(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	rule := makeStrategyRule(catalog.StrategyLeakyBucket, catalog.MeterRequests, 1, time.Minute)
+	rules := []catalog.ResolvedRule{rule}
+
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	_, err = l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded, got %v", err)
+	}
+
+	_ = l.Commit(ctx, res, Observations{Cancelled: true})
+
+	res2, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("expected success after cancel refund, got %v", err)
+	}
+	_ = l.Commit(ctx, res2, Observations{})
 }
 
 // TestMultiRule_AllGranted: all rules have headroom → reservation succeeds.
