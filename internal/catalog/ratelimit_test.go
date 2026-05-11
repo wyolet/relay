@@ -571,6 +571,31 @@ func TestRateLimitSpec_LegacyJSONLift(t *testing.T) {
 	}
 }
 
+// TestRateLimitSpec_WindowStringParsed verifies that JSON window accepts "1m" strings.
+func TestRateLimitSpec_WindowStringParsed(t *testing.T) {
+	var spec RateLimitSpec
+	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":"1m","amount":10}`), &spec); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if spec.Window != time.Minute {
+		t.Errorf("expected 1m, got %v", spec.Window)
+	}
+	// also 30s
+	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":"30s","amount":10}`), &spec); err != nil {
+		t.Fatalf("unmarshal 30s: %v", err)
+	}
+	if spec.Window != 30*time.Second {
+		t.Errorf("expected 30s, got %v", spec.Window)
+	}
+	// nanoseconds-as-int still works (legacy storage format)
+	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":60000000000,"amount":10}`), &spec); err != nil {
+		t.Fatalf("unmarshal int: %v", err)
+	}
+	if spec.Window != time.Minute {
+		t.Errorf("expected 1m from int, got %v", spec.Window)
+	}
+}
+
 // TestRateLimitSpec_LegacyDefaultMeter verifies empty legacy Meter defaults to "requests".
 func TestRateLimitSpec_LegacyDefaultMeter(t *testing.T) {
 	var spec RateLimitSpec
