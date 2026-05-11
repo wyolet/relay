@@ -19,7 +19,7 @@ func TestMiddleware(t *testing.T) {
 	key1 := []byte("key-one")
 	key2 := []byte("key-two")
 
-	mw := Middleware([][]byte{key1, key2})
+	mw := Middleware([][]byte{key1, key2}, nil)
 	handler := mw(http.HandlerFunc(ok200))
 
 	cases := []struct {
@@ -104,7 +104,7 @@ func TestMiddleware(t *testing.T) {
 
 func TestMiddlewareFailOpen(t *testing.T) {
 	// keys empty → passthrough, no counters
-	mw := Middleware(nil)
+	mw := Middleware(nil, nil)
 	handler := mw(http.HandlerFunc(ok200))
 
 	missBefore := testutil.ToFloat64(metricRejectedMissing)
@@ -123,7 +123,7 @@ func TestMiddlewareFailOpen(t *testing.T) {
 }
 
 func TestMiddlewareMultiKeyNoneMatch(t *testing.T) {
-	mw := Middleware([][]byte{[]byte("aaa"), []byte("bbb")})
+	mw := Middleware([][]byte{[]byte("aaa"), []byte("bbb")}, nil)
 	handler := mw(http.HandlerFunc(ok200))
 
 	invBefore := testutil.ToFloat64(metricRejectedInvalid)
@@ -145,7 +145,7 @@ func TestMiddlewareMultiKeyNoneMatch(t *testing.T) {
 // takes priority over Authorization and x-api-key.
 func TestMiddlewareXWRAPIKey(t *testing.T) {
 	key := []byte("relay-customer-key")
-	mw := Middleware([][]byte{key})
+	mw := Middleware([][]byte{key}, nil)
 	handler := mw(http.HandlerFunc(ok200))
 
 	// Plain X-WR-API-Key passes.

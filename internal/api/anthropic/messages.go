@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/internal/usage"
@@ -96,8 +97,9 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		}
 
 		plan, resolveErr := resolver.Resolve(routing.Request{
-			RouteHeader: r.Header.Get("X-Relay-Route"),
-			ModelName:   mr.Model,
+			RouteHeader:    r.Header.Get("X-Relay-Route"),
+			ModelName:      mr.Model,
+			PolicyOverride: auth.SubjectFrom(r.Context()).PolicyRef,
 		})
 		if resolveErr != nil {
 			switch {

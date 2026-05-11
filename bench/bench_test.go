@@ -273,7 +273,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 	}
 
 	apiKeys := auth.ParseKeys(benchKey)
-	authMW := auth.Middleware(apiKeys)
+	authMW := auth.Middleware(apiKeys, nil)
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(logger))

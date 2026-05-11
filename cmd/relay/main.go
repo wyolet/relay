@@ -442,10 +442,24 @@ func main() {
 	}
 
 	apiKeys := cfg.APIKeys
-	if len(apiKeys) == 0 {
+	if len(apiKeys) == 0 && pgStoreForAdmin == nil {
 		slog.Warn("auth: no API keys configured — running fail-open (RELAY_API_KEY/RELAY_API_KEYS unset)")
 	}
-	authMW := auth.Middleware(apiKeys)
+	var lookup auth.Lookup
+	if pgStoreForAdmin != nil {
+		store := pgStoreForAdmin
+		lookup = func(token string) (auth.Subject, bool) {
+			k, ok := store.RelayKeyByHash(auth.HashToken(token))
+			if !ok {
+				return auth.Subject{}, false
+			}
+			if !catalog.IsEnabled(k.Spec.Enabled) || k.Spec.RevokedAt != nil {
+				return auth.Subject{}, false
+			}
+			return auth.Subject{KeyName: k.Metadata.Name, PolicyRef: k.Spec.PolicyRef}, true
+		}
+	}
+	authMW := auth.Middleware(apiKeys, lookup)
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))

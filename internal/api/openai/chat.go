@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/internal/routing"
 	"github.com/wyolet/relay/internal/usage"
@@ -83,8 +84,9 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		ctx = pkgopenai.ContextWithChatRequest(ctx, cr)
 
 		plan, resolveErr := resolver.Resolve(routing.Request{
-			RouteHeader: r.Header.Get("X-Relay-Route"),
-			ModelName:   cr.Model,
+			RouteHeader:    r.Header.Get("X-Relay-Route"),
+			ModelName:      cr.Model,
+			PolicyOverride: auth.SubjectFrom(r.Context()).PolicyRef,
 		})
 		if resolveErr != nil {
 			switch {

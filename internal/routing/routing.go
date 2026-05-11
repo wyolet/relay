@@ -64,6 +64,10 @@ var (
 type Request struct {
 	RouteHeader string // value of X-Relay-Route; "" if header absent
 	ModelName   string // from parsed request body; "" if missing
+	// PolicyOverride, when non-empty, forces buildPlan to use the named Policy
+	// in place of the provider's defaultPolicy. Sourced from the authenticated
+	// RelayKey's PolicyRef.
+	PolicyOverride string
 }
 
 // Resolver resolves a routing.Request into a RequestPlan.
@@ -88,7 +92,7 @@ func (res *Resolver) Resolve(req Request) (*RequestPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	return res.buildPlan(modelName)
+	return res.buildPlan(modelName, req.PolicyOverride)
 }
 
 // pickModel applies the three-level precedence and returns the resolved model name.
@@ -123,7 +127,8 @@ func (res *Resolver) pickModel(req Request) (string, error) {
 }
 
 // buildPlan resolves provider, policy, secrets, and rate limits for a model name.
-func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
+// policyOverride, when non-empty, replaces the provider's defaultPolicy.
+func (res *Resolver) buildPlan(modelName, policyOverride string) (*RequestPlan, error) {
 	m, ok := res.catalog.ModelByName(modelName)
 	if !ok || !catalog.IsEnabled(m.Spec.Enabled) {
 		return nil, ErrUnknownModel
@@ -133,7 +138,11 @@ func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
 		return nil, ErrUnknownProvider
 	}
 	plan := &RequestPlan{Model: m, Provider: p}
-	if poolName := p.Spec.DefaultPolicy; poolName != "" {
+	poolName := p.Spec.DefaultPolicy
+	if policyOverride != "" {
+		poolName = policyOverride
+	}
+	if poolName != "" {
 		policy, ok := res.catalog.PolicyByName(poolName)
 		if !ok || !catalog.IsEnabled(policy.Spec.Enabled) {
 			return nil, ErrUnknownPolicy
