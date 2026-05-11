@@ -381,11 +381,16 @@ var validStrategies = map[RateLimitStrategy]bool{
 
 func validateRateLimits(s *snapshot) error {
 	for _, rl := range s.rateLimits {
-		if rl.Spec.Window <= 0 {
-			return fmt.Errorf("RateLimit %q: window must be > 0", rl.Metadata.Name)
+		// spec.Window may be zero only when every rule defines its own window.
+		if rl.Spec.Window < 0 {
+			return fmt.Errorf("RateLimit %q: window must be >= 0", rl.Metadata.Name)
 		}
 		if rl.Spec.Window > maxRateLimitWindow {
 			return fmt.Errorf("RateLimit %q: window %v exceeds maximum of 30 days", rl.Metadata.Name, rl.Spec.Window)
+		}
+		// Validate spec-level source (provenance field, not per-rule).
+		if rl.Spec.Source != "" && !sourceRE.MatchString(rl.Spec.Source) {
+			return fmt.Errorf("RateLimit %q: source %q must match attribution.<key>", rl.Metadata.Name, rl.Spec.Source)
 		}
 		// Reject explicitly empty rules list (nil/omitted is fine — it falls back to legacy).
 		if rl.Spec.Rules != nil && len(rl.Spec.Rules) == 0 {
@@ -403,8 +408,16 @@ func validateRateLimits(s *snapshot) error {
 			if r.Amount <= 0 {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): amount must be > 0", rl.Metadata.Name, i, r.Meter)
 			}
-			if r.Source != "" && !sourceRE.MatchString(r.Source) {
-				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): source %q must match attribution.<key>", rl.Metadata.Name, i, r.Meter, r.Source)
+			// Require every rule to have a resolvable window.
+			effectiveWindow := r.Window
+			if effectiveWindow == 0 {
+				effectiveWindow = rl.Spec.Window
+			}
+			if effectiveWindow <= 0 {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): window must be > 0 (set on rule or spec)", rl.Metadata.Name, i, r.Meter)
+			}
+			if effectiveWindow > maxRateLimitWindow {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): window %v exceeds maximum of 30 days", rl.Metadata.Name, i, r.Meter, effectiveWindow)
 			}
 			// Strategy "" is valid here; snapshot loader defaults to token-bucket.
 			if r.Strategy != "" && !validStrategies[r.Strategy] {

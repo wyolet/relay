@@ -254,22 +254,65 @@ type RateLimit struct {
 // RateLimitRule is one meter/amount pair within a RateLimitSpec.
 // Strategy is per-rule; when omitted it defaults to token-bucket (applied by
 // the snapshot loader). Concurrency meter ignores strategy.
+// Window overrides spec.Window for this rule; if zero, spec.Window is used.
 type RateLimitRule struct {
 	Meter    string            `yaml:"meter"              json:"meter"`
 	Amount   int64             `yaml:"amount"             json:"amount"`
-	Source   string            `yaml:"source,omitempty"   json:"source,omitempty"`
+	Window   time.Duration     `yaml:"window,omitempty"   json:"-"` // YAML: plain duration; JSON via ruleJSON shim
 	Strategy RateLimitStrategy `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+}
+
+// rateLimitRuleJSON is the JSON unmarshal shim for RateLimitRule, accepting
+// window as a human-readable string or nanosecond integer.
+type rateLimitRuleJSON struct {
+	Meter    string            `json:"meter"`
+	Amount   int64             `json:"amount"`
+	Window   jsonDuration      `json:"window,omitempty"`
+	Strategy RateLimitStrategy `json:"strategy,omitempty"`
+}
+
+func (r *RateLimitRule) UnmarshalJSON(b []byte) error {
+	var raw rateLimitRuleJSON
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	r.Meter = raw.Meter
+	r.Amount = raw.Amount
+	r.Window = time.Duration(raw.Window)
+	r.Strategy = raw.Strategy
+	return nil
+}
+
+func (r RateLimitRule) MarshalJSON() ([]byte, error) {
+	type Alias struct {
+		Meter    string            `json:"meter"`
+		Amount   int64             `json:"amount"`
+		Window   int64             `json:"window,omitempty"`
+		Strategy RateLimitStrategy `json:"strategy,omitempty"`
+	}
+	return json.Marshal(Alias{
+		Meter:    r.Meter,
+		Amount:   r.Amount,
+		Window:   int64(r.Window),
+		Strategy: r.Strategy,
+	})
 }
 
 // RateLimitSpec is the canonical multi-rule shape. Top-level amount/meter/source
 // were retired (see issue #78); legacy inputs are silently lifted into a
 // one-element Rules list by UnmarshalJSON / UnmarshalYAML for backward compat
 // with stored JSONB rows and YAML fixtures.
+//
+// Source is resource provenance (user_defined / system_mirrored); it is a
+// spec-level field, not per-rule.
+// Window is a spec-level default; rules may override it with their own Window.
 type RateLimitSpec struct {
-	Strategy RateLimitStrategy `yaml:"strategy" json:"strategy"`
-	Window   time.Duration     `yaml:"window"   json:"window"`
-	Rules    []RateLimitRule   `yaml:"rules"    json:"rules"`
-	Enabled  *bool             `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Strategy    RateLimitStrategy `yaml:"strategy"              json:"strategy"`
+	Window      time.Duration     `yaml:"window"                json:"window"`
+	Source      string            `yaml:"source,omitempty"      json:"source,omitempty"`
+	Description string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Rules       []RateLimitRule   `yaml:"rules"                 json:"rules"`
+	Enabled     *bool             `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
 }
 
 // jsonDuration is a time.Duration that accepts both nanosecond integers and
@@ -301,17 +344,19 @@ func (d *jsonDuration) UnmarshalJSON(b []byte) error {
 }
 
 // rateLimitSpecJSON is the legacy-tolerant unmarshal shim. It accepts either
-// the canonical {strategy, window, rules[], enabled?} shape or the legacy
-// {strategy, window, amount, meter?, source?, enabled?} shape and lifts the
-// latter into a single-element rules list.
+// the canonical {strategy, window, source?, description?, rules[], enabled?} shape
+// or the legacy {strategy, window, amount, meter?, source?, enabled?} shape and
+// lifts the latter into a single-element rules list.
+// Legacy source is lifted to spec.Source (not into the rule).
 type rateLimitSpecJSON struct {
-	Strategy RateLimitStrategy `json:"strategy"`
-	Window   jsonDuration      `json:"window"`
-	Rules    []RateLimitRule   `json:"rules,omitempty"`
-	Amount   int64             `json:"amount,omitempty"`
-	Meter    string            `json:"meter,omitempty"`
-	Source   string            `json:"source,omitempty"`
-	Enabled  *bool             `json:"enabled,omitempty"`
+	Strategy    RateLimitStrategy `json:"strategy"`
+	Window      jsonDuration      `json:"window"`
+	Source      string            `json:"source,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Rules       []RateLimitRule   `json:"rules,omitempty"`
+	Amount      int64             `json:"amount,omitempty"`
+	Meter       string            `json:"meter,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
 }
 
 func (s *RateLimitSpec) UnmarshalJSON(b []byte) error {
@@ -321,14 +366,16 @@ func (s *RateLimitSpec) UnmarshalJSON(b []byte) error {
 	}
 	s.Strategy = raw.Strategy
 	s.Window = time.Duration(raw.Window)
+	s.Source = raw.Source
+	s.Description = raw.Description
 	s.Enabled = raw.Enabled
 	s.Rules = raw.Rules
-	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "" || raw.Source != "") {
+	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "") {
 		meter := raw.Meter
 		if meter == "" {
 			meter = string(MeterRequests)
 		}
-		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount, Source: raw.Source}}
+		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount}}
 	}
 	// Legacy-tolerant shim: if spec-level strategy is set, fan it out to rules
 	// that omit their own. Allows old configs to keep spec.strategy working.
@@ -344,27 +391,30 @@ func (s *RateLimitSpec) UnmarshalJSON(b []byte) error {
 
 func (s *RateLimitSpec) UnmarshalYAML(unmarshal func(any) error) error {
 	var raw struct {
-		Strategy RateLimitStrategy `yaml:"strategy"`
-		Window   time.Duration     `yaml:"window"`
-		Rules    []RateLimitRule   `yaml:"rules,omitempty"`
-		Amount   int64             `yaml:"amount,omitempty"`
-		Meter    string            `yaml:"meter,omitempty"`
-		Source   string            `yaml:"source,omitempty"`
-		Enabled  *bool             `yaml:"enabled,omitempty"`
+		Strategy    RateLimitStrategy `yaml:"strategy"`
+		Window      time.Duration     `yaml:"window"`
+		Source      string            `yaml:"source,omitempty"`
+		Description string            `yaml:"description,omitempty"`
+		Rules       []RateLimitRule   `yaml:"rules,omitempty"`
+		Amount      int64             `yaml:"amount,omitempty"`
+		Meter       string            `yaml:"meter,omitempty"`
+		Enabled     *bool             `yaml:"enabled,omitempty"`
 	}
 	if err := unmarshal(&raw); err != nil {
 		return err
 	}
 	s.Strategy = raw.Strategy
 	s.Window = raw.Window
+	s.Source = raw.Source
+	s.Description = raw.Description
 	s.Enabled = raw.Enabled
 	s.Rules = raw.Rules
-	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "" || raw.Source != "") {
+	if len(s.Rules) == 0 && (raw.Amount != 0 || raw.Meter != "") {
 		meter := raw.Meter
 		if meter == "" {
 			meter = string(MeterRequests)
 		}
-		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount, Source: raw.Source}}
+		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount}}
 	}
 	// Legacy-tolerant shim: fan out spec-level strategy to rules missing their own.
 	if raw.Strategy != "" {
