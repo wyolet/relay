@@ -40,10 +40,38 @@ Org → Project → Route (named bundle: pool + policy + ACL + budget + storage)
 
 The **Route** is the unit of intent. Customer sends `X-Relay-Route: prod-cheap`; admins own the meaning. Header overrides are an escape hatch, not the primary interface.
 
+### Identity model (every catalog resource)
+
+Three-field identity, each with a distinct role:
+
+- `metadata.id` — UUIDv7, **immutable**, server-stamped on create. The PG primary key. Used in all id-routed admin URLs.
+- `metadata.name` — DNS-1123 slug, stable, mutable. Auto-derived from `displayName` on create with a collision suffix. Used in human-readable URLs and YAML refs.
+- `metadata.displayName` — free text. Edits are free; nothing references it. Editing displayName never affects refs or URLs.
+
+Cross-references in spec fields (e.g. `policy.spec.provider`, `route.spec.models[]`) currently store the **slug**, not the id — so renames-via-displayName are trivially safe. Slug edit isn't yet implemented; when added it will need a referencing-rewriter.
+
+`pkg/ids` (UUIDv7) and `pkg/slug` (slugify + collision suffix) are the pure helpers.
+
 ### Admin CRUD surface
 
-`/control/{kind}` (list/create) and `/control/{kind}/:name` (get/update/delete) for six kinds: `providers`, `pools`, `secrets`, `models`, `routes`, `ratelimits`. Plus `/control/attachments` (polymorphic rate-limit → resource links).
+Six generic kinds: `providers`, `policies`, `secrets`, `models`, `routes`, `ratelimits`, plus `keys` (RelayKey). Per-kind routes:
 
+```
+GET    /control/{kind}                 list
+GET    /control/{kind}/{ref}           read by slug or id (UUID form prefers id)
+POST   /control/{kind}                 create — server stamps id+slug from displayName
+PUT    /control/{kind}/by-id/{id}      update (id-routed; body may change slug)
+DELETE /control/{kind}/by-id/{id}      delete (id-routed)
+```
+
+Plus `/control/attachments` (polymorphic rate-limit → resource links).
+
+**Slug-routed exceptions** (not yet moved to id-routing):
+- `/control/secrets/{name}` — bespoke handler in `cmd/relay/openapi.go`
+- `/control/keys/{name}/revoke`, `/restore` — relay-key revoke/restore
+- `/control/passthrough` — singleton; identity not relevant
+
+Other notes:
 - Handlers live in `cmd/relay/` (`admin_handlers.go`, `admin_secret_attachment_handlers.go`)
 - Generic CRUD factory lives in `pkg/admin/crud` (Go package path; the HTTP surface is `/control/*`)
 - Pre-write validation (snapshot + proposed patch) lives in `pkg/configstore` (`ValidateWithPatch`)
