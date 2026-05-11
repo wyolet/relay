@@ -114,6 +114,45 @@ spec:
 		}
 	})
 
+	t.Run("tokens meter rejects non-sliding-window strategy", func(t *testing.T) {
+		for _, strat := range []string{"token-bucket", "leaky-bucket", "fixed-window"} {
+			dir := t.TempDir()
+			writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: bad-tokens-rl
+spec:
+  window: 1m
+  rules:
+    - meter: tokens
+      amount: 1000
+      strategy: `+strat+`
+`)
+			_, err := LoadYAML(dir)
+			if err == nil || !strings.Contains(err.Error(), "not supported for tokens meter") {
+				t.Errorf("strategy %q: expected tokens-meter rejection, got: %v", strat, err)
+			}
+		}
+		// tokens.input also rejected
+		dir := t.TempDir()
+		writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: bad-tokens-rl
+spec:
+  window: 1m
+  rules:
+    - meter: tokens.input
+      amount: 1000
+      strategy: token-bucket
+`)
+		if _, err := LoadYAML(dir); err == nil || !strings.Contains(err.Error(), "not supported for tokens meter") {
+			t.Errorf("tokens.input + token-bucket: expected rejection, got: %v", err)
+		}
+	})
+
 	t.Run("all known strategies valid", func(t *testing.T) {
 		for _, strat := range []string{"sliding-window", "fixed-window", "token-bucket", "leaky-bucket"} {
 			dir := t.TempDir()
