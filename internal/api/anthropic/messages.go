@@ -125,11 +125,22 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			return
 		}
 
-		// Stamp passthrough auth on the plan so the pipeline closure can use it.
-		if plan.Passthrough {
-			plan.PassthroughAuth = inboundAuth
+		// Passthrough is decided at auth time, not at routing time. The
+		// middleware sets Subject.PassthroughAuth when the global Passthrough
+		// config + per-key (or unauthenticated) gates allow BYO-credential
+		// forwarding. Routing knows nothing about it.
+		if subj := auth.SubjectFrom(r.Context()); subj.PassthroughAuth != "" {
+			pt := resolver.Passthrough()
+			if !pt.AllowsModel(mr.Model) {
+				statusCode = http.StatusForbidden
+				writeAnthropicError(w, statusCode, "permission_error", fmt.Sprintf("model %q not allowed by passthrough config", mr.Model))
+				return
+			}
+			plan.Passthrough = true
+			plan.PassthroughAuth = subj.PassthroughAuth
 			plan.PassthroughHeaders = inboundPassthroughHeaders
 		}
+		_ = inboundAuth
 		plan.RawQuery = r.URL.RawQuery
 
 		// Build attribution: header wins over body metadata.

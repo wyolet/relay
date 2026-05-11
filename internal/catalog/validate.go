@@ -198,16 +198,10 @@ func validatePolicies(s *snapshot) error {
 				return fmt.Errorf("Policy %q: model %q belongs to provider %q, not %q", policy.Metadata.Name, modelName, m.Spec.Provider, policy.Spec.Provider)
 			}
 		}
-		if policy.Spec.Passthrough {
-			if len(policy.Spec.Secrets) > 0 || len(policy.Spec.SecretSelector) > 0 {
-				return fmt.Errorf("Policy %q: passthrough policy must not specify secrets or secretSelector", policy.Metadata.Name)
-			}
-			continue
-		}
 		effective := s.secretsForPolicy(policy)
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
 		if authRequired && len(effective) == 0 {
-			return fmt.Errorf("Policy %q: provider %q requires auth but policy has no effective secrets", policy.Metadata.Name, policy.Spec.Provider)
+			return fmt.Errorf("Policy %q: provider %q requires auth but policy has no effective secrets (passthrough is now configured globally via /control/passthrough, not per-policy)", policy.Metadata.Name, policy.Spec.Provider)
 		}
 	}
 	return nil
@@ -460,7 +454,7 @@ func validatePoolDefaultLimits(s *snapshot) error {
 			continue
 		}
 		authRequired := prov.Spec.Kind == PKOpenAI || prov.Spec.Kind == PKAnthropic
-		if !authRequired || policy.Spec.SkipDefaultLimits || policy.Spec.Passthrough {
+		if !authRequired || policy.Spec.SkipDefaultLimits {
 			continue
 		}
 		hasRequests := false

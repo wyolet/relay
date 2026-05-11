@@ -16,7 +16,7 @@ import (
 // buildTestRouter mirrors the production mount order with the supplied key set.
 // Only /healthz, /v1/chat/completions (stubbed) are registered — enough for the smoke test.
 func buildTestRouter(keys [][]byte) http.Handler {
-	authMW := auth.Middleware(keys, nil)
+	authMW := auth.Middleware(keys, nil, nil)
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))

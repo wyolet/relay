@@ -1307,7 +1307,7 @@ func TestRun_PassthroughAuth(t *testing.T) {
 	opts := RunOptions{
 		Policy: &catalog.Policy{
 			Metadata: catalog.Metadata{Name: "pt-policy"},
-			Spec:     catalog.PolicySpec{Passthrough: true},
+			Spec:     catalog.PolicySpec{},
 		},
 		Selector:        sel,
 		Outbound:        ob,

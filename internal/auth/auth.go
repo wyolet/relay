@@ -16,14 +16,25 @@ import (
 
 // Subject identifies the authenticated caller. Populated by the bearer-auth
 // middleware and stashed on the request context for downstream consumers
-// (routing uses PolicyRef to override the provider's defaultPolicy).
+// (routing uses PolicyRef to override the provider's defaultPolicy; the
+// pipeline uses PassthroughAuth to forward the upstream credential).
 type Subject struct {
 	// KeyName is the catalog name of the matched RelayKey. Empty when the
-	// request authenticated via a legacy env-bound key.
+	// request authenticated via a legacy env-bound key or anonymously via
+	// the global passthrough config.
 	KeyName string
 	// PolicyRef, when non-empty, names the Policy that should apply to this
 	// request, overriding the provider's defaultPolicy.
 	PolicyRef string
+	// PassthroughAuth, when non-empty, is the raw inbound Authorization
+	// header value to forward verbatim to upstream (BYO-credential flow).
+	// Includes the "Bearer " prefix so the pipeline can pass it through
+	// without reconstruction.
+	PassthroughAuth string
+	// Anonymous reports whether the caller had no Relay key (matched the
+	// global Passthrough.unauthenticated.enabled gate). Always implies
+	// PassthroughAuth is set.
+	Anonymous bool
 }
 
 type subjectCtxKey struct{}
@@ -41,10 +52,33 @@ func SubjectFrom(ctx context.Context) Subject {
 	return Subject{}
 }
 
-// Lookup resolves a bearer token to an auth Subject. Returns (Subject, true)
-// when the token is valid and the key is enabled and not revoked. The catalog
-// snapshot is the expected backing store; lookups must not touch Postgres.
-type Lookup func(token string) (Subject, bool)
+// LookupResult is what Lookup returns when a bearer matches a managed key.
+// PassthroughAllowed is the per-key opt-in for BYO-credential forwarding;
+// the middleware combines it with the global PassthroughGate to decide
+// whether to populate Subject.PassthroughAuth.
+type LookupResult struct {
+	KeyName            string
+	PolicyRef          string
+	PassthroughAllowed bool
+}
+
+// Lookup resolves a bearer token to a managed-key descriptor. Returns
+// (result, true) when the token is valid, enabled, and not revoked. The
+// catalog snapshot is the expected backing store; lookups must not touch PG.
+type Lookup func(token string) (LookupResult, bool)
+
+// PassthroughGate reports the global passthrough configuration. The middleware
+// reads it on every request to decide whether BYO-credential traffic is
+// accepted at all (Enabled) and whether anonymous BYO is accepted
+// (UnauthenticatedEnabled).
+type PassthroughGate struct {
+	Enabled                bool
+	UnauthenticatedEnabled bool
+}
+
+// PassthroughGateFunc returns the current PassthroughGate. Callers compose
+// from catalog.Store.Passthrough() in main.
+type PassthroughGateFunc func() PassthroughGate
 
 // Rejection reason labels for relay_auth_rejected_total.
 const (
@@ -84,76 +118,140 @@ func reject(w http.ResponseWriter, reason string) {
 	_, _ = w.Write(deny401)
 }
 
-// Middleware returns a chi-compatible middleware that enforces bearer-token
-// auth. envKeys is the legacy env-bound key list; lookup, when non-nil,
-// resolves bearer tokens against the catalog (RelayKey snapshot). When both
-// envKeys and lookup are empty/nil the middleware is a passthrough (fail-open);
-// the boot WARN is the operator's signal, not per-request noise.
+// Middleware enforces bearer-token auth and resolves the passthrough story
+// for each request. envKeys is the legacy env-bound key list; lookup resolves
+// managed RelayKeys; ptGate reports the global Passthrough config (when nil,
+// passthrough is treated as disabled).
 //
-// On a successful catalog match the resolved Subject (with PolicyRef) is
-// stashed on the request context via WithSubject so routing can honour it.
-func Middleware(envKeys [][]byte, lookup Lookup) func(http.Handler) http.Handler {
-	if len(envKeys) == 0 && lookup == nil {
+// Header priority for relay-key matching:
+//  1. X-WR-API-Key — out-of-band relay key, leaves Authorization free for
+//     upstream forwarding (e.g. Claude Code OAuth Bearer flows).
+//  2. x-api-key — Anthropic SDK convention.
+//  3. Authorization: Bearer <token> — OpenAI SDK convention; consumed last
+//     so we don't accidentally forward the relay key as upstream auth.
+//
+// When a relay key matches via headers (1) or (2) and the request also carries
+// an Authorization header, that Authorization is treated as a BYO-credential
+// candidate and stamped on Subject.PassthroughAuth iff the per-key
+// PassthroughAllowed AND ptGate.Enabled both hold.
+//
+// When no relay key matches, the request is admitted as anonymous passthrough
+// iff Authorization is present AND ptGate.Enabled AND ptGate.UnauthenticatedEnabled.
+//
+// When envKeys, lookup, and ptGate are all empty/nil the middleware is a
+// passthrough no-op (fail-open); the boot WARN is the operator's signal.
+func Middleware(envKeys [][]byte, lookup Lookup, ptGate PassthroughGateFunc) func(http.Handler) http.Handler {
+	if len(envKeys) == 0 && lookup == nil && ptGate == nil {
 		return func(next http.Handler) http.Handler { return next }
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := extractBearer(r, w)
-			if !ok {
+			xrk := r.Header.Get("X-WR-API-Key")
+			xak := r.Header.Get("x-api-key")
+			rawAuthz := r.Header.Get("Authorization")
+			authzToken := bearerToken(rawAuthz)
+
+			// Try managed/env match in priority order: xrk → xak → authzToken.
+			candidates := []struct {
+				token string
+				kind  candidateKind
+			}{
+				{xrk, candidateXRK},
+				{xak, candidateXAK},
+				{authzToken, candidateAuthz},
+			}
+			var subj Subject
+			var matched bool
+			var consumedKind candidateKind
+			for _, c := range candidates {
+				if c.token == "" {
+					continue
+				}
+				if lookup != nil {
+					if res, ok := lookup(c.token); ok {
+						subj = Subject{KeyName: res.KeyName, PolicyRef: res.PolicyRef}
+						matched = true
+						consumedKind = c.kind
+						// Stamp passthrough auth when the relay key matched
+						// via xrk/xak (leaving Authorization as upstream
+						// candidate) AND per-key + global gates allow.
+						if c.kind != candidateAuthz && rawAuthz != "" && res.PassthroughAllowed {
+							if g := gate(ptGate); g.Enabled {
+								subj.PassthroughAuth = rawAuthz
+							}
+						}
+						break
+					}
+				}
+				if matchesEnv(c.token, envKeys) {
+					matched = true
+					consumedKind = c.kind
+					break
+				}
+			}
+
+			if matched {
+				next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subj)))
 				return
 			}
 
-			// Catalog lookup wins when present — that's the managed key path.
-			if lookup != nil {
-				if subj, ok := lookup(token); ok {
-					next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subj)))
+			// No relay key match. Try anonymous passthrough.
+			if rawAuthz != "" {
+				g := gate(ptGate)
+				if g.Enabled && g.UnauthenticatedEnabled {
+					anonSubj := Subject{PassthroughAuth: rawAuthz, Anonymous: true}
+					next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), anonSubj)))
 					return
 				}
 			}
 
-			// Env-bound fallback for bootstrap deployments.
-			tok := []byte(token)
-			for _, k := range envKeys {
-				if subtle.ConstantTimeCompare(tok, k) == 1 {
-					next.ServeHTTP(w, r)
-					return
-				}
+			// Reject with the appropriate reason.
+			if xrk == "" && xak == "" && authzToken == "" && rawAuthz == "" {
+				reject(w, ReasonMissing)
+				return
 			}
+			_ = consumedKind
 			reject(w, ReasonInvalid)
 		})
 	}
 }
 
-// extractBearer pulls the bearer token from the request. Writes a 401 and
-// returns ok=false when the credential is malformed or missing.
-func extractBearer(r *http.Request, w http.ResponseWriter) (string, bool) {
-	var token string
-	// Header priority:
-	//  1. X-WR-API-Key — lets clients that use Authorization for their own
-	//     upstream auth (e.g. Claude Code OAuth Bearer) send the Relay
-	//     customer key out-of-band.
-	//  2. Authorization: Bearer <token> — OpenAI SDK convention.
-	//  3. x-api-key — Anthropic SDK convention.
-	if xrk := r.Header.Get("X-WR-API-Key"); xrk != "" {
-		token = xrk
-	} else if raw := r.Header.Get("Authorization"); raw != "" {
-		if !strings.HasPrefix(raw, "Bearer ") {
-			reject(w, ReasonInvalid)
-			return "", false
-		}
-		token = raw[len("Bearer "):]
-		if token == "" {
-			reject(w, ReasonInvalid)
-			return "", false
-		}
-	} else if xak := r.Header.Get("x-api-key"); xak != "" {
-		token = xak
+type candidateKind int
+
+const (
+	candidateXRK candidateKind = iota
+	candidateXAK
+	candidateAuthz
+)
+
+// bearerToken strips the "Bearer " prefix from an Authorization header value.
+// Returns "" when the header is empty or doesn't use the Bearer scheme — the
+// caller decides whether that is a hard error.
+func bearerToken(raw string) string {
+	if raw == "" {
+		return ""
 	}
-	if token == "" {
-		reject(w, ReasonMissing)
-		return "", false
+	if !strings.HasPrefix(raw, "Bearer ") {
+		return ""
 	}
-	return token, true
+	return raw[len("Bearer "):]
+}
+
+func matchesEnv(token string, envKeys [][]byte) bool {
+	tok := []byte(token)
+	for _, k := range envKeys {
+		if subtle.ConstantTimeCompare(tok, k) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func gate(fn PassthroughGateFunc) PassthroughGate {
+	if fn == nil {
+		return PassthroughGate{}
+	}
+	return fn()
 }
 
 // HashToken returns the lowercase sha256 hex of token, matching the

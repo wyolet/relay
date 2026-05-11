@@ -23,11 +23,14 @@ type RequestPlan struct {
 	Policy     *catalog.Policy
 	Secrets  []*catalog.Secret
 	Rules    []catalog.ResolvedRule
-	// Passthrough is true when Policy.Spec.Passthrough is set. The pipeline
-	// skips key selection and forwards the inbound Authorization header as-is.
+	// Passthrough is true when the request should forward the inbound
+	// Authorization header to upstream instead of using a relay-managed
+	// secret. Populated by the HTTP handler from the auth.Subject; routing
+	// no longer reads policy-level passthrough (that field was removed in #80).
 	Passthrough bool
-	// PassthroughAuth is the inbound Authorization header value to forward.
-	// Set by the HTTP handler when Passthrough is true.
+	// PassthroughAuth is the inbound Authorization header value to forward
+	// (includes the "Bearer " prefix). Set by the HTTP handler from
+	// auth.Subject.PassthroughAuth.
 	PassthroughAuth string
 	// PassthroughHeaders are additional inbound headers to forward for passthrough policies.
 	// Set by the HTTP handler from the subset of inbound headers in OutboundPassthroughExtra.
@@ -47,6 +50,7 @@ type Catalog interface {
 	PolicyByName(name string) (*catalog.Policy, bool)
 	SecretsForPolicy(policy *catalog.Policy) []*catalog.Secret
 	RateLimitsForRequest(provider *catalog.Provider, policy *catalog.Policy, model *catalog.Model, secret *catalog.Secret) []catalog.ResolvedRule
+	Passthrough() *catalog.Passthrough
 }
 
 // Sentinel errors returned by Resolve.
@@ -78,6 +82,12 @@ type Resolver struct {
 // New constructs a Resolver backed by the supplied Catalog.
 func New(c Catalog) *Resolver {
 	return &Resolver{catalog: c}
+}
+
+// Passthrough returns the current passthrough config (singleton). Handlers
+// use this to enforce the models allowlist on BYO-credential requests.
+func (res *Resolver) Passthrough() *catalog.Passthrough {
+	return res.catalog.Passthrough()
 }
 
 // Resolve applies the routing precedence rules and returns a fully-populated
@@ -151,11 +161,7 @@ func (res *Resolver) buildPlan(modelName, policyOverride string) (*RequestPlan, 
 			return nil, ErrModelNotAllowed
 		}
 		plan.Policy = policy
-		if policy.Spec.Passthrough {
-			plan.Passthrough = true
-		} else {
-			plan.Secrets = res.catalog.SecretsForPolicy(policy)
-		}
+		plan.Secrets = res.catalog.SecretsForPolicy(policy)
 		plan.Rules = res.catalog.RateLimitsForRequest(p, policy, m, nil)
 	}
 	return plan, nil

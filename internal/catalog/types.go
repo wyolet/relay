@@ -116,11 +116,7 @@ type PolicySpec struct {
 	Models            []string              `yaml:"models,omitempty"      json:"models,omitempty"`
 	RateLimits        []RateLimitAttachment `yaml:"rateLimits,omitempty"  json:"rateLimits,omitempty"`
 	SkipDefaultLimits bool                  `yaml:"skipDefaultLimits,omitempty" json:"skipDefaultLimits,omitempty"`
-	// Passthrough, when true, means the policy has no relay-managed keys.
-	// The inbound Authorization header is forwarded verbatim to upstream.
-	// Secrets and SecretSelector must be empty.
-	Passthrough bool  `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
-	Enabled     *bool `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
+	Enabled           *bool                 `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
 }
 
 type Model struct {
@@ -526,6 +522,28 @@ const (
 	PassthroughModelsModeAll       PassthroughModelsMode = "all"
 	PassthroughModelsModeAllowlist PassthroughModelsMode = "allowlist"
 )
+
+// AllowsModel returns true when modelName is callable through the passthrough
+// flow under this config. Mode="all" admits everything; "allowlist" requires
+// an exact match on Models.Allow.
+func (p *Passthrough) AllowsModel(modelName string) bool {
+	if p == nil {
+		return false
+	}
+	switch p.Spec.Models.Mode {
+	case PassthroughModelsModeAll:
+		return true
+	case PassthroughModelsModeAllowlist:
+		for _, m := range p.Spec.Models.Allow {
+			if m == modelName {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
 
 // DefaultPassthrough is what GET /control/passthrough returns when no row
 // has been written. Disabled by default; safe-by-default posture.

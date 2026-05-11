@@ -144,7 +144,7 @@ func buildHumaTestRouterWithAdmin(crudArg *adminCRUD) http.Handler {
 // buildHumaTestRouter mirrors the production mount order and returns the chi
 // router (which huma has been layered on top of). Admin is omitted (nil).
 func buildHumaTestRouter() http.Handler {
-	authMW := auth.Middleware([][]byte{[]byte("test-secret")}, nil)
+	authMW := auth.Middleware([][]byte{[]byte("test-secret")}, nil, nil)
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))

@@ -118,6 +118,20 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			return
 		}
 
+		// Passthrough is decided at auth time. When set, enforce the global
+		// passthrough models allowlist before forwarding upstream.
+		if subj := auth.SubjectFrom(r.Context()); subj.PassthroughAuth != "" {
+			pt := resolver.Passthrough()
+			if !pt.AllowsModel(cr.Model) {
+				statusCode = http.StatusForbidden
+				writeError(w, statusCode, "invalid_request_error",
+					fmt.Sprintf("model %q not allowed by passthrough config", cr.Model), "model_not_allowed")
+				return
+			}
+			plan.Passthrough = true
+			plan.PassthroughAuth = subj.PassthroughAuth
+		}
+
 		// Build attribution: header wins over body metadata (M4 contract preserved).
 		var attribution map[string]string
 		if hv := r.Header.Get("X-Relay-Metadata"); hv != "" {

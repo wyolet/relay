@@ -446,20 +446,32 @@ func main() {
 		slog.Warn("auth: no API keys configured — running fail-open (RELAY_API_KEY/RELAY_API_KEYS unset)")
 	}
 	var lookup auth.Lookup
+	var ptGate auth.PassthroughGateFunc
 	if pgStoreForAdmin != nil {
 		store := pgStoreForAdmin
-		lookup = func(token string) (auth.Subject, bool) {
+		lookup = func(token string) (auth.LookupResult, bool) {
 			k, ok := store.RelayKeyByHash(auth.HashToken(token))
 			if !ok {
-				return auth.Subject{}, false
+				return auth.LookupResult{}, false
 			}
 			if !catalog.IsEnabled(k.Spec.Enabled) || k.Spec.RevokedAt != nil {
-				return auth.Subject{}, false
+				return auth.LookupResult{}, false
 			}
-			return auth.Subject{KeyName: k.Metadata.Name, PolicyRef: k.Spec.PolicyRef}, true
+			return auth.LookupResult{
+				KeyName:            k.Metadata.Name,
+				PolicyRef:          k.Spec.PolicyRef,
+				PassthroughAllowed: k.Spec.PassthroughAllowed,
+			}, true
+		}
+		ptGate = func() auth.PassthroughGate {
+			pt := store.Passthrough()
+			return auth.PassthroughGate{
+				Enabled:                pt.Spec.Enabled,
+				UnauthenticatedEnabled: pt.Spec.Unauthenticated.Enabled,
+			}
 		}
 	}
-	authMW := auth.Middleware(apiKeys, lookup)
+	authMW := auth.Middleware(apiKeys, lookup, ptGate)
 
 	r := chi.NewRouter()
 	r.Use(reqid.Middleware(slog.Default()))
