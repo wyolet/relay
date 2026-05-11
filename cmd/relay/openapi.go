@@ -441,6 +441,7 @@ type SecretValueFromResponse struct {
 // SecretResponse is the read-only response shape for a secret resource.
 type SecretResponse struct {
 	Name      string                  `json:"name" doc:"Secret name."`
+	Provider  string                  `json:"provider,omitempty" doc:"Provider this secret belongs to."`
 	ValueFrom SecretValueFromResponse `json:"valueFrom" doc:"Secret source configuration."`
 }
 
@@ -485,11 +486,13 @@ func storeToSecretResp(sec *catalog.Secret) SecretResponse {
 	if sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != "" {
 		return SecretResponse{
 			Name:      sec.Metadata.Name,
+			Provider:  sec.Spec.Provider,
 			ValueFrom: SecretValueFromResponse{Kind: "env", Env: sec.Spec.ValueFrom.Env},
 		}
 	}
 	return SecretResponse{
 		Name:      sec.Metadata.Name,
+		Provider:  sec.Spec.Provider,
 		ValueFrom: SecretValueFromResponse{Kind: "stored", ValueMasked: maskValue(sec.Resolved)},
 	}
 }

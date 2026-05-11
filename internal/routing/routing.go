@@ -94,7 +94,7 @@ func (res *Resolver) Resolve(req Request) (*RequestPlan, error) {
 func (res *Resolver) pickModel(req Request) (string, error) {
 	if req.RouteHeader != "" {
 		route, ok := res.catalog.RouteByName(req.RouteHeader)
-		if !ok {
+		if !ok || !catalog.IsEnabled(route.Spec.Enabled) {
 			return "", ErrUnknownRoute
 		}
 		if req.ModelName != "" {
@@ -124,17 +124,17 @@ func (res *Resolver) pickModel(req Request) (string, error) {
 // buildPlan resolves provider, pool, secrets, and rate limits for a model name.
 func (res *Resolver) buildPlan(modelName string) (*RequestPlan, error) {
 	m, ok := res.catalog.ModelByName(modelName)
-	if !ok {
+	if !ok || !catalog.IsEnabled(m.Spec.Enabled) {
 		return nil, ErrUnknownModel
 	}
 	p, ok := res.catalog.ProviderForModel(modelName)
-	if !ok {
+	if !ok || !catalog.IsEnabled(p.Spec.Enabled) {
 		return nil, ErrUnknownProvider
 	}
 	plan := &RequestPlan{Model: m, Provider: p}
 	if poolName := p.Spec.DefaultPool; poolName != "" {
 		pool, ok := res.catalog.PoolByName(poolName)
-		if !ok {
+		if !ok || !catalog.IsEnabled(pool.Spec.Enabled) {
 			return nil, ErrUnknownPool
 		}
 		plan.Pool = pool

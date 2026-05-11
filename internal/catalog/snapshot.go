@@ -198,7 +198,7 @@ func (s *snapshot) secretsForPool(p *Pool) []*Secret {
 	var out []*Secret
 	for _, name := range p.Spec.Secrets {
 		sec, ok := s.secrets[name]
-		if !ok {
+		if !ok || !IsEnabled(sec.Spec.Enabled) {
 			continue
 		}
 		if _, dup := seen[name]; !dup {
@@ -209,6 +209,9 @@ func (s *snapshot) secretsForPool(p *Pool) []*Secret {
 	if len(p.Spec.SecretSelector) > 0 {
 		for _, sec := range s.secrets {
 			if _, dup := seen[sec.Metadata.Name]; dup {
+				continue
+			}
+			if !IsEnabled(sec.Spec.Enabled) {
 				continue
 			}
 			if labelsMatch(p.Spec.SecretSelector, sec.Metadata.Labels) {
@@ -227,7 +230,7 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, pool *Pool, model *M
 	expand := func(parentKind Kind, parentName string, attachments []RateLimitAttachment) {
 		for _, a := range attachments {
 			rl, ok := s.rateLimits[a.Ref]
-			if !ok {
+			if !ok || !IsEnabled(rl.Spec.Enabled) {
 				continue
 			}
 			for _, rule := range rl.Spec.NormalizedRules() {
@@ -259,7 +262,7 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, pool *Pool, model *M
 
 func (s *snapshot) defaultProvider() *Provider {
 	for _, p := range s.providers {
-		if p.Spec.Default {
+		if p.Spec.Default && IsEnabled(p.Spec.Enabled) {
 			return p
 		}
 	}
@@ -268,7 +271,7 @@ func (s *snapshot) defaultProvider() *Provider {
 
 func (s *snapshot) defaultRoute() *Route {
 	for _, r := range s.routes {
-		if r.Spec.Default {
+		if r.Spec.Default && IsEnabled(r.Spec.Enabled) {
 			return r
 		}
 	}

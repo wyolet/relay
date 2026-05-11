@@ -39,11 +39,22 @@ type Provider struct {
 	Spec       ProviderSpec `yaml:"spec"       json:"spec"`
 }
 
+// IsEnabled returns true when an Enabled flag is unset (nil) or explicitly true.
+// Default is on; the frontend toggles to false to disable.
+func IsEnabled(enabled *bool) bool {
+	return enabled == nil || *enabled
+}
+
 type ProviderSpec struct {
 	Kind        ProviderKind `yaml:"kind"        json:"kind"`
 	BaseURL     string       `yaml:"baseURL"     json:"baseURL"`
 	Default     bool         `yaml:"default,omitempty"     json:"default,omitempty"`
 	DefaultPool string       `yaml:"defaultPool,omitempty" json:"defaultPool,omitempty"`
+
+	// Enabled defaults to true when nil. False disables the resource at the
+	// data plane (filtered from routing/keypool selection); admin reads still
+	// see it so the UI can toggle it back on.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 
 	// Display metadata — operator-set, optional.
 	DisplayName   string `yaml:"displayName,omitempty"   json:"displayName,omitempty"`
@@ -74,6 +85,7 @@ type SecretSpec struct {
 	ValueFrom  *SecretValueFrom      `yaml:"valueFrom,omitempty"  json:"valueFrom,omitempty"`
 	Value      string                `yaml:"value,omitempty"      json:"-"` // never serialised to JSON (cleartext)
 	RateLimits []RateLimitAttachment `yaml:"rateLimits,omitempty" json:"rateLimits,omitempty"`
+	Enabled    *bool                 `yaml:"enabled,omitempty"    json:"enabled,omitempty"`
 }
 
 type SecretValueFrom struct {
@@ -96,7 +108,8 @@ type PoolSpec struct {
 	// Passthrough, when true, means the pool has no relay-managed keys.
 	// The inbound Authorization header is forwarded verbatim to upstream.
 	// Secrets and SecretSelector must be empty.
-	Passthrough bool `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
+	Passthrough bool  `yaml:"passthrough,omitempty" json:"passthrough,omitempty"`
+	Enabled     *bool `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
 }
 
 type Model struct {
@@ -143,6 +156,8 @@ type ModelSpec struct {
 	ProviderModelPageURL string   `yaml:"providerModelPageURL,omitempty" json:"providerModelPageURL,omitempty"`
 
 	RateLimits []RateLimitAttachment `yaml:"rateLimits,omitempty" json:"rateLimits,omitempty"`
+
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 // Deprecation describes the lifecycle state of a model.
@@ -209,6 +224,7 @@ type Route struct {
 type RouteSpec struct {
 	Default bool     `yaml:"default,omitempty" json:"default,omitempty"`
 	Models  []string `yaml:"models"            json:"models"`
+	Enabled *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 type RateLimit struct {
@@ -237,6 +253,8 @@ type RateLimitSpec struct {
 	Amount int64           `yaml:"amount,omitempty" json:"amount,omitempty"`
 	Meter  string          `yaml:"meter,omitempty"  json:"meter,omitempty"`
 	Source RateLimitSource `yaml:"source,omitempty" json:"source,omitempty"`
+
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 // NormalizedRules returns the effective rule list for a spec.
