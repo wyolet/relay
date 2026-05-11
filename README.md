@@ -324,18 +324,44 @@ Subsequent boots that find any rows in any table are no-ops.
 
 When `RELAY_CATALOG_BACKEND=pg` and `RELAY_ADMIN_TOKEN` is set, Relay exposes a full CRUD API for managing catalog resources without restarts. Full reference: [docs/runbook.md §3](docs/runbook.md#3-admin-api).
 
-Six resource kinds: `providers`, `pools`, `secrets`, `models`, `routes`, `ratelimits`. Plus `/control/attachments` for rate-limit → resource links. Every successful write triggers an automatic snapshot reload — no manual `/control/reload` needed.
+Six resource kinds plus relay keys: `providers`, `policies`, `secrets`, `models`, `routes`, `ratelimits`, `keys`. Plus `/control/attachments` for rate-limit → resource links. Every successful write triggers an automatic snapshot reload — no manual `/control/reload` needed.
+
+### Identity model
+
+Every catalog resource has three identity fields:
+
+- `metadata.id` — UUIDv7, **immutable**, server-stamped on create. PG primary key.
+- `metadata.name` — DNS-1123 slug, stable; auto-derived from `displayName` with a collision suffix.
+- `metadata.displayName` — free text shown in UI.
+
+Per-kind routes (where `{kind}` is one of the six above):
+
+```
+GET    /control/{kind}                 list
+GET    /control/{kind}/{ref}           read by slug or id (UUID form prefers id)
+POST   /control/{kind}                 create — server stamps id+slug
+PUT    /control/{kind}/by-id/{id}      update (id-routed)
+DELETE /control/{kind}/by-id/{id}      delete (id-routed)
+```
+
+Mutations are id-routed so URLs survive slug/displayName changes. Reads accept either form for human-readable URLs. (Secrets, key revoke/restore, and the passthrough singleton remain slug-routed today.)
 
 ```bash
-# Create a provider
-curl -s -X POST http://localhost:8080/control/providers \
+# Create a provider — server stamps id and slug
+curl -s -X POST http://localhost:5103/control/providers \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"metadata":{"name":"openai"},"spec":{"kind":"openai","baseURL":"https://api.openai.com/v1"}}'
+  -d '{"metadata":{"displayName":"OpenAI Prod"},"spec":{"kind":"openai","baseURL":"https://api.openai.com/v1"}}'
 
-# List providers
-curl -s http://localhost:8080/control/providers \
+# Read by slug
+curl -s http://localhost:5103/control/providers/openai-prod \
   -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN"
+
+# Update by id
+curl -s -X PUT http://localhost:5103/control/providers/by-id/$ID \
+  -H "X-Relay-Admin-Token: $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"metadata":{"displayName":"OpenAI Production"},"spec":{...}}'
 ```
 
 **Missing / wrong token → 404** (obscures endpoint existence). When caller auth (`RELAY_API_KEYS`) is also active, both the caller bearer key (`Authorization: Bearer`) and the admin token (`X-Relay-Admin-Token`) are required.
@@ -401,15 +427,17 @@ make smoke-down    # tear down, remove volumes
 
 ### What's running
 
+Host ports follow the project's 100-port allocation in `~/projects/PORTS.md` (relay block: 5100–5119).
+
 | Container | Image | Host port | Role |
 |---|---|---|---|
-| `nginx` | `nginx:alpine` | `8080` | Round-robin LB in front of relay-a and relay-b |
-| `relay-a` | local build | `8081` | Relay instance A |
-| `relay-b` | local build | `8082` | Relay instance B |
-| `postgres` | `postgres:16-alpine` | `5432` | Catalog (config truth) |
+| `nginx` | `nginx:alpine` | `5100` | Round-robin LB in front of relay-a and relay-b |
+| `relay-a` | local build | `5101` data, `5103` control | Relay instance A |
+| `relay-b` | local build | `5102` data | Relay instance B |
+| `postgres` | `postgres:16-alpine` | `5115` | Catalog (config truth) |
 | `valkey` | `valkey/valkey:8-alpine` | — | Rate-limit counters + key health |
-| `clickhouse` | `clickhouse/clickhouse-server:23-alpine` | — | Usage events |
-| `jaeger` | `jaegertracing/all-in-one` | `16686` (UI), `4317` (OTLP) | Traces |
+| `clickhouse` | `clickhouse/clickhouse-server:23-alpine` | `5119` | Usage events |
+| `jaeger` | `jaegertracing/all-in-one` | `5117` (UI), `5118` (OTLP) | Traces |
 
 ### Env-var matrix (relay instances)
 
@@ -428,20 +456,22 @@ make smoke-down    # tear down, remove volumes
 
 ### Fixture catalog
 
-`deploy/compose/config/` contains a minimal catalog: one Provider (Ollama at `host.docker.internal:11434`), one Pool, one Model (`smoke-model`) with a 60 RPM rate limit, and a default Route. Edit the YAML, run `make smoke-seed`, then `POST /control/reload` to both pods to apply changes without restart.
+`deploy/compose/config/` contains a minimal catalog: one Provider (Ollama at `host.docker.internal:11434`), one Policy, one Model (`smoke-model`) with a 60 RPM rate limit, and a default Route. Edit the YAML, run `make smoke-seed`, then `POST /control/reload` on the control plane to apply changes without restart.
 
 ```bash
-# Admin reload
-curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8081/control/reload
-curl -X POST -H "Authorization: Bearer smoke-admin-token" http://localhost:8082/control/reload
+# Admin reload (control plane on relay-a)
+curl -X POST -H "X-Relay-Admin-Token: smoke-admin-token" http://localhost:5103/control/reload
 ```
 
 ### Ports summary
 
-- `http://localhost:8080` — nginx LB (use this for API traffic)
-- `http://localhost:8081/healthz` — relay-a direct
-- `http://localhost:8082/healthz` — relay-b direct
-- `http://localhost:16686` — Jaeger UI
+- `http://localhost:5100` — nginx LB (use this for API traffic)
+- `http://localhost:5101/healthz` — relay-a data plane
+- `http://localhost:5102/healthz` — relay-b data plane
+- `http://localhost:5103` — relay-a control plane (admin API + OpenAPI spec)
+- `http://localhost:5117` — Jaeger UI
+
+The Caddy reverse proxy on the gpu Fedora box exposes the same stack at `relay-api.wyolet.dev` (→ `:5100`), `relay-control-api.wyolet.dev` (→ `:5103`), and `relay.wyolet.dev` (→ vite UI on `:5140`, served by the separate `relay-ui` repo).
 - `localhost:5432` — Postgres (for `psql` / migrations)
 
 ## Documentation
