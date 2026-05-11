@@ -372,11 +372,15 @@ func validateRoutes(s *snapshot) error {
 	return nil
 }
 
+var validStrategies = map[RateLimitStrategy]bool{
+	StrategyTokenBucket:   true,
+	StrategySlidingWindow: true,
+	StrategyFixedWindow:   true,
+	StrategyLeakyBucket:   true,
+}
+
 func validateRateLimits(s *snapshot) error {
 	for _, rl := range s.rateLimits {
-		if rl.Spec.Strategy != StrategySlidingWindow {
-			return fmt.Errorf("RateLimit %q: unsupported strategy %q (must be sliding-window)", rl.Metadata.Name, rl.Spec.Strategy)
-		}
 		if rl.Spec.Window <= 0 {
 			return fmt.Errorf("RateLimit %q: window must be > 0", rl.Metadata.Name)
 		}
@@ -401,6 +405,10 @@ func validateRateLimits(s *snapshot) error {
 			}
 			if r.Source != "" && !sourceRE.MatchString(r.Source) {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): source %q must match attribution.<key>", rl.Metadata.Name, i, r.Meter, r.Source)
+			}
+			// Strategy "" is valid here; snapshot loader defaults to token-bucket.
+			if r.Strategy != "" && !validStrategies[r.Strategy] {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): unsupported strategy %q", rl.Metadata.Name, i, r.Meter, r.Strategy)
 			}
 			meterSeen[r.Meter]++
 		}
