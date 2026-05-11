@@ -59,6 +59,8 @@ type Reservation struct {
 	tbRules []catalog.ResolvedRule
 	// lbRules holds leaky-bucket rules that need state-key refund on cancel.
 	lbRules []catalog.ResolvedRule
+	// swRules holds session-window rules that need count refund on cancel.
+	swRules []catalog.ResolvedRule
 }
 
 // Observations are passed to Commit to supply post-hoc measurements.
@@ -146,6 +148,8 @@ func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []catalog.
 			reservation.tbRules = append(reservation.tbRules, rule)
 		case strat == catalog.StrategyLeakyBucket:
 			reservation.lbRules = append(reservation.lbRules, rule)
+		case strat == catalog.StrategySessionWindow:
+			reservation.swRules = append(reservation.swRules, rule)
 		}
 	}
 
@@ -180,8 +184,8 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		}
 	}
 
-	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys, ...tbStateKeys, ...lbStateKeys]
-	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules)+len(res.tbRules)+len(res.lbRules))
+	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys, ...tbStateKeys, ...lbStateKeys, ...swStateKeys]
+	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules)+len(res.tbRules)+len(res.lbRules)+len(res.swRules))
 	keys = append(keys, guardKey)
 	keys = append(keys, res.conKeys...)
 
@@ -213,6 +217,12 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		keyIdx := int64(len(keys)) // 1-based
 		lbRefunds = append(lbRefunds, refund2{keyIdx, 1000})
 	}
+	swRefunds := make([]refund2, 0, len(res.swRules))
+	for _, rule := range res.swRules {
+		keys = append(keys, swStateKey(res.poolName, rule))
+		keyIdx := int64(len(keys)) // 1-based
+		swRefunds = append(swRefunds, refund2{keyIdx, 1})
+	}
 
 	// Encode per-rule token amounts as JSON array.
 	tokAmountsJSON, err := json.Marshal(tokAmounts)
@@ -226,6 +236,10 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 	lbRefundsJSON, err := json.Marshal(lbRefunds)
 	if err != nil {
 		return fmt.Errorf("limit: marshal lb_refunds: %w", err)
+	}
+	swRefundsJSON, err := json.Marshal(swRefunds)
+	if err != nil {
+		return fmt.Errorf("limit: marshal sw_refunds: %w", err)
 	}
 
 	cancelledInt := int64(0)
@@ -243,6 +257,7 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		cancelledInt,
 		string(tbRefundsJSON),
 		string(lbRefundsJSON),
+		string(swRefundsJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("limit: commit script: %w", err)

@@ -39,6 +39,13 @@ func makeRule(meter catalog.Meter, amount int64, window time.Duration) catalog.R
 	}
 }
 
+func makeRuleStrategy(meter catalog.Meter, amount int64, window time.Duration, strat catalog.RateLimitStrategy) catalog.ResolvedRule {
+	r := makeRule(meter, amount, window)
+	r.Strategy = strat
+	r.Rule.Strategy = strat
+	return r
+}
+
 func newLimiter(t *testing.T, now *time.Time) *Limiter {
 	t.Helper()
 	s := newStore(t)
@@ -752,5 +759,94 @@ func TestMultiRule_BareTokensMeter(t *testing.T) {
 	}
 	if rem[catalog.MeterTokens] != 500 {
 		t.Errorf("expected tokens remaining=500, got %d", rem[catalog.MeterTokens])
+	}
+}
+
+// TestSessionWindow_AnchorsOnFirstRequest verifies the session-window semantics:
+// the window timer starts when the first request arrives after a reset, runs for
+// `window`, then idles until the next request arrives — at which point a fresh
+// window is anchored to that new request.
+func TestSessionWindow_AnchorsOnFirstRequest(t *testing.T) {
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := base
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	rule := makeRuleStrategy(catalog.MeterRequests, 3, 5*time.Hour, catalog.StrategySessionWindow)
+	rules := []catalog.ResolvedRule{rule}
+
+	// First request at t=0 anchors the window; 3 fit, 4th exceeds.
+	for i := 0; i < 3; i++ {
+		res, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("reserve %d at anchor: %v", i+1, err)
+		}
+		_ = l.Commit(ctx, res, Observations{})
+	}
+	if _, err := l.Reserve(ctx, "test-policy", rules); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded at 4th, got %v", err)
+	}
+
+	// Advance 2h into the window — still exceeded, window has not reset.
+	now = base.Add(2 * time.Hour)
+	if _, err := l.Reserve(ctx, "test-policy", rules); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected still exceeded mid-window, got %v", err)
+	}
+
+	// Advance 4h after the *window expires* (anchor + 5h + 4h idle): the next
+	// request should anchor a fresh window. Critical bit: window does NOT reset
+	// in the background at anchor+5h — it resets only when a request arrives
+	// after that point.
+	now = base.Add(9 * time.Hour) // anchor=0, expired at 5h, idle 4h
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("expected reserve to succeed after window expiry+idle, got %v", err)
+	}
+	_ = l.Commit(ctx, res, Observations{})
+
+	// The new window is anchored at t=9h, not at 5h. Verify by advancing 4h more
+	// (to t=13h, 4h past the new anchor): we're still inside the new window.
+	now = base.Add(13 * time.Hour)
+	// 2 slots remaining in the new window.
+	for i := 0; i < 2; i++ {
+		res, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("reserve %d in new window: %v", i+1, err)
+		}
+		_ = l.Commit(ctx, res, Observations{})
+	}
+	if _, err := l.Reserve(ctx, "test-policy", rules); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded after 3 in new window, got %v", err)
+	}
+}
+
+// TestSessionWindow_RefundOnCancel verifies that cancelled reservations
+// return a slot to the session-window count.
+func TestSessionWindow_RefundOnCancel(t *testing.T) {
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := base
+	l := newLimiter(t, &now)
+	ctx := context.Background()
+	rule := makeRuleStrategy(catalog.MeterRequests, 2, time.Hour, catalog.StrategySessionWindow)
+	rules := []catalog.ResolvedRule{rule}
+
+	// Reserve 1, cancel it. Count should refund back to 0.
+	res, err := l.Reserve(ctx, "test-policy", rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := l.Commit(ctx, res, Observations{Cancelled: true}); err != nil {
+		t.Fatalf("commit cancel: %v", err)
+	}
+
+	// Now 2 reservations should fit (refund worked).
+	for i := 0; i < 2; i++ {
+		r2, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("reserve after refund %d: %v", i+1, err)
+		}
+		_ = l.Commit(ctx, r2, Observations{})
+	}
+	if _, err := l.Reserve(ctx, "test-policy", rules); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exceeded after 2 post-refund, got %v", err)
 	}
 }

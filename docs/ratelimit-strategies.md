@@ -10,6 +10,7 @@ Reference: https://smudge.ai/blog/ratelimit-algorithms
 | `sliding-window` | `amount` = max requests; `window` = rolling window width | Two counters (cur + prev bucket) | Soft — up to 2× amount at boundary | No | Smooth request distribution; no sudden resets |
 | `fixed-window` | `amount` = max requests; `window` = bucket period | Single counter per floor(now/window) bucket | Hard at window boundary | No | Simple RPM/RPH caps with predictable reset time |
 | `leaky-bucket` | `amount` = queue depth; `window` = drain period | Redis hash `{level, last_ms}` | Yes — up to `amount` | Yes | Constant-rate upstream protection |
+| `session-window` | `amount` = max requests per session; `window` = session duration | Redis hash `{count, anchor_ms}` | No — hard count | Yes | Session-style quotas anchored to first activity (e.g. Anthropic's 5-hour limits) |
 
 Concurrency meter (`meter: concurrency`) ignores strategy; it is always a gauge counter.
 
@@ -60,6 +61,24 @@ rate = cur_bucket + prev_bucket * (1 - elapsed / window)
 if rate > amount: throttle
 ```
 
+### Session window (anchor-on-first)
+
+```
+state = {count, anchor_ms}
+
+on reserve:
+  if state.anchor_ms is unset or now >= anchor_ms + window:
+    anchor_ms = now   # arm a new session
+    count = 0
+  count += 1
+  if count > amount: throttle, retry_after = anchor_ms + window - now
+
+on commit-cancel:
+  count -= 1
+```
+
+The window does NOT reset on a wall-clock timer. It expires after `window` and then sits idle until a request arrives, which anchors a fresh window to that request. A user who is idle for 10× the window and then sends one request gets a clean slate at that moment, not on some calendar boundary.
+
 ## When to pick
 
 **Token bucket** — default and recommended for most request-rate limits. Absorbs short bursts while enforcing a long-run average. Clients that hit the limit get a precise `retry_after`.
@@ -69,6 +88,8 @@ if rate > amount: throttle
 **Fixed window** — simplest to reason about. Reset time is predictable. Avoid when bursts at the window boundary are a concern (clients can double the limit by timing requests across the boundary).
 
 **Leaky bucket** — when upstream capacity is fixed and you want to queue/smooth bursts rather than immediately reject them. The `amount` controls how much queuing is tolerated.
+
+**Session window** — when limits should be anchored to user activity rather than a calendar clock. Matches the Anthropic "5-hour session" model: a quota that resets only after the window has fully elapsed *and* a new request arrives. Good for tiered usage where idle users shouldn't be penalized for elapsed clock time.
 
 ## Strategy is per-rule
 
@@ -130,6 +151,7 @@ spec:
 | fixed-window | `window * 2` |
 | token-bucket | `window * 2` |
 | leaky-bucket | `window * 2` |
+| session-window | `window * 2` |
 | concurrency | `window * 5` |
 
 Stale keys expire automatically. No background job is needed; all strategies use lazy computation on read.

@@ -377,6 +377,7 @@ var validStrategies = map[RateLimitStrategy]bool{
 	StrategySlidingWindow: true,
 	StrategyFixedWindow:   true,
 	StrategyLeakyBucket:   true,
+	StrategySessionWindow: true,
 }
 
 func validateRateLimits(s *snapshot) error {

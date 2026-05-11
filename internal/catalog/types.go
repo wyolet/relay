@@ -440,6 +440,12 @@ const (
 	StrategySlidingWindow RateLimitStrategy = "sliding-window"
 	StrategyFixedWindow   RateLimitStrategy = "fixed-window"
 	StrategyLeakyBucket   RateLimitStrategy = "leaky-bucket"
+	// StrategySessionWindow: timer anchors on first request after a reset,
+	// runs for `window`, then idles until the next request anchors a fresh
+	// window. Distinct from fixed-window (no wall-clock alignment) and from
+	// token-bucket (no refill during the window — hard count, clean reset).
+	// Use case: session/quota patterns like Anthropic's 5-hour limits.
+	StrategySessionWindow RateLimitStrategy = "session-window"
 )
 
 type RateLimitSource string
