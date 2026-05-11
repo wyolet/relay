@@ -52,10 +52,13 @@ type Reservation struct {
 	poolName string // Redis Cluster hash-tag anchor; all keys share {policy:<poolName>}
 	rules    []catalog.ResolvedRule
 	// conKeys holds the concurrency state keys incremented at Reserve time.
-	// Used by Commit to decrement them.
 	conKeys []string
 	// tokRules holds token-meter rules (for post-hoc Commit increment).
 	tokRules []catalog.ResolvedRule
+	// tbRules holds token-bucket rules that need state-key refund on cancel.
+	tbRules []catalog.ResolvedRule
+	// lbRules holds leaky-bucket rules that need state-key refund on cancel.
+	lbRules []catalog.ResolvedRule
 }
 
 // Observations are passed to Commit to supply post-hoc measurements.
@@ -130,14 +133,19 @@ func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []catalog.
 		poolName: poolName,
 		rules:    rules,
 	}
-	// Pre-compute concurrency key list and token rule list for Commit.
+	// Pre-compute key/rule lists for Commit.
 	for _, rule := range rules {
 		m := resolvedMeter(rule)
+		strat := resolvedStrategy(rule)
 		switch {
 		case m == string(catalog.MeterConcurrency):
 			reservation.conKeys = append(reservation.conKeys, concurrencyKey(poolName, rule))
 		case m == string(catalog.MeterTokens) || strings.HasPrefix(m, "tokens."):
 			reservation.tokRules = append(reservation.tokRules, rule)
+		case strat == catalog.StrategyTokenBucket:
+			reservation.tbRules = append(reservation.tbRules, rule)
+		case strat == catalog.StrategyLeakyBucket:
+			reservation.lbRules = append(reservation.lbRules, rule)
 		}
 	}
 
@@ -172,8 +180,8 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		}
 	}
 
-	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys]
-	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules))
+	// Build KEYS: [guardKey, ...conKeys, ...tokCurKeys, ...tbStateKeys, ...lbStateKeys]
+	keys := make([]string, 0, 1+len(res.conKeys)+len(res.tokRules)+len(res.tbRules)+len(res.lbRules))
 	keys = append(keys, guardKey)
 	keys = append(keys, res.conKeys...)
 
@@ -190,10 +198,39 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		}
 	}
 
+	// Append tb/lb state keys and build refund descriptors (1-based KEYS indices).
+	type refund3 [3]int64 // [key_idx, cost_scaled, burst]
+	type refund2 [2]int64 // [key_idx, cost_scaled]
+	tbRefunds := make([]refund3, 0, len(res.tbRules))
+	for _, rule := range res.tbRules {
+		keys = append(keys, tbStateKey(res.poolName, rule))
+		keyIdx := int64(len(keys)) // 1-based
+		tbRefunds = append(tbRefunds, refund3{keyIdx, 1000, rule.Rule.Amount})
+	}
+	lbRefunds := make([]refund2, 0, len(res.lbRules))
+	for _, rule := range res.lbRules {
+		keys = append(keys, lbStateKey(res.poolName, rule))
+		keyIdx := int64(len(keys)) // 1-based
+		lbRefunds = append(lbRefunds, refund2{keyIdx, 1000})
+	}
+
 	// Encode per-rule token amounts as JSON array.
 	tokAmountsJSON, err := json.Marshal(tokAmounts)
 	if err != nil {
 		return fmt.Errorf("limit: marshal tok_amounts: %w", err)
+	}
+	tbRefundsJSON, err := json.Marshal(tbRefunds)
+	if err != nil {
+		return fmt.Errorf("limit: marshal tb_refunds: %w", err)
+	}
+	lbRefundsJSON, err := json.Marshal(lbRefunds)
+	if err != nil {
+		return fmt.Errorf("limit: marshal lb_refunds: %w", err)
+	}
+
+	cancelledInt := int64(0)
+	if obs.Cancelled {
+		cancelledInt = 1
 	}
 
 	raw, err := l.runner.RunScript(ctx, "limit.commit", commitLuaScript, keys,
@@ -203,6 +240,9 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		int64(len(res.tokRules)),
 		string(tokAmountsJSON),
 		tokTTLMs,
+		cancelledInt,
+		string(tbRefundsJSON),
+		string(lbRefundsJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("limit: commit script: %w", err)

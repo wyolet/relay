@@ -199,6 +199,31 @@ func (m *Mem) WithLock(ctx context.Context, keys []string, fn func(context.Conte
 	return fn(ctx)
 }
 
+// HGet reads one field of a hash stored as synthetic keys "key\x00field".
+// Returns ErrNotFound when either the hash key or the field is absent.
+func (m *Mem) HGet(_ context.Context, key, field string) ([]byte, error) {
+	return m.Get(context.Background(), key+"\x00"+field)
+}
+
+// HSet writes one field of a hash stored as synthetic keys "key\x00field".
+// When ttl > 0 the field entry gets that TTL; ttl == 0 preserves existing TTL.
+func (m *Mem) HSet(_ context.Context, key, field string, value []byte, ttl time.Duration) error {
+	fkey := key + "\x00" + field
+	if ttl == 0 {
+		// preserve deadline if key already exists
+		if v, ok := m.data.Load(fkey); ok {
+			e := v.(entry)
+			if !e.expired() {
+				m.data.Store(fkey, entry{value: value, deadline: e.deadline})
+				return nil
+			}
+		}
+		m.data.Store(fkey, entry{value: value})
+		return nil
+	}
+	return m.Set(context.Background(), fkey, value, ttl)
+}
+
 func (m *Mem) Close() error {
 	close(m.stopCh)
 	<-m.stopped
