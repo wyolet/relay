@@ -406,11 +406,16 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 				continue
 			}
 			for _, rule := range rl.Spec.NormalizedRules() {
+				strategy := rule.Strategy
+				if strategy == "" {
+					// Default per-rule strategy is token-bucket.
+					strategy = StrategyTokenBucket
+				}
 				out = append(out, ResolvedRule{
 					ParentKind:    parentKind,
 					ParentName:    parentName,
 					RateLimitName: rl.Metadata.Name,
-					Strategy:      rl.Spec.Strategy,
+					Strategy:      strategy,
 					Window:        rl.Spec.Window,
 					Rule:          rule,
 					RateLimit:     rl,

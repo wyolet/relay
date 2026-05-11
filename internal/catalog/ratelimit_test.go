@@ -102,13 +102,36 @@ kind: RateLimit
 metadata:
   name: bad-rl
 spec:
-  strategy: fixed-window
   window: 1m
-  amount: 100
+  rules:
+    - meter: requests
+      amount: 100
+      strategy: totally-unknown
 `)
 		_, err := LoadYAML(dir)
 		if err == nil || !strings.Contains(err.Error(), "unsupported strategy") {
 			t.Fatalf("expected strategy error, got: %v", err)
+		}
+	})
+
+	t.Run("all known strategies valid", func(t *testing.T) {
+		for _, strat := range []string{"sliding-window", "fixed-window", "token-bucket", "leaky-bucket"} {
+			dir := t.TempDir()
+			writeFile(t, dir, "all.yaml", rlOllamaProvider+`---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: strat-rl
+spec:
+  window: 1m
+  rules:
+    - meter: requests
+      amount: 100
+      strategy: `+strat+`
+`)
+			if _, err := LoadYAML(dir); err != nil {
+				t.Errorf("strategy %q: unexpected error: %v", strat, err)
+			}
 		}
 	})
 }

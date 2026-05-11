@@ -252,10 +252,13 @@ type RateLimit struct {
 }
 
 // RateLimitRule is one meter/amount pair within a RateLimitSpec.
+// Strategy is per-rule; when omitted it defaults to token-bucket (applied by
+// the snapshot loader). Concurrency meter ignores strategy.
 type RateLimitRule struct {
-	Meter  string `yaml:"meter"            json:"meter"`
-	Amount int64  `yaml:"amount"           json:"amount"`
-	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	Meter    string            `yaml:"meter"              json:"meter"`
+	Amount   int64             `yaml:"amount"             json:"amount"`
+	Source   string            `yaml:"source,omitempty"   json:"source,omitempty"`
+	Strategy RateLimitStrategy `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 }
 
 // RateLimitSpec is the canonical multi-rule shape. Top-level amount/meter/source
@@ -327,6 +330,15 @@ func (s *RateLimitSpec) UnmarshalJSON(b []byte) error {
 		}
 		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount, Source: raw.Source}}
 	}
+	// Legacy-tolerant shim: if spec-level strategy is set, fan it out to rules
+	// that omit their own. Allows old configs to keep spec.strategy working.
+	if raw.Strategy != "" {
+		for i := range s.Rules {
+			if s.Rules[i].Strategy == "" {
+				s.Rules[i].Strategy = raw.Strategy
+			}
+		}
+	}
 	return nil
 }
 
@@ -354,6 +366,14 @@ func (s *RateLimitSpec) UnmarshalYAML(unmarshal func(any) error) error {
 		}
 		s.Rules = []RateLimitRule{{Meter: meter, Amount: raw.Amount, Source: raw.Source}}
 	}
+	// Legacy-tolerant shim: fan out spec-level strategy to rules missing their own.
+	if raw.Strategy != "" {
+		for i := range s.Rules {
+			if s.Rules[i].Strategy == "" {
+				s.Rules[i].Strategy = raw.Strategy
+			}
+		}
+	}
 	return nil
 }
 
@@ -366,7 +386,10 @@ func (s *RateLimitSpec) NormalizedRules() []RateLimitRule {
 type RateLimitStrategy string
 
 const (
+	StrategyTokenBucket   RateLimitStrategy = "token-bucket"   // DEFAULT
 	StrategySlidingWindow RateLimitStrategy = "sliding-window"
+	StrategyFixedWindow   RateLimitStrategy = "fixed-window"
+	StrategyLeakyBucket   RateLimitStrategy = "leaky-bucket"
 )
 
 type RateLimitSource string
