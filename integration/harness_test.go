@@ -19,6 +19,8 @@ package integration
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -231,6 +233,7 @@ type fixture struct {
 	relayKey     string // plaintext bearer token
 	routeName    string // slug, used as X-Relay-Route header
 	policyName   string // slug, used in provider defaultPolicy
+	modelName    string // slug, used in the request body's "model" field
 }
 
 // setupFixture provisions the full resource tree for one strategy test.
@@ -251,7 +254,7 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 
 	// 1. Provider
 	provResp := adminPost(t, "/control/providers", map[string]any{
-		"metadata": map[string]any{"displayName": displayName("provider")},
+		"metadata": map[string]any{"name": displayName("provider")},
 		"spec": map[string]any{
 			"kind":    "openai",
 			"baseURL": fakeDockerURL,
@@ -278,7 +281,7 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 
 	// 3. Model
 	modelResp := adminPost(t, "/control/models", map[string]any{
-		"metadata": map[string]any{"displayName": displayName("model")},
+		"metadata": map[string]any{"name": displayName("model")},
 		"spec": map[string]any{
 			"provider":     provName,
 			"upstreamName": "test-model",
@@ -287,17 +290,16 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 	modelID := metaID(t, modelResp)
 	modelName := metaName(t, modelResp)
 
-	// 4. RateLimit
+	// 4. RateLimit. Schema requires spec.strategy + spec.window + spec.rules;
+	// per-rule window isn't exposed by the OpenAPI schema (Window has json:"-"
+	// for the duration shim). spec.strategy + spec.window fan out to rules.
 	rlResp := adminPost(t, "/control/ratelimits", map[string]any{
-		"metadata": map[string]any{"displayName": displayName("rl")},
+		"metadata": map[string]any{"name": displayName("rl")},
 		"spec": map[string]any{
+			"strategy": strategy,
+			"window":   window.Nanoseconds(),
 			"rules": []map[string]any{
-				{
-					"meter":    "requests",
-					"amount":   amount,
-					"window":   window.String(),
-					"strategy": strategy,
-				},
+				{"meter": "requests", "amount": amount, "strategy": strategy},
 			},
 		},
 	})
@@ -306,12 +308,13 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 
 	// 5. Policy — bind provider + secret + rateLimit + model allowlist
 	polResp := adminPost(t, "/control/policies", map[string]any{
-		"metadata": map[string]any{"displayName": displayName("policy")},
+		"metadata": map[string]any{"name": displayName("policy")},
 		"spec": map[string]any{
 			"provider":   provName,
 			"secrets":    []string{secName},
 			"models":     []string{modelName},
-			"rateLimits": []string{rlName},
+			"rateLimits":        []map[string]any{{"Ref": rlName}},
+			"skipDefaultLimits": true,
 		},
 	})
 	polID := metaID(t, polResp)
@@ -319,7 +322,7 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 
 	// Update provider to set defaultPolicy so routing resolves the policy.
 	adminPut(t, "/control/providers/by-id/"+provID, map[string]any{
-		"metadata": map[string]any{"displayName": displayName("provider")},
+		"metadata": map[string]any{"name": displayName("provider")},
 		"spec": map[string]any{
 			"kind":          "openai",
 			"baseURL":       fakeDockerURL,
@@ -329,7 +332,7 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 
 	// 6. Route — list the resolved model name
 	routeResp := adminPost(t, "/control/routes", map[string]any{
-		"metadata": map[string]any{"displayName": displayName("route")},
+		"metadata": map[string]any{"name": displayName("route")},
 		"spec": map[string]any{
 			"models": []string{modelName},
 		},
@@ -337,15 +340,23 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 	routeID := metaID(t, routeResp)
 	routeName := metaName(t, routeResp)
 
-	// 7. RelayKey — scoped to policy via policyRef
+	// 7. RelayKey — scoped to policy via policyRef. Schema rejects extra fields
+	// at top level (no top-level "value" allowed), and spec.keyHash is required.
+	// Compute the hash client-side.
 	bearerPlain := "rk-test-" + safeSuffix + "-" + randHex()
+	sum := sha256.Sum256([]byte(bearerPlain))
+	keyHash := hex.EncodeToString(sum[:])
+	prefix := bearerPlain
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
 	keyResp := adminPost(t, "/control/keys", map[string]any{
-		"metadata": map[string]any{"displayName": displayName("key")},
+		"metadata": map[string]any{"name": displayName("key")},
 		"spec": map[string]any{
+			"keyHash":   keyHash,
+			"prefix":    prefix,
 			"policyRef": polName,
 		},
-		// "value" is the plaintext bearer token; server stores sha256 hash.
-		"value": bearerPlain,
 	})
 	keyID := metaID(t, keyResp)
 
@@ -360,9 +371,16 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 		relayKey:    bearerPlain,
 		routeName:   routeName,
 		policyName:  polName,
+		modelName:   modelName,
 	}
 
 	cleanup := func() {
+		// Clear provider.defaultPolicy first so the policy/ratelimit/secret/model
+		// can be deleted without failing referential-integrity validation.
+		adminPut(t, "/control/providers/by-id/"+provID, map[string]any{
+			"metadata": map[string]any{"name": displayName("provider")},
+			"spec":     map[string]any{"kind": "openai", "baseURL": fakeDockerURL},
+		})
 		adminDelete(t, "/control/keys/by-id/"+keyID)
 		adminDelete(t, "/control/routes/by-id/"+routeID)
 		adminDelete(t, "/control/policies/by-id/"+polID)
@@ -372,27 +390,12 @@ func setupFixture(t *testing.T, fakeDockerURL, suffix, strategy string, amount i
 		adminDelete(t, "/control/providers/by-id/"+provID)
 	}
 
-	// Wait for the snapshot to reflect the new resources (max 5s).
-	waitForSnapshot(t, fx)
+	// Give the data-plane snapshot time to reload (PG NOTIFY → reload is ~100ms).
+	// We can't probe via real requests because each call consumes rate-limit
+	// capacity and would invalidate the test.
+	time.Sleep(800 * time.Millisecond)
 
 	return fx, cleanup
-}
-
-// waitForSnapshot polls the data plane until the route is reachable or 5s pass.
-// This confirms the relay's in-memory snapshot has loaded the new config.
-func waitForSnapshot(t *testing.T, fx *fixture) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		status, _ := dataRequest(fx, "test-model")
-		// We expect either 200 (route live) or 429 (rate limit hit — still live).
-		// 404/503 means snapshot not yet refreshed.
-		if status == http.StatusOK || status == http.StatusTooManyRequests {
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	t.Logf("warning: snapshot did not reflect new fixture within 5s; proceeding anyway")
 }
 
 // ---------------------------------------------------------------------------
@@ -401,9 +404,9 @@ func waitForSnapshot(t *testing.T, fx *fixture) {
 
 // dataRequest fires one chat-completion request and returns (statusCode, retryAfter).
 // retryAfter is 0 when the header is absent or unparseable.
-func dataRequest(fx *fixture, modelName string) (int, int) {
+func dataRequest(fx *fixture) (int, int) {
 	body, _ := json.Marshal(map[string]any{
-		"model":    modelName,
+		"model":    fx.modelName,
 		"messages": []map[string]any{{"role": "user", "content": "hi"}},
 	})
 	req, _ := http.NewRequest(http.MethodPost, dataURL()+"/v1/chat/completions", bytes.NewReader(body))

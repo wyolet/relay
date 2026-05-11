@@ -210,6 +210,9 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 					if ct != "" {
 						w.Header().Set("Content-Type", ct)
 					}
+					if ra := outMsg.Headers["Retry-After"]; ra != "" {
+						w.Header().Set("Retry-After", ra)
+					}
 					isStreaming = strings.HasPrefix(ct, "text/event-stream")
 					w.WriteHeader(status)
 					if len(outMsg.Body) > 0 {
