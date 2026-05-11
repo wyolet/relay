@@ -2,6 +2,15 @@
 
 Guidance for Claude Code working in this repo.
 
+## Dev workflow
+
+This project follows the **wyolet dev workflow**. Read these before non-trivial changes — file layout, ports, infra split, build/deploy pipeline live there, not duplicated here:
+
+- `~/Documents/Obsidian Vault/Dev Workflow/Development.md` — Mac + dev-stack split, ports rule, Caddy, centralized Postgres
+- `~/Documents/Obsidian Vault/Dev Workflow/ProjectSetup.md` — required files (Makefile, compose, Dockerfile, bake, .env), stack rules
+- `~/Documents/Obsidian Vault/Dev Workflow/BuildDeploy.md` — Harbor + ghcr.io, `kube` buildx context, ArgoCD reconcile
+- `~/Documents/Obsidian Vault/Dev Workflow/PORTS.md` — LAN port allocations
+
 ## What this is
 
 Wyolet Relay — a high-throughput LLM router in Go. Self-hostable, k8s-native, BYO provider keys. Competes with OpenRouter and LiteLLM on the infrastructure axis (performance, key pooling, batch orchestration, observability).
