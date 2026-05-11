@@ -8,13 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Attachment struct {
-	ParentKind    string `db:"parent_kind" json:"parent_kind"`
-	ParentName    string `db:"parent_name" json:"parent_name"`
-	RatelimitName string `db:"ratelimit_name" json:"ratelimit_name"`
-	Meter         string `db:"meter" json:"meter"`
-}
-
 type Model struct {
 	Name      string             `db:"name" json:"name"`
 	Metadata  []byte             `db:"metadata" json:"metadata"`
@@ -41,6 +34,15 @@ type Provider struct {
 
 type RateLimit struct {
 	Name      string             `db:"name" json:"name"`
+	Metadata  []byte             `db:"metadata" json:"metadata"`
+	Spec      []byte             `db:"spec" json:"spec"`
+	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type RelayKey struct {
+	Name      string             `db:"name" json:"name"`
+	KeyHash   string             `db:"key_hash" json:"key_hash"`
 	Metadata  []byte             `db:"metadata" json:"metadata"`
 	Spec      []byte             `db:"spec" json:"spec"`
 	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`

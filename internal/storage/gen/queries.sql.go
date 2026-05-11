@@ -11,31 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const deleteAttachmentByCompositeKey = `-- name: DeleteAttachmentByCompositeKey :execrows
-DELETE FROM attachments
-WHERE parent_kind = $1 AND parent_name = $2 AND ratelimit_name = $3 AND meter = $4
-`
-
-type DeleteAttachmentByCompositeKeyParams struct {
-	ParentKind    string `db:"parent_kind" json:"parent_kind"`
-	ParentName    string `db:"parent_name" json:"parent_name"`
-	RatelimitName string `db:"ratelimit_name" json:"ratelimit_name"`
-	Meter         string `db:"meter" json:"meter"`
-}
-
-func (q *Queries) DeleteAttachmentByCompositeKey(ctx context.Context, arg DeleteAttachmentByCompositeKeyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteAttachmentByCompositeKey,
-		arg.ParentKind,
-		arg.ParentName,
-		arg.RatelimitName,
-		arg.Meter,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const deleteModel = `-- name: DeleteModel :exec
 DELETE FROM models WHERE name = $1
 `
@@ -45,12 +20,12 @@ func (q *Queries) DeleteModel(ctx context.Context, name string) error {
 	return err
 }
 
-const deletePool = `-- name: DeletePolicy :exec
+const deletePolicy = `-- name: DeletePolicy :exec
 DELETE FROM policies WHERE name = $1
 `
 
 func (q *Queries) DeletePolicy(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deletePool, name)
+	_, err := q.db.Exec(ctx, deletePolicy, name)
 	return err
 }
 
@@ -72,6 +47,15 @@ func (q *Queries) DeleteRateLimit(ctx context.Context, name string) error {
 	return err
 }
 
+const deleteRelayKey = `-- name: DeleteRelayKey :exec
+DELETE FROM relay_keys WHERE name = $1
+`
+
+func (q *Queries) DeleteRelayKey(ctx context.Context, name string) error {
+	_, err := q.db.Exec(ctx, deleteRelayKey, name)
+	return err
+}
+
 const deleteRoute = `-- name: DeleteRoute :exec
 DELETE FROM routes WHERE name = $1
 `
@@ -88,37 +72,6 @@ DELETE FROM secrets WHERE name = $1
 func (q *Queries) DeleteSecret(ctx context.Context, name string) error {
 	_, err := q.db.Exec(ctx, deleteSecret, name)
 	return err
-}
-
-const insertAttachment = `-- name: InsertAttachment :one
-INSERT INTO attachments (parent_kind, parent_name, ratelimit_name, meter)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT DO NOTHING
-RETURNING parent_kind, parent_name, ratelimit_name, meter
-`
-
-type InsertAttachmentParams struct {
-	ParentKind    string `db:"parent_kind" json:"parent_kind"`
-	ParentName    string `db:"parent_name" json:"parent_name"`
-	RatelimitName string `db:"ratelimit_name" json:"ratelimit_name"`
-	Meter         string `db:"meter" json:"meter"`
-}
-
-func (q *Queries) InsertAttachment(ctx context.Context, arg InsertAttachmentParams) (Attachment, error) {
-	row := q.db.QueryRow(ctx, insertAttachment,
-		arg.ParentKind,
-		arg.ParentName,
-		arg.RatelimitName,
-		arg.Meter,
-	)
-	var i Attachment
-	err := row.Scan(
-		&i.ParentKind,
-		&i.ParentName,
-		&i.RatelimitName,
-		&i.Meter,
-	)
-	return i, err
 }
 
 const insertSecretEnv = `-- name: InsertSecretEnv :one
@@ -223,72 +176,6 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 		&i.Spec,
 	)
 	return i, err
-}
-
-const listAttachments = `-- name: ListAttachments :many
-SELECT parent_kind, parent_name, ratelimit_name, meter FROM attachments ORDER BY parent_kind, parent_name
-`
-
-func (q *Queries) ListAttachments(ctx context.Context) ([]Attachment, error) {
-	rows, err := q.db.Query(ctx, listAttachments)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Attachment
-	for rows.Next() {
-		var i Attachment
-		if err := rows.Scan(
-			&i.ParentKind,
-			&i.ParentName,
-			&i.RatelimitName,
-			&i.Meter,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listAttachmentsByParent = `-- name: ListAttachmentsByParent :many
-SELECT parent_kind, parent_name, ratelimit_name, meter
-FROM attachments
-WHERE parent_kind = $1 AND parent_name = $2
-ORDER BY ratelimit_name, meter
-`
-
-type ListAttachmentsByParentParams struct {
-	ParentKind string `db:"parent_kind" json:"parent_kind"`
-	ParentName string `db:"parent_name" json:"parent_name"`
-}
-
-func (q *Queries) ListAttachmentsByParent(ctx context.Context, arg ListAttachmentsByParentParams) ([]Attachment, error) {
-	rows, err := q.db.Query(ctx, listAttachmentsByParent, arg.ParentKind, arg.ParentName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []Attachment
-	for rows.Next() {
-		var i Attachment
-		if err := rows.Scan(
-			&i.ParentKind,
-			&i.ParentName,
-			&i.RatelimitName,
-			&i.Meter,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listModels = `-- name: ListModels :many
@@ -401,6 +288,42 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 	for rows.Next() {
 		var i ListRateLimitsRow
 		if err := rows.Scan(&i.Name, &i.Metadata, &i.Spec); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRelayKeys = `-- name: ListRelayKeys :many
+SELECT name, key_hash, metadata, spec FROM relay_keys ORDER BY name
+`
+
+type ListRelayKeysRow struct {
+	Name     string `db:"name" json:"name"`
+	KeyHash  string `db:"key_hash" json:"key_hash"`
+	Metadata []byte `db:"metadata" json:"metadata"`
+	Spec     []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
+	rows, err := q.db.Query(ctx, listRelayKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRelayKeysRow
+	for rows.Next() {
+		var i ListRelayKeysRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.KeyHash,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -566,29 +489,6 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 	return i, err
 }
 
-const upsertAttachment = `-- name: UpsertAttachment :exec
-INSERT INTO attachments (parent_kind, parent_name, ratelimit_name, meter)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT DO NOTHING
-`
-
-type UpsertAttachmentParams struct {
-	ParentKind    string `db:"parent_kind" json:"parent_kind"`
-	ParentName    string `db:"parent_name" json:"parent_name"`
-	RatelimitName string `db:"ratelimit_name" json:"ratelimit_name"`
-	Meter         string `db:"meter" json:"meter"`
-}
-
-func (q *Queries) UpsertAttachment(ctx context.Context, arg UpsertAttachmentParams) error {
-	_, err := q.db.Exec(ctx, upsertAttachment,
-		arg.ParentKind,
-		arg.ParentName,
-		arg.RatelimitName,
-		arg.Meter,
-	)
-	return err
-}
-
 const upsertModel = `-- name: UpsertModel :exec
 INSERT INTO models (name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, NOW())
@@ -606,7 +506,7 @@ func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error 
 	return err
 }
 
-const upsertPool = `-- name: UpsertPolicy :exec
+const upsertPolicy = `-- name: UpsertPolicy :exec
 INSERT INTO policies (name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, NOW())
 ON CONFLICT (name) DO UPDATE SET metadata = EXCLUDED.metadata, spec = EXCLUDED.spec, updated_at = NOW()
@@ -619,7 +519,7 @@ type UpsertPolicyParams struct {
 }
 
 func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) error {
-	_, err := q.db.Exec(ctx, upsertPool, arg.Name, arg.Metadata, arg.Spec)
+	_, err := q.db.Exec(ctx, upsertPolicy, arg.Name, arg.Metadata, arg.Spec)
 	return err
 }
 
@@ -657,6 +557,33 @@ func (q *Queries) UpsertRateLimit(ctx context.Context, arg UpsertRateLimitParams
 	return err
 }
 
+const upsertRelayKey = `-- name: UpsertRelayKey :exec
+INSERT INTO relay_keys (name, key_hash, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, NOW())
+ON CONFLICT (name) DO UPDATE SET
+    key_hash   = EXCLUDED.key_hash,
+    metadata   = EXCLUDED.metadata,
+    spec       = EXCLUDED.spec,
+    updated_at = NOW()
+`
+
+type UpsertRelayKeyParams struct {
+	Name     string `db:"name" json:"name"`
+	KeyHash  string `db:"key_hash" json:"key_hash"`
+	Metadata []byte `db:"metadata" json:"metadata"`
+	Spec     []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) error {
+	_, err := q.db.Exec(ctx, upsertRelayKey,
+		arg.Name,
+		arg.KeyHash,
+		arg.Metadata,
+		arg.Spec,
+	)
+	return err
+}
+
 const upsertRoute = `-- name: UpsertRoute :exec
 INSERT INTO routes (name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, NOW())
@@ -689,67 +616,5 @@ type UpsertSecretParams struct {
 // UpsertSecret is kept for the seed CLI (YAML-import path). Deprecated for new code; use InsertSecretEnv / InsertSecretStored.
 func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) error {
 	_, err := q.db.Exec(ctx, upsertSecret, arg.Name, arg.Metadata, arg.Spec)
-	return err
-}
-
-const listRelayKeys = `-- name: ListRelayKeys :many
-SELECT name, key_hash, metadata, spec FROM relay_keys ORDER BY name
-`
-
-type ListRelayKeysRow struct {
-	Name     string `db:"name" json:"name"`
-	KeyHash  string `db:"key_hash" json:"key_hash"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
-	rows, err := q.db.Query(ctx, listRelayKeys)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListRelayKeysRow
-	for rows.Next() {
-		var i ListRelayKeysRow
-		if err := rows.Scan(&i.Name, &i.KeyHash, &i.Metadata, &i.Spec); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const upsertRelayKey = `-- name: UpsertRelayKey :exec
-INSERT INTO relay_keys (name, key_hash, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, NOW())
-ON CONFLICT (name) DO UPDATE SET
-    key_hash   = EXCLUDED.key_hash,
-    metadata   = EXCLUDED.metadata,
-    spec       = EXCLUDED.spec,
-    updated_at = NOW()
-`
-
-type UpsertRelayKeyParams struct {
-	Name     string `db:"name" json:"name"`
-	KeyHash  string `db:"key_hash" json:"key_hash"`
-	Metadata []byte `db:"metadata" json:"metadata"`
-	Spec     []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) error {
-	_, err := q.db.Exec(ctx, upsertRelayKey, arg.Name, arg.KeyHash, arg.Metadata, arg.Spec)
-	return err
-}
-
-const deleteRelayKey = `-- name: DeleteRelayKey :exec
-DELETE FROM relay_keys WHERE name = $1
-`
-
-func (q *Queries) DeleteRelayKey(ctx context.Context, name string) error {
-	_, err := q.db.Exec(ctx, deleteRelayKey, name)
 	return err
 }
