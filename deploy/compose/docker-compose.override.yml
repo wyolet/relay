@@ -1,0 +1,66 @@
+# Auto-loaded by `docker compose up` (without -f flags).
+# For environments without our dev-stack — bundles Postgres / ClickHouse / Jaeger locally
+# so the project boots on a fresh laptop. Strangers also need their own .env with DSNs
+# pointed at these local services (see .env.example "self-sufficient" section).
+#
+# When using `make dev` (which passes -f explicitly), this file is ignored.
+
+volumes:
+  pg-data:
+  ch-data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: relay-postgres
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports:
+      - "5115:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: relay-clickhouse
+    environment:
+      CLICKHOUSE_DB: relay
+      CLICKHOUSE_USER: relay
+      CLICKHOUSE_PASSWORD: relay
+    volumes:
+      - ch-data:/var/lib/clickhouse
+    ports:
+      - "5119:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user relay --password relay --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 10s
+      retries: 15
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: relay-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "5117:16686"
+      - "5118:4317"
+
+  relay-a:
+    depends_on:
+      postgres: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+
+  relay-b:
+    depends_on:
+      postgres: {condition: service_healthy}
+      clickhouse: {condition: service_healthy}
+      valkey: {condition: service_healthy}

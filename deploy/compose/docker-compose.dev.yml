@@ -1,0 +1,16 @@
+# Dev overrides — `make dev` invokes this on top of docker-compose.yml.
+# Uses dev-stack for Postgres / ClickHouse / Jaeger; valkey stays local.
+# Relay binaries built locally from source for fast iteration.
+
+services:
+  relay-a:
+    image: relay:dev
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+
+  relay-b:
+    image: relay:dev
+    build:
+      context: ../..
+      dockerfile: Dockerfile
