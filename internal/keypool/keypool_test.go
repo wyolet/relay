@@ -525,6 +525,72 @@ func TestRateLimitShortPreservesReason(t *testing.T) {
 	}
 }
 
+// TestRecordLocalRateLimit — writes CircuitOpen with correct reason; BackoffStep unchanged.
+func TestRecordLocalRateLimit(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	k := "reason-local-rl"
+	// Pre-warm a backoff step so we can assert it is preserved.
+	sel.RecordFailure(ctx, k, FailureServerError, 0)
+	before := sel.readRecord(ctx, k)
+	wantStep := before.BackoffStep
+
+	sel.RecordLocalRateLimit(ctx, k, 15*time.Second)
+	rec := sel.readRecord(ctx, k)
+	if rec.State != CircuitOpen {
+		t.Fatalf("want CircuitOpen, got %v", rec.State)
+	}
+	if rec.Reason != ReasonLocalRateLimited {
+		t.Fatalf("want reason=%q, got %q", ReasonLocalRateLimited, rec.Reason)
+	}
+	wantUntil := t0.Add(15 * time.Second)
+	if rec.OpenUntil != wantUntil {
+		t.Fatalf("want OpenUntil=%v, got %v", wantUntil, rec.OpenUntil)
+	}
+	if rec.BackoffStep != wantStep {
+		t.Fatalf("BackoffStep must not change: want %d, got %d", wantStep, rec.BackoffStep)
+	}
+	if rec.Indefinite {
+		t.Fatal("want Indefinite=false")
+	}
+}
+
+// TestRecordSuccessClearsReason — after a failure, RecordSuccess resets Reason to "".
+func TestRecordSuccessClearsReason(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	k := "reason-clear"
+	sel.RecordFailure(ctx, k, FailureAuth, 0)
+	rec := sel.readRecord(ctx, k)
+	if rec.Reason == "" {
+		t.Fatal("expected non-empty reason after auth failure")
+	}
+	sel.RecordSuccess(ctx, k)
+	rec = sel.readRecord(ctx, k)
+	if rec.Reason != "" {
+		t.Fatalf("want empty reason after success, got %q", rec.Reason)
+	}
+}
+
+// TestBackwardCompatNoReason — a record encoded without the "reason" field decodes
+// cleanly with Reason == "" (backward compat with records written before this field).
+func TestBackwardCompatNoReason(t *testing.T) {
+	oldJSON := []byte(`{"state":1,"open_until":"2026-01-01T00:00:30Z","backoff_step":2,"last_transition":"2026-01-01T00:00:00Z","indefinite":false}`)
+	rec, err := decodeRecord(oldJSON)
+	if err != nil {
+		t.Fatalf("decodeRecord failed: %v", err)
+	}
+	if rec.State != CircuitOpen {
+		t.Fatalf("want CircuitOpen, got %v", rec.State)
+	}
+	if rec.BackoffStep != 2 {
+		t.Fatalf("want BackoffStep=2, got %d", rec.BackoffStep)
+	}
+	if rec.Reason != "" {
+		t.Fatalf("want empty reason from old record, got %q", rec.Reason)
+	}
+}
+
 // TestPickWithExclude_Convenience — PickWithExclude wrapper works correctly.
 func TestPickWithExclude_Convenience(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
