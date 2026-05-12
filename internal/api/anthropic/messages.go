@@ -152,14 +152,15 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		}
 
 		req := &pipeline.Request{
-			Body:            mr.Raw,
-			Attribution:     attribution,
-			PassthroughAuth: passthroughAuth,
-			Provider:        plan.Provider,
-			Policy:          plan.Policy,
-			Model:           plan.Model,
-			Secrets:         plan.Secrets,
-			Rules:           plan.Rules,
+			Body:               mr.Raw,
+			Attribution:        attribution,
+			PassthroughAuth:    passthroughAuth,
+			PassthroughHeaders: plan.PassthroughHeaders,
+			Provider:           plan.Provider,
+			Policy:             plan.Policy,
+			Model:              plan.Model,
+			Secrets:            plan.Secrets,
+			Rules:              plan.Rules,
 		}
 
 		resp, pipeErr := runPipeline(ctx, req)

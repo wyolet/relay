@@ -399,6 +399,13 @@ func main() {
 			}
 			req.Policy = &catalog.Policy{Metadata: catalog.Metadata{Name: "anon-policy"}}
 		}
+		// Forward inbound passthrough headers (anthropic-beta, user-agent, etc.)
+		// to the upstream anthropic client via context extras.
+		if len(req.PassthroughHeaders) > 0 {
+			ctx = provideranthropicpkg.WithRequestExtras(ctx, provideranthropicpkg.RequestExtras{
+				ExtraHeaders: req.PassthroughHeaders,
+			})
+		}
 		return pipeline.Run(ctx, req)
 	}
 
