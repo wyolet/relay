@@ -23,6 +23,12 @@ var isoCurrencyRE = regexp.MustCompile(`^[A-Z]{3}$`)
 // sourceRE matches the optional attribution source field.
 var sourceRE = regexp.MustCompile(`^attribution\.[a-z][a-z0-9_]*$`)
 
+// knownProvenance lists the valid spec.source values for provenance tracking.
+var knownProvenance = map[string]bool{
+	string(SourceUserDefined):    true,
+	string(SourceSystemMirrored): true,
+}
+
 const maxRateLimitWindow = 30 * 24 * time.Hour
 
 func validate(s *snapshot) error {
@@ -390,8 +396,15 @@ func validateRateLimits(s *snapshot) error {
 			return fmt.Errorf("RateLimit %q: window %v exceeds maximum of 30 days", rl.Metadata.Name, rl.Spec.Window)
 		}
 		// Validate spec-level source (provenance field, not per-rule).
-		if rl.Spec.Source != "" && !sourceRE.MatchString(rl.Spec.Source) {
-			return fmt.Errorf("RateLimit %q: source %q must match attribution.<key>", rl.Metadata.Name, rl.Spec.Source)
+		// Accepts: known provenance values (system_mirrored, user_defined) or
+		// legacy attribution.<key> form.
+		if rl.Spec.Source != "" && !knownProvenance[rl.Spec.Source] && !sourceRE.MatchString(rl.Spec.Source) {
+			return fmt.Errorf("RateLimit %q: source %q is not a valid provenance value", rl.Metadata.Name, rl.Spec.Source)
+		}
+		// system_mirrored objects may have empty rules — they act as config ceilings
+		// that operators populate after deployment. Skip rule validation for them.
+		if rl.Spec.Source == string(SourceSystemMirrored) && len(rl.Spec.Rules) == 0 {
+			continue
 		}
 		// Reject explicitly empty rules list (nil/omitted is fine — it falls back to legacy).
 		if rl.Spec.Rules != nil && len(rl.Spec.Rules) == 0 {

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/wyolet/relay/internal/catalog"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/admin/crud"
@@ -353,6 +354,13 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		},
 		PatchDelete: func(slug string) catalog.Patch {
 			return catalog.Patch{DeleteRateLimit: slug}
+		},
+		Guard: func(_ context.Context, existing *catalog.RateLimit) error {
+			if existing.Spec.Source == string(catalog.SourceSystemMirrored) {
+				return huma.NewError(http.StatusForbidden,
+					"system-mirrored RateLimit objects are read-only")
+			}
+			return nil
 		},
 	}
 }
