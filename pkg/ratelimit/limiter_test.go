@@ -168,17 +168,27 @@ func TestTokens_PostHocOnly(t *testing.T) {
 		reservations[i] = res
 	}
 
-	// Commit each with 20 tokens → total 100.
+	// Commit each with 20 tokens → total 100 (equal to amount; still allowed with > comparator).
 	for i, res := range reservations {
 		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"tokens": 20}}); err != nil {
 			t.Fatalf("commit %d: %v", i+1, err)
 		}
 	}
 
-	// 6th Reserve should fail: tokens=100 >= 100.
-	_, err := l.Reserve(ctx, testScope, rules)
+	// 6th reserve succeeds (rate==amount is still allowed with strict > comparator).
+	res6, err := l.Reserve(ctx, testScope, rules)
+	if err != nil {
+		t.Fatalf("6th reserve (rate==amount should pass): %v", err)
+	}
+	// Commit 1 more token → total 101 > 100.
+	if err := l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"tokens": 1}}); err != nil {
+		t.Fatalf("commit 6: %v", err)
+	}
+
+	// 7th Reserve should fail: tokens=101 > 100.
+	_, err = l.Reserve(ctx, testScope, rules)
 	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded after 100 tokens consumed, got %v", err)
+		t.Fatalf("expected ErrExceeded after 101 tokens consumed, got %v", err)
 	}
 	var ee *ExceededError
 	if !errors.As(err, &ee) || ee.Rule.Meter != "tokens" {
@@ -640,16 +650,16 @@ func TestMultiRule_PerMeterCommit(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	// After committing 900 input and 400 output, a second commit of the same amounts
-	// should fail (only 100 input and 100 output remaining).
+	// After committing 900 input and 400 output, commit 101 output more (total 501 > 500).
+	// Using > comparator: rate == amount is still allowed; rate > amount exceeds.
 	res2, err := l.Reserve(ctx, testScope, rules)
 	if err != nil {
 		t.Fatalf("second reserve: %v", err)
 	}
 	_ = l.Commit(ctx, res2, Observations{
-		Tokens: map[string]int64{"input": 100, "output": 100},
+		Tokens: map[string]int64{"input": 100, "output": 101},
 	})
-	// Third reserve should now exceed both limits.
+	// Third reserve should now exceed the output limit (501 > 500).
 	_, err = l.Reserve(ctx, testScope, rules)
 	if !errors.Is(err, ErrExceeded) {
 		t.Fatalf("expected ErrExceeded after limits exhausted, got %v", err)
@@ -674,18 +684,19 @@ func TestMultiRule_BareTokensMeter(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	// After 500 tokens consumed, a second commit of 500 should succeed (total 1000).
+	// After 500 tokens consumed, a second commit of 501 (total 1001 > 1000) exceeds.
+	// Using > comparator: rate == amount is still allowed; rate > amount exceeds.
 	res2, err := l.Reserve(ctx, testScope, rules)
 	if err != nil {
 		t.Fatalf("second reserve: %v", err)
 	}
 	_ = l.Commit(ctx, res2, Observations{
-		Tokens: map[string]int64{"input": 250, "output": 250},
+		Tokens: map[string]int64{"input": 251, "output": 250},
 	})
-	// Third reserve should now exceed the 1000-token limit.
+	// Third reserve should now exceed the 1000-token limit (total 1001 > 1000).
 	_, err = l.Reserve(ctx, testScope, rules)
 	if !errors.Is(err, ErrExceeded) {
-		t.Fatalf("expected ErrExceeded after 1000 tokens consumed, got %v", err)
+		t.Fatalf("expected ErrExceeded after 1001 tokens consumed, got %v", err)
 	}
 }
 
