@@ -256,10 +256,10 @@ type RateLimit struct {
 // the snapshot loader). Concurrency meter ignores strategy.
 // Window overrides spec.Window for this rule; if zero, spec.Window is used.
 type RateLimitRule struct {
-	Meter    string            `yaml:"meter"              json:"meter"`
+	Meter    string            `yaml:"meter"              json:"meter"                enum:"requests,concurrency,tokens,tokens.input,tokens.output,tokens.cache_read,tokens.cache_creation,tokens.reasoning,tokens.server_tool_use_input,tokens.server_tool_use_output" doc:"Meter to count against. Bare 'tokens' sums every sub-meter; tokens.<key> targets one."`
 	Amount   int64             `yaml:"amount"             json:"amount"`
-	Window   time.Duration     `yaml:"window,omitempty"   json:"-"` // YAML: plain duration; JSON via ruleJSON shim
-	Strategy RateLimitStrategy `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	Window   time.Duration     `yaml:"window,omitempty"   json:"window,omitempty"     doc:"Per-rule window override (nanoseconds, or human-readable string on input — '30s', '1m'). When zero, spec.window is used."` // serialized via the ruleJSON shim; this tag exists so huma includes the field in the OpenAPI schema
+	Strategy RateLimitStrategy `yaml:"strategy,omitempty" json:"strategy,omitempty"   enum:"token-bucket,sliding-window,fixed-window,leaky-bucket,session-window" doc:"Rate-limit strategy. Defaults to token-bucket if empty."`
 }
 
 // rateLimitRuleJSON is the JSON unmarshal shim for RateLimitRule, accepting
@@ -307,10 +307,10 @@ func (r RateLimitRule) MarshalJSON() ([]byte, error) {
 // spec-level field, not per-rule.
 // Window is a spec-level default; rules may override it with their own Window.
 type RateLimitSpec struct {
-	Strategy    RateLimitStrategy `yaml:"strategy"              json:"strategy"`
+	Strategy    RateLimitStrategy `yaml:"strategy"              json:"strategy"               enum:"token-bucket,sliding-window,fixed-window,leaky-bucket,session-window" doc:"Default strategy for rules that don't set one."`
 	Window      time.Duration     `yaml:"window"                json:"window"`
 	Source      string            `yaml:"source,omitempty"      json:"source,omitempty"`
-	Description string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string            `yaml:"description,omitempty" json:"description,omitempty" doc:"Free-text description of this RateLimit (e.g. why it exists, what it protects)."`
 	Rules       []RateLimitRule   `yaml:"rules"                 json:"rules"`
 	Enabled     *bool             `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
 }
@@ -448,6 +448,16 @@ const (
 	StrategySessionWindow RateLimitStrategy = "session-window"
 )
 
+// AllStrategies enumerates every accepted RateLimitStrategy. Order is stable
+// and is used by the OpenAPI enum tags on RateLimit fields — keep in sync.
+var AllStrategies = []RateLimitStrategy{
+	StrategyTokenBucket,
+	StrategySlidingWindow,
+	StrategyFixedWindow,
+	StrategyLeakyBucket,
+	StrategySessionWindow,
+}
+
 type RateLimitSource string
 
 const (
@@ -522,7 +532,33 @@ const (
 	MeterRequests    Meter = "requests"
 	MeterTokens      Meter = "tokens"
 	MeterConcurrency Meter = "concurrency"
+
+	// Token sub-meters. Keys match the canonical Tokens map keys produced by
+	// the shape-specific extractors in pkg/api/{openai,anthropic}/tokens.go.
+	MeterTokensInput                = "tokens.input"
+	MeterTokensOutput               = "tokens.output"
+	MeterTokensCacheRead            = "tokens.cache_read"
+	MeterTokensCacheCreation        = "tokens.cache_creation"
+	MeterTokensReasoning            = "tokens.reasoning"
+	MeterTokensServerToolUseInput   = "tokens.server_tool_use_input"
+	MeterTokensServerToolUseOutput  = "tokens.server_tool_use_output"
 )
+
+// AllMeters enumerates every meter name the API surface accepts. The catalog
+// regex (meterRE) remains permissive for back-compat; the OpenAPI enum tag
+// (see RateLimitRule.Meter) enforces this set at the HTTP boundary.
+var AllMeters = []string{
+	string(MeterRequests),
+	string(MeterConcurrency),
+	string(MeterTokens),
+	MeterTokensInput,
+	MeterTokensOutput,
+	MeterTokensCacheRead,
+	MeterTokensCacheCreation,
+	MeterTokensReasoning,
+	MeterTokensServerToolUseInput,
+	MeterTokensServerToolUseOutput,
+}
 
 // ResolvedRule is one concrete rule derived from attaching a RateLimit.
 // A single RateLimit with N rules produces N ResolvedRule entries.
