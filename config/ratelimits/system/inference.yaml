@@ -1,0 +1,12 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: inference
+  displayName: Inference rate limits (managed)
+spec:
+  source: system_mirrored
+  description: "Config ceiling for per-key user rate limits on authed normal-mode inference requests. Empty rules = no ceiling; operator adds rules to cap what per-key RLs can configure."
+  window: 1m
+  strategy: sliding-window
+  enabled: false
+  rules: []

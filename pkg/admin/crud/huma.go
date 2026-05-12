@@ -171,6 +171,11 @@ func RegisterOps[T any](
 			}
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
+		if k.Guard != nil {
+			if gerr := k.Guard(ctx, before); gerr != nil {
+				return nil, gerr
+			}
+		}
 		v := in.Body
 		if k.Patch != nil && deps.Patcher != nil {
 			if verr := deps.Patcher.ValidateWithPatch(k.Patch(v)); verr != nil {
@@ -217,6 +222,11 @@ func RegisterOps[T any](
 					fmt.Sprintf("%s with id %q not found", k.Name, in.ID))
 			}
 			return nil, humaError(http.StatusInternalServerError, err.Error())
+		}
+		if k.Guard != nil {
+			if gerr := k.Guard(ctx, current); gerr != nil {
+				return nil, gerr
+			}
 		}
 		slug := k.ResourceID(current)
 		if k.PatchDelete != nil && deps.Patcher != nil {

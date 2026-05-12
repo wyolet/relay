@@ -101,4 +101,9 @@ type Kind[T any] struct {
 
 	// Summarize produces a diff string for audit logs. Optional; nil => empty.
 	Summarize func(before, after T) string
+
+	// Guard is called before Update and Delete with the existing resource. It
+	// may reject the mutation by returning an error (use huma.NewError for a
+	// specific HTTP status, e.g. 403). Optional; nil disables the check.
+	Guard func(ctx context.Context, existing T) error
 }
