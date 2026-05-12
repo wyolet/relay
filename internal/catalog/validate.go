@@ -452,6 +452,9 @@ func validateRateLimits(s *snapshot) error {
 				slog.Warn("RateLimit has duplicate meter in rules", "name", rl.Metadata.Name, "meter", m, "count", cnt)
 			}
 		}
+		if err := validateAgainstCeiling(rl, s); err != nil {
+			return err
+		}
 	}
 
 	if err := validateAttachments(s); err != nil {
@@ -485,6 +488,55 @@ func validateAttachments(s *snapshot) error {
 	for _, m := range s.models {
 		if err := checkAttachments(KindModel, m.Metadata.Name, m.Spec.RateLimits); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateAgainstCeiling checks that a non-system RateLimit does not exceed the
+// config ceiling defined by the "inference" system-mirrored RateLimit. Ceiling
+// matching is lenient: only rules with the same (meter, effective-window) pair
+// are compared; unmatched meters are allowed. If the ceiling object is absent or
+// disabled, validation is skipped entirely.
+//
+// We check against "inference" only (not "inference-proxy") for v1 simplicity.
+// Operators using passthrough-allowed keys can override via env if they need a
+// more permissive ceiling in a future release.
+func validateAgainstCeiling(rl *RateLimit, s *snapshot) error {
+	// System-mirrored objects (the ceilings themselves) are exempt.
+	if rl.Spec.Source == string(SourceSystemMirrored) {
+		return nil
+	}
+
+	ceiling, ok := s.rateLimits["inference"]
+	if !ok || !IsEnabled(ceiling.Spec.Enabled) {
+		return nil
+	}
+
+	// Build a lookup map: (meter, effectiveWindow) -> amount for the ceiling.
+	type ceilingKey struct {
+		meter  string
+		window time.Duration
+	}
+	ceilingMap := make(map[ceilingKey]int64)
+	for _, cr := range ceiling.Spec.NormalizedRules() {
+		w := cr.Window
+		if w == 0 {
+			w = ceiling.Spec.Window
+		}
+		ceilingMap[ceilingKey{cr.Meter, w}] = cr.Amount
+	}
+
+	for i, r := range rl.Spec.NormalizedRules() {
+		w := r.Window
+		if w == 0 {
+			w = rl.Spec.Window
+		}
+		if max, found := ceilingMap[ceilingKey{r.Meter, w}]; found {
+			if r.Amount > max {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s window=%s amount=%d): exceeds ceiling \"inference\" (max=%d)",
+					rl.Metadata.Name, i, r.Meter, w, r.Amount, max)
+			}
 		}
 	}
 	return nil
