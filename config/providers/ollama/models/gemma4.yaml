@@ -33,25 +33,37 @@ apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
   name: gemma4-rpm
+  owner:
+    kind: user
 spec:
-  strategy: sliding-window
-  window: 1m
-  amount: 5
+  rules:
+    - meter: requests
+      amount: 5
+      window: 1m
+      strategy: sliding-window
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
   name: gemma4-tpm
+  owner:
+    kind: user
 spec:
-  strategy: sliding-window
-  window: 1m
-  amount: 1000000
+  rules:
+    - meter: tokens
+      amount: 1000000
+      window: 1m
+      strategy: sliding-window
 ---
 apiVersion: relay.wyolet.dev/v1
 kind: RateLimit
 metadata:
   name: gemma4-concurrency
+  owner:
+    kind: user
 spec:
-  strategy: sliding-window
-  window: 1m
-  amount: 3
+  rules:
+    - meter: concurrency
+      amount: 3
+      window: 1m
+      strategy: sliding-window
