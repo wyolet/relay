@@ -451,11 +451,11 @@ func validateRateLimits(s *snapshot) error {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): strategy %q is not supported for tokens meter; only sliding-window is supported (tokens are counted post-hoc)",
 					rl.Metadata.Name, i, r.Meter, r.Strategy)
 			}
-			meterSeen[r.Meter]++
+			meterSeen[r.Meter+"@"+effectiveWindow.String()]++
 		}
-		for m, cnt := range meterSeen {
+		for k, cnt := range meterSeen {
 			if cnt > 1 {
-				slog.Warn("RateLimit has duplicate meter in rules", "name", rl.Metadata.Name, "meter", m, "count", cnt)
+				slog.Warn("RateLimit has duplicate (meter,window) in rules", "name", rl.Metadata.Name, "meter_window", k, "count", cnt)
 			}
 		}
 		if err := validateAgainstCeiling(rl, s); err != nil {
