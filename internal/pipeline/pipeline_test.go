@@ -1226,3 +1226,218 @@ func TestRun_PassthroughAuth(t *testing.T) {
 		t.Errorf("secret forwarded = %q; want %q", capturedSecret, inboundAuth)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Per-key Reserve tests
+// ---------------------------------------------------------------------------
+
+// buildPerKeyStore builds a catalog.MemStore where each secret has a rate-limit
+// with the given amount (requests/1m). A fresh limiter backed by the same kv.Mem
+// is returned. The limiter's clock is fixed so window buckets are deterministic.
+func buildPerKeyStore(t *testing.T, amount int64) (*catalog.MemStore, *ratelimit.Limiter, *kv.Mem) {
+	t.Helper()
+	now := time.Now()
+	kvst := kv.NewMem()
+	t.Cleanup(func() { kvst.Close() })
+	l := ratelimit.New(kvst, slog.Default(), func() time.Time { return now })
+
+	rl1 := &catalog.RateLimit{
+		Metadata: catalog.Metadata{Name: "per-key-rpm"},
+		Spec: catalog.RateLimitSpec{
+			Strategy: catalog.StrategyTokenBucket,
+			Window:   time.Minute,
+			Rules: []catalog.RateLimitRule{
+				{Meter: string(catalog.MeterRequests), Amount: amount},
+			},
+		},
+	}
+
+	sec1 := &catalog.Secret{
+		Metadata: catalog.Metadata{Name: "key1"},
+		Resolved: "secret-key1",
+		KeyHash:  "hash1",
+		Spec:     catalog.SecretSpec{RateLimits: []catalog.RateLimitAttachment{{Ref: "per-key-rpm"}}},
+	}
+	sec2 := &catalog.Secret{
+		Metadata: catalog.Metadata{Name: "key2"},
+		Resolved: "secret-key2",
+		KeyHash:  "hash2",
+		Spec:     catalog.SecretSpec{RateLimits: []catalog.RateLimitAttachment{{Ref: "per-key-rpm"}}},
+	}
+
+	cs := catalog.NewMemStore(rl1, sec1, sec2)
+	return cs, l, kvst
+}
+
+// waitPostFlight installs postFlightHook so the caller can synchronously wait
+// for the async post-flight goroutine after Run returns. Returns a wait func.
+// Must be called before Run; the hook is cleared after wait returns.
+func waitPostFlight(t *testing.T) (wait func()) {
+	t.Helper()
+	ch := make(chan struct{})
+	postFlightHook = func() {
+		postFlightHook = nil
+		close(ch)
+	}
+	return func() {
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for post-flight goroutine")
+		}
+	}
+}
+
+// TestRun_PerKeyReserve_ExhaustsKeyA verifies the three-request scenario from
+// the brief: key A's budget exhausts, RecordLocalRateLimit cools it down, key B
+// is picked on the next request.
+func TestRun_PerKeyReserve_ExhaustsKeyA(t *testing.T) {
+	cs, l, _ := buildPerKeyStore(t, 1) // 1 request/min per key
+
+	policy := &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}}
+	// Use secrets that carry Spec.RateLimits so RateLimitsForRequest returns the
+	// attachment when called with (nil, nil, nil, secret).
+	rl := &catalog.RateLimitAttachment{Ref: "per-key-rpm"}
+	secrets := []*catalog.Secret{
+		{
+			Metadata: catalog.Metadata{Name: "key1"},
+			Resolved: "secret-key1",
+			KeyHash:  "hash1",
+			Spec:     catalog.SecretSpec{RateLimits: []catalog.RateLimitAttachment{*rl}},
+		},
+		{
+			Metadata: catalog.Metadata{Name: "key2"},
+			Resolved: "secret-key2",
+			KeyHash:  "hash2",
+			Spec:     catalog.SecretSpec{RateLimits: []catalog.RateLimitAttachment{*rl}},
+		},
+	}
+
+	kvSt := kv.NewMem()
+	t.Cleanup(func() { kvSt.Close() })
+	sel := keypool.New(kvSt, slog.Default(), nil, nil)
+
+	makeOpts := func() RunOptions {
+		return RunOptions{
+			Policy:       policy,
+			Secrets:      secrets,
+			Selector:     sel,
+			MaxAttempts:  3,
+			Limiter:      l,
+			CatalogStore: cs,
+			Outbound: &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+				out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+				out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+			}},
+		}
+	}
+
+	ctx := context.Background()
+
+	// Request 1: key A picked (prioritized), per-key Reserve succeeds (budget=1).
+	// Wait for post-flight so RecordSuccess fires before req2 checks the circuit.
+	{
+		wait := waitPostFlight(t)
+		opts := makeOpts()
+		ch := newTestChannel(ctx)
+		sendInbound(ch)
+		_, err := Run(ctx, ch, opts)
+		if err != nil {
+			t.Fatalf("req1: unexpected error: %v", err)
+		}
+		msgs := collectOut(ch)
+		wait() // ensure RecordSuccess has run before req2 starts
+		if msgs[0].Headers["X-Relay-Status"] != "200" {
+			t.Fatalf("req1: expected 200, got %s", msgs[0].Headers["X-Relay-Status"])
+		}
+	}
+
+	// Request 2: key A picked again (still prioritized), but its budget=1 is now
+	// exhausted → KeyQuotaExhausted → RecordLocalRateLimit called → 429 returned.
+	{
+		opts := makeOpts()
+		ch := newTestChannel(ctx)
+		sendInbound(ch)
+		_, err := Run(ctx, ch, opts)
+		if err == nil {
+			t.Fatal("req2: expected error for per-key exhausted, got nil")
+		}
+		msgs := collectOut(ch)
+		if len(msgs) != 1 {
+			t.Fatalf("req2: expected 1 message, got %d", len(msgs))
+		}
+		if msgs[0].Headers["X-Relay-Status"] != "429" {
+			t.Fatalf("req2: expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
+		}
+		body := string(msgs[0].Body)
+		if !containsStr(body, "rate_limit_exceeded") {
+			t.Fatalf("req2: expected rate_limit_exceeded in body: %s", body)
+		}
+	}
+
+	// Request 3: key A is now cooled down (CircuitOpen via RecordLocalRateLimit).
+	// keypool.Pick skips A and returns B. Per-key Reserve for B succeeds.
+	{
+		opts := makeOpts()
+		var pickedSecret string
+		opts.Outbound = &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+			pickedSecret = secret
+			out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+			out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+		}}
+		ch := newTestChannel(ctx)
+		sendInbound(ch)
+		_, err := Run(ctx, ch, opts)
+		if err != nil {
+			t.Fatalf("req3: unexpected error: %v", err)
+		}
+		msgs := collectOut(ch)
+		if msgs[0].Headers["X-Relay-Status"] != "200" {
+			t.Fatalf("req3: expected 200, got %s", msgs[0].Headers["X-Relay-Status"])
+		}
+		if pickedSecret != "secret-key2" {
+			t.Fatalf("req3: expected key2 to be picked (key1 cooled), got %q", pickedSecret)
+		}
+	}
+}
+
+// TestRun_PerKeyReserve_NoRules_FastPath verifies that when CatalogStore returns
+// no per-key rules for the chosen secret, the pipeline proceeds without an extra
+// kv round-trip (the per-key reserve block is skipped entirely).
+func TestRun_PerKeyReserve_NoRules_FastPath(t *testing.T) {
+	// Use a MemStore with secrets that have NO rate-limit attachments.
+	cs := catalog.NewMemStore()
+	kvSt := kv.NewMem()
+	t.Cleanup(func() { kvSt.Close() })
+	sel := keypool.New(kvSt, slog.Default(), nil, nil)
+
+	var calls atomic.Int32
+	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		calls.Add(1)
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
+		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
+	}}
+
+	opts := RunOptions{
+		Policy: &catalog.Policy{Metadata: catalog.Metadata{Name: "p"}},
+		Secrets: []*catalog.Secret{
+			{Metadata: catalog.Metadata{Name: "k"}, Resolved: "sk", KeyHash: "h"},
+		},
+		Selector:     sel,
+		Outbound:     ob,
+		MaxAttempts:  1,
+		CatalogStore: cs,
+	}
+
+	ctx := context.Background()
+	ch := newTestChannel(ctx)
+	sendInbound(ch)
+	_, err := Run(ctx, ch, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	collectOut(ch)
+	if calls.Load() != 1 {
+		t.Fatalf("expected 1 outbound call, got %d", calls.Load())
+	}
+}

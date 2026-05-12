@@ -65,12 +65,13 @@ type RunOptions struct {
 	// Limiter and Rules enable rate limiting. If either is nil/empty, rate
 	// limiting is skipped (preserves M2 behavior for configs without limits).
 	// Rules should be pre-resolved by the caller for Policy+Model scope.
-	// Secret-level rules are M4+ work.
 	Limiter *ratelimit.Limiter
 	Rules   []catalog.ResolvedRule
 
 	// CatalogStore, when non-nil, is used to look up the effective pricing for
-	// the model so cost can be computed at emit time.
+	// the model so cost can be computed at emit time. It is also used after
+	// keypool.Pick to fetch per-key (secret-attached) rate-limit rules and
+	// enforce them via a second Reserve call (scope "secret:<keyHash>").
 	CatalogStore catalog.Store
 
 	// TokenExtractor, when non-nil, is called on each response chunk body.
@@ -184,7 +185,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	// Rate limiting: Reserve before the retry loop; Commit is dispatched async
 	// after the response is sent so it doesn't add latency to the caller.
 	tokens := usage.Tokens{}    // running token map; keyed by convention (input/output/…)
-	var reservation *ratelimit.Reservation // non-nil only when Limiter is active
+	var reservation *ratelimit.Reservation // policy-level reservation; non-nil only when Limiter is active
 	if opts.Limiter != nil && len(opts.Rules) > 0 {
 		poolName := ""
 		if opts.Policy != nil {
@@ -193,7 +194,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 		var err error
 		reservation, err = opts.Limiter.Reserve(ctx, poolName, opts.Rules)
 		if err != nil {
-			var exceeded *ratelimit.ExceededError
+			var exceeded *ratelimit.KeyQuotaExhausted
 			if errors.As(err, &exceeded) {
 				send429LimitEnvelope(ch.Out, exceeded)
 			} else {
@@ -207,6 +208,10 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	// successKeyHash is set when the retry loop exits via the success path.
 	// Captured in the post-flight closure to call RecordSuccess asynchronously.
 	var successKeyHash string
+	// perKeyReservation is set by the per-key Reserve (post-Pick) when the
+	// chosen secret has attached rate-limit rules. Both reservations must be
+	// committed in post-flight.
+	var perKeyReservation *ratelimit.Reservation
 
 	// Post-flight goroutine: runs Commit and RecordSuccess after the response is
 	// fully sent, using a detached context so it outlives the request ctx.
@@ -217,6 +222,7 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 	defer func() {
 		// Snapshot mutable state before the goroutine reads it.
 		res := reservation
+		perKeyRes := perKeyReservation
 		// Snapshot the typed token map for per-meter Commit.
 		tokSnap := make(usage.Tokens, len(tokens))
 		for k, v := range tokens {
@@ -237,9 +243,16 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 			}()
 			pfCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			obs := ratelimit.Observations{Tokens: tokSnap, Cancelled: cancelled}
 			if limiter != nil && res != nil {
-				if err := limiter.Commit(pfCtx, res, ratelimit.Observations{Tokens: tokSnap, Cancelled: cancelled}); err != nil {
+				if err := limiter.Commit(pfCtx, res, obs); err != nil {
 					slog.Warn("limit.Commit failed (async)", "err", err)
+					metricPostFlightCommitErrors.Inc()
+				}
+			}
+			if limiter != nil && perKeyRes != nil {
+				if err := limiter.Commit(pfCtx, perKeyRes, obs); err != nil {
+					slog.Warn("limit.Commit (per-key) failed (async)", "err", err)
 					metricPostFlightCommitErrors.Inc()
 				}
 			}
@@ -303,6 +316,16 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 
 		// Pick a key if we don't have one.
 		if chosenKey == nil {
+			// Cancel per-key reservation from the previous failed attempt so
+			// token-bucket / leaky-bucket counters are refunded.
+			if perKeyReservation != nil && opts.Limiter != nil {
+				pfCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := opts.Limiter.Commit(pfCtx, perKeyReservation, ratelimit.Observations{Cancelled: true}); err != nil {
+					slog.Warn("limit.Commit (per-key cancel) failed", "err", err)
+				}
+				cancel()
+				perKeyReservation = nil
+			}
 			var err error
 			chosenKey, err = opts.Selector.Pick(ctx, opts.Provider, opts.Policy, opts.Model, opts.Secrets)
 			if err != nil {
@@ -315,6 +338,34 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 				return result, err
 			}
 			sameKeyAttempt = 0
+		}
+
+		// Per-key rate limit: look up secret-attached rules and Reserve against
+		// scope "secret:<keyHash>". This enforces operator-configured per-key
+		// budgets (e.g. per-key TPM/RPM mirrored from upstream tiers in #93).
+		// If no rules are attached, this fast-paths with no kv round-trip.
+		// We pass nil for provider/policy/model to retrieve ONLY the secret's
+		// own attachments — policy/model rules were already reserved above.
+		if opts.Limiter != nil && opts.CatalogStore != nil {
+			perKeyRules := opts.CatalogStore.RateLimitsForRequest(nil, nil, nil, chosenKey)
+			if len(perKeyRules) > 0 {
+				pkRes, pkErr := opts.Limiter.ReserveSecret(ctx, chosenKey.KeyHash, perKeyRules)
+				if pkErr != nil {
+					var exceeded *ratelimit.KeyQuotaExhausted
+					if errors.As(pkErr, &exceeded) {
+						// The chosen key's local budget is exhausted. Cool it down so
+						// subsequent requests pick a different key, then return 429.
+						// No retry loop — operator directive.
+						opts.Selector.RecordLocalRateLimit(ctx, chosenKey.KeyHash, exceeded.RetryAfter)
+						send429LimitEnvelope(ch.Out, exceeded)
+					} else {
+						sendGenericErrorEnvelope(ch.Out)
+					}
+					lc.TerminatedBy = usage.TerminatedRateLimited
+					return result, pkErr
+				}
+				perKeyReservation = pkRes
+			}
 		}
 
 		// Stamp pre_upstream_ms once (on first successful key pick).
