@@ -120,12 +120,13 @@ type Policy struct {
 type KeySelection string
 
 const (
-	// KeySelectionRoundRobin distributes traffic evenly across healthy keys in a
-	// rotating order. This is the default for migration safety (previous behavior).
-	KeySelectionRoundRobin KeySelection = "round-robin"
 	// KeySelectionPrioritized drains keys in declaration order: the first healthy
-	// key in the policy's secrets list is always preferred.
+	// key in the policy's secrets list is always preferred. Default — matches the
+	// most common operator request ("drain key 1 fully before key 2").
 	KeySelectionPrioritized KeySelection = "prioritized"
+	// KeySelectionRoundRobin distributes traffic evenly across healthy keys in a
+	// rotating order.
+	KeySelectionRoundRobin KeySelection = "round-robin"
 	// KeySelectionLeastRecentlyUsed prefers the key that was least recently used,
 	// spreading load based on recency rather than a counter.
 	KeySelectionLeastRecentlyUsed KeySelection = "least-recently-used"
@@ -133,8 +134,8 @@ const (
 
 // AllKeySelections enumerates every valid KeySelection value.
 var AllKeySelections = []KeySelection{
-	KeySelectionRoundRobin,
 	KeySelectionPrioritized,
+	KeySelectionRoundRobin,
 	KeySelectionLeastRecentlyUsed,
 }
 
@@ -151,8 +152,8 @@ type PolicySpec struct {
 	SkipDefaultLimits bool                  `yaml:"skipDefaultLimits,omitempty" json:"skipDefaultLimits,omitempty"`
 	Enabled           *bool                 `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
 	// KeySelection controls the strategy used to pick a secret from the healthy pool.
-	// Valid values: "round-robin" (default), "prioritized", "least-recently-used".
-	KeySelection      KeySelection          `yaml:"keySelection,omitempty" json:"keySelection,omitempty" enum:"round-robin,prioritized,least-recently-used" doc:"Key selection strategy for this policy's key pool."`
+	// Valid values: "prioritized" (default), "round-robin", "least-recently-used".
+	KeySelection      KeySelection          `yaml:"keySelection,omitempty" json:"keySelection,omitempty" enum:"prioritized,round-robin,least-recently-used" doc:"Key selection strategy for this policy's key pool. Defaults to 'prioritized' — drain first healthy key in declaration order."`
 }
 
 type Model struct {

@@ -198,7 +198,7 @@ func TestPick_RoundRobin(t *testing.T) {
 		secret("b", "hB"),
 		secret("c", "hC"),
 	}
-	p := pool("rr")
+	p := poolWithStrategy("rr", catalog.KeySelectionRoundRobin)
 	counts := map[string]int{}
 	for i := 0; i < 30; i++ {
 		got, err := sel.Pick(ctx, nil, p, nil, secrets)
@@ -224,7 +224,7 @@ func TestPick_SkipsOpen(t *testing.T) {
 		secret("b", "hB"),
 		secret("c", "hC"),
 	}
-	p := pool("skip")
+	p := poolWithStrategy("skip", catalog.KeySelectionRoundRobin)
 	for i := 0; i < 20; i++ {
 		got, err := sel.Pick(ctx, nil, p, nil, secrets)
 		if err != nil {
@@ -282,7 +282,7 @@ func TestPickConcurrent(t *testing.T) {
 		secret("b", "cB"),
 		secret("c", "cC"),
 	}
-	p := pool("concurrent")
+	p := poolWithStrategy("concurrent", catalog.KeySelectionRoundRobin)
 	var (
 		mu     sync.Mutex
 		counts = map[string]int{}

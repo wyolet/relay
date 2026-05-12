@@ -5,8 +5,8 @@
 // (LRU timestamps).
 //
 // Supported selection strategies (catalog.KeySelection):
-//   - "round-robin" (default) — distribute traffic evenly using a counter.
-//   - "prioritized" — always pick the first healthy key in declaration order.
+//   - "prioritized" (default) — always pick the first healthy key in declaration order.
+//   - "round-robin" — distribute traffic evenly using a counter.
 //   - "least-recently-used" — pick the key with the oldest last-used timestamp.
 package keypool
 
@@ -187,21 +187,20 @@ func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *c
 		return nil, ErrNoHealthyKeys
 	}
 
-	strategy := catalog.KeySelectionRoundRobin
+	strategy := catalog.KeySelectionPrioritized
 	if pool != nil && pool.Spec.KeySelection != "" {
 		strategy = pool.Spec.KeySelection
 	}
 
 	switch strategy {
-	case catalog.KeySelectionPrioritized:
-		// Return the first healthy candidate in declaration order.
-		return healthy[0].secret, nil
+	case catalog.KeySelectionRoundRobin:
+		return s.pickRoundRobin(ctx, pool, healthy)
 
 	case catalog.KeySelectionLeastRecentlyUsed:
 		return s.pickLRU(ctx, pool, healthy)
 
-	default: // "round-robin" or empty
-		return s.pickRoundRobin(ctx, pool, healthy)
+	default: // "prioritized" or empty — first healthy in declaration order.
+		return healthy[0].secret, nil
 	}
 }
 
