@@ -297,6 +297,7 @@ func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 		State:          CircuitClosed,
 		BackoffStep:    0,
 		LastTransition: now,
+		Reason:         "", // clear: key is healthy, prior reason no longer relevant
 	}
 	s.writeRecord(ctx, keyHash, rec)
 	s.log.Info("keypool transition",
@@ -323,6 +324,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.Indefinite = true
 		rec.OpenUntil = time.Time{}
 		rec.LastTransition = now
+		rec.Reason = ReasonUpstreamAuthFailed
 		s.writeRecord(ctx, keyHash, rec)
 		s.log.Info("keypool transition",
 			"request_id", reqid.From(ctx),
@@ -330,6 +332,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 			"from_state", stateName(prior),
 			"to_state", stateName(rec.State),
 			"reason", "401",
+			"cooldown_reason", rec.Reason,
 			"backoff_step", rec.BackoffStep,
 			"open_for_seconds", 0,
 		)
@@ -352,6 +355,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.Indefinite = false
 		rec.OpenUntil = now.Add(retryAfter)
 		rec.LastTransition = now
+		rec.Reason = ReasonUpstreamRateLimited
 		s.writeRecord(ctx, keyHash, rec)
 		s.log.Info("keypool transition",
 			"request_id", reqid.From(ctx),
@@ -359,14 +363,17 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 			"from_state", stateName(prior),
 			"to_state", stateName(rec.State),
 			"reason", "rate_limit_long",
+			"cooldown_reason", rec.Reason,
 			"backoff_step", rec.BackoffStep,
 			"open_for_seconds", int(retryAfter.Seconds()),
 		)
 
 	case FailureServerError, FailureNetwork:
-		reason := "5xx"
+		logReason := "5xx"
+		cooldownReason := ReasonUpstreamServerError
 		if kind == FailureNetwork {
-			reason = "network"
+			logReason = "network"
+			cooldownReason = ReasonUpstreamNetworkError
 		}
 		step := rec.BackoffStep + 1
 		if step >= len(backoffSchedule) {
@@ -378,15 +385,47 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.Indefinite = false
 		rec.OpenUntil = now.Add(dur)
 		rec.LastTransition = now
+		rec.Reason = cooldownReason
 		s.writeRecord(ctx, keyHash, rec)
 		s.log.Info("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
 			"from_state", stateName(prior),
 			"to_state", stateName(rec.State),
-			"reason", reason,
+			"reason", logReason,
+			"cooldown_reason", rec.Reason,
 			"backoff_step", rec.BackoffStep,
 			"open_for_seconds", int(dur.Seconds()),
 		)
 	}
+}
+
+// RecordLocalRateLimit cools down a secret because our own rate-limit rule
+// fired (KeyQuotaExhausted from pkg/ratelimit). Distinct from upstream-driven
+// cooldowns: no backoff escalation, no half-open probe — the duration is
+// deterministic from Retry-After.
+//
+// Used by the pipeline's post-Pick Reserve path (issue #89, future PR).
+func (s *Selector) RecordLocalRateLimit(ctx context.Context, keyHash string, retryAfter time.Duration) {
+	now := s.clock()
+	rec := s.readRecord(ctx, keyHash)
+	prior := rec.State
+	// Preserve existing BackoffStep — local RL is deterministic, not a sign
+	// of key health degradation; don't escalate the backoff ladder.
+	rec.State = CircuitOpen
+	rec.OpenUntil = now.Add(retryAfter)
+	rec.Indefinite = false
+	rec.LastTransition = now
+	rec.Reason = ReasonLocalRateLimited
+	s.writeRecord(ctx, keyHash, rec)
+	s.log.Info("keypool transition",
+		"request_id", reqid.From(ctx),
+		"key_hash", keyHash,
+		"from_state", stateName(prior),
+		"to_state", stateName(rec.State),
+		"reason", "local_rl_exhausted",
+		"cooldown_reason", rec.Reason,
+		"backoff_step", rec.BackoffStep,
+		"open_for_seconds", int(retryAfter.Seconds()),
+	)
 }
