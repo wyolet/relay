@@ -42,7 +42,7 @@ func TestSystemRateLimitsLoad(t *testing.T) {
 		t.Fatalf("validateRateLimits: %v", err)
 	}
 
-	wantNames := []string{"api", "inference", "inference-proxy", "inference-proxy-anonymous"}
+	wantNames := []string{"system-api", "inference", "inference-proxy", "inference-proxy-anonymous"}
 	for _, name := range wantNames {
 		rl, ok := snap.rateLimits[name]
 		if !ok {

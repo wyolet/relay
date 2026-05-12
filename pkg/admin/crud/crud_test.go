@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/humatest"
@@ -131,7 +132,11 @@ func TestGuard_PUT_SystemMirrored_Returns403(t *testing.T) {
 
 	body, _ := json.Marshal(&catalog.RateLimit{
 		Metadata: catalog.Metadata{Name: "sys-rl"},
-		Spec:     catalog.RateLimitSpec{Source: string(catalog.SourceSystemMirrored)},
+		Spec: catalog.RateLimitSpec{
+			Source:   string(catalog.SourceSystemMirrored),
+			Strategy: catalog.StrategySlidingWindow,
+			Window:   time.Minute,
+		},
 	})
 	req := httptest.NewRequest(http.MethodPut,
 		"/control/ratelimits/by-id/00000000-0000-0000-0000-000000000001",
