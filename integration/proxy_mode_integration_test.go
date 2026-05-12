@@ -140,6 +140,37 @@ func TestProxyMode_ProxyAuthed_Happy(t *testing.T) {
 	fx, cleanup := setupFixture(t, dockerURL, uniqueSuffix(t), "token-bucket", 100, 60*time.Second)
 	defer cleanup()
 
+	// ProxyAuthed requires (a) the relay key marked passthroughAllowed=true,
+	// and (b) the global Passthrough singleton enabled. setupFixture creates a
+	// vanilla key; flip both here.
+	restorePassthrough := setPassthrough(t, true, false)
+	defer restorePassthrough()
+
+	// GET the current key to obtain its keyHash/prefix/name, then PUT with
+	// passthroughAllowed=true.
+	keyResp := adminDo(t, http.MethodGet, "/control/keys/by-id/"+fx.keyID, nil)
+	var keyDoc struct {
+		Metadata struct{ Name string } `json:"metadata"`
+		Spec     struct {
+			KeyHash   string `json:"keyHash"`
+			Prefix    string `json:"prefix"`
+			PolicyRef string `json:"policyRef"`
+		} `json:"spec"`
+	}
+	defer keyResp.Body.Close()
+	if err := json.NewDecoder(keyResp.Body).Decode(&keyDoc); err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	adminPut(t, "/control/keys/by-id/"+fx.keyID, map[string]any{
+		"metadata": map[string]any{"name": keyDoc.Metadata.Name},
+		"spec": map[string]any{
+			"keyHash":            keyDoc.Spec.KeyHash,
+			"prefix":             keyDoc.Spec.Prefix,
+			"policyRef":          keyDoc.Spec.PolicyRef,
+			"passthroughAllowed": true,
+		},
+	})
+
 	resp := sendProxyRequest(t, proxyReqOpts{
 		proxyModeHeader: "Proxy",
 		relayKey:        fx.relayKey,
