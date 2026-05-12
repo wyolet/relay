@@ -1,5 +1,5 @@
 apiVersion: relay.wyolet.dev/v1
-kind: Pool
+kind: Policy
 metadata:
   name: openai-default
 spec:

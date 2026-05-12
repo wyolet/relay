@@ -511,9 +511,6 @@ func main() {
 		apianthropic.MessagesHandler(resolver, runAnthropicPipeline),
 	)
 
-	// Mount the operator admin UI at /ui (unauthenticated static assets; PER-274 gates API calls).
-	mountUI(r)
-
 	// Prometheus metrics endpoint. No auth — scrapers reach this over the cluster
 	// network; protecting /metrics is a deployment concern, not application concern.
 	r.Method(http.MethodGet, "/metrics", metrics.Handler())
@@ -539,6 +536,8 @@ func main() {
 			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 		}
 		mountControlHuma(ctrlRouter, adminH, adminCRUDHandlers, cfg.AdminToken, idStore, systemAPIMW)
+		// Operator UI lives on the control listener — same auth boundary, same firewall.
+		mountUI(ctrlRouter)
 		ctrlAddr := ":" + cfg.ControlPort
 		ctrlSrv = &http.Server{Addr: ctrlAddr, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlAddr, "users", len(idStore.Users()))

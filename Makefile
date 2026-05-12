@@ -140,10 +140,13 @@ logs: ## tail relay-a/b logs
 	docker compose $(COMPOSE_DEV_ARGS) logs -f relay-a relay-b
 
 migrate: ## run migrations against dev-stack PG
-	RELAY_PG_DSN=$(PG_DSN) go run ./cmd/relay migrate up
+	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay migrate up
 
-seed: ## seed catalog from deploy/compose/config
-	RELAY_PG_DSN=$(PG_DSN) go run ./cmd/relay seed --from deploy/compose/config --apply
+seed: ## seed catalog from ./config (canonical) — system RLs + providers + users
+	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from config --apply
+
+seed-loadtest: ## seed catalog from deploy/compose/config (load-tester fixtures)
+	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from deploy/compose/config --apply
 
 restart: ## restart relay-a/b + nginx after a rebuild
 	docker compose $(COMPOSE_DEV_ARGS) up -d --build relay-a relay-b

@@ -226,6 +226,11 @@ func dispatchKind(path string, idx int, raw *rawDoc, snap *snapshot) error {
 		snap.policies[name] = &Policy{APIVersion: raw.APIVersion, Kind: raw.Kind, Metadata: raw.Metadata, Spec: spec}
 
 	default:
+		// Identity-owned kinds live alongside catalog YAML in the same seed
+		// directory; identity.LoadYAML picks them up separately.
+		if raw.Kind == "User" {
+			return nil
+		}
 		return fmt.Errorf("%s [doc %d]: unknown kind %q", path, idx, raw.Kind)
 	}
 	return nil
