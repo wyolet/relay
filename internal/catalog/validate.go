@@ -148,6 +148,9 @@ func validateRelayKeys(s *snapshot) error {
 
 func validateSecrets(s *snapshot) error {
 	for _, sec := range s.secrets {
+		if sec.Spec.Tier != "" && lookupUpstreamTier(sec.Spec.Tier) == nil {
+			return fmt.Errorf("Secret %q: tier %q is not a known upstream tier", sec.Metadata.Name, sec.Spec.Tier)
+		}
 		hasEnv := sec.Spec.ValueFrom != nil && sec.Spec.ValueFrom.Env != ""
 		hasVal := sec.Spec.Value != ""
 		// Stored-mode secrets (written via UpsertSecretStored) carry their
@@ -249,6 +252,9 @@ func validateProviders(s *snapshot) error {
 	for _, p := range s.providers {
 		if p.Spec.Default {
 			defaults++
+		}
+		if p.Spec.DefaultTier != "" && lookupUpstreamTier(p.Spec.DefaultTier) == nil {
+			return fmt.Errorf("Provider %q: defaultTier %q is not a known upstream tier", p.Metadata.Name, p.Spec.DefaultTier)
 		}
 		switch p.Spec.Kind {
 		case PKOllama, PKOpenAI, PKAnthropic:
