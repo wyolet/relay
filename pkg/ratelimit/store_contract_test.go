@@ -108,9 +108,16 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 				t.Fatalf("commit %d: %v", i+1, err)
 			}
 		}
-		_, err := l.Reserve(ctx, "test-policy", rules)
+		// 5*20=100 == amount: rate==amount is allowed with strict > comparator.
+		// Reserve one more and commit 1 token to push total to 101 > 100.
+		res6, err := l.Reserve(ctx, "test-policy", rules)
+		if err != nil {
+			t.Fatalf("6th reserve (rate==amount should pass): %v", err)
+		}
+		_ = l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"tokens": 1}})
+		_, err = l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
-			t.Fatalf("expected ErrExceeded after 100 tokens, got %v", err)
+			t.Fatalf("expected ErrExceeded after 101 tokens, got %v", err)
 		}
 	})
 

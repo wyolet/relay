@@ -32,30 +32,28 @@ import (
 //	"leaky-bucket"    — lazy-drain hash {level, last_ms}; refund on cancel
 //	"session-window"  — anchored hash {count, anchor_ms}; refund on cancel
 //	"" (concurrency)  — gauge counter, ignores strategy
+//
+// Comparator invariant: every strategy uses `>` (strictly greater than amount).
+// A value equal to amount is still allowed. Applied uniformly to all meters.
 const reserveLuaScript = `
--- Reserve: per-rule strategy dispatch.
+-- Reserve: 2-phase optimistic protocol.
+-- Phase 1 (decide): loop all rules read-only, compute hypothetical new state.
+--   On any rule exceeding, return immediately — no writes have happened.
+-- Phase 2 (commit): loop pending array, write stashed new state per rule.
+--
+-- Comparator invariant: all strategies use > (strictly greater than amount).
+-- A value equal to amount is still allowed.
+--
 -- ARGV[1]=now_ms, ARGV[2]=rules_json, ARGV[3]=token
 local now_ms   = tonumber(ARGV[1])
 local rules    = cjson.decode(ARGV[2])
 local tok      = ARGV[3]
 
-local inc_con   = {}  -- {key, ttl_ms} — concurrency keys incremented
-local inc_req   = {}  -- {key, ttl_ms} — request/fixed-window keys incremented
-local inc_state = {}  -- {key, field, delta_to_reverse, upper_cap_or_neg1} — TB/LB/SW state hash mutations
+-- pending holds the phase-2 write plan, one entry per rule.
+-- Each entry is a table with a "kind" field plus strategy-specific fields.
+local pending = {}
 
-local function rollback()
-  for _, v in ipairs(inc_req) do redis.call('INCRBY', v[1], -1) end
-  for _, v in ipairs(inc_con) do redis.call('INCRBY', v[1], -1) end
-  for _, s in ipairs(inc_state) do
-    local cur = tonumber(redis.call('HGET', s[1], s[2]))
-    if cur ~= nil then
-      local new_v = cur + s[3]
-      if new_v < 0 then new_v = 0 end
-      if s[4] >= 0 and new_v > s[4] then new_v = s[4] end
-      redis.call('HSET', s[1], s[2], new_v)
-    end
-  end
-end
+-- ── Phase 1: decide ────────────────────────────────────────────────────────
 
 for i, r in ipairs(rules) do
   local meter    = r.meter
@@ -63,23 +61,21 @@ for i, r in ipairs(rules) do
   local win_ms   = tonumber(r.window_ms)
   local strategy = r.strategy or "sliding-window"
 
-  -- ── concurrency: gauge counter, strategy ignored ───────────────────────────
+  -- ── concurrency: gauge counter, strategy ignored ─────────────────────────
   if meter == "concurrency" then
     local con_key = KEYS[r.con_key_idx]
     local ttl_ms  = win_ms * 5
 
-    local new_val = redis.call('INCRBY', con_key, 1)
-    redis.call('PEXPIRE', con_key, ttl_ms)
+    local cur = tonumber(redis.call('GET', con_key) or "0") or 0
+    local new_val = cur + 1
 
     if new_val > amount then
-      redis.call('INCRBY', con_key, -1)
-      rollback()
       return cjson.encode({exceeded=true, retry_after_ms=win_ms,
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
-    table.insert(inc_con, {con_key, ttl_ms})
+    table.insert(pending, {kind="con", key=con_key, ttl_ms=ttl_ms})
 
-  -- ── tokens / tokens.X: peek only at Reserve; Commit increments ─────────────
+  -- ── tokens / tokens.X: peek only at Reserve; Commit increments ───────────
   elseif meter == "tokens" or meter:sub(1,7) == "tokens." then
     if strategy == "sliding-window" then
       local cur_key  = KEYS[r.cur_key_idx]
@@ -89,40 +85,33 @@ for i, r in ipairs(rules) do
       local bucket_start_ms = math.floor(now_ms / win_ms) * win_ms
       local frac = (now_ms - bucket_start_ms) / win_ms
       local rate  = cur_val + prev_val * (1.0 - frac)
-      if rate >= amount then
-        rollback()
+      if rate > amount then
         local retry_ms = win_ms - (now_ms - bucket_start_ms)
         return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
           rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
       end
-      -- no inc_req entry — tokens incremented at Commit
-    else
-      -- token-bucket/leaky-bucket: post-hoc too; same peek: always passes at
-      -- Reserve time (actual deduct happens at Commit). No pre-check for now.
-      -- This matches the sliding-window tokens pattern.
+      -- no pending entry — tokens incremented at Commit
     end
+    -- other strategies for tokens meter: always pass at Reserve
 
-  -- ── requests meter: strategy-specific ─────────────────────────────────────
+  -- ── requests meter: strategy-specific ────────────────────────────────────
   elseif strategy == "sliding-window" then
     local cur_key  = KEYS[r.cur_key_idx]
     local prev_key = KEYS[r.prev_key_idx]
     local ttl_ms   = win_ms * 2
 
-    local new_cur = redis.call('INCRBY', cur_key, 1)
-    redis.call('PEXPIRE', cur_key, ttl_ms)
-
+    local cur_val  = tonumber(redis.call('GET', cur_key) or "0") or 0
     local prev_val = tonumber(redis.call('GET', prev_key) or "0") or 0
     local bucket_start_ms = math.floor(now_ms / win_ms) * win_ms
     local elapsed_ms = now_ms - bucket_start_ms
     local frac = elapsed_ms / win_ms
+    local new_cur = cur_val + 1
     local rate = new_cur + prev_val * (1.0 - frac)
 
     if rate > amount then
-      redis.call('INCRBY', cur_key, -1)
-      rollback()
       local retry_ms = win_ms - elapsed_ms
       if prev_val > 0 then
-        local need = (amount - (new_cur - 1)) / prev_val
+        local need = (amount - cur_val) / prev_val
         local frac_t = 1.0 - need
         if frac_t > 0 and frac_t < 1.0 then
           local wait = frac_t * win_ms - elapsed_ms
@@ -132,29 +121,24 @@ for i, r in ipairs(rules) do
       return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
-    table.insert(inc_req, {cur_key, ttl_ms})
+    table.insert(pending, {kind="sw_req", key=cur_key, ttl_ms=ttl_ms})
 
   elseif strategy == "fixed-window" then
     local fw_key      = KEYS[r.fw_key_idx]
     local ttl_ms      = win_ms * 2
     local bucket_start_ms = math.floor(now_ms / win_ms) * win_ms
 
-    local new_val = redis.call('INCRBY', fw_key, 1)
-    redis.call('PEXPIRE', fw_key, ttl_ms)
+    local cur = tonumber(redis.call('GET', fw_key) or "0") or 0
+    local new_val = cur + 1
 
     if new_val > amount then
-      redis.call('INCRBY', fw_key, -1)
-      rollback()
       local retry_ms = win_ms - (now_ms - bucket_start_ms)
       return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
-    table.insert(inc_req, {fw_key, ttl_ms})
+    table.insert(pending, {kind="fw", key=fw_key, ttl_ms=ttl_ms})
 
   elseif strategy == "token-bucket" then
-    -- State hash: {tokens (scaled *1000 as int), last_ms}
-    -- refill_rate = amount / win_ms  tokens/ms
-    -- TTL = win_ms * 2
     local state_key = KEYS[r.tb_key_idx]
     local ttl_ms    = win_ms * 2
 
@@ -170,7 +154,6 @@ for i, r in ipairs(rules) do
       tokens  = tokens_i
     end
 
-    -- lazy refill
     local elapsed = now_ms - last_ms
     if elapsed > 0 then
       local refill = elapsed * amount * 1000 / win_ms
@@ -178,23 +161,17 @@ for i, r in ipairs(rules) do
       if tokens > amount * 1000 then tokens = amount * 1000 end
     end
 
-    -- cost = 1 request (1000 scaled)
     local cost = 1000
     if tokens < cost then
       local retry_ms = math.ceil((cost - tokens) * win_ms / (amount * 1000))
-      rollback()
       return cjson.encode({exceeded=true, retry_after_ms=retry_ms,
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
 
-    tokens = tokens - cost
-    redis.call('HMSET', state_key, 'tokens', tokens, 'last_ms', now_ms)
-    redis.call('PEXPIRE', state_key, ttl_ms)
-    table.insert(inc_state, {state_key, 'tokens', cost, amount * 1000})
+    local new_tokens = tokens - cost
+    table.insert(pending, {kind="tb", key=state_key, new_tokens=new_tokens, now=now_ms, ttl_ms=ttl_ms})
 
   elseif strategy == "leaky-bucket" then
-    -- State hash: {level (scaled *1000), last_ms}
-    -- leak_rate = amount / win_ms  per ms
     local state_key = KEYS[r.lb_key_idx]
     local ttl_ms    = win_ms * 2
 
@@ -210,7 +187,6 @@ for i, r in ipairs(rules) do
       level = level_i
     end
 
-    -- lazy drain
     local elapsed = now_ms - last_ms
     if elapsed > 0 then
       local drained = elapsed * amount * 1000 / win_ms
@@ -221,19 +197,14 @@ for i, r in ipairs(rules) do
     local cost = 1000
     if level + cost > amount * 1000 then
       local retry_ms = math.ceil((level + cost - amount * 1000) * win_ms / (amount * 1000))
-      rollback()
       return cjson.encode({exceeded=true, retry_after_ms=retry_ms,
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
 
-    level = level + cost
-    redis.call('HMSET', state_key, 'level', level, 'last_ms', now_ms)
-    redis.call('PEXPIRE', state_key, ttl_ms)
-    table.insert(inc_state, {state_key, 'level', -cost, -1})
+    local new_level = level + cost
+    table.insert(pending, {kind="lb", key=state_key, new_level=new_level, now=now_ms, ttl_ms=ttl_ms})
 
   elseif strategy == "session-window" then
-    -- State hash: {count, anchor_ms}. Window arms on first request after a
-    -- reset and runs for win_ms; counter is a hard integer (no refill).
     local state_key = KEYS[r.sw_key_idx]
     local ttl_ms    = win_ms * 2
 
@@ -250,17 +221,33 @@ for i, r in ipairs(rules) do
       anchor_ms = anchor_v
     end
 
-    count = count + 1
-    if count > amount then
-      rollback()
+    local new_count = count + 1
+    if new_count > amount then
       local retry_ms = anchor_ms + win_ms - now_ms
       return cjson.encode({exceeded=true, retry_after_ms=math.floor(retry_ms),
         rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
     end
 
-    redis.call('HMSET', state_key, 'count', count, 'anchor_ms', anchor_ms)
-    redis.call('PEXPIRE', state_key, ttl_ms)
-    table.insert(inc_state, {state_key, 'count', -1, -1})
+    table.insert(pending, {kind="sw", key=state_key, new_count=new_count, anchor_ms=anchor_ms, ttl_ms=ttl_ms})
+  end
+end
+
+-- ── Phase 2: commit ────────────────────────────────────────────────────────
+-- Only reached when every rule passed. Write all stashed state now.
+
+for _, p in ipairs(pending) do
+  if p.kind == "con" or p.kind == "sw_req" or p.kind == "fw" then
+    redis.call('INCRBY', p.key, 1)
+    redis.call('PEXPIRE', p.key, p.ttl_ms)
+  elseif p.kind == "tb" then
+    redis.call('HMSET', p.key, 'tokens', p.new_tokens, 'last_ms', p.now)
+    redis.call('PEXPIRE', p.key, p.ttl_ms)
+  elseif p.kind == "lb" then
+    redis.call('HMSET', p.key, 'level', p.new_level, 'last_ms', p.now)
+    redis.call('PEXPIRE', p.key, p.ttl_ms)
+  elseif p.kind == "sw" then
+    redis.call('HMSET', p.key, 'count', p.new_count, 'anchor_ms', p.anchor_ms)
+    redis.call('PEXPIRE', p.key, p.ttl_ms)
   end
 end
 
@@ -470,7 +457,25 @@ func RegisterScripts(m *kv.Mem) {
 	m.RegisterScript("limit.commit", memCommitImpl)
 }
 
+// pendingEntry is one phase-2 write planned during phase-1 decide.
+type pendingEntry struct {
+	kind     string // "con", "sw_req", "fw", "tb", "lb", "sw"
+	key      string
+	ttl      time.Duration
+	// token-bucket
+	newTokens int64
+	nowMs     int64
+	// leaky-bucket
+	newLevel int64
+	// session-window
+	newCount int64
+	anchorMs int64
+}
+
 // memReserveImpl is the Go emulator for reserveLuaScript.
+//
+// Comparator invariant: all strategies use > (strictly greater than amount).
+// Applied uniformly; a value equal to amount is still allowed.
 func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []any) ([]byte, error) {
 	if len(args) < 3 {
 		return nil, fmt.Errorf("limit.reserve: expected 3 args, got %d", len(args))
@@ -493,62 +498,27 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 		return nil, fmt.Errorf("limit.reserve: parse rules: %w", err)
 	}
 
-	type incEntry struct{ key string }
-	type stateEntry struct {
-		key      string
-		field    string
-		delta    int64 // amount to add to current to reverse the original mutation
-		upperCap int64 // upper bound after reversal; -1 = no cap
-	}
-	var incReq []incEntry
-	var incCon []incEntry
-	var incState []stateEntry
-
 	var result reserveResult
 
 	lockErr := store.WithLock(ctx, keys, func(ctx context.Context) error {
-		rollback := func() {
-			for _, v := range incReq {
-				_, _ = store.Incr(ctx, v.key, -1)
-			}
-			for _, v := range incCon {
-				_, _ = store.Incr(ctx, v.key, -1)
-			}
-			for _, s := range incState {
-				cur, err := memHGetInt(ctx, store, s.key, s.field)
-				if err != nil || cur < 0 {
-					continue
-				}
-				newV := cur + s.delta
-				if newV < 0 {
-					newV = 0
-				}
-				if s.upperCap >= 0 && newV > s.upperCap {
-					newV = s.upperCap
-				}
-				_ = store.HSet(ctx, s.key, s.field, []byte(strconv.FormatInt(newV, 10)), 0)
-			}
-		}
+		// ── Phase 1: decide ──────────────────────────────────────────────────
+		var pending []pendingEntry
 
 		for _, r := range rules {
 			amount := r.Amount
 			winMs := r.WindowMs
 			strategy := r.Strategy
+			ttl := time.Duration(winMs*2) * time.Millisecond
 
 			switch r.Meter {
 			case "concurrency":
 				conKey := keys[r.ConKeyIdx-1]
-				ttl := time.Duration(winMs*5) * time.Millisecond
+				conTTL := time.Duration(winMs*5) * time.Millisecond
 
-				newVal, err := store.Incr(ctx, conKey, 1)
-				if err != nil {
-					return err
-				}
-				_ = store.Expire(ctx, conKey, ttl)
+				cur, _ := memReadCounter(ctx, store, conKey)
+				newVal := cur + 1
 
 				if newVal > amount {
-					_, _ = store.Incr(ctx, conKey, -1)
-					rollback()
 					result = reserveResult{
 						Exceeded:     true,
 						RetryAfterMs: winMs,
@@ -558,7 +528,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 					}
 					return nil
 				}
-				incCon = append(incCon, incEntry{conKey})
+				pending = append(pending, pendingEntry{kind: "con", key: conKey, ttl: conTTL})
 
 			default:
 				// tokens / tokens.X — always post-hoc; for sliding-window peek:
@@ -571,8 +541,7 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						bucketStart := (nowMs / winMs) * winMs
 						frac := float64(nowMs-bucketStart) / float64(winMs)
 						rate := float64(curVal) + float64(prevVal)*(1.0-frac)
-						if rate >= float64(amount) {
-							rollback()
+						if rate > float64(amount) {
 							retryMs := float64(winMs) - float64(nowMs-bucketStart)
 							result = reserveResult{
 								Exceeded:     true,
@@ -593,26 +562,19 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 				case StrategySlidingWindow:
 					curKey := keys[r.CurKeyIdx-1]
 					prevKey := keys[r.PrevKeyIdx-1]
-					ttl := time.Duration(winMs*2) * time.Millisecond
 
-					newCur, err := store.Incr(ctx, curKey, 1)
-					if err != nil {
-						return err
-					}
-					_ = store.Expire(ctx, curKey, ttl)
-
+					curVal, _ := memReadCounter(ctx, store, curKey)
 					prevVal, _ := memReadCounter(ctx, store, prevKey)
 					bucketStart := (nowMs / winMs) * winMs
 					elapsedMs := nowMs - bucketStart
 					frac := float64(elapsedMs) / float64(winMs)
+					newCur := curVal + 1
 					rate := float64(newCur) + float64(prevVal)*(1.0-frac)
 
 					if rate > float64(amount) {
-						_, _ = store.Incr(ctx, curKey, -1)
-						rollback()
 						retryMs := float64(winMs) - float64(elapsedMs)
 						if prevVal > 0 {
-							need := float64(amount-(newCur-1)) / float64(prevVal)
+							need := float64(amount-curVal) / float64(prevVal)
 							fracT := 1.0 - need
 							if fracT > 0 && fracT < 1.0 {
 								wait := fracT*float64(winMs) - float64(elapsedMs)
@@ -630,22 +592,16 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						}
 						return nil
 					}
-					incReq = append(incReq, incEntry{curKey})
+					pending = append(pending, pendingEntry{kind: "sw_req", key: curKey, ttl: ttl})
 
 				case StrategyFixedWindow:
 					fwKey := keys[r.FwKeyIdx-1]
-					ttl := time.Duration(winMs*2) * time.Millisecond
 					bucketStart := (nowMs / winMs) * winMs
 
-					newVal, err := store.Incr(ctx, fwKey, 1)
-					if err != nil {
-						return err
-					}
-					_ = store.Expire(ctx, fwKey, ttl)
+					cur, _ := memReadCounter(ctx, store, fwKey)
+					newVal := cur + 1
 
 					if newVal > amount {
-						_, _ = store.Incr(ctx, fwKey, -1)
-						rollback()
 						retryMs := winMs - (nowMs - bucketStart)
 						result = reserveResult{
 							Exceeded:     true,
@@ -656,20 +612,13 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						}
 						return nil
 					}
-					incReq = append(incReq, incEntry{fwKey})
+					pending = append(pending, pendingEntry{kind: "fw", key: fwKey, ttl: ttl})
 
 				case StrategyTokenBucket:
 					stateKey := keys[r.TbKeyIdx-1]
-					ttl := time.Duration(winMs*2) * time.Millisecond
 
-					tokensI, err := memHGetInt(ctx, store, stateKey, "tokens")
-					if err != nil {
-						return err
-					}
-					lastMs, err := memHGetInt(ctx, store, stateKey, "last_ms")
-					if err != nil {
-						return err
-					}
+					tokensI, _ := memHGetInt(ctx, store, stateKey, "tokens")
+					lastMs, _ := memHGetInt(ctx, store, stateKey, "last_ms")
 
 					var tokens int64
 					if tokensI < 0 { // key absent
@@ -690,7 +639,6 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 
 					const cost = int64(1000)
 					if tokens < cost {
-						rollback()
 						retryMs := int64(math.Ceil(float64(cost-tokens) * float64(winMs) / float64(amount*1000)))
 						result = reserveResult{
 							Exceeded:     true,
@@ -701,23 +649,16 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						}
 						return nil
 					}
-					tokens -= cost
-					_ = memHSetInt(ctx, store, stateKey, "tokens", tokens, ttl)
-					_ = memHSetInt(ctx, store, stateKey, "last_ms", nowMs, ttl)
-					incState = append(incState, stateEntry{key: stateKey, field: "tokens", delta: cost, upperCap: amount * 1000})
+					pending = append(pending, pendingEntry{
+						kind: "tb", key: stateKey, ttl: ttl,
+						newTokens: tokens - cost, nowMs: nowMs,
+					})
 
 				case StrategyLeakyBucket:
 					stateKey := keys[r.LbKeyIdx-1]
-					ttl := time.Duration(winMs*2) * time.Millisecond
 
-					levelI, err := memHGetInt(ctx, store, stateKey, "level")
-					if err != nil {
-						return err
-					}
-					lastMs, err := memHGetInt(ctx, store, stateKey, "last_ms")
-					if err != nil {
-						return err
-					}
+					levelI, _ := memHGetInt(ctx, store, stateKey, "level")
+					lastMs, _ := memHGetInt(ctx, store, stateKey, "last_ms")
 
 					var level int64
 					if levelI < 0 { // key absent
@@ -738,7 +679,6 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 
 					const cost = int64(1000)
 					if level+cost > amount*1000 {
-						rollback()
 						retryMs := int64(math.Ceil(float64(level+cost-amount*1000) * float64(winMs) / float64(amount*1000)))
 						result = reserveResult{
 							Exceeded:     true,
@@ -749,23 +689,16 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						}
 						return nil
 					}
-					level += cost
-					_ = memHSetInt(ctx, store, stateKey, "level", level, ttl)
-					_ = memHSetInt(ctx, store, stateKey, "last_ms", nowMs, ttl)
-					incState = append(incState, stateEntry{key: stateKey, field: "level", delta: -cost, upperCap: -1})
+					pending = append(pending, pendingEntry{
+						kind: "lb", key: stateKey, ttl: ttl,
+						newLevel: level + cost, nowMs: nowMs,
+					})
 
 				case StrategySessionWindow:
 					stateKey := keys[r.SwKeyIdx-1]
-					ttl := time.Duration(winMs*2) * time.Millisecond
 
-					countV, err := memHGetInt(ctx, store, stateKey, "count")
-					if err != nil {
-						return err
-					}
-					anchorV, err := memHGetInt(ctx, store, stateKey, "anchor_ms")
-					if err != nil {
-						return err
-					}
+					countV, _ := memHGetInt(ctx, store, stateKey, "count")
+					anchorV, _ := memHGetInt(ctx, store, stateKey, "anchor_ms")
 
 					var count, anchorMs int64
 					if countV < 0 || anchorV < 0 || nowMs >= anchorV+winMs {
@@ -776,9 +709,8 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						anchorMs = anchorV
 					}
 
-					count++
-					if count > amount {
-						rollback()
+					newCount := count + 1
+					if newCount > amount {
 						retryMs := anchorMs + winMs - nowMs
 						result = reserveResult{
 							Exceeded:     true,
@@ -789,12 +721,33 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 						}
 						return nil
 					}
-					_ = memHSetInt(ctx, store, stateKey, "count", count, ttl)
-					_ = memHSetInt(ctx, store, stateKey, "anchor_ms", anchorMs, ttl)
-					incState = append(incState, stateEntry{key: stateKey, field: "count", delta: -1, upperCap: -1})
+					pending = append(pending, pendingEntry{
+						kind: "sw", key: stateKey, ttl: ttl,
+						newCount: newCount, anchorMs: anchorMs,
+					})
 				}
 			}
 		}
+
+		// ── Phase 2: commit ──────────────────────────────────────────────────
+		// Only reached when every rule passed.
+		for _, p := range pending {
+			switch p.kind {
+			case "con", "sw_req", "fw":
+				_, _ = store.Incr(ctx, p.key, 1)
+				_ = store.Expire(ctx, p.key, p.ttl)
+			case "tb":
+				_ = memHSetInt(ctx, store, p.key, "tokens", p.newTokens, p.ttl)
+				_ = memHSetInt(ctx, store, p.key, "last_ms", p.nowMs, p.ttl)
+			case "lb":
+				_ = memHSetInt(ctx, store, p.key, "level", p.newLevel, p.ttl)
+				_ = memHSetInt(ctx, store, p.key, "last_ms", p.nowMs, p.ttl)
+			case "sw":
+				_ = memHSetInt(ctx, store, p.key, "count", p.newCount, p.ttl)
+				_ = memHSetInt(ctx, store, p.key, "anchor_ms", p.anchorMs, p.ttl)
+			}
+		}
+
 		result = reserveResult{Exceeded: false, Token: token}
 		return nil
 	})
