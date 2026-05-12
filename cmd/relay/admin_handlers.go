@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -482,10 +481,14 @@ func rateLimitGuard(_ context.Context, existing, proposed *catalog.RateLimit) er
 	}
 }
 
-// enforceSystemRateLimitAllowlist rejects any field change outside the
-// allowed set: spec.enabled and spec.rules[i].amount (index-matched).
+// enforceSystemRateLimitAllowlist rejects any change to identity-style fields
+// on system/provider-owned RateLimits. The rules array is operator-tunable
+// (add, remove, edit any rule field) — Relay's runtime usage keys off the
+// bucket NAME, not the rule shape, so rule edits do not break wiring.
+//
+// Locked: name, owner, description, displayName.
+// Editable: enabled, rules[] (count and contents).
 func enforceSystemRateLimitAllowlist(existing, proposed *catalog.RateLimit) error {
-	// Name / owner / description / displayName must not change.
 	if proposed.Metadata.Name != existing.Metadata.Name {
 		return huma.NewError(http.StatusForbidden,
 			"system/provider-owned RateLimit: metadata.name cannot be changed")
@@ -501,30 +504,6 @@ func enforceSystemRateLimitAllowlist(existing, proposed *catalog.RateLimit) erro
 	if proposed.Metadata.DisplayName != existing.Metadata.DisplayName {
 		return huma.NewError(http.StatusForbidden,
 			"system/provider-owned RateLimit: metadata.displayName cannot be changed")
-	}
-
-	// Rule count must be unchanged.
-	er := existing.Spec.Rules
-	pr := proposed.Spec.Rules
-	if len(pr) != len(er) {
-		return huma.NewError(http.StatusForbidden,
-			"system/provider-owned RateLimit: rule count cannot be changed (adding/removing rules is not permitted)")
-	}
-
-	// Each rule: only amount may change; meter/window/strategy must be unchanged.
-	for i := range er {
-		if pr[i].Meter != er[i].Meter {
-			return huma.NewError(http.StatusForbidden,
-				fmt.Sprintf("system/provider-owned RateLimit: rules[%d].meter cannot be changed", i))
-		}
-		if pr[i].Window != er[i].Window {
-			return huma.NewError(http.StatusForbidden,
-				fmt.Sprintf("system/provider-owned RateLimit: rules[%d].window cannot be changed", i))
-		}
-		if pr[i].Strategy != er[i].Strategy {
-			return huma.NewError(http.StatusForbidden,
-				fmt.Sprintf("system/provider-owned RateLimit: rules[%d].strategy cannot be changed", i))
-		}
 	}
 	return nil
 }
