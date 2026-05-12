@@ -36,6 +36,12 @@ type Request struct {
 	// The raw value is never logged.
 	PassthroughAuth string
 
+	// PassthroughHeaders are inbound headers (anthropic-beta, user-agent, x-app,
+	// x-claude-code-session-id, etc.) that must travel to the upstream verbatim.
+	// Captured by the transport layer; injected into the provider call via
+	// provider-specific context extras (e.g. anthropic.WithRequestExtras).
+	PassthroughHeaders map[string]string
+
 	// --- domain config (set from routing.RequestPlan by the HTTP handler) ---
 
 	Provider    *catalog.Provider

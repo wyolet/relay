@@ -35,3 +35,4 @@ bench/litellm/.env
 bench/*.json
 
 /replay
+error.log
