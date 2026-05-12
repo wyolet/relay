@@ -110,6 +110,7 @@ func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 		},
 		ResourceID:      func(v *catalog.Provider) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Provider) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Provider) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Provider) catalog.Patch {
 			return catalog.Patch{UpsertProvider: v}
 		},
@@ -170,6 +171,7 @@ func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog
 		},
 		ResourceID:      func(v *catalog.Policy) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Policy) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Policy) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Policy) catalog.Patch {
 			return catalog.Patch{UpsertPolicy: v}
 		},
@@ -230,6 +232,7 @@ func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		},
 		ResourceID:      func(v *catalog.Model) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Model) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Model) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Model) catalog.Patch {
 			return catalog.Patch{UpsertModel: v}
 		},
@@ -290,6 +293,7 @@ func routeKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		},
 		ResourceID:      func(v *catalog.Route) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Route) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Route) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Route) catalog.Patch {
 			return catalog.Patch{UpsertRoute: v}
 		},
@@ -350,6 +354,7 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		},
 		ResourceID:      func(v *catalog.RateLimit) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.RateLimit) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.RateLimit) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.RateLimit) catalog.Patch {
 			return catalog.Patch{UpsertRateLimit: v}
 		},
@@ -443,6 +448,7 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 		},
 		ResourceID:      func(v *catalog.RelayKey) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.RelayKey) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.RelayKey) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.RelayKey) catalog.Patch {
 			return catalog.Patch{UpsertRelayKey: v}
 		},

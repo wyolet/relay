@@ -107,4 +107,8 @@ type Kind[T any] struct {
 	// mutation by returning an error (use huma.NewError for a specific HTTP
 	// status, e.g. 403). Optional; nil disables the check.
 	Guard func(ctx context.Context, existing, proposed T) error
+
+	// Owner extracts the resource owner for list filtering. Optional; when nil,
+	// the ?ownerKind / ?ownerId query params are accepted but ignored.
+	Owner func(T) catalog.Owner
 }
