@@ -5,7 +5,6 @@
 //   - Limiter, Reservation, ExceededError, ErrExceeded, Observations, New
 //   - l.Reserve(ctx, poolName, []catalog.ResolvedRule)
 //   - l.Commit(ctx, *Reservation, Observations)
-//   - l.RemainingByMeter(ctx, poolName, []catalog.ResolvedRule)
 //   - RegisterScripts(*kv.Mem)
 //
 // The Limiter is a wrapper struct (not a type alias) because the Reserve/Commit
@@ -113,20 +112,6 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		Cancelled: obs.Cancelled,
 	}
 	return l.inner.Commit(ctx, res.inner, pkgObs)
-}
-
-// RemainingByMeter returns remaining capacity per meter.
-func (l *Limiter) RemainingByMeter(ctx context.Context, poolName string, rules []catalog.ResolvedRule) (map[catalog.Meter]int64, error) {
-	scope := "policy:" + poolName
-	raw, err := l.inner.RemainingByMeter(ctx, scope, toRules(rules))
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[catalog.Meter]int64, len(raw))
-	for k, v := range raw {
-		out[catalog.Meter(k)] = v
-	}
-	return out, nil
 }
 
 // toRules translates []catalog.ResolvedRule to []pkgrl.Rule.

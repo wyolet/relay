@@ -272,7 +272,7 @@ func main() {
 	}
 
 	limiter := ratelimit.New(st, slog.Default(), nil)
-	sel := keypool.New(st, slog.Default(), nil, limiter, catalogStore, nil)
+	sel := keypool.New(st, slog.Default(), nil, nil)
 
 	reg := provider.NewRegistry()
 	for _, p := range catalogStore.Providers() {

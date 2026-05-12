@@ -249,56 +249,6 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 	return nil
 }
 
-// RemainingByMeter returns the smallest remaining capacity per meter across rules.
-// scope must match the value used in Reserve for the same rules.
-func (l *Limiter) RemainingByMeter(ctx context.Context, scope string, rules []Rule) (map[string]int64, error) {
-	now := l.clock()
-	result := make(map[string]int64)
-
-	for _, rule := range rules {
-		w := rule.Window
-		amount := rule.Amount
-		cur, prev := windowBuckets(now, w)
-		frac := fractionElapsed(now, cur, w)
-
-		m := rule.Meter
-		var rate float64
-
-		switch {
-		case m == "concurrency":
-			cVal, err := readCounter(ctx, l.store, concurrencyKey(scope, rule))
-			if err != nil {
-				return nil, err
-			}
-			rate = float64(cVal)
-		default:
-			// requests, tokens, tokens.X — sliding window
-			curKey := bucketKey(scope, rule, cur)
-			prevKey := bucketKey(scope, rule, prev)
-			curVal, err := readCounter(ctx, l.store, curKey)
-			if err != nil {
-				return nil, err
-			}
-			prevVal, err := readCounter(ctx, l.store, prevKey)
-			if err != nil {
-				return nil, err
-			}
-			rate = interpolatedRate(curVal, prevVal, frac)
-		}
-
-		remaining := amount - int64(rate)
-		if remaining < 0 {
-			remaining = 0
-		}
-
-		if existing, ok := result[m]; !ok || remaining < existing {
-			result[m] = remaining
-		}
-	}
-
-	return result, nil
-}
-
 // findRule looks up a rule by its identifying fields; returns a synthesized Rule
 // if not found (avoids nil issues in error paths).
 func findRule(rules []Rule, ruleKey, ruleName, meter string) Rule {

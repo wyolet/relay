@@ -1,18 +1,25 @@
-// Package keypool implements per-key circuit-breaker state and round-robin
+// Package keypool implements per-key circuit-breaker state and configurable
 // Pool selection over healthy keys. State is persisted in pkg/state under
-// "secret_health:<keyHash>" (circuit records) and "pool_rr:<poolName>"
-// (round-robin counters).
+// "secret_health:<keyHash>" (circuit records), "pool_rr:<poolName>"
+// (round-robin counters), and "pool_lru:<poolName>:<keyHash>"
+// (LRU timestamps).
+//
+// Supported selection strategies (catalog.KeySelection):
+//   - "round-robin" (default) — distribute traffic evenly using a counter.
+//   - "prioritized" — always pick the first healthy key in declaration order.
+//   - "least-recently-used" — pick the key with the oldest last-used timestamp.
 package keypool
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand"
+	"strconv"
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
 )
@@ -38,7 +45,13 @@ const (
 )
 
 var ErrNoHealthyKeys = errors.New("keypool: no healthy keys in pool")
-var ErrPoolOutOfCapacity = errors.New("keypool: pool out of capacity (all secrets at zero remaining quota)")
+
+// candidate holds a healthy Secret alongside its circuit record.
+type candidate struct {
+	secret  *catalog.Secret
+	rec     circuitRecord
+	promote bool
+}
 
 // backoffSchedule is seconds per step, capped at 60.
 var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
@@ -52,31 +65,31 @@ const (
 	// index so staleness is harmless, but a long TTL lets Redis reclaim keys
 	// from deleted pools instead of accumulating indefinitely.
 	ttlRoundRobin = 30 * 24 * time.Hour
+
+	// ttlLRU is the TTL on pool_lru timestamps. Long enough to survive between
+	// pool deployments; staleness is harmless (treated as never-used).
+	ttlLRU = 30 * 24 * time.Hour
 )
 
 // Selector picks Secrets from Pools and tracks per-key circuit-breaker state.
 type Selector struct {
-	state   kv.Store
-	log     *slog.Logger
-	clock   func() time.Time
-	limiter *ratelimit.Limiter
-	cfg     catalog.Store
-	rng     *rand.Rand
+	state kv.Store
+	log   *slog.Logger
+	clock func() time.Time
+	rng   *rand.Rand
 }
 
-// New constructs a Selector. clock, limiter, cfg, and rng may be nil.
-// When limiter and cfg are nil, Pick falls back to round-robin (M2 behavior).
+// New constructs a Selector. clock and rng may be nil.
 // When rng is nil, a new rand seeded from time.Now().UnixNano() is used.
-func New(s kv.Store, log *slog.Logger, clock func() time.Time, limiter *ratelimit.Limiter, cfg catalog.Store, rng *rand.Rand) *Selector {
+func New(s kv.Store, log *slog.Logger, clock func() time.Time, rng *rand.Rand) *Selector {
 	if clock == nil {
 		clock = time.Now
 	}
 	if rng == nil {
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	return &Selector{state: s, log: log, clock: clock, limiter: limiter, cfg: cfg, rng: rng}
+	return &Selector{state: s, log: log, clock: clock, rng: rng}
 }
-
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) circuitRecord {
 	b, err := s.state.Get(ctx, circuitKey(keyHash))
@@ -105,24 +118,40 @@ func (s *Selector) writeRecord(ctx context.Context, keyHash string, r circuitRec
 	}
 }
 
-// Pick returns a healthy Secret from the pool. When a limiter and config store
-// are configured, it uses quota-aware weighted-random selection; otherwise it
-// falls back to round-robin (M2 behavior).
+// lruKey returns the Redis key used to store the last-use timestamp for a
+// secret within a named pool.
+func lruKey(poolName, keyHash string) string {
+	return fmt.Sprintf("{pool_lru:%s}:%s", poolName, keyHash)
+}
+
+// Pick returns a healthy Secret from pool. The selection strategy is
+// determined by pool.Spec.KeySelection (default: round-robin).
+//
+// exclude is an optional list of secrets to skip even if healthy (e.g. for
+// retry-with-exclusion in future callers). Pass nil to skip the check.
 //
 // Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
 // eligible. Concurrent Picks may both pick the same half-open key; the
-// caller's RecordSuccess/RecordFailure resolves the outcome (acceptable in M2).
-func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *catalog.Policy, model *catalog.Model, secrets []*catalog.Secret) (*catalog.Secret, error) {
+// caller's RecordSuccess/RecordFailure resolves the outcome (acceptable).
+func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *catalog.Policy, model *catalog.Model, secrets []*catalog.Secret, exclude ...[]*catalog.Secret) (*catalog.Secret, error) {
 	now := s.clock()
 
-	type candidate struct {
-		secret  *catalog.Secret
-		rec     circuitRecord
-		promote bool
+	// Build exclude set for O(1) lookup.
+	var excludeSet map[string]struct{}
+	if len(exclude) > 0 && len(exclude[0]) > 0 {
+		excludeSet = make(map[string]struct{}, len(exclude[0]))
+		for _, sec := range exclude[0] {
+			excludeSet[sec.KeyHash] = struct{}{}
+		}
 	}
 
 	var healthy []candidate
 	for _, sec := range secrets {
+		if excludeSet != nil {
+			if _, skip := excludeSet[sec.KeyHash]; skip {
+				continue
+			}
+		}
 		rec := s.readRecord(ctx, sec.KeyHash)
 
 		switch rec.State {
@@ -158,68 +187,26 @@ func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *c
 		return nil, ErrNoHealthyKeys
 	}
 
-	// Weighted-random when limiter and cfg are available.
-	if s.limiter != nil && s.cfg != nil {
-		weights := make([]int64, len(healthy))
-		anyRules := false
-		for i, c := range healthy {
-			rules := s.cfg.RateLimitsForRequest(provider, pool, model, c.secret)
-			if len(rules) == 0 {
-				weights[i] = -1 // sentinel: no rules → unbounded
-				continue
-			}
-			anyRules = true
-			remaining, err := s.limiter.RemainingByMeter(ctx, pool.Metadata.Name, rules)
-			if err != nil {
-				weights[i] = -1
-				continue
-			}
-			w := int64(-1)
-			if v, ok := remaining[catalog.MeterRequests]; ok {
-				if w < 0 || v < w {
-					w = v
-				}
-			}
-			if v, ok := remaining[catalog.MeterTokens]; ok {
-				if w < 0 || v < w {
-					w = v
-				}
-			}
-			if w < 0 {
-				// Only concurrency or unknown meters → treat as unbounded.
-				weights[i] = -1
-			} else {
-				weights[i] = w
-			}
-		}
-
-		if anyRules {
-			// Replace unbounded sentinels with a high weight relative to bounded ones.
-			const highWeight = int64(1<<32 - 1)
-			var total int64
-			for i := range weights {
-				if weights[i] < 0 {
-					weights[i] = highWeight
-				}
-				total += weights[i]
-			}
-			if total == 0 {
-				return nil, ErrPoolOutOfCapacity
-			}
-			r := s.rng.Int63n(total)
-			var acc int64
-			for i, c := range healthy {
-				acc += weights[i]
-				if r < acc {
-					return c.secret, nil
-				}
-			}
-			return healthy[len(healthy)-1].secret, nil
-		}
-		// No secret has any rules → fall through to round-robin.
+	strategy := catalog.KeySelectionRoundRobin
+	if pool != nil && pool.Spec.KeySelection != "" {
+		strategy = pool.Spec.KeySelection
 	}
 
-	// Round-robin fallback.
+	switch strategy {
+	case catalog.KeySelectionPrioritized:
+		// Return the first healthy candidate in declaration order.
+		return healthy[0].secret, nil
+
+	case catalog.KeySelectionLeastRecentlyUsed:
+		return s.pickLRU(ctx, pool, healthy)
+
+	default: // "round-robin" or empty
+		return s.pickRoundRobin(ctx, pool, healthy)
+	}
+}
+
+// pickRoundRobin selects a candidate using a modular counter stored in Redis.
+func (s *Selector) pickRoundRobin(ctx context.Context, pool *catalog.Policy, healthy []candidate) (*catalog.Secret, error) {
 	var idx int64
 	err := s.state.WithLock(ctx, []string{roundRobinKey(pool.Metadata.Name)}, func(ctx context.Context) error {
 		var ierr error
@@ -234,9 +221,63 @@ func (s *Selector) Pick(ctx context.Context, provider *catalog.Provider, pool *c
 	if err != nil {
 		idx = 1
 	}
-
 	chosen := healthy[(idx-1)%int64(len(healthy))]
 	return chosen.secret, nil
+}
+
+// pickLRU selects the healthy candidate with the oldest last-use timestamp
+// (or never-used) and updates its timestamp.
+func (s *Selector) pickLRU(ctx context.Context, pool *catalog.Policy, healthy []candidate) (*catalog.Secret, error) {
+	var (
+		chosen    *catalog.Secret
+		chosenTS  int64 = -1 // -1 = not yet set
+		neverUsed *catalog.Secret
+	)
+
+	for _, c := range healthy {
+		k := lruKey(pool.Metadata.Name, c.secret.KeyHash)
+		raw, err := s.state.Get(ctx, k)
+		if err != nil || len(raw) == 0 {
+			// Never used — immediately preferred.
+			if neverUsed == nil {
+				neverUsed = c.secret
+			}
+			continue
+		}
+		ts, err := strconv.ParseInt(string(raw), 10, 64)
+		if err != nil {
+			if neverUsed == nil {
+				neverUsed = c.secret
+			}
+			continue
+		}
+		if chosen == nil || ts < chosenTS {
+			chosen = c.secret
+			chosenTS = ts
+		}
+	}
+
+	if neverUsed != nil {
+		chosen = neverUsed
+	}
+	if chosen == nil {
+		// Fallback: should not happen given len(healthy) > 0.
+		chosen = healthy[0].secret
+	}
+
+	// Stamp last-use timestamp.
+	now := s.clock().UnixMilli()
+	k := lruKey(pool.Metadata.Name, chosen.KeyHash)
+	_ = s.state.Set(ctx, k, []byte(strconv.FormatInt(now, 10)), ttlLRU)
+
+	return chosen, nil
+}
+
+// PickWithExclude is a convenience wrapper around Pick that accepts an explicit
+// exclude list. Callers that always have an exclude slice can use this to avoid
+// the variadic syntax.
+func (s *Selector) PickWithExclude(ctx context.Context, provider *catalog.Provider, pool *catalog.Policy, model *catalog.Model, secrets []*catalog.Secret, exclude []*catalog.Secret) (*catalog.Secret, error) {
+	return s.Pick(ctx, provider, pool, model, secrets, exclude)
 }
 
 // ClearCircuit deletes the circuit-breaker record for a secret from the KV

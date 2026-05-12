@@ -40,7 +40,7 @@ func (f *fakeOutbound) ChatCompletions(ctx context.Context, body []byte, secret 
 func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
 	t.Helper()
 	st := kv.NewMem()
-	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
+	sel := keypool.New(st, slog.Default(), nil, nil)
 
 	policy := &catalog.Policy{
 		Metadata: catalog.Metadata{Name: "test-policy"},
@@ -585,7 +585,7 @@ func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *ratelimit.Limiter, 
 	t.Helper()
 	st := kv.NewMem()
 	t.Cleanup(func() { st.Close() })
-	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
+	sel := keypool.New(st, slog.Default(), nil, nil)
 	policy := &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}}
 	secrets := []*catalog.Secret{
 		{Metadata: catalog.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
@@ -674,7 +674,7 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	}}
 	st2 := kv.NewMem()
 	defer st2.Close()
-	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
+	sel := keypool.New(st2, slog.Default(), nil, nil)
 	opts := RunOptions{
 		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
@@ -721,7 +721,7 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	}}
 	st2 := kv.NewMem()
 	defer st2.Close()
-	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
+	sel := keypool.New(st2, slog.Default(), nil, nil)
 	opts := RunOptions{
 		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
@@ -839,7 +839,7 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 
 	st2 := kv.NewMem()
 	defer st2.Close()
-	sel := keypool.New(st2, slog.Default(), nil, nil, nil, nil)
+	sel := keypool.New(st2, slog.Default(), nil, nil)
 	opts := RunOptions{
 		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
@@ -868,105 +868,6 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 	collectOut(ch)
 }
 
-// TestPipeline_ErrPoolOutOfCapacity_Returns429 — selector returning ErrPoolOutOfCapacity → 429.
-func TestPipeline_ErrPoolOutOfCapacity_Returns429(t *testing.T) {
-	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
-		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
-	}}
-
-	// Build a real Selector with a 1-request budget pre-exhausted so Pick returns ErrPoolOutOfCapacity.
-	dir := t.TempDir()
-	yamlContent := `apiVersion: relay.wyolet.dev/v1
-kind: Provider
-metadata:
-  name: p
-spec:
-  kind: openai
-  baseURL: https://api.openai.com
-  default: true
----
-apiVersion: relay.wyolet.dev/v1
-kind: RateLimit
-metadata:
-  name: rpm-zero
-spec:
-  strategy: sliding-window
-  window: 1m
-  amount: 1
----
-apiVersion: relay.wyolet.dev/v1
-kind: Secret
-metadata:
-  name: k
-spec:
-  provider: p
-  value: "testval"
-  rateLimits:
-    - ref: rpm-zero
-      meter: requests
-`
-	if err := os.WriteFile(dir+"/config.yaml", []byte(yamlContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	cfg, err := catalog.LoadYAML(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	st3 := kv.NewMem()
-	defer st3.Close()
-	lim3 := ratelimit.New(st3, slog.Default(), nil)
-	sel3 := keypool.New(st3, slog.Default(), nil, lim3, cfg, nil)
-
-	sec := cfg.Secrets()[0]
-	p2 := &catalog.Policy{Metadata: catalog.Metadata{Name: "pp"}}
-
-	// Pre-exhaust the budget.
-	rule3 := catalog.ResolvedRule{
-		ParentKind: catalog.KindSecret,
-		ParentName: "k",
-		Meter:      catalog.MeterRequests,
-		RateLimit: &catalog.RateLimit{
-			Metadata: catalog.Metadata{Name: "rpm-zero"},
-			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategySlidingWindow,
-				Window:   time.Minute,
-				Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: 1}},
-			},
-		},
-		Rule: catalog.RateLimitRule{Meter: string(catalog.MeterRequests), Amount: 1},
-	}
-	lim3.Reserve(ctx, "pp", []catalog.ResolvedRule{rule3})
-
-	ch := newTestChannel(ctx)
-	ch.In <- &transport.Message{ID: "x", Body: []byte(`{"model":"m"}`)}
-	close(ch.In)
-
-	_, runErr := Run(ctx, ch, RunOptions{
-		Policy:    p2,
-		Secrets: []*catalog.Secret{sec},
-		Selector: sel3,
-		Outbound: ob,
-		MaxAttempts: 1,
-	})
-	if runErr != keypool.ErrPoolOutOfCapacity {
-		t.Fatalf("want ErrPoolOutOfCapacity, got %v", runErr)
-	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
-	}
-	if msgs[0].Headers["X-Relay-Status"] != "429" {
-		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	if !containsStr(string(msgs[0].Body), "pool_out_of_capacity") {
-		t.Fatalf("expected pool_out_of_capacity in body: %s", string(msgs[0].Body))
-	}
-	if msgs[0].Headers["Retry-After"] != "30" {
-		t.Fatalf("expected Retry-After: 30, got %s", msgs[0].Headers["Retry-After"])
-	}
-}
 
 // --- Lifecycle / usage.Record integration tests ---
 
@@ -1297,7 +1198,7 @@ func TestRun_PassthroughAuth(t *testing.T) {
 
 	st := kv.NewMem()
 	defer st.Close()
-	sel := keypool.New(st, slog.Default(), nil, nil, nil, nil)
+	sel := keypool.New(st, slog.Default(), nil, nil)
 
 	ctx := context.Background()
 	ch := newTestChannel(ctx)

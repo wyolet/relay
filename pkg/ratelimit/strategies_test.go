@@ -850,13 +850,10 @@ func TestMultiRule_FirstViolationShortCircuits2(t *testing.T) {
 		t.Errorf("expected ruleB to be violated, got key=%s", ee.Rule.Key)
 	}
 
-	// ruleA increments should have been rolled back.
-	rem, err := l.RemainingByMeter(context.Background(), "multi-sc", []Rule{ruleA})
-	if err != nil {
-		t.Fatalf("RemainingByMeter: %v", err)
-	}
-	if rem["requests"] != 100 {
-		t.Errorf("expected ruleA remaining=100 after rollback, got %d", rem["requests"])
+	// ruleA increments should have been rolled back — all 100 reserves succeed.
+	for i := 0; i < 100; i++ {
+		res := mustReserve(t, l, "multi-sc", []Rule{ruleA})
+		mustCommit(t, l, res, Observations{})
 	}
 }
 
@@ -1001,14 +998,11 @@ func TestMultiRule_RollbackOnLaterFailure(t *testing.T) {
 		t.Errorf("expected rule2 to fail, got %s", ee.Rule.Key)
 	}
 
-	// Both rule0 and rule1 must be rolled back. Verify by reserving without rule2.
-	// If rule0 was rolled back, remaining = 100.
-	rem0, err := l.RemainingByMeter(ctx, "multi-rb", []Rule{rule0})
-	if err != nil {
-		t.Fatalf("remaining rule0: %v", err)
-	}
-	if rem0["requests"] != 100 {
-		t.Errorf("rule0 not rolled back: remaining=%d, expected 100", rem0["requests"])
+	// Both rule0 and rule1 must be rolled back.
+	// Verify rule0 (SW) rolled back: all 100 reserves succeed.
+	for i := 0; i < 100; i++ {
+		res := mustReserve(t, l, "multi-rb", []Rule{rule0})
+		mustCommit(t, l, res, Observations{})
 	}
 
 	// Verify rule1 (TB) also rolled back — try a TB-only reserve sequence.

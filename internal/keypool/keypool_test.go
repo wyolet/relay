@@ -4,14 +4,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wyolet/relay/internal/catalog"
-	"github.com/wyolet/relay/internal/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -21,7 +19,7 @@ func newSel(t *testing.T, clock func() time.Time) (*Selector, *kv.Mem) {
 	t.Helper()
 	ms := kv.NewMem()
 	t.Cleanup(func() { ms.Close() })
-	return New(ms, noopLogger(), clock, nil, nil, nil), ms
+	return New(ms, noopLogger(), clock, nil), ms
 }
 
 func noopLogger() *slog.Logger {
@@ -39,6 +37,13 @@ func pool(name string) *catalog.Policy {
 	return &catalog.Policy{Metadata: catalog.Metadata{Name: name}}
 }
 
+func poolWithStrategy(name string, strategy catalog.KeySelection) *catalog.Policy {
+	return &catalog.Policy{
+		Metadata: catalog.Metadata{Name: name},
+		Spec:     catalog.PolicySpec{KeySelection: strategy},
+	}
+}
+
 // frozen clock helpers
 
 func frozenClock(t time.Time) func() time.Time { return func() time.Time { return t } }
@@ -46,6 +51,8 @@ func frozenClock(t time.Time) func() time.Time { return func() time.Time { retur
 func advancedClock(base time.Time, delta time.Duration) func() time.Time {
 	return frozenClock(base.Add(delta))
 }
+
+var _ = advancedClock // suppress unused warning
 
 var t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -307,249 +314,6 @@ func TestPickConcurrent(t *testing.T) {
 	}
 }
 
-// --- Weighted-random tests ---
-
-// stubCfg is a minimal catalog.Store that returns pre-set rules per secret name.
-type stubCfg struct {
-	rules map[string][]catalog.ResolvedRule // keyed by secret name
-}
-
-func (c *stubCfg) RateLimitsForRequest(_ *catalog.Provider, _ *catalog.Policy, _ *catalog.Model, sec *catalog.Secret) []catalog.ResolvedRule {
-	if sec == nil {
-		return nil
-	}
-	return c.rules[sec.Metadata.Name]
-}
-func (c *stubCfg) ProviderByName(_ string) (*catalog.Provider, bool)  { return nil, false }
-func (c *stubCfg) ModelByName(_ string) (*catalog.Model, bool)        { return nil, false }
-func (c *stubCfg) RouteByName(_ string) (*catalog.Route, bool)        { return nil, false }
-func (c *stubCfg) RateLimitByName(_ string) (*catalog.RateLimit, bool) { return nil, false }
-func (c *stubCfg) SecretByName(_ string) (*catalog.Secret, bool)      { return nil, false }
-func (c *stubCfg) PolicyByName(_ string) (*catalog.Policy, bool)          { return nil, false }
-func (c *stubCfg) Providers() []*catalog.Provider                     { return nil }
-func (c *stubCfg) Models() []*catalog.Model                           { return nil }
-func (c *stubCfg) Routes() []*catalog.Route                           { return nil }
-func (c *stubCfg) RateLimits() []*catalog.RateLimit                   { return nil }
-func (c *stubCfg) Secrets() []*catalog.Secret                         { return nil }
-func (c *stubCfg) Policies() []*catalog.Policy                             { return nil }
-func (c *stubCfg) DefaultProvider() *catalog.Provider                 { return nil }
-func (c *stubCfg) DefaultRoute() *catalog.Route                       { return nil }
-func (c *stubCfg) ProviderForModel(_ string) (*catalog.Provider, bool) { return nil, false }
-func (c *stubCfg) SecretsForPolicy(_ *catalog.Policy) []*catalog.Secret   { return nil }
-func (c *stubCfg) EffectivePricing(_ string) (*catalog.Pricing, bool)  { return nil, false }
-func (c *stubCfg) RelayKeyByName(_ string) (*catalog.RelayKey, bool)   { return nil, false }
-func (c *stubCfg) RelayKeyByHash(_ string) (*catalog.RelayKey, bool)   { return nil, false }
-func (c *stubCfg) RelayKeys() []*catalog.RelayKey                      { return nil }
-func (c *stubCfg) Passthrough() *catalog.Passthrough                   { return catalog.DefaultPassthrough() }
-
-func (c *stubCfg) ProviderByID(string) (*catalog.Provider, bool)   { return nil, false }
-func (c *stubCfg) ModelByID(string) (*catalog.Model, bool)         { return nil, false }
-func (c *stubCfg) RouteByID(string) (*catalog.Route, bool)         { return nil, false }
-func (c *stubCfg) RateLimitByID(string) (*catalog.RateLimit, bool) { return nil, false }
-func (c *stubCfg) SecretByID(string) (*catalog.Secret, bool)       { return nil, false }
-func (c *stubCfg) PolicyByID(string) (*catalog.Policy, bool)       { return nil, false }
-func (c *stubCfg) RelayKeyByID(string) (*catalog.RelayKey, bool)   { return nil, false }
-
-// makeRule creates a ResolvedRule with a given meter and amount.
-func makeRule(name string, meter catalog.Meter, amount int64) catalog.ResolvedRule {
-	return catalog.ResolvedRule{
-		ParentKind: catalog.KindSecret,
-		ParentName: name,
-		Meter:      meter,
-		RateLimit: &catalog.RateLimit{
-			Metadata: catalog.Metadata{Name: name + "-" + string(meter)},
-			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategySlidingWindow,
-				Window:   time.Minute,
-				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
-			},
-		},
-		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
-	}
-}
-
-// newWeightedSel builds a Selector with a limiter and stubCfg.
-func newWeightedSel(t *testing.T, cfg *stubCfg, rng *rand.Rand) (*Selector, *ratelimit.Limiter, *kv.Mem) {
-	t.Helper()
-	ms := kv.NewMem()
-	t.Cleanup(func() { ms.Close() })
-	l := ratelimit.New(ms, noopLogger(), nil)
-	sel := New(ms, noopLogger(), frozenClock(t0), l, cfg, rng)
-	return sel, l, ms
-}
-
-// TestPickWeighted_SkewsToHigherQuota — 1000 vs 100 quota; over 10000 picks ratio ~10:1 (±20%).
-func TestPickWeighted_SkewsToHigherQuota(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
-		"high": {makeRule("high", catalog.MeterRequests, 1000)},
-		"low":  {makeRule("low", catalog.MeterRequests, 100)},
-	}}
-	rng := rand.New(rand.NewSource(42))
-	sel, _, _ := newWeightedSel(t, cfg, rng)
-	ctx := context.Background()
-	p := pool("w1")
-	secrets := []*catalog.Secret{
-		{Metadata: catalog.Metadata{Name: "high"}, KeyHash: "hHigh"},
-		{Metadata: catalog.Metadata{Name: "low"}, KeyHash: "hLow"},
-	}
-	counts := map[string]int{}
-	const n = 10000
-	for i := 0; i < n; i++ {
-		got, err := sel.Pick(ctx, nil, p, nil, secrets)
-		if err != nil {
-			t.Fatalf("unexpected err: %v", err)
-		}
-		counts[got.Metadata.Name]++
-	}
-	ratio := float64(counts["high"]) / float64(counts["low"])
-	if ratio < 8.0 || ratio > 12.0 {
-		t.Fatalf("expected ~10:1 ratio, got high=%d low=%d ratio=%.2f", counts["high"], counts["low"], ratio)
-	}
-}
-
-// TestPickWeighted_ZeroQuotaSkipped — three secrets, one at zero; it's never picked.
-func TestPickWeighted_ZeroQuotaSkipped(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
-		"a":    {makeRule("a", catalog.MeterRequests, 500)},
-		"b":    {makeRule("b", catalog.MeterRequests, 0)},
-		"c":    {makeRule("c", catalog.MeterRequests, 500)},
-	}}
-	rng := rand.New(rand.NewSource(42))
-	sel, _, _ := newWeightedSel(t, cfg, rng)
-	ctx := context.Background()
-	p := pool("w2")
-	secrets := []*catalog.Secret{
-		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
-		{Metadata: catalog.Metadata{Name: "c"}, KeyHash: "hC"},
-	}
-	for i := 0; i < 1000; i++ {
-		got, err := sel.Pick(ctx, nil, p, nil, secrets)
-		if err != nil {
-			t.Fatalf("unexpected err: %v", err)
-		}
-		if got.Metadata.Name == "b" {
-			t.Fatal("picked zero-quota secret b")
-		}
-	}
-}
-
-// TestPickWeighted_AllZeroReturnsErr — all secrets at zero → ErrPoolOutOfCapacity.
-func TestPickWeighted_AllZeroReturnsErr(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
-		"a": {makeRule("a", catalog.MeterRequests, 0)},
-		"b": {makeRule("b", catalog.MeterRequests, 0)},
-	}}
-	rng := rand.New(rand.NewSource(42))
-	sel, _, _ := newWeightedSel(t, cfg, rng)
-	ctx := context.Background()
-	p := pool("w3")
-	secrets := []*catalog.Secret{
-		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
-	}
-	_, err := sel.Pick(ctx, nil, p, nil, secrets)
-	if err != ErrPoolOutOfCapacity {
-		t.Fatalf("want ErrPoolOutOfCapacity, got %v", err)
-	}
-}
-
-// TestPickWeighted_NoLimitsFallsBackToRR — no rate limits → round-robin.
-func TestPickWeighted_NoLimitsFallsBackToRR(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{}}
-	rng := rand.New(rand.NewSource(42))
-	sel, _, _ := newWeightedSel(t, cfg, rng)
-	ctx := context.Background()
-	p := pool("w4")
-	secrets := []*catalog.Secret{
-		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
-		{Metadata: catalog.Metadata{Name: "c"}, KeyHash: "hC"},
-	}
-	counts := map[string]int{}
-	for i := 0; i < 30; i++ {
-		got, err := sel.Pick(ctx, nil, p, nil, secrets)
-		if err != nil {
-			t.Fatalf("unexpected err: %v", err)
-		}
-		counts[got.KeyHash]++
-	}
-	for _, k := range []string{"hA", "hB", "hC"} {
-		if counts[k] < 9 || counts[k] > 11 {
-			t.Fatalf("want even RR distribution, got %v", counts)
-		}
-	}
-}
-
-// TestPickWeighted_DistinctFromCircuitOpen — all quota zero → ErrPoolOutOfCapacity;
-// all circuit open → ErrNoHealthyKeys. Two distinct sentinels.
-func TestPickWeighted_DistinctFromCircuitOpen(t *testing.T) {
-	ctx := context.Background()
-	p := pool("w5")
-
-	// All quota zero → ErrPoolOutOfCapacity
-	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
-		"a": {makeRule("a", catalog.MeterRequests, 0)},
-	}}
-	rng := rand.New(rand.NewSource(42))
-	sel, _, _ := newWeightedSel(t, cfg, rng)
-	secrets := []*catalog.Secret{{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"}}
-	_, err := sel.Pick(ctx, nil, p, nil, secrets)
-	if err != ErrPoolOutOfCapacity {
-		t.Fatalf("want ErrPoolOutOfCapacity, got %v", err)
-	}
-
-	// All circuit open → ErrNoHealthyKeys (no limiter)
-	sel2, _ := newSel(t, frozenClock(t0))
-	sel2.RecordFailure(ctx, "hA", FailureAuth, 0)
-	_, err2 := sel2.Pick(ctx, nil, p, nil, secrets)
-	if err2 != ErrNoHealthyKeys {
-		t.Fatalf("want ErrNoHealthyKeys, got %v", err2)
-	}
-	if err == err2 {
-		t.Fatal("ErrPoolOutOfCapacity and ErrNoHealthyKeys must be distinct")
-	}
-}
-
-// TestPickWeighted_DeterministicWithSeededRNG — same seed → same sequence.
-func TestPickWeighted_DeterministicWithSeededRNG(t *testing.T) {
-	cfg := &stubCfg{rules: map[string][]catalog.ResolvedRule{
-		"a": {makeRule("a", catalog.MeterRequests, 700)},
-		"b": {makeRule("b", catalog.MeterRequests, 300)},
-	}}
-	ctx := context.Background()
-	p := pool("w6")
-	secrets := []*catalog.Secret{
-		{Metadata: catalog.Metadata{Name: "a"}, KeyHash: "hA"},
-		{Metadata: catalog.Metadata{Name: "b"}, KeyHash: "hB"},
-	}
-
-	picks := func(seed int64) []string {
-		rng := rand.New(rand.NewSource(seed))
-		ms := kv.NewMem()
-		defer ms.Close()
-		l := ratelimit.New(ms, noopLogger(), nil)
-		sel := New(ms, noopLogger(), frozenClock(t0), l, cfg, rng)
-		var out []string
-		for i := 0; i < 20; i++ {
-			got, err := sel.Pick(ctx, nil, p, nil, secrets)
-			if err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-			out = append(out, got.Metadata.Name)
-		}
-		return out
-	}
-
-	seq1 := picks(42)
-	seq2 := picks(42)
-	for i := range seq1 {
-		if seq1[i] != seq2[i] {
-			t.Fatalf("sequences differ at %d: %v vs %v", i, seq1, seq2)
-		}
-	}
-}
-
 // TestRecordSuccessClearsBackoff — after a 5xx series, RecordSuccess resets BackoffStep to 0.
 func TestRecordSuccessClearsBackoff(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
@@ -566,5 +330,169 @@ func TestRecordSuccessClearsBackoff(t *testing.T) {
 	rec = sel.readRecord(ctx, k)
 	if rec.BackoffStep != 0 || rec.State != CircuitClosed {
 		t.Fatalf("after RecordSuccess: want closed/0, got %v/%d", rec.State, rec.BackoffStep)
+	}
+}
+
+// ── Strategy tests ─────────────────────────────────────────────────────────────
+
+// TestPick_Prioritized_HealthyFirst — A, B, C all healthy → A always picked.
+func TestPick_Prioritized_HealthyFirst(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	secrets := []*catalog.Secret{
+		secret("a", "hA"),
+		secret("b", "hB"),
+		secret("c", "hC"),
+	}
+	p := poolWithStrategy("pri", catalog.KeySelectionPrioritized)
+	for i := 0; i < 10; i++ {
+		got, err := sel.Pick(ctx, nil, p, nil, secrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.KeyHash != "hA" {
+			t.Fatalf("prioritized: want hA, got %s", got.KeyHash)
+		}
+	}
+}
+
+// TestPick_Prioritized_SkipsOpenFirst — A in cooldown → B.
+func TestPick_Prioritized_SkipsOpenFirst(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	sel.RecordFailure(ctx, "hA", FailureAuth, 0)
+	secrets := []*catalog.Secret{
+		secret("a", "hA"),
+		secret("b", "hB"),
+		secret("c", "hC"),
+	}
+	p := poolWithStrategy("pri2", catalog.KeySelectionPrioritized)
+	got, err := sel.Pick(ctx, nil, p, nil, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KeyHash != "hB" {
+		t.Fatalf("prioritized with A open: want hB, got %s", got.KeyHash)
+	}
+}
+
+// TestPick_LRU_PrefersNeverUsed — A used at t=1, B at t=2, C never → C.
+func TestPick_LRU_PrefersNeverUsed(t *testing.T) {
+	ms := kv.NewMem()
+	defer ms.Close()
+	ctx := context.Background()
+
+	clk := frozenClock(t0)
+	sel := New(ms, noopLogger(), clk, nil)
+	p := poolWithStrategy("lru1", catalog.KeySelectionLeastRecentlyUsed)
+
+	secA := secret("a", "hA")
+	secB := secret("b", "hB")
+	secC := secret("c", "hC")
+
+	// Stamp A at t0, B at t0+1s.
+	sel.clock = frozenClock(t0)
+	_, _ = sel.Pick(ctx, nil, poolWithStrategy("lru1", catalog.KeySelectionLeastRecentlyUsed), nil, []*catalog.Secret{secA})
+	sel.clock = frozenClock(t0.Add(time.Second))
+	_, _ = sel.Pick(ctx, nil, poolWithStrategy("lru1", catalog.KeySelectionLeastRecentlyUsed), nil, []*catalog.Secret{secB})
+
+	// Now pick from all three — C was never used, prefer C.
+	sel.clock = frozenClock(t0.Add(2 * time.Second))
+	got, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secA, secB, secC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KeyHash != "hC" {
+		t.Fatalf("LRU: want hC (never used), got %s", got.KeyHash)
+	}
+}
+
+// TestPick_LRU_PrefersOldest — A at t=1, B at t=2, C at t=3 → next pick prefers A.
+func TestPick_LRU_PrefersOldest(t *testing.T) {
+	ms := kv.NewMem()
+	defer ms.Close()
+	ctx := context.Background()
+
+	sel := New(ms, noopLogger(), frozenClock(t0), nil)
+	p := poolWithStrategy("lru2", catalog.KeySelectionLeastRecentlyUsed)
+	secA := secret("a", "hA")
+	secB := secret("b", "hB")
+	secC := secret("c", "hC")
+
+	// Stamp all three at increasing times.
+	sel.clock = frozenClock(t0.Add(1 * time.Second))
+	_, _ = sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secA})
+	sel.clock = frozenClock(t0.Add(2 * time.Second))
+	_, _ = sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secB})
+	sel.clock = frozenClock(t0.Add(3 * time.Second))
+	_, _ = sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secC})
+
+	// Next pick: A has oldest stamp (t0+1s) → prefer A.
+	sel.clock = frozenClock(t0.Add(4 * time.Second))
+	got, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secA, secB, secC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KeyHash != "hA" {
+		t.Fatalf("LRU: want hA (oldest), got %s", got.KeyHash)
+	}
+
+	// Now A has been used at t0+4s; next pick prefers B (t0+2s).
+	sel.clock = frozenClock(t0.Add(5 * time.Second))
+	got2, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secA, secB, secC})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.KeyHash != "hB" {
+		t.Fatalf("LRU second pick: want hB, got %s", got2.KeyHash)
+	}
+}
+
+// TestPick_Exclude — secret in exclude list is never returned even if healthy.
+func TestPick_Exclude(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	secA := secret("a", "hA")
+	secB := secret("b", "hB")
+	secC := secret("c", "hC")
+	secrets := []*catalog.Secret{secA, secB, secC}
+	p := pool("excl")
+
+	for i := 0; i < 20; i++ {
+		got, err := sel.Pick(ctx, nil, p, nil, secrets, []*catalog.Secret{secA})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.KeyHash == "hA" {
+			t.Fatal("excluded secret hA was returned")
+		}
+	}
+}
+
+// TestPick_ExcludeAll — excluding all healthy secrets → ErrNoHealthyKeys.
+func TestPick_ExcludeAll(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	secA := secret("a", "hA")
+	p := pool("excl-all")
+	_, err := sel.Pick(ctx, nil, p, nil, []*catalog.Secret{secA}, []*catalog.Secret{secA})
+	if err != ErrNoHealthyKeys {
+		t.Fatalf("want ErrNoHealthyKeys when all excluded, got %v", err)
+	}
+}
+
+// TestPickWithExclude_Convenience — PickWithExclude wrapper works correctly.
+func TestPickWithExclude_Convenience(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	secA := secret("a", "hA")
+	secB := secret("b", "hB")
+	p := pool("conv")
+	got, err := sel.PickWithExclude(ctx, nil, p, nil, []*catalog.Secret{secA, secB}, []*catalog.Secret{secA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KeyHash != "hB" {
+		t.Fatalf("want hB, got %s", got.KeyHash)
 	}
 }
