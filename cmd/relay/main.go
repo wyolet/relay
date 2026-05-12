@@ -508,6 +508,9 @@ func main() {
 	r.Method(http.MethodGet, "/metrics", metrics.Handler())
 
 	addr := ":8080"
+	if p := os.Getenv("RELAY_PORT"); p != "" {
+		addr = ":" + p
+	}
 	srv := &http.Server{Addr: addr, Handler: r}
 
 	slog.Info("relay listening", "addr", addr)
