@@ -485,7 +485,7 @@ func main() {
 	inferenceAnonMW := systemrl.ConditionalAnonymousMiddleware(
 		pkgLimiter,
 		func() catalog.Store { return storeForRL },
-		"inference-proxy-anonymous",
+		"inference-api-proxy-anonymous",
 		ipScopeFn,
 	)
 
@@ -493,7 +493,7 @@ func main() {
 	systemAPIMW := systemrl.Middleware(
 		pkgLimiter,
 		func() catalog.Store { return storeForRL },
-		"system-api",
+		"control-api",
 		ipScopeFn,
 	)
 
