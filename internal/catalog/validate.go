@@ -119,6 +119,9 @@ var relayKeyHashRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func validateRelayKeys(s *snapshot) error {
 	seenHash := make(map[string]string, len(s.relayKeys))
 	for _, k := range s.relayKeys {
+		if err := validateOwner("RelayKey", k.Metadata.Name, k.Metadata.Owner); err != nil {
+			return err
+		}
 		if k.Spec.KeyHash == "" {
 			return fmt.Errorf("RelayKey %q: keyHash required", k.Metadata.Name)
 		}
@@ -140,6 +143,9 @@ func validateRelayKeys(s *snapshot) error {
 
 func validateSecrets(s *snapshot) error {
 	for _, sec := range s.secrets {
+		if err := validateOwner("Secret", sec.Metadata.Name, sec.Metadata.Owner); err != nil {
+			return err
+		}
 		if sec.Spec.Tier != "" && lookupUpstreamTier(sec.Spec.Tier) == nil {
 			return fmt.Errorf("Secret %q: tier %q is not a known upstream tier", sec.Metadata.Name, sec.Spec.Tier)
 		}
@@ -174,6 +180,9 @@ func validateSecrets(s *snapshot) error {
 
 func validatePolicies(s *snapshot) error {
 	for _, policy := range s.policies {
+		if err := validateOwner("Policy", policy.Metadata.Name, policy.Metadata.Owner); err != nil {
+			return err
+		}
 		if policy.Spec.Provider == "" {
 			return fmt.Errorf("Policy %q: provider required", policy.Metadata.Name)
 		}
@@ -242,6 +251,9 @@ func validatePricing(context string, pr *Pricing) error {
 func validateProviders(s *snapshot) error {
 	defaults := 0
 	for _, p := range s.providers {
+		if err := validateOwner("Provider", p.Metadata.Name, p.Metadata.Owner); err != nil {
+			return err
+		}
 		if p.Spec.Default {
 			defaults++
 		}
@@ -302,6 +314,9 @@ func validateModels(s *snapshot) error {
 		allNames[m.Metadata.Name] = m.Metadata.Name
 	}
 	for _, m := range s.models {
+		if err := validateOwner("Model", m.Metadata.Name, m.Metadata.Owner); err != nil {
+			return err
+		}
 		for _, alias := range m.Spec.Aliases {
 			if existing, ok := allNames[alias]; ok && existing != m.Metadata.Name {
 				return fmt.Errorf("Model %q: alias %q collides with model or alias %q", m.Metadata.Name, alias, existing)
@@ -358,6 +373,9 @@ func validateModels(s *snapshot) error {
 func validateRoutes(s *snapshot) error {
 	defaults := 0
 	for _, r := range s.routes {
+		if err := validateOwner("Route", r.Metadata.Name, r.Metadata.Owner); err != nil {
+			return err
+		}
 		if r.Spec.Default {
 			defaults++
 		}
@@ -384,17 +402,29 @@ var validStrategies = map[RateLimitStrategy]bool{
 	StrategySessionWindow: true,
 }
 
+// validateOwner enforces the owner.kind / owner.id pairing for any resource.
+// Empty kind is accepted (treated as default per resource); set kinds must be
+// known. id is required for provider-owned resources and forbidden for
+// system-owned resources.
+func validateOwner(kindLabel, name string, o Owner) error {
+	switch o.Kind {
+	case OwnerSystem, OwnerProvider, OwnerUser, "":
+	default:
+		return fmt.Errorf("%s %q: metadata.owner.kind %q is not valid (must be system, provider, or user)", kindLabel, name, o.Kind)
+	}
+	if o.Kind == OwnerProvider && o.ID == "" {
+		return fmt.Errorf("%s %q: metadata.owner.id required when kind=provider", kindLabel, name)
+	}
+	if o.Kind == OwnerSystem && o.ID != "" {
+		return fmt.Errorf("%s %q: metadata.owner.id must be empty when kind=system", kindLabel, name)
+	}
+	return nil
+}
+
 func validateRateLimits(s *snapshot) error {
 	for _, rl := range s.rateLimits {
-		// Validate metadata.owner.kind when present.
-		switch rl.Metadata.Owner.Kind {
-		case OwnerSystem, OwnerProvider, OwnerUser, "":
-			// valid
-		default:
-			return fmt.Errorf("RateLimit %q: metadata.owner.kind %q is not valid (must be system, provider, or user)", rl.Metadata.Name, rl.Metadata.Owner.Kind)
-		}
-		if rl.Metadata.Owner.Kind == OwnerProvider && rl.Metadata.Owner.ID == "" {
-			return fmt.Errorf("RateLimit %q: metadata.owner.id required when kind=provider", rl.Metadata.Name)
+		if err := validateOwner("RateLimit", rl.Metadata.Name, rl.Metadata.Owner); err != nil {
+			return err
 		}
 
 		// System-owned objects may have empty rules — they are config ceilings

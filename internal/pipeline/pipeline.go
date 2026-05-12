@@ -936,13 +936,13 @@ func sendPoolExhausted(out chan<- *transport.Message) {
 }
 
 // send429LimitEnvelope emits an OpenAI-shaped 429 for a relay-side limit violation.
+//
+// For RLs owned by `user`, the envelope names the specific meter (e.g.
+// "rate limit exceeded: tokens", code "tpm_exceeded") so the caller can act.
+// For RLs owned by `system` or `provider`, the envelope is intentionally
+// generic — those are Relay/upstream-infra protections and naming them would
+// leak infrastructure details (which key, which tier, which DoS knob).
 func send429LimitEnvelope(out chan<- *transport.Message, exceeded *ratelimit.ExceededError) {
-	meter := exceeded.Rule.Meter
-	if meter == "" {
-		meter = catalog.Meter(exceeded.Rule.Rule.Meter)
-	}
-	code := meterToCode(meter)
-	msg := "rate limit exceeded: " + string(meter)
 	headers := map[string]string{
 		"X-Relay-Status": "429",
 		"Content-Type":   "application/json",
@@ -951,6 +951,23 @@ func send429LimitEnvelope(out chan<- *transport.Message, exceeded *ratelimit.Exc
 	if exceeded.RetryAfter > 0 {
 		headers["Retry-After"] = strconv.Itoa(int(exceeded.RetryAfter.Seconds()))
 	}
+
+	var ownerKind catalog.OwnerKind
+	if exceeded.Rule.RateLimit != nil {
+		ownerKind = exceeded.Rule.RateLimit.Metadata.Owner.Kind
+	}
+	if ownerKind != "" && ownerKind != catalog.OwnerUser {
+		body := []byte(`{"error":{"message":"rate limit exceeded","type":"rate_limit_exceeded","code":"rate_limit_exceeded"}}`)
+		out <- &transport.Message{Headers: headers, Body: body}
+		return
+	}
+
+	meter := exceeded.Rule.Meter
+	if meter == "" {
+		meter = catalog.Meter(exceeded.Rule.Rule.Meter)
+	}
+	code := meterToCode(meter)
+	msg := "rate limit exceeded: " + string(meter)
 	body := []byte(`{"error":{"message":"` + msg + `","type":"rate_limit_exceeded","code":"` + code + `"}}`)
 	out <- &transport.Message{Headers: headers, Body: body}
 }
