@@ -147,7 +147,7 @@ func buildHumaTestRouterWithAdmin(crudArg *adminCRUD) http.Handler {
 	r.Use(httpmw.LimitBody(httpmw.DefaultMaxRequestBytes))
 
 	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
-	mountControlHuma(r, http.HandlerFunc(stub), crudArg, "test-admin-token", nil)
+	mountControlHuma(r, http.HandlerFunc(stub), crudArg, "test-admin-token", nil, nil)
 	return r
 }
 
@@ -162,7 +162,7 @@ func buildHumaTestRouter() http.Handler {
 
 	stub := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
 
-	mountHuma(r, authMW,
+	mountHuma(r, authMW, nil, // no inference anon MW in tests
 		http.HandlerFunc(stub), // healthz
 		http.HandlerFunc(stub), // chat completions
 		http.HandlerFunc(stub), // models

@@ -56,7 +56,9 @@ func buildAdminTestServer(t *testing.T) (*httptest.Server, *catalog.PGStore) {
 
 	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	authMW := auth.Middleware(nil, nil, nil) // no API-key auth needed for admin tests
-	mountHuma(r, authMW, stub, stub, stub, stub, nil, crudH, adminTestToken)
+	mountHuma(r, authMW, nil, stub, stub, stub, stub)
+	_ = crudH
+	_ = adminTestToken
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

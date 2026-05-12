@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/wyolet/relay/internal/transport/mode"
 )
 
 func ok200(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
@@ -209,5 +210,190 @@ func TestParseKeys(t *testing.T) {
 				t.Errorf("len=%d want %d (input=%v)", len(got), tc.want, tc.input)
 			}
 		})
+	}
+}
+
+// ─── Proxy mode tests ──────────────────────────────────────────────────────
+
+func makeLookup(relayKey string, passthroughAllowed bool) Lookup {
+	return func(token string) (LookupResult, bool) {
+		if token == relayKey {
+			return LookupResult{
+				KeyName:            "test-key",
+				PolicyRef:          "test-policy",
+				PassthroughAllowed: passthroughAllowed,
+			}, true
+		}
+		return LookupResult{}, false
+	}
+}
+
+func openPtGate() PassthroughGateFunc {
+	return func() PassthroughGate {
+		return PassthroughGate{Enabled: true, UnauthenticatedEnabled: true}
+	}
+}
+
+func closedPtGate() PassthroughGateFunc {
+	return func() PassthroughGate {
+		return PassthroughGate{Enabled: false, UnauthenticatedEnabled: false}
+	}
+}
+
+// capSubjectHandler records the Subject from context.
+func capSubjectHandler(out *Subject) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		*out = SubjectFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func TestProxyModeInvalidHeader(t *testing.T) {
+	mw := Middleware(nil, makeLookup("rk", true), openPtGate())
+	handler := mw(http.HandlerFunc(ok200))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-Proxy-Mode", "invalid")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 400 {
+		t.Fatalf("got %d want 400", rec.Code)
+	}
+	var body struct {
+		Error struct{ Code string `json:"code"` } `json:"error"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&body)
+	if body.Error.Code != "invalid_proxy_mode" {
+		t.Errorf("code: got %q want invalid_proxy_mode", body.Error.Code)
+	}
+}
+
+func TestProxyModeMissingProviderKey(t *testing.T) {
+	mw := Middleware(nil, makeLookup("rk", true), openPtGate())
+	handler := mw(http.HandlerFunc(ok200))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	// No Authorization header
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 400 {
+		t.Fatalf("got %d want 400", rec.Code)
+	}
+	var body struct {
+		Error struct{ Code string `json:"code"` } `json:"error"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&body)
+	if body.Error.Code != "missing_provider_key" {
+		t.Errorf("code: got %q want missing_provider_key", body.Error.Code)
+	}
+}
+
+func TestProxyModeAuthed(t *testing.T) {
+	var got Subject
+	mw := Middleware(nil, makeLookup("relay-k", true), openPtGate())
+	handler := mw(capSubjectHandler(&got))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	req.Header.Set("X-WR-API-Key", "relay-k")
+	req.Header.Set("Authorization", "Bearer sk-provider")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("got %d want 200", rec.Code)
+	}
+	if got.Mode != mode.ModeProxyAuthed {
+		t.Errorf("mode: got %v want ModeProxyAuthed", got.Mode)
+	}
+	if got.PassthroughAuth != "Bearer sk-provider" {
+		t.Errorf("PassthroughAuth: got %q want Bearer sk-provider", got.PassthroughAuth)
+	}
+	if got.KeyName != "test-key" {
+		t.Errorf("KeyName: got %q want test-key", got.KeyName)
+	}
+}
+
+func TestProxyModeAuthedForbiddenWhenPassthroughNotAllowed(t *testing.T) {
+	mw := Middleware(nil, makeLookup("relay-k", false), openPtGate())
+	handler := mw(http.HandlerFunc(ok200))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	req.Header.Set("X-WR-API-Key", "relay-k")
+	req.Header.Set("Authorization", "Bearer sk-provider")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 403 {
+		t.Fatalf("got %d want 403", rec.Code)
+	}
+}
+
+func TestProxyModeAnonymous(t *testing.T) {
+	var got Subject
+	mw := Middleware(nil, makeLookup("relay-k", true), openPtGate())
+	handler := mw(capSubjectHandler(&got))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	req.Header.Set("Authorization", "Bearer sk-anon")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("got %d want 200", rec.Code)
+	}
+	if got.Mode != mode.ModeProxyAnonymous {
+		t.Errorf("mode: got %v want ModeProxyAnonymous", got.Mode)
+	}
+	if !got.Anonymous {
+		t.Error("Anonymous should be true")
+	}
+	if got.PassthroughAuth != "Bearer sk-anon" {
+		t.Errorf("PassthroughAuth: got %q", got.PassthroughAuth)
+	}
+}
+
+func TestProxyModeAnonymousDisabled(t *testing.T) {
+	mw := Middleware(nil, makeLookup("rk", true), closedPtGate())
+	handler := mw(http.HandlerFunc(ok200))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	req.Header.Set("Authorization", "Bearer sk-anon")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 401 {
+		t.Fatalf("got %d want 401", rec.Code)
+	}
+	var body struct {
+		Error struct{ Code string `json:"code"` } `json:"error"`
+	}
+	_ = json.NewDecoder(rec.Body).Decode(&body)
+	if body.Error.Code != "unauthenticated_proxy_disabled" {
+		t.Errorf("code: got %q want unauthenticated_proxy_disabled", body.Error.Code)
+	}
+}
+
+func TestNormalModeSubjectMode(t *testing.T) {
+	var got Subject
+	mw := Middleware(nil, makeLookup("rk", false), nil)
+	handler := mw(capSubjectHandler(&got))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-WR-API-Key", "rk")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("got %d want 200", rec.Code)
+	}
+	if got.Mode != mode.ModeNormal {
+		t.Errorf("mode: got %v want ModeNormal", got.Mode)
 	}
 }

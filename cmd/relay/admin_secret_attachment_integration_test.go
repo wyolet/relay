@@ -62,7 +62,9 @@ func buildSecretTestServer(t *testing.T, withMasterKey bool) (*httptest.Server, 
 
 	stub := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	authMW := auth.Middleware(nil, nil, nil)
-	mountHuma(r, authMW, stub, stub, stub, stub, nil, crudH, adminTestToken)
+	mountHuma(r, authMW, nil, stub, stub, stub, stub)
+	_ = crudH
+	_ = adminTestToken
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

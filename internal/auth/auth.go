@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/wyolet/relay/internal/transport/mode"
 )
 
 // Subject identifies the authenticated caller. Populated by the bearer-auth
@@ -35,6 +37,9 @@ type Subject struct {
 	// global Passthrough.unauthenticated.enabled gate). Always implies
 	// PassthroughAuth is set.
 	Anonymous bool
+	// Mode is the resolved proxy mode for this request. Set by Middleware
+	// when X-WR-Proxy-Mode header is present; ModeNormal for default requests.
+	Mode mode.Mode
 }
 
 type subjectCtxKey struct{}
@@ -95,11 +100,43 @@ func incRejected(reason string) {
 	}
 }
 
+var deny400ProxyMode = mustMarshal(map[string]any{
+	"error": map[string]string{
+		"type":    "invalid_request_error",
+		"code":    "invalid_proxy_mode",
+		"message": "Invalid X-WR-Proxy-Mode header value.",
+	},
+})
+
+var deny400MissingProviderKey = mustMarshal(map[string]any{
+	"error": map[string]string{
+		"type":    "invalid_request_error",
+		"code":    "missing_provider_key",
+		"message": "Proxy mode requires Authorization: Bearer <provider-key>.",
+	},
+})
+
 var deny401 = mustMarshal(map[string]any{
 	"error": map[string]string{
 		"type":    "invalid_request_error",
 		"code":    "missing_authorization",
 		"message": "Missing or invalid API key.",
+	},
+})
+
+var deny403Passthrough = mustMarshal(map[string]any{
+	"error": map[string]string{
+		"type":    "invalid_request_error",
+		"code":    "passthrough_not_allowed",
+		"message": "Proxy mode is not permitted for this key.",
+	},
+})
+
+var deny401Anonymous = mustMarshal(map[string]any{
+	"error": map[string]string{
+		"type":    "invalid_request_error",
+		"code":    "unauthenticated_proxy_disabled",
+		"message": "Anonymous proxy mode is not enabled.",
 	},
 })
 
@@ -118,25 +155,26 @@ func reject(w http.ResponseWriter, reason string) {
 	_, _ = w.Write(deny401)
 }
 
+func rejectWith(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
 // Middleware enforces bearer-token auth and resolves the passthrough story
 // for each request. envKeys is the legacy env-bound key list; lookup resolves
 // managed RelayKeys; ptGate reports the global Passthrough config (when nil,
 // passthrough is treated as disabled).
 //
-// Header priority for relay-key matching:
-//  1. X-WR-API-Key — out-of-band relay key, leaves Authorization free for
-//     upstream forwarding (e.g. Claude Code OAuth Bearer flows).
-//  2. x-api-key — Anthropic SDK convention.
-//  3. Authorization: Bearer <token> — OpenAI SDK convention; consumed last
-//     so we don't accidentally forward the relay key as upstream auth.
-//
-// When a relay key matches via headers (1) or (2) and the request also carries
-// an Authorization header, that Authorization is treated as a BYO-credential
-// candidate and stamped on Subject.PassthroughAuth iff the per-key
-// PassthroughAllowed AND ptGate.Enabled both hold.
-//
-// When no relay key matches, the request is admitted as anonymous passthrough
-// iff Authorization is present AND ptGate.Enabled AND ptGate.UnauthenticatedEnabled.
+// Mode determination is delegated to internal/transport/mode.Classify:
+//   - ModeNormal (default / "No-Proxy"): Relay key required via X-WR-API-Key,
+//     x-api-key, or Authorization Bearer. 401 if missing or invalid.
+//   - ModeProxyAuthed: Relay key via X-WR-API-Key required; the key's
+//     PassthroughAllowed flag must be true. 401/403 otherwise. The provider
+//     key from Authorization is stamped on Subject.PassthroughAuth.
+//   - ModeProxyAnonymous: no Relay key; global gate.UnauthenticatedEnabled
+//     must be on. 401 if off. The provider key from Authorization is stamped.
+//   - Invalid X-WR-Proxy-Mode value or missing provider key in Proxy mode → 400.
 //
 // When envKeys, lookup, and ptGate are all empty/nil the middleware is a
 // passthrough no-op (fail-open); the boot WARN is the operator's signal.
@@ -146,83 +184,142 @@ func Middleware(envKeys [][]byte, lookup Lookup, ptGate PassthroughGateFunc) fun
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			xrk := r.Header.Get("X-WR-API-Key")
-			xak := r.Header.Get("x-api-key")
-			rawAuthz := r.Header.Get("Authorization")
-			authzToken := bearerToken(rawAuthz)
-
-			// Try managed/env match in priority order: xrk → xak → authzToken.
-			candidates := []struct {
-				token string
-				kind  candidateKind
-			}{
-				{xrk, candidateXRK},
-				{xak, candidateXAK},
-				{authzToken, candidateAuthz},
-			}
-			var subj Subject
-			var matched bool
-			var consumedKind candidateKind
-			for _, c := range candidates {
-				if c.token == "" {
-					continue
+			cls, err := mode.Classify(r)
+			if err != nil {
+				switch err {
+				case mode.ErrMissingProviderKey:
+					rejectWith(w, http.StatusBadRequest, deny400MissingProviderKey)
+				default:
+					rejectWith(w, http.StatusBadRequest, deny400ProxyMode)
 				}
-				if lookup != nil {
-					if res, ok := lookup(c.token); ok {
-						subj = Subject{KeyName: res.KeyName, PolicyRef: res.PolicyRef}
-						matched = true
-						consumedKind = c.kind
-						// Stamp passthrough auth when the relay key matched
-						// via xrk/xak (leaving Authorization as upstream
-						// candidate) AND per-key + global gates allow.
-						if c.kind != candidateAuthz && rawAuthz != "" && res.PassthroughAllowed {
-							if g := gate(ptGate); g.Enabled {
-								subj.PassthroughAuth = rawAuthz
-							}
-						}
-						break
-					}
-				}
-				if matchesEnv(c.token, envKeys) {
-					matched = true
-					consumedKind = c.kind
-					break
-				}
-			}
-
-			if matched {
-				next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subj)))
 				return
 			}
 
-			// No relay key match. Try anonymous passthrough.
-			if rawAuthz != "" {
-				g := gate(ptGate)
-				if g.Enabled && g.UnauthenticatedEnabled {
-					anonSubj := Subject{PassthroughAuth: rawAuthz, Anonymous: true}
-					next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), anonSubj)))
-					return
-				}
-			}
-
-			// Reject with the appropriate reason.
-			if xrk == "" && xak == "" && authzToken == "" && rawAuthz == "" {
+			switch cls.Mode {
+			case mode.ModeNormal:
+				handleNormal(w, r, cls, envKeys, lookup, ptGate, next)
+			case mode.ModeProxyAuthed:
+				handleProxyAuthed(w, r, cls, lookup, ptGate, next)
+			case mode.ModeProxyAnonymous:
+				handleProxyAnonymous(w, r, cls, ptGate, next)
+			default:
 				reject(w, ReasonMissing)
-				return
 			}
-			_ = consumedKind
-			reject(w, ReasonInvalid)
 		})
 	}
 }
 
-type candidateKind int
+// handleNormal processes ModeNormal requests.
+func handleNormal(
+	w http.ResponseWriter, r *http.Request,
+	cls mode.Classification,
+	envKeys [][]byte, lookup Lookup, ptGate PassthroughGateFunc,
+	next http.Handler,
+) {
+	relayKey := cls.RelayKey
+	rawAuthz := r.Header.Get("Authorization")
 
-const (
-	candidateXRK candidateKind = iota
-	candidateXAK
-	candidateAuthz
-)
+	// Determine which header slot provided the relay key for passthrough logic.
+	relayKeyViaAuthz := relayKey != "" && relayKey == bearerToken(rawAuthz)
+
+	if relayKey != "" {
+		if lookup != nil {
+			if res, ok := lookup(relayKey); ok {
+				subj := Subject{KeyName: res.KeyName, PolicyRef: res.PolicyRef, Mode: cls.Mode}
+				// Passthrough: relay key not via Authorization AND Authorization present.
+				if !relayKeyViaAuthz && rawAuthz != "" && res.PassthroughAllowed {
+					if g := gate(ptGate); g.Enabled {
+						subj.PassthroughAuth = rawAuthz
+					}
+				}
+				next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subj)))
+				return
+			}
+		}
+		if matchesEnv(relayKey, envKeys) {
+			next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), Subject{Mode: cls.Mode})))
+			return
+		}
+		reject(w, ReasonInvalid)
+		return
+	}
+
+	// No relay key — try anonymous passthrough (only in normal mode when gate allows).
+	if rawAuthz != "" {
+		g := gate(ptGate)
+		if g.Enabled && g.UnauthenticatedEnabled {
+			anonSubj := Subject{PassthroughAuth: rawAuthz, Anonymous: true, Mode: cls.Mode}
+			next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), anonSubj)))
+			return
+		}
+	}
+
+	if rawAuthz == "" && relayKey == "" {
+		reject(w, ReasonMissing)
+	} else {
+		reject(w, ReasonInvalid)
+	}
+}
+
+// handleProxyAuthed processes ModeProxyAuthed requests (relay key + provider key).
+func handleProxyAuthed(
+	w http.ResponseWriter, r *http.Request,
+	cls mode.Classification,
+	lookup Lookup, ptGate PassthroughGateFunc,
+	next http.Handler,
+) {
+	if cls.RelayKey == "" {
+		reject(w, ReasonMissing)
+		return
+	}
+	if lookup == nil {
+		// No lookup configured — can't verify passthrough permission.
+		reject(w, ReasonInvalid)
+		return
+	}
+	res, ok := lookup(cls.RelayKey)
+	if !ok {
+		reject(w, ReasonInvalid)
+		return
+	}
+	if !res.PassthroughAllowed {
+		rejectWith(w, http.StatusForbidden, deny403Passthrough)
+		return
+	}
+	g := gate(ptGate)
+	if !g.Enabled {
+		rejectWith(w, http.StatusForbidden, deny403Passthrough)
+		return
+	}
+	// Provider key is in Authorization; stamp it as PassthroughAuth (with "Bearer " prefix).
+	subj := Subject{
+		KeyName:         res.KeyName,
+		PolicyRef:       res.PolicyRef,
+		PassthroughAuth: "Bearer " + cls.ProviderKey,
+		Mode:            cls.Mode,
+	}
+	next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subj)))
+}
+
+// handleProxyAnonymous processes ModeProxyAnonymous requests (no relay key).
+func handleProxyAnonymous(
+	w http.ResponseWriter, r *http.Request,
+	cls mode.Classification,
+	ptGate PassthroughGateFunc,
+	next http.Handler,
+) {
+	g := gate(ptGate)
+	if !g.Enabled || !g.UnauthenticatedEnabled {
+		rejectWith(w, http.StatusUnauthorized, deny401Anonymous)
+		return
+	}
+	subj := Subject{
+		PassthroughAuth: "Bearer " + cls.ProviderKey,
+		Anonymous:       true,
+		Mode:            cls.Mode,
+	}
+	next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), subj)))
+}
 
 // bearerToken strips the "Bearer " prefix from an Authorization header value.
 // Returns "" when the header is empty or doesn't use the Bearer scheme — the
