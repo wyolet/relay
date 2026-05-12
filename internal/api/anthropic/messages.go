@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,14 +19,14 @@ import (
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/transport"
 )
 
 // RequestPlan is an alias for routing.RequestPlan so callers don't need an extra import.
 type RequestPlan = routing.RequestPlan
 
-// Pipeline orchestrates message flow for one request through a Channel.
-type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error)
+// Pipeline runs the pipeline for one request and returns a typed Response.
+// All HTTP framing is the caller's responsibility; pipeline.Run is free of net/http.
+type Pipeline func(ctx context.Context, req *pipeline.Request) (*pipeline.Response, error)
 
 // MessagesHandler returns an http.HandlerFunc for POST /v1/messages.
 func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.HandlerFunc {
@@ -125,10 +124,8 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			return
 		}
 
-		// Passthrough is decided at auth time, not at routing time. The
-		// middleware sets Subject.PassthroughAuth when the global Passthrough
-		// config + per-key (or unauthenticated) gates allow BYO-credential
-		// forwarding. Routing knows nothing about it.
+		// Passthrough is decided at auth time, not at routing time.
+		var passthroughAuth string
 		if subj := auth.SubjectFrom(r.Context()); subj.PassthroughAuth != "" {
 			pt := resolver.Passthrough()
 			if !pt.AllowsModel(mr.Model) {
@@ -139,6 +136,7 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			plan.Passthrough = true
 			plan.PassthroughAuth = subj.PassthroughAuth
 			plan.PassthroughHeaders = inboundPassthroughHeaders
+			passthroughAuth = subj.PassthroughAuth
 		}
 		_ = inboundAuth
 		plan.RawQuery = r.URL.RawQuery
@@ -153,93 +151,68 @@ func MessagesHandler(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			attribution = reqid.Attribution(ctx)
 		}
 
-		// Forward the raw body verbatim; consumer's model name is authoritative.
-		forwardBody := mr.Raw
-
-		msg := &transport.Message{
-			ID:          reqid.From(ctx),
-			ParentID:    "",
-			Body:        forwardBody,
-			Headers:     map[string]string{"Content-Type": r.Header.Get("Content-Type")},
-			Attribution: attribution,
-			ReceivedAt:  time.Now().UTC(),
+		req := &pipeline.Request{
+			Body:            mr.Raw,
+			Attribution:     attribution,
+			PassthroughAuth: passthroughAuth,
+			Provider:        plan.Provider,
+			Policy:          plan.Policy,
+			Model:           plan.Model,
+			Secrets:         plan.Secrets,
+			Rules:           plan.Rules,
 		}
 
-		ch := transport.NewChannel(ctx, msg.ID, 1, 64)
-		defer ch.Cancel()
-
-		ch.In <- msg
-		close(ch.In)
-
-		type pipelineResult struct {
-			res pipeline.RunResult
-			err error
+		resp, pipeErr := runPipeline(ctx, req)
+		if pipeErr != nil && resp == nil {
+			reqid.Logger(r.Context()).Warn("pipeline error", "err", pipeErr)
+			statusCode = http.StatusInternalServerError
+			writeAnthropicError(w, statusCode, "api_error", "internal error")
+			return
 		}
-		pipeResultCh := make(chan pipelineResult, 1)
-		go func() {
-			res, err := runPipeline(ch.Ctx, ch, plan)
-			pipeResultCh <- pipelineResult{res: res, err: err}
-		}()
+		if resp == nil {
+			statusCode = http.StatusInternalServerError
+			writeAnthropicError(w, statusCode, "api_error", "internal error")
+			return
+		}
 
-		flusher, _ := w.(http.Flusher)
-		flush := func() {
-			if flusher != nil {
+		statusCode = resp.Status
+		ct := resp.Headers["Content-Type"]
+		if ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		if ra := resp.Headers["Retry-After"]; ra != "" {
+			w.Header().Set("Retry-After", ra)
+		}
+		w.WriteHeader(resp.Status)
+
+		isStreaming := strings.HasPrefix(ct, "text/event-stream")
+		if isStreaming {
+			writeSSE(w, resp.Body)
+		} else {
+			io.Copy(w, resp.Body)
+		}
+
+		if pipeErr != nil {
+			reqid.Logger(r.Context()).Warn("pipeline error", "err", pipeErr)
+		}
+		upstreamDur = resp.UpstreamDuration
+	}
+}
+
+// writeSSE copies body to w, flushing after each read.
+func writeSSE(w http.ResponseWriter, body io.Reader) {
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			if canFlush {
 				flusher.Flush()
 			}
 		}
-		firstSeen := false
-		isStreaming := false
-		for {
-			select {
-			case <-r.Context().Done():
-				goto done
-			case outMsg, ok := <-ch.Out:
-				if !ok {
-					goto done
-				}
-				if !firstSeen {
-					firstSeen = true
-					status := 200
-					if s := outMsg.Headers["X-Relay-Status"]; s != "" {
-						if code, err := strconv.Atoi(s); err == nil {
-							status = code
-						}
-					}
-					statusCode = status
-					ct := outMsg.Headers["Content-Type"]
-					if ct != "" {
-						w.Header().Set("Content-Type", ct)
-					}
-					if ra := outMsg.Headers["Retry-After"]; ra != "" {
-						w.Header().Set("Retry-After", ra)
-					}
-					isStreaming = strings.HasPrefix(ct, "text/event-stream")
-					w.WriteHeader(status)
-					if len(outMsg.Body) > 0 {
-						w.Write(outMsg.Body)
-						flush()
-					}
-					continue
-				}
-				// Subsequent messages.
-				if isStreaming && outMsg.Headers["X-Relay-Final"] == "true" && len(outMsg.Body) > 0 {
-					// Mid-stream error: emit the error body then done.
-					w.Write(outMsg.Body)
-					flush()
-					goto done
-				}
-				if len(outMsg.Body) > 0 {
-					w.Write(outMsg.Body)
-					flush()
-				}
-			}
-		}
-	done:
-
-		pr := <-pipeResultCh
-		upstreamDur = pr.res.UpstreamDuration
-		if pr.err != nil {
-			reqid.Logger(r.Context()).Warn("pipeline error", "err", pr.err)
+		if err != nil {
+			break
 		}
 	}
 }

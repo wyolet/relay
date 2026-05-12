@@ -43,7 +43,6 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgrl "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/transport"
 )
 
 // masterKey holds the parsed RELAY_MASTER_KEY (32 bytes) or nil if unset.
@@ -352,85 +351,55 @@ func main() {
 
 	resolver := routing.New(catalogStore)
 
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) (pipeline.RunResult, error) {
-		ob, err := outboundFor(plan)
-		if err != nil {
-			return pipeline.RunResult{}, err
-		}
-		if plan.Policy != nil && len(plan.Secrets) > 0 {
-			return pipeline.Run(ctx, ch, pipeline.RunOptions{
-				Provider:       plan.Provider,
-				Policy:           plan.Policy,
-				Model:          plan.Model,
-				Secrets:        plan.Secrets,
-				Selector:       sel,
-				Outbound:       ob,
-				Limiter:        limiter,
-				Rules:          plan.Rules,
-				TokenExtractor: pkgopenai.ExtractTokens,
-				CatalogStore:   catalogStore,
-			})
-		}
-		emptySecret := &catalog.Secret{
-			Metadata: catalog.Metadata{Name: "anon"},
-			Resolved: "",
-			KeyHash:  "anon",
-		}
-		syntheticPool := &catalog.Policy{
-			Metadata: catalog.Metadata{Name: "anon-policy"},
-		}
-		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Policy:           syntheticPool,
-			Secrets:        []*catalog.Secret{emptySecret},
-			Selector:       sel,
-			Outbound:       ob,
-			TokenExtractor: pkgopenai.ExtractTokens,
+	runPipeline := func(ctx context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		ob, err := outboundFor(&apiopenai.RequestPlan{
+			Provider: req.Provider,
+			Policy:   req.Policy,
+			Model:    req.Model,
+			Secrets:  req.Secrets,
 		})
+		if err != nil {
+			return nil, err
+		}
+		req.Outbound = ob
+		req.Selector = sel
+		req.Limiter = limiter
+		req.TokenExtractor = pkgopenai.ExtractTokens
+		req.CatalogStore = catalogStore
+		if req.Policy == nil || len(req.Secrets) == 0 {
+			req.Secrets = []*catalog.Secret{
+				{Metadata: catalog.Metadata{Name: "anon"}, Resolved: "", KeyHash: "anon"},
+			}
+			req.Policy = &catalog.Policy{Metadata: catalog.Metadata{Name: "anon-policy"}}
+		}
+		return pipeline.Run(ctx, req)
 	}
 
-	runAnthropicPipeline := func(ctx context.Context, ch *transport.Channel, plan *apianthropic.RequestPlan) (pipeline.RunResult, error) {
+	runAnthropicPipeline := func(ctx context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		// Reconstruct a minimal RequestPlan to drive messagesOutboundFor.
+		plan := &apianthropic.RequestPlan{
+			Provider:        req.Provider,
+			Policy:          req.Policy,
+			Model:           req.Model,
+			Secrets:         req.Secrets,
+			PassthroughAuth: req.PassthroughAuth,
+		}
 		mob, err := messagesOutboundFor(plan)
 		if err != nil {
-			return pipeline.RunResult{}, err
+			return nil, err
 		}
-		// Inject per-request extras (query string, passthrough headers) via context.
-		if plan.RawQuery != "" || len(plan.PassthroughHeaders) > 0 {
-			ctx = provideranthropicpkg.WithRequestExtras(ctx, provideranthropicpkg.RequestExtras{
-				RawQuery:     plan.RawQuery,
-				ExtraHeaders: plan.PassthroughHeaders,
-			})
+		req.DoUpstream = mob.Messages
+		req.Selector = sel
+		req.Limiter = limiter
+		req.TokenExtractor = pkganthropic.ExtractTokens
+		req.CatalogStore = catalogStore
+		if req.Policy == nil || (len(req.Secrets) == 0 && req.PassthroughAuth == "") {
+			req.Secrets = []*catalog.Secret{
+				{Metadata: catalog.Metadata{Name: "anon"}, Resolved: "", KeyHash: "anon"},
+			}
+			req.Policy = &catalog.Policy{Metadata: catalog.Metadata{Name: "anon-policy"}}
 		}
-		doUpstream := mob.Messages
-		if plan.Policy != nil && (len(plan.Secrets) > 0 || plan.Passthrough) {
-			return pipeline.Run(ctx, ch, pipeline.RunOptions{
-				Provider:        plan.Provider,
-				Policy:            plan.Policy,
-				Model:           plan.Model,
-				Secrets:         plan.Secrets,
-				Selector:        sel,
-				DoUpstream:      doUpstream,
-				Limiter:         limiter,
-				Rules:           plan.Rules,
-				TokenExtractor:  pkganthropic.ExtractTokens,
-				CatalogStore:    catalogStore,
-				PassthroughAuth: plan.PassthroughAuth,
-			})
-		}
-		emptySecret := &catalog.Secret{
-			Metadata: catalog.Metadata{Name: "anon"},
-			Resolved: "",
-			KeyHash:  "anon",
-		}
-		syntheticPool := &catalog.Policy{
-			Metadata: catalog.Metadata{Name: "anon-policy"},
-		}
-		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Policy:           syntheticPool,
-			Secrets:        []*catalog.Secret{emptySecret},
-			Selector:       sel,
-			DoUpstream:     doUpstream,
-			TokenExtractor: pkganthropic.ExtractTokens,
-		})
+		return pipeline.Run(ctx, req)
 	}
 
 	// Healthcheck backends: nil pinger = unconditionally healthy (memory/file).

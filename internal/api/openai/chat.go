@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,16 +19,16 @@ import (
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/transport"
 )
 
 // RequestPlan is an alias for routing.RequestPlan so existing callers don't break.
 // Canonical definition lives in internal/routing to keep the import graph cycle-free.
 type RequestPlan = routing.RequestPlan
 
-// Pipeline orchestrates message flow for one request through a Channel.
-// It returns a RunResult carrying upstream duration alongside any error.
-type Pipeline func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error)
+// Pipeline runs the pipeline for one request and returns a typed Response.
+// All HTTP framing (status code, headers, body copy, SSE chunking) is the
+// caller's responsibility; pipeline.Run is free of net/http concerns.
+type Pipeline func(ctx context.Context, req *pipeline.Request) (*pipeline.Response, error)
 
 // ChatCompletions returns an http.HandlerFunc. resolver resolves the routing.Request
 // to a RequestPlan; runPipeline orchestrates the message flow.
@@ -120,6 +119,7 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 
 		// Passthrough is decided at auth time. When set, enforce the global
 		// passthrough models allowlist before forwarding upstream.
+		var passthroughAuth string
 		if subj := auth.SubjectFrom(r.Context()); subj.PassthroughAuth != "" {
 			pt := resolver.Passthrough()
 			if !pt.AllowsModel(cr.Model) {
@@ -130,6 +130,7 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 			}
 			plan.Passthrough = true
 			plan.PassthroughAuth = subj.PassthroughAuth
+			passthroughAuth = subj.PassthroughAuth
 		}
 
 		// Build attribution: header wins over body metadata (M4 contract preserved).
@@ -143,94 +144,71 @@ func ChatCompletions(resolver *routing.Resolver, runPipeline Pipeline) http.Hand
 		}
 
 		// Forward the raw body verbatim; consumer's model name is authoritative.
-		forwardBody := cr.Raw
-
-		msg := &transport.Message{
-			ID:          reqid.From(ctx),
-			ParentID:    "",
-			Body:        forwardBody,
-			Headers:     map[string]string{"Content-Type": r.Header.Get("Content-Type")},
-			Attribution: attribution,
-			ReceivedAt:  time.Now().UTC(),
+		req := &pipeline.Request{
+			Body:            cr.Raw,
+			Attribution:     attribution,
+			PassthroughAuth: passthroughAuth,
+			Provider:        plan.Provider,
+			Policy:          plan.Policy,
+			Model:           plan.Model,
+			Secrets:         plan.Secrets,
+			Rules:           plan.Rules,
 		}
 
-		ch := transport.NewChannel(ctx, msg.ID, 1, 64)
-		defer ch.Cancel()
-
-		ch.In <- msg
-		close(ch.In)
-
-		type pipelineResult struct {
-			res pipeline.RunResult
-			err error
+		resp, pipeErr := runPipeline(ctx, req)
+		if pipeErr != nil && resp == nil {
+			// Pipeline failed before producing any response (e.g. context cancelled
+			// before first message). Log and return 500 if headers not yet sent.
+			reqid.Logger(r.Context()).Warn("pipeline error", "err", pipeErr)
+			statusCode = http.StatusInternalServerError
+			writeError(w, statusCode, "api_error", "internal error", "")
+			return
 		}
-		pipeResultCh := make(chan pipelineResult, 1)
-		go func() {
-			res, err := runPipeline(ch.Ctx, ch, plan)
-			pipeResultCh <- pipelineResult{res: res, err: err}
-		}()
+		if resp == nil {
+			statusCode = http.StatusInternalServerError
+			writeError(w, statusCode, "api_error", "internal error", "")
+			return
+		}
 
-		flusher, _ := w.(http.Flusher)
-		flush := func() {
-			if flusher != nil {
+		statusCode = resp.Status
+		ct := resp.Headers["Content-Type"]
+		if ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		if ra := resp.Headers["Retry-After"]; ra != "" {
+			w.Header().Set("Retry-After", ra)
+		}
+		w.WriteHeader(resp.Status)
+
+		isStreaming := strings.HasPrefix(ct, "text/event-stream")
+		if isStreaming {
+			writeSSE(w, resp.Body)
+		} else {
+			io.Copy(w, resp.Body)
+		}
+
+		if pipeErr != nil {
+			reqid.Logger(r.Context()).Warn("pipeline error", "err", pipeErr)
+		}
+		upstreamDur = resp.UpstreamDuration
+	}
+}
+
+// writeSSE copies body to w, flushing after each read. It does not add SSE
+// framing — the upstream bytes are already in SSE format (data: ...\n\n).
+func writeSSE(w http.ResponseWriter, body io.Reader) {
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			w.Write(buf[:n])
+			if canFlush {
 				flusher.Flush()
 			}
 		}
-		firstSeen := false
-		isStreaming := false
-		for {
-			select {
-			case <-r.Context().Done():
-				goto done
-			case outMsg, ok := <-ch.Out:
-				if !ok {
-					goto done
-				}
-				if !firstSeen {
-					firstSeen = true
-					status := 200
-					if s := outMsg.Headers["X-Relay-Status"]; s != "" {
-						if code, err := strconv.Atoi(s); err == nil {
-							status = code
-						}
-					}
-					statusCode = status
-					ct := outMsg.Headers["Content-Type"]
-					if ct != "" {
-						w.Header().Set("Content-Type", ct)
-					}
-					if ra := outMsg.Headers["Retry-After"]; ra != "" {
-						w.Header().Set("Retry-After", ra)
-					}
-					isStreaming = strings.HasPrefix(ct, "text/event-stream")
-					w.WriteHeader(status)
-					if len(outMsg.Body) > 0 {
-						w.Write(outMsg.Body)
-						flush()
-					}
-					continue
-				}
-				// Subsequent messages.
-				if isStreaming && outMsg.Headers["X-Relay-Final"] == "true" && len(outMsg.Body) > 0 {
-					// Mid-stream error: emit SSE error event then [DONE].
-					w.Write([]byte("data: "))
-					w.Write(outMsg.Body)
-					w.Write([]byte("\n\ndata: [DONE]\n\n"))
-					flush()
-					goto done
-				}
-				if len(outMsg.Body) > 0 {
-					w.Write(outMsg.Body)
-					flush()
-				}
-			}
-		}
-	done:
-
-		pr := <-pipeResultCh
-		upstreamDur = pr.res.UpstreamDuration
-		if pr.err != nil {
-			reqid.Logger(r.Context()).Warn("pipeline error", "err", pr.err)
+		if err != nil {
+			break
 		}
 	}
 }

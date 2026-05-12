@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/transport"
 )
 
 // TestRequestIDPresentOnEveryLogLine drives a ChatCompletions request through
@@ -38,42 +38,38 @@ func TestRequestIDPresentOnEveryLogLine(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	// Build a pipeline that does some logging via reqid.Logger.
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
+	runPipeline := func(ctx context.Context, req *pipeline.Request) (*pipeline.Response, error) {
 		log := reqid.Logger(ctx)
 		log.Debug("pipeline: test debug", "phase", "start")
 		log.Info("pipeline: test info", "phase", "upstream")
 		log.Warn("pipeline: test warn", "phase", "degraded")
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{
-				"X-Relay-Status": "200",
-				"Content-Type":   "application/json",
-			},
-			Body: []byte(`{"choices":[]}`),
-		}
 		log.Debug("pipeline: test debug", "phase", "done")
-		return pipeline.RunResult{}, nil
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    io.NopCloser(bytes.NewReader([]byte(`{"choices":[]}`))),
+		}, nil
 	}
 
 	body := `{"model":"gpt-4","messages":[]}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
 	// Stamp request_id into context (mimicking reqid.Middleware).
-	ctx := req.Context()
+	ctx := r.Context()
 	const testReqID = "01JTEST00000000000000000000"
 	ctx = context.WithValue(ctx, ctxKeyForTest{}, testReqID) // not used directly
 	// Use reqid middleware to stamp the context properly.
-	req = req.WithContext(ctx)
+	r = r.WithContext(ctx)
 
 	// Wrap in reqid middleware so the logger is context-bound.
 	var captured *http.Request
 	mw := reqid.Middleware(logger)
-	innerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		captured = r
-		ChatCompletions(fakeResolver(), runPipeline)(w, r)
+	innerHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		captured = req
+		ChatCompletions(fakeResolver(), runPipeline)(w, req)
 	})
 	rec := httptest.NewRecorder()
-	mw(innerHandler).ServeHTTP(rec, req)
+	mw(innerHandler).ServeHTTP(rec, r)
 
 	if captured == nil {
 		t.Fatal("inner handler not called")

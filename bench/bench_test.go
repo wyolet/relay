@@ -89,7 +89,6 @@ import (
 	providerOpenAI "github.com/wyolet/relay/internal/provider/openai"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/kv"
-	"github.com/wyolet/relay/pkg/transport"
 	"github.com/wyolet/relay/internal/usage"
 )
 
@@ -239,37 +238,21 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 
 	resolver := routing.New(cfg)
 
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *apiopenai.RequestPlan) (pipeline.RunResult, error) {
-		ob, err := reg.Get(plan.Provider.Spec.Kind, plan.Provider.Spec.BaseURL)
+	runPipeline := func(ctx context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		ob, err := reg.Get(req.Provider.Spec.Kind, req.Provider.Spec.BaseURL)
 		if err != nil {
-			return pipeline.RunResult{}, err
+			return nil, err
 		}
-		if plan.Policy != nil && len(plan.Secrets) > 0 {
-			return pipeline.Run(ctx, ch, pipeline.RunOptions{
-				Provider: plan.Provider,
-				Policy:     plan.Policy,
-				Model:    plan.Model,
-				Secrets:  plan.Secrets,
-				Selector: sel,
-				Outbound: ob,
-				Limiter:  limiter,
-				Rules:    plan.Rules,
-			})
+		req.Outbound = ob
+		req.Selector = sel
+		req.Limiter = limiter
+		if req.Policy == nil || len(req.Secrets) == 0 {
+			req.Secrets = []*catalog.Secret{
+				{Metadata: catalog.Metadata{Name: "anon"}, Resolved: "", KeyHash: "anon"},
+			}
+			req.Policy = &catalog.Policy{Metadata: catalog.Metadata{Name: "anon-policy"}}
 		}
-		emptySecret := &catalog.Secret{
-			Metadata: catalog.Metadata{Name: "anon"},
-			Resolved: "",
-			KeyHash:  "anon",
-		}
-		syntheticPool := &catalog.Policy{
-			Metadata: catalog.Metadata{Name: "anon-policy"},
-		}
-		return pipeline.Run(ctx, ch, pipeline.RunOptions{
-			Policy:     syntheticPool,
-			Secrets:  []*catalog.Secret{emptySecret},
-			Selector: sel,
-			Outbound: ob,
-		})
+		return pipeline.Run(ctx, req)
 	}
 
 	apiKeys := auth.ParseKeys(benchKey)
