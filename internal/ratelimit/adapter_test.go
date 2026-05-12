@@ -23,14 +23,13 @@ func TestAdapterKeyFormat(t *testing.T) {
 		Rule: catalog.RateLimitRule{
 			Meter:    "requests",
 			Amount:   100,
+			Window:   time.Minute,
 			Strategy: catalog.StrategyTokenBucket,
 		},
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: "rl-basic"},
 			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategyTokenBucket,
-				Window:   time.Minute,
-				Rules:    []catalog.RateLimitRule{{Meter: "requests", Amount: 100}},
+				Rules: []catalog.RateLimitRule{{Meter: "requests", Amount: 100, Window: time.Minute, Strategy: catalog.StrategyTokenBucket}},
 			},
 		},
 	}

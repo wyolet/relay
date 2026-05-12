@@ -197,9 +197,6 @@ func resolvedStrategy(r catalog.ResolvedRule) catalog.RateLimitStrategy {
 	if r.Strategy != "" {
 		return r.Strategy
 	}
-	if r.RateLimit != nil && r.RateLimit.Spec.Strategy != "" {
-		return r.RateLimit.Spec.Strategy
-	}
 	return catalog.StrategyTokenBucket
 }
 
@@ -224,11 +221,5 @@ func resolvedRLName(r catalog.ResolvedRule) string {
 
 // resolvedWindow returns the effective window for a ResolvedRule.
 func resolvedWindow(r catalog.ResolvedRule) time.Duration {
-	if r.Window != 0 {
-		return r.Window
-	}
-	if r.RateLimit != nil {
-		return r.RateLimit.Spec.Window
-	}
-	return 0
+	return r.Window
 }

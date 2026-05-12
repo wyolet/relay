@@ -1,0 +1,67 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: control-api
+  displayName: API rate limits
+  description: "DoS protection for control and non-inference public API endpoints. Per-IP runtime cap."
+  owner:
+    kind: system
+spec:
+  enabled: false
+  rules:
+    - meter: requests
+      amount: 10
+      window: 1s
+      strategy: sliding-window
+    - meter: requests
+      amount: 300
+      window: 1m
+      strategy: sliding-window
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: inference-api
+  displayName: Inference rate limits (managed)
+  description: "Config ceiling for per-key user rate limits on authed normal-mode inference requests. Empty rules = no ceiling; operator adds rules to cap what per-key RLs can configure."
+  owner:
+    kind: system
+spec:
+  enabled: false
+  rules: []
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: inference-api-proxy
+  displayName: Inference rate limits (proxy)
+  description: "Config ceiling for per-key user rate limits on authed proxy-mode inference requests (BYOK customers). Empty rules = no ceiling."
+  owner:
+    kind: system
+spec:
+  enabled: false
+  rules: []
+---
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: inference-api-proxy-anonymous
+  displayName: Inference rate limits (anonymous proxy)
+  description: "Per-IP runtime cap for anonymous proxy-mode inference requests (X-WR-Proxy-Mode: Proxy without a Relay key). Protects against abuse of the proxy path."
+  owner:
+    kind: system
+spec:
+  enabled: true
+  rules:
+    - meter: requests
+      amount: 60
+      window: 1m
+      strategy: sliding-window
+    - meter: tokens
+      amount: 5000
+      window: 1m
+      strategy: sliding-window
+    - meter: concurrency
+      amount: 10
+      window: 1m
+      strategy: sliding-window

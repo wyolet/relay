@@ -109,6 +109,7 @@ func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 		},
 		ResourceID:      func(v *catalog.Provider) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Provider) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Provider) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Provider) catalog.Patch {
 			return catalog.Patch{UpsertProvider: v}
 		},
@@ -169,6 +170,7 @@ func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog
 		},
 		ResourceID:      func(v *catalog.Policy) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Policy) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Policy) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Policy) catalog.Patch {
 			return catalog.Patch{UpsertPolicy: v}
 		},
@@ -229,6 +231,7 @@ func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		},
 		ResourceID:      func(v *catalog.Model) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Model) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Model) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Model) catalog.Patch {
 			return catalog.Patch{UpsertModel: v}
 		},
@@ -289,6 +292,7 @@ func routeKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 		},
 		ResourceID:      func(v *catalog.Route) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.Route) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.Route) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.Route) catalog.Patch {
 			return catalog.Patch{UpsertRoute: v}
 		},
@@ -349,19 +353,14 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		},
 		ResourceID:      func(v *catalog.RateLimit) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.RateLimit) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.RateLimit) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.RateLimit) catalog.Patch {
 			return catalog.Patch{UpsertRateLimit: v}
 		},
 		PatchDelete: func(slug string) catalog.Patch {
 			return catalog.Patch{DeleteRateLimit: slug}
 		},
-		Guard: func(_ context.Context, existing *catalog.RateLimit) error {
-			if existing.Spec.Source == string(catalog.SourceSystemMirrored) {
-				return huma.NewError(http.StatusForbidden,
-					"system-mirrored RateLimit objects are read-only")
-			}
-			return nil
-		},
+		Guard: rateLimitGuard,
 	}
 }
 
@@ -448,6 +447,7 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 		},
 		ResourceID:      func(v *catalog.RelayKey) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.RelayKey) string { return v.Metadata.ID },
+		Owner:           func(v *catalog.RelayKey) catalog.Owner { return v.Metadata.Owner },
 		Patch: func(v *catalog.RelayKey) catalog.Patch {
 			return catalog.Patch{UpsertRelayKey: v}
 		},
@@ -455,6 +455,57 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 			return catalog.Patch{DeleteRelayKey: slug}
 		},
 	}
+}
+
+// --- RateLimit guard ---
+
+// rateLimitGuard enforces per-owner edit rules:
+//   - OwnerUser: unrestricted edit + delete.
+//   - OwnerSystem / OwnerProvider: only spec.enabled and spec.rules[i].amount
+//     (matched by index; length must not change) may differ; delete rejected.
+func rateLimitGuard(_ context.Context, existing, proposed *catalog.RateLimit) error {
+	switch existing.Metadata.Owner.Kind {
+	case catalog.OwnerUser, "":
+		// user-owned (or untagged legacy): no restrictions
+		return nil
+	case catalog.OwnerSystem, catalog.OwnerProvider:
+		// delete is proposed==nil (zero value pointer)
+		if proposed == nil {
+			return huma.NewError(http.StatusForbidden,
+				"system/provider-owned RateLimit objects cannot be deleted via the API")
+		}
+		return enforceSystemRateLimitAllowlist(existing, proposed)
+	default:
+		return huma.NewError(http.StatusForbidden,
+			"unknown owner kind; edit rejected")
+	}
+}
+
+// enforceSystemRateLimitAllowlist rejects any change to identity-style fields
+// on system/provider-owned RateLimits. The rules array is operator-tunable
+// (add, remove, edit any rule field) — Relay's runtime usage keys off the
+// bucket NAME, not the rule shape, so rule edits do not break wiring.
+//
+// Locked: name, owner, description, displayName.
+// Editable: enabled, rules[] (count and contents).
+func enforceSystemRateLimitAllowlist(existing, proposed *catalog.RateLimit) error {
+	if proposed.Metadata.Name != existing.Metadata.Name {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.name cannot be changed")
+	}
+	if proposed.Metadata.Owner != existing.Metadata.Owner {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.owner cannot be changed")
+	}
+	if proposed.Metadata.Description != existing.Metadata.Description {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.description cannot be changed")
+	}
+	if proposed.Metadata.DisplayName != existing.Metadata.DisplayName {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.displayName cannot be changed")
+	}
+	return nil
 }
 
 // --- helpers ---

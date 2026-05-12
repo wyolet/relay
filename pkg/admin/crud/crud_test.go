@@ -34,16 +34,30 @@ type fakeReloader struct{}
 func (fakeReloader) Reload(_ context.Context) error { return nil }
 
 // buildRateLimitKind builds a minimal crud.Kind[*catalog.RateLimit] with an
-// in-memory store seeded with one system_mirrored and one user_defined RL.
+// in-memory store seeded with one system-owned and one user-owned RL.
 func buildRateLimitKind() (*crud.Kind[*catalog.RateLimit], map[string]*catalog.RateLimit) {
+	sysRule := catalog.RateLimitRule{
+		Meter:    "requests",
+		Amount:   100,
+		Window:   time.Minute,
+		Strategy: catalog.StrategySlidingWindow,
+	}
 	store := map[string]*catalog.RateLimit{
 		"sys-rl": {
-			Metadata: catalog.Metadata{Name: "sys-rl", ID: "00000000-0000-0000-0000-000000000001"},
-			Spec:     catalog.RateLimitSpec{Source: string(catalog.SourceSystemMirrored)},
+			Metadata: catalog.Metadata{
+				Name:  "sys-rl",
+				ID:    "00000000-0000-0000-0000-000000000001",
+				Owner: catalog.Owner{Kind: catalog.OwnerSystem},
+			},
+			Spec: catalog.RateLimitSpec{Rules: []catalog.RateLimitRule{sysRule}},
 		},
 		"user-rl": {
-			Metadata: catalog.Metadata{Name: "user-rl", ID: "00000000-0000-0000-0000-000000000002"},
-			Spec:     catalog.RateLimitSpec{Source: string(catalog.SourceUserDefined)},
+			Metadata: catalog.Metadata{
+				Name:  "user-rl",
+				ID:    "00000000-0000-0000-0000-000000000002",
+				Owner: catalog.Owner{Kind: catalog.OwnerUser},
+			},
+			Spec: catalog.RateLimitSpec{Rules: []catalog.RateLimitRule{sysRule}},
 		},
 	}
 
@@ -102,10 +116,17 @@ func buildRateLimitKind() (*crud.Kind[*catalog.RateLimit], map[string]*catalog.R
 		},
 		ResourceID:      func(v *catalog.RateLimit) string { return v.Metadata.Name },
 		ResourceIDValue: func(v *catalog.RateLimit) string { return v.Metadata.ID },
-		Guard: func(_ context.Context, existing *catalog.RateLimit) error {
-			if existing.Spec.Source == string(catalog.SourceSystemMirrored) {
-				return huma.NewError(http.StatusForbidden,
-					"system-mirrored RateLimit objects are read-only")
+		Guard: func(_ context.Context, existing, proposed *catalog.RateLimit) error {
+			if existing.Metadata.Owner.Kind == catalog.OwnerSystem {
+				if proposed == nil {
+					return huma.NewError(http.StatusForbidden,
+						"system-owned RateLimit objects cannot be deleted")
+				}
+				// For testing: only allow amount edits.
+				if len(proposed.Spec.Rules) != len(existing.Spec.Rules) {
+					return huma.NewError(http.StatusForbidden,
+						"system-owned RateLimit: rule count cannot be changed")
+				}
 			}
 			return nil
 		},
@@ -126,16 +147,18 @@ func buildTestAPI(t *testing.T, k *crud.Kind[*catalog.RateLimit]) huma.API {
 	return api
 }
 
-func TestGuard_PUT_SystemMirrored_Returns403(t *testing.T) {
+func TestGuard_PUT_SystemOwned_Returns403(t *testing.T) {
 	k, _ := buildRateLimitKind()
 	api := buildTestAPI(t, k)
 
+	// Attempt to add a second rule — system guard should reject.
 	body, _ := json.Marshal(&catalog.RateLimit{
-		Metadata: catalog.Metadata{Name: "sys-rl"},
+		Metadata: catalog.Metadata{Name: "sys-rl", Owner: catalog.Owner{Kind: catalog.OwnerSystem}},
 		Spec: catalog.RateLimitSpec{
-			Source:   string(catalog.SourceSystemMirrored),
-			Strategy: catalog.StrategySlidingWindow,
-			Window:   time.Minute,
+			Rules: []catalog.RateLimitRule{
+				{Meter: "requests", Amount: 100, Window: time.Minute, Strategy: catalog.StrategySlidingWindow},
+				{Meter: "tokens", Amount: 1000, Window: time.Minute, Strategy: catalog.StrategySlidingWindow},
+			},
 		},
 	})
 	req := httptest.NewRequest(http.MethodPut,
@@ -146,11 +169,11 @@ func TestGuard_PUT_SystemMirrored_Returns403(t *testing.T) {
 	api.Adapter().ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
-		t.Errorf("PUT system_mirrored: want 403, got %d (body: %s)", w.Code, w.Body.String())
+		t.Errorf("PUT system-owned (rule count change): want 403, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
-func TestGuard_DELETE_SystemMirrored_Returns403(t *testing.T) {
+func TestGuard_DELETE_SystemOwned_Returns403(t *testing.T) {
 	k, _ := buildRateLimitKind()
 	api := buildTestAPI(t, k)
 
@@ -161,11 +184,11 @@ func TestGuard_DELETE_SystemMirrored_Returns403(t *testing.T) {
 	api.Adapter().ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
-		t.Errorf("DELETE system_mirrored: want 403, got %d (body: %s)", w.Code, w.Body.String())
+		t.Errorf("DELETE system-owned: want 403, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }
 
-func TestGuard_DELETE_UserDefined_Succeeds(t *testing.T) {
+func TestGuard_DELETE_UserOwned_Succeeds(t *testing.T) {
 	k, _ := buildRateLimitKind()
 	api := buildTestAPI(t, k)
 
@@ -176,6 +199,6 @@ func TestGuard_DELETE_UserDefined_Succeeds(t *testing.T) {
 	api.Adapter().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNoContent {
-		t.Errorf("DELETE user_defined: want 204, got %d (body: %s)", w.Code, w.Body.String())
+		t.Errorf("DELETE user-owned: want 204, got %d (body: %s)", w.Code, w.Body.String())
 	}
 }

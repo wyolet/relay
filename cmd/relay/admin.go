@@ -29,9 +29,9 @@ func adminReloadRules(rpm int64) []catalog.ResolvedRule {
 		Kind:       catalog.KindRateLimit,
 		Metadata:   catalog.Metadata{Name: "admin-reload-rpm"},
 		Spec: catalog.RateLimitSpec{
-			Strategy: catalog.StrategySlidingWindow,
-			Window:   60 * time.Second,
-			Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: rpm}},
+			Rules: []catalog.RateLimitRule{
+				{Meter: string(catalog.MeterRequests), Amount: rpm, Window: 60 * time.Second, Strategy: catalog.StrategySlidingWindow},
+			},
 		},
 	}
 	return []catalog.ResolvedRule{
@@ -39,6 +39,8 @@ func adminReloadRules(rpm int64) []catalog.ResolvedRule {
 			ParentKind: "Admin",
 			ParentName: "reload",
 			Meter:      catalog.MeterRequests,
+			Strategy:   catalog.StrategySlidingWindow,
+			Window:     60 * time.Second,
 			RateLimit:  rl,
 			Rule:       rl.Spec.Rules[0],
 		},

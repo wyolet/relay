@@ -31,11 +31,11 @@ func makeRuleWith(meter catalog.Meter, amount int64, window time.Duration, name 
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: name},
 			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategySlidingWindow,
-				Window:   window,
-				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
+				Rules: []catalog.RateLimitRule{{Meter: string(meter), Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow}},
 			},
 		},
-		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
+		Rule:     catalog.RateLimitRule{Meter: string(meter), Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow},
+		Strategy: catalog.StrategySlidingWindow,
+		Window:   window,
 	}
 }

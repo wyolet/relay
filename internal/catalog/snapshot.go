@@ -439,14 +439,14 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 		rl := &RateLimit{
 			APIVersion: APIVersion,
 			Kind:       KindRateLimit,
-			Metadata:   Metadata{Name: rlName},
-			Spec: RateLimitSpec{
-				Source:      string(SourceSystemMirrored),
-				Strategy:    StrategySlidingWindow,
-				Window:      0, // each rule carries its own window
-				Rules:       tier.copyRules(),
-				Enabled:     &enabled,
+			Metadata: Metadata{
+				Name:        rlName,
 				Description: "Auto-injected upstream tier mirror for secret " + secretName,
+				Owner:       Owner{Kind: OwnerSystem},
+			},
+			Spec: RateLimitSpec{
+				Rules:   tier.copyRules(),
+				Enabled: &enabled,
 			},
 		}
 		s.secretTierRLs[secretName] = rl
@@ -470,14 +470,10 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 			for _, rule := range rl.Spec.NormalizedRules() {
 				strategy := rule.Strategy
 				if strategy == "" {
-					// Default per-rule strategy is token-bucket.
+					// Fallback for pre-#105 JSONB rows that still lack per-rule strategy.
 					strategy = StrategyTokenBucket
 				}
-				// Rule-level window overrides spec-level window; fall back to spec.Window.
 				w := rule.Window
-				if w == 0 {
-					w = rl.Spec.Window
-				}
 				out = append(out, ResolvedRule{
 					ParentKind:    parentKind,
 					ParentName:    parentName,

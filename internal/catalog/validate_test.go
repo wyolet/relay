@@ -15,10 +15,8 @@ func boolPtr(b bool) *bool { return &b }
 func makeSnapshotWithCeiling(ceilingEnabled *bool, ceilingRules []RateLimitRule, userRL *RateLimit) *snapshot {
 	s := newSnapshot()
 	ceiling := &RateLimit{
-		Metadata: Metadata{Name: "inference"},
+		Metadata: Metadata{Name: "inference", Owner: Owner{Kind: OwnerSystem}},
 		Spec: RateLimitSpec{
-			Source:  string(SourceSystemMirrored),
-			Window:  time.Minute,
 			Rules:   ceilingRules,
 			Enabled: ceilingEnabled,
 		},
@@ -35,13 +33,11 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		// Ceiling explicitly disabled → no validation, user RL is fine even if it exceeds.
 		snap := makeSnapshotWithCeiling(
 			boolPtr(false),
-			[]RateLimitRule{{Meter: "requests", Amount: 1000}},
+			[]RateLimitRule{{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			&RateLimit{
-				Metadata: Metadata{Name: "user-rl"},
+				Metadata: Metadata{Name: "user-rl", Owner: Owner{Kind: OwnerUser}},
 				Spec: RateLimitSpec{
-					Source: string(SourceUserDefined),
-					Window: time.Minute,
-					Rules:  []RateLimitRule{{Meter: "requests", Amount: 99999}},
+					Rules: []RateLimitRule{{Meter: "requests", Amount: 99999, Window: time.Minute, Strategy: StrategySlidingWindow}},
 				},
 			},
 		)
@@ -53,13 +49,11 @@ func TestValidateAgainstCeiling(t *testing.T) {
 	t.Run("user_within_ceiling_accepted", func(t *testing.T) {
 		snap := makeSnapshotWithCeiling(
 			nil, // nil treated as enabled
-			[]RateLimitRule{{Meter: "requests", Amount: 1000}},
+			[]RateLimitRule{{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			&RateLimit{
-				Metadata: Metadata{Name: "user-rl"},
+				Metadata: Metadata{Name: "user-rl", Owner: Owner{Kind: OwnerUser}},
 				Spec: RateLimitSpec{
-					Source: string(SourceUserDefined),
-					Window: time.Minute,
-					Rules:  []RateLimitRule{{Meter: "requests", Amount: 500}},
+					Rules: []RateLimitRule{{Meter: "requests", Amount: 500, Window: time.Minute, Strategy: StrategySlidingWindow}},
 				},
 			},
 		)
@@ -71,13 +65,11 @@ func TestValidateAgainstCeiling(t *testing.T) {
 	t.Run("user_exceeds_ceiling_rejected", func(t *testing.T) {
 		snap := makeSnapshotWithCeiling(
 			nil,
-			[]RateLimitRule{{Meter: "requests", Amount: 1000}},
+			[]RateLimitRule{{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			&RateLimit{
-				Metadata: Metadata{Name: "user-rl"},
+				Metadata: Metadata{Name: "user-rl", Owner: Owner{Kind: OwnerUser}},
 				Spec: RateLimitSpec{
-					Source: string(SourceUserDefined),
-					Window: time.Minute,
-					Rules:  []RateLimitRule{{Meter: "requests", Amount: 2000}},
+					Rules: []RateLimitRule{{Meter: "requests", Amount: 2000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 				},
 			},
 		)
@@ -94,13 +86,11 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		// Ceiling only has requests/1m; user has tokens/1m → no match → allowed.
 		snap := makeSnapshotWithCeiling(
 			nil,
-			[]RateLimitRule{{Meter: "requests", Amount: 1000}},
+			[]RateLimitRule{{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			&RateLimit{
-				Metadata: Metadata{Name: "user-rl"},
+				Metadata: Metadata{Name: "user-rl", Owner: Owner{Kind: OwnerUser}},
 				Spec: RateLimitSpec{
-					Source: string(SourceUserDefined),
-					Window: time.Minute,
-					Rules:  []RateLimitRule{{Meter: "tokens", Amount: 100000}},
+					Rules: []RateLimitRule{{Meter: "tokens", Amount: 100000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 				},
 			},
 		)
@@ -113,17 +103,15 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		snap := makeSnapshotWithCeiling(
 			nil,
 			[]RateLimitRule{
-				{Meter: "requests", Amount: 1000},
-				{Meter: "tokens", Amount: 50000},
+				{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow},
+				{Meter: "tokens", Amount: 50000, Window: time.Minute, Strategy: StrategySlidingWindow},
 			},
 			&RateLimit{
-				Metadata: Metadata{Name: "user-rl"},
+				Metadata: Metadata{Name: "user-rl", Owner: Owner{Kind: OwnerUser}},
 				Spec: RateLimitSpec{
-					Source: string(SourceUserDefined),
-					Window: time.Minute,
 					Rules: []RateLimitRule{
-						{Meter: "requests", Amount: 500},   // fine
-						{Meter: "tokens", Amount: 100000},  // exceeds
+						{Meter: "requests", Amount: 500, Window: time.Minute, Strategy: StrategySlidingWindow},  // fine
+						{Meter: "tokens", Amount: 100000, Window: time.Minute, Strategy: StrategySlidingWindow}, // exceeds
 					},
 				},
 			},
@@ -137,17 +125,17 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		}
 	})
 
-	t.Run("system_mirrored_self_validation_skipped", func(t *testing.T) {
-		// The inference ceiling itself must not be rejected — source=system_mirrored skips check.
+	t.Run("system_owned_self_validation_skipped", func(t *testing.T) {
+		// The inference ceiling itself must not be rejected — owner=system skips check.
 		snap := makeSnapshotWithCeiling(
 			nil,
-			[]RateLimitRule{{Meter: "requests", Amount: 1000}},
+			[]RateLimitRule{{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			nil, // don't add a second RL
 		)
 		// Call validateAgainstCeiling on the inference object itself.
 		ceiling := snap.rateLimits["inference"]
 		if err := validateAgainstCeiling(ceiling, snap); err != nil {
-			t.Errorf("expected nil for system_mirrored self-check, got: %v", err)
+			t.Errorf("expected nil for system-owned self-check, got: %v", err)
 		}
 	})
 
@@ -155,11 +143,9 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		// Snapshot without inference ceiling at all — all user RLs are allowed.
 		s := newSnapshot()
 		userRL := &RateLimit{
-			Metadata: Metadata{Name: "user-rl"},
+			Metadata: Metadata{Name: "user-rl", Owner: Owner{Kind: OwnerUser}},
 			Spec: RateLimitSpec{
-				Source: string(SourceUserDefined),
-				Window: time.Minute,
-				Rules:  []RateLimitRule{{Meter: "requests", Amount: 99999}},
+				Rules: []RateLimitRule{{Meter: "requests", Amount: 99999, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			},
 		}
 		s.rateLimits["user-rl"] = userRL
@@ -172,13 +158,11 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		// Full validateRateLimits call with ceiling + violating user RL.
 		snap := makeSnapshotWithCeiling(
 			nil,
-			[]RateLimitRule{{Meter: "requests", Amount: 1000}},
+			[]RateLimitRule{{Meter: "requests", Amount: 1000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 			&RateLimit{
-				Metadata: Metadata{Name: "bad-rl"},
+				Metadata: Metadata{Name: "bad-rl", Owner: Owner{Kind: OwnerUser}},
 				Spec: RateLimitSpec{
-					Source: string(SourceUserDefined),
-					Window: time.Minute,
-					Rules:  []RateLimitRule{{Meter: "requests", Amount: 5000}},
+					Rules: []RateLimitRule{{Meter: "requests", Amount: 5000, Window: time.Minute, Strategy: StrategySlidingWindow}},
 				},
 			},
 		)
@@ -188,6 +172,81 @@ func TestValidateAgainstCeiling(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "exceeds ceiling") {
 			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
+// TestValidateRateLimits_OwnerKind verifies owner-kind validation.
+func TestValidateRateLimits_OwnerKind(t *testing.T) {
+	t.Run("valid_user_owner", func(t *testing.T) {
+		s := newSnapshot()
+		s.rateLimits["u"] = &RateLimit{
+			Metadata: Metadata{Name: "u", Owner: Owner{Kind: OwnerUser}},
+			Spec: RateLimitSpec{
+				Rules: []RateLimitRule{{Meter: "requests", Amount: 10, Window: time.Minute, Strategy: StrategySlidingWindow}},
+			},
+		}
+		if err := validateRateLimits(s); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("invalid_owner_kind_rejected", func(t *testing.T) {
+		s := newSnapshot()
+		s.rateLimits["u"] = &RateLimit{
+			Metadata: Metadata{Name: "u", Owner: Owner{Kind: "robot"}},
+			Spec: RateLimitSpec{
+				Rules: []RateLimitRule{{Meter: "requests", Amount: 10, Window: time.Minute, Strategy: StrategySlidingWindow}},
+			},
+		}
+		err := validateRateLimits(s)
+		if err == nil || !strings.Contains(err.Error(), "owner.kind") {
+			t.Errorf("expected owner.kind error, got: %v", err)
+		}
+	})
+
+	t.Run("provider_owner_requires_id", func(t *testing.T) {
+		s := newSnapshot()
+		s.rateLimits["u"] = &RateLimit{
+			Metadata: Metadata{Name: "u", Owner: Owner{Kind: OwnerProvider}},
+			Spec: RateLimitSpec{
+				Rules: []RateLimitRule{{Meter: "requests", Amount: 10, Window: time.Minute, Strategy: StrategySlidingWindow}},
+			},
+		}
+		err := validateRateLimits(s)
+		if err == nil || !strings.Contains(err.Error(), "owner.id") {
+			t.Errorf("expected owner.id error, got: %v", err)
+		}
+	})
+}
+
+// TestValidateRateLimits_RequiredRuleFields verifies per-rule window+strategy required.
+func TestValidateRateLimits_RequiredRuleFields(t *testing.T) {
+	t.Run("missing_window_rejected", func(t *testing.T) {
+		s := newSnapshot()
+		s.rateLimits["u"] = &RateLimit{
+			Metadata: Metadata{Name: "u", Owner: Owner{Kind: OwnerUser}},
+			Spec: RateLimitSpec{
+				Rules: []RateLimitRule{{Meter: "requests", Amount: 10, Strategy: StrategySlidingWindow}},
+			},
+		}
+		err := validateRateLimits(s)
+		if err == nil || !strings.Contains(err.Error(), "window is required") {
+			t.Errorf("expected window error, got: %v", err)
+		}
+	})
+
+	t.Run("missing_strategy_rejected", func(t *testing.T) {
+		s := newSnapshot()
+		s.rateLimits["u"] = &RateLimit{
+			Metadata: Metadata{Name: "u", Owner: Owner{Kind: OwnerUser}},
+			Spec: RateLimitSpec{
+				Rules: []RateLimitRule{{Meter: "requests", Amount: 10, Window: time.Minute}},
+			},
+		}
+		err := validateRateLimits(s)
+		if err == nil || !strings.Contains(err.Error(), "strategy is required") {
+			t.Errorf("expected strategy error, got: %v", err)
 		}
 	})
 }

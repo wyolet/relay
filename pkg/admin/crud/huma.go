@@ -70,6 +70,10 @@ func RegisterOps[T any](
 	idPath := base + "/by-id/{id}"
 
 	// --- List ---
+	type listInput struct {
+		OwnerKind string `query:"ownerKind" enum:"system,provider,user" doc:"Filter by owner.kind."`
+		OwnerID   string `query:"ownerId" doc:"Filter by owner.id (use with ownerKind=provider|user)."`
+	}
 	huma.Register(api, huma.Operation{
 		OperationID: "admin_" + singular + "_list",
 		Method:      http.MethodGet,
@@ -78,10 +82,24 @@ func RegisterOps[T any](
 		Tags:        []string{"admin"},
 		Errors:      []int{500},
 		Middlewares: middlewares,
-	}, func(ctx context.Context, _ *struct{}) (*ListOutput[T], error) {
+	}, func(ctx context.Context, in *listInput) (*ListOutput[T], error) {
 		items, err := k.List(ctx)
 		if err != nil {
 			return nil, humaError(http.StatusInternalServerError, err.Error())
+		}
+		if (in.OwnerKind != "" || in.OwnerID != "") && k.Owner != nil {
+			filtered := items[:0]
+			for _, it := range items {
+				o := k.Owner(it)
+				if in.OwnerKind != "" && string(o.Kind) != in.OwnerKind {
+					continue
+				}
+				if in.OwnerID != "" && o.ID != in.OwnerID {
+					continue
+				}
+				filtered = append(filtered, it)
+			}
+			items = filtered
 		}
 		if items == nil {
 			items = []T{}
@@ -172,7 +190,7 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if k.Guard != nil {
-			if gerr := k.Guard(ctx, before); gerr != nil {
+			if gerr := k.Guard(ctx, before, in.Body); gerr != nil {
 				return nil, gerr
 			}
 		}
@@ -224,7 +242,8 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if k.Guard != nil {
-			if gerr := k.Guard(ctx, current); gerr != nil {
+			var zero T
+			if gerr := k.Guard(ctx, current, zero); gerr != nil {
 				return nil, gerr
 			}
 		}

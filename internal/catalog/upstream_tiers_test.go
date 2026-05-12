@@ -66,9 +66,9 @@ func TestUpstreamTierAutoInjection(t *testing.T) {
 		t.Errorf("key-b RL name: got %q, want %q", rlB.Metadata.Name, "upstream-key-b-openai-tier-3")
 	}
 
-	// Source must be system_mirrored.
-	if rlA.Spec.Source != string(SourceSystemMirrored) {
-		t.Errorf("key-a RL source: got %q, want system_mirrored", rlA.Spec.Source)
+	// Owner must be system.
+	if rlA.Metadata.Owner.Kind != OwnerSystem {
+		t.Errorf("key-a RL owner.kind: got %q, want system", rlA.Metadata.Owner.Kind)
 	}
 
 	// Verify rule counts and values for tier-5 (10000 RPM, 30M TPM).
