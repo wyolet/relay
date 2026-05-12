@@ -1,10 +1,12 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log/slog"
 	"strconv"
 	"sync/atomic"
@@ -29,8 +31,8 @@ var (
 	ErrAttemptsExhausted = errors.New("pipeline: all attempts exhausted")
 )
 
-// RunResult carries per-request output from Run beyond the error.
-type RunResult struct {
+// runResult carries per-request output from Run beyond the error.
+type runResult struct {
 	// UpstreamDuration is the wall-clock time spent in the last upstream HTTP
 	// call that was actually served (request fire → body close). It is set even
 	// on error paths (failed attempt, network error) — the caller should treat a
@@ -51,8 +53,8 @@ const shortRateLimitThreshold = 5 * time.Second
 // This makes pipeline.Run independent of the wire format.
 type UpstreamFunc func(ctx context.Context, body []byte, secret string, out chan<- *transport.Message) error
 
-// RunOptions configures a Run invocation.
-type RunOptions struct {
+// runOptions configures a Run invocation.
+type runOptions struct {
 	Provider    *catalog.Provider
 	Policy        *catalog.Policy
 	Model       *catalog.Model
@@ -97,16 +99,175 @@ type RunOptions struct {
 	UpstreamAdapter TransformAdapter
 }
 
-// Run reads the inbound Message from ch.In and orchestrates upstream calls
-// with retry/failover. It closes ch.Out before returning. Pre-first-byte
-// retry only: once a non-error first response chunk is forwarded, the
-// response is committed.
-func Run(ctx context.Context, ch *transport.Channel, opts RunOptions) (RunResult, error) {
-	res, err := run(ctx, ch, opts)
-	return res, err
+// runPipeResult is the internal result type sent from the run goroutine.
+type runPipeResult struct {
+	res runResult
+	err error
 }
 
-func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result RunResult, retErr error) {
+// resultReader is an io.ReadCloser that streams body bytes from a pipe and
+// stamps UpstreamDuration on the parent Response once the pipe is exhausted.
+type resultReader struct {
+	r        *io.PipeReader
+	resultCh <-chan runPipeResult
+	resp     *Response
+	done     bool
+}
+
+func (rr *resultReader) Read(p []byte) (int, error) {
+	n, err := rr.r.Read(p)
+	if err == io.EOF && !rr.done {
+		rr.done = true
+		// Non-blocking drain: goroutine may already have sent its result.
+		select {
+		case cr := <-rr.resultCh:
+			rr.resp.UpstreamDuration = cr.res.UpstreamDuration
+		default:
+		}
+	}
+	return n, err
+}
+
+func (rr *resultReader) Close() error { return rr.r.Close() }
+
+// Run executes the pipeline for req and returns a typed Response.
+// The Response.Body must be read to completion (or closed) by the caller.
+// Run does not import net/http; all HTTP framing is the caller's responsibility.
+func Run(ctx context.Context, req *Request) (*Response, error) {
+	opts := runOptionsFromRequest(req)
+
+	// ch is not cancelled here; the pipe goroutine owns ch.Out reads and the
+	// run goroutine owns ch.Out writes + close. ch.Cancel is called once the
+	// pipe goroutine has drained ch.Out.
+	ch := transport.NewChannel(ctx, "", 1, 64)
+
+	ch.In <- &transport.Message{
+		Body:        req.Body,
+		Attribution: req.Attribution,
+	}
+	close(ch.In)
+
+	resultCh := make(chan runPipeResult, 1)
+	go func() {
+		res, err := run(ctx, ch, opts)
+		resultCh <- runPipeResult{res, err}
+	}()
+
+	// Read the first output message to determine status and headers.
+	var firstMsg *transport.Message
+	select {
+	case msg, ok := <-ch.Out:
+		if ok {
+			firstMsg = msg
+		}
+	case <-ctx.Done():
+		// Context cancelled before any message arrived. Wait for the run goroutine
+		// to finish (it will exit via its own ctx.Done() check) so that usage.Record
+		// and post-flight defers fire before we return. Ch.Out may receive messages
+		// during the drain; discard them.
+		ch.Cancel()
+		go func() { for range ch.Out {} }()
+		<-resultCh
+		return nil, ctx.Err()
+	}
+
+	status := 200
+	headers := map[string]string{}
+	if firstMsg != nil {
+		if s := firstMsg.Headers["X-Relay-Status"]; s != "" {
+			if code, err := strconv.Atoi(s); err == nil {
+				status = code
+			}
+		}
+		if ct := firstMsg.Headers["Content-Type"]; ct != "" {
+			headers["Content-Type"] = ct
+		}
+		if ra := firstMsg.Headers["Retry-After"]; ra != "" {
+			headers["Retry-After"] = ra
+		}
+	}
+
+	// If the first message is terminal (X-Relay-Final=true), the entire response
+	// is in firstMsg.Body. Drain ch.Out (nothing more expected), wait for the
+	// run goroutine to finish, and return the run error alongside the response.
+	// This covers all error paths: rate limit, pool exhausted, attempts exhausted.
+	if firstMsg != nil && firstMsg.Headers["X-Relay-Final"] == "true" {
+		// Drain any remaining ch.Out messages (shouldn't be any, but be safe).
+		for range ch.Out {
+		}
+		ch.Cancel()
+		pr := <-resultCh
+		body := firstMsg.Body
+		resp := &Response{
+			Status:           status,
+			Headers:          headers,
+			Body:             io.NopCloser(bytes.NewReader(body)),
+			UpstreamDuration: pr.res.UpstreamDuration,
+		}
+		return resp, pr.err
+	}
+
+	resp := &Response{
+		Status:  status,
+		Headers: headers,
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer ch.Cancel()
+		defer pw.Close()
+		// Write first message body if any.
+		if firstMsg != nil && len(firstMsg.Body) > 0 {
+			if _, err := pw.Write(firstMsg.Body); err != nil {
+				go func() {
+					for range ch.Out {
+					}
+				}()
+				return
+			}
+		}
+		// Drain remaining messages until ch.Out is closed by run().
+		for msg := range ch.Out {
+			// Skip header-only messages (X-Relay-Final signals, etc.).
+			if len(msg.Body) > 0 {
+				if _, err := pw.Write(msg.Body); err != nil {
+					go func() {
+						for range ch.Out {
+						}
+					}()
+					return
+				}
+			}
+		}
+	}()
+
+	rr := &resultReader{r: pr, resultCh: resultCh, resp: resp}
+	resp.Body = rr
+	return resp, nil
+}
+
+// runOptionsFromRequest converts a *Request to the internal runOptions.
+func runOptionsFromRequest(req *Request) runOptions {
+	return runOptions{
+		Provider:        req.Provider,
+		Policy:          req.Policy,
+		Model:           req.Model,
+		Secrets:         req.Secrets,
+		Selector:        req.Selector,
+		Outbound:        req.Outbound,
+		DoUpstream:      req.DoUpstream,
+		MaxAttempts:     req.MaxAttempts,
+		Limiter:         req.Limiter,
+		Rules:           req.Rules,
+		CatalogStore:    req.CatalogStore,
+		TokenExtractor:  req.TokenExtractor,
+		PassthroughAuth: req.PassthroughAuth,
+		InboundAdapter:  req.InboundAdapter,
+		UpstreamAdapter: req.UpstreamAdapter,
+	}
+}
+
+func run(ctx context.Context, ch *transport.Channel, opts runOptions) (result runResult, retErr error) {
 	maxAttempts := opts.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
@@ -644,7 +805,7 @@ func terminatedByFromFailureKind(kind keypool.FailureKind) usage.TerminatedBy {
 
 // extractInto calls extractor on b (if non-nil) and merges the result into dst.
 // This is the shape-agnostic token extraction step; each shape handler wires
-// its own extractor function via RunOptions.TokenExtractor.
+// its own extractor function via runOptions.TokenExtractor.
 func extractInto(b []byte, extractor func([]byte) usage.Tokens, dst usage.Tokens) {
 	if len(b) == 0 || extractor == nil {
 		return

@@ -1,8 +1,10 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +16,6 @@ import (
 	"github.com/wyolet/relay/internal/routing"
 	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/pkg/reqid"
-	"github.com/wyolet/relay/pkg/transport"
 )
 
 func withRich(on bool, fn func()) {
@@ -51,19 +52,19 @@ func fakeResolver() *routing.Resolver {
 	return routing.New(store)
 }
 
-func TestChatCompletions_HappyPath(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{
-				"X-Relay-Status": "200",
-				"Content-Type":   "application/json",
-			},
-		}
-		ch.Out <- &transport.Message{Body: []byte(`{"hello":"world"}`)}
-		ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-		return pipeline.RunResult{}, nil
+// jsonResp builds a Pipeline mock that returns a JSON success response.
+func jsonResp(body []byte) Pipeline {
+	return func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    io.NopCloser(bytes.NewReader(body)),
+		}, nil
 	}
+}
+
+func TestChatCompletions_HappyPath(t *testing.T) {
+	runPipeline := jsonResp([]byte(`{"hello":"world"}`))
 
 	body := `{"model":"gpt-4","messages":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
@@ -84,16 +85,13 @@ func TestChatCompletions_HappyPath(t *testing.T) {
 }
 
 func TestChatCompletions_StreamingPath(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
-		}
-		ch.Out <- &transport.Message{Body: []byte("data: chunk1\n")}
-		ch.Out <- &transport.Message{Body: []byte("data: chunk2\n")}
-		ch.Out <- &transport.Message{Body: []byte("data: chunk3\n")}
-		ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-		return pipeline.RunResult{}, nil
+	runPipeline := func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		streamBody := "data: chunk1\ndata: chunk2\ndata: chunk3\n"
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "text/event-stream"},
+			Body:    io.NopCloser(strings.NewReader(streamBody)),
+		}, nil
 	}
 
 	body := `{"model":"gpt-4","messages":[]}`
@@ -109,7 +107,9 @@ func TestChatCompletions_StreamingPath(t *testing.T) {
 }
 
 func TestChatCompletions_ModelNotFound(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) { return pipeline.RunResult{}, nil }
+	runPipeline := func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		return &pipeline.Response{Status: 200, Headers: map[string]string{}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	}
 
 	body := `{"model":"unknown-model","messages":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
@@ -130,7 +130,9 @@ func TestChatCompletions_ModelNotFound(t *testing.T) {
 }
 
 func TestChatCompletions_BadJSON(t *testing.T) {
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) { return pipeline.RunResult{}, nil }
+	runPipeline := func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		return &pipeline.Response{Status: 200, Headers: map[string]string{}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not json"))
 	rec := httptest.NewRecorder()
@@ -144,20 +146,16 @@ func TestChatCompletions_BadJSON(t *testing.T) {
 
 func TestChatCompletions_StreamingMidstreamError(t *testing.T) {
 	errEnvJSON := `{"error":{"message":"upstream lost","type":"upstream_error","code":"upstream_unavailable"}}`
-	runPipeline := func(ctx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
-		}
-		ch.Out <- &transport.Message{Body: []byte("data: chunk1\n\n")}
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{
-				"X-Relay-Status": "502",
-				"X-Relay-Final":  "true",
-			},
-			Body: []byte(errEnvJSON),
-		}
-		return pipeline.RunResult{}, nil
+	// In the new API, mid-stream errors are part of the body stream.
+	// The pipeline returns a 200 with a streaming body that contains both
+	// the normal chunk and the error event.
+	streamBody := "data: chunk1\n\n" + "data: " + errEnvJSON + "\n\ndata: [DONE]\n\n"
+	runPipeline := func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "text/event-stream"},
+			Body:    io.NopCloser(strings.NewReader(streamBody)),
+		}, nil
 	}
 
 	body := `{"model":"gpt-4","messages":[]}`
@@ -185,16 +183,19 @@ func TestChatCompletions_StreamingClientCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Pipeline sends first message then blocks until context is done.
-	runPipeline := func(pCtx context.Context, ch *transport.Channel, plan *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "text/event-stream"},
-		}
-		ch.Out <- &transport.Message{Body: []byte("data: chunk1\n\n")}
-		// Wait for context cancellation.
-		<-pCtx.Done()
-		return pipeline.RunResult{}, pCtx.Err()
+	// Pipeline sends first chunk then blocks until context is done.
+	runPipeline := func(pCtx context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		pr, pw := io.Pipe()
+		go func() {
+			defer pw.Close()
+			pw.Write([]byte("data: chunk1\n\n"))
+			<-pCtx.Done()
+		}()
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "text/event-stream"},
+			Body:    pr,
+		}, nil
 	}
 
 	body := `{"model":"gpt-4","messages":[]}`
@@ -217,15 +218,13 @@ func TestChatCompletions_StreamingClientCancel(t *testing.T) {
 
 func TestChatCompletions_AttributionFlowsFromContext(t *testing.T) {
 	var capturedAttribution map[string]string
-	innerHandler := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
-		msg := <-ch.In
-		capturedAttribution = msg.Attribution
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"},
-		}
-		ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-		return pipeline.RunResult{}, nil
+	innerHandler := ChatCompletions(fakeResolver(), func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		capturedAttribution = req.Attribution
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    io.NopCloser(bytes.NewReader([]byte(`{}`))),
+		}, nil
 	})
 
 	// Wrap with reqid.Middleware so attribution is parsed from X-Relay-Metadata.
@@ -247,13 +246,13 @@ func TestChatCompletions_AttributionFlowsFromContext(t *testing.T) {
 func TestChatCompletions_BodyAttributionRichMode(t *testing.T) {
 	withRich(true, func() {
 		var capturedAttribution map[string]string
-		h := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-			defer close(ch.Out)
-			msg := <-ch.In
-			capturedAttribution = msg.Attribution
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-			return pipeline.RunResult{}, nil
+		h := ChatCompletions(fakeResolver(), func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+			capturedAttribution = req.Attribution
+			return &pipeline.Response{
+				Status:  200,
+				Headers: map[string]string{"Content-Type": "application/json"},
+				Body:    io.NopCloser(bytes.NewReader([]byte(`{}`))),
+			}, nil
 		})
 
 		body := `{"model":"gpt-4","metadata":{"caller":"sdk"}}`
@@ -270,13 +269,13 @@ func TestChatCompletions_BodyAttributionRichMode(t *testing.T) {
 func TestChatCompletions_HeaderWinsOverBody(t *testing.T) {
 	withRich(true, func() {
 		var capturedAttribution map[string]string
-		innerHandler := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-			defer close(ch.Out)
-			msg := <-ch.In
-			capturedAttribution = msg.Attribution
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-			return pipeline.RunResult{}, nil
+		innerHandler := ChatCompletions(fakeResolver(), func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+			capturedAttribution = req.Attribution
+			return &pipeline.Response{
+				Status:  200,
+				Headers: map[string]string{"Content-Type": "application/json"},
+				Body:    io.NopCloser(bytes.NewReader([]byte(`{}`))),
+			}, nil
 		})
 
 		wrapped := reqid.Middleware(slog.Default())(innerHandler)
@@ -295,13 +294,13 @@ func TestChatCompletions_HeaderWinsOverBody(t *testing.T) {
 func TestChatCompletions_MinimalModeBodyAttributionIgnored(t *testing.T) {
 	withRich(false, func() {
 		var capturedAttribution map[string]string
-		h := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-			defer close(ch.Out)
-			msg := <-ch.In
-			capturedAttribution = msg.Attribution
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-			return pipeline.RunResult{}, nil
+		h := ChatCompletions(fakeResolver(), func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+			capturedAttribution = req.Attribution
+			return &pipeline.Response{
+				Status:  200,
+				Headers: map[string]string{"Content-Type": "application/json"},
+				Body:    io.NopCloser(bytes.NewReader([]byte(`{}`))),
+			}, nil
 		})
 
 		body := `{"model":"gpt-4","metadata":{"caller":"sdk"}}`
@@ -318,13 +317,13 @@ func TestChatCompletions_MinimalModeBodyAttributionIgnored(t *testing.T) {
 func TestChatCompletions_RawBodyForwarded(t *testing.T) {
 	withRich(true, func() {
 		var capturedBody []byte
-		h := ChatCompletions(fakeResolver(), func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-			defer close(ch.Out)
-			msg := <-ch.In
-			capturedBody = msg.Body
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200", "Content-Type": "application/json"}}
-			ch.Out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
-			return pipeline.RunResult{}, nil
+		h := ChatCompletions(fakeResolver(), func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+			capturedBody = req.Body
+			return &pipeline.Response{
+				Status:  200,
+				Headers: map[string]string{"Content-Type": "application/json"},
+				Body:    io.NopCloser(bytes.NewReader([]byte(`{}`))),
+			}, nil
 		})
 
 		// model name matches upstream, so Raw is forwarded as-is.

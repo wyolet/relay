@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"sync/atomic"
@@ -36,8 +37,8 @@ func (f *fakeOutbound) ChatCompletions(ctx context.Context, body []byte, secret 
 	return nil
 }
 
-// testSetup builds a RunOptions with two secrets and a fresh Selector.
-func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
+// testSetup builds a *Request with two secrets and a fresh Selector.
+func testSetup(t *testing.T, ob *fakeOutbound) (*Request, func()) {
 	t.Helper()
 	st := kv.NewMem()
 	sel := keypool.New(st, slog.Default(), nil, nil)
@@ -50,23 +51,15 @@ func testSetup(t *testing.T, ob *fakeOutbound) (RunOptions, func()) {
 		{Metadata: catalog.Metadata{Name: "key2"}, Resolved: "secret-key2", KeyHash: "hash2"},
 	}
 
-	opts := RunOptions{
-		Policy:        policy,
+	req := &Request{
+		Body:        []byte(`{"model":"gpt-4"}`),
+		Policy:      policy,
 		Secrets:     secrets,
 		Selector:    sel,
 		Outbound:    ob,
 		MaxAttempts: 3,
 	}
-	return opts, func() { st.Close() }
-}
-
-func newTestChannel(ctx context.Context) *transport.Channel {
-	return transport.NewChannel(ctx, "test", 1, 64)
-}
-
-func sendInbound(ch *transport.Channel) {
-	ch.In <- &transport.Message{ID: "test", Body: []byte(`{"model":"gpt-4"}`)}
-	close(ch.In)
+	return req, func() { st.Close() }
 }
 
 // testOpenAIExtractTokens is a minimal token extractor for pipeline tests.
@@ -95,12 +88,13 @@ func testOpenAIExtractTokens(body []byte) usage.Tokens {
 	return t
 }
 
-func collectOut(ch *transport.Channel) []*transport.Message {
-	var msgs []*transport.Message
-	for m := range ch.Out {
-		msgs = append(msgs, m)
+// runBody reads all bytes from resp.Body. Used in tests to assert on body content.
+func runBody(resp *Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
 	}
-	return msgs
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
 }
 
 func TestRun_Success(t *testing.T) {
@@ -109,20 +103,20 @@ func TestRun_Success(t *testing.T) {
 		out <- &transport.Message{Body: []byte("chunk")}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	if resp.Status != 200 {
+		t.Fatalf("expected status 200, got %d", resp.Status)
+	}
+	body := runBody(resp)
+	if body != "chunk" {
+		t.Fatalf("expected body 'chunk', got %q", body)
 	}
 	if ob.calls.Load() != 1 {
 		t.Fatalf("expected 1 outbound call, got %d", ob.calls.Load())
@@ -140,17 +134,15 @@ func TestRun_5xxThen200_SameKey(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	runBody(resp) // drain
 	if ob.calls.Load() != 2 {
 		t.Fatalf("expected 2 calls, got %d", ob.calls.Load())
 	}
@@ -170,17 +162,15 @@ func TestRun_AuthFailover(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	runBody(resp) // drain
 	if ob.calls.Load() != 2 {
 		t.Fatalf("expected 2 calls, got %d", ob.calls.Load())
 	}
@@ -194,7 +184,7 @@ func TestRun_429Short_RetrySameKey(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		keys = append(keys, secret)
 		if idx == 1 {
-			// 10ms retry-after — well under 5s threshold, so same-key retry
+			// 0s retry-after — well under 5s threshold, so same-key retry
 			out <- &transport.Message{Headers: map[string]string{
 				"X-Relay-Status": "429",
 				"Retry-After":    "0", // 0s, but we test the same-key path
@@ -205,17 +195,15 @@ func TestRun_429Short_RetrySameKey(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	runBody(resp) // drain
 	if ob.calls.Load() != 2 {
 		t.Fatalf("expected 2 calls, got %d", ob.calls.Load())
 	}
@@ -240,17 +228,15 @@ func TestRun_429Long_Failover(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	runBody(resp) // drain
 	if ob.calls.Load() != 2 {
 		t.Fatalf("expected 2 calls, got %d", ob.calls.Load())
 	}
@@ -263,26 +249,19 @@ func TestRun_AllExhausted(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "500", "X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.MaxAttempts = 3
+	req.MaxAttempts = 3
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 exhausted message, got %d", len(msgs))
+	if resp.Status != 502 {
+		t.Fatalf("expected status 502, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "502" {
-		t.Fatalf("expected 502 status, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "upstream_5xx_exhausted") {
 		t.Fatalf("expected upstream_5xx_exhausted code, got %s", body)
 	}
@@ -305,26 +284,19 @@ func TestRun_AllAuthFailed_AuthFailedEnvelope(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "401", "X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.MaxAttempts = 2
+	req.MaxAttempts = 2
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if resp.Status != 502 {
+		t.Fatalf("expected 502, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "502" {
-		t.Fatalf("expected 502, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "auth_failed") {
 		t.Fatalf("expected auth_failed code, got %s", body)
 	}
@@ -341,31 +313,24 @@ func TestRun_AllRateLimited_RateLimitEnvelope(t *testing.T) {
 			"X-Relay-Final":  "true",
 		}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.MaxAttempts = 2
+	req.MaxAttempts = 2
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if resp.Status != 429 {
+		t.Fatalf("expected 429, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "429" {
-		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "rate_limit_exceeded") {
 		t.Fatalf("expected rate_limit_exceeded, got %s", body)
 	}
-	if msgs[0].Headers["Retry-After"] != "30" {
-		t.Fatalf("expected Retry-After: 30, got %s", msgs[0].Headers["Retry-After"])
+	if ra := resp.Headers["Retry-After"]; ra != "30" {
+		t.Fatalf("expected Retry-After: 30, got %s", ra)
 	}
 }
 
@@ -373,26 +338,19 @@ func TestRun_All5xx_ServerErrorEnvelope(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "500", "X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.MaxAttempts = 3
+	req.MaxAttempts = 3
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != ErrAttemptsExhausted {
 		t.Fatalf("expected ErrAttemptsExhausted, got %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if resp.Status != 502 {
+		t.Fatalf("expected 502, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "502" {
-		t.Fatalf("expected 502, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "upstream_5xx_exhausted") {
 		t.Fatalf("expected upstream_5xx_exhausted, got %s", body)
 	}
@@ -403,29 +361,22 @@ func TestRun_NoKeysFromStart_NoHealthyKeysEnvelope(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
 	// Mark all keys as auth-failed so ErrNoHealthyKeys is returned immediately.
-	opts.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
-	opts.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
+	req.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
+	req.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != keypool.ErrNoHealthyKeys {
 		t.Fatalf("expected ErrNoHealthyKeys, got %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if resp.Status != 503 {
+		t.Fatalf("expected 503, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "503" {
-		t.Fatalf("expected 503, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "no_healthy_keys") {
 		t.Fatalf("expected no_healthy_keys, got %s", body)
 	}
@@ -436,28 +387,22 @@ func TestRun_NoHealthyKeys(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	// Mark both keys as auth-failed so they're permanently open.
 	ctx := context.Background()
-	opts.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
-	opts.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
+	req.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
+	req.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != keypool.ErrNoHealthyKeys {
 		t.Fatalf("expected ErrNoHealthyKeys, got %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 exhausted message, got %d", len(msgs))
+	if resp.Status != 503 {
+		t.Fatalf("expected 503, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "503" {
-		t.Fatalf("expected 503, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
+	runBody(resp) // drain
 }
 
 func TestRun_ContextCancel(t *testing.T) {
@@ -468,15 +413,13 @@ func TestRun_ContextCancel(t *testing.T) {
 		// Don't send anything — let ctx.Done() trigger in Run.
 		<-ctx.Done()
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
 
 	errCh := make(chan error, 1)
 	go func() {
-		res, err := Run(ctx, ch, opts); _ = res; errCh <- err
+		_, err := Run(ctx, req)
+		errCh <- err
 	}()
 
 	// Give Run time to start, then cancel.
@@ -487,8 +430,6 @@ func TestRun_ContextCancel(t *testing.T) {
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-	// ch.Out should be closed.
-	collectOut(ch)
 }
 
 func TestRun_NetworkError(t *testing.T) {
@@ -511,17 +452,15 @@ func TestRun_NetworkError(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	runBody(resp) // drain
 	// call 1: 502 same key → sameKeyAttempt=0→1
 	// call 2: 502 failover → sameKeyAttempt=1→0, chosenKey=nil
 	// call 3: 200 success
@@ -541,8 +480,8 @@ func TestRun_NetworkError(t *testing.T) {
 
 // fakeLimiter tracks Reserve/Commit calls for pipeline rate-limit tests.
 type fakeLimiter struct {
-	reserveErr  error
-	commitCalls []ratelimit.Observations
+	reserveErr   error
+	commitCalls  []ratelimit.Observations
 	reserveCalls int
 }
 
@@ -551,8 +490,6 @@ func (f *fakeLimiter) reserve(ctx context.Context, rules []catalog.ResolvedRule)
 	if f.reserveErr != nil {
 		return nil, f.reserveErr
 	}
-	// Return a zero-value Reservation via limit.New with MemStore — not possible
-	// from outside the package. We expose via the real Limiter instead.
 	return nil, nil
 }
 
@@ -581,7 +518,7 @@ func testLimiterSetup(t *testing.T) (*ratelimit.Limiter, []catalog.ResolvedRule,
 	return l, rules, func() { st.Close() }
 }
 
-func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *ratelimit.Limiter, rules []catalog.ResolvedRule) RunOptions {
+func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *ratelimit.Limiter, rules []catalog.ResolvedRule) *Request {
 	t.Helper()
 	st := kv.NewMem()
 	t.Cleanup(func() { st.Close() })
@@ -590,8 +527,9 @@ func testSetupWithLimiter(t *testing.T, ob *fakeOutbound, l *ratelimit.Limiter, 
 	secrets := []*catalog.Secret{
 		{Metadata: catalog.Metadata{Name: "key1"}, Resolved: "secret-key1", KeyHash: "hash1"},
 	}
-	return RunOptions{
-		Policy:        policy,
+	return &Request{
+		Body:        []byte(`{"model":"gpt-4"}`),
+		Policy:      policy,
 		Secrets:     secrets,
 		Selector:    sel,
 		Outbound:    ob,
@@ -647,18 +585,16 @@ func TestRun_LimiterNil_NoGating(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	// opts.Limiter is nil by default — no gating
+	// req.Limiter is nil by default — no gating
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	runBody(resp) // drain
 	if ob.calls.Load() != 1 {
 		t.Fatalf("expected 1 call, got %d", ob.calls.Load())
 	}
@@ -675,8 +611,9 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	st2 := kv.NewMem()
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil)
-	opts := RunOptions{
-		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
+	req := &Request{
+		Body:        []byte(`{"model":"gpt-4"}`),
+		Policy:      &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -686,21 +623,14 @@ func TestRun_RPMExceeded_Returns429(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err == nil {
 		t.Fatal("expected error from rate limit, got nil")
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if resp.Status != 429 {
+		t.Fatalf("expected 429, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "429" {
-		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "rpm_exceeded") {
 		t.Fatalf("expected rpm_exceeded code in body: %s", body)
 	}
@@ -722,8 +652,9 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	st2 := kv.NewMem()
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil)
-	opts := RunOptions{
-		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
+	req := &Request{
+		Body:        []byte(`{"model":"gpt-4"}`),
+		Policy:      &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -733,21 +664,14 @@ func TestRun_ConcurrencyExceeded_Returns429(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err == nil {
 		t.Fatal("expected error from concurrency limit")
 	}
-	msgs := collectOut(ch)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if resp.Status != 429 {
+		t.Fatalf("expected 429, got %d", resp.Status)
 	}
-	if msgs[0].Headers["X-Relay-Status"] != "429" {
-		t.Fatalf("expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
-	}
-	body := string(msgs[0].Body)
+	body := runBody(resp)
 	if !containsStr(body, "concurrency_exceeded") {
 		t.Fatalf("expected concurrency_exceeded in body: %s", body)
 	}
@@ -769,28 +693,16 @@ func TestRun_TokensCommittedFromResponseUsage(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
 
-	opts := testSetupWithLimiter(t, ob, l, rules)
+	req := testSetupWithLimiter(t, ob, l, rules)
+	req.TokenExtractor = testOpenAIExtractTokens
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Collect all output.
-	msgs := collectOut(ch)
-	if len(msgs) == 0 {
-		t.Fatal("expected output messages")
-	}
 	// Verify pipeline forwarded the body containing usage.
-	found := false
-	for _, m := range msgs {
-		if containsStr(string(m.Body), "total_tokens") {
-			found = true
-		}
-	}
-	if !found {
+	body := runBody(resp)
+	if !containsStr(body, "total_tokens") {
 		t.Fatal("expected usage body to be forwarded")
 	}
 }
@@ -811,19 +723,13 @@ func TestRun_StreamingTokensCommitted(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
 
-	opts := testSetupWithLimiter(t, ob, l, rules)
+	req := testSetupWithLimiter(t, ob, l, rules)
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	msgs := collectOut(ch)
-	if len(msgs) == 0 {
-		t.Fatal("expected output messages")
-	}
+	runBody(resp) // drain
 }
 
 func TestRun_CancellationCommitsCancelled(t *testing.T) {
@@ -840,8 +746,9 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 	st2 := kv.NewMem()
 	defer st2.Close()
 	sel := keypool.New(st2, slog.Default(), nil, nil)
-	opts := RunOptions{
-		Policy:        &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
+	req := &Request{
+		Body:        []byte(`{"model":"gpt-4"}`),
+		Policy:      &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}},
 		Secrets:     []*catalog.Secret{{Metadata: catalog.Metadata{Name: "k"}, Resolved: "s", KeyHash: "h"}},
 		Selector:    sel,
 		Outbound:    ob,
@@ -850,12 +757,10 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 		Rules:       rules,
 	}
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
 	errCh := make(chan error, 1)
 	go func() {
-		res, err := Run(ctx, ch, opts); _ = res; errCh <- err
+		_, err := Run(ctx, req)
+		errCh <- err
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -865,9 +770,7 @@ func TestRun_CancellationCommitsCancelled(t *testing.T) {
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
-	collectOut(ch)
 }
-
 
 // --- Lifecycle / usage.Record integration tests ---
 
@@ -950,18 +853,17 @@ func TestLifecycle_SingleSuccess(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}, Body: responseBody}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.Model = &catalog.Model{Metadata: catalog.Metadata{Name: "gpt-4o"}}
-	opts.Provider = &catalog.Provider{Metadata: catalog.Metadata{Name: "openai"}}
-	opts.TokenExtractor = testOpenAIExtractTokens
+	req.Model = &catalog.Model{Metadata: catalog.Metadata{Name: "gpt-4o"}}
+	req.Provider = &catalog.Provider{Metadata: catalog.Metadata{Name: "openai"}}
+	req.TokenExtractor = testOpenAIExtractTokens
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-	if _, err := Run(ctx, ch, opts); err != nil {
+	resp, err := Run(ctx, req)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	collectOut(ch)
+	runBody(resp) // drain so pipeline goroutine exits and event is emitted
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1013,15 +915,14 @@ func TestLifecycle_FailoverThenSuccess(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-	if _, err := Run(ctx, ch, opts); err != nil {
+	resp, err := Run(ctx, req)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	collectOut(ch)
+	runBody(resp) // drain
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1054,12 +955,10 @@ func TestLifecycle_RateLimitedByReserve(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 	}}
-	opts := testSetupWithLimiter(t, ob, l, rules)
+	req := testSetupWithLimiter(t, ob, l, rules)
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-	_, _ = Run(ctx, ch, opts)
-	collectOut(ch)
+	resp, _ := Run(ctx, req)
+	runBody(resp) // drain
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1079,15 +978,13 @@ func TestLifecycle_PoolExhausted(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
-	opts.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
-	opts.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
+	req.Selector.RecordFailure(ctx, "hash1", keypool.FailureAuth, 0)
+	req.Selector.RecordFailure(ctx, "hash2", keypool.FailureAuth, 0)
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-	_, _ = Run(ctx, ch, opts)
-	collectOut(ch)
+	resp, _ := Run(ctx, req)
+	runBody(resp) // drain
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1107,20 +1004,22 @@ func TestLifecycle_ClientCancelMidStream(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 		<-cancelCtx.Done()
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
-	ch := newTestChannel(cancelCtx)
-	sendInbound(ch)
-
 	errCh := make(chan error, 1)
-	go func() { _, err := Run(cancelCtx, ch, opts); errCh <- err }()
+	go func() {
+		resp, err := Run(cancelCtx, req)
+		if resp != nil {
+			runBody(resp)
+		}
+		errCh <- err
+	}()
 
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	<-errCh
-	collectOut(ch)
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1140,13 +1039,13 @@ func TestLifecycle_UpstreamDeadline(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		<-deadlineCtx.Done()
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
-	ch := newTestChannel(deadlineCtx)
-	sendInbound(ch)
-	Run(deadlineCtx, ch, opts)
-	collectOut(ch)
+	resp, _ := Run(deadlineCtx, req)
+	if resp != nil {
+		runBody(resp)
+	}
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1163,17 +1062,16 @@ func TestLifecycle_PanicInProvider(t *testing.T) {
 	ob := &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 		panic("provider bug")
 	}}
-	opts, cleanup := testSetup(t, ob)
+	req, cleanup := testSetup(t, ob)
 	defer cleanup()
 
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err == nil {
 		t.Fatal("expected error from recovered panic")
 	}
-	collectOut(ch)
+	if resp != nil {
+		runBody(resp)
+	}
 
 	evs := flush()
 	if len(evs) != 1 {
@@ -1200,12 +1098,8 @@ func TestRun_PassthroughAuth(t *testing.T) {
 	defer st.Close()
 	sel := keypool.New(st, slog.Default(), nil, nil)
 
-	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	ch.In <- &transport.Message{ID: "test", Body: []byte(`{}`)}
-	close(ch.In)
-
-	opts := RunOptions{
+	req := &Request{
+		Body: []byte(`{}`),
 		Policy: &catalog.Policy{
 			Metadata: catalog.Metadata{Name: "pt-policy"},
 			Spec:     catalog.PolicySpec{},
@@ -1216,11 +1110,12 @@ func TestRun_PassthroughAuth(t *testing.T) {
 		MaxAttempts:     1,
 	}
 
-	_, err := Run(ctx, ch, opts)
+	ctx := context.Background()
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	collectOut(ch)
+	runBody(resp) // drain
 
 	if capturedSecret != inboundAuth {
 		t.Errorf("secret forwarded = %q; want %q", capturedSecret, inboundAuth)
@@ -1317,8 +1212,9 @@ func TestRun_PerKeyReserve_ExhaustsKeyA(t *testing.T) {
 	t.Cleanup(func() { kvSt.Close() })
 	sel := keypool.New(kvSt, slog.Default(), nil, nil)
 
-	makeOpts := func() RunOptions {
-		return RunOptions{
+	makeReq := func() *Request {
+		return &Request{
+			Body:         []byte(`{"model":"gpt-4"}`),
 			Policy:       policy,
 			Secrets:      secrets,
 			Selector:     sel,
@@ -1338,38 +1234,28 @@ func TestRun_PerKeyReserve_ExhaustsKeyA(t *testing.T) {
 	// Wait for post-flight so RecordSuccess fires before req2 checks the circuit.
 	{
 		wait := waitPostFlight(t)
-		opts := makeOpts()
-		ch := newTestChannel(ctx)
-		sendInbound(ch)
-		_, err := Run(ctx, ch, opts)
+		resp, err := Run(ctx, makeReq())
 		if err != nil {
 			t.Fatalf("req1: unexpected error: %v", err)
 		}
-		msgs := collectOut(ch)
-		wait() // ensure RecordSuccess has run before req2 starts
-		if msgs[0].Headers["X-Relay-Status"] != "200" {
-			t.Fatalf("req1: expected 200, got %s", msgs[0].Headers["X-Relay-Status"])
+		if resp.Status != 200 {
+			t.Fatalf("req1: expected 200, got %d", resp.Status)
 		}
+		runBody(resp) // drain
+		wait()        // ensure RecordSuccess has run before req2 starts
 	}
 
 	// Request 2: key A picked again (still prioritized), but its budget=1 is now
 	// exhausted → KeyQuotaExhausted → RecordLocalRateLimit called → 429 returned.
 	{
-		opts := makeOpts()
-		ch := newTestChannel(ctx)
-		sendInbound(ch)
-		_, err := Run(ctx, ch, opts)
+		resp, err := Run(ctx, makeReq())
 		if err == nil {
 			t.Fatal("req2: expected error for per-key exhausted, got nil")
 		}
-		msgs := collectOut(ch)
-		if len(msgs) != 1 {
-			t.Fatalf("req2: expected 1 message, got %d", len(msgs))
+		if resp.Status != 429 {
+			t.Fatalf("req2: expected 429, got %d", resp.Status)
 		}
-		if msgs[0].Headers["X-Relay-Status"] != "429" {
-			t.Fatalf("req2: expected 429, got %s", msgs[0].Headers["X-Relay-Status"])
-		}
-		body := string(msgs[0].Body)
+		body := runBody(resp)
 		if !containsStr(body, "rate_limit_exceeded") {
 			t.Fatalf("req2: expected rate_limit_exceeded in body: %s", body)
 		}
@@ -1378,23 +1264,21 @@ func TestRun_PerKeyReserve_ExhaustsKeyA(t *testing.T) {
 	// Request 3: key A is now cooled down (CircuitOpen via RecordLocalRateLimit).
 	// keypool.Pick skips A and returns B. Per-key Reserve for B succeeds.
 	{
-		opts := makeOpts()
 		var pickedSecret string
-		opts.Outbound = &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
+		req3 := makeReq()
+		req3.Outbound = &fakeOutbound{handle: func(idx int, secret string, out chan<- *transport.Message) {
 			pickedSecret = secret
 			out <- &transport.Message{Headers: map[string]string{"X-Relay-Status": "200"}}
 			out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 		}}
-		ch := newTestChannel(ctx)
-		sendInbound(ch)
-		_, err := Run(ctx, ch, opts)
+		resp, err := Run(ctx, req3)
 		if err != nil {
 			t.Fatalf("req3: unexpected error: %v", err)
 		}
-		msgs := collectOut(ch)
-		if msgs[0].Headers["X-Relay-Status"] != "200" {
-			t.Fatalf("req3: expected 200, got %s", msgs[0].Headers["X-Relay-Status"])
+		if resp.Status != 200 {
+			t.Fatalf("req3: expected 200, got %d", resp.Status)
 		}
+		runBody(resp) // drain
 		if pickedSecret != "secret-key2" {
 			t.Fatalf("req3: expected key2 to be picked (key1 cooled), got %q", pickedSecret)
 		}
@@ -1418,7 +1302,8 @@ func TestRun_PerKeyReserve_NoRules_FastPath(t *testing.T) {
 		out <- &transport.Message{Headers: map[string]string{"X-Relay-Final": "true"}}
 	}}
 
-	opts := RunOptions{
+	req := &Request{
+		Body:  []byte(`{"model":"gpt-4"}`),
 		Policy: &catalog.Policy{Metadata: catalog.Metadata{Name: "p"}},
 		Secrets: []*catalog.Secret{
 			{Metadata: catalog.Metadata{Name: "k"}, Resolved: "sk", KeyHash: "h"},
@@ -1430,13 +1315,11 @@ func TestRun_PerKeyReserve_NoRules_FastPath(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	ch := newTestChannel(ctx)
-	sendInbound(ch)
-	_, err := Run(ctx, ch, opts)
+	resp, err := Run(ctx, req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	collectOut(ch)
+	runBody(resp) // drain
 	if calls.Load() != 1 {
 		t.Fatalf("expected 1 outbound call, got %d", calls.Load())
 	}

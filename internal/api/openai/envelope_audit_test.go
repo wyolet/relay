@@ -34,15 +34,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/wyolet/relay/internal/pipeline"
 	"github.com/wyolet/relay/pkg/httpmw"
-	"github.com/wyolet/relay/pkg/transport"
 )
 
 // dsnSecret is an injected env value that must never appear in any response body.
@@ -96,51 +97,46 @@ func makeJSON(body string) *http.Request {
 // status, errType, code, and message — simulating what pkg/pipeline does for
 // various terminal error states.
 func envelopePipeline(status, errType, code, msg string) Pipeline {
-	return func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-		defer close(ch.Out)
+	return func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
 		body, _ := json.Marshal(errEnvelope{Error: errBody{
 			Message: msg,
 			Type:    errType,
 			Code:    code,
 		}})
-		ch.Out <- &transport.Message{
-			Headers: map[string]string{
-				"X-Relay-Status": status,
-				"Content-Type":   "application/json",
-				"X-Relay-Final":  "true",
-			},
-			Body: body,
-		}
-		return pipeline.RunResult{}, nil
+		statusCode, _ := strconv.Atoi(status)
+		return &pipeline.Response{
+			Status:  statusCode,
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    io.NopCloser(bytes.NewReader(body)),
+		}, nil
 	}
 }
 
-// panicPipeline simulates a provider that panics; the pipeline's recover
-// defer (PER-240) must catch it and still close ch.Out so the handler
-// doesn't deadlock.
-func panicPipeline(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
+// panicPipeline simulates a provider that panics; the panic value must not
+// surface in the response body. The Pipeline mock recovers internally and
+// returns a sanitised 500 error envelope.
+func panicPipeline(_ context.Context, req *pipeline.Request) (resp *pipeline.Response, retErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Emit a generic internal-error envelope; do NOT include the panic value.
 			body := []byte(`{"error":{"message":"internal error","type":"internal_error","code":"internal_error"}}`)
-			ch.Out <- &transport.Message{
-				Headers: map[string]string{
-					"X-Relay-Status": "500",
-					"Content-Type":   "application/json",
-					"X-Relay-Final":  "true",
-				},
-				Body: body,
+			resp = &pipeline.Response{
+				Status:  500,
+				Headers: map[string]string{"Content-Type": "application/json"},
+				Body:    io.NopCloser(bytes.NewReader(body)),
 			}
-			close(ch.Out)
 		}
 	}()
 	panic("goroutine panic: runtime/proc.go " + "SEL" + "ECT FROM postgres://relay:supersecretpassword99@host/db /Users/relay/src panic:")
 }
 
 func TestEnvelopeAudit(t *testing.T) {
-	noPipeline := func(_ context.Context, ch *transport.Channel, _ *RequestPlan) (pipeline.RunResult, error) {
-		close(ch.Out)
-		return pipeline.RunResult{}, nil
+	noPipeline := func(_ context.Context, req *pipeline.Request) (*pipeline.Response, error) {
+		return &pipeline.Response{
+			Status:  200,
+			Headers: map[string]string{"Content-Type": "application/json"},
+			Body:    io.NopCloser(bytes.NewReader([]byte(`{}`))),
+		}, nil
 	}
 
 	rows := []auditRow{
@@ -270,9 +266,9 @@ func TestEnvelopeAudit(t *testing.T) {
 		},
 		{
 			// Row 13: Internal relay-side generic error (non-ExceededError from limiter)
-			name:     "internal_generic_error",
-			buildReq: func() *http.Request { return makeJSON(`{"model":"gpt-4","messages":[]}`) },
-			pipeline: envelopePipeline("500", "internal_error", "internal_error", "internal error"),
+			name:        "internal_generic_error",
+			buildReq:    func() *http.Request { return makeJSON(`{"model":"gpt-4","messages":[]}`) },
+			pipeline:    envelopePipeline("500", "internal_error", "internal_error", "internal error"),
 			wantStatus:  http.StatusInternalServerError,
 			wantErrType: "internal_error",
 			wantCode:    "internal_error",
