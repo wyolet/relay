@@ -97,9 +97,16 @@ type adminCRUD struct {
 // mountHuma wraps chiRouter in a humachi-backed huma API for the data plane
 // and registers /healthz and the /v1/* operations. Control-plane operations
 // live on a separate huma API mounted by mountControlHuma.
+//
+// inferenceAnonMW, when non-nil, is applied as an additional per-operation
+// middleware on all inference endpoints (/v1/chat/completions, /v1/messages,
+// /v1/embeddings). It is expected to be the ConditionalAnonymousMiddleware for
+// the "inference-proxy-anonymous" system rate limit — it no-ops for non-proxy-
+// anonymous requests so it is safe to attach unconditionally.
 func mountHuma(
 	chiRouter chi.Router,
 	authMW func(http.Handler) http.Handler,
+	inferenceAnonMW func(http.Handler) http.Handler,
 	healthzH http.HandlerFunc,
 	chatH http.HandlerFunc,
 	modelsH http.HandlerFunc,
@@ -114,6 +121,12 @@ func mountHuma(
 
 	api := humachi.New(chiRouter, cfg)
 	auth := huma.Middlewares{humaAuth(authMW)}
+	// inferenceAuth adds the anonymous proxy system RL check before auth, so
+	// an IP-exhausted anonymous caller gets 429 before Relay even tries to auth.
+	inferenceAuth := auth
+	if inferenceAnonMW != nil {
+		inferenceAuth = huma.Middlewares{humaAuth(inferenceAnonMW), humaAuth(authMW)}
+	}
 
 	// delegate wraps an http.HandlerFunc as a huma stream handler (no request body).
 	delegate := func(h http.HandlerFunc) func(context.Context, *struct{}) (*huma.StreamResponse, error) {
@@ -199,7 +212,7 @@ func mountHuma(
 			"Returns text/event-stream when stream=true, application/json otherwise.",
 		Tags:        []string{"chat"},
 		Errors:      []int{400, 401, 404, 429, 500},
-		Middlewares: auth,
+		Middlewares: inferenceAuth,
 	}, delegateBody(chatH))
 
 	// Patch the generated OpenAPI spec for /v1/chat/completions.
@@ -238,7 +251,7 @@ func mountHuma(
 			"Accepts x-api-key header in addition to Authorization: Bearer for SDK compatibility.",
 		Tags:        []string{"anthropic"},
 		Errors:      []int{400, 401, 404, 429, 500},
-		Middlewares: auth,
+		Middlewares: inferenceAuth,
 	}, delegateMessagesBody(messagesH))
 
 	// GET /v1/models
@@ -264,13 +277,19 @@ func mountHuma(
 // adminH may be nil (reload not configured); its op is skipped.
 // crudArg may be nil; its ops are skipped.
 // idStore may be nil (login disabled).
+// systemAPIMW, when non-nil, is applied as a chi-level middleware on the
+// control router (enforces the "system-api" per-IP rate limit).
 func mountControlHuma(
 	controlRouter chi.Router,
 	adminH http.HandlerFunc,
 	crudArg *adminCRUD,
 	adminTok string,
 	idStore *identity.Store,
+	systemAPIMW func(http.Handler) http.Handler,
 ) huma.API {
+	if systemAPIMW != nil {
+		controlRouter.Use(systemAPIMW)
+	}
 	cfg := huma.DefaultConfig("Wyolet Relay — Control API", relayVersion)
 	cfg.Info.Description = "Operator-facing control plane. Manages providers, policies, secrets, models, routes, " +
 		"rate limits, and identity. Authentication is cookie-based: POST /control/login with " +

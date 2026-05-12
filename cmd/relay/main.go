@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,8 @@ import (
 	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
 	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/internal/catalog"
+	"github.com/wyolet/relay/internal/transport/mode"
+	"github.com/wyolet/relay/internal/transport/systemrl"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/control"
 	"github.com/wyolet/relay/internal/identity"
@@ -38,6 +41,7 @@ import (
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/metrics"
+	pkgrl "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 	"github.com/wyolet/relay/pkg/transport"
 )
@@ -487,6 +491,43 @@ func main() {
 		adminCRUDHandlers = buildAdminCRUD(kinds, deps, pgStoreForAdmin, st)
 	}
 
+	// System RL: build pkg/ratelimit.Limiter for transport-layer enforcement.
+	// Uses the same kv.Store as the pipeline limiter (already initialised above).
+	pkgLimiter := pkgrl.New(st, slog.Default(), nil)
+
+	// ipScopeFn extracts the client IP from a request using the mode classifier
+	// (which honours RELAY_TRUSTED_PROXIES). Used as the per-IP scope for system RLs.
+	ipScopeFn := func(r *http.Request) string {
+		cls, err := mode.Classify(r)
+		if err != nil {
+			// Fall back to raw RemoteAddr on error.
+			host, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+			if splitErr != nil {
+				return r.RemoteAddr
+			}
+			return host
+		}
+		return cls.ClientIP
+	}
+
+	storeForRL := catalogStore // immutable local ref for closure
+
+	// inference-proxy-anonymous: conditional — only fires for proxy-anonymous requests.
+	inferenceAnonMW := systemrl.ConditionalAnonymousMiddleware(
+		pkgLimiter,
+		func() catalog.Store { return storeForRL },
+		"inference-proxy-anonymous",
+		ipScopeFn,
+	)
+
+	// system-api: per-IP cap for the control plane. Disabled by default (Spec.Enabled=false).
+	systemAPIMW := systemrl.Middleware(
+		pkgLimiter,
+		func() catalog.Store { return storeForRL },
+		"system-api",
+		ipScopeFn,
+	)
+
 	// Mount huma on the top-level chi router. It registers /openapi.json, /docs,
 	// /schemas (unauthenticated) and all business-logic operations (auth enforced
 	// per-operation via humaAuth). The chi Group pattern from PER-249 is replaced
@@ -494,6 +535,7 @@ func main() {
 	mountHuma(
 		r,
 		authMW,
+		inferenceAnonMW,
 		healthzHandler(healthzBackends, cfg.HealthzDeadlineMS, len(masterKey) > 0),
 		apiopenai.ChatCompletions(resolver, runPipeline),
 		apiopenai.ListModels(catalogStore),
@@ -527,7 +569,7 @@ func main() {
 		if len(cfg.ControlAllowOrigins) > 0 {
 			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 		}
-		mountControlHuma(ctrlRouter, adminH, adminCRUDHandlers, cfg.AdminToken, idStore)
+		mountControlHuma(ctrlRouter, adminH, adminCRUDHandlers, cfg.AdminToken, idStore, systemAPIMW)
 		ctrlAddr := ":" + cfg.ControlPort
 		ctrlSrv = &http.Server{Addr: ctrlAddr, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlAddr, "users", len(idStore.Users()))
