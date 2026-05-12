@@ -481,6 +481,50 @@ func TestPick_ExcludeAll(t *testing.T) {
 	}
 }
 
+// TestCooldownReasons — each FailureKind stamps the expected Reason on the circuit record.
+func TestCooldownReasons(t *testing.T) {
+	cases := []struct {
+		name     string
+		kind     FailureKind
+		retry    time.Duration
+		wantRsn  CooldownReason
+		wantOpen bool
+	}{
+		{"auth", FailureAuth, 0, ReasonUpstreamAuthFailed, true},
+		{"rl_long", FailureRateLimitLong, 30 * time.Second, ReasonUpstreamRateLimited, true},
+		{"server_error", FailureServerError, 0, ReasonUpstreamServerError, true},
+		{"network", FailureNetwork, 0, ReasonUpstreamNetworkError, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sel, _ := newSel(t, frozenClock(t0))
+			ctx := context.Background()
+			h := "hash-" + tc.name
+			sel.RecordFailure(ctx, h, tc.kind, tc.retry)
+			rec := sel.readRecord(ctx, h)
+			if rec.Reason != tc.wantRsn {
+				t.Fatalf("want reason %q, got %q", tc.wantRsn, rec.Reason)
+			}
+			if tc.wantOpen && rec.State != CircuitOpen {
+				t.Fatalf("want CircuitOpen, got %v", rec.State)
+			}
+		})
+	}
+}
+
+// TestRateLimitShortPreservesReason — short RL does not write a record, so reason stays empty.
+func TestRateLimitShortPreservesReason(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	h := "hash-rls-reason"
+	sel.RecordFailure(ctx, h, FailureRateLimitShort, 2*time.Second)
+	rec := sel.readRecord(ctx, h)
+	// No record was written; default is closed with empty reason.
+	if rec.Reason != "" {
+		t.Fatalf("want empty reason, got %q", rec.Reason)
+	}
+}
+
 // TestPickWithExclude_Convenience — PickWithExclude wrapper works correctly.
 func TestPickWithExclude_Convenience(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
