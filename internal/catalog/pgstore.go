@@ -102,6 +102,7 @@ func (s *PGStore) Reload(ctx context.Context) error {
 	if err := validate(snap); err != nil {
 		return fmt.Errorf("catalog.PGStore.Reload: catalog invalid: %w", err)
 	}
+	snap.injectUpstreamTierRateLimits()
 	snap.buildEffectivePricing()
 	snap.buildByIDIndexes()
 	s.mu.Lock()

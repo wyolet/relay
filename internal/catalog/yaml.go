@@ -45,6 +45,7 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 	if err := validate(snap); err != nil {
 		return nil, err
 	}
+	snap.injectUpstreamTierRateLimits()
 	snap.buildEffectivePricing()
 	snap.buildByIDIndexes()
 	return &YAMLStore{snap: snap}, nil

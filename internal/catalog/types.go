@@ -85,6 +85,12 @@ type ProviderSpec struct {
 	// DefaultPricing is merged with Model.Spec.Pricing at snapshot load.
 	// Model-level rates win on collision per-key.
 	DefaultPricing *Pricing `yaml:"defaultPricing,omitempty" json:"defaultPricing,omitempty"`
+
+	// DefaultTier is the upstream billing tier for keys that don't declare one.
+	// When set, the snapshot loader auto-injects a system_mirrored RateLimit
+	// named "upstream-<secret>-<tier>" for every secret on this provider that
+	// does not override Tier itself. Must be a value from AllUpstreamTiers or empty.
+	DefaultTier string `yaml:"defaultTier,omitempty" json:"defaultTier,omitempty" enum:"openai-tier-1,openai-tier-2,openai-tier-3,openai-tier-4,openai-tier-5,anthropic-tier-1,anthropic-tier-2,anthropic-tier-3,anthropic-tier-4" doc:"Default upstream billing tier for secrets on this provider. Auto-injects a system_mirrored RateLimit when set."`
 }
 
 type Secret struct {
@@ -103,6 +109,12 @@ type SecretSpec struct {
 	Value      string                `yaml:"value,omitempty"      json:"-"` // never serialised to JSON (cleartext)
 	RateLimits []RateLimitAttachment `yaml:"rateLimits,omitempty" json:"rateLimits,omitempty"`
 	Enabled    *bool                 `yaml:"enabled,omitempty"    json:"enabled,omitempty"`
+
+	// Tier is the upstream billing tier for this specific key. When set, the
+	// snapshot loader auto-injects a system_mirrored RateLimit named
+	// "upstream-<secret>-<tier>". Overrides Provider.Spec.DefaultTier.
+	// Must be a value from AllUpstreamTiers or empty.
+	Tier string `yaml:"tier,omitempty" json:"tier,omitempty" enum:"openai-tier-1,openai-tier-2,openai-tier-3,openai-tier-4,openai-tier-5,anthropic-tier-1,anthropic-tier-2,anthropic-tier-3,anthropic-tier-4" doc:"Upstream billing tier for this key. Overrides provider.spec.defaultTier. Auto-injects a system_mirrored RateLimit when set."`
 }
 
 type SecretValueFrom struct {

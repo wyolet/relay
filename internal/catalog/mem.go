@@ -32,6 +32,7 @@ func NewMemStore(objects ...any) *MemStore {
 			snap.passthrough = v
 		}
 	}
+	snap.injectUpstreamTierRateLimits()
 	snap.buildEffectivePricing()
 	snap.buildByIDIndexes()
 	snap.rebuildRelayKeyHashIndex()

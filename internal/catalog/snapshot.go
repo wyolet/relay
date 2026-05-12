@@ -1,6 +1,9 @@
 package catalog
 
-import "sort"
+import (
+	"log/slog"
+	"sort"
+)
 
 // snapshot is the in-memory view of the catalog, shared by YAMLStore and PGStore.
 //
@@ -22,6 +25,12 @@ type snapshot struct {
 	relayKeysByHash map[string]*RelayKey // keyed by Spec.KeyHash for hot-path auth lookup
 	passthrough     *Passthrough         // singleton; nil before first load, then always non-nil
 	effectivePrices map[string]*Pricing  // keyed by model slug; populated by buildEffectivePricing
+	// secretTierRLs holds one auto-injected system_mirrored RateLimit per
+	// secret that has a resolvable upstream tier (via Spec.Tier or its
+	// provider's Spec.DefaultTier). Keyed by secret slug. Populated by
+	// injectUpstreamTierRateLimits; consumed by rateLimitsForRequest and
+	// exposed via listRateLimits so they appear at GET /control/ratelimits.
+	secretTierRLs map[string]*RateLimit
 
 	// byID secondary indexes: id → slug. Built by buildByIDIndexes; used by the
 	// HTTP layer's id-routed PUT/DELETE and slug-or-id GET. Empty before the
@@ -55,6 +64,7 @@ func newSnapshot() *snapshot {
 		relayKeys:       map[string]*RelayKey{},
 		relayKeysByHash: map[string]*RelayKey{},
 		effectivePrices: map[string]*Pricing{},
+		secretTierRLs:   map[string]*RateLimit{},
 		providersByID:   map[string]string{},
 		modelsByID:      map[string]string{},
 		routesByID:      map[string]string{},
@@ -396,6 +406,58 @@ func (s *snapshot) secretsForPolicy(p *Policy) []*Secret {
 	return out
 }
 
+// injectUpstreamTierRateLimits walks all secrets and, for each one that has a
+// resolvable upstream tier (Spec.Tier or provider's Spec.DefaultTier), generates
+// a synthetic system_mirrored RateLimit and stores it in s.secretTierRLs.
+//
+// The generated objects are also inserted into s.rateLimits so they appear in
+// GET /control/ratelimits. The existing system_mirrored guard in the admin
+// handlers blocks PUT/DELETE on them automatically via Spec.Source.
+//
+// Must be called after providers and secrets are fully populated.
+func (s *snapshot) injectUpstreamTierRateLimits() {
+	s.secretTierRLs = make(map[string]*RateLimit, len(s.secrets))
+	for secretName, sec := range s.secrets {
+		// Resolve effective tier: secret-level wins over provider default.
+		tierName := sec.Spec.Tier
+		if tierName == "" {
+			if prov, ok := s.providers[sec.Spec.Provider]; ok {
+				tierName = prov.Spec.DefaultTier
+			}
+		}
+		if tierName == "" {
+			continue // no tier declared; silent skip
+		}
+		tier := lookupUpstreamTier(tierName)
+		if tier == nil {
+			slog.Warn("upstream tier unknown; skipping auto-injection",
+				"secret", secretName, "tier", tierName)
+			continue
+		}
+		rlName := "upstream-" + secretName + "-" + tierName
+		enabled := true
+		rl := &RateLimit{
+			APIVersion: APIVersion,
+			Kind:       KindRateLimit,
+			Metadata:   Metadata{Name: rlName},
+			Spec: RateLimitSpec{
+				Source:      string(SourceSystemMirrored),
+				Strategy:    StrategySlidingWindow,
+				Window:      0, // each rule carries its own window
+				Rules:       tier.copyRules(),
+				Enabled:     &enabled,
+				Description: "Auto-injected upstream tier mirror for secret " + secretName,
+			},
+		}
+		s.secretTierRLs[secretName] = rl
+		// Also expose via rateLimits map for admin list/read endpoints.
+		// Do not overwrite if an operator has manually defined a same-named RL.
+		if _, exists := s.rateLimits[rlName]; !exists {
+			s.rateLimits[rlName] = rl
+		}
+	}
+}
+
 func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, model *Model, secret *Secret) []ResolvedRule {
 	var out []ResolvedRule
 
@@ -432,6 +494,10 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 
 	if secret != nil {
 		expand(KindSecret, secret.Metadata.Name, secret.Spec.RateLimits)
+		// Auto-injected upstream-tier RL for this secret (if any).
+		if tierRL, ok := s.secretTierRLs[secret.Metadata.Name]; ok {
+			expand(KindSecret, secret.Metadata.Name, []RateLimitAttachment{{Ref: tierRL.Metadata.Name}})
+		}
 	}
 	if policy != nil {
 		expand(KindPolicy, policy.Metadata.Name, policy.Spec.RateLimits)
