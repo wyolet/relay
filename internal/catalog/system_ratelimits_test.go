@@ -49,9 +49,9 @@ func TestSystemRateLimitsLoad(t *testing.T) {
 			t.Errorf("RateLimit %q not found in snapshot", name)
 			continue
 		}
-		if rl.Spec.Source != string(SourceSystemMirrored) {
-			t.Errorf("RateLimit %q: want source=%q, got %q",
-				name, SourceSystemMirrored, rl.Spec.Source)
+		if rl.Metadata.Owner.Kind != OwnerSystem {
+			t.Errorf("RateLimit %q: want owner.kind=%q, got %q",
+				name, OwnerSystem, rl.Metadata.Owner.Kind)
 		}
 	}
 	if t.Failed() {

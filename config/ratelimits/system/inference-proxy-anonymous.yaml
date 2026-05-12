@@ -3,11 +3,10 @@ kind: RateLimit
 metadata:
   name: inference-proxy-anonymous
   displayName: Inference rate limits (anonymous proxy)
-spec:
-  source: system_mirrored
   description: "Per-IP runtime cap for anonymous proxy-mode inference requests (X-WR-Proxy-Mode: Proxy without a Relay key). Protects against abuse of the proxy path."
-  window: 1m
-  strategy: sliding-window
+  owner:
+    kind: system
+spec:
   enabled: true
   rules:
     - meter: requests
@@ -20,3 +19,5 @@ spec:
       strategy: sliding-window
     - meter: concurrency
       amount: 10
+      window: 1m
+      strategy: sliding-window

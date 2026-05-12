@@ -30,12 +30,12 @@ func makeRule(meter catalog.Meter, amount int64, window time.Duration) catalog.R
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: "rl-" + string(meter)},
 			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategySlidingWindow,
-				Window:   window,
-				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
+				Rules: []catalog.RateLimitRule{{Meter: string(meter), Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow}},
 			},
 		},
-		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
+		Rule:     catalog.RateLimitRule{Meter: string(meter), Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow},
+		Strategy: catalog.StrategySlidingWindow,
+		Window:   window,
 	}
 }
 
@@ -438,9 +438,7 @@ func makeMultiRule(parentName, rlName string, ruleMeter string, amount int64, wi
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: rlName},
 			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategySlidingWindow,
-				Window:   window,
-				Rules:    []catalog.RateLimitRule{{Meter: ruleMeter, Amount: amount}},
+				Rules: []catalog.RateLimitRule{{Meter: ruleMeter, Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow}},
 			},
 		},
 	}
@@ -457,15 +455,14 @@ func makeStrategyRule(strategy catalog.RateLimitStrategy, meter catalog.Meter, a
 		Rule: catalog.RateLimitRule{
 			Meter:    string(meter),
 			Amount:   amount,
+			Window:   window,
 			Strategy: strategy,
 		},
 		Meter: meter,
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: "rl-" + string(strategy)},
 			Spec: catalog.RateLimitSpec{
-				Strategy: strategy,
-				Window:   window,
-				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
+				Rules: []catalog.RateLimitRule{{Meter: string(meter), Amount: amount, Window: window, Strategy: strategy}},
 			},
 		},
 	}

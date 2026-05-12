@@ -47,14 +47,12 @@ spec:
 		if !ok {
 			t.Fatal("rate limit not found")
 		}
-		if rl.Spec.Window != time.Minute {
-			t.Errorf("expected window 1m, got %v", rl.Spec.Window)
-		}
+		// Legacy YAML fans strategy+window down into rules on unmarshal.
 		if len(rl.Spec.Rules) != 1 || rl.Spec.Rules[0].Amount != 100 {
 			t.Errorf("expected lifted rules[0].Amount=100, got %+v", rl.Spec.Rules)
 		}
-		if rl.Spec.Source != "" {
-			t.Errorf("expected empty spec.Source, got %q", rl.Spec.Source)
+		if rl.Spec.Rules[0].Window != time.Minute {
+			t.Errorf("expected rule window 1m, got %v", rl.Spec.Rules[0].Window)
 		}
 	})
 
@@ -89,7 +87,7 @@ spec:
   amount: 100
 `)
 		_, err := LoadYAML(dir)
-		if err == nil || !strings.Contains(err.Error(), "window must be > 0") {
+		if err == nil || (!strings.Contains(err.Error(), "window") && !strings.Contains(err.Error(), "window is required")) {
 			t.Fatalf("expected window error, got: %v", err)
 		}
 	})
@@ -633,28 +631,29 @@ func TestRateLimitSpec_LegacyJSONLift(t *testing.T) {
 	}
 }
 
-// TestRateLimitSpec_WindowStringParsed verifies that JSON window accepts "1m" strings.
+// TestRateLimitSpec_WindowStringParsed verifies that JSON legacy window string fans out to rules.
 func TestRateLimitSpec_WindowStringParsed(t *testing.T) {
 	var spec RateLimitSpec
 	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":"1m","amount":10}`), &spec); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if spec.Window != time.Minute {
-		t.Errorf("expected 1m, got %v", spec.Window)
+	// Legacy fan-out: window ends up on the rule.
+	if len(spec.Rules) != 1 || spec.Rules[0].Window != time.Minute {
+		t.Errorf("expected rule window 1m, got %+v", spec.Rules)
 	}
 	// also 30s
 	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":"30s","amount":10}`), &spec); err != nil {
 		t.Fatalf("unmarshal 30s: %v", err)
 	}
-	if spec.Window != 30*time.Second {
-		t.Errorf("expected 30s, got %v", spec.Window)
+	if len(spec.Rules) != 1 || spec.Rules[0].Window != 30*time.Second {
+		t.Errorf("expected rule window 30s, got %+v", spec.Rules)
 	}
 	// nanoseconds-as-int still works (legacy storage format)
 	if err := json.Unmarshal([]byte(`{"strategy":"sliding-window","window":60000000000,"amount":10}`), &spec); err != nil {
 		t.Fatalf("unmarshal int: %v", err)
 	}
-	if spec.Window != time.Minute {
-		t.Errorf("expected 1m from int, got %v", spec.Window)
+	if len(spec.Rules) != 1 || spec.Rules[0].Window != time.Minute {
+		t.Errorf("expected rule window 1m from int, got %+v", spec.Rules)
 	}
 }
 
@@ -689,14 +688,6 @@ func TestMultiRuleRateLimit_ValidationErrors(t *testing.T) {
     - meter: requests
       amount: 0`,
 			wantErr: "amount must be > 0",
-		},
-		{
-			name: "bad source",
-			spec: `source: not-attribution
-  rules:
-    - meter: requests
-      amount: 10`,
-			wantErr: "source",
 		},
 		{
 			name:    "empty rules — must provide legacy fields",

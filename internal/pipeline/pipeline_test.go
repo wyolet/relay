@@ -507,12 +507,12 @@ func testLimiterSetup(t *testing.T) (*ratelimit.Limiter, []catalog.ResolvedRule,
 			RateLimit: &catalog.RateLimit{
 				Metadata: catalog.Metadata{Name: "rpm"},
 				Spec: catalog.RateLimitSpec{
-					Strategy: catalog.StrategySlidingWindow,
-					Window:   time.Minute,
-					Rules:    []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: 1000}},
+					Rules: []catalog.RateLimitRule{{Meter: string(catalog.MeterRequests), Amount: 1000, Window: time.Minute, Strategy: catalog.StrategySlidingWindow}},
 				},
 			},
-			Rule: catalog.RateLimitRule{Meter: string(catalog.MeterRequests), Amount: 1000},
+			Rule:     catalog.RateLimitRule{Meter: string(catalog.MeterRequests), Amount: 1000, Window: time.Minute, Strategy: catalog.StrategySlidingWindow},
+			Strategy: catalog.StrategySlidingWindow,
+			Window:   time.Minute,
 		},
 	}
 	return l, rules, func() { st.Close() }
@@ -553,12 +553,12 @@ func exceededRules(meter catalog.Meter, retryAfterSec int) ([]catalog.ResolvedRu
 		RateLimit: &catalog.RateLimit{
 			Metadata: catalog.Metadata{Name: string(meter) + "-limit"},
 			Spec: catalog.RateLimitSpec{
-				Strategy: catalog.StrategySlidingWindow,
-				Window:   window,
-				Rules:    []catalog.RateLimitRule{{Meter: string(meter), Amount: amount}},
+				Rules: []catalog.RateLimitRule{{Meter: string(meter), Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow}},
 			},
 		},
-		Rule: catalog.RateLimitRule{Meter: string(meter), Amount: amount},
+		Rule:     catalog.RateLimitRule{Meter: string(meter), Amount: amount, Window: window, Strategy: catalog.StrategySlidingWindow},
+		Strategy: catalog.StrategySlidingWindow,
+		Window:   window,
 	}
 	rules := []catalog.ResolvedRule{rule}
 	ctx := context.Background()
@@ -1139,10 +1139,8 @@ func buildPerKeyStore(t *testing.T, amount int64) (*catalog.MemStore, *ratelimit
 	rl1 := &catalog.RateLimit{
 		Metadata: catalog.Metadata{Name: "per-key-rpm"},
 		Spec: catalog.RateLimitSpec{
-			Strategy: catalog.StrategyTokenBucket,
-			Window:   time.Minute,
 			Rules: []catalog.RateLimitRule{
-				{Meter: string(catalog.MeterRequests), Amount: amount},
+				{Meter: string(catalog.MeterRequests), Amount: amount, Window: time.Minute, Strategy: catalog.StrategyTokenBucket},
 			},
 		},
 	}

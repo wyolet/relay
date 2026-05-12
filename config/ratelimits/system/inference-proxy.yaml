@@ -3,10 +3,9 @@ kind: RateLimit
 metadata:
   name: inference-proxy
   displayName: Inference rate limits (proxy)
-spec:
-  source: system_mirrored
   description: "Config ceiling for per-key user rate limits on authed proxy-mode inference requests (BYOK customers). Empty rules = no ceiling."
-  window: 1m
-  strategy: sliding-window
+  owner:
+    kind: system
+spec:
   enabled: false
   rules: []

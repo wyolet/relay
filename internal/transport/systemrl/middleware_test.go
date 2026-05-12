@@ -41,9 +41,7 @@ func newRL(name string, enabled *bool, amount int64, window time.Duration) *cata
 	return &catalog.RateLimit{
 		Metadata: catalog.Metadata{Name: name},
 		Spec: catalog.RateLimitSpec{
-			Enabled:  enabled,
-			Strategy: catalog.StrategySlidingWindow,
-			Window:   d,
+			Enabled: enabled,
 			Rules: []catalog.RateLimitRule{
 				{
 					Meter:    "requests",

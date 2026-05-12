@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -355,13 +356,7 @@ func rateLimitKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*cata
 		PatchDelete: func(slug string) catalog.Patch {
 			return catalog.Patch{DeleteRateLimit: slug}
 		},
-		Guard: func(_ context.Context, existing *catalog.RateLimit) error {
-			if existing.Spec.Source == string(catalog.SourceSystemMirrored) {
-				return huma.NewError(http.StatusForbidden,
-					"system-mirrored RateLimit objects are read-only")
-			}
-			return nil
-		},
+		Guard: rateLimitGuard,
 	}
 }
 
@@ -455,6 +450,77 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 			return catalog.Patch{DeleteRelayKey: slug}
 		},
 	}
+}
+
+// --- RateLimit guard ---
+
+// rateLimitGuard enforces per-owner edit rules:
+//   - OwnerUser: unrestricted edit + delete.
+//   - OwnerSystem / OwnerProvider: only spec.enabled and spec.rules[i].amount
+//     (matched by index; length must not change) may differ; delete rejected.
+func rateLimitGuard(_ context.Context, existing, proposed *catalog.RateLimit) error {
+	switch existing.Metadata.Owner.Kind {
+	case catalog.OwnerUser, "":
+		// user-owned (or untagged legacy): no restrictions
+		return nil
+	case catalog.OwnerSystem, catalog.OwnerProvider:
+		// delete is proposed==nil (zero value pointer)
+		if proposed == nil {
+			return huma.NewError(http.StatusForbidden,
+				"system/provider-owned RateLimit objects cannot be deleted via the API")
+		}
+		return enforceSystemRateLimitAllowlist(existing, proposed)
+	default:
+		return huma.NewError(http.StatusForbidden,
+			"unknown owner kind; edit rejected")
+	}
+}
+
+// enforceSystemRateLimitAllowlist rejects any field change outside the
+// allowed set: spec.enabled and spec.rules[i].amount (index-matched).
+func enforceSystemRateLimitAllowlist(existing, proposed *catalog.RateLimit) error {
+	// Name / owner / description / displayName must not change.
+	if proposed.Metadata.Name != existing.Metadata.Name {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.name cannot be changed")
+	}
+	if proposed.Metadata.Owner != existing.Metadata.Owner {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.owner cannot be changed")
+	}
+	if proposed.Metadata.Description != existing.Metadata.Description {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.description cannot be changed")
+	}
+	if proposed.Metadata.DisplayName != existing.Metadata.DisplayName {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: metadata.displayName cannot be changed")
+	}
+
+	// Rule count must be unchanged.
+	er := existing.Spec.Rules
+	pr := proposed.Spec.Rules
+	if len(pr) != len(er) {
+		return huma.NewError(http.StatusForbidden,
+			"system/provider-owned RateLimit: rule count cannot be changed (adding/removing rules is not permitted)")
+	}
+
+	// Each rule: only amount may change; meter/window/strategy must be unchanged.
+	for i := range er {
+		if pr[i].Meter != er[i].Meter {
+			return huma.NewError(http.StatusForbidden,
+				fmt.Sprintf("system/provider-owned RateLimit: rules[%d].meter cannot be changed", i))
+		}
+		if pr[i].Window != er[i].Window {
+			return huma.NewError(http.StatusForbidden,
+				fmt.Sprintf("system/provider-owned RateLimit: rules[%d].window cannot be changed", i))
+		}
+		if pr[i].Strategy != er[i].Strategy {
+			return huma.NewError(http.StatusForbidden,
+				fmt.Sprintf("system/provider-owned RateLimit: rules[%d].strategy cannot be changed", i))
+		}
+	}
+	return nil
 }
 
 // --- helpers ---

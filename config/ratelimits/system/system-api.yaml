@@ -3,11 +3,10 @@ kind: RateLimit
 metadata:
   name: system-api
   displayName: API rate limits
-spec:
-  source: system_mirrored
   description: "DoS protection for control and non-inference public API endpoints. Per-IP runtime cap."
-  window: 1m
-  strategy: sliding-window
+  owner:
+    kind: system
+spec:
   enabled: false
   rules:
     - meter: requests

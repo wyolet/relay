@@ -20,14 +20,6 @@ var pricingRateKeyRE = regexp.MustCompile(`^[a-z][a-z0-9_.]*$`)
 // isoCurrencyRE matches 3-letter uppercase ISO 4217 currency codes.
 var isoCurrencyRE = regexp.MustCompile(`^[A-Z]{3}$`)
 
-// sourceRE matches the optional attribution source field.
-var sourceRE = regexp.MustCompile(`^attribution\.[a-z][a-z0-9_]*$`)
-
-// knownProvenance lists the valid spec.source values for provenance tracking.
-var knownProvenance = map[string]bool{
-	string(SourceUserDefined):    true,
-	string(SourceSystemMirrored): true,
-}
 
 const maxRateLimitWindow = 30 * 24 * time.Hour
 
@@ -394,25 +386,23 @@ var validStrategies = map[RateLimitStrategy]bool{
 
 func validateRateLimits(s *snapshot) error {
 	for _, rl := range s.rateLimits {
-		// spec.Window may be zero only when every rule defines its own window.
-		if rl.Spec.Window < 0 {
-			return fmt.Errorf("RateLimit %q: window must be >= 0", rl.Metadata.Name)
+		// Validate metadata.owner.kind when present.
+		switch rl.Metadata.Owner.Kind {
+		case OwnerSystem, OwnerProvider, OwnerUser, "":
+			// valid
+		default:
+			return fmt.Errorf("RateLimit %q: metadata.owner.kind %q is not valid (must be system, provider, or user)", rl.Metadata.Name, rl.Metadata.Owner.Kind)
 		}
-		if rl.Spec.Window > maxRateLimitWindow {
-			return fmt.Errorf("RateLimit %q: window %v exceeds maximum of 30 days", rl.Metadata.Name, rl.Spec.Window)
+		if rl.Metadata.Owner.Kind == OwnerProvider && rl.Metadata.Owner.ID == "" {
+			return fmt.Errorf("RateLimit %q: metadata.owner.id required when kind=provider", rl.Metadata.Name)
 		}
-		// Validate spec-level source (provenance field, not per-rule).
-		// Accepts: known provenance values (system_mirrored, user_defined) or
-		// legacy attribution.<key> form.
-		if rl.Spec.Source != "" && !knownProvenance[rl.Spec.Source] && !sourceRE.MatchString(rl.Spec.Source) {
-			return fmt.Errorf("RateLimit %q: source %q is not a valid provenance value", rl.Metadata.Name, rl.Spec.Source)
-		}
-		// system_mirrored objects may have empty rules — they act as config ceilings
+
+		// System-owned objects may have empty rules — they are config ceilings
 		// that operators populate after deployment. Skip rule validation for them.
-		if rl.Spec.Source == string(SourceSystemMirrored) && len(rl.Spec.Rules) == 0 {
+		if rl.Metadata.Owner.Kind == OwnerSystem && len(rl.Spec.Rules) == 0 {
 			continue
 		}
-		// Reject explicitly empty rules list (nil/omitted is fine — it falls back to legacy).
+		// Reject explicitly empty rules list.
 		if rl.Spec.Rules != nil && len(rl.Spec.Rules) == 0 {
 			return fmt.Errorf("RateLimit %q: rules must be non-empty", rl.Metadata.Name)
 		}
@@ -428,30 +418,29 @@ func validateRateLimits(s *snapshot) error {
 			if r.Amount <= 0 {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): amount must be > 0", rl.Metadata.Name, i, r.Meter)
 			}
-			// Require every rule to have a resolvable window.
-			effectiveWindow := r.Window
-			if effectiveWindow == 0 {
-				effectiveWindow = rl.Spec.Window
+			// Every rule must declare its own window (no spec-level fallback).
+			if r.Window <= 0 {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): window is required on each rule (no spec-level default)", rl.Metadata.Name, i, r.Meter)
 			}
-			if effectiveWindow <= 0 {
-				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): window must be > 0 (set on rule or spec)", rl.Metadata.Name, i, r.Meter)
+			if r.Window > maxRateLimitWindow {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): window %v exceeds maximum of 30 days", rl.Metadata.Name, i, r.Meter, r.Window)
 			}
-			if effectiveWindow > maxRateLimitWindow {
-				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): window %v exceeds maximum of 30 days", rl.Metadata.Name, i, r.Meter, effectiveWindow)
+			// Every rule must declare its own strategy.
+			if r.Strategy == "" {
+				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): strategy is required on each rule", rl.Metadata.Name, i, r.Meter)
 			}
-			// Strategy "" is valid here; snapshot loader defaults to token-bucket.
-			if r.Strategy != "" && !validStrategies[r.Strategy] {
+			if !validStrategies[r.Strategy] {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): unsupported strategy %q", rl.Metadata.Name, i, r.Meter, r.Strategy)
 			}
 			// tokens / tokens.<suffix> meters are post-hoc (amount known only after
 			// the upstream responds). Only sliding-window has a Commit-time increment
 			// path; token-bucket / leaky-bucket / fixed-window would silently no-op.
 			if (r.Meter == string(MeterTokens) || strings.HasPrefix(r.Meter, "tokens.")) &&
-				r.Strategy != "" && r.Strategy != StrategySlidingWindow {
+				r.Strategy != StrategySlidingWindow {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s): strategy %q is not supported for tokens meter; only sliding-window is supported (tokens are counted post-hoc)",
 					rl.Metadata.Name, i, r.Meter, r.Strategy)
 			}
-			meterSeen[r.Meter+"@"+effectiveWindow.String()]++
+			meterSeen[r.Meter+"@"+r.Window.String()]++
 		}
 		for k, cnt := range meterSeen {
 			if cnt > 1 {
@@ -509,8 +498,8 @@ func validateAttachments(s *snapshot) error {
 // Operators using passthrough-allowed keys can override via env if they need a
 // more permissive ceiling in a future release.
 func validateAgainstCeiling(rl *RateLimit, s *snapshot) error {
-	// System-mirrored objects (the ceilings themselves) are exempt.
-	if rl.Spec.Source == string(SourceSystemMirrored) {
+	// System/provider-owned objects (the ceilings themselves) are exempt.
+	if rl.Metadata.Owner.Kind == OwnerSystem || rl.Metadata.Owner.Kind == OwnerProvider {
 		return nil
 	}
 
@@ -519,29 +508,21 @@ func validateAgainstCeiling(rl *RateLimit, s *snapshot) error {
 		return nil
 	}
 
-	// Build a lookup map: (meter, effectiveWindow) -> amount for the ceiling.
+	// Build a lookup map: (meter, window) -> amount for the ceiling.
 	type ceilingKey struct {
 		meter  string
 		window time.Duration
 	}
 	ceilingMap := make(map[ceilingKey]int64)
 	for _, cr := range ceiling.Spec.NormalizedRules() {
-		w := cr.Window
-		if w == 0 {
-			w = ceiling.Spec.Window
-		}
-		ceilingMap[ceilingKey{cr.Meter, w}] = cr.Amount
+		ceilingMap[ceilingKey{cr.Meter, cr.Window}] = cr.Amount
 	}
 
 	for i, r := range rl.Spec.NormalizedRules() {
-		w := r.Window
-		if w == 0 {
-			w = rl.Spec.Window
-		}
-		if max, found := ceilingMap[ceilingKey{r.Meter, w}]; found {
+		if max, found := ceilingMap[ceilingKey{r.Meter, r.Window}]; found {
 			if r.Amount > max {
 				return fmt.Errorf("RateLimit %q rule[%d] (meter=%s window=%s amount=%d): exceeds ceiling \"inference\" (max=%d)",
-					rl.Metadata.Name, i, r.Meter, w, r.Amount, max)
+					rl.Metadata.Name, i, r.Meter, r.Window, r.Amount, max)
 			}
 		}
 	}

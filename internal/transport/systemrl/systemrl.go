@@ -130,16 +130,9 @@ func toRules(rl *catalog.RateLimit) []pkgrl.Rule {
 	for _, r := range normalised {
 		strategy := pkgrl.Strategy(r.Strategy)
 		if strategy == "" {
-			if rl.Spec.Strategy != "" {
-				strategy = pkgrl.Strategy(rl.Spec.Strategy)
-			} else {
-				strategy = pkgrl.StrategyTokenBucket
-			}
+			strategy = pkgrl.StrategyTokenBucket
 		}
 		w := r.Window
-		if w == 0 {
-			w = rl.Spec.Window
-		}
 		meter := r.Meter
 		if meter == "" {
 			meter = string(catalog.MeterRequests)

@@ -172,7 +172,7 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if k.Guard != nil {
-			if gerr := k.Guard(ctx, before); gerr != nil {
+			if gerr := k.Guard(ctx, before, in.Body); gerr != nil {
 				return nil, gerr
 			}
 		}
@@ -224,7 +224,8 @@ func RegisterOps[T any](
 			return nil, humaError(http.StatusInternalServerError, err.Error())
 		}
 		if k.Guard != nil {
-			if gerr := k.Guard(ctx, current); gerr != nil {
+			var zero T
+			if gerr := k.Guard(ctx, current, zero); gerr != nil {
 				return nil, gerr
 			}
 		}
