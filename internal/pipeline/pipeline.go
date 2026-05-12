@@ -311,11 +311,6 @@ func run(ctx context.Context, ch *transport.Channel, opts RunOptions) (result Ru
 					lc.TerminatedBy = usage.TerminatedPoolExhausted
 					return result, err
 				}
-				if errors.Is(err, keypool.ErrPoolOutOfCapacity) {
-					sendPoolOutOfCapacityEnvelope(ch.Out)
-					lc.TerminatedBy = usage.TerminatedPoolExhausted
-					return result, err
-				}
 				lc.TerminatedBy = usage.TerminatedRelayError
 				return result, err
 			}
@@ -575,7 +570,7 @@ func classifyTermination(ctx context.Context, err error) usage.TerminatedBy {
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return usage.TerminatedClientCancel
 	}
-	if errors.Is(err, keypool.ErrNoHealthyKeys) || errors.Is(err, keypool.ErrPoolOutOfCapacity) {
+	if errors.Is(err, keypool.ErrNoHealthyKeys) {
 		return usage.TerminatedPoolExhausted
 	}
 	if errors.Is(err, ErrAttemptsExhausted) {
@@ -716,17 +711,6 @@ func sendExhaustedEnvelope(out chan<- *transport.Message, kind keypool.FailureKi
 	out <- &transport.Message{Headers: headers, Body: body}
 }
 
-func sendPoolOutOfCapacityEnvelope(out chan<- *transport.Message) {
-	out <- &transport.Message{
-		Headers: map[string]string{
-			"X-Relay-Status": "429",
-			"Content-Type":   "application/json",
-			"X-Relay-Final":  "true",
-			"Retry-After":    "30",
-		},
-		Body: []byte(`{"error":{"message":"policy out of capacity: all secrets at zero remaining quota","type":"rate_limit_exceeded","code":"pool_out_of_capacity"}}`),
-	}
-}
 
 func sendPoolExhausted(out chan<- *transport.Message) {
 	out <- &transport.Message{

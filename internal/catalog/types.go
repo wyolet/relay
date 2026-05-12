@@ -116,6 +116,29 @@ type Policy struct {
 	Spec       PolicySpec `yaml:"spec"       json:"spec"`
 }
 
+// KeySelection controls how the key pool selects a secret from the healthy candidates.
+type KeySelection string
+
+const (
+	// KeySelectionPrioritized drains keys in declaration order: the first healthy
+	// key in the policy's secrets list is always preferred. Default — matches the
+	// most common operator request ("drain key 1 fully before key 2").
+	KeySelectionPrioritized KeySelection = "prioritized"
+	// KeySelectionRoundRobin distributes traffic evenly across healthy keys in a
+	// rotating order.
+	KeySelectionRoundRobin KeySelection = "round-robin"
+	// KeySelectionLeastRecentlyUsed prefers the key that was least recently used,
+	// spreading load based on recency rather than a counter.
+	KeySelectionLeastRecentlyUsed KeySelection = "least-recently-used"
+)
+
+// AllKeySelections enumerates every valid KeySelection value.
+var AllKeySelections = []KeySelection{
+	KeySelectionPrioritized,
+	KeySelectionRoundRobin,
+	KeySelectionLeastRecentlyUsed,
+}
+
 type PolicySpec struct {
 	Provider          string                `yaml:"provider"              json:"provider"`
 	Secrets           []string              `yaml:"secrets,omitempty"     json:"secrets,omitempty"`
@@ -128,6 +151,9 @@ type PolicySpec struct {
 	RateLimits        []RateLimitAttachment `yaml:"rateLimits,omitempty"  json:"rateLimits,omitempty"`
 	SkipDefaultLimits bool                  `yaml:"skipDefaultLimits,omitempty" json:"skipDefaultLimits,omitempty"`
 	Enabled           *bool                 `yaml:"enabled,omitempty"     json:"enabled,omitempty"`
+	// KeySelection controls the strategy used to pick a secret from the healthy pool.
+	// Valid values: "prioritized" (default), "round-robin", "least-recently-used".
+	KeySelection      KeySelection          `yaml:"keySelection,omitempty" json:"keySelection,omitempty" enum:"prioritized,round-robin,least-recently-used" doc:"Key selection strategy for this policy's key pool. Defaults to 'prioritized' — drain first healthy key in declaration order."`
 }
 
 type Model struct {

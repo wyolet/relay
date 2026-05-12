@@ -235,7 +235,7 @@ func buildRelayHandler(tb testing.TB, stubURL string) http.Handler {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	limiter := ratelimit.New(st, logger, nil)
-	sel := keypool.New(st, logger, nil, limiter, cfg, nil)
+	sel := keypool.New(st, logger, nil, nil)
 
 	resolver := routing.New(cfg)
 

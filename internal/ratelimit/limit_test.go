@@ -274,22 +274,13 @@ func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 		t.Fatalf("expected rule1 to be violated, got %s", ee.Rule.RateLimit.Metadata.Name)
 	}
 
-	// rule0's requests counter should be rolled back → still 0.
-	rem, err := l.RemainingByMeter(ctx, "test-policy", []catalog.ResolvedRule{rule0})
-	if err != nil {
-		t.Fatalf("remaining: %v", err)
-	}
-	if rem[catalog.MeterRequests] != 100 {
-		t.Fatalf("expected rule0 requests remaining=100 after rollback, got %d", rem[catalog.MeterRequests])
-	}
-
-	// rule2 should be untouched (rule1 failed before rule2 was evaluated).
-	rem2, err := l.RemainingByMeter(ctx, "test-policy", []catalog.ResolvedRule{rule2})
-	if err != nil {
-		t.Fatalf("remaining rule2: %v", err)
-	}
-	if rem2[catalog.MeterRequests] != 100 {
-		t.Fatalf("expected rule2 untouched, got %d", rem2[catalog.MeterRequests])
+	// rule0's requests counter should be rolled back → all 100 reserves succeed.
+	for i := 0; i < 100; i++ {
+		res, err2 := l.Reserve(ctx, "test-policy", []catalog.ResolvedRule{rule0})
+		if err2 != nil {
+			t.Fatalf("rule0 reserve %d after rollback: %v", i+1, err2)
+		}
+		_ = l.Commit(ctx, res, Observations{})
 	}
 }
 
@@ -315,14 +306,12 @@ func TestIdempotentCommit(t *testing.T) {
 		t.Fatalf("commit 2: %v", err)
 	}
 
-	// Concurrency counter should be 0 now (decremented once, not twice).
-	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
+	// Concurrency counter decremented once, not twice → a new reserve succeeds.
+	res2, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
-		t.Fatalf("remaining: %v", err)
+		t.Fatalf("expected reserve to succeed after idempotent commit, got %v", err)
 	}
-	if rem[catalog.MeterConcurrency] != 1 {
-		t.Fatalf("expected concurrency remaining=1, got %d", rem[catalog.MeterConcurrency])
-	}
+	_ = l.Commit(ctx, res2, Observations{})
 }
 
 // TestSlidingWindow_BoundaryAccuracy
@@ -386,37 +375,6 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 	}
 }
 
-// TestRemainingByMeter_MinAcrossRules
-func TestRemainingByMeter_MinAcrossRules(t *testing.T) {
-	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
-	l := newLimiter(t, &now)
-	ctx := context.Background()
-
-	rule10 := makeRule(catalog.MeterRequests, 10, time.Minute)
-	rule10.RateLimit.Metadata.Name = "rl-10"
-	rule5 := makeRule(catalog.MeterRequests, 5, time.Minute)
-	rule5.RateLimit.Metadata.Name = "rl-5"
-
-	rules := []catalog.ResolvedRule{rule10, rule5}
-
-	// 3 reserves → consumes from both rules.
-	for i := 0; i < 3; i++ {
-		res, err := l.Reserve(ctx, "test-policy", rules)
-		if err != nil {
-			t.Fatalf("reserve %d: %v", i+1, err)
-		}
-		_ = l.Commit(ctx, res, Observations{})
-	}
-
-	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
-	if err != nil {
-		t.Fatalf("remaining: %v", err)
-	}
-	// min(10-3, 5-3) = min(7, 2) = 2
-	if rem[catalog.MeterRequests] != 2 {
-		t.Fatalf("expected remaining=2, got %d", rem[catalog.MeterRequests])
-	}
-}
 
 // TestReserve_ContextCancel
 func TestReserve_ContextCancel(t *testing.T) {
@@ -443,13 +401,13 @@ func TestReserve_ContextCancel(t *testing.T) {
 	_ = l.Commit(context.Background(), res1, Observations{})
 	_ = l.Commit(context.Background(), res2, Observations{})
 
-	// After commits, counter should be 0.
-	rem, err := l.RemainingByMeter(context.Background(), "test-policy", rules)
-	if err != nil {
-		t.Fatalf("remaining: %v", err)
-	}
-	if rem[catalog.MeterConcurrency] != 2 {
-		t.Fatalf("expected remaining=2, got %d", rem[catalog.MeterConcurrency])
+	// After commits, both concurrency slots freed → two new reserves succeed.
+	for i := 0; i < 2; i++ {
+		res, err2 := l.Reserve(context.Background(), "test-policy", rules)
+		if err2 != nil {
+			t.Fatalf("post-cancel reserve %d: expected success, got %v", i+1, err2)
+		}
+		_ = l.Commit(context.Background(), res, Observations{})
 	}
 }
 
@@ -720,16 +678,15 @@ func TestMultiRule_PerMeterCommit(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	// input: 1000-900=100 remaining; output: 500-400=100 remaining.
-	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
+	// Commit remaining 100 input + 100 output — should hit limits.
+	res2, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
-		t.Fatalf("remaining: %v", err)
+		t.Fatalf("second reserve: %v", err)
 	}
-	if rem["tokens.input"] != 100 {
-		t.Errorf("expected tokens.input remaining=100, got %d", rem["tokens.input"])
-	}
-	if rem["tokens.output"] != 100 {
-		t.Errorf("expected tokens.output remaining=100, got %d", rem["tokens.output"])
+	_ = l.Commit(ctx, res2, Observations{Tokens: usage.Tokens{"input": 100, "output": 100}})
+	_, err = l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected ErrExceeded after exhausting limits, got %v", err)
 	}
 }
 
@@ -753,12 +710,15 @@ func TestMultiRule_BareTokensMeter(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
+	// Commit remaining 500 tokens → limit exactly reached.
+	res2, err := l.Reserve(ctx, "test-policy", rules)
 	if err != nil {
-		t.Fatalf("remaining: %v", err)
+		t.Fatalf("second reserve: %v", err)
 	}
-	if rem[catalog.MeterTokens] != 500 {
-		t.Errorf("expected tokens remaining=500, got %d", rem[catalog.MeterTokens])
+	_ = l.Commit(ctx, res2, Observations{Tokens: usage.Tokens{"input": 250, "output": 250}})
+	_, err = l.Reserve(ctx, "test-policy", rules)
+	if !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected ErrExceeded after 1000 tokens, got %v", err)
 	}
 }
 

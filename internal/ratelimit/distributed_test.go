@@ -256,14 +256,12 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if err := l.Commit(ctx, res, ratelimit.Observations{Tokens: 50}); err != nil {
 			t.Fatalf("commit 2: %v", err)
 		}
-		// Concurrency should be 1 (slot fully released once; counter at 0 → remaining=1).
-		rem, err := l.RemainingByMeter(ctx, "test-policy", rules)
-		if err != nil {
-			t.Fatalf("remaining: %v", err)
+		// Concurrency slot fully released once → a new reserve succeeds.
+		res2, err2 := l.Reserve(ctx, "test-policy", rules)
+		if err2 != nil {
+			t.Fatalf("expected reserve to succeed after idempotent commit, got %v", err2)
 		}
-		if rem[catalog.MeterConcurrency] != 1 {
-			t.Fatalf("expected concurrency remaining=1 after single commit, got %d", rem[catalog.MeterConcurrency])
-		}
+		_ = l.Commit(ctx, res2, ratelimit.Observations{})
 	})
 
 	t.Run(name+"/Rollback_FirstViolation", func(t *testing.T) {
@@ -285,12 +283,13 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if ee.Rule.RateLimit.Metadata.Name != "rl-rule1" {
 			t.Fatalf("expected rule1 to be violated, got %s", ee.Rule.RateLimit.Metadata.Name)
 		}
-		rem, err := l.RemainingByMeter(ctx, "test-policy", []catalog.ResolvedRule{rule0})
-		if err != nil {
-			t.Fatalf("remaining: %v", err)
-		}
-		if rem[catalog.MeterRequests] != 100 {
-			t.Fatalf("expected rule0 remaining=100 after rollback, got %d", rem[catalog.MeterRequests])
+		// rule0 rolled back → all 100 reserves succeed.
+		for i := 0; i < 100; i++ {
+			res, err2 := l.Reserve(ctx, "test-policy", []catalog.ResolvedRule{rule0})
+			if err2 != nil {
+				t.Fatalf("rule0 reserve %d after rollback: %v", i+1, err2)
+			}
+			_ = l.Commit(ctx, res, ratelimit.Observations{})
 		}
 	})
 }
