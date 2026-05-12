@@ -75,18 +75,26 @@ type Observations struct {
 	Cancelled bool
 }
 
-// ExceededError is returned by Reserve when a budget is violated.
-type ExceededError struct {
-	Rule         Rule
-	RetryAfter   time.Duration
+// KeyQuotaExhausted is returned by Reserve when a budget is violated.
+// The name reflects that exceeding a per-key rule is the primary signal this
+// type carries in the post-Pick path (pipeline issue #89).
+type KeyQuotaExhausted struct {
+	Rule       Rule
+	RetryAfter time.Duration
 }
 
-func (e *ExceededError) Error() string {
+func (e *KeyQuotaExhausted) Error() string {
 	return fmt.Sprintf("limit: budget exceeded: %s retry_after=%.0fs",
 		e.Rule.Name, e.RetryAfter.Seconds())
 }
 
-func (e *ExceededError) Unwrap() error { return ErrExceeded }
+func (e *KeyQuotaExhausted) Unwrap() error { return ErrExceeded }
 
-// ErrExceeded is the sentinel wrapped by *ExceededError.
+// ExceededError is an alias kept for backward compatibility with callers that
+// use the old name. New code should use KeyQuotaExhausted directly.
+//
+// Deprecated: Use KeyQuotaExhausted.
+type ExceededError = KeyQuotaExhausted
+
+// ErrExceeded is the sentinel wrapped by *KeyQuotaExhausted.
 var ErrExceeded = errors.New("limit: budget exceeded")

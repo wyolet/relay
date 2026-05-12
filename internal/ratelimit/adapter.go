@@ -32,22 +32,30 @@ var RegisterScripts = pkgrl.RegisterScripts
 // ErrExceeded is re-exported so callers can use errors.Is(err, ratelimit.ErrExceeded).
 var ErrExceeded = pkgrl.ErrExceeded
 
-// ExceededError wraps pkgrl.ExceededError and adds a catalog.ResolvedRule field
-// so existing callers that do ee.Rule.RateLimit.Metadata.Name keep working.
-type ExceededError struct {
+// KeyQuotaExhausted wraps pkgrl.KeyQuotaExhausted and adds a catalog.ResolvedRule
+// field so existing callers that do ee.Rule.RateLimit.Metadata.Name keep working.
+// It is used for both policy-level (pre-Pick) and per-key (post-Pick) Reserve
+// failures; the call site determines which scope was exhausted.
+type KeyQuotaExhausted struct {
 	Rule       catalog.ResolvedRule
 	RetryAfter time.Duration
 	// pkg is the underlying pkg error (for Unwrap).
-	pkg *pkgrl.ExceededError
+	pkg *pkgrl.KeyQuotaExhausted
 }
 
-func (e *ExceededError) Error() string {
+func (e *KeyQuotaExhausted) Error() string {
 	return fmt.Sprintf("limit: budget exceeded: %s/%s/%s retry_after=%.0fs",
 		e.Rule.ParentKind, e.Rule.ParentName, e.Rule.RateLimit.Metadata.Name,
 		e.RetryAfter.Seconds())
 }
 
-func (e *ExceededError) Unwrap() error { return ErrExceeded }
+func (e *KeyQuotaExhausted) Unwrap() error { return ErrExceeded }
+
+// ExceededError is an alias kept for backward compatibility with callers that
+// use the old name. New code should use KeyQuotaExhausted directly.
+//
+// Deprecated: Use KeyQuotaExhausted.
+type ExceededError = KeyQuotaExhausted
 
 // Reservation wraps pkgrl.Reservation together with the original catalog rules
 // so Commit can reconstruct token amounts from usage.Tokens.
@@ -90,11 +98,35 @@ func (l *Limiter) Reserve(ctx context.Context, poolName string, rules []catalog.
 
 	inner, err := l.inner.Reserve(ctx, scope, pkgRules)
 	if err != nil {
-		var pe *pkgrl.ExceededError
+		var pe *pkgrl.KeyQuotaExhausted
 		if errors.As(err, &pe) {
 			// Reconstruct the catalog rule for the violated rule.
 			catalogRule := findCatalogRule(rules, pe.Rule.Key, pe.Rule.Meter)
-			return nil, &ExceededError{
+			return nil, &KeyQuotaExhausted{
+				Rule:       catalogRule,
+				RetryAfter: pe.RetryAfter,
+				pkg:        pe,
+			}
+		}
+		return nil, err
+	}
+	return &Reservation{inner: inner, rules: rules}, nil
+}
+
+// ReserveSecret is like Reserve but uses scope "secret:<keyHash>" instead of
+// "policy:<poolName>". It is called after keypool.Pick to enforce per-key rules
+// (secret-attached rate limits). On KeyQuotaExhausted the caller should invoke
+// keypool.Selector.RecordLocalRateLimit to cool down the chosen key.
+func (l *Limiter) ReserveSecret(ctx context.Context, keyHash string, rules []catalog.ResolvedRule) (*Reservation, error) {
+	scope := "secret:" + keyHash
+	pkgRules := toRules(rules)
+
+	inner, err := l.inner.Reserve(ctx, scope, pkgRules)
+	if err != nil {
+		var pe *pkgrl.KeyQuotaExhausted
+		if errors.As(err, &pe) {
+			catalogRule := findCatalogRule(rules, pe.Rule.Key, pe.Rule.Meter)
+			return nil, &KeyQuotaExhausted{
 				Rule:       catalogRule,
 				RetryAfter: pe.RetryAfter,
 				pkg:        pe,
