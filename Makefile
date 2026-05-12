@@ -1,4 +1,4 @@
-.PHONY: help dev down logs migrate seed restart \
+.PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed restart \
         image dev-push push-all local-image run-local \
         version release release-minor release-major \
         sqlc-generate test test-integration \
@@ -48,8 +48,13 @@ help: ## Show this help
 	@echo '  wyolet relay — Makefile commands'
 	@echo '════════════════════════════════════════════════════════════════'
 	@echo ''
-	@echo '🐋 Dev stack (base + dev compose, dev-stack-wired):'
-	@echo '  make dev               bring stack up (build relay-a/b locally, PG/CH/Jaeger from dev-stack)'
+	@echo '⚡ Local dev (host-side go run — fastest inner loop):'
+	@echo '  make dev               start valkey in compose, then go run relay on :$(DEV_DATA_PORT)/:$(DEV_CONTROL_PORT)'
+	@echo '  make dev-redis         bring up just the valkey container (host-published on $(RELAY_VALKEY_PORT))'
+	@echo '  make dev-down          stop the valkey container'
+	@echo ''
+	@echo '🐋 Full compose stack (multi-pod + nginx LB — for integration shape):'
+	@echo '  make dev-compose       bring stack up (build relay-a/b locally, PG/CH/Jaeger from dev-stack)'
 	@echo '  make down              stop + remove (no volume drop)'
 	@echo '  make logs              tail relay-a/b logs'
 	@echo '  make migrate           run migrations against dev-stack PG'
@@ -94,9 +99,35 @@ help: ## Show this help
 	@echo '  Latest tag:    $(LATEST_TAG)'
 	@echo ''
 
-# --- dev stack ---
+# --- local dev (host-side go run) ---
 
-dev: ## bring stack up against dev-stack
+# Ports for `make dev`. Match what Caddy on dev-stack expects (relay-api.wyolet.dev
+# → Mac:$RELAY_LB_PORT, relay-control-api.wyolet.dev → Mac:$RELAY_CONTROL_PORT)
+# so the live URLs keep working without touching dev-stack.
+DEV_DATA_PORT    ?= $(RELAY_LB_PORT)
+DEV_CONTROL_PORT ?= $(RELAY_CONTROL_PORT)
+RELAY_VALKEY_PORT ?= 6379
+
+dev: dev-redis ## go run on the Mac against dev-stack PG/CH + local valkey
+	@echo "▸ relay-api.wyolet.dev → Mac:$(DEV_DATA_PORT)   control → :$(DEV_CONTROL_PORT)"
+	RELAY_PORT=$(DEV_DATA_PORT) \
+	RELAY_CONTROL_PORT=$(DEV_CONTROL_PORT) \
+	RELAY_REDIS_ADDR=127.0.0.1:$(RELAY_VALKEY_PORT) \
+	RELAY_CONFIG_DIR=$(CURDIR)/deploy/compose/config \
+	RELAY_INSTANCE_ID=relay-local \
+	go run ./cmd/relay
+
+dev-redis: ## bring up just the valkey container, host-published on $(RELAY_VALKEY_PORT)
+	RELAY_VALKEY_PORT=$(RELAY_VALKEY_PORT) docker compose $(COMPOSE_DEV_ARGS) up -d valkey
+	@until docker exec relay-valkey valkey-cli ping >/dev/null 2>&1; do sleep 0.5; done
+	@echo "valkey ready on 127.0.0.1:$(RELAY_VALKEY_PORT)"
+
+dev-down: ## stop the valkey container
+	docker compose $(COMPOSE_DEV_ARGS) stop valkey
+
+# --- full compose stack ---
+
+dev-compose: ## bring full multi-pod stack up against dev-stack
 	docker compose $(COMPOSE_DEV_ARGS) up -d --build
 	@echo "Waiting for relay LB on :$(RELAY_LB_PORT)..."
 	@until curl -sf http://localhost:$(RELAY_LB_PORT)/healthz >/dev/null 2>&1; do sleep 1; done
