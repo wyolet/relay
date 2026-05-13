@@ -38,6 +38,14 @@ func TestValidate(t *testing.T) {
 			p:    &Provider{Meta: meta.Metadata{Name: "x"}, Spec: Spec{BaseURL: "not-a-url"}},
 			want: "BaseURL",
 		},
+		{
+			name: "non-system owner rejected",
+			p: &Provider{
+				Meta: meta.Metadata{Name: "x", Owner: meta.Owner{Kind: meta.OwnerUser}},
+				Spec: Spec{BaseURL: "https://x.example"},
+			},
+			want: "owner.kind must be system",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.p.Validate()

@@ -47,12 +47,12 @@ func isDNS1123Slug(fl validator.FieldLevel) bool {
 //   - Owner identifies provenance.
 //   - Labels are arbitrary k/v selectors.
 type Metadata struct {
-	ID          string `validate:"omitempty,uuid"`
-	Name        string `validate:"required,slug"`
-	DisplayName string
-	Description string
-	Owner       Owner
-	Labels      map[string]string
+	ID          string            `json:"id,omitempty"          yaml:"id,omitempty"          validate:"omitempty,uuid"`
+	Name        string            `json:"name"                  yaml:"name"                  validate:"required,slug"`
+	DisplayName string            `json:"displayName,omitempty" yaml:"displayName,omitempty"`
+	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
+	Owner       Owner             `json:"owner,omitempty"       yaml:"owner,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
 }
 
 // NewID returns a fresh UUIDv7 string. Centralized so every entity store
@@ -62,8 +62,8 @@ func NewID() string { return ids.New() }
 // Owner describes who created / manages a row. Kind=provider requires ID;
 // the other kinds leave ID empty.
 type Owner struct {
-	Kind OwnerKind `json:"kind,omitempty"`
-	ID   string    `json:"id,omitempty"`
+	Kind OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty"`
+	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"`
 }
 
 // OwnerKind enumerates provenance categories.
