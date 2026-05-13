@@ -24,6 +24,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -519,6 +520,97 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 	}
 }
 
-// Silence the unused-fakeanthropic import if we add it later for
-// streaming tests. Keeps the file's import surface stable.
-var _ = json.Marshal
+// TestE2E_OpenAPI_AllRefsResolve fetches the generated spec from each
+// plane and walks every "$ref", asserting it resolves to a schema in
+// components.schemas. Catches schema-registration mismatches before
+// downstream codegen tools (openapi-typescript, openapi-generator) hit
+// them at build time.
+//
+// The bug this guards against: when response types are declared as
+// anonymous structs inside a generic function, each instantiation
+// produces a local type with an unstable reflect.Type.Name(); huma's
+// schema registry registers under one synthesised name and the $ref
+// gets emitted under another, leaving references unresolvable.
+func TestE2E_OpenAPI_AllRefsResolve(t *testing.T) {
+	st := newStack(t)
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{"inference", st.inference.URL + "/openapi.json"},
+		{"control", st.control.URL + "/openapi.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(tc.url)
+			if err != nil {
+				t.Fatalf("GET %s: %v", tc.url, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status: want 200, got %d", resp.StatusCode)
+			}
+
+			var spec map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&spec); err != nil {
+				t.Fatalf("decode spec: %v", err)
+			}
+
+			defined := extractSchemaNames(spec)
+			if len(defined) == 0 {
+				t.Fatalf("components.schemas is empty; spec generation broken")
+			}
+
+			bad := findUnresolvedRefs(spec, defined)
+			if len(bad) > 0 {
+				t.Fatalf("%d unresolved $refs in %s spec:\n  %s",
+					len(bad), tc.name, strings.Join(bad, "\n  "))
+			}
+		})
+	}
+}
+
+func extractSchemaNames(spec map[string]any) map[string]struct{} {
+	out := map[string]struct{}{}
+	comp, ok := spec["components"].(map[string]any)
+	if !ok {
+		return out
+	}
+	schemas, ok := comp["schemas"].(map[string]any)
+	if !ok {
+		return out
+	}
+	for name := range schemas {
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func findUnresolvedRefs(node any, defined map[string]struct{}) []string {
+	const prefix = "#/components/schemas/"
+	var bad []string
+	var walk func(n any, path string)
+	walk = func(n any, path string) {
+		switch v := n.(type) {
+		case map[string]any:
+			if ref, ok := v["$ref"].(string); ok && strings.HasPrefix(ref, prefix) {
+				name := ref[len(prefix):]
+				if _, has := defined[name]; !has {
+					bad = append(bad, path+" -> "+ref)
+				}
+			}
+			for k, child := range v {
+				walk(child, path+"/"+k)
+			}
+		case []any:
+			for i, child := range v {
+				walk(child, path+"/"+strconvI(i))
+			}
+		}
+	}
+	walk(node, "")
+	return bad
+}
+
+// strconvI is a tiny int-to-string helper to avoid pulling strconv into
+// the test file's import surface for this single call site.
+func strconvI(i int) string { return fmt.Sprintf("%d", i) }

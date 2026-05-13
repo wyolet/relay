@@ -45,6 +45,38 @@ type entityStore[T any] interface {
 	Delete(ctx context.Context, id string) error
 }
 
+// Generic input / output shapes for the CRUD ops. Declared at package
+// level (not inside registerKind) so each generic instantiation is a
+// distinct named type that huma's schema registry can resolve from
+// $refs in the generated OpenAPI spec. An anonymous struct declared
+// inside the generic function produces local types whose Name() is
+// unstable, breaking $ref resolution for downstream codegen tools.
+type listBody[T any] struct {
+	Items []*T `json:"items"`
+}
+type listResponse[T any] struct {
+	Body listBody[T]
+}
+type itemResponse[T any] struct {
+	Body *T `json:"body"`
+}
+type createRequest[T any] struct {
+	Body T `json:"body"`
+}
+type updateRequest[T any] struct {
+	ID   string `path:"id" doc:"Resource id (UUIDv7)."`
+	Body T      `json:"body"`
+}
+
+// Non-generic shared path-param inputs and the empty success body.
+type refInput struct {
+	Ref string `path:"ref" doc:"Resource slug or UUIDv7 id."`
+}
+type idInput struct {
+	ID string `path:"id" doc:"Resource id (UUIDv7)."`
+}
+type emptyResponse struct{}
+
 var errSlugNotFound = errors.New("not found")
 
 // registerKind installs the five CRUD operations for kind T on api. The
@@ -63,11 +95,6 @@ func registerKind[T any](
 	tag := plural
 
 	// List
-	type listOut struct {
-		Body struct {
-			Items []*T `json:"items"`
-		}
-	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
 		Method:      http.MethodGet,
@@ -76,7 +103,7 @@ func registerKind[T any](
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{401, 500},
-	}, func(ctx context.Context, _ *struct{}) (*listOut, error) {
+	}, func(ctx context.Context, _ *struct{}) (*listResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".list", authz.Resource{Kind: singular}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
@@ -87,18 +114,12 @@ func registerKind[T any](
 		if items == nil {
 			items = []*T{}
 		}
-		out := &listOut{}
+		out := &listResponse[T]{}
 		out.Body.Items = items
 		return out, nil
 	})
 
 	// Get by slug-or-id
-	type refIn struct {
-		Ref string `path:"ref" doc:"Slug or UUIDv7 id."`
-	}
-	type itemOut struct {
-		Body *T `json:"body"`
-	}
 	huma.Register(api, huma.Operation{
 		OperationID: "get_" + singular,
 		Method:      http.MethodGet,
@@ -107,7 +128,7 @@ func registerKind[T any](
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
-	}, func(ctx context.Context, in *refIn) (*itemOut, error) {
+	}, func(ctx context.Context, in *refInput) (*itemResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".read", authz.Resource{Kind: singular, Name: in.Ref}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
@@ -123,13 +144,10 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
-		return &itemOut{Body: v}, nil
+		return &itemResponse[T]{Body: v}, nil
 	})
 
 	// Create
-	type bodyIn struct {
-		Body T `json:"body"`
-	}
 	huma.Register(api, huma.Operation{
 		OperationID:   "create_" + singular,
 		Method:        http.MethodPost,
@@ -139,7 +157,7 @@ func registerKind[T any](
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{400, 401, 500},
-	}, func(ctx context.Context, in *bodyIn) (*itemOut, error) {
+	}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
@@ -170,14 +188,10 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
 		}
-		return &itemOut{Body: created}, nil
+		return &itemResponse[T]{Body: created}, nil
 	})
 
 	// Update by id
-	type idBodyIn struct {
-		ID   string `path:"id" doc:"Resource id (UUIDv7)."`
-		Body T      `json:"body"`
-	}
 	huma.Register(api, huma.Operation{
 		OperationID: "update_" + singular,
 		Method:      http.MethodPut,
@@ -186,7 +200,7 @@ func registerKind[T any](
 		Tags:        []string{tag},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 404, 500},
-	}, func(ctx context.Context, in *idBodyIn) (*itemOut, error) {
+	}, func(ctx context.Context, in *updateRequest[T]) (*itemResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
@@ -208,14 +222,10 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error500InternalServerError("updated but could not read back: " + err.Error())
 		}
-		return &itemOut{Body: updated}, nil
+		return &itemResponse[T]{Body: updated}, nil
 	})
 
 	// Delete by id
-	type idIn struct {
-		ID string `path:"id" doc:"Resource id (UUIDv7)."`
-	}
-	type emptyOut struct{}
 	huma.Register(api, huma.Operation{
 		OperationID:   "delete_" + singular,
 		Method:        http.MethodDelete,
@@ -225,14 +235,14 @@ func registerKind[T any](
 		Middlewares:   protect,
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{401, 404, 500},
-	}, func(ctx context.Context, in *idIn) (*emptyOut, error) {
+	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
 		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		if err := store.Delete(ctx, in.ID); err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}
-		return &emptyOut{}, nil
+		return &emptyResponse{}, nil
 	})
 }
 
