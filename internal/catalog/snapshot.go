@@ -378,26 +378,26 @@ func (s *snapshot) listPolicies() []*Policy {
 func (s *snapshot) secretsForPolicy(p *Policy) []*Secret {
 	seen := map[string]struct{}{}
 	var out []*Secret
-	for _, name := range p.Spec.Secrets {
-		sec, ok := s.secrets[name]
+	for _, ref := range p.Spec.Secrets {
+		sec, ok := s.secretByID(ref)
 		if !ok || !IsEnabled(sec.Spec.Enabled) {
 			continue
 		}
-		if _, dup := seen[name]; !dup {
-			seen[name] = struct{}{}
+		if _, dup := seen[sec.Metadata.ID]; !dup {
+			seen[sec.Metadata.ID] = struct{}{}
 			out = append(out, sec)
 		}
 	}
 	if len(p.Spec.SecretSelector) > 0 {
 		for _, sec := range s.secrets {
-			if _, dup := seen[sec.Metadata.Name]; dup {
+			if _, dup := seen[sec.Metadata.ID]; dup {
 				continue
 			}
 			if !IsEnabled(sec.Spec.Enabled) {
 				continue
 			}
 			if labelsMatch(p.Spec.SecretSelector, sec.Metadata.Labels) {
-				seen[sec.Metadata.Name] = struct{}{}
+				seen[sec.Metadata.ID] = struct{}{}
 				out = append(out, sec)
 			}
 		}

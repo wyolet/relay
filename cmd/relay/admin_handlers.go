@@ -73,6 +73,13 @@ func normalizePolicyRefs(store *catalog.PGStore, v *catalog.Policy) error {
 		}
 		v.Spec.Models[i] = id
 	}
+	for i, s := range v.Spec.Secrets {
+		id, err := catalog.ResolveSecretRef(store, s)
+		if err != nil {
+			return err
+		}
+		v.Spec.Secrets[i] = id
+	}
 	return nil
 }
 

@@ -20,9 +20,10 @@ import (
 //   - PolicySpec.Models[] → Model id
 //   - RouteSpec.Models[] → Model id
 //   - Deprecation.Replacement → Model id
+//   - PolicySpec.Secrets[] → Secret id
 //
-// Other cross-refs (Secret refs, RateLimit attachments) will land in
-// subsequent PRs following this same pattern.
+// Remaining cross-refs (RateLimit attachments) will land in a subsequent
+// PR following this same pattern.
 //
 // Hard-errors on a string that is neither a known slug nor a valid UUID — that
 // indicates the catalog is corrupt and silently dropping the ref would mask
@@ -168,6 +169,41 @@ func resolveRefs(snap *snapshot) (mutated mutatedKinds, err error) {
 			}
 		}
 	}
+	// Secret refs: PolicySpec.Secrets[].
+	secIDBySlug := make(map[string]string, len(snap.secrets))
+	for slug, sec := range snap.secrets {
+		if sec.Metadata.ID == "" {
+			continue
+		}
+		secIDBySlug[slug] = sec.Metadata.ID
+	}
+	resolveSecret := func(field, ownerKind, ownerName string, val *string) error {
+		if *val == "" {
+			return nil
+		}
+		if ids.Valid(*val) {
+			return nil
+		}
+		id, ok := secIDBySlug[*val]
+		if !ok {
+			return fmt.Errorf("%s %q: %s references unknown secret %q",
+				ownerKind, ownerName, field, *val)
+		}
+		*val = id
+		return nil
+	}
+	for name, pol := range snap.policies {
+		for i := range pol.Spec.Secrets {
+			before := pol.Spec.Secrets[i]
+			if err := resolveSecret("spec.secrets", "Policy", name, &pol.Spec.Secrets[i]); err != nil {
+				return mutated, err
+			}
+			if pol.Spec.Secrets[i] != before {
+				mutated.policies = true
+			}
+		}
+	}
+
 	for name, m := range snap.models {
 		if m.Spec.Deprecation == nil {
 			continue
@@ -236,6 +272,29 @@ func ResolvePolicyRef(store PolicyRefStore, ref string) (string, error) {
 		return p.Metadata.ID, nil
 	}
 	return "", fmt.Errorf("unknown policy %q", ref)
+}
+
+// SecretRefStore is the narrow view needed by ResolveSecretRef.
+type SecretRefStore interface {
+	SecretByName(name string) (*Secret, bool)
+	SecretByID(id string) (*Secret, bool)
+}
+
+// ResolveSecretRef normalizes a secret reference to its id.
+func ResolveSecretRef(store SecretRefStore, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if ids.Valid(ref) {
+		if _, ok := store.SecretByID(ref); ok {
+			return ref, nil
+		}
+		return "", fmt.Errorf("unknown secret id %q", ref)
+	}
+	if sec, ok := store.SecretByName(ref); ok {
+		return sec.Metadata.ID, nil
+	}
+	return "", fmt.Errorf("unknown secret %q", ref)
 }
 
 // ModelRefStore is the narrow view needed by ResolveModelRef.

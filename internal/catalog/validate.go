@@ -190,13 +190,13 @@ func validatePolicies(s *snapshot) error {
 		if !ok {
 			return fmt.Errorf("Policy %q: unknown provider %q", policy.Metadata.Name, policy.Spec.Provider)
 		}
-		for _, secName := range policy.Spec.Secrets {
-			sec, ok := s.secrets[secName]
+		for _, secRef := range policy.Spec.Secrets {
+			sec, ok := s.secretByID(secRef)
 			if !ok {
-				return fmt.Errorf("Policy %q: unknown secret %q", policy.Metadata.Name, secName)
+				return fmt.Errorf("Policy %q: unknown secret %q", policy.Metadata.Name, secRef)
 			}
 			if sec.Spec.Provider != policy.Spec.Provider {
-				return fmt.Errorf("Policy %q: secret %q belongs to provider %q, not %q", policy.Metadata.Name, secName, sec.Spec.Provider, policy.Spec.Provider)
+				return fmt.Errorf("Policy %q: secret %q belongs to provider %q, not %q", policy.Metadata.Name, sec.Metadata.Name, sec.Spec.Provider, policy.Spec.Provider)
 			}
 		}
 		for _, modelRef := range policy.Spec.Models {
