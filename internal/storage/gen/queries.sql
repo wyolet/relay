@@ -204,6 +204,34 @@ INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, 
 -- name: ListPoliciesWithRateLimit :many
 SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies ORDER BY name;
 
+-- ── pricing (migration 0010) ─────────────────────────────────────────────────
+
+-- name: ListPricings :many
+SELECT id, name, display_name, host_id, metadata, spec FROM pricings ORDER BY name;
+
+-- name: UpsertPricing :exec
+INSERT INTO pricings (id, name, display_name, host_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    host_id = EXCLUDED.host_id,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW();
+
+-- name: DeletePricing :exec
+DELETE FROM pricings WHERE id = $1;
+
+-- name: ListPricingModels :many
+SELECT pricing_id, model_id, position FROM pricing_models ORDER BY pricing_id, position;
+
+-- name: DeletePricingModels :exec
+DELETE FROM pricing_models WHERE pricing_id = $1;
+
+-- name: InsertPricingModel :exec
+INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
+
 -- name: GetPassthrough :one
 SELECT name, spec FROM passthrough_config WHERE name = $1;
 

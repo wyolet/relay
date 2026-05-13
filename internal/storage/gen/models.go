@@ -58,6 +58,23 @@ type PolicyModel struct {
 	Position int32  `db:"position" json:"position"`
 }
 
+type Pricing struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	HostID      string             `db:"host_id" json:"host_id"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type PricingModel struct {
+	PricingID string `db:"pricing_id" json:"pricing_id"`
+	ModelID   string `db:"model_id" json:"model_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
 type Provider struct {
 	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`

@@ -56,6 +56,24 @@ func (q *Queries) DeletePolicyModels(ctx context.Context, policyID string) error
 	return err
 }
 
+const deletePricing = `-- name: DeletePricing :exec
+DELETE FROM pricings WHERE id = $1
+`
+
+func (q *Queries) DeletePricing(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deletePricing, id)
+	return err
+}
+
+const deletePricingModels = `-- name: DeletePricingModels :exec
+DELETE FROM pricing_models WHERE pricing_id = $1
+`
+
+func (q *Queries) DeletePricingModels(ctx context.Context, pricingID string) error {
+	_, err := q.db.Exec(ctx, deletePricingModels, pricingID)
+	return err
+}
+
 const deleteProvider = `-- name: DeleteProvider :exec
 DELETE FROM providers WHERE id = $1
 `
@@ -144,6 +162,21 @@ type InsertPolicyModelParams struct {
 
 func (q *Queries) InsertPolicyModel(ctx context.Context, arg InsertPolicyModelParams) error {
 	_, err := q.db.Exec(ctx, insertPolicyModel, arg.PolicyID, arg.ModelID, arg.Position)
+	return err
+}
+
+const insertPricingModel = `-- name: InsertPricingModel :exec
+INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPricingModelParams struct {
+	PricingID string `db:"pricing_id" json:"pricing_id"`
+	ModelID   string `db:"model_id" json:"model_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPricingModel(ctx context.Context, arg InsertPricingModelParams) error {
+	_, err := q.db.Exec(ctx, insertPricingModel, arg.PricingID, arg.ModelID, arg.Position)
 	return err
 }
 
@@ -465,6 +498,72 @@ func (q *Queries) ListPolicyModels(ctx context.Context) ([]PolicyModel, error) {
 	for rows.Next() {
 		var i PolicyModel
 		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPricingModels = `-- name: ListPricingModels :many
+SELECT pricing_id, model_id, position FROM pricing_models ORDER BY pricing_id, position
+`
+
+func (q *Queries) ListPricingModels(ctx context.Context) ([]PricingModel, error) {
+	rows, err := q.db.Query(ctx, listPricingModels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PricingModel
+	for rows.Next() {
+		var i PricingModel
+		if err := rows.Scan(&i.PricingID, &i.ModelID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPricings = `-- name: ListPricings :many
+
+SELECT id, name, display_name, host_id, metadata, spec FROM pricings ORDER BY name
+`
+
+type ListPricingsRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	HostID      string `db:"host_id" json:"host_id"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+// ── pricing (migration 0010) ─────────────────────────────────────────────────
+func (q *Queries) ListPricings(ctx context.Context) ([]ListPricingsRow, error) {
+	rows, err := q.db.Query(ctx, listPricings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPricingsRow
+	for rows.Next() {
+		var i ListPricingsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.HostID,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -882,6 +981,39 @@ func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) erro
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
+	return err
+}
+
+const upsertPricing = `-- name: UpsertPricing :exec
+INSERT INTO pricings (id, name, display_name, host_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    host_id = EXCLUDED.host_id,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
+`
+
+type UpsertPricingParams struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	HostID      string `db:"host_id" json:"host_id"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertPricing(ctx context.Context, arg UpsertPricingParams) error {
+	_, err := q.db.Exec(ctx, upsertPricing,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.HostID,
 		arg.Metadata,
 		arg.Spec,
 	)
