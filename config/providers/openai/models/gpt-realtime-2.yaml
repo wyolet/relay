@@ -1,0 +1,40 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: gpt-realtime-2
+    labels:
+        family: gpt
+        source: litellm
+        source_version: "2026-05-13"
+spec:
+    provider: openai
+    upstreamName: gpt-realtime-2
+    family: gpt
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+        parallelTools: true
+        audioInput: true
+        audioOutput: true
+        systemMessages: true
+    modalities:
+        input:
+            - text
+            - audio
+        output:
+            - text
+            - audio
+    contextWindowInput: 32000
+    contextWindowOutput: 4096
+    contextWindowTotal: 32000
+    pricing:
+        currency: USD
+        unit: per_million
+        rates:
+            images: 5e-06
+            tokens.audio_input: 32
+            tokens.audio_output: 64
+            tokens.cache_read: 0.39999999999999997
+            tokens.input: 4
+            tokens.output: 16

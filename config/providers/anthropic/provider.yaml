@@ -2,10 +2,10 @@ apiVersion: relay.wyolet.dev/v1
 kind: Provider
 metadata:
     name: anthropic
+    displayName: Anthropic
 spec:
     kind: anthropic
     baseURL: https://api.anthropic.com
-    displayName: Anthropic
     description: Claude models from Anthropic.
     homepageURL: https://www.anthropic.com
     docsURL: https://docs.anthropic.com

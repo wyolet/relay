@@ -1,7 +1,0 @@
-apiVersion: relay.wyolet.dev/v1
-kind: Policy
-metadata:
-  name: ollama-default
-spec:
-  provider: ollama
-  skipDefaultLimits: true

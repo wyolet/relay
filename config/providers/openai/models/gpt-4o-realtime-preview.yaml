@@ -5,7 +5,7 @@ metadata:
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-07"
+        source_version: "2026-05-13"
 spec:
     provider: openai
     upstreamName: gpt-4o-realtime-preview

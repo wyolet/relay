@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: ollama/mixtral-8x22B-Instruct-v0.1
+    labels:
+        family: ollama/mixtral
+        source: litellm
+        source_version: "2026-05-13"
+spec:
+    provider: ollama
+    upstreamName: ollama/mixtral-8x22B-Instruct-v0.1
+    family: ollama/mixtral
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+    modalities:
+        input:
+            - text
+        output:
+            - text
+    contextWindowInput: 65536
+    contextWindowOutput: 65536
+    contextWindowTotal: 65536

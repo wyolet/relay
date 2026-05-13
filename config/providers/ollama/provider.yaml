@@ -1,9 +1,11 @@
 apiVersion: relay.wyolet.dev/v1
 kind: Provider
 metadata:
-  name: ollama
+    name: ollama
+    displayName: Ollama
 spec:
-  kind: ollama
-  baseURL: https://ollama.wyolet.dev
-  default: true
-  defaultPolicy: ollama-default
+    kind: ollama
+    baseURL: http://host.docker.internal:11434
+    description: Run large language models locally with Ollama.
+    homepageURL: https://ollama.com
+    logoURL: https://wyolet.dev/logos/ollama.svg
