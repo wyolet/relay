@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-3.5-turbo-1106
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-3.5-turbo-1106
+    hosts:
+        - host: openai
+          upstreamName: gpt-3.5-turbo-1106
     family: gpt
     capabilities:
         chat: true
@@ -25,12 +29,6 @@ spec:
     contextWindowInput: 16385
     contextWindowOutput: 4096
     contextWindowTotal: 16385
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.input: 1
-            tokens.output: 2
     deprecation:
         status: deprecated
         sunsetDate: "2026-09-28"

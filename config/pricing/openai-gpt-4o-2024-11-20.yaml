@@ -1,0 +1,21 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-gpt-4o-2024-11-20
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - gpt-4o-2024-11-20
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 2.5
+        - meter: tokens.output
+          unit: per_million
+          amount: 10
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 1.25

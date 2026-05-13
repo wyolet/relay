@@ -1,0 +1,21 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-gpt-4.1-mini
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - gpt-4.1-mini
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 0.39999999999999997
+        - meter: tokens.output
+          unit: per_million
+          amount: 1.5999999999999999
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 0.09999999999999999

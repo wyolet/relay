@@ -3,9 +3,9 @@ kind: Provider
 metadata:
     name: ollama
     displayName: Ollama
-spec:
-    kind: ollama
-    baseURL: http://host.docker.internal:11434
     description: Run large language models locally with Ollama.
+    owner:
+        kind: system
+spec:
     homepageURL: https://ollama.com
     logoURL: https://wyolet.dev/logos/ollama.svg

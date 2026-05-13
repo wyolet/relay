@@ -58,7 +58,7 @@ func makeEvent(i int) eventlog.Event {
 		Policy:         "policy-a",
 		SecretHash:   "abc123def456",
 		TerminatedBy: "clean",
-		Tokens:       eventlog.TokenCounts{Prompt: 10, Completion: 20, Total: 30},
+		Tokens:       eventlog.TokenCounts{"input": 10, "output": 20},
 		Attribution:  map[string]string{"user": "u1"},
 		Metrics:      map[string]int64{"retry": 0},
 		InstanceID:   "pod-1",

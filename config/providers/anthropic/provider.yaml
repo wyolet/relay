@@ -3,12 +3,11 @@ kind: Provider
 metadata:
     name: anthropic
     displayName: Anthropic
-spec:
-    kind: anthropic
-    baseURL: https://api.anthropic.com
     description: Claude models from Anthropic.
+    owner:
+        kind: system
+spec:
     homepageURL: https://www.anthropic.com
     docsURL: https://docs.anthropic.com
-    consoleURL: https://console.anthropic.com
     statusPageURL: https://status.anthropic.com
     logoURL: https://wyolet.dev/logos/anthropic.svg

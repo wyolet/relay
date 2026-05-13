@@ -1,0 +1,14 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Host
+metadata:
+    name: openai
+    displayName: OpenAI
+    owner:
+        kind: system
+spec:
+    baseURL: https://api.openai.com
+    homepageURL: https://openai.com
+    docsURL: https://platform.openai.com/docs
+    consoleURL: https://platform.openai.com
+    statusPageURL: https://status.openai.com
+    logoURL: https://wyolet.dev/logos/openai.svg

@@ -269,5 +269,12 @@ clean: ## drop UI dist + binary
 test: ## go test ./...
 	go test ./...
 
-test-integration: ## integration tag, race
-	go test -tags=integration -race ./...
+COMPOSE_TEST := deploy/compose/docker-compose.test.yml
+TEST_PG_DSN  := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
+
+test-integration: ## spin up ephemeral pg, run integration-tagged tests with -race, tear down
+	docker compose -f $(COMPOSE_TEST) up -d --wait
+	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race ./... ; \
+		status=$$?; \
+		docker compose -f $(COMPOSE_TEST) down -v; \
+		exit $$status

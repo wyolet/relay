@@ -1,0 +1,18 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-gpt-4o-mini-audio-preview-2024-12-17
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - gpt-4o-mini-audio-preview-2024-12-17
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 0.15
+        - meter: tokens.output
+          unit: per_million
+          amount: 0.6

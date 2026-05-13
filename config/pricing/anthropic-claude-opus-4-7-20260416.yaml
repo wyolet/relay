@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: anthropic-claude-opus-4-7-20260416
+    owner:
+        kind: host
+        id: anthropic
+spec:
+    currency: USD
+    targetModels:
+        - claude-opus-4-7-20260416
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 5
+        - meter: tokens.output
+          unit: per_million
+          amount: 25
+        - meter: tokens.cache_write
+          unit: per_million
+          amount: 6.25
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 0.5

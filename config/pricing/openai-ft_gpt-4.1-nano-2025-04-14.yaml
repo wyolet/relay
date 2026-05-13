@@ -1,0 +1,21 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-ft_gpt-4.1-nano-2025-04-14
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - ft:gpt-4.1-nano-2025-04-14
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 0.19999999999999998
+        - meter: tokens.output
+          unit: per_million
+          amount: 0.7999999999999999
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 0.049999999999999996

@@ -1,0 +1,14 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Host
+metadata:
+    name: anthropic
+    displayName: Anthropic
+    owner:
+        kind: system
+spec:
+    baseURL: https://api.anthropic.com
+    homepageURL: https://www.anthropic.com
+    docsURL: https://docs.anthropic.com
+    consoleURL: https://console.anthropic.com
+    statusPageURL: https://status.anthropic.com
+    logoURL: https://wyolet.dev/logos/anthropic.svg

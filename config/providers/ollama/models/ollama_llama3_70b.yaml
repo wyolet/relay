@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: ollama/llama3:70b
+    owner:
+        kind: provider
+        id: ollama
     labels:
         family: ollama/llama3:70b
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: ollama
-    upstreamName: ollama/llama3:70b
+    hosts:
+        - host: ollama
+          upstreamName: ollama/llama3:70b
     family: ollama/llama3:70b
     capabilities:
         chat: true

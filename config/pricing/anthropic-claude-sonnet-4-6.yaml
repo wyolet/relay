@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: anthropic-claude-sonnet-4-6
+    owner:
+        kind: host
+        id: anthropic
+spec:
+    currency: USD
+    targetModels:
+        - claude-sonnet-4-6
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 3
+        - meter: tokens.output
+          unit: per_million
+          amount: 15
+        - meter: tokens.cache_write
+          unit: per_million
+          amount: 3.75
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 0.3

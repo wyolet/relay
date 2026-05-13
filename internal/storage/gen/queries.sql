@@ -162,8 +162,111 @@ ON CONFLICT (id) DO UPDATE SET
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
 
+-- ── app/ arch (migration 0009) ───────────────────────────────────────────────
+
+-- name: ListHosts :many
+SELECT id, name, display_name, metadata, spec FROM hosts ORDER BY name;
+
+-- name: UpsertHost :exec
+INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW();
+
+-- name: DeleteHost :exec
+DELETE FROM hosts WHERE id = $1;
+
+-- name: SetPolicyRateLimit :exec
+UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1;
+
+-- name: ListPolicyModels :many
+SELECT policy_id, model_id, position FROM policy_models ORDER BY policy_id, position;
+
+-- name: DeletePolicyModels :exec
+DELETE FROM policy_models WHERE policy_id = $1;
+
+-- name: InsertPolicyModel :exec
+INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPolicyHostKeys :many
+SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position;
+
+-- name: DeletePolicyHostKeys :exec
+DELETE FROM policy_host_keys WHERE policy_id = $1;
+
+-- name: InsertPolicyHostKey :exec
+INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPoliciesWithRateLimit :many
+SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies ORDER BY name;
+
+-- ── pricing (migration 0010) ─────────────────────────────────────────────────
+
+-- name: ListPricings :many
+SELECT id, name, display_name, host_id, metadata, spec FROM pricings ORDER BY name;
+
+-- name: UpsertPricing :exec
+INSERT INTO pricings (id, name, display_name, host_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    host_id = EXCLUDED.host_id,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW();
+
+-- name: DeletePricing :exec
+DELETE FROM pricings WHERE id = $1;
+
+-- name: ListPricingModels :many
+SELECT pricing_id, model_id, position FROM pricing_models ORDER BY pricing_id, position;
+
+-- name: DeletePricingModels :exec
+DELETE FROM pricing_models WHERE pricing_id = $1;
+
+-- name: InsertPricingModel :exec
+INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
+
 -- name: GetPassthrough :one
 SELECT name, spec FROM passthrough_config WHERE name = $1;
+
+-- name: GetProvider :one
+SELECT id, name, display_name, metadata, spec FROM providers WHERE id = $1;
+
+-- name: GetHost :one
+SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1;
+
+-- name: GetModel :one
+SELECT id, name, display_name, metadata, spec FROM models WHERE id = $1;
+
+-- name: GetSecret :one
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets WHERE id = $1;
+
+-- name: GetRateLimit :one
+SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1;
+
+-- name: GetPolicy :one
+SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies WHERE id = $1;
+
+-- name: GetPricing :one
+SELECT id, name, display_name, host_id, metadata, spec FROM pricings WHERE id = $1;
+
+-- name: GetRelayKey :one
+SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys WHERE id = $1;
+
+-- name: GetPolicyModels :many
+SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
+
+-- name: GetPricingModels :many
+SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position;
+
+-- name: GetPolicyHostKeys :many
+SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position;
 
 -- name: UpsertPassthrough :exec
 INSERT INTO passthrough_config (name, spec, updated_at)

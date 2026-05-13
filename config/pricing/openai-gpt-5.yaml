@@ -1,0 +1,21 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-gpt-5
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - gpt-5
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 1.25
+        - meter: tokens.output
+          unit: per_million
+          amount: 10
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 0.125

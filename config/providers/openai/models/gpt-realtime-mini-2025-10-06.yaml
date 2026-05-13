@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-realtime-mini-2025-10-06
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-realtime-mini-2025-10-06
+    hosts:
+        - host: openai
+          upstreamName: gpt-realtime-mini-2025-10-06
     family: gpt
     capabilities:
         chat: true
@@ -28,13 +32,3 @@ spec:
     contextWindowInput: 128000
     contextWindowOutput: 4096
     contextWindowTotal: 128000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            images: 8e-07
-            tokens.audio_input: 10
-            tokens.audio_output: 20
-            tokens.cache_read: 0.06
-            tokens.input: 0.6
-            tokens.output: 2.4

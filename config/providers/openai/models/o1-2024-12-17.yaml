@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: o1-2024-12-17
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: o-series
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: o1-2024-12-17
+    hosts:
+        - host: openai
+          upstreamName: o1-2024-12-17
     family: o-series
     capabilities:
         chat: true
@@ -18,7 +22,7 @@ spec:
         vision: true
         promptCache: true
         reasoning: true
-        structuredOutput: true
+        structuredOutputs: true
         fileInput: true
         systemMessages: true
     modalities:
@@ -31,10 +35,3 @@ spec:
     contextWindowInput: 200000
     contextWindowOutput: 100000
     contextWindowTotal: 200000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.cache_read: 7.5
-            tokens.input: 15
-            tokens.output: 60

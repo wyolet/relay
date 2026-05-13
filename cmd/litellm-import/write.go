@@ -1,0 +1,134 @@
+package main
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/wyolet/relay/app/manifest"
+)
+
+// WriteResult summarises what happened during a write-to-disk pass.
+type WriteResult struct {
+	ProvidersWritten int
+	HostsWritten     int
+	ModelsWritten    int
+	PricingsWritten  int
+	Errors           int
+}
+
+// SanitizeFilename replaces unsafe filename characters (':', '/') with '_'.
+func SanitizeFilename(name string) string {
+	return strings.NewReplacer(":", "_", "/", "_").Replace(name)
+}
+
+// WriteToDisk writes translated DTOs as YAML files under outDir:
+//
+//	<outDir>/hosts/<name>.yaml
+//	<outDir>/providers/<name>/provider.yaml
+//	<outDir>/providers/<name>/models/<model>.yaml
+//
+// Existing files are always overwritten.
+func WriteToDisk(outDir string, result *TranslateResult) (*WriteResult, error) {
+	wr := &WriteResult{}
+
+	for _, h := range result.Hosts {
+		path := filepath.Join(outDir, "hosts", h.Metadata.Name+".yaml")
+		if err := writeYAML(path, h); err != nil {
+			slog.Error("litellm-import: write host failed", "path", path, "err", err)
+			wr.Errors++
+			continue
+		}
+		slog.Info("litellm-import: wrote " + path)
+		wr.HostsWritten++
+	}
+
+	for _, p := range result.Providers {
+		path := filepath.Join(outDir, "providers", p.Metadata.Name, "provider.yaml")
+		if err := writeYAML(path, p); err != nil {
+			slog.Error("litellm-import: write provider failed", "path", path, "err", err)
+			wr.Errors++
+			continue
+		}
+		slog.Info("litellm-import: wrote " + path)
+		wr.ProvidersWritten++
+	}
+
+	for _, m := range result.Models {
+		providerName := m.Metadata.Owner.ID // set to provider name in buildModel
+		filename := SanitizeFilename(m.Metadata.Name) + ".yaml"
+		path := filepath.Join(outDir, "providers", providerName, "models", filename)
+		if err := writeYAML(path, m); err != nil {
+			slog.Error("litellm-import: write model failed", "path", path, "err", err)
+			wr.Errors++
+			continue
+		}
+		slog.Info("litellm-import: wrote " + path)
+		wr.ModelsWritten++
+	}
+
+	for _, p := range result.Pricings {
+		filename := SanitizeFilename(p.Metadata.Name) + ".yaml"
+		path := filepath.Join(outDir, "pricing", filename)
+		if err := writeYAML(path, p); err != nil {
+			slog.Error("litellm-import: write pricing failed", "path", path, "err", err)
+			wr.Errors++
+			continue
+		}
+		slog.Info("litellm-import: wrote " + path)
+		wr.PricingsWritten++
+	}
+
+	return wr, nil
+}
+
+func writeYAML(path string, v any) error {
+	b, err := yaml.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	return os.WriteFile(path, b, 0o644)
+}
+
+// WriteToStdout emits all hosts, providers, then models as YAML documents to stdout.
+func WriteToStdout(result *TranslateResult) error {
+	emit := func(v any) error {
+		b, err := yaml.Marshal(v)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("---\n%s", b)
+		return nil
+	}
+	for _, h := range result.Hosts {
+		if err := emit(h); err != nil {
+			return fmt.Errorf("marshal host %s: %w", h.Metadata.Name, err)
+		}
+	}
+	for _, p := range result.Providers {
+		if err := emit(p); err != nil {
+			return fmt.Errorf("marshal provider %s: %w", p.Metadata.Name, err)
+		}
+	}
+	for _, m := range result.Models {
+		if err := emit(m); err != nil {
+			return fmt.Errorf("marshal model %s: %w", m.Metadata.Name, err)
+		}
+	}
+	for _, p := range result.Pricings {
+		if err := emit(p); err != nil {
+			return fmt.Errorf("marshal pricing %s: %w", p.Metadata.Name, err)
+		}
+	}
+	return nil
+}
+
+// Ensure manifest types compile.
+var _ = manifest.ProviderDTO{}

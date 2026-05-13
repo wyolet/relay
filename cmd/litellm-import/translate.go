@@ -1,0 +1,506 @@
+package main
+
+import (
+	"fmt"
+	"log/slog"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/model"
+)
+
+// providerMeta holds static display + endpoint metadata per known litellm_provider.
+type providerMeta struct {
+	name          string
+	displayName   string
+	description   string
+	baseURL       string
+	homepageURL   string
+	docsURL       string
+	consoleURL    string
+	statusPageURL string
+	logoURL       string
+}
+
+var knownProviders = map[string]providerMeta{
+	"anthropic": {
+		name:          "anthropic",
+		displayName:   "Anthropic",
+		description:   "Claude models from Anthropic.",
+		baseURL:       "https://api.anthropic.com",
+		homepageURL:   "https://www.anthropic.com",
+		docsURL:       "https://docs.anthropic.com",
+		consoleURL:    "https://console.anthropic.com",
+		statusPageURL: "https://status.anthropic.com",
+		logoURL:       "https://wyolet.dev/logos/anthropic.svg",
+	},
+	"openai": {
+		name:          "openai",
+		displayName:   "OpenAI",
+		description:   "GPT models from OpenAI.",
+		baseURL:       "https://api.openai.com",
+		homepageURL:   "https://openai.com",
+		docsURL:       "https://platform.openai.com/docs",
+		consoleURL:    "https://platform.openai.com",
+		statusPageURL: "https://status.openai.com",
+		logoURL:       "https://wyolet.dev/logos/openai.svg",
+	},
+	"ollama": {
+		name:        "ollama",
+		displayName: "Ollama",
+		description: "Run large language models locally with Ollama.",
+		baseURL:     "http://host.docker.internal:11434",
+		homepageURL: "https://ollama.com",
+		logoURL:     "https://wyolet.dev/logos/ollama.svg",
+	},
+}
+
+var skippedProviders = map[string]string{
+	"openai_compatible":         "requires custom config",
+	"vertex_ai-language-models": "no provider client yet",
+	"gemini":                    "no provider client yet",
+	"bedrock":                   "requires BYO config",
+	"groq":                      "provider client not implemented",
+	"deepseek":                  "provider client not implemented",
+	"fireworks_ai":              "provider client not implemented",
+	"together_ai":               "provider client not implemented",
+	"perplexity":                "provider client not implemented",
+	"mistral":                   "provider client not implemented",
+	"cohere_chat":               "provider client not implemented",
+	"cohere":                    "provider client not implemented",
+	"replicate":                 "provider client not implemented",
+	"huggingface":               "provider client not implemented",
+	"aleph_alpha":               "provider client not implemented",
+	"nlp_cloud":                 "provider client not implemented",
+	"sagemaker":                 "provider client not implemented",
+	"azure":                     "requires custom config",
+	"azure_ai":                  "requires custom config",
+}
+
+var dateSuffixRE = regexp.MustCompile(`-(\d{8})$`)
+var suffixesToStrip = []string{"-latest", "-preview", "-current"}
+
+func baseName(name string) string {
+	n := dateSuffixRE.ReplaceAllString(name, "")
+	for _, s := range suffixesToStrip {
+		n = strings.TrimSuffix(n, s)
+	}
+	return n
+}
+
+func extractDateSuffix(name string) string {
+	m := dateSuffixRE.FindStringSubmatch(name)
+	if m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// Group holds a canonical model name, optional aliases, and the entry data.
+type Group struct {
+	Canonical string
+	Aliases   []string
+	Entry     Entry
+}
+
+// CollapseAliases groups entries by base name and picks a canonical per group.
+func CollapseAliases(entries map[string]Entry) []Group {
+	byBase := map[string][]string{}
+	for name := range entries {
+		b := baseName(name)
+		byBase[b] = append(byBase[b], name)
+	}
+
+	var groups []Group
+	for _, names := range byBase {
+		sort.Strings(names)
+		if len(names) == 1 {
+			groups = append(groups, Group{Canonical: names[0], Entry: entries[names[0]]})
+			continue
+		}
+
+		canonical := ""
+		for _, n := range names {
+			if extractDateSuffix(n) != "" {
+				canonical = n
+				break
+			}
+		}
+		if canonical == "" {
+			b := baseName(names[0])
+			for _, n := range names {
+				if n == b {
+					canonical = n
+					break
+				}
+			}
+		}
+		if canonical == "" {
+			canonical = names[0]
+		}
+
+		canonicalEntry := entries[canonical]
+		hasConflict := false
+		for _, n := range names {
+			if n == canonical {
+				continue
+			}
+			if entriesConflict(canonicalEntry, entries[n]) {
+				slog.Warn("litellm-import: alias conflict — emitting separately", "canonical", canonical, "alias", n)
+				hasConflict = true
+			}
+		}
+
+		if hasConflict {
+			for _, n := range names {
+				groups = append(groups, Group{Canonical: n, Entry: entries[n]})
+			}
+			continue
+		}
+
+		var aliases []string
+		for _, n := range names {
+			if n != canonical {
+				aliases = append(aliases, n)
+			}
+		}
+		groups = append(groups, Group{Canonical: canonical, Aliases: aliases, Entry: canonicalEntry})
+	}
+
+	sort.Slice(groups, func(i, j int) bool { return groups[i].Canonical < groups[j].Canonical })
+	return groups
+}
+
+func entriesConflict(a, b Entry) bool {
+	for _, pair := range [][2]float64{{a.InputCostPerToken, b.InputCostPerToken}, {a.OutputCostPerToken, b.OutputCostPerToken}} {
+		if pair[0] != 0 && pair[1] != 0 && pair[0] != pair[1] {
+			return true
+		}
+	}
+	return a.SupportsFunctionCalling != b.SupportsFunctionCalling ||
+		a.SupportsVision != b.SupportsVision ||
+		a.SupportsReasoning != b.SupportsReasoning ||
+		a.MaxInputTokens != b.MaxInputTokens
+}
+
+func inferFamily(name string) string {
+	switch {
+	case strings.HasPrefix(name, "claude-"):
+		return "claude"
+	case strings.HasPrefix(name, "gpt-"):
+		return "gpt"
+	case strings.HasPrefix(name, "o1-") || strings.HasPrefix(name, "o3-") || strings.HasPrefix(name, "o4-"):
+		return "o-series"
+	case strings.HasPrefix(name, "gemini-"):
+		return "gemini"
+	default:
+		return strings.SplitN(name, "-", 2)[0]
+	}
+}
+
+func inferModalities(e Entry) model.Modalities {
+	inputs := []string{"text"}
+	if e.SupportsVision {
+		inputs = append(inputs, "image")
+	}
+	if e.SupportsAudioInput {
+		inputs = append(inputs, "audio")
+	}
+	if e.SupportsPDFInput {
+		inputs = append(inputs, "file")
+	}
+	outputs := []string{"text"}
+	if e.SupportsAudioOutput {
+		outputs = append(outputs, "audio")
+	}
+	return model.Modalities{Input: inputs, Output: outputs}
+}
+
+func hasBatchEndpoint(e Entry) bool {
+	for _, ep := range e.SupportedEndpoints {
+		if strings.Contains(ep, "batch") {
+			return true
+		}
+	}
+	return false
+}
+
+func deprecationInfo(e Entry, today time.Time) *model.Deprecation {
+	if e.DeprecationDate == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", e.DeprecationDate)
+	if err != nil {
+		return nil
+	}
+	if t.Before(today) {
+		return &model.Deprecation{Status: model.DeprecationSunset, SunsetDate: e.DeprecationDate}
+	}
+	return &model.Deprecation{Status: model.DeprecationDeprecated, SunsetDate: e.DeprecationDate}
+}
+
+// pricingRate is one row in a Pricing YAML spec.rates list.
+type pricingRate struct {
+	Meter       string  `yaml:"meter"`
+	Unit        string  `yaml:"unit"`
+	Amount      float64 `yaml:"amount"`
+	AboveTokens int     `yaml:"aboveTokens,omitempty"`
+}
+
+// pricingSpec is the spec block of a Pricing YAML document.
+type pricingSpec struct {
+	Currency     string        `yaml:"currency"`
+	TargetModels []string      `yaml:"targetModels"`
+	Rates        []pricingRate `yaml:"rates"`
+}
+
+// pricingMeta is the metadata block of a Pricing YAML document.
+type pricingMeta struct {
+	Name  string             `yaml:"name"`
+	Owner pricingOwnerRef    `yaml:"owner"`
+}
+
+// pricingOwnerRef is the owner reference in Pricing metadata.
+type pricingOwnerRef struct {
+	Kind string `yaml:"kind"`
+	ID   string `yaml:"id"`
+}
+
+// PricingDTO is the full Pricing YAML document emitted by this tool.
+type PricingDTO struct {
+	APIVersion string      `yaml:"apiVersion"`
+	Kind       string      `yaml:"kind"`
+	Metadata   pricingMeta `yaml:"metadata"`
+	Spec       pricingSpec `yaml:"spec"`
+}
+
+// TranslateResult holds the translated DTOs.
+type TranslateResult struct {
+	Providers       []*manifest.ProviderDTO
+	Hosts           []*manifest.HostDTO
+	Models          []*manifest.ModelDTO
+	Pricings        []*PricingDTO
+	SkippedMode     int
+	SkippedProvider int
+}
+
+// Translate converts filtered LiteLLM entries into new-arch manifest DTOs.
+func Translate(entries map[string]Entry, sourceVersion string) (*TranslateResult, error) {
+	today := time.Now()
+	if sourceVersion == "" {
+		sourceVersion = today.Format("2006-01-02")
+	}
+
+	result := &TranslateResult{}
+	seenProviders := map[string]bool{}
+
+	chatEntries := map[string]Entry{}
+	for k, e := range entries {
+		if e.Mode != "chat" {
+			result.SkippedMode++
+			continue
+		}
+		if _, skip := skippedProviders[e.LiteLLMProvider]; skip {
+			result.SkippedProvider++
+			continue
+		}
+		if _, ok := knownProviders[e.LiteLLMProvider]; !ok {
+			slog.Info("litellm-import: unknown provider — skipping", "provider", e.LiteLLMProvider, "model", k)
+			result.SkippedProvider++
+			continue
+		}
+		chatEntries[k] = e
+	}
+
+	groups := CollapseAliases(chatEntries)
+
+	for _, g := range groups {
+		e := g.Entry
+		pm, ok := knownProviders[e.LiteLLMProvider]
+		if !ok {
+			continue
+		}
+
+		if !seenProviders[e.LiteLLMProvider] {
+			seenProviders[e.LiteLLMProvider] = true
+			result.Providers = append(result.Providers, buildProvider(pm))
+			result.Hosts = append(result.Hosts, buildHost(pm))
+		}
+
+		m, err := buildModel(g, pm, sourceVersion, today)
+		if err != nil {
+			return nil, fmt.Errorf("translate: model %q: %w", g.Canonical, err)
+		}
+		result.Models = append(result.Models, m)
+
+		if p := buildPricing(g, pm); p != nil {
+			result.Pricings = append(result.Pricings, p)
+		}
+	}
+
+	sort.Slice(result.Providers, func(i, j int) bool { return result.Providers[i].Metadata.Name < result.Providers[j].Metadata.Name })
+	sort.Slice(result.Hosts, func(i, j int) bool { return result.Hosts[i].Metadata.Name < result.Hosts[j].Metadata.Name })
+	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].Metadata.Name < result.Models[j].Metadata.Name })
+	sort.Slice(result.Pricings, func(i, j int) bool { return result.Pricings[i].Metadata.Name < result.Pricings[j].Metadata.Name })
+
+	return result, nil
+}
+
+func buildProvider(pm providerMeta) *manifest.ProviderDTO {
+	return &manifest.ProviderDTO{
+		APIVersion: manifest.APIVersion,
+		Kind:       "Provider",
+		Metadata: manifest.WireMeta{
+			Name:        pm.name,
+			DisplayName: pm.displayName,
+			Description: pm.description,
+			Owner:       meta.Owner{Kind: meta.OwnerSystem},
+		},
+		Spec: manifest.ProviderSpec{
+			HomepageURL:   pm.homepageURL,
+			DocsURL:       pm.docsURL,
+			StatusPageURL: pm.statusPageURL,
+			LogoURL:       pm.logoURL,
+		},
+	}
+}
+
+func buildHost(pm providerMeta) *manifest.HostDTO {
+	return &manifest.HostDTO{
+		APIVersion: manifest.APIVersion,
+		Kind:       "Host",
+		Metadata: manifest.WireMeta{
+			Name:        pm.name,
+			DisplayName: pm.displayName,
+			Owner:       meta.Owner{Kind: meta.OwnerSystem},
+		},
+		Spec: manifest.HostSpec{
+			BaseURL:       pm.baseURL,
+			HomepageURL:   pm.homepageURL,
+			DocsURL:       pm.docsURL,
+			ConsoleURL:    pm.consoleURL,
+			StatusPageURL: pm.statusPageURL,
+			LogoURL:       pm.logoURL,
+		},
+	}
+}
+
+func addRate(rates []pricingRate, meter string, usdPerToken float64, aboveTokens int) []pricingRate {
+	if usdPerToken == 0 {
+		return rates
+	}
+	return append(rates, pricingRate{
+		Meter:       meter,
+		Unit:        "per_million",
+		Amount:      usdPerToken * 1_000_000,
+		AboveTokens: aboveTokens,
+	})
+}
+
+func buildPricing(g Group, pm providerMeta) *PricingDTO {
+	e := g.Entry
+	var rates []pricingRate
+
+	rates = addRate(rates, "tokens.input", e.InputCostPerToken, 0)
+	rates = addRate(rates, "tokens.output", e.OutputCostPerToken, 0)
+	rates = addRate(rates, "tokens.cache_write", e.CacheCreationInputTokenCost, 0)
+	rates = addRate(rates, "tokens.cache_read", e.CacheReadInputTokenCost, 0)
+	rates = addRate(rates, "tokens.reasoning", e.OutputCostPerReasoningToken, 0)
+
+	rates = addRate(rates, "tokens.input", e.InputCostPerTokenAbove128kTokens, 128_000)
+	rates = addRate(rates, "tokens.output", e.OutputCostPerTokenAbove128kTokens, 128_000)
+	rates = addRate(rates, "tokens.input", e.InputCostPerTokenAbove200kTokens, 200_000)
+	rates = addRate(rates, "tokens.output", e.OutputCostPerTokenAbove200kTokens, 200_000)
+	rates = addRate(rates, "tokens.input", e.InputCostPerTokenAbove272kTokens, 272_000)
+	rates = addRate(rates, "tokens.output", e.OutputCostPerTokenAbove272kTokens, 272_000)
+
+	if len(rates) == 0 {
+		return nil
+	}
+
+	name := pm.name + "-" + SanitizeFilename(g.Canonical)
+	return &PricingDTO{
+		APIVersion: "relay.wyolet.dev/v1",
+		Kind:       "Pricing",
+		Metadata: pricingMeta{
+			Name:  name,
+			Owner: pricingOwnerRef{Kind: "host", ID: pm.name},
+		},
+		Spec: pricingSpec{
+			Currency:     "USD",
+			TargetModels: []string{g.Canonical},
+			Rates:        rates,
+		},
+	}
+}
+
+func buildModel(g Group, pm providerMeta, version string, today time.Time) (*manifest.ModelDTO, error) {
+	e := g.Entry
+
+	inputMax := e.MaxInputTokens
+	outputMax := e.MaxOutputTokens
+	total := inputMax
+	if inputMax == 0 && e.MaxTokens > 0 {
+		inputMax = e.MaxTokens
+		total = e.MaxTokens
+	}
+	if outputMax == 0 && e.MaxTokens > 0 {
+		outputMax = e.MaxTokens
+	}
+
+	caps := model.Capabilities{
+		Chat:              true,
+		Streaming:         true,
+		Tools:             e.SupportsFunctionCalling,
+		ParallelTools:     e.SupportsParallelFunctionCalling,
+		Vision:            e.SupportsVision,
+		FileInput:         e.SupportsPDFInput,
+		PromptCache:       e.SupportsPromptCaching,
+		Reasoning:         e.SupportsReasoning,
+		StructuredOutputs: e.SupportsResponseSchema || e.SupportsNativeStructuredOutput,
+		SystemMessages:    e.SupportsSystemMessages,
+		AssistantPrefill:  e.SupportsAssistantPrefill,
+		AudioInput:        e.SupportsAudioInput,
+		AudioOutput:       e.SupportsAudioOutput,
+		WebSearch:         e.SupportsWebSearch,
+		ComputerUse:       e.SupportsComputerUse,
+		Batch:             hasBatchEndpoint(e),
+	}
+
+	family := inferFamily(g.Canonical)
+	labels := map[string]string{
+		"source":         "litellm",
+		"source_version": version,
+	}
+	if family != "" {
+		labels["family"] = family
+	}
+
+	return &manifest.ModelDTO{
+		APIVersion: manifest.APIVersion,
+		Kind:       "Model",
+		Metadata: manifest.WireMeta{
+			Name:   g.Canonical,
+			Labels: labels,
+			Owner:  meta.Owner{Kind: meta.OwnerProvider, ID: pm.name},
+		},
+		Spec: manifest.ModelSpec{
+			Hosts: []manifest.HostBindingDTO{{
+				Host:         pm.name,
+				UpstreamName: g.Canonical,
+			}},
+			Family:              family,
+			Capabilities:        caps,
+			Modalities:          inferModalities(e),
+			ContextWindowInput:  inputMax,
+			ContextWindowOutput: outputMax,
+			ContextWindowTotal:  total,
+			Deprecation:         deprecationInfo(e, today),
+			Aliases:             g.Aliases,
+		},
+	}, nil
+}

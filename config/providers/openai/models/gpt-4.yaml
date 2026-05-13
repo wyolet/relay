@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-4
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-4
+    hosts:
+        - host: openai
+          upstreamName: gpt-4
     family: gpt
     capabilities:
         chat: true
@@ -24,9 +28,3 @@ spec:
     contextWindowInput: 8192
     contextWindowOutput: 4096
     contextWindowTotal: 8192
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.input: 30
-            tokens.output: 60
