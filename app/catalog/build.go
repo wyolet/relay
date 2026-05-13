@@ -77,7 +77,14 @@ func build(
 	}
 	for _, m := range models {
 		s.modelsByID[m.Meta.ID] = m
+		// Index by the slug so callers can address the model with
+		// `"model": "<slug>"`. Aliases extend addressability — a model
+		// can be reached by both its slug and any declared alias.
+		s.modelsByName[m.Meta.Name] = append(s.modelsByName[m.Meta.Name], m)
 		for _, a := range m.Spec.Aliases {
+			if a == m.Meta.Name {
+				continue // already indexed via slug
+			}
 			s.modelsByName[a] = append(s.modelsByName[a], m)
 		}
 		s.registerRefs(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
