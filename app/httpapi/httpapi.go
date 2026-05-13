@@ -102,12 +102,37 @@ func (e *OpenAIError) ContentType(_ string) string { return "application/json" }
 // function (not an assignable variable) in v2.37+.
 func installSchemaNamer() {}
 
-// NewRegistry returns a huma schema Registry whose namer prefixes type
-// names with their package's last segment (e.g. "provider_Spec") so
-// catalog kinds' uniform Spec sub-structs don't collide. Plane Mount()
-// functions install this on their huma.Config.
+// NewRegistry returns a huma schema Registry whose namer produces
+// clean PascalCase schema ids in the generated OpenAPI:
+//
+//   - The entity types Provider / Host / Model / HostKey / RateLimit /
+//     Policy / Pricing / RelayKey keep their bare names.
+//   - Sub-types defined inside an entity package get the entity name
+//     prepended so the 8 colliding `Spec` types become `ProviderSpec`,
+//     `HostSpec`, `ModelSpec`, etc. without renaming the Go types.
+//   - Types in non-entity packages (meta.Metadata, meta.Owner,
+//     adapter.Kind, …) keep their bare names — they don't collide.
+//
+// Plane Mount() functions install the returned registry on their
+// huma.Config.
 func NewRegistry() huma.Registry {
 	return huma.NewMapRegistry("#/components/schemas/", schemaNamer)
+}
+
+// entityNameByPkg maps each app/<entity> package path to the
+// PascalCase name of its top-level entity type. Sub-types in these
+// packages get the entity name prepended in OpenAPI schema ids; the
+// entity type itself stays bare. Update this when adding a new
+// catalog entity package.
+var entityNameByPkg = map[string]string{
+	"github.com/wyolet/relay/app/provider":  "Provider",
+	"github.com/wyolet/relay/app/host":      "Host",
+	"github.com/wyolet/relay/app/model":     "Model",
+	"github.com/wyolet/relay/app/hostkey":   "HostKey",
+	"github.com/wyolet/relay/app/ratelimit": "RateLimit",
+	"github.com/wyolet/relay/app/policy":    "Policy",
+	"github.com/wyolet/relay/app/pricing":   "Pricing",
+	"github.com/wyolet/relay/app/relaykey":  "RelayKey",
 }
 
 func schemaNamer(t reflect.Type, hint string) string {
@@ -118,12 +143,11 @@ func schemaNamer(t reflect.Type, hint string) string {
 	if name == "" {
 		return hint
 	}
-	pkg := t.PkgPath()
-	if pkg != "" {
-		if i := strings.LastIndex(pkg, "/"); i >= 0 {
-			pkg = pkg[i+1:]
-		}
-		name = pkg + "_" + name
+	if entity, ok := entityNameByPkg[t.PkgPath()]; ok && name != entity {
+		// Sub-type in an entity package — prepend the entity name to
+		// avoid collisions (every entity has a `Spec`, `ratelimit.Rule`
+		// vs `pricing.Rate`, etc.).
+		name = entity + name
 	}
 	return sanitizeSchemaName(name)
 }
