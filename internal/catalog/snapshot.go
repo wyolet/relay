@@ -221,7 +221,7 @@ func (s *snapshot) listRelayKeys() []*RelayKey {
 func (s *snapshot) buildEffectivePricing() {
 	s.effectivePrices = make(map[string]*Pricing, len(s.models))
 	for name, m := range s.models {
-		p := s.providers[m.Spec.Provider]
+		p, _ := s.providerByID(m.Spec.Provider)
 		ep := effectivePricing(p, m)
 		if ep != nil {
 			s.effectivePrices[name] = ep
@@ -421,7 +421,7 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 		// Resolve effective tier: secret-level wins over provider default.
 		tierName := sec.Spec.Tier
 		if tierName == "" {
-			if prov, ok := s.providers[sec.Spec.Provider]; ok {
+			if prov, ok := s.providerByID(sec.Spec.Provider); ok {
 				tierName = prov.Spec.DefaultTier
 			}
 		}
@@ -527,6 +527,5 @@ func (s *snapshot) providerForModel(modelName string) (*Provider, bool) {
 	if !ok {
 		return nil, false
 	}
-	p, ok := s.providers[m.Spec.Provider]
-	return p, ok
+	return s.providerByID(m.Spec.Provider)
 }

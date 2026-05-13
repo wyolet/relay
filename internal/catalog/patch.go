@@ -50,6 +50,15 @@ func (s *PGStore) ValidateWithPatch(patch Patch) error {
 	base := s.cur()
 	sim := cloneSnapshot(base)
 	applyPatch(sim, patch)
+	// A patch from the admin handler may carry refs by name; the live
+	// snapshot already has them resolved to ids, but the new/updated row
+	// in the patch does not. Re-run id stamping + resolution so the
+	// validator sees a uniformly id-keyed snapshot.
+	ensureSnapshotIDs(sim)
+	sim.buildByIDIndexes()
+	if _, err := resolveRefs(sim); err != nil {
+		return err
+	}
 	return validate(sim)
 }
 
