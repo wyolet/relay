@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: ft:gpt-3.5-turbo-0613
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: ft:gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: ft:gpt-3.5-turbo-0613
+    hosts:
+        - host: openai
+          upstreamName: ft:gpt-3.5-turbo-0613
     family: ft:gpt
     capabilities:
         chat: true
@@ -22,9 +26,3 @@ spec:
     contextWindowInput: 4096
     contextWindowOutput: 4096
     contextWindowTotal: 4096
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.input: 3
-            tokens.output: 6

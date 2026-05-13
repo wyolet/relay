@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: o3-mini
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: o-series
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: o3-mini
+    hosts:
+        - host: openai
+          upstreamName: o3-mini
     family: o-series
     capabilities:
         chat: true
@@ -16,7 +20,7 @@ spec:
         tools: true
         promptCache: true
         reasoning: true
-        structuredOutput: true
+        structuredOutputs: true
     modalities:
         input:
             - text
@@ -25,10 +29,3 @@ spec:
     contextWindowInput: 200000
     contextWindowOutput: 100000
     contextWindowTotal: 200000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.cache_read: 0.55
-            tokens.input: 1.1
-            tokens.output: 4.4

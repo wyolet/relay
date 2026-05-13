@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: ft:gpt-4.1-nano-2025-04-14
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: ft:gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: ft:gpt-4.1-nano-2025-04-14
+    hosts:
+        - host: openai
+          upstreamName: ft:gpt-4.1-nano-2025-04-14
     family: ft:gpt
     capabilities:
         chat: true
@@ -16,7 +20,7 @@ spec:
         tools: true
         parallelTools: true
         promptCache: true
-        structuredOutput: true
+        structuredOutputs: true
         systemMessages: true
     modalities:
         input:
@@ -26,12 +30,3 @@ spec:
     contextWindowInput: 1047576
     contextWindowOutput: 32768
     contextWindowTotal: 1047576
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.batch_input: 0.09999999999999999
-            tokens.batch_output: 0.39999999999999997
-            tokens.cache_read: 0.049999999999999996
-            tokens.input: 0.19999999999999998
-            tokens.output: 0.7999999999999999

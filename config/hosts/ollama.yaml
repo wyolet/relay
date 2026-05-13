@@ -1,0 +1,11 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Host
+metadata:
+    name: ollama
+    displayName: Ollama
+    owner:
+        kind: system
+spec:
+    baseURL: http://host.docker.internal:11434
+    homepageURL: https://ollama.com
+    logoURL: https://wyolet.dev/logos/ollama.svg

@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: anthropic-claude-3-opus-20240229
+    owner:
+        kind: host
+        id: anthropic
+spec:
+    currency: USD
+    targetModels:
+        - claude-3-opus-20240229
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 15
+        - meter: tokens.output
+          unit: per_million
+          amount: 75
+        - meter: tokens.cache_write
+          unit: per_million
+          amount: 18.75
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 1.5

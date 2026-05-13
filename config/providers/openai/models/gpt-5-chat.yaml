@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-5-chat
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-5-chat
+    hosts:
+        - host: openai
+          upstreamName: gpt-5-chat
     family: gpt
     capabilities:
         chat: true
@@ -16,7 +20,7 @@ spec:
         vision: true
         promptCache: true
         reasoning: true
-        structuredOutput: true
+        structuredOutputs: true
         batch: true
         fileInput: true
         systemMessages: true
@@ -30,12 +34,5 @@ spec:
     contextWindowInput: 128000
     contextWindowOutput: 16384
     contextWindowTotal: 128000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.cache_read: 0.125
-            tokens.input: 1.25
-            tokens.output: 10
     aliases:
         - gpt-5-chat-latest

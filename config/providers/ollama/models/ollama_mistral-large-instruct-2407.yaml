@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: ollama/mistral-large-instruct-2407
+    owner:
+        kind: provider
+        id: ollama
     labels:
         family: ollama/mistral
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: ollama
-    upstreamName: ollama/mistral-large-instruct-2407
+    hosts:
+        - host: ollama
+          upstreamName: ollama/mistral-large-instruct-2407
     family: ollama/mistral
     capabilities:
         chat: true

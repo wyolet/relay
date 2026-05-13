@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-4-1106-preview
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-4-1106-preview
+    hosts:
+        - host: openai
+          upstreamName: gpt-4-1106-preview
     family: gpt
     capabilities:
         chat: true
@@ -25,12 +29,6 @@ spec:
     contextWindowInput: 128000
     contextWindowOutput: 4096
     contextWindowTotal: 128000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.input: 10
-            tokens.output: 30
     deprecation:
         status: sunset
         sunsetDate: "2026-03-26"

@@ -3,12 +3,11 @@ kind: Provider
 metadata:
     name: openai
     displayName: OpenAI
-spec:
-    kind: openai
-    baseURL: https://api.openai.com
     description: GPT models from OpenAI.
+    owner:
+        kind: system
+spec:
     homepageURL: https://openai.com
     docsURL: https://platform.openai.com/docs
-    consoleURL: https://platform.openai.com
     statusPageURL: https://status.openai.com
     logoURL: https://wyolet.dev/logos/openai.svg

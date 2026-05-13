@@ -1,0 +1,21 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-o1-2024-12-17
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - o1-2024-12-17
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 15
+        - meter: tokens.output
+          unit: per_million
+          amount: 60
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 7.5

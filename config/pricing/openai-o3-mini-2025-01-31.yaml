@@ -1,0 +1,21 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+    name: openai-o3-mini-2025-01-31
+    owner:
+        kind: host
+        id: openai
+spec:
+    currency: USD
+    targetModels:
+        - o3-mini-2025-01-31
+    rates:
+        - meter: tokens.input
+          unit: per_million
+          amount: 1.1
+        - meter: tokens.output
+          unit: per_million
+          amount: 4.4
+        - meter: tokens.cache_read
+          unit: per_million
+          amount: 0.55

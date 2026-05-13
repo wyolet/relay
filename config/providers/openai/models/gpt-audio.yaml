@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-audio
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-audio
+    hosts:
+        - host: openai
+          upstreamName: gpt-audio
     family: gpt
     capabilities:
         chat: true
@@ -29,11 +33,3 @@ spec:
     contextWindowInput: 128000
     contextWindowOutput: 16384
     contextWindowTotal: 128000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.audio_input: 32
-            tokens.audio_output: 64
-            tokens.input: 2.5
-            tokens.output: 10

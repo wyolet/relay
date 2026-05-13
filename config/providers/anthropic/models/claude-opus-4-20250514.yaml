@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: claude-opus-4-20250514
+    owner:
+        kind: provider
+        id: anthropic
     labels:
         family: claude
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: anthropic
-    upstreamName: claude-opus-4-20250514
+    hosts:
+        - host: anthropic
+          upstreamName: claude-opus-4-20250514
     family: claude
     capabilities:
         chat: true
@@ -17,7 +21,7 @@ spec:
         vision: true
         promptCache: true
         reasoning: true
-        structuredOutput: true
+        structuredOutputs: true
         computerUse: true
         fileInput: true
         assistantPrefill: true
@@ -31,14 +35,6 @@ spec:
     contextWindowInput: 200000
     contextWindowOutput: 32000
     contextWindowTotal: 200000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.cache_creation: 18.75
-            tokens.cache_read: 1.5
-            tokens.input: 15
-            tokens.output: 75
     deprecation:
         status: deprecated
         sunsetDate: "2026-05-14"

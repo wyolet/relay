@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: gpt-4o-realtime-preview
+    owner:
+        kind: provider
+        id: openai
     labels:
         family: gpt
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: openai
-    upstreamName: gpt-4o-realtime-preview
+    hosts:
+        - host: openai
+          upstreamName: gpt-4o-realtime-preview
     family: gpt
     capabilities:
         chat: true
@@ -28,12 +32,3 @@ spec:
     contextWindowInput: 128000
     contextWindowOutput: 4096
     contextWindowTotal: 128000
-    pricing:
-        currency: USD
-        unit: per_million
-        rates:
-            tokens.audio_input: 40
-            tokens.audio_output: 80
-            tokens.cache_read: 2.5
-            tokens.input: 5
-            tokens.output: 20

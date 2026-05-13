@@ -2,13 +2,17 @@ apiVersion: relay.wyolet.dev/v1
 kind: Model
 metadata:
     name: ollama/internlm2_5-20b-chat
+    owner:
+        kind: provider
+        id: ollama
     labels:
         family: ollama/internlm2_5
         source: litellm
-        source_version: "2026-05-13"
+        source_version: "2026-05-14"
 spec:
-    provider: ollama
-    upstreamName: ollama/internlm2_5-20b-chat
+    hosts:
+        - host: ollama
+          upstreamName: ollama/internlm2_5-20b-chat
     family: ollama/internlm2_5
     capabilities:
         chat: true
