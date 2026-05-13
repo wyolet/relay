@@ -1,0 +1,19 @@
+# Throwaway Postgres for `make test-integration`. Spun up, used, torn down.
+# Single service, ephemeral storage, no port collision with dev-stack
+# (binds to 127.0.0.1:5499 to dodge the standard 5432/5100 conventions).
+services:
+  pg-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: relay_test
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+    ports:
+      - "127.0.0.1:5499:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay -d relay_test"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
