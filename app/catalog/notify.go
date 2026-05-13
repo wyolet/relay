@@ -13,6 +13,7 @@ package catalog
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -235,14 +236,35 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 	}
 }
 
-// applyDrained drains the debouncer and applies each event.
+// applyDrained drains the debouncer and applies each event in dependency
+// order: parent kinds before their children, so that when a bulk admin
+// transaction commits and the debouncer flushes the whole burst together,
+// cross-ref validation against the snapshot succeeds at each step.
+//
+// Order: provider → host → ratelimit → model → hostkey → policy → pricing
+// → relaykey. Deletes propagate via reverse-ref cascade inside the
+// reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
+	sort.SliceStable(events, func(i, j int) bool {
+		return kindOrder[events[i].Kind] < kindOrder[events[j].Kind]
+	})
 	for _, e := range events {
 		if err := l.applyEvent(ctx, e); err != nil {
 			slog.Error("catalog notify: apply error", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
 		}
 	}
+}
+
+var kindOrder = map[string]int{
+	"provider":  0,
+	"host":      1,
+	"ratelimit": 2,
+	"model":     3,
+	"hostkey":   4,
+	"policy":    5,
+	"pricing":   6,
+	"relaykey":  7,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
