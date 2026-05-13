@@ -12,6 +12,11 @@ import (
 // Reachability pruning happens here: Models / ProviderKeys / RateLimits not
 // referenced by any input Policy are dropped.
 //
+// providerSlugByID maps Provider.Meta.ID → Provider.Meta.Name. Providers
+// themselves don't enter the Snapshot, but every Model is indexed by name
+// as "{providerSlug}/{modelName}" so the request path can resolve client
+// strings like "openai/gpt-5" in one map lookup.
+//
 // The caller is responsible for filtering rows by Spec.Enabled before
 // passing them in. build does not consult Enabled itself — it trusts inputs.
 func build(
@@ -20,6 +25,7 @@ func build(
 	models []*model.Model,
 	keys []*providerkey.ProviderKey,
 	rls []*ratelimit.RateLimit,
+	providerSlugByID map[string]string,
 ) *Snapshot {
 	s := &Snapshot{
 		policiesByID:         make(map[string]*policy.Policy, len(pols)),
@@ -65,15 +71,20 @@ func build(
 		}
 	}
 
-	// Index reachable Models by id, slug, and aliases.
+	// Index reachable Models by id and by "{providerSlug}/{modelName}".
+	// The name index includes Spec.Aliases under the same provider prefix.
 	for _, m := range models {
 		if _, ok := wantModel[m.Meta.ID]; !ok {
 			continue
 		}
 		s.modelsByID[m.Meta.ID] = m
-		s.modelsByName[m.Meta.Name] = m
+		prefix, ok := providerSlugByID[m.Meta.Owner.ID]
+		if !ok {
+			continue // cross-entity validate should have caught this
+		}
+		s.modelsByName[prefix+"/"+m.Meta.Name] = m
 		for _, a := range m.Spec.Aliases {
-			s.modelsByName[a] = m
+			s.modelsByName[prefix+"/"+a] = m
 		}
 	}
 

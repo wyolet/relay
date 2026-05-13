@@ -105,11 +105,14 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: relaykeys: %w", err)
 	}
 
-	// Filter to enabled rows. Providers aren't kept in the Snapshot, but we
-	// still need their ids for ownership validation.
+	// Filter to enabled rows. Providers aren't kept in the Snapshot, but
+	// their ids are needed for ownership validation and their slugs are
+	// needed to compute the prefixed model name index.
 	providerIDs := make(map[string]struct{}, len(provs))
+	providerSlugByID := make(map[string]string, len(provs))
 	for _, p := range provs {
 		providerIDs[p.Meta.ID] = struct{}{}
+		providerSlugByID[p.Meta.ID] = p.Meta.Name
 	}
 	enabledPols := filter(pols, (*policy.Policy).IsEnabled)
 	enabledRKs := filter(rks, (*relaykey.RelayKey).IsEnabled)
@@ -121,7 +124,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs)
+	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, providerSlugByID)
 	c.snap.Store(snap)
 	return nil
 }

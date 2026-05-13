@@ -136,10 +136,10 @@ func TestReload_HappyPath(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); !ok {
 		t.Error("policy not in snapshot")
 	}
-	if _, ok := s.ModelByName("gpt-4o-mini"); !ok {
+	if _, ok := s.ModelByName("openai/gpt-4o-mini"); !ok {
 		t.Error("model not in snapshot")
 	}
-	if _, ok := s.ModelByName("mini"); !ok {
+	if _, ok := s.ModelByName("openai/mini"); !ok {
 		t.Error("alias lookup failed")
 	}
 	if _, ok := s.RelayKeyByHash(strings.Repeat("a", 64)); !ok {
@@ -175,10 +175,10 @@ func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); ok {
 		t.Error("disabled policy should be evicted")
 	}
-	if _, ok := s.ModelByName("gpt-4o"); ok {
+	if _, ok := s.ModelByName("openai/gpt-4o"); ok {
 		t.Error("model with no enabled referrer should be evicted")
 	}
-	if _, ok := s.ModelByName("gpt-4o-mini"); ok {
+	if _, ok := s.ModelByName("openai/gpt-4o-mini"); ok {
 		t.Error("aliased model with no enabled referrer should be evicted")
 	}
 }
