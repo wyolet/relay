@@ -1,117 +1,97 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
 
-// build assembles a Snapshot from the (already enabled-filtered) rows.
-// Reachability pruning happens here: Models / HostKeys / RateLimits not
-// referenced by any input Policy are dropped.
+// build assembles a Snapshot from already enabled-filtered rows. Every row
+// passed in enters the snapshot — there is no reachability pruning.
 //
-// Models are indexed by every entry in their Spec.Aliases verbatim — no
-// prefix derivation. The operator decides what wire strings address each
-// Model. Multiple Models may share an alias intentionally (same wire name
-// hosted by different Providers); ModelsByName returns the full list and
-// the consumer disambiguates with a suffix or header.
-//
-// providerSlugByID is carried through to the Snapshot for hot-path
-// disambiguation; the Provider rows themselves never enter the Snapshot.
-//
-// The caller is responsible for filtering rows by Spec.Enabled before
-// passing them in. build does not consult Enabled itself — it trusts inputs.
+// Reverse joins (modelsByPolicy, pricingByModelHost) are derived from cross-
+// refs at the end. A ref to a row that's not in the snapshot is silently
+// skipped — that's how cascade invalidation degrades after a parent disables.
+// validateCross rejects dangling refs before we get here, so this is a
+// defensive guard only.
 func build(
+	provs []*provider.Provider,
+	hosts []*host.Host,
 	pols []*policy.Policy,
 	rks []*relaykey.RelayKey,
 	models []*model.Model,
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
-	providerSlugByID map[string]string,
-	hostSlugByID map[string]string,
 ) *Snapshot {
 	s := &Snapshot{
+		providersByID:      make(map[string]*provider.Provider, len(provs)),
+		providersByName:    make(map[string]*provider.Provider, len(provs)),
+		hostsByID:          make(map[string]*host.Host, len(hosts)),
+		hostsByName:        make(map[string]*host.Host, len(hosts)),
 		policiesByID:       make(map[string]*policy.Policy, len(pols)),
 		policiesByName:     make(map[string]*policy.Policy, len(pols)),
-		modelsByID:         map[string]*model.Model{},
+		modelsByID:         make(map[string]*model.Model, len(models)),
 		modelsByName:       map[string][]*model.Model{},
-		hostKeysByID:       map[string]*hostkey.HostKey{},
-		rateLimitsByID:     map[string]*ratelimit.RateLimit{},
+		hostKeysByID:       make(map[string]*hostkey.HostKey, len(keys)),
+		rateLimitsByID:     make(map[string]*ratelimit.RateLimit, len(rls)),
 		relayKeysByID:      make(map[string]*relaykey.RelayKey, len(rks)),
 		relayKeysByHash:    make(map[string]*relaykey.RelayKey, len(rks)),
-		providerSlugByID:   providerSlugByID,
-		hostSlugByID:       hostSlugByID,
 		modelsByPolicy:     map[string][]*model.Model{},
 		hostKeysByPolicy:   map[string][]*hostkey.HostKey{},
 		rateLimitByPolicy:  map[string]*ratelimit.RateLimit{},
 		pricingsByID:       make(map[string]*pricing.Pricing, len(pricings)),
 		pricingByModelHost: map[string]*pricing.Pricing{},
+		refsByProvider:     map[string]refSet{},
+		refsByHost:         map[string]refSet{},
+		refsByModel:        map[string]refSet{},
+		refsByHostKey:      map[string]refSet{},
+		refsByRateLimit:    map[string]refSet{},
+		refsByPolicy:       map[string]refSet{},
 	}
 
-	// Policies always enter wholesale (input is already enabled-filtered).
+	for _, p := range provs {
+		s.providersByID[p.Meta.ID] = p
+		s.providersByName[p.Meta.Name] = p
+	}
+	for _, h := range hosts {
+		s.hostsByID[h.Meta.ID] = h
+		s.hostsByName[h.Meta.Name] = h
+	}
 	for _, p := range pols {
 		s.policiesByID[p.Meta.ID] = p
 		s.policiesByName[p.Meta.Name] = p
+		s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
 	}
-
-	// RelayKeys always enter wholesale.
 	for _, k := range rks {
 		s.relayKeysByID[k.Meta.ID] = k
 		if k.Spec.KeyHash != "" {
 			s.relayKeysByHash[k.Spec.KeyHash] = k
 		}
+		s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
 	}
-
-	// Reachability sets: union over all input Policies' refs.
-	wantModel := map[string]struct{}{}
-	wantKey := map[string]struct{}{}
-	wantRL := map[string]struct{}{}
-	for _, p := range pols {
-		for _, id := range p.Spec.ModelIDs {
-			wantModel[id] = struct{}{}
-		}
-		for _, id := range p.Spec.HostKeyIDs {
-			wantKey[id] = struct{}{}
-		}
-		if p.Spec.RateLimitID != "" {
-			wantRL[p.Spec.RateLimitID] = struct{}{}
-		}
-	}
-
-	// Index reachable Models by id and by every entry in Spec.Aliases
-	// verbatim. Aliases may collide intentionally (same wire name hosted
-	// by multiple Providers); the index is multivalued and the consumer
-	// disambiguates downstream.
 	for _, m := range models {
-		if _, ok := wantModel[m.Meta.ID]; !ok {
-			continue
-		}
 		s.modelsByID[m.Meta.ID] = m
 		for _, a := range m.Spec.Aliases {
 			s.modelsByName[a] = append(s.modelsByName[a], m)
 		}
+		s.registerRefs(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
 	}
-
-	// Index reachable HostKeys.
 	for _, k := range keys {
-		if _, ok := wantKey[k.Meta.ID]; ok {
-			s.hostKeysByID[k.Meta.ID] = k
-		}
+		s.hostKeysByID[k.Meta.ID] = k
+		s.registerRefs(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
 	}
-
-	// Index reachable RateLimits.
 	for _, r := range rls {
-		if _, ok := wantRL[r.Meta.ID]; ok {
-			s.rateLimitsByID[r.Meta.ID] = r
-		}
+		s.rateLimitsByID[r.Meta.ID] = r
 	}
 
-	// Reverse joins per Policy. Skip refs that didn't survive reachability
-	// (shouldn't happen post-validate, but defensive).
+	// Reverse joins per Policy. Skip refs to rows that aren't in the
+	// snapshot (defensive; validateCross already rejected dangling refs).
 	for _, p := range pols {
 		for _, id := range p.Spec.ModelIDs {
 			if m, ok := s.modelsByID[id]; ok {
@@ -130,9 +110,6 @@ func build(
 		}
 	}
 
-	// Index pricings by id and by (targetModelID, hostID). Drop entries whose
-	// target model didn't survive reachability — defensive guard only;
-	// validateCross already rejected unknown models.
 	for _, p := range pricings {
 		s.pricingsByID[p.Meta.ID] = p
 		hostID := p.Meta.Owner.ID
@@ -142,6 +119,7 @@ func build(
 			}
 			s.pricingByModelHost[modelID+"|"+hostID] = p
 		}
+		s.registerRefs(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
 	}
 
 	return s

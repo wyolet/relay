@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/wyolet/relay/app/host"
@@ -29,6 +30,7 @@ type Catalog struct {
 	pricings   PricingLister
 
 	snap atomic.Pointer[Snapshot]
+	rmu  sync.Mutex
 }
 
 // Per-package narrow Lister interfaces — Catalog only needs List from each.
@@ -127,24 +129,8 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: pricings: %w", err)
 	}
 
-	// Providers and Hosts don't enter the Snapshot directly, but we need
-	// their ids for ownership validation and their slugs for the model
-	// name index (Provider prefix) and host disambiguation.
-	providerIDs := make(map[string]struct{}, len(provs))
-	providerSlugByID := make(map[string]string, len(provs))
-	for _, p := range provs {
-		providerIDs[p.Meta.ID] = struct{}{}
-		providerSlugByID[p.Meta.ID] = p.Meta.Name
-	}
-	hostIDs := make(map[string]struct{}, len(hosts))
-	hostSlugByID := make(map[string]string, len(hosts))
-	for _, h := range hosts {
-		if !h.IsEnabled() {
-			continue
-		}
-		hostIDs[h.Meta.ID] = struct{}{}
-		hostSlugByID[h.Meta.ID] = h.Meta.Name
-	}
+	enabledProvs := filter(provs, (*provider.Provider).IsEnabled)
+	enabledHosts := filter(hosts, (*host.Host).IsEnabled)
 	enabledPols := filter(pols, (*policy.Policy).IsEnabled)
 	enabledRKs := filter(rks, (*relaykey.RelayKey).IsEnabled)
 	enabledModels := filter(models, (*model.Model).IsEnabled)
@@ -152,11 +138,20 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 	enabledPricings := filter(pricingsAll, (*pricing.Pricing).IsEnabled)
 
+	providerIDs := make(map[string]struct{}, len(enabledProvs))
+	for _, p := range enabledProvs {
+		providerIDs[p.Meta.ID] = struct{}{}
+	}
+	hostIDs := make(map[string]struct{}, len(enabledHosts))
+	for _, h := range enabledHosts {
+		hostIDs[h.Meta.ID] = struct{}{}
+	}
+
 	if err := validateCross(providerIDs, hostIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings); err != nil {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, providerSlugByID, hostSlugByID)
+	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings)
 	c.snap.Store(snap)
 	return nil
 }

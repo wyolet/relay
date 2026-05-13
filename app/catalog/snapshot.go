@@ -1,36 +1,37 @@
-// Package catalog is the composition layer: it pulls the six entity stores
+// Package catalog is the composition layer: it pulls the entity stores
 // together into an atomic in-memory Snapshot the request path can read in
 // O(1). Snapshots are immutable; Reload rebuilds and atomically swaps.
 //
-// Membership rules (locked in design, not configuration):
+// Membership rule (single, simple): every enabled row of every kind enters
+// the snapshot. There is no reachability filter — a Model not bound to any
+// Policy still appears (it's just unreachable through PoolModels until
+// someone wires it up). The "enabled" flag is the entire toggle mechanism.
 //
-//   - Provider: never in the snapshot. Base URLs and wire-shape selection
-//     live in code, keyed off the provider slug; PG rows are informational
-//     for the admin UI.
-//   - Policy: enabled rows only.
-//   - Model: enabled rows referenced by ≥1 enabled Policy.
-//   - HostKey: enabled rows referenced by ≥1 enabled Policy.
-//   - RateLimit: enabled rows referenced by ≥1 enabled Policy.
-//   - RelayKey: enabled rows. (Auth proceeds even if its Policy is
-//     disabled, so the response can say "policy disabled" instead of 401.)
-//
-// Disabled rows are evicted at the next Reload; flipping Spec.Enabled is
-// the entire toggle mechanism.
+// Reverse joins (modelsByPolicy, pricingByModelHost, etc.) are derived
+// indices over the snapshot — they hold pointers to the same rows.
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
 
 // Snapshot is the immutable in-memory view. All maps are populated at
-// construction by Reload and never written after — read accessors are
-// safe to call from any goroutine.
+// construction and never written after — read accessors are safe to call
+// from any goroutine.
 type Snapshot struct {
+	providersByID   map[string]*provider.Provider
+	providersByName map[string]*provider.Provider
+
+	hostsByID   map[string]*host.Host
+	hostsByName map[string]*host.Host
+
 	policiesByID   map[string]*policy.Policy
 	policiesByName map[string]*policy.Policy
 
@@ -49,24 +50,73 @@ type Snapshot struct {
 	relayKeysByID   map[string]*relaykey.RelayKey
 	relayKeysByHash map[string]*relaykey.RelayKey
 
-	// providerSlugByID and hostSlugByID are tiny id→slug maps needed by
-	// hot-path disambiguation. Provider and Host rows themselves don't
-	// enter the Snapshot proper.
-	providerSlugByID map[string]string
-	hostSlugByID     map[string]string
-
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
 	modelsByPolicy    map[string][]*model.Model
 	hostKeysByPolicy  map[string][]*hostkey.HostKey
 	rateLimitByPolicy map[string]*ratelimit.RateLimit
 
-	pricingsByID      map[string]*pricing.Pricing
+	pricingsByID map[string]*pricing.Pricing
 	// pricingByModelHost keys on modelID+"|"+hostID for O(1) hot-path lookup.
 	pricingByModelHost map[string]*pricing.Pricing
+
+	// Reverse-dependency indices: refsByX[X-id] = set of child refKeys that
+	// reference this row. Used by the COW reconciler to enumerate dependents
+	// when a parent is evicted. Allocated even for empty snapshots so
+	// registerRefs has somewhere to write.
+	refsByProvider  map[string]refSet
+	refsByHost      map[string]refSet
+	refsByModel     map[string]refSet
+	refsByHostKey   map[string]refSet
+	refsByRateLimit map[string]refSet
+	refsByPolicy    map[string]refSet
 }
 
 // ── Read accessors ─────────────────────────────────────────────────────────
+
+// Provider returns the enabled Provider with this id, or false.
+func (s *Snapshot) Provider(id string) (*provider.Provider, bool) {
+	p, ok := s.providersByID[id]
+	return p, ok
+}
+
+// ProviderByName returns the enabled Provider with this slug, or false.
+func (s *Snapshot) ProviderByName(name string) (*provider.Provider, bool) {
+	p, ok := s.providersByName[name]
+	return p, ok
+}
+
+// ProviderSlug returns the Provider.Meta.Name for the given Provider id, or
+// false. Hot-path resolution uses this to compare a Model's owning Provider
+// against the suffix/header hint without needing the full Provider row.
+func (s *Snapshot) ProviderSlug(providerID string) (string, bool) {
+	p, ok := s.providersByID[providerID]
+	if !ok {
+		return "", false
+	}
+	return p.Meta.Name, true
+}
+
+// Host returns the enabled Host with this id, or false.
+func (s *Snapshot) Host(id string) (*host.Host, bool) {
+	h, ok := s.hostsByID[id]
+	return h, ok
+}
+
+// HostByName returns the enabled Host with this slug, or false.
+func (s *Snapshot) HostByName(name string) (*host.Host, bool) {
+	h, ok := s.hostsByName[name]
+	return h, ok
+}
+
+// HostSlug returns the Host.Meta.Name for the given Host id, or false.
+func (s *Snapshot) HostSlug(hostID string) (string, bool) {
+	h, ok := s.hostsByID[hostID]
+	if !ok {
+		return "", false
+	}
+	return h.Meta.Name, true
+}
 
 // Policy returns the enabled Policy with this id, or false.
 func (s *Snapshot) Policy(id string) (*policy.Policy, bool) {
@@ -80,13 +130,13 @@ func (s *Snapshot) PolicyByName(name string) (*policy.Policy, bool) {
 	return p, ok
 }
 
-// Model returns the reachable Model with this id, or false.
+// Model returns the enabled Model with this id, or false.
 func (s *Snapshot) Model(id string) (*model.Model, bool) {
 	m, ok := s.modelsByID[id]
 	return m, ok
 }
 
-// ModelsByName returns every reachable Model whose Spec.Aliases contains
+// ModelsByName returns every enabled Model whose Spec.Aliases contains
 // this name. The list is empty for unknown names. Multiple Models may share
 // an alias when the same wire name is intentionally hosted by more than one
 // Provider; consumers disambiguate with a host suffix or the
@@ -95,29 +145,13 @@ func (s *Snapshot) ModelsByName(name string) []*model.Model {
 	return s.modelsByName[name]
 }
 
-// ProviderSlug returns the Provider.Meta.Name for the given Provider id, or
-// false. Hot-path resolution uses this to compare a Model's owning Provider
-// against the suffix/header hint without needing the full Provider row.
-func (s *Snapshot) ProviderSlug(providerID string) (string, bool) {
-	slug, ok := s.providerSlugByID[providerID]
-	return slug, ok
-}
-
-// HostSlug returns the Host.Meta.Name for the given Host id, or false.
-// Hot-path resolution uses this to compare a HostBinding's host against the
-// suffix/header hint and to pick the right Host for an upstream call.
-func (s *Snapshot) HostSlug(hostID string) (string, bool) {
-	slug, ok := s.hostSlugByID[hostID]
-	return slug, ok
-}
-
-// HostKey returns the reachable HostKey with this id, or false.
+// HostKey returns the enabled HostKey with this id, or false.
 func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
 	k, ok := s.hostKeysByID[id]
 	return k, ok
 }
 
-// RateLimit returns the reachable RateLimit with this id, or false.
+// RateLimit returns the enabled RateLimit with this id, or false.
 func (s *Snapshot) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	r, ok := s.rateLimitsByID[id]
 	return r, ok
@@ -136,14 +170,14 @@ func (s *Snapshot) RelayKeyByHash(hash string) (*relaykey.RelayKey, bool) {
 	return k, ok
 }
 
-// ModelsInPolicy returns the reachable Models attached to this Policy in
-// declaration order. nil if the Policy is unknown or empty.
+// ModelsInPolicy returns the Models attached to this Policy in declaration
+// order. nil if the Policy is unknown or empty.
 func (s *Snapshot) ModelsInPolicy(policyID string) []*model.Model {
 	return s.modelsByPolicy[policyID]
 }
 
-// HostKeysInPolicy returns the reachable HostKeys attached to this
-// Policy in declaration order (relevant for KeySelectionPrioritized).
+// HostKeysInPolicy returns the HostKeys attached to this Policy in
+// declaration order (relevant for KeySelectionPrioritized).
 func (s *Snapshot) HostKeysInPolicy(policyID string) []*hostkey.HostKey {
 	return s.hostKeysByPolicy[policyID]
 }

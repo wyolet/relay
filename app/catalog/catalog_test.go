@@ -182,13 +182,16 @@ func TestReload_HappyPath(t *testing.T) {
 	}
 }
 
-func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
+// TestReload_DisabledPolicyDoesNotEvictModels verifies the enabled-only
+// snapshot rule: disabling a Policy removes the Policy itself but its
+// referenced Models / HostKeys / RateLimits stay (they're independently
+// enabled). The reachability filter is gone.
+func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
-	// Disabling the policy strands the relaykey pointing at it; for this
-	// test we also disable the relaykey so cross-entity validation passes
-	// and we can verify the snapshot eviction behaviour in isolation.
+	// Disabling the policy strands the relaykey pointing at it; disable
+	// the relaykey too so cross-entity validation passes.
 	rks[0].Spec.Enabled = &fls
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
@@ -200,11 +203,11 @@ func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); ok {
 		t.Error("disabled policy should be evicted")
 	}
-	if got := s.ModelsByName("openai/gpt-4o"); len(got) != 0 {
-		t.Errorf("model with no enabled referrer should be evicted: got %d", len(got))
+	if got := s.ModelsByName("openai/gpt-4o"); len(got) != 1 {
+		t.Errorf("model should stay (independently enabled): got %d", len(got))
 	}
-	if got := s.ModelsByName("openai/gpt-4o-mini"); len(got) != 0 {
-		t.Errorf("aliased model with no enabled referrer should be evicted: got %d", len(got))
+	if got := s.ModelsByName("openai/gpt-4o-mini"); len(got) != 1 {
+		t.Errorf("aliased model should stay: got %d", len(got))
 	}
 }
 
