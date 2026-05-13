@@ -21,6 +21,7 @@ type Document struct {
 	Policy   *PolicyDTO
 	RateLimit *RateLimitDTO
 	RelayKey *RelayKeyDTO
+	Pricing  *PricingDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -40,6 +41,8 @@ func (d Document) Kind() string {
 		return "RateLimit"
 	case d.RelayKey != nil:
 		return "RelayKey"
+	case d.Pricing != nil:
+		return "Pricing"
 	default:
 		return ""
 	}
@@ -173,6 +176,13 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 			return Document{}, err
 		}
 		return Document{RelayKey: &RelayKeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "Pricing":
+		var spec PricingSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{Pricing: &PricingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
 	default:
 		return Document{}, fmt.Errorf("unknown kind %q", env.Kind)

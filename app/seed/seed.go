@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
@@ -48,6 +49,7 @@ type Result struct {
 	RateLimits int
 	HostKeys   int
 	Models     int
+	Pricings   int
 	Policies   int
 	RelayKeys  int
 }
@@ -74,6 +76,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		hostkey:   hostkey.NewStore(q, opts.MasterKey),
 		model:     model.NewStore(q),
 		policy:    policy.NewStore(opts.Pool),
+		pricing:   pricing.NewStore(opts.Pool),
 		relaykey:  relaykey.NewStore(q),
 	}
 
@@ -89,6 +92,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		rlDocs   []*manifest.RateLimitDTO
 		hkDocs   []*manifest.HostKeyDTO
 		mDocs    []*manifest.ModelDTO
+		prDocs   []*manifest.PricingDTO
 		polDocs  []*manifest.PolicyDTO
 		rkDocs   []*manifest.RelayKeyDTO
 	)
@@ -104,6 +108,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			hkDocs = append(hkDocs, d.HostKey)
 		case d.Model != nil:
 			mDocs = append(mDocs, d.Model)
+		case d.Pricing != nil:
+			prDocs = append(prDocs, d.Pricing)
 		case d.Policy != nil:
 			polDocs = append(polDocs, d.Policy)
 		case d.RelayKey != nil:
@@ -118,6 +124,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	mintIDs(resolver.RateLimits, rlDocs, func(d *manifest.RateLimitDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.HostKeys, hkDocs, func(d *manifest.HostKeyDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Models, mDocs, func(d *manifest.ModelDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.Pricings, prDocs, func(d *manifest.PricingDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Policies, polDocs, func(d *manifest.PolicyDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.RelayKeys, rkDocs, func(d *manifest.RelayKeyDTO) string { return d.Metadata.Name })
 
@@ -178,6 +185,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		res.Models++
 	}
+	for _, d := range prDocs {
+		p, err := manifest.ToPricing(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: pricing %q: %w", d.Metadata.Name, err)
+		}
+		p.Meta.ID = resolver.Pricings[d.Metadata.Name]
+		if err := stores.pricing.Upsert(ctx, p); err != nil {
+			return nil, fmt.Errorf("seed: upsert pricing %q: %w", d.Metadata.Name, err)
+		}
+		res.Pricings++
+	}
 	for _, d := range polDocs {
 		p, err := manifest.ToPolicy(*d, resolver)
 		if err != nil {
@@ -213,6 +231,7 @@ type storeSet struct {
 	hostkey   *hostkey.Store
 	model     *model.Store
 	policy    *policy.Store
+	pricing   *pricing.Store
 	relaykey  *relaykey.Store
 }
 
@@ -224,6 +243,7 @@ type indexBuilder struct {
 	RateLimits map[string]string
 	HostKeys   map[string]string
 	Models     map[string]string
+	Pricings   map[string]string
 	Policies   map[string]string
 	RelayKeys  map[string]string
 }
@@ -234,6 +254,7 @@ func (i *indexBuilder) PolicyID(n string) (string, bool)    { v, ok := i.Policie
 func (i *indexBuilder) ModelID(n string) (string, bool)     { v, ok := i.Models[n]; return v, ok }
 func (i *indexBuilder) HostKeyID(n string) (string, bool)   { v, ok := i.HostKeys[n]; return v, ok }
 func (i *indexBuilder) RateLimitID(n string) (string, bool) { v, ok := i.RateLimits[n]; return v, ok }
+func (i *indexBuilder) PricingID(n string) (string, bool)   { v, ok := i.Pricings[n]; return v, ok }
 
 func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	idx := &indexBuilder{
@@ -242,6 +263,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 		RateLimits: map[string]string{},
 		HostKeys:   map[string]string{},
 		Models:     map[string]string{},
+		Pricings:   map[string]string{},
 		Policies:   map[string]string{},
 		RelayKeys:  map[string]string{},
 	}
@@ -279,6 +301,13 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, m := range models {
 		idx.Models[m.Meta.Name] = m.Meta.ID
+	}
+	prs, err := s.pricing.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list pricings: %w", err)
+	}
+	for _, p := range prs {
+		idx.Pricings[p.Meta.Name] = p.Meta.ID
 	}
 	pols, err := s.policy.List(ctx)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
@@ -45,6 +46,10 @@ func (l rlList) List(context.Context) ([]*ratelimit.RateLimit, error) { return l
 type rkList []*relaykey.RelayKey
 
 func (l rkList) List(context.Context) ([]*relaykey.RelayKey, error) { return l, nil }
+
+type rcList []*pricing.Pricing
+
+func (l rcList) List(context.Context) ([]*pricing.Pricing, error) { return l, nil }
 
 // fixture builds a coherent set: 1 provider (vendor), 1 host (serving
 // endpoint), 2 models served by that host, 2 keys for that host, 1
@@ -147,7 +152,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 
 func TestReload_HappyPath(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	c := New(provs, hosts, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -186,7 +191,7 @@ func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
 	// and we can verify the snapshot eviction behaviour in isolation.
 	rks[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -208,7 +213,7 @@ func TestReload_DisabledModelFailsValidation(t *testing.T) {
 	fls := false
 	models[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "unknown or disabled model") {
 		t.Fatalf("expected unknown-or-disabled-model error, got %v", err)
@@ -220,10 +225,68 @@ func TestReload_RelayKeyToDisabledPolicyFails(t *testing.T) {
 	fls := false
 	pols[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "unknown or disabled policy") {
 		t.Fatalf("expected unknown-or-disabled-policy error, got %v", err)
+	}
+}
+
+func TestReload_PricingResolves(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	hostID := hosts[0].Meta.ID
+	modelID := models[0].Meta.ID
+	pr := &pricing.Pricing{
+		Meta: meta.Metadata{
+			ID:   meta.NewID(),
+			Name: "openai-standard",
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
+		},
+		Spec: pricing.Spec{
+			Currency:       "USD",
+			TargetModelIDs: []string{modelID},
+			Rates: []pricing.Rate{
+				{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 2.50},
+			},
+		},
+	}
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr})
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got, ok := c.Current().PriceByModelHost(modelID, hostID)
+	if !ok {
+		t.Fatal("PriceByModelHost: not found")
+	}
+	if got.Meta.ID != pr.Meta.ID {
+		t.Errorf("got pricing %q, want %q", got.Meta.ID, pr.Meta.ID)
+	}
+}
+
+func TestReload_DuplicatePricingFails(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	hostID := hosts[0].Meta.ID
+	modelID := models[0].Meta.ID
+	mkPricing := func(name string) *pricing.Pricing {
+		return &pricing.Pricing{
+			Meta: meta.Metadata{
+				ID:   meta.NewID(),
+				Name: name,
+				Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
+			},
+			Spec: pricing.Spec{
+				Currency:       "USD",
+				TargetModelIDs: []string{modelID},
+				Rates: []pricing.Rate{
+					{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 3.00},
+				},
+			},
+		}
+	}
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{mkPricing("p1"), mkPricing("p2")})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "duplicate pricing") {
+		t.Fatalf("expected duplicate pricing error, got %v", err)
 	}
 }
 
@@ -237,7 +300,7 @@ func TestReload_AliasCollisionAllowed(t *testing.T) {
 	models[0].Spec.Aliases = append(models[0].Spec.Aliases, "shared")
 	models[1].Spec.Aliases = append(models[1].Spec.Aliases, "shared")
 
-	c := New(provs, hosts, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

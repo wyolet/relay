@@ -1,9 +1,10 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -29,23 +30,26 @@ func build(
 	models []*model.Model,
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
+	pricings []*pricing.Pricing,
 	providerSlugByID map[string]string,
 	hostSlugByID map[string]string,
 ) *Snapshot {
 	s := &Snapshot{
-		policiesByID:      make(map[string]*policy.Policy, len(pols)),
-		policiesByName:    make(map[string]*policy.Policy, len(pols)),
-		modelsByID:        map[string]*model.Model{},
-		modelsByName:      map[string][]*model.Model{},
-		hostKeysByID:      map[string]*hostkey.HostKey{},
-		rateLimitsByID:    map[string]*ratelimit.RateLimit{},
-		relayKeysByID:     make(map[string]*relaykey.RelayKey, len(rks)),
-		relayKeysByHash:   make(map[string]*relaykey.RelayKey, len(rks)),
-		providerSlugByID:  providerSlugByID,
-		hostSlugByID:      hostSlugByID,
-		modelsByPolicy:    map[string][]*model.Model{},
-		hostKeysByPolicy:  map[string][]*hostkey.HostKey{},
-		rateLimitByPolicy: map[string]*ratelimit.RateLimit{},
+		policiesByID:       make(map[string]*policy.Policy, len(pols)),
+		policiesByName:     make(map[string]*policy.Policy, len(pols)),
+		modelsByID:         map[string]*model.Model{},
+		modelsByName:       map[string][]*model.Model{},
+		hostKeysByID:       map[string]*hostkey.HostKey{},
+		rateLimitsByID:     map[string]*ratelimit.RateLimit{},
+		relayKeysByID:      make(map[string]*relaykey.RelayKey, len(rks)),
+		relayKeysByHash:    make(map[string]*relaykey.RelayKey, len(rks)),
+		providerSlugByID:   providerSlugByID,
+		hostSlugByID:       hostSlugByID,
+		modelsByPolicy:     map[string][]*model.Model{},
+		hostKeysByPolicy:   map[string][]*hostkey.HostKey{},
+		rateLimitByPolicy:  map[string]*ratelimit.RateLimit{},
+		pricingsByID:       make(map[string]*pricing.Pricing, len(pricings)),
+		pricingByModelHost: map[string]*pricing.Pricing{},
 	}
 
 	// Policies always enter wholesale (input is already enabled-filtered).
@@ -123,6 +127,20 @@ func build(
 			if r, ok := s.rateLimitsByID[p.Spec.RateLimitID]; ok {
 				s.rateLimitByPolicy[p.Meta.ID] = r
 			}
+		}
+	}
+
+	// Index pricings by id and by (targetModelID, hostID). Drop entries whose
+	// target model didn't survive reachability — defensive guard only;
+	// validateCross already rejected unknown models.
+	for _, p := range pricings {
+		s.pricingsByID[p.Meta.ID] = p
+		hostID := p.Meta.Owner.ID
+		for _, modelID := range p.Spec.TargetModelIDs {
+			if _, ok := s.modelsByID[modelID]; !ok {
+				continue
+			}
+			s.pricingByModelHost[modelID+"|"+hostID] = p
 		}
 	}
 

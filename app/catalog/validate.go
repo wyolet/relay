@@ -3,9 +3,10 @@ package catalog
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -39,6 +40,7 @@ func validateCross(
 	enabledModels []*model.Model,
 	enabledKeys []*hostkey.HostKey,
 	enabledRLs []*ratelimit.RateLimit,
+	enabledPricings []*pricing.Pricing,
 ) error {
 	modelByID := indexBy(enabledModels, func(m *model.Model) string { return m.Meta.ID })
 	keyByID := indexBy(enabledKeys, func(k *hostkey.HostKey) string { return k.Meta.ID })
@@ -105,6 +107,25 @@ func validateCross(
 		if _, ok := modelByID[m.Spec.Deprecation.Replacement]; !ok {
 			return fmt.Errorf("model %q: deprecation.replacement references unknown or disabled model %q",
 				m.Meta.Name, m.Spec.Deprecation.Replacement)
+		}
+	}
+
+	// Pricing cross-entity rules.
+	seenModelHost := map[string]string{} // key → pricing name that claimed it first
+	for _, p := range enabledPricings {
+		if _, ok := hostIDs[p.Meta.Owner.ID]; !ok {
+			return fmt.Errorf("pricing %q: owner.id %q does not match any enabled Host", p.Meta.Name, p.Meta.Owner.ID)
+		}
+		for _, modelID := range p.Spec.TargetModelIDs {
+			if _, ok := modelByID[modelID]; !ok {
+				return fmt.Errorf("pricing %q: targetModel %q references unknown or disabled model", p.Meta.Name, modelID)
+			}
+			key := modelID + "|" + p.Meta.Owner.ID
+			if first, dup := seenModelHost[key]; dup {
+				return fmt.Errorf("duplicate pricing: pricing %q and %q both cover model %q for the same host",
+					first, p.Meta.Name, modelID)
+			}
+			seenModelHost[key] = p.Meta.Name
 		}
 	}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
@@ -381,6 +382,89 @@ func FromRateLimit(rl *ratelimit.RateLimit, _ ReverseResolver) RateLimitDTO {
 		Spec: RateLimitSpec{
 			Rules:   rules,
 			Enabled: rl.Spec.Enabled,
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pricing
+// ---------------------------------------------------------------------------
+
+// ToPricing resolves the owner host name → id and target model names → ids.
+func ToPricing(d PricingDTO, idx Resolver) (*pricing.Pricing, error) {
+	m := d.Metadata.toMeta()
+	if m.Owner.Kind == meta.OwnerHost && m.Owner.ID != "" {
+		if hid, ok := idx.HostID(m.Owner.ID); ok {
+			m.Owner.ID = hid
+		}
+	}
+
+	modelIDs := make([]string, 0, len(d.Spec.TargetModels))
+	for _, name := range d.Spec.TargetModels {
+		id, ok := idx.ModelID(name)
+		if !ok {
+			return nil, fmt.Errorf("pricing %q: targetModels: model %q not found", d.Metadata.Name, name)
+		}
+		modelIDs = append(modelIDs, id)
+	}
+
+	rates := make([]pricing.Rate, 0, len(d.Spec.Rates))
+	for _, r := range d.Spec.Rates {
+		rates = append(rates, pricing.Rate{
+			Meter:       pricing.Meter(r.Meter),
+			Unit:        pricing.Unit(r.Unit),
+			Amount:      r.Amount,
+			AboveTokens: r.AboveTokens,
+		})
+	}
+
+	return &pricing.Pricing{
+		Meta: m,
+		Spec: pricing.Spec{
+			Currency:       d.Spec.Currency,
+			TargetModelIDs: modelIDs,
+			Rates:          rates,
+			Enabled:        d.Spec.Enabled,
+		},
+	}, nil
+}
+
+func FromPricing(p *pricing.Pricing, rev ReverseResolver) PricingDTO {
+	wm := metaToWire(p.Meta)
+	if p.Meta.Owner.Kind == meta.OwnerHost && p.Meta.Owner.ID != "" {
+		if hname, ok := rev.HostName(p.Meta.Owner.ID); ok {
+			wm.Owner.ID = hname
+		}
+	}
+
+	models := make([]string, 0, len(p.Spec.TargetModelIDs))
+	for _, id := range p.Spec.TargetModelIDs {
+		name, _ := rev.ModelName(id)
+		if name == "" {
+			name = id
+		}
+		models = append(models, name)
+	}
+
+	rates := make([]PricingRateDTO, 0, len(p.Spec.Rates))
+	for _, r := range p.Spec.Rates {
+		rates = append(rates, PricingRateDTO{
+			Meter:       string(r.Meter),
+			Unit:        string(r.Unit),
+			Amount:      r.Amount,
+			AboveTokens: r.AboveTokens,
+		})
+	}
+
+	return PricingDTO{
+		APIVersion: APIVersion,
+		Kind:       "Pricing",
+		Metadata:   wm,
+		Spec: PricingSpec{
+			Currency:     p.Spec.Currency,
+			TargetModels: models,
+			Rates:        rates,
+			Enabled:      p.Spec.Enabled,
 		},
 	}
 }

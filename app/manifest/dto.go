@@ -197,3 +197,27 @@ type RelayKeySpec struct {
 	Enabled            *bool      `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
 	PassthroughAllowed bool       `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
 }
+
+// PricingDTO is the wire form of a Pricing. Owner.ID is a host *name* here.
+// TargetModels holds model *names* (wire form).
+type PricingDTO struct {
+	APIVersion string      `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string      `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta    `json:"metadata"   yaml:"metadata"`
+	Spec       PricingSpec `json:"spec"       yaml:"spec"`
+}
+
+type PricingSpec struct {
+	Currency     string           `json:"currency"          yaml:"currency"`
+	TargetModels []string         `json:"targetModels"      yaml:"targetModels"`
+	Rates        []PricingRateDTO `json:"rates"             yaml:"rates"`
+	Enabled      *bool            `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// PricingRateDTO mirrors pricing.Rate using plain types.
+type PricingRateDTO struct {
+	Meter       string  `json:"meter"                 yaml:"meter"`
+	Unit        string  `json:"unit"                  yaml:"unit"`
+	Amount      float64 `json:"amount"                yaml:"amount"`
+	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty"`
+}

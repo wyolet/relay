@@ -222,3 +222,53 @@ func TestToRateLimit_HappyPath(t *testing.T) {
 		t.Errorf("amount: want 100, got %d", rl.Spec.Rules[0].Amount)
 	}
 }
+
+const pricingYAML = `
+apiVersion: relay.wyolet.dev/v1
+kind: Pricing
+metadata:
+  name: anthropic-direct-pricing
+  owner:
+    kind: host
+    id: anthropic-direct
+spec:
+  currency: USD
+  targetModels:
+    - claude-3-5-sonnet
+  rates:
+    - meter: tokens.input
+      unit: per_million
+      amount: 3.00
+    - meter: tokens.output
+      unit: per_million
+      amount: 15.00
+`
+
+func TestToPricing_HappyPath(t *testing.T) {
+	docs, err := manifest.Parse(strings.NewReader(pricingYAML))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(docs) != 1 || docs[0].Pricing == nil {
+		t.Fatalf("want 1 Pricing doc")
+	}
+	p, err := manifest.ToPricing(*docs[0].Pricing, testResolver)
+	if err != nil {
+		t.Fatalf("ToPricing: %v", err)
+	}
+	if p.Meta.Owner.ID != "host-bbb" {
+		t.Errorf("owner.id: want host-bbb, got %q", p.Meta.Owner.ID)
+	}
+	if p.Spec.Currency != "USD" {
+		t.Errorf("currency: want USD, got %q", p.Spec.Currency)
+	}
+	if len(p.Spec.TargetModelIDs) != 1 || p.Spec.TargetModelIDs[0] != "model-fff" {
+		t.Errorf("targetModelIDs: want [model-fff], got %v", p.Spec.TargetModelIDs)
+	}
+	if p.Spec.Rates[0].Meter != "tokens.input" {
+		t.Errorf("rates[0].meter: want tokens.input, got %q", p.Spec.Rates[0].Meter)
+	}
+	if p.Spec.Rates[0].Amount != 3.00 {
+		t.Errorf("rates[0].amount: want 3.00, got %f", p.Spec.Rates[0].Amount)
+	}
+}

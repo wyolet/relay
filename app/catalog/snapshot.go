@@ -19,9 +19,10 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -56,9 +57,13 @@ type Snapshot struct {
 
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
-	modelsByPolicy       map[string][]*model.Model
-	hostKeysByPolicy map[string][]*hostkey.HostKey
-	rateLimitByPolicy    map[string]*ratelimit.RateLimit
+	modelsByPolicy    map[string][]*model.Model
+	hostKeysByPolicy  map[string][]*hostkey.HostKey
+	rateLimitByPolicy map[string]*ratelimit.RateLimit
+
+	pricingsByID      map[string]*pricing.Pricing
+	// pricingByModelHost keys on modelID+"|"+hostID for O(1) hot-path lookup.
+	pricingByModelHost map[string]*pricing.Pricing
 }
 
 // ── Read accessors ─────────────────────────────────────────────────────────
@@ -147,4 +152,16 @@ func (s *Snapshot) HostKeysInPolicy(policyID string) []*hostkey.HostKey {
 // nil when none is configured.
 func (s *Snapshot) RateLimitOfPolicy(policyID string) *ratelimit.RateLimit {
 	return s.rateLimitByPolicy[policyID]
+}
+
+// Pricing returns the enabled Pricing with this id, or false.
+func (s *Snapshot) Pricing(id string) (*pricing.Pricing, bool) {
+	p, ok := s.pricingsByID[id]
+	return p, ok
+}
+
+// PriceByModelHost returns the Pricing that covers (modelID, hostID), or false.
+func (s *Snapshot) PriceByModelHost(modelID, hostID string) (*pricing.Pricing, bool) {
+	p, ok := s.pricingByModelHost[modelID+"|"+hostID]
+	return p, ok
 }

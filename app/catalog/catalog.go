@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
@@ -25,6 +26,7 @@ type Catalog struct {
 	keys       HostKeyLister
 	rateLimits RateLimitLister
 	relayKeys  RelayKeyLister
+	pricings   PricingLister
 
 	snap atomic.Pointer[Snapshot]
 }
@@ -54,6 +56,9 @@ type RateLimitLister interface {
 type RelayKeyLister interface {
 	List(ctx context.Context) ([]*relaykey.RelayKey, error)
 }
+type PricingLister interface {
+	List(ctx context.Context) ([]*pricing.Pricing, error)
+}
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
@@ -65,6 +70,7 @@ func New(
 	keys HostKeyLister,
 	rateLimits RateLimitLister,
 	relayKeys RelayKeyLister,
+	pricings PricingLister,
 ) *Catalog {
 	c := &Catalog{
 		providers:  providers,
@@ -74,6 +80,7 @@ func New(
 		keys:       keys,
 		rateLimits: rateLimits,
 		relayKeys:  relayKeys,
+		pricings:   pricings,
 	}
 	c.snap.Store(&Snapshot{})
 	return c
@@ -115,6 +122,10 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: relaykeys: %w", err)
 	}
+	pricingsAll, err := c.pricings.List(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog reload: pricings: %w", err)
+	}
 
 	// Providers and Hosts don't enter the Snapshot directly, but we need
 	// their ids for ownership validation and their slugs for the model
@@ -139,12 +150,13 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	enabledModels := filter(models, (*model.Model).IsEnabled)
 	enabledKeys := filter(keys, (*hostkey.HostKey).IsEnabled)
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
+	enabledPricings := filter(pricingsAll, (*pricing.Pricing).IsEnabled)
 
-	if err := validateCross(providerIDs, hostIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs); err != nil {
+	if err := validateCross(providerIDs, hostIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings); err != nil {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, providerSlugByID, hostSlugByID)
+	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, providerSlugByID, hostSlugByID)
 	c.snap.Store(snap)
 	return nil
 }
