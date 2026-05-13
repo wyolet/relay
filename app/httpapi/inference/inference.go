@@ -1,9 +1,8 @@
 // Package inference is the data-plane HTTP API: /v1/* and /healthz.
 //
-// Mount(r, deps) wires huma+chi onto an existing chi router and returns the
-// huma.API for callers that want to register additional operations (tests,
-// experimental endpoints). The package owns its huma.Config; main.go just
-// constructs Deps and calls Mount.
+// Mount(r, deps) wires huma+chi onto an existing chi router and returns
+// the huma.API. The package owns its huma.Config; main.go constructs
+// Deps and calls Mount.
 package inference
 
 import (
@@ -13,19 +12,37 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/adapter"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/routing"
 )
 
-// Deps is the typed dependency bundle for the data plane. Grows as endpoints
-// are ported in subsequent stages (pipeline runner, catalog, key-pool, etc.).
-// Keep it minimal; if a field is only used by one handler, plumb it through
-// that handler's signature instead of widening Deps.
+// Deps is the typed dependency bundle for the data plane.
 type Deps struct {
+	// Pinger reports backend health for /healthz. Storage satisfies
+	// this; tests can pass a stub.
 	Pinger Pinger
+
+	// Catalog is the in-memory snapshot used for relay-key auth lookup
+	// and the /v1/models listing.
+	Catalog *appcatalog.Catalog
+
+	// Resolver translates inbound model+policy refs into a pipeline-
+	// ready Plan against the snapshot.
+	Resolver *routing.Resolver
+
+	// Pipeline orchestrates one inference request end-to-end.
+	Pipeline *pipeline.Pipeline
+
+	// Adapters keys the wire-protocol implementation by adapter.Kind.
+	// Handlers look up the binding's Adapter Kind here at request time.
+	Adapters map[adapter.Kind]pipeline.Adapter
 }
 
-// Pinger reports backend health for /healthz. Storage satisfies this via its
-// own Ping method; tests pass a stub.
+// Pinger reports backend health for /healthz. Storage satisfies this
+// via its own Ping method; tests can supply a stub.
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
@@ -43,6 +60,14 @@ func Mount(r chi.Router, d Deps) huma.API {
 
 	api := humachi.New(r, cfg)
 
+	// /healthz is public.
 	registerHealth(api, d)
+
+	// All /v1/* operations require a valid relay key.
+	authMW := huma.Middlewares{httpapi.HumaAuth(RelayKeyAuthMiddleware(d.Catalog))}
+	registerChat(api, d, authMW)
+	registerMessages(api, d, authMW)
+	registerModels(api, d, authMW)
+
 	return api
 }
