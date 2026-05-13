@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/llama2:7b
+          adapter: openai
     family: ollama/llama2:7b
     capabilities:
         chat: true

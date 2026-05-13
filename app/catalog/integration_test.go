@@ -17,6 +17,7 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/adapter"
 	"context"
 	"os"
 	"strings"
@@ -155,7 +156,7 @@ func TestIntegration_DeleteCascadesToPricing(t *testing.T) {
 	mdl := &model.Model{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-test", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{HostID: hst.Meta.ID, UpstreamName: "gpt-test"}},
+			Hosts: []model.HostBinding{{HostID: hst.Meta.ID, UpstreamName: "gpt-test", Adapter: adapter.OpenAI}},
 		},
 	}
 	pr := &pricing.Pricing{

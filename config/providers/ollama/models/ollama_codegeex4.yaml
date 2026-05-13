@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/codegeex4
+          adapter: openai
     family: ollama/codegeex4
     capabilities:
         chat: true

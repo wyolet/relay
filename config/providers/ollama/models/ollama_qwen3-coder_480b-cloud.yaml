@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/qwen3-coder:480b-cloud
+          adapter: openai
     family: ollama/qwen3
     capabilities:
         chat: true

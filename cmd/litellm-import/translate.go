@@ -14,11 +14,13 @@ import (
 )
 
 // providerMeta holds static display + endpoint metadata per known litellm_provider.
+// adapter is the wire protocol the relay must speak to this provider's host(s).
 type providerMeta struct {
 	name          string
 	displayName   string
 	description   string
 	baseURL       string
+	adapter       string // adapter.Kind value: "openai" or "anthropic"
 	homepageURL   string
 	docsURL       string
 	consoleURL    string
@@ -32,6 +34,7 @@ var knownProviders = map[string]providerMeta{
 		displayName:   "Anthropic",
 		description:   "Claude models from Anthropic.",
 		baseURL:       "https://api.anthropic.com",
+		adapter:       "anthropic",
 		homepageURL:   "https://www.anthropic.com",
 		docsURL:       "https://docs.anthropic.com",
 		consoleURL:    "https://console.anthropic.com",
@@ -43,6 +46,7 @@ var knownProviders = map[string]providerMeta{
 		displayName:   "OpenAI",
 		description:   "GPT models from OpenAI.",
 		baseURL:       "https://api.openai.com",
+		adapter:       "openai",
 		homepageURL:   "https://openai.com",
 		docsURL:       "https://platform.openai.com/docs",
 		consoleURL:    "https://platform.openai.com",
@@ -54,6 +58,7 @@ var knownProviders = map[string]providerMeta{
 		displayName: "Ollama",
 		description: "Run large language models locally with Ollama.",
 		baseURL:     "http://host.docker.internal:11434",
+		adapter:     "openai", // Ollama exposes OpenAI-compatible endpoint
 		homepageURL: "https://ollama.com",
 		logoURL:     "https://wyolet.dev/logos/ollama.svg",
 	},
@@ -492,6 +497,7 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 			Hosts: []manifest.HostBindingDTO{{
 				Host:         pm.name,
 				UpstreamName: g.Canonical,
+				Adapter:      pm.adapter,
 			}},
 			Family:              family,
 			Capabilities:        caps,

@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: ft:gpt-4o-2024-11-20
+          adapter: openai
     family: ft:gpt
     capabilities:
         chat: true

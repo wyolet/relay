@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: anthropic
           upstreamName: claude-sonnet-4-5-20250929
+          adapter: anthropic
     family: claude
     capabilities:
         chat: true

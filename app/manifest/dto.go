@@ -116,6 +116,7 @@ type ModelSpec struct {
 type HostBindingDTO struct {
 	Host         string `json:"host"                   yaml:"host"`
 	UpstreamName string `json:"upstreamName"           yaml:"upstreamName"`
+	Adapter      string `json:"adapter"                yaml:"adapter"`
 	Enabled      *bool  `json:"enabled,omitempty"      yaml:"enabled,omitempty"`
 }
 

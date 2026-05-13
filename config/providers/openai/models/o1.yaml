@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: o1
+          adapter: openai
     family: o1
     capabilities:
         chat: true

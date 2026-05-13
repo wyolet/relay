@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: anthropic
           upstreamName: claude-opus-4-7-20260416
+          adapter: anthropic
     family: claude
     capabilities:
         chat: true

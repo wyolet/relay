@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: ft:o4-mini-2025-04-16
+          adapter: openai
     family: ft:o4
     capabilities:
         chat: true

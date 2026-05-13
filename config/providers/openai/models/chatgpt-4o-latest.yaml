@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: chatgpt-4o-latest
+          adapter: openai
     family: chatgpt
     capabilities:
         chat: true

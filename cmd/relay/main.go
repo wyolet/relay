@@ -19,15 +19,22 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/adapter"
+	apianthropic "github.com/wyolet/relay/app/api/anthropic"
+	apiopenai "github.com/wyolet/relay/app/api/openai"
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/kv"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 func main() {
@@ -116,9 +123,30 @@ func main() {
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.New(kvStore, cookieSecure, "sess:")
 
+	// Pipeline orchestrator: shared limiter + selector backed by kv.
+	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
+	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	pl := &pipeline.Pipeline{
+		Limiter:  limiter,
+		Selector: selector,
+		Logger:   slog.Default(),
+	}
+
+	// Adapter registry — one entry per supported wire protocol.
+	adapters := map[adapter.Kind]pipeline.Adapter{
+		adapter.OpenAI:    apiopenai.New(),
+		adapter.Anthropic: apianthropic.New(),
+	}
+
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
-	inference.Mount(inferRouter, inference.Deps{Pinger: st})
+	inference.Mount(inferRouter, inference.Deps{
+		Pinger:   st,
+		Catalog:  cat,
+		Resolver: routing.New(cat),
+		Pipeline: pl,
+		Adapters: adapters,
+	})
 
 	inferAddr := ":8080"
 	if p := os.Getenv("RELAY_PORT"); p != "" {

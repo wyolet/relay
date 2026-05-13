@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: gpt-4o-mini-realtime-preview
+          adapter: openai
     family: gpt
     capabilities:
         chat: true
