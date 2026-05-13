@@ -67,6 +67,12 @@ func (s *Storage) Ping(ctx context.Context) error {
 // rawPool returns the underlying policy for same-package use only.
 func (s *Storage) rawPool() *pgxpool.Pool { return s.policy }
 
+// Pool returns the underlying pgxpool for callers that need direct access
+// (e.g. app/catalog.Bootstrap, which constructs sqlc queries against the
+// same pool). Composition-root use only — domain packages must not call
+// this; they go through storage's typed methods.
+func (s *Storage) Pool() *pgxpool.Pool { return s.policy }
+
 // WrapPool wraps an existing *pgxpool.Pool into a *Storage without opening a new
 // policy or running migrations. Intended for tests and the seed CLI that open their
 // own policy via pgxpool directly. The returned Storage must NOT be closed (the

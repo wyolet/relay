@@ -79,6 +79,13 @@ func Parse(r io.Reader) ([]Document, error) {
 		if env.APIVersion != APIVersion {
 			return nil, fmt.Errorf("wire: doc %d: unsupported apiVersion %q (want %q)", docIdx, env.APIVersion, APIVersion)
 		}
+		// Skip kinds owned by sibling subsystems that share the config tree.
+		// Identity (User, Group, Role) lives in config/users/ alongside catalog
+		// YAML; the catalog seeder must walk past it without erroring.
+		if isForeignKind(env.Kind) {
+			docIdx++
+			continue
+		}
 		if env.Metadata.Name == "" {
 			return nil, fmt.Errorf("wire: doc %d kind=%s: metadata.name required", docIdx, env.Kind)
 		}
@@ -187,4 +194,15 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 	default:
 		return Document{}, fmt.Errorf("unknown kind %q", env.Kind)
 	}
+}
+
+// isForeignKind reports kinds owned by sibling subsystems that the catalog
+// manifest loader should pass through silently. Keep this list narrow —
+// silent skips can mask typos in catalog YAML.
+func isForeignKind(kind string) bool {
+	switch kind {
+	case "User", "Group", "Role":
+		return true
+	}
+	return false
 }
