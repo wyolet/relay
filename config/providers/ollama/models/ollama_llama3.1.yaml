@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: ollama/llama3.1
+    labels:
+        family: ollama/llama3.1
+        source: litellm
+        source_version: "2026-05-13"
+spec:
+    provider: ollama
+    upstreamName: ollama/llama3.1
+    family: ollama/llama3.1
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+    modalities:
+        input:
+            - text
+        output:
+            - text
+    contextWindowInput: 8192
+    contextWindowOutput: 8192
+    contextWindowTotal: 8192

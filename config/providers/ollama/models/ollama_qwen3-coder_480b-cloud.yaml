@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: ollama/qwen3-coder:480b-cloud
+    labels:
+        family: ollama/qwen3
+        source: litellm
+        source_version: "2026-05-13"
+spec:
+    provider: ollama
+    upstreamName: ollama/qwen3-coder:480b-cloud
+    family: ollama/qwen3
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+    modalities:
+        input:
+            - text
+        output:
+            - text
+    contextWindowInput: 262144
+    contextWindowOutput: 262144
+    contextWindowTotal: 262144

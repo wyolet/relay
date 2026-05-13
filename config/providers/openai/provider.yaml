@@ -2,11 +2,10 @@ apiVersion: relay.wyolet.dev/v1
 kind: Provider
 metadata:
     name: openai
+    displayName: OpenAI
 spec:
     kind: openai
     baseURL: https://api.openai.com
-    defaultPolicy: openai-default
-    displayName: OpenAI
     description: GPT models from OpenAI.
     homepageURL: https://openai.com
     docsURL: https://platform.openai.com/docs

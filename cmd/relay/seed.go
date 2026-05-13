@@ -61,10 +61,12 @@ func runSeedTo(out io.Writer, args []string) error {
 		return fmt.Errorf("RELAY_PG_DSN not set and --dsn not provided")
 	}
 
-	// Validate first — never open a transaction on bad input.
-	src, err := catalog.LoadYAML(fromDir)
+	// Seed reads YAML in name-form and builds its own name→id index against
+	// the current PG state. The full-resolver LoadYAML would stamp random
+	// ids the seed would have to remap anyway.
+	src, err := catalog.LoadYAMLForSeed(fromDir)
 	if err != nil {
-		return fmt.Errorf("validate: %w", err)
+		return fmt.Errorf("load: %w", err)
 	}
 
 	// Identity is parsed and resolved alongside the catalog. Postgres tables
@@ -143,7 +145,7 @@ func maybeAutoSeed(ctx context.Context, dsn, configDir string) error {
 		return nil
 	}
 
-	src, err := catalog.LoadYAML(configDir)
+	src, err := catalog.LoadYAMLForSeed(configDir)
 	if err != nil {
 		return fmt.Errorf("load yaml %s: %w", configDir, err)
 	}

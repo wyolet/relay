@@ -1,0 +1,24 @@
+apiVersion: relay.wyolet.dev/v1
+kind: Model
+metadata:
+    name: ollama/deepseek-coder-v2-lite-instruct
+    labels:
+        family: ollama/deepseek
+        source: litellm
+        source_version: "2026-05-13"
+spec:
+    provider: ollama
+    upstreamName: ollama/deepseek-coder-v2-lite-instruct
+    family: ollama/deepseek
+    capabilities:
+        chat: true
+        streaming: true
+        tools: true
+    modalities:
+        input:
+            - text
+        output:
+            - text
+    contextWindowInput: 32768
+    contextWindowOutput: 8192
+    contextWindowTotal: 32768

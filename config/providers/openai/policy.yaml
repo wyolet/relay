@@ -1,9 +1,0 @@
-apiVersion: relay.wyolet.dev/v1
-kind: Policy
-metadata:
-  name: openai-default
-spec:
-  provider: openai
-  secrets:
-    - openai-key-1
-  skipDefaultLimits: true
