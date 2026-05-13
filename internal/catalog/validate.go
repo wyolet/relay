@@ -494,7 +494,7 @@ func validateRateLimits(s *snapshot) error {
 func validateAttachments(s *snapshot) error {
 	checkAttachments := func(kind Kind, name string, attachments []RateLimitAttachment) error {
 		for _, a := range attachments {
-			if _, ok := s.rateLimits[a.Ref]; !ok {
+			if _, ok := s.rateLimitByID(a.Ref); !ok {
 				return fmt.Errorf("%s %q: rateLimits ref %q does not exist", kind, name, a.Ref)
 			}
 		}
@@ -575,7 +575,7 @@ func validatePoolDefaultLimits(s *snapshot) error {
 		// Check effective rules via snapshot expansion.
 		checkRules := func(attachments []RateLimitAttachment) {
 			for _, a := range attachments {
-				rl, ok := s.rateLimits[a.Ref]
+				rl, ok := s.rateLimitByID(a.Ref)
 				if !ok {
 					continue
 				}

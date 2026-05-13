@@ -80,7 +80,7 @@ func normalizePolicyRefs(store *catalog.PGStore, v *catalog.Policy) error {
 		}
 		v.Spec.Secrets[i] = id
 	}
-	return nil
+	return normalizeAttachments(store, v.Spec.RateLimits)
 }
 
 // normalizeModelRefs handles ModelSpec cross-refs: Provider and the optional
@@ -98,7 +98,7 @@ func normalizeModelRefs(store *catalog.PGStore, v *catalog.Model) error {
 		}
 		v.Spec.Deprecation.Replacement = id
 	}
-	return nil
+	return normalizeAttachments(store, v.Spec.RateLimits)
 }
 
 // normalizeRouteRefs rewrites Route.Spec.Models[] from names to ids.
@@ -109,6 +109,18 @@ func normalizeRouteRefs(store *catalog.PGStore, v *catalog.Route) error {
 			return err
 		}
 		v.Spec.Models[i] = id
+	}
+	return nil
+}
+
+// normalizeAttachments rewrites RateLimitAttachment.Ref entries in-place.
+func normalizeAttachments(store *catalog.PGStore, attachments []catalog.RateLimitAttachment) error {
+	for i, a := range attachments {
+		id, err := catalog.ResolveRateLimitRef(store, a.Ref)
+		if err != nil {
+			return err
+		}
+		attachments[i].Ref = id
 	}
 	return nil
 }

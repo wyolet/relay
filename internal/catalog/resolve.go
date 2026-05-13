@@ -21,9 +21,7 @@ import (
 //   - RouteSpec.Models[] → Model id
 //   - Deprecation.Replacement → Model id
 //   - PolicySpec.Secrets[] → Secret id
-//
-// Remaining cross-refs (RateLimit attachments) will land in a subsequent
-// PR following this same pattern.
+//   - RateLimitAttachment.Ref on Policy/Secret/Model → RateLimit id
 //
 // Hard-errors on a string that is neither a known slug nor a valid UUID — that
 // indicates the catalog is corrupt and silently dropping the ref would mask
@@ -217,6 +215,52 @@ func resolveRefs(snap *snapshot) (mutated mutatedKinds, err error) {
 		}
 	}
 
+	// RateLimit attachments on Policy/Secret/Model.
+	rlIDBySlug := make(map[string]string, len(snap.rateLimits))
+	for slug, rl := range snap.rateLimits {
+		if rl.Metadata.ID == "" {
+			continue
+		}
+		rlIDBySlug[slug] = rl.Metadata.ID
+	}
+	resolveAttachments := func(ownerKind, ownerName string, attachments []RateLimitAttachment) (bool, error) {
+		changed := false
+		for i := range attachments {
+			ref := attachments[i].Ref
+			if ref == "" || ids.Valid(ref) {
+				continue
+			}
+			id, ok := rlIDBySlug[ref]
+			if !ok {
+				return changed, fmt.Errorf("%s %q: rateLimits ref %q does not exist", ownerKind, ownerName, ref)
+			}
+			attachments[i].Ref = id
+			changed = true
+		}
+		return changed, nil
+	}
+	for name, sec := range snap.secrets {
+		if changed, err := resolveAttachments("Secret", name, sec.Spec.RateLimits); err != nil {
+			return mutated, err
+		} else if changed {
+			mutated.secrets = true
+		}
+	}
+	for name, pol := range snap.policies {
+		if changed, err := resolveAttachments("Policy", name, pol.Spec.RateLimits); err != nil {
+			return mutated, err
+		} else if changed {
+			mutated.policies = true
+		}
+	}
+	for name, m := range snap.models {
+		if changed, err := resolveAttachments("Model", name, m.Spec.RateLimits); err != nil {
+			return mutated, err
+		} else if changed {
+			mutated.models = true
+		}
+	}
+
 	return mutated, nil
 }
 
@@ -272,6 +316,29 @@ func ResolvePolicyRef(store PolicyRefStore, ref string) (string, error) {
 		return p.Metadata.ID, nil
 	}
 	return "", fmt.Errorf("unknown policy %q", ref)
+}
+
+// RateLimitRefStore is the narrow view needed by ResolveRateLimitRef.
+type RateLimitRefStore interface {
+	RateLimitByName(name string) (*RateLimit, bool)
+	RateLimitByID(id string) (*RateLimit, bool)
+}
+
+// ResolveRateLimitRef normalizes a rate-limit reference to its id.
+func ResolveRateLimitRef(store RateLimitRefStore, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if ids.Valid(ref) {
+		if _, ok := store.RateLimitByID(ref); ok {
+			return ref, nil
+		}
+		return "", fmt.Errorf("unknown ratelimit id %q", ref)
+	}
+	if rl, ok := store.RateLimitByName(ref); ok {
+		return rl.Metadata.ID, nil
+	}
+	return "", fmt.Errorf("unknown ratelimit %q", ref)
 }
 
 // SecretRefStore is the narrow view needed by ResolveSecretRef.

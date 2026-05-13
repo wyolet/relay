@@ -3,6 +3,8 @@ package catalog
 import (
 	"log/slog"
 	"sort"
+
+	"github.com/wyolet/relay/pkg/ids"
 )
 
 // snapshot is the in-memory view of the catalog, shared by YAMLStore and PGStore.
@@ -440,6 +442,7 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 			APIVersion: APIVersion,
 			Kind:       KindRateLimit,
 			Metadata: Metadata{
+				ID:          ids.New(),
 				Name:        rlName,
 				Description: "Auto-injected upstream tier mirror for secret " + secretName,
 				Owner:       Owner{Kind: OwnerSystem},
@@ -454,6 +457,7 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 		// Do not overwrite if an operator has manually defined a same-named RL.
 		if _, exists := s.rateLimits[rlName]; !exists {
 			s.rateLimits[rlName] = rl
+			s.rateLimitsByID[rl.Metadata.ID] = rlName
 		}
 	}
 }
@@ -463,7 +467,7 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 
 	expand := func(parentKind Kind, parentName string, attachments []RateLimitAttachment) {
 		for _, a := range attachments {
-			rl, ok := s.rateLimits[a.Ref]
+			rl, ok := s.rateLimitByID(a.Ref)
 			if !ok || !IsEnabled(rl.Spec.Enabled) {
 				continue
 			}
@@ -492,7 +496,7 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 		expand(KindSecret, secret.Metadata.Name, secret.Spec.RateLimits)
 		// Auto-injected upstream-tier RL for this secret (if any).
 		if tierRL, ok := s.secretTierRLs[secret.Metadata.Name]; ok {
-			expand(KindSecret, secret.Metadata.Name, []RateLimitAttachment{{Ref: tierRL.Metadata.Name}})
+			expand(KindSecret, secret.Metadata.Name, []RateLimitAttachment{{Ref: tierRL.Metadata.ID}})
 		}
 	}
 	if policy != nil {

@@ -508,13 +508,16 @@ var AllStrategies = []RateLimitStrategy{
 	StrategySessionWindow,
 }
 
-// RateLimitAttachment is a reference by name from a Policy/Secret/Model to a RateLimit.
-// It accepts two YAML/JSON shapes for backward compatibility:
+// RateLimitAttachment is a reference from a Policy/Secret/Model to a RateLimit.
+// YAML/JSON input may use the RateLimit's name; the catalog resolver and the
+// admin write boundary normalize Ref to the RateLimit's id, which is what
+// PG JSONB and the in-memory snapshot carry. Two wire shapes are accepted
+// for backward compatibility:
 //
-//	New:    "my-rate-limit"                 (plain string)
-//	Legacy: {ref: "my-rate-limit", meter: "requests"}  (the meter field is now ignored)
+//	New:    "my-rate-limit"                 (plain string — name or id)
+//	Legacy: {ref: "my-rate-limit", meter: "requests"}  (meter is now ignored)
 type RateLimitAttachment struct {
-	Ref string // the RateLimit name
+	Ref string // the RateLimit id (after resolution)
 }
 
 func (a RateLimitAttachment) MarshalJSON() ([]byte, error) {
