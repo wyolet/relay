@@ -1,13 +1,25 @@
 # `app/` architecture cutover — handoff
 
-This branch (`feat/new-arch`) is at a clean checkpoint. The new catalog
-plane is feature-complete, tested, and pushed. The legacy
-`internal/catalog` still serves production paths; both arches coexist.
-The remaining work is the **cutover** — wiring the request and admin
-paths to the new arch and deleting the old.
+This doc tracks the cutover from the legacy `internal/catalog`-based
+request path to the new `app/`-based one. It started as a handoff
+checkpoint when the new catalog plane was feature-complete on the
+`feat/new-arch` branch and now also records what's shipped vs pending
+as stages land.
 
-This doc captures: what's done, what's deferred and why, decisions
-locked, and the staged plan to finish.
+## Status (as of stage 4 open PR)
+
+| Stage | Title | Status | PR |
+|---|---|---|---|
+| 1 | `cmd/relay/main.go` boot swap | Shipped | [#111](https://github.com/wyolet/relay/pull/111) |
+| 2 | `app/httpapi/` scaffold (replaces stage-2 in-package split) | Shipped | [#111](https://github.com/wyolet/relay/pull/111) |
+| 3 | Admin CRUD + `/auth/*` + sessions | Shipped | [#112](https://github.com/wyolet/relay/pull/112) |
+| 4 | Hot path: `app/pipeline` + `app/api/*` + inference handlers | Open | [#113](https://github.com/wyolet/relay/pull/113) |
+| 5 | Delete legacy | Pending | — |
+| 6 | E2E integration test against compose with mock upstream | Pending | — |
+
+The legacy tree (`internal/pipeline`, `internal/routing`, `internal/api/*`,
+`internal/keypool`, `cmd/relay/_legacy/`) is no longer wired into the
+boot path from stage 4 onward but stays in tree until stage 5.
 
 ---
 
@@ -258,91 +270,161 @@ under `gen/`. Confusing but historical. Worth moving to
 
 Each stage is its own focused PR with green tests before merging.
 
-### Stage 1 — `cmd/relay/main.go` boot swap
+### Stage 1 — `cmd/relay/main.go` boot swap *(shipped — PR #111)*
 
-Replace `internal/catalog.PGStore` construction with
-`app/catalog.Bootstrap(ctx, BootstrapOptions{...})`. Start
-`go listener.Run(ctx)`. Keep old `internal/catalog` alive in parallel
-(legacy handlers still call into it). No handler changes yet — the new
-catalog runs hot but unused.
+`main.go` now boots `app/catalog.Bootstrap` exclusively. Legacy
+`cmd/relay/*.go` files moved aside under `cmd/relay/_legacy/` (the `_`
+prefix makes Go skip the dir entirely — files stay as porting
+reference without compiling). Auto-seed via
+`BootstrapOptions.AutoSeedDir` when `RELAY_AUTO_SEED_IF_EMPTY=1`.
+NOTIFY listener runs in a goroutine. Added `Storage.Pool()` accessor
+on `internal/storage` so the composition root can hand the pool to
+Bootstrap. `app/manifest` skips foreign kinds (`User`/`Group`/`Role`)
+so the catalog seeder coexists with `config/users/` identity YAML.
 
-Validation: existing tests stay green, `make test-integration` passes,
-manual smoke against `make dev`.
+### Stage 2 — `app/httpapi/` scaffold *(shipped — PR #111, alongside stage 1)*
 
-### Stage 2 — OpenAPI reorganization
+Original plan was to split `openapi.go` into in-package files. We went
+further and lifted the whole HTTP layer into its own package:
 
-Split `cmd/relay/openapi.go` (902 lines) into focused files:
-- `http_inference.go` — `/v1/*` + `/healthz`
-- `http_auth.go` — `/auth/login`, `/auth/logout`, `/auth/whoami`
-- `http_crud.go` — generic CRUD wiring across all kinds
-- `http_misc.go` — `/version`, `/reload`, `/master-key/generate`
-- `openapi.go` — Huma API setup + router mount
-
-URL changes (control plane drops the `/control/` prefix entirely — it's
-served on its own listener):
-- `POST /auth/login`, `POST /auth/logout`, `GET /auth/whoami`
-  *(grouped)*
-- `GET /version`, `POST /reload`, `POST /master-key/generate`
-- CRUD (id-routed, uniform):
-  - `/providers`, `/hosts`, `/models`, `/policies`, `/pricings`,
-    `/rate-limits`, `/host-keys`, `/relay-keys`
-- **Renames:** `ratelimits` → `rate-limits`, `keys` → `relay-keys`,
-  `secrets` → `host-keys`
-- **Dropped:** `/routes`, `/attachments`, `/passthrough`, the bespoke
-  `/secrets/{name}` handlers
-- **New:** `/hosts`, `/pricings`
-
-### Stage 3 — CRUD factory rewire
-
-`pkg/admin/crud` generic factory currently uses `internal/catalog.PGStore`
-methods. Switch to a narrow interface satisfied by every `app/X.Store`:
-```go
-type Store[T any] interface {
-    List(ctx) ([]*T, error)
-    Get(ctx, id) (*T, error)
-    Upsert(ctx, *T) error
-    Delete(ctx, id) error
-}
 ```
-Admin writes go to `stores.X.Upsert/Delete`; NOTIFY auto-propagates to
-the snapshot. Drop direct snapshot manipulation from admin handlers.
+app/httpapi/
+  httpapi.go       — shared OpenAI-shape error envelope, version const,
+                     per-plane schema namer (avoids provider.Spec vs
+                     host.Spec collisions in the OpenAPI registry)
+  middleware.go    — HumaAuth (net/http MW → huma per-op MW)
+  inference/       — data plane (Mount + huma.API + Deps)
+  control/         — admin plane (Mount + huma.API + Deps)
+```
 
-### Stage 4 — Hot path rewire
+Each plane: `Deps` + `Mount(chi.Router, Deps) huma.API`. `cmd/relay/main.go`
+mounts both planes on separate listeners (`RELAY_PORT`,
+`RELAY_CONTROL_PORT`).
 
-`internal/pipeline` and `pkg/transport` deep-coupled to
-`internal/catalog.Secret`, `.Provider`, `.Policy`, `.Model`,
-`.ResolvedRule`. Translate to `app/hostkey.HostKey`, `app/provider.*`,
-etc. Most accessor names line up; some fields differ (e.g.
-`Secret.ValueFrom` → `HostKey.Spec.ValueFrom`).
+### Stage 3 — Admin CRUD + `/auth/*` *(shipped — PR #112)*
 
-Tests: `internal/pipeline/pipeline_test.go` (1310 lines) will need
-rewiring — likely worth a focused subagent pass.
+The control plane is now a real admin API serving auth + CRUD against
+`app/catalog`:
+
+- `/auth/login`, `/auth/logout`, `/auth/whoami` — bcrypt-aware password
+  verification via `internal/identity.Verify`; opaque server-side
+  sessions via `alexedwards/scs/v2` with a kv-backed store
+  (`app/session`).
+- 8 catalog kinds × 5 routes each (`/providers`, `/hosts`, `/models`,
+  `/host-keys`, `/rate-limits`, `/policies`, `/pricings`, `/relay-keys`):
+  - `GET /{plural}`, `GET /{plural}/{ref}` (slug or id),
+    `POST /{plural}` (server stamps id+slug),
+    `PUT /{plural}/by-id/{id}`, `DELETE /{plural}/by-id/{id}`.
+- `/master-key/generate`, `/reload`, `/version`.
+- 30 paths in `/openapi.json`.
+
+**Future-proof seams baked in** for the multi-tenant / IAM work later:
+
+- `app/actor` — `Actor{UserID, Username, SessionID, AdminToken}` in
+  `context.Context` via typed key. Reserved `ActiveOrgID`/`Roles` slots
+  for the org-scoped permissions work.
+- `app/authz` — `Authorizer` interface with `Authorize(ctx, action,
+  resource)`. v1 impl `AlwaysAllowAuthenticated` grants any action to
+  any authenticated caller; swap impl when org-scoped permissions land,
+  no handler changes.
+- Identity stays in `internal/identity` for v1 — YAML-backed; no `users`
+  table. Migrating to Postgres-backed users is its own slice when SaaS
+  signup lands (likely alongside Org/Workspace).
+
+Two explicit non-goals confirmed during stage 3:
+
+- `/passthrough`, `/attachments` dropped from routes permanently —
+  replaced by a future `/settings/*` typed sectioned API + KV
+  `settings(key TEXT, value JSONB)` table (NOT a one-row table per
+  section).
+- Per-user JWT for programmatic API access is **complementary**, not a
+  replacement. Slots in cleanly later as a third caller type alongside
+  cookies and relay keys.
+
+### Stage 4 — Hot path rewire *(shipped — PR #113)*
+
+The data plane now serves `/v1/chat/completions`, `/v1/messages`,
+`/v1/models`, `/healthz` against `app/catalog`.
+
+Layout (LOC approximate):
+
+| Package | Lines | Role |
+|---|---|---|
+| `app/adapter` | ~40 | `Kind` enum (`openai`, `anthropic`). Lives on `model.HostBinding`, not Host — Bedrock serves Claude (Anthropic) and Llama (OpenAI) from one endpoint. |
+| `app/pipeline` | ~280 | **Pure orchestration**: reserve → pick key → `Adapter.Call` → stream → post-flight commit + RecordSuccess in a detached goroutine. Knows nothing about catalog snapshots, JSON shapes, or HTTP routing. |
+| `app/keypool` | ~290 | Port of `internal/keypool` to `*hostkey.HostKey` + `*policy.Policy`. Pick/Record* signatures dropped the unused Provider/Model args. |
+| `app/routing` | ~200 | snapshot lookup → `Plan{Model, Policy, HostBinding, Host, Keys, Rules}`. |
+| `app/ratelimit` | ~50 | `Resolve(policy, rl) → []pkgratelimit.Rule`. Pipeline calls `pkg/ratelimit` directly; no adapter-wrapper layer. |
+| `app/api/openai` | ~250 | `pipeline.Adapter` impl, Bearer auth. |
+| `app/api/anthropic` | ~260 | `pipeline.Adapter` impl, `x-api-key` auth, `anthropic-version` default, passthrough headers, 529 → FailureServerError. |
+| `app/httpapi/inference` | ~400 | Huma ops + relay-key Bearer middleware. |
+
+**Key design decisions made during stage 4** (push back on the original
+1:1 port plan was correct):
+
+- **Pipeline is pure orchestration.** Removed the legacy pipeline's
+  passenger concerns: `usage.Lifecycle` stamping, token extraction
+  (delegated to Adapter), 429 envelope shaping (handler), anonymous-
+  mode synthetic fallback (handler), cross-shape transform branching
+  (dropped), channel-based transport messages (dropped), `Outbound` vs
+  `DoUpstream` branching (unified into Adapter.Call).
+- **Cross-shape translation dropped for v1.** Hit `/v1/chat/completions`
+  for a model whose binding declares `adapter: anthropic` → 400. Same
+  the other way. CLAUDE.md: "same-format passthrough is the 95% case."
+- **Anonymous traffic is a separate package**, not a branch in pipeline.
+  Future `app/proxy` (or similar) when passthrough comes back.
+- **Async post-flight stays** — never blocks the response (per
+  CLAUDE.md hot-path rule).
+- **`HostBinding.Adapter` is required**. `cmd/litellm-import` emits it
+  per provider (openai/ollama → `openai`, anthropic → `anthropic`);
+  132 model YAMLs regenerated.
+
+Full upstream call exercise is stage 6 (compose E2E with mock upstream
+service).
 
 ### Stage 5 — Delete legacy
 
-Remove `internal/catalog/`, `internal/import/litellm/`,
-`cmd/relay/import.go`. Update `cmd/relay/seed.go` to be a thin wrapper
-around `app/seed.Run`. Drop `internal/configstore` if it was
-catalog-coupled.
+Now that stages 1–4 ship, all of these are dead code:
+
+- `internal/pipeline/`, `internal/routing/`, `internal/api/*`,
+  `internal/keypool/`, `internal/ratelimit/adapter.go`,
+  `internal/provider/*` (legacy outbound clients — `app/api/*` issues
+  its own HTTP).
+- `internal/catalog/`, `internal/import/litellm/`, `internal/configstore/`.
+- `cmd/relay/_legacy/` — porting reference, can go once stages 1–4 are
+  merged and we don't need it for cross-checks.
+- `pkg/admin/crud/` — superseded by the generic CRUD in
+  `app/httpapi/control/crud.go`.
+
+Order matters: do `internal/*` first (independent), then
+`cmd/relay/_legacy/`, then `pkg/admin/crud/` (independent of the
+internal tree but worth confirming nothing imports it). One PR is fine
+— it's pure deletion with no design decisions.
 
 ### Stage 6 — E2E integration
 
-Extend `deploy/compose/docker-compose.test.yml` with `relay-a` service.
-New `integration/e2e_test.go` (build tag `integration`):
-1. Boot compose stack
-2. Wait for relay-a healthz
-3. POST a Provider, Host, Model, HostKey, Policy, RelayKey via the
-   admin HTTP API
-4. Sleep ~1.5s for NOTIFY propagation
-5. POST `/v1/chat/completions` with the relay key + a request that
-   targets the new model
-6. Assert: 200, expected upstream selected, response body matches
-   mock-upstream's reply
+Extend `deploy/compose/docker-compose.test.yml` with a `relay` service
+and a `mock-upstream` service. New `integration/e2e_test.go` (build
+tag `integration`):
 
-Mock upstream lives in the same compose file as a tiny Go process or
-httptest binary. The point is **catching real bugs unit tests don't see**
-— per-shape transforms, header forwarding, key-pool selection, NOTIFY
-end-to-end.
+1. Boot compose stack (pg + relay + mock-upstream).
+2. Wait for relay `/healthz`.
+3. Use the admin Bearer to:
+   - `POST /hosts` pointing at the mock upstream
+   - `POST /host-keys` with a test key value
+   - `POST /policies` linking a seeded model to the host-key
+   - `POST /relay-keys` for the policy
+4. Sleep ~1.5s for NOTIFY propagation (or poll the snapshot endpoint
+   if we add one).
+5. `POST /v1/chat/completions` with the relay key.
+6. Assert: 200, correct upstream URL hit, response matches mock's reply,
+   `RecordSuccess` fired (verify via Selector state in kv).
+
+Mock upstream lives in the compose file as a tiny Go binary or a
+prepopulated `httptest`-like service. The point is **catching real
+bugs unit tests don't see** — per-shape transforms, header forwarding,
+key-pool selection, NOTIFY end-to-end, adapter dispatch on
+`HostBinding.Adapter`.
 
 ---
 
