@@ -159,10 +159,20 @@ func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Policy) error {
+			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
+			if err != nil {
+				return err
+			}
+			v.Spec.Provider = resolved
 			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.Policy) error {
 			v.Metadata.ID = id
+			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
+			if err != nil {
+				return err
+			}
+			v.Spec.Provider = resolved
 			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {
@@ -220,10 +230,20 @@ func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Model) error {
+			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
+			if err != nil {
+				return err
+			}
+			v.Spec.Provider = resolved
 			return st.Catalog.UpsertModel(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.Model) error {
 			v.Metadata.ID = id
+			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
+			if err != nil {
+				return err
+			}
+			v.Spec.Provider = resolved
 			return st.Catalog.UpsertModel(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {

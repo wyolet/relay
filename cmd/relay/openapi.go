@@ -544,6 +544,12 @@ func applySecretWriteToTx(ctx context.Context, store *catalog.PGStore, name stri
 	if provider == "" {
 		provider = "default"
 	}
+	// Normalize name → id so PG JSONB stores the canonical id form.
+	resolved, err := catalog.ResolveProviderRef(store, provider)
+	if err != nil {
+		return err
+	}
+	provider = resolved
 	meta := catalog.Metadata{Name: name, DisplayName: name}
 	if existing, ok := store.SecretByName(name); ok {
 		meta.ID = existing.Metadata.ID
@@ -572,6 +578,8 @@ func secretPatch(inp SecretWriteBody) catalog.Patch {
 	if provider == "" {
 		provider = "default"
 	}
+	// Patch flows through ValidateWithPatch which re-runs the resolver, so a
+	// name here is tolerated; passing it through unchanged is fine.
 	spec := catalog.SecretSpec{Provider: provider}
 	switch inp.ValueFrom.Kind {
 	case "env":

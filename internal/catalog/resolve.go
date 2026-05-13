@@ -82,6 +82,37 @@ func resolveRefs(snap *snapshot) (mutated mutatedKinds, err error) {
 	return mutated, nil
 }
 
+// ProviderRefStore is the narrow view of a catalog needed by ResolveProviderRef.
+// Implemented by *PGStore, *MemStore, and *YAMLStore.
+type ProviderRefStore interface {
+	ProviderByName(name string) (*Provider, bool)
+	ProviderByID(id string) (*Provider, bool)
+}
+
+// ResolveProviderRef normalizes a provider reference (which may arrive as a
+// name in admin POST/PUT bodies) to the canonical id form. Empty input is
+// returned as-is — emptiness is rejected later by validate. Returns an error
+// when the input matches neither a known id nor a known slug.
+//
+// Used by admin handlers at the write boundary so PG JSONB stores ids, not
+// names. Mirrors what the snapshot-load resolver does, but for one ref at a
+// time without requiring a full snapshot rebuild.
+func ResolveProviderRef(store ProviderRefStore, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if ids.Valid(ref) {
+		if _, ok := store.ProviderByID(ref); ok {
+			return ref, nil
+		}
+		return "", fmt.Errorf("unknown provider id %q", ref)
+	}
+	if p, ok := store.ProviderByName(ref); ok {
+		return p.Metadata.ID, nil
+	}
+	return "", fmt.Errorf("unknown provider %q", ref)
+}
+
 // mutatedKinds reports which kinds had at least one row rewritten by
 // resolveRefs. Used by PGStore.Reload to decide whether to write the rewrites
 // back to Postgres (one-time self-healing migration).
