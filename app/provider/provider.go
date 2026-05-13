@@ -1,9 +1,8 @@
-// Package provider is the domain layer for the Provider entity — a definition
-// of an upstream LLM API endpoint.
-//
-// types.go holds the domain struct and validation. The wire-shape family
-// (OpenAI / Anthropic / Ollama) is selected in code from the model name
-// prefix, not stored on the row.
+// Package provider is the domain layer for the Provider entity — the
+// vendor / author of a Model. Anthropic, OpenAI, Meta-Llama, Mistral,
+// Google. Operational concerns (BaseURL, auth) live on Host, not Provider.
+// Provider is essentially display metadata + the identity Model rows hang
+// their Owner.ID off.
 package provider
 
 import (
@@ -12,25 +11,22 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-// Provider is the configured upstream endpoint.
+// Provider is the vendor that authors Models.
 type Provider struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec is the body. Optional fields are pointers so absence is distinguishable
-// from zero.
+// Spec is display-only. There is no BaseURL on Provider — that lives on
+// Host, since the same Provider (e.g. Anthropic) is served by multiple
+// Hosts (Anthropic direct, Bedrock, Vertex). Per-Host serving info lives
+// on Model.Spec.Hosts[].
 type Spec struct {
-	BaseURL         string `json:"baseURL"                   yaml:"baseURL"                   validate:"required,http_url"`
-	Default         bool   `json:"default,omitempty"         yaml:"default,omitempty"`
-	DefaultPolicyID string `json:"defaultPolicyId,omitempty" yaml:"defaultPolicyId,omitempty" validate:"omitempty,uuid"`
-	DefaultTier     string `json:"defaultTier,omitempty"     yaml:"defaultTier,omitempty"     validate:"omitempty,slug"`
-	Enabled         *bool  `json:"enabled,omitempty"         yaml:"enabled,omitempty"` // nil = true
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
 
-	// Display metadata — operator-set, optional. Free-text.
+	// Display metadata — operator-set, optional.
 	HomepageURL   string `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url"`
 	DocsURL       string `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url"`
-	ConsoleURL    string `json:"consoleURL,omitempty"    yaml:"consoleURL,omitempty"    validate:"omitempty,http_url"`
 	StatusPageURL string `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url"`
 	LogoURL       string `json:"logoURL,omitempty"       yaml:"logoURL,omitempty"       validate:"omitempty,http_url"`
 }
@@ -39,10 +35,7 @@ type Spec struct {
 func (p *Provider) IsEnabled() bool { return p.Spec.Enabled == nil || *p.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
-// the Provider-specific invariant that Owner.Kind is system (Providers are
-// not user- or provider-owned). Cross-entity checks (DefaultPolicyID resolves
-// to a Policy that targets this Provider, at-most-one-default-Provider) live
-// in the composition layer.
+// the Provider-specific invariant that Owner.Kind is system.
 func (p *Provider) Validate() error {
 	if err := meta.Validator.Struct(p); err != nil {
 		return err

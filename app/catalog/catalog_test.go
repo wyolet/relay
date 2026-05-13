@@ -5,11 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -20,6 +21,10 @@ import (
 type provList []*provider.Provider
 
 func (l provList) List(context.Context) ([]*provider.Provider, error) { return l, nil }
+
+type hostList []*host.Host
+
+func (l hostList) List(context.Context) ([]*host.Host, error) { return l, nil }
 
 type polList []*policy.Policy
 
@@ -41,10 +46,13 @@ type rkList []*relaykey.RelayKey
 
 func (l rkList) List(context.Context) ([]*relaykey.RelayKey, error) { return l, nil }
 
-// fixture builds a coherent set: 1 provider, 2 models, 2 keys, 1 ratelimit,
-// 1 policy referencing all of those, 1 relaykey pointing at the policy.
-func fixture() (provList, polList, modList, keyList, rlList, rkList) {
+// fixture builds a coherent set: 1 provider (vendor), 1 host (serving
+// endpoint), 2 models served by that host, 2 keys for that host, 1
+// ratelimit, 1 policy referencing all of those, 1 relaykey pointing at
+// the policy.
+func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 	provID := meta.NewID()
+	hostID := meta.NewID()
 
 	m1 := &model.Model{
 		Meta: meta.Metadata{
@@ -52,8 +60,8 @@ func fixture() (provList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			UpstreamName: "gpt-4o",
-			Aliases:      []string{"openai/gpt-4o"},
+			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o"}},
+			Aliases: []string{"openai/gpt-4o"},
 		},
 	}
 	m2 := &model.Model{
@@ -62,15 +70,15 @@ func fixture() (provList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			UpstreamName: "gpt-4o-mini",
-			Aliases:      []string{"openai/gpt-4o-mini", "openai/mini"},
+			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini"}},
+			Aliases: []string{"openai/gpt-4o-mini", "openai/mini"},
 		},
 	}
 
 	k1 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k1",
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
 		},
 		Spec: hostkey.Spec{
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K1"},
@@ -79,7 +87,7 @@ func fixture() (provList, polList, modList, keyList, rlList, rkList) {
 	k2 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k2",
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
 		},
 		Spec: hostkey.Spec{
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K2"},
@@ -125,15 +133,21 @@ func fixture() (provList, polList, modList, keyList, rlList, rkList) {
 			ID: provID, Name: "openai",
 			Owner: meta.Owner{Kind: meta.OwnerSystem},
 		},
-		Spec: provider.Spec{BaseURL: "https://api.openai.com"},
+	}
+	h := &host.Host{
+		Meta: meta.Metadata{
+			ID: hostID, Name: "openai-direct",
+			Owner: meta.Owner{Kind: meta.OwnerSystem},
+		},
+		Spec: host.Spec{BaseURL: "https://api.openai.com"},
 	}
 
-	return provList{prov}, polList{pol}, modList{m1, m2}, keyList{k1, k2}, rlList{rl}, rkList{rk}
+	return provList{prov}, hostList{h}, polList{pol}, modList{m1, m2}, keyList{k1, k2}, rlList{rl}, rkList{rk}
 }
 
 func TestReload_HappyPath(t *testing.T) {
-	provs, pols, models, keys, rls, rks := fixture()
-	c := New(provs, pols, models, keys, rls, rks)
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	c := New(provs, hosts, pols, models, keys, rls, rks)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -164,7 +178,7 @@ func TestReload_HappyPath(t *testing.T) {
 }
 
 func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
-	provs, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
 	// Disabling the policy strands the relaykey pointing at it; for this
@@ -172,7 +186,7 @@ func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
 	// and we can verify the snapshot eviction behaviour in isolation.
 	rks[0].Spec.Enabled = &fls
 
-	c := New(provs, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -190,11 +204,11 @@ func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
 }
 
 func TestReload_DisabledModelFailsValidation(t *testing.T) {
-	provs, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks := fixture()
 	fls := false
 	models[0].Spec.Enabled = &fls
 
-	c := New(provs, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks)
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "unknown or disabled model") {
 		t.Fatalf("expected unknown-or-disabled-model error, got %v", err)
@@ -202,11 +216,11 @@ func TestReload_DisabledModelFailsValidation(t *testing.T) {
 }
 
 func TestReload_RelayKeyToDisabledPolicyFails(t *testing.T) {
-	provs, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
 
-	c := New(provs, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks)
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "unknown or disabled policy") {
 		t.Fatalf("expected unknown-or-disabled-policy error, got %v", err)
@@ -218,12 +232,12 @@ func TestReload_RelayKeyToDisabledPolicyFails(t *testing.T) {
 // name "gpt-5" served by both openai-direct and an azure deployment).
 // Consumers disambiguate downstream with a suffix or header.
 func TestReload_AliasCollisionAllowed(t *testing.T) {
-	provs, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks := fixture()
 	// Both models claim the same wire alias "shared".
 	models[0].Spec.Aliases = append(models[0].Spec.Aliases, "shared")
 	models[1].Spec.Aliases = append(models[1].Spec.Aliases, "shared")
 
-	c := New(provs, pols, models, keys, rls, rks)
+	c := New(provs, hosts, pols, models, keys, rls, rks)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

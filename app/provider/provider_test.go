@@ -9,10 +9,7 @@ import (
 
 func TestValidate(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
-		p := &Provider{
-			Meta: meta.Metadata{Name: "openai"},
-			Spec: Spec{BaseURL: "https://api.openai.com"},
-		}
+		p := &Provider{Meta: meta.Metadata{Name: "anthropic"}}
 		if err := p.Validate(); err != nil {
 			t.Fatalf("unexpected: %v", err)
 		}
@@ -25,26 +22,23 @@ func TestValidate(t *testing.T) {
 	}{
 		{
 			name: "missing name",
-			p:    &Provider{Spec: Spec{BaseURL: "https://api.openai.com"}},
+			p:    &Provider{},
 			want: "Name",
-		},
-		{
-			name: "missing baseURL",
-			p:    &Provider{Meta: meta.Metadata{Name: "x"}, Spec: Spec{}},
-			want: "BaseURL",
-		},
-		{
-			name: "bad URL",
-			p:    &Provider{Meta: meta.Metadata{Name: "x"}, Spec: Spec{BaseURL: "not-a-url"}},
-			want: "BaseURL",
 		},
 		{
 			name: "non-system owner rejected",
 			p: &Provider{
 				Meta: meta.Metadata{Name: "x", Owner: meta.Owner{Kind: meta.OwnerUser}},
-				Spec: Spec{BaseURL: "https://x.example"},
 			},
 			want: "owner.kind must be system",
+		},
+		{
+			name: "bad homepageURL",
+			p: &Provider{
+				Meta: meta.Metadata{Name: "x"},
+				Spec: Spec{HomepageURL: "not-a-url"},
+			},
+			want: "HomepageURL",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

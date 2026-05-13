@@ -17,13 +17,16 @@ type Model struct {
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec is the body. Cross-refs are stored as ids. The owning Provider's id
-// lives on Meta.Owner.ID (Owner.Kind is always "provider"); there is no
-// separate spec.providerId field.
+// Spec is the body. Cross-refs are stored as ids. The owning Provider
+// (vendor) id lives on Meta.Owner.ID (Owner.Kind is always "provider");
+// there is no separate spec.providerId field.
+//
+// Per-Host serving info (which Hosts can serve this Model and what name
+// each one calls the model upstream) lives in Spec.Hosts.
 type Spec struct {
-	// UpstreamName is the model identifier sent to the provider's API
-	// (e.g. "gpt-4o-2024-08-06"). Required.
-	UpstreamName string `json:"upstreamName" yaml:"upstreamName" validate:"required"`
+	// Hosts is the list of HostBindings — one per Host that serves this
+	// Model. At least one is required for the Model to be callable.
+	Hosts []HostBinding `json:"hosts" yaml:"hosts" validate:"required,min=1,dive"`
 
 	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
@@ -83,6 +86,18 @@ type Modalities struct {
 	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
 }
 
+// HostBinding declares that a Model is callable via a particular Host and
+// what name the Host's upstream API expects. One Model lists one binding
+// per Host that serves it.
+type HostBinding struct {
+	HostID       string `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
+	UpstreamName string `json:"upstreamName"       yaml:"upstreamName"       validate:"required"`
+	Enabled      *bool  `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
+}
+
+// IsEnabled returns true when the binding's Enabled is unset or explicitly true.
+func (b HostBinding) IsEnabled() bool { return b.Enabled == nil || *b.Enabled }
+
 // Deprecation describes the lifecycle state of a Model.
 type Deprecation struct {
 	Status      DeprecationStatus `json:"status,omitempty"      yaml:"status,omitempty"      validate:"omitempty,oneof=active deprecated sunset"`
@@ -138,6 +153,13 @@ func (m *Model) Validate() error {
 			return fmt.Errorf("model %q: duplicate alias %q", m.Meta.Name, a)
 		}
 		seen[key] = struct{}{}
+	}
+	hosts := make(map[string]struct{}, len(m.Spec.Hosts))
+	for _, b := range m.Spec.Hosts {
+		if _, dup := hosts[b.HostID]; dup {
+			return fmt.Errorf("model %q: duplicate host binding %q", m.Meta.Name, b.HostID)
+		}
+		hosts[b.HostID] = struct{}{}
 	}
 	return nil
 }

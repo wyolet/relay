@@ -48,9 +48,11 @@ type Snapshot struct {
 	relayKeysByID   map[string]*relaykey.RelayKey
 	relayKeysByHash map[string]*relaykey.RelayKey
 
-	// providerSlugByID is the tiny id→slug map needed by hot-path
-	// disambiguation (Provider rows themselves don't enter the Snapshot).
+	// providerSlugByID and hostSlugByID are tiny id→slug maps needed by
+	// hot-path disambiguation. Provider and Host rows themselves don't
+	// enter the Snapshot proper.
 	providerSlugByID map[string]string
+	hostSlugByID     map[string]string
 
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
@@ -93,6 +95,14 @@ func (s *Snapshot) ModelsByName(name string) []*model.Model {
 // against the suffix/header hint without needing the full Provider row.
 func (s *Snapshot) ProviderSlug(providerID string) (string, bool) {
 	slug, ok := s.providerSlugByID[providerID]
+	return slug, ok
+}
+
+// HostSlug returns the Host.Meta.Name for the given Host id, or false.
+// Hot-path resolution uses this to compare a HostBinding's host against the
+// suffix/header hint and to pick the right Host for an upstream call.
+func (s *Snapshot) HostSlug(hostID string) (string, bool) {
+	slug, ok := s.hostSlugByID[hostID]
 	return slug, ok
 }
 

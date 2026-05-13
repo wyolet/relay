@@ -16,7 +16,9 @@ func fix(name string) *Model {
 			Name:  name,
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: validProvID()},
 		},
-		Spec: Spec{UpstreamName: "u"},
+		Spec: Spec{
+			Hosts: []HostBinding{{HostID: meta.NewID(), UpstreamName: "u"}},
+		},
 	}
 }
 
@@ -38,9 +40,37 @@ func TestValidate(t *testing.T) {
 			want: "Name",
 		},
 		{
-			name: "missing upstreamName",
-			m:    func() *Model { m := fix("x"); m.Spec.UpstreamName = ""; return m }(),
+			name: "missing hosts",
+			m:    func() *Model { m := fix("x"); m.Spec.Hosts = nil; return m }(),
+			want: "Hosts",
+		},
+		{
+			name: "host binding missing upstreamName",
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Hosts[0].UpstreamName = ""
+				return m
+			}(),
 			want: "UpstreamName",
+		},
+		{
+			name: "host binding missing hostId",
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Hosts[0].HostID = ""
+				return m
+			}(),
+			want: "HostID",
+		},
+		{
+			name: "duplicate host binding",
+			m: func() *Model {
+				m := fix("x")
+				dup := m.Spec.Hosts[0].HostID
+				m.Spec.Hosts = append(m.Spec.Hosts, HostBinding{HostID: dup, UpstreamName: "u2"})
+				return m
+			}(),
+			want: "duplicate host binding",
 		},
 		{
 			name: "user owner rejected",

@@ -5,24 +5,26 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
 
-// Catalog is the long-lived composition object. Holds the six entity stores
+// Catalog is the long-lived composition object. Holds the entity stores
 // and the current Snapshot pointer. Construct one per process; call Reload
 // at boot and whenever PG state changes (admin write, NOTIFY watcher).
 type Catalog struct {
-	providers   ProviderLister
-	policies    PolicyLister
-	models      ModelLister
-	keys        HostKeyLister
-	rateLimits  RateLimitLister
-	relayKeys   RelayKeyLister
+	providers  ProviderLister
+	hosts      HostLister
+	policies   PolicyLister
+	models     ModelLister
+	keys       HostKeyLister
+	rateLimits RateLimitLister
+	relayKeys  RelayKeyLister
 
 	snap atomic.Pointer[Snapshot]
 }
@@ -33,6 +35,9 @@ type Catalog struct {
 
 type ProviderLister interface {
 	List(ctx context.Context) ([]*provider.Provider, error)
+}
+type HostLister interface {
+	List(ctx context.Context) ([]*host.Host, error)
 }
 type PolicyLister interface {
 	List(ctx context.Context) ([]*policy.Policy, error)
@@ -54,6 +59,7 @@ type RelayKeyLister interface {
 // is empty; call Reload before serving traffic.
 func New(
 	providers ProviderLister,
+	hosts HostLister,
 	policies PolicyLister,
 	models ModelLister,
 	keys HostKeyLister,
@@ -62,6 +68,7 @@ func New(
 ) *Catalog {
 	c := &Catalog{
 		providers:  providers,
+		hosts:      hosts,
 		policies:   policies,
 		models:     models,
 		keys:       keys,
@@ -84,6 +91,10 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: providers: %w", err)
 	}
+	hosts, err := c.hosts.List(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog reload: hosts: %w", err)
+	}
 	pols, err := c.policies.List(ctx)
 	if err != nil {
 		return fmt.Errorf("catalog reload: policies: %w", err)
@@ -105,14 +116,23 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: relaykeys: %w", err)
 	}
 
-	// Filter to enabled rows. Providers aren't kept in the Snapshot, but
-	// their ids are needed for ownership validation and their slugs are
-	// needed to compute the prefixed model name index.
+	// Providers and Hosts don't enter the Snapshot directly, but we need
+	// their ids for ownership validation and their slugs for the model
+	// name index (Provider prefix) and host disambiguation.
 	providerIDs := make(map[string]struct{}, len(provs))
 	providerSlugByID := make(map[string]string, len(provs))
 	for _, p := range provs {
 		providerIDs[p.Meta.ID] = struct{}{}
 		providerSlugByID[p.Meta.ID] = p.Meta.Name
+	}
+	hostIDs := make(map[string]struct{}, len(hosts))
+	hostSlugByID := make(map[string]string, len(hosts))
+	for _, h := range hosts {
+		if !h.IsEnabled() {
+			continue
+		}
+		hostIDs[h.Meta.ID] = struct{}{}
+		hostSlugByID[h.Meta.ID] = h.Meta.Name
 	}
 	enabledPols := filter(pols, (*policy.Policy).IsEnabled)
 	enabledRKs := filter(rks, (*relaykey.RelayKey).IsEnabled)
@@ -120,11 +140,11 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	enabledKeys := filter(keys, (*hostkey.HostKey).IsEnabled)
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 
-	if err := validateCross(providerIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs); err != nil {
+	if err := validateCross(providerIDs, hostIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs); err != nil {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, providerSlugByID)
+	snap := build(enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, providerSlugByID, hostSlugByID)
 	c.snap.Store(snap)
 	return nil
 }

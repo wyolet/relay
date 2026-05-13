@@ -33,6 +33,7 @@ import (
 // not in the Snapshot but we still need them here for ownership checks).
 func validateCross(
 	providerIDs map[string]struct{},
+	hostIDs map[string]struct{},
 	enabledPols []*policy.Policy,
 	enabledRKs []*relaykey.RelayKey,
 	enabledModels []*model.Model,
@@ -44,43 +45,36 @@ func validateCross(
 	rlByID := indexBy(enabledRLs, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
 	polByID := indexBy(enabledPols, func(p *policy.Policy) string { return p.Meta.ID })
 
-	// Owner.ID → Provider for Models and HostKeys.
+	// Owner.ID → Provider (vendor) for Models.
 	for _, m := range enabledModels {
 		if _, ok := providerIDs[m.Meta.Owner.ID]; !ok {
 			return fmt.Errorf("model %q: owner.id %q does not match any Provider", m.Meta.Name, m.Meta.Owner.ID)
 		}
-	}
-	for _, k := range enabledKeys {
-		if _, ok := providerIDs[k.Meta.Owner.ID]; !ok {
-			return fmt.Errorf("hostkey %q: owner.id %q does not match any Provider", k.Meta.Name, k.Meta.Owner.ID)
+		// Each HostBinding.HostID must resolve to an enabled Host.
+		for _, b := range m.Spec.Hosts {
+			if _, ok := hostIDs[b.HostID]; !ok {
+				return fmt.Errorf("model %q: host binding references unknown or disabled host %q", m.Meta.Name, b.HostID)
+			}
 		}
 	}
 
-	// Policy.Spec.ModelIDs / HostKeyIDs / RateLimitID resolve + same-provider.
+	// Owner.ID → Host for HostKeys.
+	for _, k := range enabledKeys {
+		if _, ok := hostIDs[k.Meta.Owner.ID]; !ok {
+			return fmt.Errorf("hostkey %q: owner.id %q does not match any Host", k.Meta.Name, k.Meta.Owner.ID)
+		}
+	}
+
+	// Policy.Spec.ModelIDs / HostKeyIDs / RateLimitID resolve.
 	for _, p := range enabledPols {
-		var providerID string
 		for _, id := range p.Spec.ModelIDs {
-			m, ok := modelByID[id]
-			if !ok {
+			if _, ok := modelByID[id]; !ok {
 				return fmt.Errorf("policy %q: modelIds references unknown or disabled model %q", p.Meta.Name, id)
-			}
-			if providerID == "" {
-				providerID = m.Meta.Owner.ID
-			} else if providerID != m.Meta.Owner.ID {
-				return fmt.Errorf("policy %q: models span multiple providers (%q vs %q)",
-					p.Meta.Name, providerID, m.Meta.Owner.ID)
 			}
 		}
 		for _, id := range p.Spec.HostKeyIDs {
-			k, ok := keyByID[id]
-			if !ok {
+			if _, ok := keyByID[id]; !ok {
 				return fmt.Errorf("policy %q: hostKeyIds references unknown or disabled key %q", p.Meta.Name, id)
-			}
-			if providerID == "" {
-				providerID = k.Meta.Owner.ID
-			} else if providerID != k.Meta.Owner.ID {
-				return fmt.Errorf("policy %q: hostKey %q belongs to provider %q, not %q",
-					p.Meta.Name, k.Meta.Name, k.Meta.Owner.ID, providerID)
 			}
 		}
 		if p.Spec.RateLimitID != "" {
