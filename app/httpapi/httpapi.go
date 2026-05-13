@@ -143,6 +143,16 @@ func schemaNamer(t reflect.Type, hint string) string {
 	if name == "" {
 		return hint
 	}
+	// Generic instantiation: reflect.Type.Name() returns
+	// "listBody[github.com/wyolet/relay/app/policy.Policy]". Reduce to
+	// a clean "<Entity><Suffix>" form so downstream codegen produces
+	// usable type names instead of `listBody_github_com_...`.
+	if i := strings.Index(name, "["); i >= 0 {
+		if pretty := nameGenericInstantiation(t, name[:i]); pretty != "" {
+			return pretty
+		}
+		return sanitizeSchemaName(name)
+	}
 	if entity, ok := entityNameByPkg[t.PkgPath()]; ok && name != entity {
 		// Sub-type in an entity package — prepend the entity name to
 		// avoid collisions (every entity has a `Spec`, `ratelimit.Rule`
@@ -150,6 +160,43 @@ func schemaNamer(t reflect.Type, hint string) string {
 		name = entity + name
 	}
 	return sanitizeSchemaName(name)
+}
+
+// genericSuffix maps the CRUD wrapper base names to the suffix used in
+// the OpenAPI schema id. listBody is the only wrapper that gets its
+// own schema in practice (huma inlines single-Body wrappers), but the
+// others are listed so they render cleanly if ever exposed.
+var genericSuffix = map[string]string{
+	"listBody":      "List",
+	"listResponse":  "List",
+	"itemResponse":  "",
+	"createRequest": "CreateRequest",
+	"updateRequest": "UpdateRequest",
+}
+
+// nameGenericInstantiation produces "<Entity><Suffix>" for a known CRUD
+// wrapper like listBody[policy.Policy] → "PolicyList". Returns "" when
+// the wrapper isn't recognised or the type param isn't a catalog entity;
+// caller falls back to sanitizing the raw bracketed name.
+func nameGenericInstantiation(t reflect.Type, base string) string {
+	suffix, known := genericSuffix[base]
+	if !known {
+		return ""
+	}
+	if t.Kind() != reflect.Struct || t.NumField() == 0 {
+		return ""
+	}
+	// The wrapper's first (and usually only) field carries the type
+	// parameter — Items []*T for listBody, Body T/*T for the rest.
+	f := t.Field(0).Type
+	for f.Kind() == reflect.Ptr || f.Kind() == reflect.Slice || f.Kind() == reflect.Array {
+		f = f.Elem()
+	}
+	entity, ok := entityNameByPkg[f.PkgPath()]
+	if !ok {
+		return ""
+	}
+	return entity + suffix
 }
 
 // sanitizeSchemaName collapses characters that are valid in Go type names

@@ -10,6 +10,12 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 )
 
+// Re-declared here with the same name as control.listBody so the
+// generic-instantiation path in schemaNamer matches. Test only.
+type listBody[T any] struct {
+	Items []*T `json:"items"`
+}
+
 func TestSchemaNamer_CleanNames(t *testing.T) {
 	cases := []struct {
 		in   reflect.Type
@@ -24,6 +30,8 @@ func TestSchemaNamer_CleanNames(t *testing.T) {
 		{reflect.TypeOf(pricing.Rate{}), "PricingRate"},
 		{reflect.TypeOf(meta.Metadata{}), "Metadata"},
 		{reflect.TypeOf(meta.Owner{}), "Owner"},
+		{reflect.TypeOf(listBody[policy.Policy]{}), "PolicyList"},
+		{reflect.TypeOf(listBody[pricing.Pricing]{}), "PricingList"},
 	}
 	for _, tc := range cases {
 		if got := schemaNamer(tc.in, ""); got != tc.want {
