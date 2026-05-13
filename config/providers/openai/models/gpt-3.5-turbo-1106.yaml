@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: gpt-3.5-turbo-1106
+          adapter: openai
     family: gpt
     capabilities:
         chat: true

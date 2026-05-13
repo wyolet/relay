@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/deepseek-v3.1:671b-cloud
+          adapter: openai
     family: ollama/deepseek
     capabilities:
         chat: true

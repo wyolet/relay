@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/deepseek-coder-v2-instruct
+          adapter: openai
     family: ollama/deepseek
     capabilities:
         chat: true

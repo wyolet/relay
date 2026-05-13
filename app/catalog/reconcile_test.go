@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/adapter"
 	"context"
 	"strings"
 	"testing"
@@ -55,7 +56,7 @@ func TestApply_UpsertNew(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-x"}},
+			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-x", Adapter: adapter.OpenAI}},
 			Aliases: []string{"gpt/x"},
 		},
 	}
@@ -289,7 +290,7 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: firstHostID, UpstreamName: "extra"}},
+			Hosts:   []model.HostBinding{{HostID: firstHostID, UpstreamName: "extra", Adapter: adapter.OpenAI}},
 			Aliases: []string{"extra/model"},
 		},
 	}

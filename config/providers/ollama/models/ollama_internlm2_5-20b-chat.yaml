@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/internlm2_5-20b-chat
+          adapter: openai
     family: ollama/internlm2_5
     capabilities:
         chat: true

@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: gpt-audio-2025-08-28
+          adapter: openai
     family: gpt
     capabilities:
         chat: true

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"github.com/wyolet/relay/app/adapter"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func fix(name string) *Model {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: validProvID()},
 		},
 		Spec: Spec{
-			Hosts: []HostBinding{{HostID: meta.NewID(), UpstreamName: "u"}},
+			Hosts: []HostBinding{{HostID: meta.NewID(), UpstreamName: "u", Adapter: adapter.OpenAI}},
 		},
 	}
 }
@@ -67,7 +68,7 @@ func TestValidate(t *testing.T) {
 			m: func() *Model {
 				m := fix("x")
 				dup := m.Spec.Hosts[0].HostID
-				m.Spec.Hosts = append(m.Spec.Hosts, HostBinding{HostID: dup, UpstreamName: "u2"})
+				m.Spec.Hosts = append(m.Spec.Hosts, HostBinding{HostID: dup, UpstreamName: "u2", Adapter: adapter.OpenAI})
 				return m
 			}(),
 			want: "duplicate host binding",

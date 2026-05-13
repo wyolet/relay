@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/mistral-7B-Instruct-v0.2
+          adapter: openai
     family: ollama/mistral
     capabilities:
         chat: true

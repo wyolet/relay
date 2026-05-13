@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/mixtral-8x7B-Instruct-v0.1
+          adapter: openai
     family: ollama/mixtral
     capabilities:
         chat: true

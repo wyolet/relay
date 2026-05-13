@@ -8,6 +8,7 @@ package model
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/meta"
 )
 
@@ -86,13 +87,15 @@ type Modalities struct {
 	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
 }
 
-// HostBinding declares that a Model is callable via a particular Host and
-// what name the Host's upstream API expects. One Model lists one binding
+// HostBinding declares that a Model is callable via a particular Host,
+// what name the Host's upstream API expects, and which wire-protocol
+// adapter the relay must use to talk to it. One Model lists one binding
 // per Host that serves it.
 type HostBinding struct {
-	HostID       string `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
-	UpstreamName string `json:"upstreamName"       yaml:"upstreamName"       validate:"required"`
-	Enabled      *bool  `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
+	HostID       string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
+	UpstreamName string        `json:"upstreamName"       yaml:"upstreamName"       validate:"required"`
+	Adapter      adapter.Kind  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
+	Enabled      *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
 }
 
 // IsEnabled returns true when the binding's Enabled is unset or explicitly true.

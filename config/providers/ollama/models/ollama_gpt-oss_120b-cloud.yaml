@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/gpt-oss:120b-cloud
+          adapter: openai
     family: ollama/gpt
     capabilities:
         chat: true

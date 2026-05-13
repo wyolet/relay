@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: openai
           upstreamName: o3-mini
+          adapter: openai
     family: o-series
     capabilities:
         chat: true

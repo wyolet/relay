@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/adapter"
 	"context"
 	"strings"
 	"testing"
@@ -65,7 +66,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o"}},
+			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o", Adapter: adapter.OpenAI}},
 			Aliases: []string{"openai/gpt-4o"},
 		},
 	}
@@ -75,7 +76,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini"}},
+			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini", Adapter: adapter.OpenAI}},
 			Aliases: []string{"openai/gpt-4o-mini", "openai/mini"},
 		},
 	}

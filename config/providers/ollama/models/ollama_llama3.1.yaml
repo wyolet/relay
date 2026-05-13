@@ -13,6 +13,7 @@ spec:
     hosts:
         - host: ollama
           upstreamName: ollama/llama3.1
+          adapter: openai
     family: ollama/llama3.1
     capabilities:
         chat: true
