@@ -74,6 +74,32 @@ func TestResolveRefs_RewritesPolicyNameToID(t *testing.T) {
 	}
 }
 
+func TestResolveRefs_RewritesModelNamesToIDs(t *testing.T) {
+	provID := ids.New()
+	mID := ids.New()
+	replID := ids.New()
+	snap := newSnapshot()
+	snap.providers["openai"] = &Provider{Metadata: Metadata{ID: provID, Name: "openai"}}
+	snap.models["gpt-4"] = &Model{Metadata: Metadata{ID: mID, Name: "gpt-4"}, Spec: ModelSpec{Provider: provID, UpstreamName: "gpt-4", Deprecation: &Deprecation{Replacement: "gpt-5"}}}
+	snap.models["gpt-5"] = &Model{Metadata: Metadata{ID: replID, Name: "gpt-5"}, Spec: ModelSpec{Provider: provID, UpstreamName: "gpt-5"}}
+	snap.policies["p"] = &Policy{Metadata: Metadata{ID: ids.New(), Name: "p"}, Spec: PolicySpec{Provider: provID, Models: []string{"gpt-4"}}}
+	snap.routes["r"] = &Route{Metadata: Metadata{ID: ids.New(), Name: "r"}, Spec: RouteSpec{Models: []string{"gpt-4", "gpt-5"}}}
+	snap.buildByIDIndexes()
+
+	if _, err := resolveRefs(snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.policies["p"].Spec.Models[0] != mID {
+		t.Errorf("policy.models[0]: got %q, want %q", snap.policies["p"].Spec.Models[0], mID)
+	}
+	if snap.routes["r"].Spec.Models[0] != mID || snap.routes["r"].Spec.Models[1] != replID {
+		t.Errorf("route.models: %+v", snap.routes["r"].Spec.Models)
+	}
+	if snap.models["gpt-4"].Spec.Deprecation.Replacement != replID {
+		t.Errorf("deprecation.replacement: got %q, want %q", snap.models["gpt-4"].Spec.Deprecation.Replacement, replID)
+	}
+}
+
 func TestResolveRefs_UnknownProviderErrors(t *testing.T) {
 	snap := newSnapshot()
 	snap.providers["openai"] = &Provider{Metadata: Metadata{ID: ids.New(), Name: "openai"}}

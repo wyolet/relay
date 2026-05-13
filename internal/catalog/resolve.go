@@ -17,9 +17,12 @@ import (
 //   - ModelSpec.Provider → Provider id
 //   - ProviderSpec.DefaultPolicy → Policy id
 //   - RelayKeySpec.PolicyRef → Policy id
+//   - PolicySpec.Models[] → Model id
+//   - RouteSpec.Models[] → Model id
+//   - Deprecation.Replacement → Model id
 //
-// Other cross-refs (Model refs, Secret refs, RateLimit attachments) will
-// land in subsequent PRs following this same pattern.
+// Other cross-refs (Secret refs, RateLimit attachments) will land in
+// subsequent PRs following this same pattern.
 //
 // Hard-errors on a string that is neither a known slug nor a valid UUID — that
 // indicates the catalog is corrupt and silently dropping the ref would mask
@@ -124,6 +127,60 @@ func resolveRefs(snap *snapshot) (mutated mutatedKinds, err error) {
 		}
 	}
 
+	// Model refs: PolicySpec.Models[], RouteSpec.Models[], Deprecation.Replacement.
+	// Models also accept Spec.Aliases as alternate human handles — accept either
+	// the canonical slug or any alias on write (modelByName already does this).
+	resolveModel := func(field, ownerKind, ownerName string, val *string) error {
+		if *val == "" {
+			return nil
+		}
+		if ids.Valid(*val) {
+			return nil
+		}
+		m, ok := snap.modelByName(*val)
+		if !ok {
+			return fmt.Errorf("%s %q: %s references unknown model %q",
+				ownerKind, ownerName, field, *val)
+		}
+		*val = m.Metadata.ID
+		return nil
+	}
+
+	for name, pol := range snap.policies {
+		for i := range pol.Spec.Models {
+			before := pol.Spec.Models[i]
+			if err := resolveModel("spec.models", "Policy", name, &pol.Spec.Models[i]); err != nil {
+				return mutated, err
+			}
+			if pol.Spec.Models[i] != before {
+				mutated.policies = true
+			}
+		}
+	}
+	for name, r := range snap.routes {
+		for i := range r.Spec.Models {
+			before := r.Spec.Models[i]
+			if err := resolveModel("spec.models", "Route", name, &r.Spec.Models[i]); err != nil {
+				return mutated, err
+			}
+			if r.Spec.Models[i] != before {
+				mutated.routes = true
+			}
+		}
+	}
+	for name, m := range snap.models {
+		if m.Spec.Deprecation == nil {
+			continue
+		}
+		before := m.Spec.Deprecation.Replacement
+		if err := resolveModel("spec.deprecation.replacement", "Model", name, &m.Spec.Deprecation.Replacement); err != nil {
+			return mutated, err
+		}
+		if m.Spec.Deprecation.Replacement != before {
+			mutated.models = true
+		}
+	}
+
 	return mutated, nil
 }
 
@@ -181,6 +238,30 @@ func ResolvePolicyRef(store PolicyRefStore, ref string) (string, error) {
 	return "", fmt.Errorf("unknown policy %q", ref)
 }
 
+// ModelRefStore is the narrow view needed by ResolveModelRef.
+type ModelRefStore interface {
+	ModelByName(name string) (*Model, bool)
+	ModelByID(id string) (*Model, bool)
+}
+
+// ResolveModelRef normalizes a model reference (name, alias, or id) to its id.
+// ModelByName already resolves aliases, so any human-known handle works.
+func ResolveModelRef(store ModelRefStore, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if ids.Valid(ref) {
+		if _, ok := store.ModelByID(ref); ok {
+			return ref, nil
+		}
+		return "", fmt.Errorf("unknown model id %q", ref)
+	}
+	if m, ok := store.ModelByName(ref); ok {
+		return m.Metadata.ID, nil
+	}
+	return "", fmt.Errorf("unknown model %q", ref)
+}
+
 // mutatedKinds reports which kinds had at least one row rewritten by
 // resolveRefs. Used by PGStore.Reload to decide whether to write the rewrites
 // back to Postgres (one-time self-healing migration).
@@ -190,10 +271,11 @@ type mutatedKinds struct {
 	models    bool
 	providers bool
 	relayKeys bool
+	routes    bool
 }
 
 func (m mutatedKinds) any() bool {
-	return m.secrets || m.policies || m.models || m.providers || m.relayKeys
+	return m.secrets || m.policies || m.models || m.providers || m.relayKeys || m.routes
 }
 
 // finalizeIdentity is the standard snapshot-preparation sequence used by every

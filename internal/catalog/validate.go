@@ -199,13 +199,13 @@ func validatePolicies(s *snapshot) error {
 				return fmt.Errorf("Policy %q: secret %q belongs to provider %q, not %q", policy.Metadata.Name, secName, sec.Spec.Provider, policy.Spec.Provider)
 			}
 		}
-		for _, modelName := range policy.Spec.Models {
-			m, ok := s.models[modelName]
+		for _, modelRef := range policy.Spec.Models {
+			m, ok := s.modelByID(modelRef)
 			if !ok {
-				return fmt.Errorf("Policy %q: unknown model %q", policy.Metadata.Name, modelName)
+				return fmt.Errorf("Policy %q: unknown model %q", policy.Metadata.Name, modelRef)
 			}
 			if m.Spec.Provider != policy.Spec.Provider {
-				return fmt.Errorf("Policy %q: model %q belongs to provider %q, not %q", policy.Metadata.Name, modelName, m.Spec.Provider, policy.Spec.Provider)
+				return fmt.Errorf("Policy %q: model %q belongs to provider %q, not %q", policy.Metadata.Name, m.Metadata.Name, m.Spec.Provider, policy.Spec.Provider)
 			}
 		}
 		effective := s.secretsForPolicy(policy)
@@ -383,7 +383,7 @@ func validateRoutes(s *snapshot) error {
 			return fmt.Errorf("Route %q: at least one model required", r.Metadata.Name)
 		}
 		for _, mn := range r.Spec.Models {
-			if _, ok := s.models[mn]; !ok {
+			if _, ok := s.modelByID(mn); !ok {
 				return fmt.Errorf("Route %q: unknown model %q", r.Metadata.Name, mn)
 			}
 		}

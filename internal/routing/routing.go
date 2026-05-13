@@ -46,6 +46,7 @@ type Catalog interface {
 	DefaultRoute() *catalog.Route
 	RouteByName(name string) (*catalog.Route, bool)
 	ModelByName(name string) (*catalog.Model, bool)
+	ModelByID(id string) (*catalog.Model, bool)
 	ProviderForModel(modelName string) (*catalog.Provider, bool)
 	PolicyByName(name string) (*catalog.Policy, bool)
 	PolicyByID(id string) (*catalog.Policy, bool)
@@ -114,7 +115,7 @@ func (res *Resolver) pickModel(req Request) (string, error) {
 			return "", ErrUnknownRoute
 		}
 		if req.ModelName != "" {
-			if !modelInRoute(req.ModelName, route) {
+			if !res.modelInRoute(req.ModelName, route) {
 				return "", ErrModelNotInRoute
 			}
 			return req.ModelName, nil
@@ -122,7 +123,7 @@ func (res *Resolver) pickModel(req Request) (string, error) {
 		if len(route.Spec.Models) == 0 {
 			return "", ErrNoModelSpecified
 		}
-		return route.Spec.Models[0], nil
+		return res.modelNameByID(route.Spec.Models[0])
 	}
 
 	if req.ModelName != "" {
@@ -134,7 +135,18 @@ func (res *Resolver) pickModel(req Request) (string, error) {
 	if dr == nil || len(dr.Spec.Models) == 0 {
 		return "", ErrNoModelSpecified
 	}
-	return dr.Spec.Models[0], nil
+	return res.modelNameByID(dr.Spec.Models[0])
+}
+
+// modelNameByID renders a Model id to its canonical slug. Used when picking
+// the first model from a Route — RouteSpec.Models[] is stored as ids, but the
+// rest of the pipeline still keys lookups by name (and includes aliases).
+func (res *Resolver) modelNameByID(id string) (string, error) {
+	m, ok := res.catalog.ModelByID(id)
+	if !ok {
+		return "", ErrUnknownModel
+	}
+	return m.Metadata.Name, nil
 }
 
 // buildPlan resolves provider, policy, secrets, and rate limits for a model name.
@@ -160,7 +172,7 @@ func (res *Resolver) buildPlan(modelName, policyOverride string) (*RequestPlan, 
 		if !ok || !catalog.IsEnabled(policy.Spec.Enabled) {
 			return nil, ErrUnknownPolicy
 		}
-		if len(policy.Spec.Models) > 0 && !modelAllowed(modelName, policy.Spec.Models) {
+		if len(policy.Spec.Models) > 0 && !res.modelAllowed(modelName, policy.Spec.Models) {
 			return nil, ErrModelNotAllowed
 		}
 		plan.Policy = policy
@@ -170,20 +182,30 @@ func (res *Resolver) buildPlan(modelName, policyOverride string) (*RequestPlan, 
 	return plan, nil
 }
 
-// modelInRoute reports whether modelName is listed in route.Spec.Models.
-func modelInRoute(modelName string, route *catalog.Route) bool {
-	for _, m := range route.Spec.Models {
-		if m == modelName {
+// modelInRoute reports whether the model resolved from modelName (slug or
+// alias) appears in route.Spec.Models. RouteSpec.Models[] carries Model ids,
+// so we resolve the incoming name to its model and compare by id.
+func (res *Resolver) modelInRoute(modelName string, route *catalog.Route) bool {
+	m, ok := res.catalog.ModelByName(modelName)
+	if !ok {
+		return false
+	}
+	for _, id := range route.Spec.Models {
+		if id == m.Metadata.ID {
 			return true
 		}
 	}
 	return false
 }
 
-// modelAllowed reports whether modelName is in the allowed list.
-func modelAllowed(modelName string, allowed []string) bool {
-	for _, m := range allowed {
-		if m == modelName {
+// modelAllowed is the Policy.Spec.Models analogue of modelInRoute.
+func (res *Resolver) modelAllowed(modelName string, allowed []string) bool {
+	m, ok := res.catalog.ModelByName(modelName)
+	if !ok {
+		return false
+	}
+	for _, id := range allowed {
+		if id == m.Metadata.ID {
 			return true
 		}
 	}

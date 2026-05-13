@@ -58,6 +58,54 @@ func stampMetaID(meta *catalog.Metadata, slugTaken func(candidate string) bool) 
 	return nil
 }
 
+// normalizePolicyRefs rewrites Policy.Spec cross-refs from name to id form so
+// PG JSONB carries the canonical id. Used by the admin write boundary.
+func normalizePolicyRefs(store *catalog.PGStore, v *catalog.Policy) error {
+	provID, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
+	if err != nil {
+		return err
+	}
+	v.Spec.Provider = provID
+	for i, m := range v.Spec.Models {
+		id, err := catalog.ResolveModelRef(store, m)
+		if err != nil {
+			return err
+		}
+		v.Spec.Models[i] = id
+	}
+	return nil
+}
+
+// normalizeModelRefs handles ModelSpec cross-refs: Provider and the optional
+// Deprecation.Replacement.
+func normalizeModelRefs(store *catalog.PGStore, v *catalog.Model) error {
+	provID, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
+	if err != nil {
+		return err
+	}
+	v.Spec.Provider = provID
+	if v.Spec.Deprecation != nil && v.Spec.Deprecation.Replacement != "" {
+		id, err := catalog.ResolveModelRef(store, v.Spec.Deprecation.Replacement)
+		if err != nil {
+			return err
+		}
+		v.Spec.Deprecation.Replacement = id
+	}
+	return nil
+}
+
+// normalizeRouteRefs rewrites Route.Spec.Models[] from names to ids.
+func normalizeRouteRefs(store *catalog.PGStore, v *catalog.Route) error {
+	for i, m := range v.Spec.Models {
+		id, err := catalog.ResolveModelRef(store, m)
+		if err != nil {
+			return err
+		}
+		v.Spec.Models[i] = id
+	}
+	return nil
+}
+
 // --- Provider ---
 
 func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.Provider] {
@@ -169,20 +217,16 @@ func policyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Policy) error {
-			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
-			if err != nil {
+			if err := normalizePolicyRefs(store, v); err != nil {
 				return err
 			}
-			v.Spec.Provider = resolved
 			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.Policy) error {
 			v.Metadata.ID = id
-			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
-			if err != nil {
+			if err := normalizePolicyRefs(store, v); err != nil {
 				return err
 			}
-			v.Spec.Provider = resolved
 			return st.Catalog.UpsertPolicy(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {
@@ -240,20 +284,16 @@ func modelKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Model) error {
-			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
-			if err != nil {
+			if err := normalizeModelRefs(store, v); err != nil {
 				return err
 			}
-			v.Spec.Provider = resolved
 			return st.Catalog.UpsertModel(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.Model) error {
 			v.Metadata.ID = id
-			resolved, err := catalog.ResolveProviderRef(store, v.Spec.Provider)
-			if err != nil {
+			if err := normalizeModelRefs(store, v); err != nil {
 				return err
 			}
-			v.Spec.Provider = resolved
 			return st.Catalog.UpsertModel(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {
@@ -311,10 +351,16 @@ func routeKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catalog.
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Route) error {
+			if err := normalizeRouteRefs(store, v); err != nil {
+				return err
+			}
 			return st.Catalog.UpsertRoute(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.Route) error {
 			v.Metadata.ID = id
+			if err := normalizeRouteRefs(store, v); err != nil {
+				return err
+			}
 			return st.Catalog.UpsertRoute(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {
