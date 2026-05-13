@@ -20,10 +20,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/internal/config"
+	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/pkg/kv"
 )
 
 func main() {
@@ -65,12 +69,11 @@ func main() {
 		bootOpts.AutoSeedDir = cfg.ConfigDir
 	}
 
-	cat, listener, _, err := appcatalog.Bootstrap(bootCtx, bootOpts)
+	cat, listener, stores, err := appcatalog.Bootstrap(bootCtx, bootOpts)
 	if err != nil {
 		slog.Error("catalog bootstrap failed", "err", err)
 		os.Exit(1)
 	}
-	_ = cat // catalog snapshot reaches handlers in Stage 3 (CRUD wire-up)
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
@@ -80,6 +83,38 @@ func main() {
 		}
 	}()
 	slog.Info("catalog bootstrapped", "auto_seed_dir", bootOpts.AutoSeedDir)
+
+	// Identity store — fatal if YAML is malformed (login would silently
+	// be disabled otherwise). Empty store is fine (login returns 503).
+	idStore, err := identity.LoadYAML(cfg.ConfigDir)
+	if err != nil {
+		slog.Error("identity: load YAML failed", "err", err)
+		os.Exit(1)
+	}
+	if n := len(idStore.Users()); n > 0 {
+		slog.Info("identity: loaded users", "count", n)
+	}
+
+	// kv backend — sessions, rate-limits, key-pool all share this.
+	var kvStore kv.Store
+	if cfg.StateBackend == "redis" {
+		if cfg.RedisAddr == "" {
+			slog.Error("RELAY_REDIS_ADDR required when RELAY_STATE_BACKEND=redis")
+			os.Exit(1)
+		}
+		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{Addr: cfg.RedisAddr})
+		if err != nil {
+			slog.Error("state(redis) init failed", "err", err)
+			os.Exit(1)
+		}
+		kvStore = rs
+	} else {
+		kvStore = kv.NewMem()
+	}
+	defer kvStore.Close()
+
+	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
+	sessMgr := session.New(kvStore, cookieSecure, "sess:")
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
@@ -94,14 +129,22 @@ func main() {
 	inferErr := make(chan error, 1)
 	go func() { inferErr <- inferSrv.ListenAndServe() }()
 
-	// Control plane (admin plane): /auth/*, CRUD, /version on RELAY_CONTROL_PORT.
-	// Disabled when RELAY_CONTROL_PORT is empty or "off".
+	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
+	// RELAY_CONTROL_PORT. Disabled when empty or "off".
 	var ctrlSrv *http.Server
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlRouter := chi.NewRouter()
-		control.Mount(ctrlRouter, control.Deps{})
+		control.Mount(ctrlRouter, control.Deps{
+			Identity:     idStore,
+			Sessions:     sessMgr,
+			AdminToken:   cfg.AdminToken,
+			Authz:        authz.AlwaysAllowAuthenticated{},
+			Catalog:      cat,
+			Stores:       stores,
+			CookieSecure: cookieSecure,
+		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
-		slog.Info("relay control listening", "addr", ctrlSrv.Addr)
+		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
 		go func() {
 			if err := ctrlSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				slog.Error("relay control: server error", "err", err)
