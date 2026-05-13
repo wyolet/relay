@@ -10,8 +10,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -49,6 +51,26 @@ func (s *Store) Upsert(ctx context.Context, p *Provider) error {
 		return fmt.Errorf("provider.Upsert: %w", err)
 	}
 	return s.q.UpsertProvider(ctx, params)
+}
+
+// Get returns the Provider with the given id, or (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*Provider, error) {
+	r, err := s.q.GetProvider(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("provider.Get: %w", err)
+	}
+	m, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	return &Provider{Meta: m, Spec: spec}, nil
 }
 
 // Delete removes a Provider by id. sqlc returns nil on a no-rows delete;

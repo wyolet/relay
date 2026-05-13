@@ -9,8 +9,10 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wyolet/relay/app/meta"
@@ -63,6 +65,45 @@ func (s *Store) List(ctx context.Context) ([]*Policy, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// Get returns the Policy with the given id, hydrating ModelIDs/HostKeyIDs/RateLimitID.
+// Returns (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
+	q := gen.New(s.pool)
+	r, err := q.GetPolicy(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("policy.Get: %w", err)
+	}
+	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	if r.RateLimitID.Valid {
+		spec.RateLimitID = r.RateLimitID.String
+	}
+	modelRows, err := q.GetPolicyModels(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("policy.Get models: %w", err)
+	}
+	for _, mr := range modelRows {
+		spec.ModelIDs = append(spec.ModelIDs, mr.ModelID)
+	}
+	keyRows, err := q.GetPolicyHostKeys(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("policy.Get hostkeys: %w", err)
+	}
+	for _, kr := range keyRows {
+		spec.HostKeyIDs = append(spec.HostKeyIDs, kr.HostKeyID)
+	}
+	return &Policy{Meta: md, Spec: spec}, nil
 }
 
 // Upsert writes p across policies + junction tables in a single tx.

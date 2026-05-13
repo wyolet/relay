@@ -7,8 +7,10 @@ package pricing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/meta"
@@ -50,6 +52,36 @@ func (s *Store) List(ctx context.Context) ([]*Pricing, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// Get returns the Pricing with the given id, hydrating TargetModelIDs.
+// Returns (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
+	q := gen.New(s.pool)
+	r, err := q.GetPricing(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("pricing.Get: %w", err)
+	}
+	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	md.Owner = meta.Owner{Kind: meta.OwnerHost, ID: r.HostID}
+	modelRows, err := q.GetPricingModels(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("pricing.Get models: %w", err)
+	}
+	for _, mr := range modelRows {
+		spec.TargetModelIDs = append(spec.TargetModelIDs, mr.ModelID)
+	}
+	return &Pricing{Meta: md, Spec: spec}, nil
 }
 
 // Upsert writes p across pricings + pricing_models in a single tx.

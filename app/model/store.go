@@ -5,8 +5,10 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -43,6 +45,26 @@ func (s *Store) Upsert(ctx context.Context, m *Model) error {
 		return fmt.Errorf("model.Upsert: %w", err)
 	}
 	return s.q.UpsertModel(ctx, params)
+}
+
+// Get returns the Model with the given id, or (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*Model, error) {
+	r, err := s.q.GetModel(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("model.Get: %w", err)
+	}
+	m, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	return &Model{Meta: m, Spec: spec}, nil
 }
 
 // Delete removes a Model by id.

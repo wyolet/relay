@@ -6,8 +6,10 @@ package relaykey
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -45,6 +47,26 @@ func (s *Store) Upsert(ctx context.Context, k *RelayKey) error {
 		return fmt.Errorf("relaykey.Upsert: %w", err)
 	}
 	return s.q.UpsertRelayKey(ctx, params)
+}
+
+// Get returns the RelayKey with the given id, or (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*RelayKey, error) {
+	r, err := s.q.GetRelayKey(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("relaykey.Get: %w", err)
+	}
+	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	return &RelayKey{Meta: md, Spec: spec}, nil
 }
 
 // Delete removes a RelayKey by id.

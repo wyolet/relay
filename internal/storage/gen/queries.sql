@@ -235,6 +235,39 @@ INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
 -- name: GetPassthrough :one
 SELECT name, spec FROM passthrough_config WHERE name = $1;
 
+-- name: GetProvider :one
+SELECT id, name, display_name, metadata, spec FROM providers WHERE id = $1;
+
+-- name: GetHost :one
+SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1;
+
+-- name: GetModel :one
+SELECT id, name, display_name, metadata, spec FROM models WHERE id = $1;
+
+-- name: GetSecret :one
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets WHERE id = $1;
+
+-- name: GetRateLimit :one
+SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1;
+
+-- name: GetPolicy :one
+SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies WHERE id = $1;
+
+-- name: GetPricing :one
+SELECT id, name, display_name, host_id, metadata, spec FROM pricings WHERE id = $1;
+
+-- name: GetRelayKey :one
+SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys WHERE id = $1;
+
+-- name: GetPolicyModels :many
+SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
+
+-- name: GetPricingModels :many
+SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position;
+
+-- name: GetPolicyHostKeys :many
+SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position;
+
 -- name: UpsertPassthrough :exec
 INSERT INTO passthrough_config (name, spec, updated_at)
 VALUES ($1, $2, NOW())

@@ -119,6 +119,56 @@ func (q *Queries) DeleteSecret(ctx context.Context, id string) error {
 	return err
 }
 
+const getHost = `-- name: GetHost :one
+SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1
+`
+
+type GetHostRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetHost(ctx context.Context, id string) (GetHostRow, error) {
+	row := q.db.QueryRow(ctx, getHost, id)
+	var i GetHostRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const getModel = `-- name: GetModel :one
+SELECT id, name, display_name, metadata, spec FROM models WHERE id = $1
+`
+
+type GetModelRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) {
+	row := q.db.QueryRow(ctx, getModel, id)
+	var i GetModelRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
 const getPassthrough = `-- name: GetPassthrough :one
 SELECT name, spec FROM passthrough_config WHERE name = $1
 `
@@ -132,6 +182,242 @@ func (q *Queries) GetPassthrough(ctx context.Context, name string) (GetPassthrou
 	row := q.db.QueryRow(ctx, getPassthrough, name)
 	var i GetPassthroughRow
 	err := row.Scan(&i.Name, &i.Spec)
+	return i, err
+}
+
+const getPolicy = `-- name: GetPolicy :one
+SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies WHERE id = $1
+`
+
+type GetPolicyRow struct {
+	ID          string      `db:"id" json:"id"`
+	Name        string      `db:"name" json:"name"`
+	DisplayName string      `db:"display_name" json:"display_name"`
+	Metadata    []byte      `db:"metadata" json:"metadata"`
+	Spec        []byte      `db:"spec" json:"spec"`
+	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
+}
+
+func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error) {
+	row := q.db.QueryRow(ctx, getPolicy, id)
+	var i GetPolicyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+		&i.RateLimitID,
+	)
+	return i, err
+}
+
+const getPolicyHostKeys = `-- name: GetPolicyHostKeys :many
+SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPolicyHostKeys(ctx context.Context, policyID string) ([]PolicyHostKey, error) {
+	rows, err := q.db.Query(ctx, getPolicyHostKeys, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyHostKey
+	for rows.Next() {
+		var i PolicyHostKey
+		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPolicyModels = `-- name: GetPolicyModels :many
+SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPolicyModels(ctx context.Context, policyID string) ([]PolicyModel, error) {
+	rows, err := q.db.Query(ctx, getPolicyModels, policyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyModel
+	for rows.Next() {
+		var i PolicyModel
+		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getPricing = `-- name: GetPricing :one
+SELECT id, name, display_name, host_id, metadata, spec FROM pricings WHERE id = $1
+`
+
+type GetPricingRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	HostID      string `db:"host_id" json:"host_id"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetPricing(ctx context.Context, id string) (GetPricingRow, error) {
+	row := q.db.QueryRow(ctx, getPricing, id)
+	var i GetPricingRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.HostID,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const getPricingModels = `-- name: GetPricingModels :many
+SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 ORDER BY position
+`
+
+func (q *Queries) GetPricingModels(ctx context.Context, pricingID string) ([]PricingModel, error) {
+	rows, err := q.db.Query(ctx, getPricingModels, pricingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PricingModel
+	for rows.Next() {
+		var i PricingModel
+		if err := rows.Scan(&i.PricingID, &i.ModelID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProvider = `-- name: GetProvider :one
+SELECT id, name, display_name, metadata, spec FROM providers WHERE id = $1
+`
+
+type GetProviderRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetProvider(ctx context.Context, id string) (GetProviderRow, error) {
+	row := q.db.QueryRow(ctx, getProvider, id)
+	var i GetProviderRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const getRateLimit = `-- name: GetRateLimit :one
+SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1
+`
+
+type GetRateLimitRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow, error) {
+	row := q.db.QueryRow(ctx, getRateLimit, id)
+	var i GetRateLimitRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const getRelayKey = `-- name: GetRelayKey :one
+SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys WHERE id = $1
+`
+
+type GetRelayKeyRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	KeyHash     string `db:"key_hash" json:"key_hash"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, error) {
+	row := q.db.QueryRow(ctx, getRelayKey, id)
+	var i GetRelayKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.KeyHash,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const getSecret = `-- name: GetSecret :one
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets WHERE id = $1
+`
+
+type GetSecretRow struct {
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+}
+
+func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error) {
+	row := q.db.QueryRow(ctx, getSecret, id)
+	var i GetSecretRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+		&i.ValueKind,
+		&i.ValueFromEnv,
+		&i.ValueCiphertext,
+		&i.ValueNonce,
+	)
 	return i, err
 }
 

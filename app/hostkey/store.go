@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -108,6 +109,34 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 	default:
 		return fmt.Errorf("hostkey.Upsert: unknown value kind %q", k.Spec.ValueFrom.Kind)
 	}
+}
+
+// Get returns the HostKey with the given id, or (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
+	r, err := s.q.GetSecret(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("hostkey.Get: %w", err)
+	}
+	// Convert GetSecretRow to the shape fromRow expects via ListSecretsRow alias.
+	row := gen.ListSecretsRow{
+		ID:              r.ID,
+		Name:            r.Name,
+		DisplayName:     r.DisplayName,
+		Metadata:        r.Metadata,
+		Spec:            r.Spec,
+		ValueKind:       r.ValueKind,
+		ValueFromEnv:    r.ValueFromEnv,
+		ValueCiphertext: r.ValueCiphertext,
+		ValueNonce:      r.ValueNonce,
+	}
+	k, err := s.fromRow(row)
+	if err != nil {
+		return nil, fmt.Errorf("hostkey.Get: %w", err)
+	}
+	return k, nil
 }
 
 // Delete removes a HostKey by id.
