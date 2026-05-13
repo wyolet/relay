@@ -9,7 +9,7 @@
 //     for the admin UI.
 //   - Policy: enabled rows only.
 //   - Model: enabled rows referenced by ≥1 enabled Policy.
-//   - ProviderKey: enabled rows referenced by ≥1 enabled Policy.
+//   - HostKey: enabled rows referenced by ≥1 enabled Policy.
 //   - RateLimit: enabled rows referenced by ≥1 enabled Policy.
 //   - RelayKey: enabled rows. (Auth proceeds even if its Policy is
 //     disabled, so the response can say "policy disabled" instead of 401.)
@@ -21,7 +21,7 @@ package catalog
 import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/providerkey"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -33,20 +33,29 @@ type Snapshot struct {
 	policiesByID   map[string]*policy.Policy
 	policiesByName map[string]*policy.Policy
 
-	modelsByID   map[string]*model.Model
-	modelsByName map[string]*model.Model // includes Spec.Aliases
+	modelsByID map[string]*model.Model
+	// modelsByName is multivalued: an alias may legitimately point at more
+	// than one Model (e.g. "gpt-5" hosted by both openai and azure). The
+	// consumer disambiguates using a suffix in the request string
+	// (model@providerSlug) or the X-Relay-Provider header, falling back to
+	// the caller's Policy.
+	modelsByName map[string][]*model.Model
 
-	providerKeysByID map[string]*providerkey.ProviderKey
+	hostKeysByID map[string]*hostkey.HostKey
 
 	rateLimitsByID map[string]*ratelimit.RateLimit
 
 	relayKeysByID   map[string]*relaykey.RelayKey
 	relayKeysByHash map[string]*relaykey.RelayKey
 
+	// providerSlugByID is the tiny id→slug map needed by hot-path
+	// disambiguation (Provider rows themselves don't enter the Snapshot).
+	providerSlugByID map[string]string
+
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
 	modelsByPolicy       map[string][]*model.Model
-	providerKeysByPolicy map[string][]*providerkey.ProviderKey
+	hostKeysByPolicy map[string][]*hostkey.HostKey
 	rateLimitByPolicy    map[string]*ratelimit.RateLimit
 }
 
@@ -70,15 +79,26 @@ func (s *Snapshot) Model(id string) (*model.Model, bool) {
 	return m, ok
 }
 
-// ModelByName returns the reachable Model matching this slug or alias.
-func (s *Snapshot) ModelByName(name string) (*model.Model, bool) {
-	m, ok := s.modelsByName[name]
-	return m, ok
+// ModelsByName returns every reachable Model whose Spec.Aliases contains
+// this name. The list is empty for unknown names. Multiple Models may share
+// an alias when the same wire name is intentionally hosted by more than one
+// Provider; consumers disambiguate with a host suffix or the
+// X-Relay-Provider header.
+func (s *Snapshot) ModelsByName(name string) []*model.Model {
+	return s.modelsByName[name]
 }
 
-// ProviderKey returns the reachable ProviderKey with this id, or false.
-func (s *Snapshot) ProviderKey(id string) (*providerkey.ProviderKey, bool) {
-	k, ok := s.providerKeysByID[id]
+// ProviderSlug returns the Provider.Meta.Name for the given Provider id, or
+// false. Hot-path resolution uses this to compare a Model's owning Provider
+// against the suffix/header hint without needing the full Provider row.
+func (s *Snapshot) ProviderSlug(providerID string) (string, bool) {
+	slug, ok := s.providerSlugByID[providerID]
+	return slug, ok
+}
+
+// HostKey returns the reachable HostKey with this id, or false.
+func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
+	k, ok := s.hostKeysByID[id]
 	return k, ok
 }
 
@@ -107,10 +127,10 @@ func (s *Snapshot) ModelsInPolicy(policyID string) []*model.Model {
 	return s.modelsByPolicy[policyID]
 }
 
-// ProviderKeysInPolicy returns the reachable ProviderKeys attached to this
+// HostKeysInPolicy returns the reachable HostKeys attached to this
 // Policy in declaration order (relevant for KeySelectionPrioritized).
-func (s *Snapshot) ProviderKeysInPolicy(policyID string) []*providerkey.ProviderKey {
-	return s.providerKeysByPolicy[policyID]
+func (s *Snapshot) HostKeysInPolicy(policyID string) []*hostkey.HostKey {
+	return s.hostKeysByPolicy[policyID]
 }
 
 // RateLimitOfPolicy returns the single RateLimit bound to this Policy, or

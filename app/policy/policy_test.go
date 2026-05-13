@@ -42,13 +42,13 @@ func TestValidate(t *testing.T) {
 			want: "Name",
 		},
 		{
-			name: "providerKeyIds non-uuid",
+			name: "hostKeyIds non-uuid",
 			p: func() *Policy {
 				p := fix("x")
-				p.Spec.ProviderKeyIDs = []string{"not-a-uuid"}
+				p.Spec.HostKeyIDs = []string{"not-a-uuid"}
 				return p
 			}(),
-			want: "ProviderKeyIDs",
+			want: "HostKeyIDs",
 		},
 		{
 			name: "modelIds non-uuid",
@@ -60,14 +60,14 @@ func TestValidate(t *testing.T) {
 			want: "ModelIDs",
 		},
 		{
-			name: "duplicate providerKeyIds",
+			name: "duplicate hostKeyIds",
 			p: func() *Policy {
 				p := fix("x")
 				id := meta.NewID()
-				p.Spec.ProviderKeyIDs = []string{id, id}
+				p.Spec.HostKeyIDs = []string{id, id}
 				return p
 			}(),
-			want: "duplicate providerKeyIds",
+			want: "duplicate hostKeyIds",
 		},
 		{
 			name: "duplicate modelIds",

@@ -5,7 +5,7 @@ import (
 
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/providerkey"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -16,10 +16,10 @@ import (
 //
 // Rules enforced:
 //   - Every Model.Meta.Owner.ID resolves to a Provider row (lookup by id).
-//   - Every ProviderKey.Meta.Owner.ID resolves to a Provider row.
+//   - Every HostKey.Meta.Owner.ID resolves to a Provider row.
 //   - Every enabled Policy's ModelIDs resolve to enabled Models, all sharing
 //     a single Provider.
-//   - Every enabled Policy's ProviderKeyIDs resolve to enabled ProviderKeys,
+//   - Every enabled Policy's HostKeyIDs resolve to enabled HostKeys,
 //     all sharing the same Provider as the Policy's Models.
 //   - Every enabled Policy's RateLimitID (when set) resolves to an enabled
 //     RateLimit.
@@ -36,15 +36,15 @@ func validateCross(
 	enabledPols []*policy.Policy,
 	enabledRKs []*relaykey.RelayKey,
 	enabledModels []*model.Model,
-	enabledKeys []*providerkey.ProviderKey,
+	enabledKeys []*hostkey.HostKey,
 	enabledRLs []*ratelimit.RateLimit,
 ) error {
 	modelByID := indexBy(enabledModels, func(m *model.Model) string { return m.Meta.ID })
-	keyByID := indexBy(enabledKeys, func(k *providerkey.ProviderKey) string { return k.Meta.ID })
+	keyByID := indexBy(enabledKeys, func(k *hostkey.HostKey) string { return k.Meta.ID })
 	rlByID := indexBy(enabledRLs, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
 	polByID := indexBy(enabledPols, func(p *policy.Policy) string { return p.Meta.ID })
 
-	// Owner.ID → Provider for Models and ProviderKeys.
+	// Owner.ID → Provider for Models and HostKeys.
 	for _, m := range enabledModels {
 		if _, ok := providerIDs[m.Meta.Owner.ID]; !ok {
 			return fmt.Errorf("model %q: owner.id %q does not match any Provider", m.Meta.Name, m.Meta.Owner.ID)
@@ -52,11 +52,11 @@ func validateCross(
 	}
 	for _, k := range enabledKeys {
 		if _, ok := providerIDs[k.Meta.Owner.ID]; !ok {
-			return fmt.Errorf("providerkey %q: owner.id %q does not match any Provider", k.Meta.Name, k.Meta.Owner.ID)
+			return fmt.Errorf("hostkey %q: owner.id %q does not match any Provider", k.Meta.Name, k.Meta.Owner.ID)
 		}
 	}
 
-	// Policy.Spec.ModelIDs / ProviderKeyIDs / RateLimitID resolve + same-provider.
+	// Policy.Spec.ModelIDs / HostKeyIDs / RateLimitID resolve + same-provider.
 	for _, p := range enabledPols {
 		var providerID string
 		for _, id := range p.Spec.ModelIDs {
@@ -71,15 +71,15 @@ func validateCross(
 					p.Meta.Name, providerID, m.Meta.Owner.ID)
 			}
 		}
-		for _, id := range p.Spec.ProviderKeyIDs {
+		for _, id := range p.Spec.HostKeyIDs {
 			k, ok := keyByID[id]
 			if !ok {
-				return fmt.Errorf("policy %q: providerKeyIds references unknown or disabled key %q", p.Meta.Name, id)
+				return fmt.Errorf("policy %q: hostKeyIds references unknown or disabled key %q", p.Meta.Name, id)
 			}
 			if providerID == "" {
 				providerID = k.Meta.Owner.ID
 			} else if providerID != k.Meta.Owner.ID {
-				return fmt.Errorf("policy %q: providerKey %q belongs to provider %q, not %q",
+				return fmt.Errorf("policy %q: hostKey %q belongs to provider %q, not %q",
 					p.Meta.Name, k.Meta.Name, k.Meta.Owner.ID, providerID)
 			}
 		}
@@ -97,26 +97,11 @@ func validateCross(
 		}
 	}
 
-	// Model alias uniqueness across the enabled set.
-	allNames := map[string]string{}
-	add := func(handle, owner string) error {
-		key := lower(handle)
-		if prev, dup := allNames[key]; dup && prev != owner {
-			return fmt.Errorf("model %q: name/alias %q collides with %q", owner, handle, prev)
-		}
-		allNames[key] = owner
-		return nil
-	}
-	for _, m := range enabledModels {
-		if err := add(m.Meta.Name, m.Meta.Name); err != nil {
-			return err
-		}
-		for _, a := range m.Spec.Aliases {
-			if err := add(a, m.Meta.Name); err != nil {
-				return err
-			}
-		}
-	}
+	// Model alias collisions across the enabled set are *permitted* — the
+	// same wire name may intentionally point at multiple Models hosted by
+	// different Providers, with the consumer disambiguating via suffix or
+	// header. Per-row alias uniqueness (within a single Model's own list)
+	// is checked in model.Validate.
 
 	// Deprecation.Replacement resolves.
 	for _, m := range enabledModels {

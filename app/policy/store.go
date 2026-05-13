@@ -3,7 +3,7 @@
 // TODO(arch): the target storage shape uses junction tables
 // (policy_models, policy_provider_keys) plus a policies.rate_limit_id
 // column. That requires migrations + new sqlc queries which haven't
-// landed yet, so for now Spec.ModelIDs, Spec.ProviderKeyIDs, and
+// landed yet, so for now Spec.ModelIDs, Spec.HostKeyIDs, and
 // Spec.RateLimitID continue to round-trip inside the existing JSONB
 // spec column. When the junctions land, fromRow becomes a List+JOIN
 // and toUpsertParams becomes a multi-table transaction; Spec stops

@@ -1,11 +1,11 @@
-// store.go is the data-access layer for ProviderKey. It is the only place
+// store.go is the data-access layer for HostKey. It is the only place
 // that knows about encryption, the env-var lookup, or the split storage
 // columns (value_kind / value_from_env / value_ciphertext / value_nonce).
 //
 // One Upsert routes to the right SQL based on Spec.ValueFrom.Kind. List
 // reconstructs Spec from JSONB and populates the runtime-only Resolved /
 // KeyHash fields by reading the env var or decrypting the ciphertext.
-package providerkey
+package hostkey
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
-// Store is the ProviderKey data-access type. The 32-byte AES-GCM master key
+// Store is the HostKey data-access type. The 32-byte AES-GCM master key
 // is plumbed at construction; pass nil to run env-only (any stored-mode
 // operation errors loudly).
 type Store struct {
@@ -36,19 +36,19 @@ func NewStore(q *gen.Queries, masterKey []byte) *Store {
 	return &Store{q: q, masterKey: masterKey}
 }
 
-// List returns every ProviderKey row with Resolved + KeyHash populated.
+// List returns every HostKey row with Resolved + KeyHash populated.
 // env-mode rows read os.Getenv; stored-mode rows are decrypted with the
 // master key.
-func (s *Store) List(ctx context.Context) ([]*ProviderKey, error) {
+func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 	rows, err := s.q.ListSecrets(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("providerkey.List: %w", err)
+		return nil, fmt.Errorf("hostkey.List: %w", err)
 	}
-	out := make([]*ProviderKey, 0, len(rows))
+	out := make([]*HostKey, 0, len(rows))
 	for _, r := range rows {
 		k, err := s.fromRow(r)
 		if err != nil {
-			return nil, fmt.Errorf("providerkey %s: %w", r.Name, err)
+			return nil, fmt.Errorf("hostkey %s: %w", r.Name, err)
 		}
 		out = append(out, k)
 	}
@@ -59,14 +59,14 @@ func (s *Store) List(ctx context.Context) ([]*ProviderKey, error) {
 // Spec.ValueFrom.Kind. Cleartext Spec.Value is encrypted here and never
 // reaches PG in cleartext; the field on k is cleared after a successful
 // stored-mode write.
-func (s *Store) Upsert(ctx context.Context, k *ProviderKey) error {
+func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 	metaJSON, err := meta.MarshalJSONB(k.Meta)
 	if err != nil {
-		return fmt.Errorf("providerkey.Upsert metadata: %w", err)
+		return fmt.Errorf("hostkey.Upsert metadata: %w", err)
 	}
 	specJSON, err := marshalSpec(&k.Spec)
 	if err != nil {
-		return fmt.Errorf("providerkey.Upsert spec: %w", err)
+		return fmt.Errorf("hostkey.Upsert spec: %w", err)
 	}
 	switch k.Spec.ValueFrom.Kind {
 	case ValueKindEnv:
@@ -81,14 +81,14 @@ func (s *Store) Upsert(ctx context.Context, k *ProviderKey) error {
 		return err
 	case ValueKindStored:
 		if len(s.masterKey) == 0 {
-			return errors.New("providerkey.Upsert: stored mode requires master key")
+			return errors.New("hostkey.Upsert: stored mode requires master key")
 		}
 		if k.Spec.Value == "" {
-			return errors.New("providerkey.Upsert: cleartext value required for stored mode")
+			return errors.New("hostkey.Upsert: cleartext value required for stored mode")
 		}
 		ct, nonce, err := crypto.Encrypt(s.masterKey, []byte(k.Spec.Value))
 		if err != nil {
-			return fmt.Errorf("providerkey.Upsert encrypt: %w", err)
+			return fmt.Errorf("hostkey.Upsert encrypt: %w", err)
 		}
 		_, err = s.q.InsertSecretStored(ctx, gen.InsertSecretStoredParams{
 			ID:              k.Meta.ID,
@@ -106,16 +106,16 @@ func (s *Store) Upsert(ctx context.Context, k *ProviderKey) error {
 		k.Spec.Value = ""
 		return nil
 	default:
-		return fmt.Errorf("providerkey.Upsert: unknown value kind %q", k.Spec.ValueFrom.Kind)
+		return fmt.Errorf("hostkey.Upsert: unknown value kind %q", k.Spec.ValueFrom.Kind)
 	}
 }
 
-// Delete removes a ProviderKey by id.
+// Delete removes a HostKey by id.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteSecret(ctx, id)
 }
 
-func (s *Store) fromRow(r gen.ListSecretsRow) (*ProviderKey, error) {
+func (s *Store) fromRow(r gen.ListSecretsRow) (*HostKey, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (s *Store) fromRow(r gen.ListSecretsRow) (*ProviderKey, error) {
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
-	k := &ProviderKey{Meta: md, Spec: spec}
+	k := &HostKey{Meta: md, Spec: spec}
 
 	switch r.ValueKind {
 	case string(ValueKindEnv):

@@ -72,5 +72,6 @@ type OwnerKind string
 const (
 	OwnerSystem   OwnerKind = "system"
 	OwnerProvider OwnerKind = "provider"
+	OwnerHost     OwnerKind = "host"
 	OwnerUser     OwnerKind = "user"
 )

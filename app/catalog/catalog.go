@@ -8,7 +8,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/providerkey"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -20,7 +20,7 @@ type Catalog struct {
 	providers   ProviderLister
 	policies    PolicyLister
 	models      ModelLister
-	keys        ProviderKeyLister
+	keys        HostKeyLister
 	rateLimits  RateLimitLister
 	relayKeys   RelayKeyLister
 
@@ -40,8 +40,8 @@ type PolicyLister interface {
 type ModelLister interface {
 	List(ctx context.Context) ([]*model.Model, error)
 }
-type ProviderKeyLister interface {
-	List(ctx context.Context) ([]*providerkey.ProviderKey, error)
+type HostKeyLister interface {
+	List(ctx context.Context) ([]*hostkey.HostKey, error)
 }
 type RateLimitLister interface {
 	List(ctx context.Context) ([]*ratelimit.RateLimit, error)
@@ -56,7 +56,7 @@ func New(
 	providers ProviderLister,
 	policies PolicyLister,
 	models ModelLister,
-	keys ProviderKeyLister,
+	keys HostKeyLister,
 	rateLimits RateLimitLister,
 	relayKeys RelayKeyLister,
 ) *Catalog {
@@ -117,7 +117,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	enabledPols := filter(pols, (*policy.Policy).IsEnabled)
 	enabledRKs := filter(rks, (*relaykey.RelayKey).IsEnabled)
 	enabledModels := filter(models, (*model.Model).IsEnabled)
-	enabledKeys := filter(keys, (*providerkey.ProviderKey).IsEnabled)
+	enabledKeys := filter(keys, (*hostkey.HostKey).IsEnabled)
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 
 	if err := validateCross(providerIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs); err != nil {

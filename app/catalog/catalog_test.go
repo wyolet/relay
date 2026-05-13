@@ -9,7 +9,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/providerkey"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -29,9 +29,9 @@ type modList []*model.Model
 
 func (l modList) List(context.Context) ([]*model.Model, error) { return l, nil }
 
-type keyList []*providerkey.ProviderKey
+type keyList []*hostkey.HostKey
 
-func (l keyList) List(context.Context) ([]*providerkey.ProviderKey, error) { return l, nil }
+func (l keyList) List(context.Context) ([]*hostkey.HostKey, error) { return l, nil }
 
 type rlList []*ratelimit.RateLimit
 
@@ -51,32 +51,38 @@ func fixture() (provList, polList, modList, keyList, rlList, rkList) {
 			ID: meta.NewID(), Name: "gpt-4o",
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
-		Spec: model.Spec{UpstreamName: "gpt-4o"},
+		Spec: model.Spec{
+			UpstreamName: "gpt-4o",
+			Aliases:      []string{"openai/gpt-4o"},
+		},
 	}
 	m2 := &model.Model{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "gpt-4o-mini",
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
-		Spec: model.Spec{UpstreamName: "gpt-4o-mini", Aliases: []string{"mini"}},
+		Spec: model.Spec{
+			UpstreamName: "gpt-4o-mini",
+			Aliases:      []string{"openai/gpt-4o-mini", "openai/mini"},
+		},
 	}
 
-	k1 := &providerkey.ProviderKey{
+	k1 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k1",
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
-		Spec: providerkey.Spec{
-			ValueFrom: providerkey.ValueFrom{Kind: providerkey.ValueKindEnv, Env: "K1"},
+		Spec: hostkey.Spec{
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K1"},
 		},
 	}
-	k2 := &providerkey.ProviderKey{
+	k2 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k2",
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
-		Spec: providerkey.Spec{
-			ValueFrom: providerkey.ValueFrom{Kind: providerkey.ValueKindEnv, Env: "K2"},
+		Spec: hostkey.Spec{
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K2"},
 		},
 	}
 
@@ -97,7 +103,7 @@ func fixture() (provList, polList, modList, keyList, rlList, rkList) {
 		},
 		Spec: policy.Spec{
 			ModelIDs:       []string{m1.Meta.ID, m2.Meta.ID},
-			ProviderKeyIDs: []string{k1.Meta.ID, k2.Meta.ID},
+			HostKeyIDs: []string{k1.Meta.ID, k2.Meta.ID},
 			RateLimitID:    rl.Meta.ID,
 		},
 	}
@@ -136,11 +142,11 @@ func TestReload_HappyPath(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); !ok {
 		t.Error("policy not in snapshot")
 	}
-	if _, ok := s.ModelByName("openai/gpt-4o-mini"); !ok {
-		t.Error("model not in snapshot")
+	if got := s.ModelsByName("openai/gpt-4o-mini"); len(got) != 1 {
+		t.Errorf("model not in snapshot: got %d matches, want 1", len(got))
 	}
-	if _, ok := s.ModelByName("openai/mini"); !ok {
-		t.Error("alias lookup failed")
+	if got := s.ModelsByName("openai/mini"); len(got) != 1 {
+		t.Errorf("alias lookup failed: got %d matches, want 1", len(got))
 	}
 	if _, ok := s.RelayKeyByHash(strings.Repeat("a", 64)); !ok {
 		t.Error("relaykey hash lookup failed")
@@ -149,7 +155,7 @@ func TestReload_HappyPath(t *testing.T) {
 	if got := len(s.ModelsInPolicy(pol.Meta.ID)); got != 2 {
 		t.Errorf("models in policy: got %d, want 2", got)
 	}
-	if got := len(s.ProviderKeysInPolicy(pol.Meta.ID)); got != 2 {
+	if got := len(s.HostKeysInPolicy(pol.Meta.ID)); got != 2 {
 		t.Errorf("keys in policy: got %d, want 2", got)
 	}
 	if s.RateLimitOfPolicy(pol.Meta.ID) == nil {
@@ -175,11 +181,11 @@ func TestReload_DisabledPolicyEvictsReachables(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); ok {
 		t.Error("disabled policy should be evicted")
 	}
-	if _, ok := s.ModelByName("openai/gpt-4o"); ok {
-		t.Error("model with no enabled referrer should be evicted")
+	if got := s.ModelsByName("openai/gpt-4o"); len(got) != 0 {
+		t.Errorf("model with no enabled referrer should be evicted: got %d", len(got))
 	}
-	if _, ok := s.ModelByName("openai/gpt-4o-mini"); ok {
-		t.Error("aliased model with no enabled referrer should be evicted")
+	if got := s.ModelsByName("openai/gpt-4o-mini"); len(got) != 0 {
+		t.Errorf("aliased model with no enabled referrer should be evicted: got %d", len(got))
 	}
 }
 
@@ -207,13 +213,22 @@ func TestReload_RelayKeyToDisabledPolicyFails(t *testing.T) {
 	}
 }
 
-func TestReload_AliasCollisionFails(t *testing.T) {
+// TestReload_AliasCollisionAllowed proves the multivalued index: two
+// reachable Models can share an alias intentionally (e.g. the same wire
+// name "gpt-5" served by both openai-direct and an azure deployment).
+// Consumers disambiguate downstream with a suffix or header.
+func TestReload_AliasCollisionAllowed(t *testing.T) {
 	provs, pols, models, keys, rls, rks := fixture()
-	models[1].Spec.Aliases = []string{"gpt-4o"} // collides with models[0]'s name
+	// Both models claim the same wire alias "shared".
+	models[0].Spec.Aliases = append(models[0].Spec.Aliases, "shared")
+	models[1].Spec.Aliases = append(models[1].Spec.Aliases, "shared")
 
 	c := New(provs, pols, models, keys, rls, rks)
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "collides") {
-		t.Fatalf("expected alias collision error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got := c.Current().ModelsByName("shared")
+	if len(got) != 2 {
+		t.Errorf("got %d matches for shared alias, want 2", len(got))
 	}
 }

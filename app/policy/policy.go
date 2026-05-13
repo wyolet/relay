@@ -42,9 +42,9 @@ type Spec struct {
 	// ModelIDs is the set of Models this Policy exposes (m:n with Model).
 	ModelIDs []string `json:"modelIds,omitempty" yaml:"modelIds,omitempty" validate:"omitempty,dive,uuid"`
 
-	// ProviderKeyIDs is the set of ProviderKeys this Policy can draw from
+	// HostKeyIDs is the set of HostKeys this Policy can draw from
 	// (m:n with ProviderKey). Order is significant for KeySelectionPrioritized.
-	ProviderKeyIDs []string `json:"providerKeyIds,omitempty" yaml:"providerKeyIds,omitempty" validate:"omitempty,dive,uuid"`
+	HostKeyIDs []string `json:"hostKeyIds,omitempty" yaml:"hostKeyIds,omitempty" validate:"omitempty,dive,uuid"`
 
 	// RateLimitID is the single RateLimit applied to traffic through this
 	// Policy. Optional — empty means no policy-level rate limiting.
@@ -69,7 +69,7 @@ type KeySelection string
 
 const (
 	// KeySelectionPrioritized drains keys in declaration order — the first
-	// healthy key in ProviderKeyIDs wins. Default.
+	// healthy key in HostKeyIDs wins. Default.
 	KeySelectionPrioritized KeySelection = "prioritized"
 	// KeySelectionRoundRobin rotates evenly across healthy keys.
 	KeySelectionRoundRobin KeySelection = "round-robin"
@@ -91,7 +91,7 @@ func (p *Policy) EffectiveKeySelection() KeySelection {
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
 //   - Owner.Kind is user or system.
-//   - ModelIDs / ProviderKeyIDs have no within-list duplicates.
+//   - ModelIDs / HostKeyIDs have no within-list duplicates.
 //
 // Cross-entity checks (every id resolves; ProviderKeys + Models share a
 // Provider; RateLimitID resolves; auth-required Providers have at least
@@ -110,7 +110,7 @@ func (p *Policy) Validate() error {
 	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
 		return err
 	}
-	if err := uniqueIDs("providerKeyIds", p.Meta.Name, p.Spec.ProviderKeyIDs); err != nil {
+	if err := uniqueIDs("hostKeyIds", p.Meta.Name, p.Spec.HostKeyIDs); err != nil {
 		return err
 	}
 	return nil

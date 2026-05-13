@@ -3,19 +3,23 @@ package catalog
 import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/providerkey"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
 
 // build assembles a Snapshot from the (already enabled-filtered) rows.
-// Reachability pruning happens here: Models / ProviderKeys / RateLimits not
+// Reachability pruning happens here: Models / HostKeys / RateLimits not
 // referenced by any input Policy are dropped.
 //
-// providerSlugByID maps Provider.Meta.ID → Provider.Meta.Name. Providers
-// themselves don't enter the Snapshot, but every Model is indexed by name
-// as "{providerSlug}/{modelName}" so the request path can resolve client
-// strings like "openai/gpt-5" in one map lookup.
+// Models are indexed by every entry in their Spec.Aliases verbatim — no
+// prefix derivation. The operator decides what wire strings address each
+// Model. Multiple Models may share an alias intentionally (same wire name
+// hosted by different Providers); ModelsByName returns the full list and
+// the consumer disambiguates with a suffix or header.
+//
+// providerSlugByID is carried through to the Snapshot for hot-path
+// disambiguation; the Provider rows themselves never enter the Snapshot.
 //
 // The caller is responsible for filtering rows by Spec.Enabled before
 // passing them in. build does not consult Enabled itself — it trusts inputs.
@@ -23,7 +27,7 @@ func build(
 	pols []*policy.Policy,
 	rks []*relaykey.RelayKey,
 	models []*model.Model,
-	keys []*providerkey.ProviderKey,
+	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	providerSlugByID map[string]string,
 ) *Snapshot {
@@ -31,13 +35,14 @@ func build(
 		policiesByID:         make(map[string]*policy.Policy, len(pols)),
 		policiesByName:       make(map[string]*policy.Policy, len(pols)),
 		modelsByID:           map[string]*model.Model{},
-		modelsByName:         map[string]*model.Model{},
-		providerKeysByID:     map[string]*providerkey.ProviderKey{},
+		modelsByName:         map[string][]*model.Model{},
+		hostKeysByID:     map[string]*hostkey.HostKey{},
 		rateLimitsByID:       map[string]*ratelimit.RateLimit{},
 		relayKeysByID:        make(map[string]*relaykey.RelayKey, len(rks)),
 		relayKeysByHash:      make(map[string]*relaykey.RelayKey, len(rks)),
+		providerSlugByID:     providerSlugByID,
 		modelsByPolicy:       map[string][]*model.Model{},
-		providerKeysByPolicy: map[string][]*providerkey.ProviderKey{},
+		hostKeysByPolicy: map[string][]*hostkey.HostKey{},
 		rateLimitByPolicy:    map[string]*ratelimit.RateLimit{},
 	}
 
@@ -63,7 +68,7 @@ func build(
 		for _, id := range p.Spec.ModelIDs {
 			wantModel[id] = struct{}{}
 		}
-		for _, id := range p.Spec.ProviderKeyIDs {
+		for _, id := range p.Spec.HostKeyIDs {
 			wantKey[id] = struct{}{}
 		}
 		if p.Spec.RateLimitID != "" {
@@ -71,27 +76,24 @@ func build(
 		}
 	}
 
-	// Index reachable Models by id and by "{providerSlug}/{modelName}".
-	// The name index includes Spec.Aliases under the same provider prefix.
+	// Index reachable Models by id and by every entry in Spec.Aliases
+	// verbatim. Aliases may collide intentionally (same wire name hosted
+	// by multiple Providers); the index is multivalued and the consumer
+	// disambiguates downstream.
 	for _, m := range models {
 		if _, ok := wantModel[m.Meta.ID]; !ok {
 			continue
 		}
 		s.modelsByID[m.Meta.ID] = m
-		prefix, ok := providerSlugByID[m.Meta.Owner.ID]
-		if !ok {
-			continue // cross-entity validate should have caught this
-		}
-		s.modelsByName[prefix+"/"+m.Meta.Name] = m
 		for _, a := range m.Spec.Aliases {
-			s.modelsByName[prefix+"/"+a] = m
+			s.modelsByName[a] = append(s.modelsByName[a], m)
 		}
 	}
 
-	// Index reachable ProviderKeys.
+	// Index reachable HostKeys.
 	for _, k := range keys {
 		if _, ok := wantKey[k.Meta.ID]; ok {
-			s.providerKeysByID[k.Meta.ID] = k
+			s.hostKeysByID[k.Meta.ID] = k
 		}
 	}
 
@@ -110,9 +112,9 @@ func build(
 				s.modelsByPolicy[p.Meta.ID] = append(s.modelsByPolicy[p.Meta.ID], m)
 			}
 		}
-		for _, id := range p.Spec.ProviderKeyIDs {
-			if k, ok := s.providerKeysByID[id]; ok {
-				s.providerKeysByPolicy[p.Meta.ID] = append(s.providerKeysByPolicy[p.Meta.ID], k)
+		for _, id := range p.Spec.HostKeyIDs {
+			if k, ok := s.hostKeysByID[id]; ok {
+				s.hostKeysByPolicy[p.Meta.ID] = append(s.hostKeysByPolicy[p.Meta.ID], k)
 			}
 		}
 		if p.Spec.RateLimitID != "" {

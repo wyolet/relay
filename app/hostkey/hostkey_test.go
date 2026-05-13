@@ -1,4 +1,4 @@
-package providerkey
+package hostkey
 
 import (
 	"strings"
@@ -7,11 +7,11 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-func fix(name string, kind ValueKind) *ProviderKey {
-	k := &ProviderKey{
+func fix(name string, kind ValueKind) *HostKey {
+	k := &HostKey{
 		Meta: meta.Metadata{
 			Name:  name,
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: meta.NewID()},
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()},
 		},
 		Spec: Spec{ValueFrom: ValueFrom{Kind: kind}},
 	}
@@ -38,37 +38,37 @@ func TestValidate(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		k    *ProviderKey
+		k    *HostKey
 		want string
 	}{
 		{
 			name: "user owner rejected",
-			k:    func() *ProviderKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerUser; return k }(),
-			want: "owner.kind must be provider",
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerUser; return k }(),
+			want: "owner.kind must be host",
 		},
 		{
-			name: "missing provider id",
-			k:    func() *ProviderKey { k := fix("k", ValueKindEnv); k.Meta.Owner.ID = ""; return k }(),
+			name: "missing host id",
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.ID = ""; return k }(),
 			want: "owner.id is required",
 		},
 		{
 			name: "env mode missing env",
-			k:    func() *ProviderKey { k := fix("k", ValueKindEnv); k.Spec.ValueFrom.Env = ""; return k }(),
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.ValueFrom.Env = ""; return k }(),
 			want: "valueFrom.env required",
 		},
 		{
 			name: "env mode with cleartext rejected",
-			k:    func() *ProviderKey { k := fix("k", ValueKindEnv); k.Spec.Value = "sk-x"; return k }(),
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.Value = "sk-x"; return k }(),
 			want: "value must be empty",
 		},
 		{
 			name: "stored mode missing value",
-			k:    func() *ProviderKey { k := fix("k", ValueKindStored); k.Spec.Value = ""; return k }(),
+			k:    func() *HostKey { k := fix("k", ValueKindStored); k.Spec.Value = ""; return k }(),
 			want: "value required",
 		},
 		{
 			name: "stored mode with env rejected",
-			k: func() *ProviderKey {
+			k: func() *HostKey {
 				k := fix("k", ValueKindStored)
 				k.Spec.ValueFrom.Env = "X"
 				return k
@@ -77,7 +77,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "unknown kind",
-			k: func() *ProviderKey {
+			k: func() *HostKey {
 				k := fix("k", ValueKindEnv)
 				k.Spec.ValueFrom.Kind = "bogus"
 				return k

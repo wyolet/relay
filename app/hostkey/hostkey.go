@@ -1,6 +1,6 @@
-// Package providerkey is the domain layer for the ProviderKey entity — a
-// credential the relay uses to call an upstream Provider's API. A ProviderKey
-// belongs to a Provider (Meta.Owner.Kind=provider, Meta.Owner.ID=provider id).
+// Package hostkey is the domain layer for the HostKey entity — a credential
+// the relay uses to authenticate to a Host (a serving endpoint). A HostKey
+// belongs to a Host (Meta.Owner.Kind=host, Meta.Owner.ID=host id).
 //
 // Two value modes:
 //
@@ -13,7 +13,7 @@
 // Spec.Value is intentionally tagged `json:"-"` so cleartext never appears in
 // JSONB or in API responses. Loading from YAML is the only path that carries
 // a literal value through this struct.
-package providerkey
+package hostkey
 
 import (
 	"fmt"
@@ -21,8 +21,8 @@ import (
 	"github.com/wyolet/relay/app/meta"
 )
 
-// ProviderKey is a credential bound to a Provider.
-type ProviderKey struct {
+// HostKey is a credential bound to a Host.
+type HostKey struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
 
@@ -62,40 +62,40 @@ const (
 )
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
-func (k *ProviderKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Enabled }
+func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind must be provider; Owner.ID required.
+//   - Owner.Kind must be host; Owner.ID required.
 //   - ValueKindEnv requires Spec.ValueFrom.Env; cleartext Value must be empty.
 //   - ValueKindStored requires non-empty cleartext Spec.Value at write time;
 //     ValueFrom.Env must be empty.
 //
-// Cross-entity checks (Owner.ID resolves to a Provider) live in the
-// composition layer.
-func (k *ProviderKey) Validate() error {
+// Cross-entity checks (Owner.ID resolves to a Host) live in the composition
+// layer.
+func (k *HostKey) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err
 	}
-	if k.Meta.Owner.Kind != meta.OwnerProvider {
-		return fmt.Errorf("providerkey %q: owner.kind must be provider, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+	if k.Meta.Owner.Kind != meta.OwnerHost {
+		return fmt.Errorf("hostkey %q: owner.kind must be host, got %q", k.Meta.Name, k.Meta.Owner.Kind)
 	}
 	if k.Meta.Owner.ID == "" {
-		return fmt.Errorf("providerkey %q: owner.id is required (provider id)", k.Meta.Name)
+		return fmt.Errorf("hostkey %q: owner.id is required (host id)", k.Meta.Name)
 	}
 	switch k.Spec.ValueFrom.Kind {
 	case ValueKindEnv:
 		if k.Spec.ValueFrom.Env == "" {
-			return fmt.Errorf("providerkey %q: valueFrom.env required for env mode", k.Meta.Name)
+			return fmt.Errorf("hostkey %q: valueFrom.env required for env mode", k.Meta.Name)
 		}
 		if k.Spec.Value != "" {
-			return fmt.Errorf("providerkey %q: value must be empty for env mode", k.Meta.Name)
+			return fmt.Errorf("hostkey %q: value must be empty for env mode", k.Meta.Name)
 		}
 	case ValueKindStored:
 		if k.Spec.Value == "" && k.Resolved == "" {
-			return fmt.Errorf("providerkey %q: value required for stored mode", k.Meta.Name)
+			return fmt.Errorf("hostkey %q: value required for stored mode", k.Meta.Name)
 		}
 		if k.Spec.ValueFrom.Env != "" {
-			return fmt.Errorf("providerkey %q: valueFrom.env must be empty for stored mode", k.Meta.Name)
+			return fmt.Errorf("hostkey %q: valueFrom.env must be empty for stored mode", k.Meta.Name)
 		}
 	}
 	return nil
