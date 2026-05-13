@@ -1,0 +1,354 @@
+// CRUD handlers for the eight catalog kinds. Wired uniformly via
+// registerKind[T]; per-kind glue (metaOf, slug resolver) lives in the
+// registerCRUD block.
+//
+// Route surface per kind (no /control/ prefix — admin plane runs on its
+// own listener):
+//
+//   GET    /{plural}                 list
+//   GET    /{plural}/{ref}           read by slug or id (UUID form prefers id)
+//   POST   /{plural}                 create  (server stamps id+slug)
+//   PUT    /{plural}/by-id/{id}      update  (id-routed)
+//   DELETE /{plural}/by-id/{id}      delete  (id-routed)
+
+package control
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/pkg/ids"
+	"github.com/wyolet/relay/pkg/slug"
+)
+
+// entityStore is the slice of methods the CRUD factory needs from any
+// app/X.Store. Each store satisfies this generic interface with T being
+// its concrete entity type.
+type entityStore[T any] interface {
+	List(ctx context.Context) ([]*T, error)
+	Get(ctx context.Context, id string) (*T, error)
+	Upsert(ctx context.Context, t *T) error
+	Delete(ctx context.Context, id string) error
+}
+
+var errSlugNotFound = errors.New("not found")
+
+// registerKind installs the five CRUD operations for kind T on api. The
+// metaOf and resolveSlug closures supply the kind-specific glue.
+func registerKind[T any](
+	api huma.API,
+	plural, singular string,
+	store entityStore[T],
+	authzr authz.Authorizer,
+	metaOf func(*T) *meta.Metadata,
+	resolveSlug func(slug string) (string, error),
+	protect huma.Middlewares,
+) {
+	base := "/" + plural
+	tag := plural
+
+	// List
+	type listOut struct {
+		Body struct {
+			Items []*T `json:"items"`
+		}
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "list_" + plural,
+		Method:      http.MethodGet,
+		Path:        base,
+		Summary:     "List " + plural,
+		Tags:        []string{tag},
+		Middlewares: protect,
+		Errors:      []int{401, 500},
+	}, func(ctx context.Context, _ *struct{}) (*listOut, error) {
+		if err := authzr.Authorize(ctx, plural+".list", authz.Resource{Kind: singular}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		items, err := store.List(ctx)
+		if err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		if items == nil {
+			items = []*T{}
+		}
+		out := &listOut{}
+		out.Body.Items = items
+		return out, nil
+	})
+
+	// Get by slug-or-id
+	type refIn struct {
+		Ref string `path:"ref" doc:"Slug or UUIDv7 id."`
+	}
+	type itemOut struct {
+		Body *T `json:"body"`
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "get_" + singular,
+		Method:      http.MethodGet,
+		Path:        base + "/{ref}",
+		Summary:     "Get " + singular + " by slug or id",
+		Tags:        []string{tag},
+		Middlewares: protect,
+		Errors:      []int{401, 404, 500},
+	}, func(ctx context.Context, in *refIn) (*itemOut, error) {
+		if err := authzr.Authorize(ctx, plural+".read", authz.Resource{Kind: singular, Name: in.Ref}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		id := in.Ref
+		if !ids.Valid(id) {
+			resolved, err := resolveSlug(id)
+			if err != nil {
+				return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
+			}
+			id = resolved
+		}
+		v, err := store.Get(ctx, id)
+		if err != nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
+		}
+		return &itemOut{Body: v}, nil
+	})
+
+	// Create
+	type bodyIn struct {
+		Body T `json:"body"`
+	}
+	huma.Register(api, huma.Operation{
+		OperationID:   "create_" + singular,
+		Method:        http.MethodPost,
+		Path:          base,
+		Summary:       "Create " + singular,
+		Tags:          []string{tag},
+		Middlewares:   protect,
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{400, 401, 500},
+	}, func(ctx context.Context, in *bodyIn) (*itemOut, error) {
+		if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		v := &in.Body
+		m := metaOf(v)
+		// Server stamps id+slug. Client-supplied id is discarded so id
+		// provenance is auditable.
+		m.ID = ids.New()
+		if m.Name == "" {
+			base := slug.From(m.DisplayName)
+			if base == "" {
+				base = singular
+			}
+			m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
+		}
+		if err := store.Upsert(ctx, v); err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		created, err := store.Get(ctx, m.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
+		}
+		return &itemOut{Body: created}, nil
+	})
+
+	// Update by id
+	type idBodyIn struct {
+		ID   string `path:"id" doc:"Resource id (UUIDv7)."`
+		Body T      `json:"body"`
+	}
+	huma.Register(api, huma.Operation{
+		OperationID: "update_" + singular,
+		Method:      http.MethodPut,
+		Path:        base + "/by-id/{id}",
+		Summary:     "Update " + singular + " by id",
+		Tags:        []string{tag},
+		Middlewares: protect,
+		Errors:      []int{400, 401, 404, 500},
+	}, func(ctx context.Context, in *idBodyIn) (*itemOut, error) {
+		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		if _, err := store.Get(ctx, in.ID); err != nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
+		}
+		v := &in.Body
+		m := metaOf(v)
+		m.ID = in.ID // path id wins over body id
+		if err := store.Upsert(ctx, v); err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+		updated, err := store.Get(ctx, in.ID)
+		if err != nil {
+			return nil, huma.Error500InternalServerError("updated but could not read back: " + err.Error())
+		}
+		return &itemOut{Body: updated}, nil
+	})
+
+	// Delete by id
+	type idIn struct {
+		ID string `path:"id" doc:"Resource id (UUIDv7)."`
+	}
+	type emptyOut struct{}
+	huma.Register(api, huma.Operation{
+		OperationID:   "delete_" + singular,
+		Method:        http.MethodDelete,
+		Path:          base + "/by-id/{id}",
+		Summary:       "Delete " + singular + " by id",
+		Tags:          []string{tag},
+		Middlewares:   protect,
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{401, 404, 500},
+	}, func(ctx context.Context, in *idIn) (*emptyOut, error) {
+		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		if err := store.Delete(ctx, in.ID); err != nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
+		}
+		return &emptyOut{}, nil
+	})
+}
+
+// slugTakenFn returns the existence predicate slug.Unique needs to mint a
+// non-colliding slug. Walks the store once per create — acceptable for
+// catalogs in the hundreds; if it becomes a hotspot, the snapshot grows
+// a byName index for the kinds that don't yet have one.
+func slugTakenFn[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) func(string) bool {
+	taken := map[string]struct{}{}
+	if items, err := store.List(context.Background()); err == nil {
+		for _, it := range items {
+			taken[metaOf(it).Name] = struct{}{}
+		}
+	}
+	return func(candidate string) bool {
+		_, ok := taken[candidate]
+		return ok
+	}
+}
+
+func mapAuthzErr(err error) error {
+	switch {
+	case errors.Is(err, authz.ErrUnauthenticated):
+		return huma.Error401Unauthorized("unauthenticated")
+	case errors.Is(err, authz.ErrForbidden):
+		return huma.Error403Forbidden("forbidden")
+	default:
+		return huma.Error500InternalServerError("authz: " + err.Error())
+	}
+}
+
+// listScanResolver is the slug→id resolver fallback for kinds whose
+// snapshot doesn't have a byName index. Linear scan over store.List — OK
+// for catalog sizes; revisit if the snapshot grows byName indices.
+func listScanResolver[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) func(string) (string, error) {
+	return func(s string) (string, error) {
+		items, err := store.List(context.Background())
+		if err != nil {
+			return "", err
+		}
+		for _, it := range items {
+			if metaOf(it).Name == s {
+				return metaOf(it).ID, nil
+			}
+		}
+		return "", errSlugNotFound
+	}
+}
+
+// registerCRUD wires the eight kinds onto api. metaOf closures + slug
+// resolvers are supplied per kind.
+func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
+	pmeta := func(p *provider.Provider) *meta.Metadata { return &p.Meta }
+	hmeta := func(h *host.Host) *meta.Metadata { return &h.Meta }
+	mmeta := func(m *model.Model) *meta.Metadata { return &m.Meta }
+	kmeta := func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta }
+	rlmeta := func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }
+	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
+	prmeta := func(p *pricing.Pricing) *meta.Metadata { return &p.Meta }
+	rkmeta := func(k *relaykey.RelayKey) *meta.Metadata { return &k.Meta }
+
+	registerKind[provider.Provider](
+		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
+		func(s string) (string, error) {
+			p, ok := d.Catalog.Current().ProviderByName(s)
+			if !ok {
+				return "", errSlugNotFound
+			}
+			return p.Meta.ID, nil
+		},
+		protect,
+	)
+
+	registerKind[host.Host](
+		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
+		func(s string) (string, error) {
+			h, ok := d.Catalog.Current().HostByName(s)
+			if !ok {
+				return "", errSlugNotFound
+			}
+			return h.Meta.ID, nil
+		},
+		protect,
+	)
+
+	registerKind[model.Model](
+		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
+		func(s string) (string, error) {
+			ms := d.Catalog.Current().ModelsByName(s)
+			if len(ms) == 0 {
+				return "", errSlugNotFound
+			}
+			return ms[0].Meta.ID, nil
+		},
+		protect,
+	)
+
+	registerKind[hostkey.HostKey](
+		api, "host-keys", "host-key", d.Stores.HostKey, d.Authz, kmeta,
+		listScanResolver(d.Stores.HostKey, kmeta),
+		protect,
+	)
+
+	registerKind[ratelimit.RateLimit](
+		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
+		listScanResolver(d.Stores.RateLimit, rlmeta),
+		protect,
+	)
+
+	registerKind[policy.Policy](
+		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
+		func(s string) (string, error) {
+			p, ok := d.Catalog.Current().PolicyByName(s)
+			if !ok {
+				return "", errSlugNotFound
+			}
+			return p.Meta.ID, nil
+		},
+		protect,
+	)
+
+	registerKind[pricing.Pricing](
+		api, "pricings", "pricing", d.Stores.Pricing, d.Authz, prmeta,
+		listScanResolver(d.Stores.Pricing, prmeta),
+		protect,
+	)
+
+	registerKind[relaykey.RelayKey](
+		api, "relay-keys", "relay-key", d.Stores.RelayKey, d.Authz, rkmeta,
+		listScanResolver(d.Stores.RelayKey, rkmeta),
+		protect,
+	)
+}

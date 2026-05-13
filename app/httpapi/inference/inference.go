@@ -39,6 +39,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	cfg.Info.Description = "Data plane. /v1/* endpoints accept OpenAI- and " +
 		"Anthropic-shape requests; bytes are forwarded to the upstream " +
 		"provider with usage extracted from the response."
+	cfg.OpenAPI.Components.Schemas = httpapi.NewRegistry()
 
 	api := humachi.New(r, cfg)
 

@@ -12,6 +12,9 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"reflect"
+	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -21,12 +24,29 @@ import (
 // `git describe` via -ldflags.
 const Version = "0.1.0"
 
-// InstallErrorRewriter overrides huma's default error model with an
-// OpenAI-compatible envelope. Both planes share the same error shape so
-// clients see one error contract regardless of which listener they hit.
+// installOnce gates the global huma overrides (error rewriter + schema
+// namer) so both planes' Mount() can call Install without doubling up.
+var installOnce sync.Once
+
+// Install installs the process-global huma overrides: OpenAI-compatible
+// error envelope, and a schema namer that prefixes type names with their
+// package's last segment (e.g. provider_Spec vs host_Spec) so the catalog
+// kinds' uniform Spec sub-structs don't collide in the OpenAPI schema
+// registry.
 //
-// Idempotent — safe to call from multiple Mount() entrypoints.
-func InstallErrorRewriter() {
+// Idempotent — safe to call from every Mount entrypoint.
+func Install() {
+	installOnce.Do(func() {
+		installErrorRewriter()
+		installSchemaNamer()
+	})
+}
+
+// InstallErrorRewriter is the legacy alias for Install(). Retained until
+// callers migrate.
+func InstallErrorRewriter() { Install() }
+
+func installErrorRewriter() {
 	huma.NewError = func(status int, msg string, errs ...error) huma.StatusError {
 		code := ""
 		errType := "invalid_request_error"
@@ -76,3 +96,51 @@ type OpenAIError struct {
 func (e *OpenAIError) GetStatus() int              { return e.HTTPStatus }
 func (e *OpenAIError) Error() string               { return e.Err.Message }
 func (e *OpenAIError) ContentType(_ string) string { return "application/json" }
+
+// installSchemaNamer is a no-op kept for symmetry; per-plane registries
+// are wired via NewRegistry() below because huma.DefaultSchemaNamer is a
+// function (not an assignable variable) in v2.37+.
+func installSchemaNamer() {}
+
+// NewRegistry returns a huma schema Registry whose namer prefixes type
+// names with their package's last segment (e.g. "provider_Spec") so
+// catalog kinds' uniform Spec sub-structs don't collide. Plane Mount()
+// functions install this on their huma.Config.
+func NewRegistry() huma.Registry {
+	return huma.NewMapRegistry("#/components/schemas/", schemaNamer)
+}
+
+func schemaNamer(t reflect.Type, hint string) string {
+	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+		t = t.Elem()
+	}
+	name := t.Name()
+	if name == "" {
+		return hint
+	}
+	pkg := t.PkgPath()
+	if pkg != "" {
+		if i := strings.LastIndex(pkg, "/"); i >= 0 {
+			pkg = pkg[i+1:]
+		}
+		name = pkg + "_" + name
+	}
+	return sanitizeSchemaName(name)
+}
+
+// sanitizeSchemaName collapses characters that are valid in Go type names
+// (dots, brackets, asterisks from generic instantiations) into underscores
+// so the resulting OpenAPI schema id is a clean identifier.
+func sanitizeSchemaName(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
