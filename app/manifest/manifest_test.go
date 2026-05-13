@@ -1,14 +1,14 @@
-package wire_test
+package manifest_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/wyolet/relay/app/wire"
+	"github.com/wyolet/relay/app/manifest"
 )
 
 // testResolver is a fixed-set Resolver for unit tests.
-var testResolver = wire.MapResolver{
+var testResolver = manifest.MapResolver{
 	Providers:  map[string]string{"anthropic": "provider-aaa"},
 	Hosts:      map[string]string{"anthropic-direct": "host-bbb", "bedrock-us-east": "host-ccc"},
 	Policies:   map[string]string{"cheap-tier": "policy-ddd"},
@@ -17,7 +17,7 @@ var testResolver = wire.MapResolver{
 	RateLimits: map[string]string{"cheap-tier-rpm": "rl-iii"},
 }
 
-var testRev = wire.MapReverseResolver{
+var testRev = manifest.MapReverseResolver{
 	Providers:  map[string]string{"provider-aaa": "anthropic"},
 	Hosts:      map[string]string{"host-bbb": "anthropic-direct", "host-ccc": "bedrock-us-east"},
 	Policies:   map[string]string{"policy-ddd": "cheap-tier"},
@@ -42,7 +42,7 @@ spec:
 `
 
 func TestParse_Policy(t *testing.T) {
-	docs, err := wire.Parse(strings.NewReader(policyYAML))
+	docs, err := manifest.Parse(strings.NewReader(policyYAML))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -65,8 +65,8 @@ func TestParse_Policy(t *testing.T) {
 }
 
 func TestToPolicy_HappyPath(t *testing.T) {
-	docs, _ := wire.Parse(strings.NewReader(policyYAML))
-	pol, err := wire.ToPolicy(*docs[0].Policy, testResolver)
+	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
+	pol, err := manifest.ToPolicy(*docs[0].Policy, testResolver)
 	if err != nil {
 		t.Fatalf("ToPolicy: %v", err)
 	}
@@ -85,22 +85,22 @@ func TestToPolicy_HappyPath(t *testing.T) {
 }
 
 func TestToPolicy_MissingRef(t *testing.T) {
-	docs, _ := wire.Parse(strings.NewReader(policyYAML))
-	emptyResolver := wire.MapResolver{
+	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
+	emptyResolver := manifest.MapResolver{
 		Models:     map[string]string{},
 		HostKeys:   map[string]string{},
 		RateLimits: map[string]string{},
 	}
-	_, err := wire.ToPolicy(*docs[0].Policy, emptyResolver)
+	_, err := manifest.ToPolicy(*docs[0].Policy, emptyResolver)
 	if err == nil {
 		t.Fatal("expected error for missing model ref, got nil")
 	}
 }
 
 func TestFromPolicy_RoundTrip(t *testing.T) {
-	docs, _ := wire.Parse(strings.NewReader(policyYAML))
-	pol, _ := wire.ToPolicy(*docs[0].Policy, testResolver)
-	dto := wire.FromPolicy(pol, testRev)
+	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
+	pol, _ := manifest.ToPolicy(*docs[0].Policy, testResolver)
+	dto := manifest.FromPolicy(pol, testRev)
 	if len(dto.Spec.Models) != 2 {
 		t.Errorf("models: want 2, got %d", len(dto.Spec.Models))
 	}
@@ -128,7 +128,7 @@ spec:
 `
 
 func TestParse_MultiDoc(t *testing.T) {
-	docs, err := wire.Parse(strings.NewReader(multiDocYAML))
+	docs, err := manifest.Parse(strings.NewReader(multiDocYAML))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -150,7 +150,7 @@ metadata:
   name: foo
 spec: {}
 `
-	_, err := wire.Parse(strings.NewReader(yaml))
+	_, err := manifest.Parse(strings.NewReader(yaml))
 	if err == nil {
 		t.Fatal("expected error for unknown apiVersion")
 	}
@@ -171,11 +171,11 @@ spec:
 `
 
 func TestToModel_HappyPath(t *testing.T) {
-	docs, err := wire.Parse(strings.NewReader(modelYAML))
+	docs, err := manifest.Parse(strings.NewReader(modelYAML))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	m, err := wire.ToModel(*docs[0].Model, testResolver)
+	m, err := manifest.ToModel(*docs[0].Model, testResolver)
 	if err != nil {
 		t.Fatalf("ToModel: %v", err)
 	}
@@ -204,14 +204,14 @@ spec:
 `
 
 func TestToRateLimit_HappyPath(t *testing.T) {
-	docs, err := wire.Parse(strings.NewReader(rateLimitYAML))
+	docs, err := manifest.Parse(strings.NewReader(rateLimitYAML))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	if docs[0].RateLimit == nil {
 		t.Fatal("want RateLimit doc")
 	}
-	rl, err := wire.ToRateLimit(*docs[0].RateLimit, testResolver)
+	rl, err := manifest.ToRateLimit(*docs[0].RateLimit, testResolver)
 	if err != nil {
 		t.Fatalf("ToRateLimit: %v", err)
 	}

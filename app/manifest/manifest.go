@@ -15,6 +15,6 @@
 //  1. Receive domain struct from store
 //  2. Build a ReverseResolver from your id→name index
 //  3. Call FromXxx(domain, rev) → wire DTO suitable for JSON/YAML output
-package wire
+package manifest
 
 const APIVersion = "relay.wyolet.dev/v1"

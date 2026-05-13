@@ -1,4 +1,4 @@
-package wire
+package manifest
 
 import (
 	"github.com/wyolet/relay/app/meta"

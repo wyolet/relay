@@ -1,4 +1,4 @@
-package wire
+package manifest
 
 // Resolver resolves entity names to ids. The caller builds one from their
 // name→id index (a snapshot, a seed index built against live PG state, etc.).
