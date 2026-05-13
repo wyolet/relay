@@ -98,10 +98,20 @@ func providerKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.Provider) error {
+			resolved, err := catalog.ResolvePolicyRef(store, v.Spec.DefaultPolicy)
+			if err != nil {
+				return err
+			}
+			v.Spec.DefaultPolicy = resolved
 			return st.Catalog.UpsertProvider(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.Provider) error {
 			v.Metadata.ID = id
+			resolved, err := catalog.ResolvePolicyRef(store, v.Spec.DefaultPolicy)
+			if err != nil {
+				return err
+			}
+			v.Spec.DefaultPolicy = resolved
 			return st.Catalog.UpsertProvider(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {
@@ -447,6 +457,11 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 			})
 		},
 		Insert: func(ctx context.Context, v *catalog.RelayKey) error {
+			resolved, err := catalog.ResolvePolicyRef(store, v.Spec.PolicyRef)
+			if err != nil {
+				return err
+			}
+			v.Spec.PolicyRef = resolved
 			return st.Catalog.UpsertRelayKey(ctx, *v)
 		},
 		UpdateByID: func(ctx context.Context, id string, v *catalog.RelayKey) error {
@@ -460,6 +475,11 @@ func relayKeyKind(store *catalog.PGStore, st *storage.Storage) *crud.Kind[*catal
 					}
 				}
 			}
+			resolved, err := catalog.ResolvePolicyRef(store, v.Spec.PolicyRef)
+			if err != nil {
+				return err
+			}
+			v.Spec.PolicyRef = resolved
 			return st.Catalog.UpsertRelayKey(ctx, *v)
 		},
 		DeleteByID: func(ctx context.Context, id string) error {

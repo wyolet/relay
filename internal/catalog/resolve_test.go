@@ -50,6 +50,30 @@ func TestResolveRefs_IdempotentWhenAlreadyID(t *testing.T) {
 	}
 }
 
+func TestResolveRefs_RewritesPolicyNameToID(t *testing.T) {
+	provID := ids.New()
+	polID := ids.New()
+	snap := newSnapshot()
+	snap.providers["openai"] = &Provider{Metadata: Metadata{ID: provID, Name: "openai"}, Spec: ProviderSpec{DefaultPolicy: "main"}}
+	snap.policies["main"] = &Policy{Metadata: Metadata{ID: polID, Name: "main"}, Spec: PolicySpec{Provider: provID}}
+	snap.relayKeys["k"] = &RelayKey{Metadata: Metadata{ID: ids.New(), Name: "k"}, Spec: RelayKeySpec{PolicyRef: "main"}}
+	snap.buildByIDIndexes()
+
+	mutated, err := resolveRefs(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mutated.providers || !mutated.relayKeys {
+		t.Errorf("expected providers+relayKeys mutated, got %+v", mutated)
+	}
+	if snap.providers["openai"].Spec.DefaultPolicy != polID {
+		t.Errorf("defaultPolicy: got %q, want id %q", snap.providers["openai"].Spec.DefaultPolicy, polID)
+	}
+	if snap.relayKeys["k"].Spec.PolicyRef != polID {
+		t.Errorf("policyRef: got %q, want id %q", snap.relayKeys["k"].Spec.PolicyRef, polID)
+	}
+}
+
 func TestResolveRefs_UnknownProviderErrors(t *testing.T) {
 	snap := newSnapshot()
 	snap.providers["openai"] = &Provider{Metadata: Metadata{ID: ids.New(), Name: "openai"}}

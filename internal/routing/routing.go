@@ -48,6 +48,7 @@ type Catalog interface {
 	ModelByName(name string) (*catalog.Model, bool)
 	ProviderForModel(modelName string) (*catalog.Provider, bool)
 	PolicyByName(name string) (*catalog.Policy, bool)
+	PolicyByID(id string) (*catalog.Policy, bool)
 	SecretsForPolicy(policy *catalog.Policy) []*catalog.Secret
 	RateLimitsForRequest(provider *catalog.Provider, policy *catalog.Policy, model *catalog.Model, secret *catalog.Secret) []catalog.ResolvedRule
 	Passthrough() *catalog.Passthrough
@@ -148,12 +149,14 @@ func (res *Resolver) buildPlan(modelName, policyOverride string) (*RequestPlan, 
 		return nil, ErrUnknownProvider
 	}
 	plan := &RequestPlan{Model: m, Provider: p}
-	poolName := p.Spec.DefaultPolicy
+	// Both DefaultPolicy and the RelayKey-sourced PolicyOverride carry the
+	// canonical Policy id after the snapshot resolver runs.
+	policyID := p.Spec.DefaultPolicy
 	if policyOverride != "" {
-		poolName = policyOverride
+		policyID = policyOverride
 	}
-	if poolName != "" {
-		policy, ok := res.catalog.PolicyByName(poolName)
+	if policyID != "" {
+		policy, ok := res.catalog.PolicyByID(policyID)
 		if !ok || !catalog.IsEnabled(policy.Spec.Enabled) {
 			return nil, ErrUnknownPolicy
 		}

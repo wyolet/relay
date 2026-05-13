@@ -422,7 +422,7 @@ spec:
   defaultPolicy: nonexistent-policy
 `)
 	_, err := LoadYAML(dir)
-	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if err == nil || !strings.Contains(err.Error(), "unknown policy") {
 		t.Fatalf("expected defaultPolicy not found error, got: %v", err)
 	}
 }

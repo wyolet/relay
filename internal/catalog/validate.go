@@ -133,7 +133,7 @@ func validateRelayKeys(s *snapshot) error {
 		}
 		seenHash[k.Spec.KeyHash] = k.Metadata.Name
 		if k.Spec.PolicyRef != "" {
-			if _, ok := s.policies[k.Spec.PolicyRef]; !ok {
+			if _, ok := s.policyByID(k.Spec.PolicyRef); !ok {
 				return fmt.Errorf("RelayKey %q: unknown policyRef %q", k.Metadata.Name, k.Spec.PolicyRef)
 			}
 		}
@@ -296,7 +296,7 @@ func validateProviders(s *snapshot) error {
 		if p.Spec.DefaultPolicy == "" {
 			continue
 		}
-		policy, ok := s.policies[p.Spec.DefaultPolicy]
+		policy, ok := s.policyByID(p.Spec.DefaultPolicy)
 		if !ok {
 			return fmt.Errorf("Provider %q: defaultPolicy %q does not exist", p.Metadata.Name, p.Spec.DefaultPolicy)
 		}

@@ -11,13 +11,15 @@ import (
 // alone. Returns a set of kinds whose rows were mutated so callers can persist
 // the rewrite back to the underlying store on first migration.
 //
-// Currently handles Provider refs only:
-//   - SecretSpec.Provider
-//   - PolicySpec.Provider
-//   - ModelSpec.Provider
+// Currently handles:
+//   - SecretSpec.Provider → Provider id
+//   - PolicySpec.Provider → Provider id
+//   - ModelSpec.Provider → Provider id
+//   - ProviderSpec.DefaultPolicy → Policy id
+//   - RelayKeySpec.PolicyRef → Policy id
 //
-// Other cross-refs (Policy refs, Model refs, Secret refs, RateLimit
-// attachments) will land in subsequent PRs following this same pattern.
+// Other cross-refs (Model refs, Secret refs, RateLimit attachments) will
+// land in subsequent PRs following this same pattern.
 //
 // Hard-errors on a string that is neither a known slug nor a valid UUID — that
 // indicates the catalog is corrupt and silently dropping the ref would mask
@@ -79,6 +81,49 @@ func resolveRefs(snap *snapshot) (mutated mutatedKinds, err error) {
 		}
 	}
 
+	// Policy refs: ProviderSpec.DefaultPolicy and RelayKeySpec.PolicyRef.
+	polIDBySlug := make(map[string]string, len(snap.policies))
+	for slug, p := range snap.policies {
+		if p.Metadata.ID == "" {
+			continue
+		}
+		polIDBySlug[slug] = p.Metadata.ID
+	}
+	resolvePol := func(field, ownerKind, ownerName string, val *string) error {
+		if *val == "" {
+			return nil
+		}
+		if ids.Valid(*val) {
+			return nil
+		}
+		id, ok := polIDBySlug[*val]
+		if !ok {
+			return fmt.Errorf("%s %q: %s references unknown policy %q",
+				ownerKind, ownerName, field, *val)
+		}
+		*val = id
+		return nil
+	}
+
+	for name, p := range snap.providers {
+		before := p.Spec.DefaultPolicy
+		if err := resolvePol("spec.defaultPolicy", "Provider", name, &p.Spec.DefaultPolicy); err != nil {
+			return mutated, err
+		}
+		if p.Spec.DefaultPolicy != before {
+			mutated.providers = true
+		}
+	}
+	for name, k := range snap.relayKeys {
+		before := k.Spec.PolicyRef
+		if err := resolvePol("spec.policyRef", "RelayKey", name, &k.Spec.PolicyRef); err != nil {
+			return mutated, err
+		}
+		if k.Spec.PolicyRef != before {
+			mutated.relayKeys = true
+		}
+	}
+
 	return mutated, nil
 }
 
@@ -113,17 +158,42 @@ func ResolveProviderRef(store ProviderRefStore, ref string) (string, error) {
 	return "", fmt.Errorf("unknown provider %q", ref)
 }
 
+// PolicyRefStore is the narrow view needed by ResolvePolicyRef.
+type PolicyRefStore interface {
+	PolicyByName(name string) (*Policy, bool)
+	PolicyByID(id string) (*Policy, bool)
+}
+
+// ResolvePolicyRef is the policy-side analogue of ResolveProviderRef.
+func ResolvePolicyRef(store PolicyRefStore, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+	if ids.Valid(ref) {
+		if _, ok := store.PolicyByID(ref); ok {
+			return ref, nil
+		}
+		return "", fmt.Errorf("unknown policy id %q", ref)
+	}
+	if p, ok := store.PolicyByName(ref); ok {
+		return p.Metadata.ID, nil
+	}
+	return "", fmt.Errorf("unknown policy %q", ref)
+}
+
 // mutatedKinds reports which kinds had at least one row rewritten by
 // resolveRefs. Used by PGStore.Reload to decide whether to write the rewrites
 // back to Postgres (one-time self-healing migration).
 type mutatedKinds struct {
-	secrets  bool
-	policies bool
-	models   bool
+	secrets   bool
+	policies  bool
+	models    bool
+	providers bool
+	relayKeys bool
 }
 
 func (m mutatedKinds) any() bool {
-	return m.secrets || m.policies || m.models
+	return m.secrets || m.policies || m.models || m.providers || m.relayKeys
 }
 
 // finalizeIdentity is the standard snapshot-preparation sequence used by every
