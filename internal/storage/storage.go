@@ -1,7 +1,10 @@
-// Package storage is the data-access tier for Wyolet Relay.
-// It owns the Postgres connection policy, sqlc queries, transactions, migrations,
-// and error translation. All other packages consume typed domain methods; none
-// of them import pgx or sqlc-generated types.
+// Package storage owns the Postgres connection pool and runs migrations.
+//
+// In the new arch the catalog "domain repos" that used to live here moved
+// out: each `app/X.Store` constructs its own sqlc-backed queries via
+// `gen.New(pool)` against the pool surfaced by Storage.Pool(). Storage's
+// remaining job is composition-root plumbing — open, ping, hand out the
+// pool, close.
 package storage
 
 import (
@@ -10,22 +13,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Storage is the top-level data-access handle.
-// Callers reach domain repos via the public fields (e.g. s.Catalog).
+// Storage is the data-access handle the composition root passes around.
 type Storage struct {
-	// Catalog satisfies catalog.CatalogDB — use it to pass to catalog.NewPGStore.
-	Catalog *catalogRepo
-
-	policy *pgxpool.Pool
-	db   gen.DBTX // policy or an in-progress pgx.Tx
+	pool *pgxpool.Pool
 }
 
-// Open opens a connection policy, runs pending migrations, and returns a ready-to-use *Storage.
-// The returned Storage must be closed with Close when no longer needed.
+// Open opens a connection pool, runs pending migrations, and returns a
+// ready-to-use *Storage. The returned Storage must be closed with Close
+// when no longer needed.
 func Open(ctx context.Context, dsn string) (*Storage, error) {
 	if err := runMigrations(dsn); err != nil {
 		return nil, fmt.Errorf("storage.Open: %w", err)
@@ -39,44 +36,26 @@ func Open(ctx context.Context, dsn string) (*Storage, error) {
 	cfg.MinConns = 2
 	cfg.MaxConnLifetime = 30 * time.Minute
 
-	policy, err := pgxpool.NewWithConfig(ctx, cfg)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("storage.Open: open policy: %w", err)
+		return nil, fmt.Errorf("storage.Open: open pool: %w", err)
 	}
 
-	return newStorage(policy, policy), nil
+	return &Storage{pool: pool}, nil
 }
 
-// newStorage constructs a *Storage backed by the given executor (policy or tx).
-func newStorage(policy *pgxpool.Pool, db gen.DBTX) *Storage {
-	s := &Storage{policy: policy, db: db}
-	s.Catalog = &catalogRepo{db: db}
-	return s
-}
-
-// Close releases the connection policy. Must not be called on a tx-scoped Storage.
-func (s *Storage) Close() {
-	s.policy.Close()
-}
+// Close releases the connection pool.
+func (s *Storage) Close() { s.pool.Close() }
 
 // Ping checks database connectivity.
-func (s *Storage) Ping(ctx context.Context) error {
-	return s.policy.Ping(ctx)
-}
+func (s *Storage) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
-// rawPool returns the underlying policy for same-package use only.
-func (s *Storage) rawPool() *pgxpool.Pool { return s.policy }
+// Pool returns the underlying pgxpool. Composition-root use only —
+// domain code reaches Postgres via its own typed Store packages.
+func (s *Storage) Pool() *pgxpool.Pool { return s.pool }
 
-// Pool returns the underlying pgxpool for callers that need direct access
-// (e.g. app/catalog.Bootstrap, which constructs sqlc queries against the
-// same pool). Composition-root use only — domain packages must not call
-// this; they go through storage's typed methods.
-func (s *Storage) Pool() *pgxpool.Pool { return s.policy }
-
-// WrapPool wraps an existing *pgxpool.Pool into a *Storage without opening a new
-// policy or running migrations. Intended for tests and the seed CLI that open their
-// own policy via pgxpool directly. The returned Storage must NOT be closed (the
-// caller owns the policy's lifetime).
-func WrapPool(policy *pgxpool.Pool) *Storage {
-	return newStorage(policy, policy)
-}
+// WrapPool wraps an existing *pgxpool.Pool into a *Storage without
+// opening a new pool or running migrations. Intended for tests that
+// supply their own pool. The returned Storage must NOT be closed —
+// the caller owns the pool's lifetime.
+func WrapPool(pool *pgxpool.Pool) *Storage { return &Storage{pool: pool} }

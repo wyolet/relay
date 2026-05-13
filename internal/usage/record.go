@@ -87,12 +87,9 @@ func Record(ctx context.Context, lc *Lifecycle) {
 		relayVersion = cachedRelayVersion
 	}
 
-	// Compute cost from effective pricing if available.
-	if cost, currency, ok := Cost(lc.Tokens, lc.EffectivePricing); ok && cost > 0 {
-		lc.Cost = cost
-		lc.Currency = currency
-		metricCostTotal.WithLabelValues(lc.Provider, lc.Model, currency).Add(cost)
-	}
+	// Cost computation: removed alongside the legacy catalog.Pricing
+	// type in stage 5. A new-arch pricing lookup against app/pricing
+	// will be rewired when the observability emit pipeline is rebuilt.
 
 	rec := eventlog.Event{
 		EventVersion: 1,

@@ -12,7 +12,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/wyolet/relay/internal/auth"
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
@@ -33,7 +32,6 @@ type Config struct {
 	OTLPEndpoint string
 
 	// Auth
-	APIKeys    [][]byte // already parsed via auth.ParseKeys
 	AdminToken string
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
 
@@ -115,7 +113,6 @@ func Load() (*Config, error) {
 	cfg.OTLPEndpoint = os.Getenv("RELAY_OTLP_ENDPOINT")
 
 	// --- Auth ---
-	cfg.APIKeys = auth.ParseKeys(os.Getenv("RELAY_API_KEY"), os.Getenv("RELAY_API_KEYS"))
 	cfg.AdminToken = os.Getenv("RELAY_ADMIN_TOKEN")
 
 	// --- Behavior knobs ---
