@@ -42,6 +42,12 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 		return nil, err
 	}
 
+	ensureSnapshotIDs(snap)
+	snap.buildByIDIndexes()
+	if _, err := resolveRefs(snap); err != nil {
+		return nil, err
+	}
+
 	if err := validate(snap); err != nil {
 		return nil, err
 	}

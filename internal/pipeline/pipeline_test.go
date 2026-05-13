@@ -1188,23 +1188,9 @@ func TestRun_PerKeyReserve_ExhaustsKeyA(t *testing.T) {
 	cs, l, _ := buildPerKeyStore(t, 1) // 1 request/min per key
 
 	policy := &catalog.Policy{Metadata: catalog.Metadata{Name: "test-policy"}}
-	// Use secrets that carry Spec.RateLimits so RateLimitsForRequest returns the
-	// attachment when called with (nil, nil, nil, secret).
-	rl := &catalog.RateLimitAttachment{Ref: "per-key-rpm"}
-	secrets := []*catalog.Secret{
-		{
-			Metadata: catalog.Metadata{Name: "key1"},
-			Resolved: "secret-key1",
-			KeyHash:  "hash1",
-			Spec:     catalog.SecretSpec{RateLimits: []catalog.RateLimitAttachment{*rl}},
-		},
-		{
-			Metadata: catalog.Metadata{Name: "key2"},
-			Resolved: "secret-key2",
-			KeyHash:  "hash2",
-			Spec:     catalog.SecretSpec{RateLimits: []catalog.RateLimitAttachment{*rl}},
-		},
-	}
+	// Reuse the snapshot-resolved secrets so RateLimitAttachment.Ref is the
+	// canonical RateLimit id (the resolver rewrote it inside NewMemStore).
+	secrets := cs.Secrets()
 
 	kvSt := kv.NewMem()
 	t.Cleanup(func() { kvSt.Close() })

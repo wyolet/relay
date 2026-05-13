@@ -46,6 +46,9 @@ func TestUpstreamTierAutoInjection(t *testing.T) {
 	snap.providers["openai"] = prov
 	snap.secrets["key-a"] = s1
 	snap.secrets["key-b"] = s2
+	if err := snap.finalizeIdentity(); err != nil {
+		t.Fatal(err)
+	}
 	snap.injectUpstreamTierRateLimits()
 
 	// Both secrets should have an auto-injected RL in secretTierRLs.
@@ -135,6 +138,9 @@ func TestUpstreamTierRateLimitsForRequest(t *testing.T) {
 	snap := newSnapshot()
 	snap.providers["openai"] = prov
 	snap.secrets["my-key"] = sec
+	if err := snap.finalizeIdentity(); err != nil {
+		t.Fatal(err)
+	}
 	snap.injectUpstreamTierRateLimits()
 
 	rules := snap.rateLimitsForRequest(prov, nil, nil, sec)
@@ -177,6 +183,9 @@ func TestUpstreamTierUnknown(t *testing.T) {
 	snap := newSnapshot()
 	snap.providers["openai"] = prov
 	snap.secrets["mystery-key"] = sec
+	if err := snap.finalizeIdentity(); err != nil {
+		t.Fatal(err)
+	}
 	snap.injectUpstreamTierRateLimits() // must not panic
 
 	if _, ok := snap.secretTierRLs["mystery-key"]; ok {
@@ -210,6 +219,9 @@ func TestUpstreamTierNoTier(t *testing.T) {
 	snap := newSnapshot()
 	snap.providers["openai"] = prov
 	snap.secrets["bare-key"] = sec
+	if err := snap.finalizeIdentity(); err != nil {
+		t.Fatal(err)
+	}
 	snap.injectUpstreamTierRateLimits()
 
 	if _, ok := snap.secretTierRLs["bare-key"]; ok {

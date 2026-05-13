@@ -32,6 +32,15 @@ func NewMemStore(objects ...any) *MemStore {
 			snap.passthrough = v
 		}
 	}
+	ensureSnapshotIDs(snap)
+	snap.buildByIDIndexes()
+	// Resolve cross-refs name→id. Test fixtures typically write names; this
+	// rewrites them to the freshly stamped ids so consumers (validate,
+	// snapshot lookups, pipeline) can look up via providerByID etc.
+	// Panic on unknown refs — tests should always pass valid data.
+	if _, err := resolveRefs(snap); err != nil {
+		panic("catalog.NewMemStore: " + err.Error())
+	}
 	snap.injectUpstreamTierRateLimits()
 	snap.buildEffectivePricing()
 	snap.buildByIDIndexes()

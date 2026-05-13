@@ -133,7 +133,7 @@ func validateRelayKeys(s *snapshot) error {
 		}
 		seenHash[k.Spec.KeyHash] = k.Metadata.Name
 		if k.Spec.PolicyRef != "" {
-			if _, ok := s.policies[k.Spec.PolicyRef]; !ok {
+			if _, ok := s.policyByID(k.Spec.PolicyRef); !ok {
 				return fmt.Errorf("RelayKey %q: unknown policyRef %q", k.Metadata.Name, k.Spec.PolicyRef)
 			}
 		}
@@ -163,7 +163,7 @@ func validateSecrets(s *snapshot) error {
 			if sec.Spec.ValueFrom != nil {
 				return fmt.Errorf("Secret %q: valueFrom.env must not be empty", sec.Metadata.Name)
 			}
-			p, ok := s.providers[sec.Spec.Provider]
+			p, ok := s.providerByID(sec.Spec.Provider)
 			if ok && p.Spec.Kind != PKOllama {
 				return fmt.Errorf("Secret %q: exactly one of valueFrom.env or value required", sec.Metadata.Name)
 			}
@@ -171,7 +171,7 @@ func validateSecrets(s *snapshot) error {
 		if sec.Spec.Provider == "" {
 			return fmt.Errorf("Secret %q: provider required", sec.Metadata.Name)
 		}
-		if _, ok := s.providers[sec.Spec.Provider]; !ok {
+		if _, ok := s.providerByID(sec.Spec.Provider); !ok {
 			return fmt.Errorf("Secret %q: unknown provider %q", sec.Metadata.Name, sec.Spec.Provider)
 		}
 	}
@@ -186,26 +186,26 @@ func validatePolicies(s *snapshot) error {
 		if policy.Spec.Provider == "" {
 			return fmt.Errorf("Policy %q: provider required", policy.Metadata.Name)
 		}
-		prov, ok := s.providers[policy.Spec.Provider]
+		prov, ok := s.providerByID(policy.Spec.Provider)
 		if !ok {
 			return fmt.Errorf("Policy %q: unknown provider %q", policy.Metadata.Name, policy.Spec.Provider)
 		}
-		for _, secName := range policy.Spec.Secrets {
-			sec, ok := s.secrets[secName]
+		for _, secRef := range policy.Spec.Secrets {
+			sec, ok := s.secretByID(secRef)
 			if !ok {
-				return fmt.Errorf("Policy %q: unknown secret %q", policy.Metadata.Name, secName)
+				return fmt.Errorf("Policy %q: unknown secret %q", policy.Metadata.Name, secRef)
 			}
 			if sec.Spec.Provider != policy.Spec.Provider {
-				return fmt.Errorf("Policy %q: secret %q belongs to provider %q, not %q", policy.Metadata.Name, secName, sec.Spec.Provider, policy.Spec.Provider)
+				return fmt.Errorf("Policy %q: secret %q belongs to provider %q, not %q", policy.Metadata.Name, sec.Metadata.Name, sec.Spec.Provider, policy.Spec.Provider)
 			}
 		}
-		for _, modelName := range policy.Spec.Models {
-			m, ok := s.models[modelName]
+		for _, modelRef := range policy.Spec.Models {
+			m, ok := s.modelByID(modelRef)
 			if !ok {
-				return fmt.Errorf("Policy %q: unknown model %q", policy.Metadata.Name, modelName)
+				return fmt.Errorf("Policy %q: unknown model %q", policy.Metadata.Name, modelRef)
 			}
 			if m.Spec.Provider != policy.Spec.Provider {
-				return fmt.Errorf("Policy %q: model %q belongs to provider %q, not %q", policy.Metadata.Name, modelName, m.Spec.Provider, policy.Spec.Provider)
+				return fmt.Errorf("Policy %q: model %q belongs to provider %q, not %q", policy.Metadata.Name, m.Metadata.Name, m.Spec.Provider, policy.Spec.Provider)
 			}
 		}
 		effective := s.secretsForPolicy(policy)
@@ -296,11 +296,11 @@ func validateProviders(s *snapshot) error {
 		if p.Spec.DefaultPolicy == "" {
 			continue
 		}
-		policy, ok := s.policies[p.Spec.DefaultPolicy]
+		policy, ok := s.policyByID(p.Spec.DefaultPolicy)
 		if !ok {
 			return fmt.Errorf("Provider %q: defaultPolicy %q does not exist", p.Metadata.Name, p.Spec.DefaultPolicy)
 		}
-		if policy.Spec.Provider != p.Metadata.Name {
+		if policy.Spec.Provider != p.Metadata.ID {
 			return fmt.Errorf("Provider %q: defaultPolicy %q belongs to provider %q", p.Metadata.Name, p.Spec.DefaultPolicy, policy.Spec.Provider)
 		}
 	}
@@ -329,7 +329,7 @@ func validateModels(s *snapshot) error {
 		if m.Spec.Provider == "" {
 			return fmt.Errorf("Model %q: provider required", m.Metadata.Name)
 		}
-		if _, ok := s.providers[m.Spec.Provider]; !ok {
+		if _, ok := s.providerByID(m.Spec.Provider); !ok {
 			return fmt.Errorf("Model %q: unknown provider %q", m.Metadata.Name, m.Spec.Provider)
 		}
 		if m.Spec.UpstreamName == "" {
@@ -383,7 +383,7 @@ func validateRoutes(s *snapshot) error {
 			return fmt.Errorf("Route %q: at least one model required", r.Metadata.Name)
 		}
 		for _, mn := range r.Spec.Models {
-			if _, ok := s.models[mn]; !ok {
+			if _, ok := s.modelByID(mn); !ok {
 				return fmt.Errorf("Route %q: unknown model %q", r.Metadata.Name, mn)
 			}
 		}
@@ -494,7 +494,7 @@ func validateRateLimits(s *snapshot) error {
 func validateAttachments(s *snapshot) error {
 	checkAttachments := func(kind Kind, name string, attachments []RateLimitAttachment) error {
 		for _, a := range attachments {
-			if _, ok := s.rateLimits[a.Ref]; !ok {
+			if _, ok := s.rateLimitByID(a.Ref); !ok {
 				return fmt.Errorf("%s %q: rateLimits ref %q does not exist", kind, name, a.Ref)
 			}
 		}
@@ -561,7 +561,7 @@ func validateAgainstCeiling(rl *RateLimit, s *snapshot) error {
 
 func validatePoolDefaultLimits(s *snapshot) error {
 	for _, policy := range s.policies {
-		prov, ok := s.providers[policy.Spec.Provider]
+		prov, ok := s.providerByID(policy.Spec.Provider)
 		if !ok {
 			continue
 		}
@@ -575,7 +575,7 @@ func validatePoolDefaultLimits(s *snapshot) error {
 		// Check effective rules via snapshot expansion.
 		checkRules := func(attachments []RateLimitAttachment) {
 			for _, a := range attachments {
-				rl, ok := s.rateLimits[a.Ref]
+				rl, ok := s.rateLimitByID(a.Ref)
 				if !ok {
 					continue
 				}

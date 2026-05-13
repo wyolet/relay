@@ -3,6 +3,8 @@ package catalog
 import (
 	"log/slog"
 	"sort"
+
+	"github.com/wyolet/relay/pkg/ids"
 )
 
 // snapshot is the in-memory view of the catalog, shared by YAMLStore and PGStore.
@@ -221,7 +223,7 @@ func (s *snapshot) listRelayKeys() []*RelayKey {
 func (s *snapshot) buildEffectivePricing() {
 	s.effectivePrices = make(map[string]*Pricing, len(s.models))
 	for name, m := range s.models {
-		p := s.providers[m.Spec.Provider]
+		p, _ := s.providerByID(m.Spec.Provider)
 		ep := effectivePricing(p, m)
 		if ep != nil {
 			s.effectivePrices[name] = ep
@@ -378,26 +380,26 @@ func (s *snapshot) listPolicies() []*Policy {
 func (s *snapshot) secretsForPolicy(p *Policy) []*Secret {
 	seen := map[string]struct{}{}
 	var out []*Secret
-	for _, name := range p.Spec.Secrets {
-		sec, ok := s.secrets[name]
+	for _, ref := range p.Spec.Secrets {
+		sec, ok := s.secretByID(ref)
 		if !ok || !IsEnabled(sec.Spec.Enabled) {
 			continue
 		}
-		if _, dup := seen[name]; !dup {
-			seen[name] = struct{}{}
+		if _, dup := seen[sec.Metadata.ID]; !dup {
+			seen[sec.Metadata.ID] = struct{}{}
 			out = append(out, sec)
 		}
 	}
 	if len(p.Spec.SecretSelector) > 0 {
 		for _, sec := range s.secrets {
-			if _, dup := seen[sec.Metadata.Name]; dup {
+			if _, dup := seen[sec.Metadata.ID]; dup {
 				continue
 			}
 			if !IsEnabled(sec.Spec.Enabled) {
 				continue
 			}
 			if labelsMatch(p.Spec.SecretSelector, sec.Metadata.Labels) {
-				seen[sec.Metadata.Name] = struct{}{}
+				seen[sec.Metadata.ID] = struct{}{}
 				out = append(out, sec)
 			}
 		}
@@ -421,7 +423,7 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 		// Resolve effective tier: secret-level wins over provider default.
 		tierName := sec.Spec.Tier
 		if tierName == "" {
-			if prov, ok := s.providers[sec.Spec.Provider]; ok {
+			if prov, ok := s.providerByID(sec.Spec.Provider); ok {
 				tierName = prov.Spec.DefaultTier
 			}
 		}
@@ -440,6 +442,7 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 			APIVersion: APIVersion,
 			Kind:       KindRateLimit,
 			Metadata: Metadata{
+				ID:          ids.New(),
 				Name:        rlName,
 				Description: "Auto-injected upstream tier mirror for secret " + secretName,
 				Owner:       Owner{Kind: OwnerSystem},
@@ -454,6 +457,7 @@ func (s *snapshot) injectUpstreamTierRateLimits() {
 		// Do not overwrite if an operator has manually defined a same-named RL.
 		if _, exists := s.rateLimits[rlName]; !exists {
 			s.rateLimits[rlName] = rl
+			s.rateLimitsByID[rl.Metadata.ID] = rlName
 		}
 	}
 }
@@ -463,7 +467,7 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 
 	expand := func(parentKind Kind, parentName string, attachments []RateLimitAttachment) {
 		for _, a := range attachments {
-			rl, ok := s.rateLimits[a.Ref]
+			rl, ok := s.rateLimitByID(a.Ref)
 			if !ok || !IsEnabled(rl.Spec.Enabled) {
 				continue
 			}
@@ -492,7 +496,7 @@ func (s *snapshot) rateLimitsForRequest(provider *Provider, policy *Policy, mode
 		expand(KindSecret, secret.Metadata.Name, secret.Spec.RateLimits)
 		// Auto-injected upstream-tier RL for this secret (if any).
 		if tierRL, ok := s.secretTierRLs[secret.Metadata.Name]; ok {
-			expand(KindSecret, secret.Metadata.Name, []RateLimitAttachment{{Ref: tierRL.Metadata.Name}})
+			expand(KindSecret, secret.Metadata.Name, []RateLimitAttachment{{Ref: tierRL.Metadata.ID}})
 		}
 	}
 	if policy != nil {
@@ -527,6 +531,5 @@ func (s *snapshot) providerForModel(modelName string) (*Provider, bool) {
 	if !ok {
 		return nil, false
 	}
-	p, ok := s.providers[m.Spec.Provider]
-	return p, ok
+	return s.providerByID(m.Spec.Provider)
 }

@@ -99,6 +99,11 @@ func (s *PGStore) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog.PGStore.Reload: %w", err)
 	}
+	ensureSnapshotIDs(snap)
+	snap.buildByIDIndexes()
+	if _, err := resolveRefs(snap); err != nil {
+		return fmt.Errorf("catalog.PGStore.Reload: resolve refs: %w", err)
+	}
 	if err := validate(snap); err != nil {
 		return fmt.Errorf("catalog.PGStore.Reload: catalog invalid: %w", err)
 	}
