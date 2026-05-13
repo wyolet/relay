@@ -9,13 +9,21 @@ import (
 
 func validProvID() string { return meta.NewID() }
 
+// fix builds a minimally-valid Model. Tests override fields they want to break.
+func fix(name string) *Model {
+	prov := validProvID()
+	return &Model{
+		Meta: meta.Metadata{
+			Name:  name,
+			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov},
+		},
+		Spec: Spec{ProviderID: prov, UpstreamName: "u"},
+	}
+}
+
 func TestValidate(t *testing.T) {
 	t.Run("ok minimal", func(t *testing.T) {
-		m := &Model{
-			Meta: meta.Metadata{Name: "gpt-4o"},
-			Spec: Spec{ProviderID: validProvID(), UpstreamName: "gpt-4o-2024-08-06"},
-		}
-		if err := m.Validate(); err != nil {
+		if err := fix("gpt-4o").Validate(); err != nil {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
@@ -27,63 +35,64 @@ func TestValidate(t *testing.T) {
 	}{
 		{
 			name: "missing name",
-			m:    &Model{Spec: Spec{ProviderID: validProvID(), UpstreamName: "u"}},
+			m:    func() *Model { m := fix("x"); m.Meta.Name = ""; return m }(),
 			want: "Name",
 		},
 		{
 			name: "missing providerID",
-			m: &Model{
-				Meta: meta.Metadata{Name: "x"},
-				Spec: Spec{UpstreamName: "u"},
-			},
+			m:    func() *Model { m := fix("x"); m.Spec.ProviderID = ""; return m }(),
 			want: "ProviderID",
 		},
 		{
 			name: "providerID not uuid",
-			m: &Model{
-				Meta: meta.Metadata{Name: "x"},
-				Spec: Spec{ProviderID: "not-a-uuid", UpstreamName: "u"},
-			},
+			m:    func() *Model { m := fix("x"); m.Spec.ProviderID = "not-a-uuid"; return m }(),
 			want: "ProviderID",
 		},
 		{
 			name: "missing upstreamName",
-			m: &Model{
-				Meta: meta.Metadata{Name: "x"},
-				Spec: Spec{ProviderID: validProvID()},
-			},
+			m:    func() *Model { m := fix("x"); m.Spec.UpstreamName = ""; return m }(),
 			want: "UpstreamName",
 		},
 		{
 			name: "user owner rejected",
-			m: &Model{
-				Meta: meta.Metadata{Name: "x", Owner: meta.Owner{Kind: meta.OwnerUser}},
-				Spec: Spec{ProviderID: validProvID(), UpstreamName: "u"},
-			},
+			m:    func() *Model { m := fix("x"); m.Meta.Owner.Kind = meta.OwnerUser; return m }(),
 			want: "owner.kind must be provider",
 		},
 		{
+			name: "system owner rejected",
+			m:    func() *Model { m := fix("x"); m.Meta.Owner.Kind = meta.OwnerSystem; return m }(),
+			want: "owner.kind must be provider",
+		},
+		{
+			name: "owner id required",
+			m:    func() *Model { m := fix("x"); m.Meta.Owner.ID = ""; return m }(),
+			want: "owner.id is required",
+		},
+		{
 			name: "duplicate alias",
-			m: &Model{
-				Meta: meta.Metadata{Name: "x"},
-				Spec: Spec{
-					ProviderID:   validProvID(),
-					UpstreamName: "u",
-					Aliases:      []string{"GPT-4o", "gpt-4o"},
-				},
-			},
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Aliases = []string{"GPT-4o", "gpt-4o"}
+				return m
+			}(),
 			want: "duplicate alias",
 		},
 		{
+			name: "alias collides with own name",
+			m: func() *Model {
+				m := fix("gpt-4o")
+				m.Spec.Aliases = []string{"GPT-4O"}
+				return m
+			}(),
+			want: "collides with the model's own name",
+		},
+		{
 			name: "bad deprecation status",
-			m: &Model{
-				Meta: meta.Metadata{Name: "x"},
-				Spec: Spec{
-					ProviderID:   validProvID(),
-					UpstreamName: "u",
-					Deprecation:  &Deprecation{Status: "bogus"},
-				},
-			},
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Deprecation = &Deprecation{Status: "bogus"}
+				return m
+			}(),
 			want: "Status",
 		},
 	} {

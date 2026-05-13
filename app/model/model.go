@@ -106,26 +106,36 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the Model-specific invariants:
-//   - Owner.Kind, when set, must be provider (Models belong to a Provider).
-//   - Aliases are non-empty and unique (case-insensitive within a single Model;
-//     cross-Model alias collisions are a composition-layer concern).
+//   - Owner is required and must be provider-kind with a non-empty ID.
+//     Models always belong to a Provider; "system" or user-created models
+//     are exposed by attaching them to a relay-owned Provider (e.g. "wr"),
+//     not by changing the owner kind.
+//   - Aliases are non-empty, case-insensitively unique, and must not
+//     collide with the Model's own Meta.Name.
 //
-// Cross-entity checks (ProviderID resolves to a real Provider; Deprecation.
-// Replacement resolves to a real Model; alias uniqueness across Models) live
-// in the composition layer.
+// Cross-entity checks (ProviderID resolves to a real Provider; Owner.ID
+// matches Spec.ProviderID; Deprecation.Replacement resolves to a real Model;
+// alias uniqueness across Models) live in the composition layer.
 func (m *Model) Validate() error {
 	if err := meta.Validator.Struct(m); err != nil {
 		return err
 	}
-	if k := m.Meta.Owner.Kind; k != "" && k != meta.OwnerProvider {
-		return fmt.Errorf("model %q: owner.kind must be provider, got %q", m.Meta.Name, k)
+	if m.Meta.Owner.Kind != meta.OwnerProvider {
+		return fmt.Errorf("model %q: owner.kind must be provider, got %q", m.Meta.Name, m.Meta.Owner.Kind)
 	}
+	if m.Meta.Owner.ID == "" {
+		return fmt.Errorf("model %q: owner.id is required (provider id)", m.Meta.Name)
+	}
+	ownName := lower(m.Meta.Name)
 	seen := make(map[string]struct{}, len(m.Spec.Aliases))
 	for _, a := range m.Spec.Aliases {
 		if a == "" {
 			return fmt.Errorf("model %q: alias is empty", m.Meta.Name)
 		}
 		key := lower(a)
+		if key == ownName {
+			return fmt.Errorf("model %q: alias %q collides with the model's own name", m.Meta.Name, a)
+		}
 		if _, dup := seen[key]; dup {
 			return fmt.Errorf("model %q: duplicate alias %q", m.Meta.Name, a)
 		}
