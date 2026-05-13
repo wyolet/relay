@@ -19,21 +19,7 @@ type YAMLStore struct {
 }
 
 func LoadYAML(dir string) (*YAMLStore, error) {
-	snap := newSnapshot()
-
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		ext := filepath.Ext(path)
-		if ext != ".yaml" && ext != ".yml" {
-			return nil
-		}
-		return loadFile(path, snap)
-	})
+	snap, err := loadYAMLRaw(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +41,45 @@ func LoadYAML(dir string) (*YAMLStore, error) {
 	snap.buildEffectivePricing()
 	snap.buildByIDIndexes()
 	return &YAMLStore{snap: snap}, nil
+}
+
+// LoadYAMLForSeed reads the YAML tree in name-form: no id stamping, no
+// cross-ref resolution, no validation. Seed consumes this and resolves refs
+// itself against a name→id index it builds from the current PG state.
+func LoadYAMLForSeed(dir string) (*YAMLStore, error) {
+	snap, err := loadYAMLRaw(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := resolveSecrets(snap); err != nil {
+		return nil, err
+	}
+	return &YAMLStore{snap: snap}, nil
+}
+
+// loadYAMLRaw parses every YAML in dir into a snapshot without stamping ids,
+// resolving cross-refs, or validating. Cross-ref Spec fields stay in name
+// form. The seed CLI uses this so it can build its own name→id index against
+// the live PG state and resolve refs at upsert time.
+func loadYAMLRaw(dir string) (*snapshot, error) {
+	snap := newSnapshot()
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(path)
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		return loadFile(path, snap)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return snap, nil
 }
 
 func resolveSecrets(snap *snapshot) error {
