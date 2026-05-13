@@ -11,13 +11,12 @@ func validProvID() string { return meta.NewID() }
 
 // fix builds a minimally-valid Model. Tests override fields they want to break.
 func fix(name string) *Model {
-	prov := validProvID()
 	return &Model{
 		Meta: meta.Metadata{
 			Name:  name,
-			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov},
+			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: validProvID()},
 		},
-		Spec: Spec{ProviderID: prov, UpstreamName: "u"},
+		Spec: Spec{UpstreamName: "u"},
 	}
 }
 
@@ -37,16 +36,6 @@ func TestValidate(t *testing.T) {
 			name: "missing name",
 			m:    func() *Model { m := fix("x"); m.Meta.Name = ""; return m }(),
 			want: "Name",
-		},
-		{
-			name: "missing providerID",
-			m:    func() *Model { m := fix("x"); m.Spec.ProviderID = ""; return m }(),
-			want: "ProviderID",
-		},
-		{
-			name: "providerID not uuid",
-			m:    func() *Model { m := fix("x"); m.Spec.ProviderID = "not-a-uuid"; return m }(),
-			want: "ProviderID",
 		},
 		{
 			name: "missing upstreamName",

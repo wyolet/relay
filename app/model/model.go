@@ -17,12 +17,10 @@ type Model struct {
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec is the body. Cross-refs are stored as ids.
+// Spec is the body. Cross-refs are stored as ids. The owning Provider's id
+// lives on Meta.Owner.ID (Owner.Kind is always "provider"); there is no
+// separate spec.providerId field.
 type Spec struct {
-	// ProviderID identifies the owning Provider. Validated against the
-	// snapshot at composition time; only structural (uuid) here.
-	ProviderID string `json:"providerId" yaml:"providerId" validate:"required,uuid"`
-
 	// UpstreamName is the model identifier sent to the provider's API
 	// (e.g. "gpt-4o-2024-08-06"). Required.
 	UpstreamName string `json:"upstreamName" yaml:"upstreamName" validate:"required"`
@@ -113,9 +111,9 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 //   - Aliases are non-empty, case-insensitively unique, and must not
 //     collide with the Model's own Meta.Name.
 //
-// Cross-entity checks (ProviderID resolves to a real Provider; Owner.ID
-// matches Spec.ProviderID; Deprecation.Replacement resolves to a real Model;
-// alias uniqueness across Models) live in the composition layer.
+// Cross-entity checks (Owner.ID resolves to a real Provider; Deprecation.
+// Replacement resolves to a real Model; alias uniqueness across Models) live
+// in the composition layer.
 func (m *Model) Validate() error {
 	if err := meta.Validator.Struct(m); err != nil {
 		return err
