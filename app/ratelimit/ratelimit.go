@@ -99,14 +99,3 @@ func (r *RateLimit) Validate() error {
 	return nil
 }
 
-// ── Attachment ──────────────────────────────────────────────────────────────
-
-// Attachment is a by-id reference from Policy/Model/ProviderKey to a RateLimit.
-// Lives here (not in the attaching package) so consumers depend on the
-// referenced package, not the other way around.
-//
-// The legacy wire form {ref: "...", meter: "..."} (with meter ignored) is
-// accepted on unmarshal but never emitted; new writes use a plain id string.
-type Attachment struct {
-	RateLimitID string `json:"rateLimitId" yaml:"rateLimitId" validate:"required,uuid"`
-}

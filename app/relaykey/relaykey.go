@@ -3,10 +3,10 @@
 // plaintext is never stored, only sha256(KeyHash) plus a short display
 // Prefix.
 //
-// RelayKey does not reference Policy. Policy selection is driven entirely
-// by the incoming request's model — model resolves to Provider, Provider
-// names its DefaultPolicy. The per-key policy override that existed in the
-// old design is gone.
+// Each RelayKey belongs to exactly one Policy via Spec.PolicyID. Policy
+// selection at request time is keyed off the authenticated RelayKey, not
+// the model — the Policy then dictates the allowed Models and the
+// ProviderKey pool.
 package relaykey
 
 import (
@@ -26,6 +26,9 @@ type RelayKey struct {
 // hex of the bearer token (lowercase, 64 chars); the plaintext is never
 // stored anywhere.
 type Spec struct {
+	// PolicyID is the Policy this RelayKey serves under. Required.
+	PolicyID string `json:"policyId" yaml:"policyId" validate:"required,uuid"`
+
 	// KeyHash is sha256(plaintext) hex. Required and immutable after create.
 	KeyHash string `json:"keyHash" yaml:"keyHash" validate:"required,len=64,hexadecimal"`
 

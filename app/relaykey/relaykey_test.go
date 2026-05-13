@@ -16,7 +16,7 @@ func fix(name string) *RelayKey {
 			Name:  name,
 			Owner: meta.Owner{Kind: meta.OwnerUser},
 		},
-		Spec: Spec{KeyHash: validHash, Prefix: "rk_test"},
+		Spec: Spec{PolicyID: meta.NewID(), KeyHash: validHash, Prefix: "rk_test"},
 	}
 }
 
@@ -32,6 +32,16 @@ func TestValidate(t *testing.T) {
 		k    *RelayKey
 		want string
 	}{
+		{
+			name: "missing policyId",
+			k:    func() *RelayKey { k := fix("k"); k.Spec.PolicyID = ""; return k }(),
+			want: "PolicyID",
+		},
+		{
+			name: "policyId not uuid",
+			k:    func() *RelayKey { k := fix("k"); k.Spec.PolicyID = "not-a-uuid"; return k }(),
+			want: "PolicyID",
+		},
 		{
 			name: "missing keyhash",
 			k:    func() *RelayKey { k := fix("k"); k.Spec.KeyHash = ""; return k }(),

@@ -1,75 +1,80 @@
-// Package policy is the domain layer for the Policy entity — the hub that
-// glues a Provider to a set of usable ProviderKeys, a set of allowed Models,
-// rate-limit attachments, and a key-selection strategy.
+// Package policy is the domain layer for the Policy entity — the named
+// group that bundles Models (m:n), ProviderKeys (m:n), and an optional
+// single RateLimit (m:1, the one rule set that applies to traffic through
+// this Policy).
 //
-// Policies are user-owned (or system-bundled). A Provider points to a default
-// Policy; a RelayKey may override that with its own PolicyRef.
+// Wire format: Policy YAML/JSON carries entity *names*; the admin and seed
+// boundaries resolve names to ids.
 //
-// All cross-refs are stored as ids. Cross-entity rules — every ProviderKey in
-// Spec.ProviderKeyIDs belongs to Spec.ProviderID, etc. — live in the
-// composition layer, not here.
+// Go domain shape: Policy.Spec carries id arrays / scalar id. Callers read
+// the lists directly without dealing with joins.
+//
+// PG storage: arrays land in junction tables (policy_models,
+// policy_provider_keys) with proper FKs; the single RateLimit ref is a
+// column on the policies table. Policy's store.go fans the writes out
+// across the junctions inside a transaction and rebuilds the arrays on
+// read. (Migration + sqlc queries land as a follow-up; current store.go
+// keeps Spec in JSONB until then, see TODO in store.go.)
+//
+// Reverse direction: RelayKey carries a single Spec.PolicyID (m:1).
+// Provider names its default via Spec.DefaultPolicyID. Models and
+// ProviderKeys carry no policy reference — they are discovered via the
+// junctions / via Policy.Spec.
 package policy
 
 import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/ratelimit"
 )
 
-// Policy is the routing/auth bundle for a Provider.
+// Policy is the routing/auth bundle. Composition layer enforces that every
+// id in the lists below resolves and (for ProviderKeys) shares the Provider
+// of the Models in the same Policy.
 type Policy struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec is the body. ProviderID is the FK; everything else is scoped to it.
+// Spec carries the membership lists, the single rate-limit, and the
+// strategy knobs.
 type Spec struct {
-	// ProviderID is the Provider this Policy applies to. Required.
-	ProviderID string `json:"providerId" yaml:"providerId" validate:"required,uuid"`
-
-	// ProviderKeyIDs is the explicit, ordered list of ProviderKeys eligible
-	// to serve this Policy. May be empty if ProviderKeySelector is non-empty.
-	ProviderKeyIDs []string `json:"providerKeyIds,omitempty" yaml:"providerKeyIds,omitempty" validate:"omitempty,dive,uuid"`
-
-	// ProviderKeySelector picks ProviderKeys by Metadata.Labels. Merged with
-	// ProviderKeyIDs at request time; entries appearing in both are deduped.
-	ProviderKeySelector map[string]string `json:"providerKeySelector,omitempty" yaml:"providerKeySelector,omitempty"`
-
-	// ModelIDs is the allowed-list of Model ids callable through this Policy.
-	// Empty/nil means "any Model registered for Spec.ProviderID."
+	// ModelIDs is the set of Models this Policy exposes (m:n with Model).
 	ModelIDs []string `json:"modelIds,omitempty" yaml:"modelIds,omitempty" validate:"omitempty,dive,uuid"`
 
-	// RateLimits attach RateLimit rule sets that apply at request time.
-	RateLimits []ratelimit.Attachment `json:"rateLimits,omitempty" yaml:"rateLimits,omitempty" validate:"omitempty,dive"`
+	// ProviderKeyIDs is the set of ProviderKeys this Policy can draw from
+	// (m:n with ProviderKey). Order is significant for KeySelectionPrioritized.
+	ProviderKeyIDs []string `json:"providerKeyIds,omitempty" yaml:"providerKeyIds,omitempty" validate:"omitempty,dive,uuid"`
 
-	// SkipDefaultLimits opts out of the implicit "every Policy targeting an
-	// auth-required Provider must enforce at least requests + tokens" rule.
-	// Used by special-purpose policies that have their limits enforced
-	// elsewhere (e.g. system-owned passthrough policies).
-	SkipDefaultLimits bool `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
+	// RateLimitID is the single RateLimit applied to traffic through this
+	// Policy. Optional — empty means no policy-level rate limiting.
+	RateLimitID string `json:"rateLimitId,omitempty" yaml:"rateLimitId,omitempty" validate:"omitempty,uuid"`
 
 	// KeySelection is the algorithm used to pick a ProviderKey from the
 	// healthy pool. Defaults to prioritized.
 	KeySelection KeySelection `json:"keySelection,omitempty" yaml:"keySelection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used"`
 
+	// SkipDefaultLimits opts out of the implicit "every Policy targeting an
+	// auth-required Provider must enforce at least requests + tokens" rule
+	// performed by the composition layer.
+	SkipDefaultLimits bool `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
+
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
-// KeySelection controls how the keypool picks a ProviderKey from the healthy
-// candidates that satisfy a Policy.
+// KeySelection controls how the keypool picks a ProviderKey from the
+// healthy candidates that satisfy this Policy.
 type KeySelection string
 
 const (
 	// KeySelectionPrioritized drains keys in declaration order — the first
-	// healthy key in ProviderKeyIDs wins. Default — matches the most common
-	// operator request ("burn key 1 before key 2").
+	// healthy key in ProviderKeyIDs wins. Default.
 	KeySelectionPrioritized KeySelection = "prioritized"
 	// KeySelectionRoundRobin rotates evenly across healthy keys.
 	KeySelectionRoundRobin KeySelection = "round-robin"
-	// KeySelectionLeastRecentlyUsed prefers the key whose last successful use
-	// was furthest in the past.
+	// KeySelectionLeastRecentlyUsed prefers the key whose last successful
+	// use was furthest in the past.
 	KeySelectionLeastRecentlyUsed KeySelection = "least-recently-used"
 )
 
@@ -85,14 +90,12 @@ func (p *Policy) EffectiveKeySelection() KeySelection {
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind is user or system (Policies are never provider-owned).
-//   - ProviderKeyIDs contains no duplicates.
-//   - ModelIDs contains no duplicates.
+//   - Owner.Kind is user or system.
+//   - ModelIDs / ProviderKeyIDs have no within-list duplicates.
 //
-// Cross-entity checks — every referenced ProviderKey/Model belongs to the
-// same Provider; ProviderID resolves; RateLimits resolve; auth-required
-// Providers have at least one resolvable ProviderKey — live in the
-// composition layer.
+// Cross-entity checks (every id resolves; ProviderKeys + Models share a
+// Provider; RateLimitID resolves; auth-required Providers have at least
+// one resolvable ProviderKey) live in the composition layer.
 func (p *Policy) Validate() error {
 	if err := meta.Validator.Struct(p); err != nil {
 		return err
@@ -104,10 +107,10 @@ func (p *Policy) Validate() error {
 	default:
 		return fmt.Errorf("policy %q: owner.kind required (user|system)", p.Meta.Name)
 	}
-	if err := uniqueIDs("providerKeyIds", p.Meta.Name, p.Spec.ProviderKeyIDs); err != nil {
+	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
 		return err
 	}
-	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
+	if err := uniqueIDs("providerKeyIds", p.Meta.Name, p.Spec.ProviderKeyIDs); err != nil {
 		return err
 	}
 	return nil

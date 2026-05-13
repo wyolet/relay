@@ -13,7 +13,7 @@ func fix(name string) *Policy {
 			Name:  name,
 			Owner: meta.Owner{Kind: meta.OwnerUser},
 		},
-		Spec: Spec{ProviderID: meta.NewID()},
+		Spec: Spec{},
 	}
 }
 
@@ -40,16 +40,6 @@ func TestValidate(t *testing.T) {
 			name: "missing name",
 			p:    func() *Policy { p := fix("x"); p.Meta.Name = ""; return p }(),
 			want: "Name",
-		},
-		{
-			name: "missing providerID",
-			p:    func() *Policy { p := fix("x"); p.Spec.ProviderID = ""; return p }(),
-			want: "ProviderID",
-		},
-		{
-			name: "providerID not uuid",
-			p:    func() *Policy { p := fix("x"); p.Spec.ProviderID = "not-a-uuid"; return p }(),
-			want: "ProviderID",
 		},
 		{
 			name: "providerKeyIds non-uuid",

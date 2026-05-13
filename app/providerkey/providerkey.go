@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/ratelimit"
 )
 
 // ProviderKey is a credential bound to a Provider.
@@ -37,10 +36,9 @@ type ProviderKey struct {
 // Spec carries non-secret config and the value-mode discriminator. Cleartext
 // (Value) is write-only via YAML; storage encrypts and discards it.
 type Spec struct {
-	ValueFrom   ValueFrom              `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
-	DefaultTier string                 `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
-	Enabled     *bool                  `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
-	RateLimits  []ratelimit.Attachment `json:"rateLimits,omitempty"  yaml:"rateLimits,omitempty"  validate:"omitempty,dive"`
+	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
+	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
+	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
 
 	// Value is cleartext on the write path for ValueKindStored. Never
 	// serialised to JSON (so it never reaches JSONB or API responses); only
