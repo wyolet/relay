@@ -62,8 +62,8 @@ func NewID() string { return ids.New() }
 // Owner describes who created / manages a row. Kind=provider requires ID;
 // the other kinds leave ID empty.
 type Owner struct {
-	Kind OwnerKind
-	ID   string
+	Kind OwnerKind `json:"kind,omitempty"`
+	ID   string    `json:"id,omitempty"`
 }
 
 // OwnerKind enumerates provenance categories.

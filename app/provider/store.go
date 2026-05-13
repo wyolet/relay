@@ -1,25 +1,20 @@
 // store.go is the data-access layer for Provider. It maps Provider domain
-// structs to and from the sqlc-generated row types, and is the only file in
-// this package that talks SQL.
+// structs to and from the sqlc-generated row types. Metadata JSONB encoding
+// is delegated to app/meta; this file only knows about Provider's Spec.
 //
-// The Store type is concrete — no interface declared here. Consumers (the
-// snapshot composer, admin handlers, seed) each declare their own narrow
-// interface locally if they want a test seam.
+// Store is concrete — no interface declared here. Consumers (snapshot
+// composer, admin handlers, seed) each declare their own narrow interface
+// locally if they want a test seam.
 package provider
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
-
-// ErrNotFound is returned when no Provider matches the requested id.
-var ErrNotFound = errors.New("provider: not found")
 
 // Store is the Provider data-access type. Holds a sqlc Queries handle.
 type Store struct {
@@ -38,114 +33,56 @@ func (s *Store) List(ctx context.Context) ([]*Provider, error) {
 	}
 	out := make([]*Provider, 0, len(rows))
 	for _, r := range rows {
-		p, err := decode(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec)
+		p, err := fromRow(r)
 		if err != nil {
-			return nil, fmt.Errorf("provider.List decode %s: %w", r.Name, err)
+			return nil, fmt.Errorf("provider %s: %w", r.Name, err)
 		}
 		out = append(out, p)
 	}
 	return out, nil
 }
 
-// Get returns the Provider with this id, or ErrNotFound. Implemented over
-// List for now — the sqlc layer has no point-query for providers yet.
-func (s *Store) Get(ctx context.Context, id string) (*Provider, error) {
-	all, err := s.List(ctx)
+// Upsert writes p. Caller is responsible for stamping Meta.ID.
+func (s *Store) Upsert(ctx context.Context, p *Provider) error {
+	params, err := toUpsertParams(p)
+	if err != nil {
+		return fmt.Errorf("provider.Upsert: %w", err)
+	}
+	return s.q.UpsertProvider(ctx, params)
+}
+
+// Delete removes a Provider by id. sqlc returns nil on a no-rows delete;
+// callers can pre-check existence via the snapshot if they need a 404.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	return s.q.DeleteProvider(ctx, id)
+}
+
+func fromRow(r gen.ListProvidersRow) (*Provider, error) {
+	m, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
 	}
-	for _, p := range all {
-		if p.Meta.ID == id {
-			return p, nil
-		}
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
 	}
-	return nil, ErrNotFound
+	return &Provider{Meta: m, Spec: spec}, nil
 }
 
-// Upsert writes p. p.Meta.ID must already be set; callers stamp ids before
-// reaching the store (so the same id can flow through validation + seed
-// remap + tx commit without surprises).
-func (s *Store) Upsert(ctx context.Context, p *Provider) error {
-	if p.Meta.ID == "" {
-		return errors.New("provider.Upsert: Meta.ID required (stamp before write)")
-	}
-	metaJSON, err := encodeMetadata(p.Meta)
+func toUpsertParams(p *Provider) (gen.UpsertProviderParams, error) {
+	metaJSON, err := meta.MarshalJSONB(p.Meta)
 	if err != nil {
-		return fmt.Errorf("provider.Upsert: encode metadata: %w", err)
+		return gen.UpsertProviderParams{}, fmt.Errorf("metadata: %w", err)
 	}
 	specJSON, err := json.Marshal(p.Spec)
 	if err != nil {
-		return fmt.Errorf("provider.Upsert: encode spec: %w", err)
+		return gen.UpsertProviderParams{}, fmt.Errorf("spec: %w", err)
 	}
-	return s.q.UpsertProvider(ctx, gen.UpsertProviderParams{
+	return gen.UpsertProviderParams{
 		ID:          p.Meta.ID,
 		Name:        p.Meta.Name,
 		DisplayName: p.Meta.DisplayName,
 		Metadata:    metaJSON,
 		Spec:        specJSON,
-	})
-}
-
-// Delete removes a Provider by id. Returns ErrNotFound on miss.
-func (s *Store) Delete(ctx context.Context, id string) error {
-	if err := s.q.DeleteProvider(ctx, id); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("provider.Delete: %w", err)
-	}
-	return nil
-}
-
-// ── encoding helpers ─────────────────────────────────────────────────────────
-
-// metadataDoc is the on-disk JSONB shape of meta.Metadata. ID/Name/DisplayName
-// live in their own columns so they're never duplicated here; description,
-// owner, and labels are JSONB only.
-type metadataDoc struct {
-	Description string            `json:"description,omitempty"`
-	Owner       ownerDoc          `json:"owner,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-}
-
-type ownerDoc struct {
-	Kind meta.OwnerKind `json:"kind,omitempty"`
-	ID   string         `json:"id,omitempty"`
-}
-
-func encodeMetadata(m meta.Metadata) ([]byte, error) {
-	return json.Marshal(metadataDoc{
-		Description: m.Description,
-		Owner:       ownerDoc{Kind: m.Owner.Kind, ID: m.Owner.ID},
-		Labels:      m.Labels,
-	})
-}
-
-func decodeMetadata(raw []byte, m *meta.Metadata) error {
-	if len(raw) == 0 {
-		return nil
-	}
-	var d metadataDoc
-	if err := json.Unmarshal(raw, &d); err != nil {
-		return err
-	}
-	m.Description = d.Description
-	m.Owner = meta.Owner{Kind: d.Kind(), ID: d.Owner.ID}
-	m.Labels = d.Labels
-	return nil
-}
-
-func (d metadataDoc) Kind() meta.OwnerKind { return d.Owner.Kind }
-
-func decode(id, name, displayName string, metaJSON, specJSON []byte) (*Provider, error) {
-	p := &Provider{
-		Meta: meta.Metadata{ID: id, Name: name, DisplayName: displayName},
-	}
-	if err := decodeMetadata(metaJSON, &p.Meta); err != nil {
-		return nil, fmt.Errorf("metadata: %w", err)
-	}
-	if err := json.Unmarshal(specJSON, &p.Spec); err != nil {
-		return nil, fmt.Errorf("spec: %w", err)
-	}
-	return p, nil
+	}, nil
 }
