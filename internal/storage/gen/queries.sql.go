@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteHost = `-- name: DeleteHost :exec
+DELETE FROM hosts WHERE id = $1
+`
+
+func (q *Queries) DeleteHost(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteHost, id)
+	return err
+}
+
 const deleteModel = `-- name: DeleteModel :exec
 DELETE FROM models WHERE id = $1
 `
@@ -26,6 +35,24 @@ DELETE FROM policies WHERE id = $1
 
 func (q *Queries) DeletePolicy(ctx context.Context, id string) error {
 	_, err := q.db.Exec(ctx, deletePolicy, id)
+	return err
+}
+
+const deletePolicyHostKeys = `-- name: DeletePolicyHostKeys :exec
+DELETE FROM policy_host_keys WHERE policy_id = $1
+`
+
+func (q *Queries) DeletePolicyHostKeys(ctx context.Context, policyID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyHostKeys, policyID)
+	return err
+}
+
+const deletePolicyModels = `-- name: DeletePolicyModels :exec
+DELETE FROM policy_models WHERE policy_id = $1
+`
+
+func (q *Queries) DeletePolicyModels(ctx context.Context, policyID string) error {
+	_, err := q.db.Exec(ctx, deletePolicyModels, policyID)
 	return err
 }
 
@@ -88,6 +115,36 @@ func (q *Queries) GetPassthrough(ctx context.Context, name string) (GetPassthrou
 	var i GetPassthroughRow
 	err := row.Scan(&i.Name, &i.Spec)
 	return i, err
+}
+
+const insertPolicyHostKey = `-- name: InsertPolicyHostKey :exec
+INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPolicyHostKeyParams struct {
+	PolicyID  string `db:"policy_id" json:"policy_id"`
+	HostKeyID string `db:"host_key_id" json:"host_key_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyHostKey(ctx context.Context, arg InsertPolicyHostKeyParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyHostKey, arg.PolicyID, arg.HostKeyID, arg.Position)
+	return err
+}
+
+const insertPolicyModel = `-- name: InsertPolicyModel :exec
+INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, $3)
+`
+
+type InsertPolicyModelParams struct {
+	PolicyID string `db:"policy_id" json:"policy_id"`
+	ModelID  string `db:"model_id" json:"model_id"`
+	Position int32  `db:"position" json:"position"`
+}
+
+func (q *Queries) InsertPolicyModel(ctx context.Context, arg InsertPolicyModelParams) error {
+	_, err := q.db.Exec(ctx, insertPolicyModel, arg.PolicyID, arg.ModelID, arg.Position)
+	return err
 }
 
 const insertSecretEnv = `-- name: InsertSecretEnv :one
@@ -214,6 +271,46 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 	return i, err
 }
 
+const listHosts = `-- name: ListHosts :many
+
+SELECT id, name, display_name, metadata, spec FROM hosts ORDER BY name
+`
+
+type ListHostsRow struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+// ── app/ arch (migration 0009) ───────────────────────────────────────────────
+func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
+	rows, err := q.db.Query(ctx, listHosts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListHostsRow
+	for rows.Next() {
+		var i ListHostsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listModels = `-- name: ListModels :many
 SELECT id, name, display_name, metadata, spec FROM models ORDER BY name
 `
@@ -280,6 +377,94 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 			&i.Metadata,
 			&i.Spec,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPoliciesWithRateLimit = `-- name: ListPoliciesWithRateLimit :many
+SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies ORDER BY name
+`
+
+type ListPoliciesWithRateLimitRow struct {
+	ID          string      `db:"id" json:"id"`
+	Name        string      `db:"name" json:"name"`
+	DisplayName string      `db:"display_name" json:"display_name"`
+	Metadata    []byte      `db:"metadata" json:"metadata"`
+	Spec        []byte      `db:"spec" json:"spec"`
+	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
+}
+
+func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPoliciesWithRateLimitRow, error) {
+	rows, err := q.db.Query(ctx, listPoliciesWithRateLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPoliciesWithRateLimitRow
+	for rows.Next() {
+		var i ListPoliciesWithRateLimitRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+			&i.RateLimitID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPolicyHostKeys = `-- name: ListPolicyHostKeys :many
+SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position
+`
+
+func (q *Queries) ListPolicyHostKeys(ctx context.Context) ([]PolicyHostKey, error) {
+	rows, err := q.db.Query(ctx, listPolicyHostKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyHostKey
+	for rows.Next() {
+		var i PolicyHostKey
+		if err := rows.Scan(&i.PolicyID, &i.HostKeyID, &i.Position); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPolicyModels = `-- name: ListPolicyModels :many
+SELECT policy_id, model_id, position FROM policy_models ORDER BY policy_id, position
+`
+
+func (q *Queries) ListPolicyModels(ctx context.Context) ([]PolicyModel, error) {
+	rows, err := q.db.Query(ctx, listPolicyModels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PolicyModel
+	for rows.Next() {
+		var i PolicyModel
+		if err := rows.Scan(&i.PolicyID, &i.ModelID, &i.Position); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -490,6 +675,20 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 	return items, nil
 }
 
+const setPolicyRateLimit = `-- name: SetPolicyRateLimit :exec
+UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1
+`
+
+type SetPolicyRateLimitParams struct {
+	ID          string      `db:"id" json:"id"`
+	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
+}
+
+func (q *Queries) SetPolicyRateLimit(ctx context.Context, arg SetPolicyRateLimitParams) error {
+	_, err := q.db.Exec(ctx, setPolicyRateLimit, arg.ID, arg.RateLimitID)
+	return err
+}
+
 const updateSecretEnv = `-- name: UpdateSecretEnv :one
 UPDATE secrets
 SET value_kind       = 'env',
@@ -579,6 +778,36 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 		&i.Spec,
 	)
 	return i, err
+}
+
+const upsertHost = `-- name: UpsertHost :exec
+INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
+`
+
+type UpsertHostParams struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertHost(ctx context.Context, arg UpsertHostParams) error {
+	_, err := q.db.Exec(ctx, upsertHost,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
+	return err
 }
 
 const upsertModel = `-- name: UpsertModel :exec

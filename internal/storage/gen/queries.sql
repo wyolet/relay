@@ -162,6 +162,48 @@ ON CONFLICT (id) DO UPDATE SET
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
 
+-- ── app/ arch (migration 0009) ───────────────────────────────────────────────
+
+-- name: ListHosts :many
+SELECT id, name, display_name, metadata, spec FROM hosts ORDER BY name;
+
+-- name: UpsertHost :exec
+INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW();
+
+-- name: DeleteHost :exec
+DELETE FROM hosts WHERE id = $1;
+
+-- name: SetPolicyRateLimit :exec
+UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1;
+
+-- name: ListPolicyModels :many
+SELECT policy_id, model_id, position FROM policy_models ORDER BY policy_id, position;
+
+-- name: DeletePolicyModels :exec
+DELETE FROM policy_models WHERE policy_id = $1;
+
+-- name: InsertPolicyModel :exec
+INSERT INTO policy_models (policy_id, model_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPolicyHostKeys :many
+SELECT policy_id, host_key_id, position FROM policy_host_keys ORDER BY policy_id, position;
+
+-- name: DeletePolicyHostKeys :exec
+DELETE FROM policy_host_keys WHERE policy_id = $1;
+
+-- name: InsertPolicyHostKey :exec
+INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
+
+-- name: ListPoliciesWithRateLimit :many
+SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies ORDER BY name;
+
 -- name: GetPassthrough :one
 SELECT name, spec FROM passthrough_config WHERE name = $1;
 

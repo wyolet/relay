@@ -8,6 +8,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Host struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Model struct {
 	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`
@@ -33,6 +43,19 @@ type Policy struct {
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 	ID          string             `db:"id" json:"id"`
 	DisplayName string             `db:"display_name" json:"display_name"`
+	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+}
+
+type PolicyHostKey struct {
+	PolicyID  string `db:"policy_id" json:"policy_id"`
+	HostKeyID string `db:"host_key_id" json:"host_key_id"`
+	Position  int32  `db:"position" json:"position"`
+}
+
+type PolicyModel struct {
+	PolicyID string `db:"policy_id" json:"policy_id"`
+	ModelID  string `db:"model_id" json:"model_id"`
+	Position int32  `db:"position" json:"position"`
 }
 
 type Provider struct {
