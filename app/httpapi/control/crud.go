@@ -55,6 +55,7 @@ func registerKind[T any](
 	store entityStore[T],
 	authzr authz.Authorizer,
 	metaOf func(*T) *meta.Metadata,
+	validate func(*T) error,
 	resolveSlug func(slug string) (string, error),
 	protect huma.Middlewares,
 ) {
@@ -154,6 +155,14 @@ func registerKind[T any](
 			}
 			m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 		}
+		// Validate AFTER stamping id+slug so the entity's Validate() sees
+		// the same shape the store will persist. Rejecting here keeps bad
+		// rows out of PG (which would otherwise break Bootstrap).
+		if validate != nil {
+			if err := validate(v); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
+		}
 		if err := store.Upsert(ctx, v); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -187,6 +196,11 @@ func registerKind[T any](
 		v := &in.Body
 		m := metaOf(v)
 		m.ID = in.ID // path id wins over body id
+		if validate != nil {
+			if err := validate(v); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
+		}
 		if err := store.Upsert(ctx, v); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -282,6 +296,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 
 	registerKind[provider.Provider](
 		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
+		func(p *provider.Provider) error { return p.Validate() },
 		func(s string) (string, error) {
 			p, ok := d.Catalog.Current().ProviderByName(s)
 			if !ok {
@@ -294,6 +309,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 
 	registerKind[host.Host](
 		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
+		func(h *host.Host) error { return h.Validate() },
 		func(s string) (string, error) {
 			h, ok := d.Catalog.Current().HostByName(s)
 			if !ok {
@@ -306,6 +322,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 
 	registerKind[model.Model](
 		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
+		func(m *model.Model) error { return m.Validate() },
 		func(s string) (string, error) {
 			ms := d.Catalog.Current().ModelsByName(s)
 			if len(ms) == 0 {
@@ -318,18 +335,21 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 
 	registerKind[hostkey.HostKey](
 		api, "host-keys", "host-key", d.Stores.HostKey, d.Authz, kmeta,
+		func(k *hostkey.HostKey) error { return k.Validate() },
 		listScanResolver(d.Stores.HostKey, kmeta),
 		protect,
 	)
 
 	registerKind[ratelimit.RateLimit](
 		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
+		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		listScanResolver(d.Stores.RateLimit, rlmeta),
 		protect,
 	)
 
 	registerKind[policy.Policy](
 		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
+		func(p *policy.Policy) error { return p.Validate() },
 		func(s string) (string, error) {
 			p, ok := d.Catalog.Current().PolicyByName(s)
 			if !ok {
@@ -342,12 +362,14 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 
 	registerKind[pricing.Pricing](
 		api, "pricings", "pricing", d.Stores.Pricing, d.Authz, prmeta,
+		func(p *pricing.Pricing) error { return p.Validate() },
 		listScanResolver(d.Stores.Pricing, prmeta),
 		protect,
 	)
 
 	registerKind[relaykey.RelayKey](
 		api, "relay-keys", "relay-key", d.Stores.RelayKey, d.Authz, rkmeta,
+		func(k *relaykey.RelayKey) error { return k.Validate() },
 		listScanResolver(d.Stores.RelayKey, rkmeta),
 		protect,
 	)
