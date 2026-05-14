@@ -29,8 +29,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
@@ -77,6 +79,14 @@ type Request struct {
 	// expects the full Policy.
 	Policy *policy.Policy
 
+	// Model, Host, Provider name the request triple the upstream RL
+	// resolution depends on. Required when Pipeline.Policy (the Service)
+	// is set — the Service uses them to pick the per-(provider, model,
+	// host) bucket. The legacy Selector path ignores them.
+	Model    *model.Model
+	Host     *host.Host
+	Provider string
+
 	// Keys are the ordered candidate set. Empty rejected with ErrNoKeys.
 	// Anonymous traffic is served by a separate package, not this one.
 	Keys []*hostkey.HostKey
@@ -112,9 +122,21 @@ type Result struct {
 // Pipeline is the orchestrator. Constructed once at boot; Run() is
 // goroutine-safe.
 type Pipeline struct {
-	Limiter  *pkgratelimit.Limiter
+	// Limiter is used for the inbound (per-Policy) reservation. The
+	// upstream (per-HostKey) reservation goes through Policy.Service.
+	Limiter *pkgratelimit.Limiter
+
+	// Selector is the legacy direct reference; the retry loop now goes
+	// through Policy.Service.Acquire instead. Kept on the struct for
+	// other callers that still expect it; may be removed in a follow-up.
 	Selector *keypool.Selector
-	Logger   *slog.Logger
+
+	// Policy is the runtime orchestrator for "pick a key + reserve its
+	// upstream rate-limit." Per-attempt the retry loop calls
+	// Policy.Acquire and on retryable adapter errors Policy.Release.
+	Policy *policy.Service
+
+	Logger *slog.Logger
 }
 
 const defaultMaxAttempts = 3
@@ -164,22 +186,48 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 		}
 	}
 
-	// Retry loop: pick → call → on retryable error, rotate key.
+	// Retry loop: pick → call → on retryable error, rotate key. When
+	// Pipeline.Policy (Service) is wired the picking + upstream RL
+	// reservation go through it; otherwise we fall back to the legacy
+	// direct Selector path used by older tests.
 	var (
 		excluded []*hostkey.HostKey
 		chosen   *hostkey.HostKey
+		acq      *policy.Acquisition
 		resp     *http.Response
 	)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		chosen, err = p.Selector.PickWithExclude(ctx, req.Policy, req.Keys, excluded)
-		if err != nil {
-			break
+		if p.Policy != nil {
+			acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
+				Policy:   req.Policy,
+				Keys:     req.Keys,
+				Excluded: excluded,
+				Model:    req.Model,
+				Host:     req.Host,
+				Provider: req.Provider,
+			})
+			if errors.Is(err, policy.ErrSaturated) {
+				// Service already recorded the short-RL failure; rotate.
+				if acq != nil && acq.Key != nil {
+					excluded = append(excluded, acq.Key)
+				}
+				continue
+			}
+			if err != nil {
+				break
+			}
+			chosen = acq.Key
+		} else {
+			chosen, err = p.Selector.PickWithExclude(ctx, req.Policy.Meta.Name, req.Policy.EffectiveKeySelection(), req.Keys, excluded)
+			if err != nil {
+				break
+			}
 		}
 
 		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, chosen.Resolved, req.Body, req.Headers)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			// Success path (or non-retryable upstream error — return as-is).
-			return p.makeResult(req, reservation, chosen, resp), nil
+			return p.makeResult(req, reservation, acq, chosen, resp), nil
 		}
 
 		// Retryable: classify, record failure, drain body, exclude this
@@ -191,9 +239,14 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 		if !retry {
 			break
 		}
-		p.Selector.RecordFailure(ctx, chosen.KeyHash, kind, retryAfter)
+		if p.Policy != nil {
+			p.Policy.Release(ctx, acq, kind, retryAfter)
+		} else {
+			p.Selector.RecordFailure(ctx, chosen.KeyHash, kind, retryAfter)
+		}
 		excluded = append(excluded, chosen)
-		chosen = nil // don't carry forward
+		chosen = nil
+		acq = nil
 	}
 
 	// Reservation never committed — let it expire by TTL. Limiter is
@@ -226,6 +279,7 @@ func classify(a Adapter, resp *http.Response, callErr error) (bool, keypool.Fail
 func (p *Pipeline) makeResult(
 	req *Request,
 	res *pkgratelimit.Reservation,
+	acq *policy.Acquisition,
 	chosen *hostkey.HostKey,
 	resp *http.Response,
 ) *Result {
@@ -245,7 +299,7 @@ func (p *Pipeline) makeResult(
 	pfTriggered := &sync.Once{}
 	postFlight := func() {
 		pfTriggered.Do(func() {
-			go p.runPostFlight(req, res, chosen, collected.Bytes())
+			go p.runPostFlight(req, res, acq, chosen, collected.Bytes())
 		})
 	}
 
@@ -271,6 +325,7 @@ func (p *Pipeline) makeResult(
 func (p *Pipeline) runPostFlight(
 	req *Request,
 	res *pkgratelimit.Reservation,
+	acq *policy.Acquisition,
 	chosen *hostkey.HostKey,
 	body []byte,
 ) {
@@ -278,16 +333,21 @@ func (p *Pipeline) runPostFlight(
 	defer cancel()
 
 	tokens := req.Adapter.ExtractTokens(body)
+	obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
 
 	if res != nil && p.Limiter != nil {
-		obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
 		if err := p.Limiter.Commit(ctx, res, obs); err != nil && p.Logger != nil {
 			p.Logger.Warn("pipeline: limiter commit failed",
 				"err", err, "scope", req.RateScope)
 		}
 	}
 
-	if p.Selector != nil && chosen != nil {
+	if p.Policy != nil {
+		if err := p.Policy.Commit(ctx, acq, obs); err != nil && p.Logger != nil {
+			p.Logger.Warn("pipeline: upstream commit failed", "err", err)
+		}
+		p.Policy.RecordSuccess(ctx, acq)
+	} else if p.Selector != nil && chosen != nil {
 		p.Selector.RecordSuccess(ctx, chosen.KeyHash)
 	}
 

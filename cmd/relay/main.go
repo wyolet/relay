@@ -28,7 +28,9 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/proxy"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/internal/config"
@@ -133,9 +135,11 @@ func main() {
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
 	pl := &pipeline.Pipeline{
 		Limiter:  limiter,
 		Selector: selector,
+		Policy:   policySvc,
 		Logger:   slog.Default(),
 	}
 	proxyPipeline := proxy.New(limiter, slog.Default())
@@ -239,4 +243,17 @@ func loadDotEnv(path string) {
 			_ = os.Setenv(k, v)
 		}
 	}
+}
+
+// catalogSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader by
+// reading the current snapshot per lookup, so each call sees the latest
+// post-NOTIFY state.
+type catalogSnapReader struct{ cat *appcatalog.Catalog }
+
+func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
+	return r.cat.Current().Policy(id)
+}
+
+func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
+	return r.cat.Current().RateLimit(id)
 }

@@ -71,6 +71,7 @@ type Plan struct {
 	Policy      *policy.Policy
 	HostBinding *model.HostBinding
 	Host        *host.Host
+	Provider    string
 	Keys        []*hostkey.HostKey
 	Rules       []pkgratelimit.Rule
 }
@@ -201,6 +202,7 @@ candidates:
 		Policy:      pol,
 		HostBinding: binding,
 		Host:        h,
+		Provider:    providerSlug,
 		Keys:        keys,
 		Rules:       rules,
 	}, nil
@@ -271,37 +273,20 @@ func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID strin
 }
 
 // selectPolicyRateLimit picks the RateLimit a policy applies to one
-// request. When pol.Spec.RLBindings is non-empty, the first binding
-// whose Models matches the (provider, model, host) triple wins. When
-// RLBindings is empty the flat pol.Spec.RateLimitID is used. Returns
-// nil when no rate-limit applies (binding miss with no flat fallback,
-// or unresolvable RL id).
+// request, then resolves the id via the snapshot. Pure policy logic
+// lives on *Policy.SelectRateLimitID; this wrapper just bridges the id
+// to the *RateLimit row.
 func selectPolicyRateLimit(snap *appcatalog.Snapshot, pol *policy.Policy, providerSlug, modelSlug, hostSlug string) *ratelimit.RateLimit {
-	if len(pol.Spec.RLBindings) > 0 {
-		for _, b := range pol.Spec.RLBindings {
-			if refsAllow(b.Models, providerSlug, modelSlug, hostSlug, false) {
-				rl, _ := snap.RateLimit(b.RateLimitID)
-				return rl
-			}
-		}
+	id := pol.SelectRateLimitID(providerSlug, modelSlug, hostSlug)
+	if id == "" {
 		return nil
 	}
-	if pol.Spec.RateLimitID != "" {
-		rl, _ := snap.RateLimit(pol.Spec.RateLimitID)
-		return rl
-	}
-	return nil
+	rl, _ := snap.RateLimit(id)
+	return rl
 }
 
-// buildRules translates a Policy + its RateLimit into pkgratelimit.Rules
-// the limiter understands. v1 supports the policy-level rate limit; per-
-// key rules and system rate limits are deferred to the routing layer
-// reaching parity with legacy.
-//
-// Returns nil when the policy has no rate limit attached.
+// buildRules delegates to *Policy.ResolveRules. Returns nil when the
+// policy has no rate limit attached for this request.
 func buildRules(pol *policy.Policy, rl *ratelimit.RateLimit) []pkgratelimit.Rule {
-	if rl == nil {
-		return nil
-	}
-	return ratelimit.Resolve(pol, rl)
+	return pol.ResolveRules(rl)
 }

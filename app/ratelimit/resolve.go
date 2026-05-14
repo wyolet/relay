@@ -3,7 +3,6 @@ package ratelimit
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/policy"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -19,31 +18,10 @@ func PerModelScope(base, modelID string) string {
 	return base + ":m:" + modelID
 }
 
-// Resolve produces the []pkgratelimit.Rule the limiter understands from
-// a Policy + its attached RateLimit. The pipeline calls pkg/ratelimit
-// directly with this slice; there is no intermediate adapter wrapper.
-//
-// Key construction:
-//
-//   "policy:{policy-slug}:{rule-index}:{meter}"
-//
-// — policy-slug makes the scope visible in dashboards; rule-index keeps
-// multi-rule RateLimits independent so e.g. "100 req/min AND 1M tok/hour"
-// don't clobber each other.
-//
-// Name construction:
-//
-//   "{meter} on {policy-slug}"
-//
-// — surfaced to callers in 429 error messages.
-//
-// Returns nil when rl is nil or has no Rules.
-func Resolve(pol *policy.Policy, rl *RateLimit) []pkgratelimit.Rule {
-	if pol == nil {
-		return nil
-	}
-	return ResolveWithScope("policy", pol.Meta.Name, rl)
-}
+// Resolve was here; moved to *policy.Policy.ResolveRules so the policy
+// package can own its runtime methods without ratelimit importing
+// policy (which would form a cycle once policy.Service lands). Use
+// pol.ResolveRules(rl) instead.
 
 // ResolveWithScope is the policy-less variant used by proxy mode, where
 // the rate-limit subject is not a Policy but a per-key hash or per-IP
