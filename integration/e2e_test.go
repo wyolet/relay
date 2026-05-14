@@ -764,12 +764,12 @@ func (s *stack) enableProxyMode(allowAnon bool) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if v, ok := s.cat.Setting("proxy-mode"); ok {
-			if pm, ok := v.(*settings.ProxyMode); ok && pm.Enabled {
+			if pm, ok := v.(*settings.ProxyMode); ok && pm.Enabled && pm.AllowUnauthenticated == allowAnon {
 				return
 			}
 		}
 		if time.Now().After(deadline) {
-			s.t.Fatalf("proxy-mode setting did not propagate")
+			s.t.Fatalf("proxy-mode setting did not propagate (Enabled=true, AllowUnauthenticated=%v)", allowAnon)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
