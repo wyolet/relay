@@ -73,7 +73,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		provider:  provider.NewStore(q),
 		host:      host.NewStore(q),
 		ratelimit: ratelimit.NewStore(q),
-		hostkey:   hostkey.NewStore(q, opts.MasterKey),
+		hostkey:   hostkey.NewStore(q, opts.Pool, opts.MasterKey),
 		model:     model.NewStore(q),
 		policy:    policy.NewStore(opts.Pool),
 		pricing:   pricing.NewStore(opts.Pool),
