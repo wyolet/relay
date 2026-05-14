@@ -48,11 +48,11 @@ type ProviderDTO struct {
 }
 
 type ProviderSpec struct {
-	Enabled       *bool  `json:"enabled,omitempty"       yaml:"enabled,omitempty"`
-	HomepageURL   string `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"`
-	DocsURL       string `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"`
-	StatusPageURL string `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
-	LogoURL       string `json:"logoURL,omitempty"       yaml:"logoURL,omitempty"`
+	Enabled       *bool      `json:"enabled,omitempty"       yaml:"enabled,omitempty"`
+	HomepageURL   string     `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"`
+	DocsURL       string     `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"`
+	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
+	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"`
 }
 
 // HostDTO is the wire form of a Host.
@@ -71,7 +71,7 @@ type HostSpec struct {
 	DocsURL       string            `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
 	ConsoleURL    string            `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
 	StatusPageURL string            `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
-	LogoURL       string            `json:"logoURL,omitempty"     yaml:"logoURL,omitempty"`
+	Icon          *meta.Icon        `json:"icon,omitempty"        yaml:"icon,omitempty"`
 }
 
 // ModelDTO is the wire form of a Model. Hosts[].host is a name, not an id.
@@ -140,7 +140,7 @@ type HostKeyValueFrom struct {
 	Env  string `json:"env,omitempty" yaml:"env,omitempty"`
 }
 
-// PolicyDTO is the wire form of a Policy. Models/HostKeys/RateLimit are names.
+// PolicyDTO carries policy-level model-handling flags + the grant list.
 type PolicyDTO struct {
 	APIVersion string     `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string     `json:"kind"       yaml:"kind"`
@@ -158,6 +158,7 @@ type PolicySpec struct {
 
 	KeySelection      string `json:"keySelection,omitempty"      yaml:"keySelection,omitempty"`
 	SkipDefaultLimits bool   `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
+	IncludeDeprecated bool   `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
 	Enabled           *bool  `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
 }
 

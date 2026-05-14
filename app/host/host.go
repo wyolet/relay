@@ -44,7 +44,7 @@ type Spec struct {
 	DocsURL       string `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url"`
 	ConsoleURL    string `json:"consoleURL,omitempty"    yaml:"consoleURL,omitempty"    validate:"omitempty,http_url"`
 	StatusPageURL string `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url"`
-	LogoURL       string `json:"logoURL,omitempty"       yaml:"logoURL,omitempty"       validate:"omitempty,http_url"`
+	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

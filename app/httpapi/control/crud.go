@@ -80,7 +80,13 @@ type emptyResponse struct{}
 var errSlugNotFound = errors.New("not found")
 
 // registerKind installs the five CRUD operations for kind T on api. The
-// metaOf and resolveSlug closures supply the kind-specific glue.
+// metaOf, validate, defaultOwnerKind, and resolveSlug closures supply
+// the kind-specific glue.
+//
+// defaultOwnerKind is stamped on Create when the caller omits
+// metadata.owner.kind. Pass "" for kinds where the caller must always
+// supply owner.kind explicitly (e.g. Model needs Owner.Kind=provider
+// with a specific Owner.ID; the API can't default it).
 func registerKind[T any](
 	api huma.API,
 	plural, singular string,
@@ -88,6 +94,7 @@ func registerKind[T any](
 	authzr authz.Authorizer,
 	metaOf func(*T) *meta.Metadata,
 	validate func(*T) error,
+	defaultOwnerKind meta.OwnerKind,
 	resolveSlug func(slug string) (string, error),
 	protect huma.Middlewares,
 ) {
@@ -172,6 +179,18 @@ func registerKind[T any](
 				base = singular
 			}
 			m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
+		}
+		// API never creates system-owned rows. system is reserved for
+		// seed paths (Store.Upsert directly, bypassing this handler).
+		// When defaultOwnerKind is set, an empty owner gets stamped;
+		// an explicit "system" gets rejected. Kinds without a default
+		// (Model, HostKey) require the caller to specify owner.kind
+		// because their valid owner is per-row.
+		if m.Owner.Kind == meta.OwnerSystem {
+			return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
+		}
+		if m.Owner.Kind == "" && defaultOwnerKind != "" {
+			m.Owner.Kind = defaultOwnerKind
 		}
 		// Validate AFTER stamping id+slug so the entity's Validate() sees
 		// the same shape the store will persist. Rejecting here keeps bad
@@ -307,6 +326,8 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[provider.Provider](
 		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
 		func(p *provider.Provider) error { return p.Validate() },
+		"", // Provider requires Owner.Kind=system per Validate, but the API blocks system.
+		// Net: Providers can't be created via API; they ship through seed.
 		func(s string) (string, error) {
 			p, ok := d.Catalog.Current().ProviderByName(s)
 			if !ok {
@@ -320,6 +341,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[host.Host](
 		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
 		func(h *host.Host) error { return h.Validate() },
+		"", // Hosts ship through seed (system-owned), not the API.
 		func(s string) (string, error) {
 			h, ok := d.Catalog.Current().HostByName(s)
 			if !ok {
@@ -333,6 +355,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[model.Model](
 		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
 		func(m *model.Model) error { return m.Validate() },
+		"", // Models are provider-owned; caller must supply Owner.ID (provider id).
 		func(s string) (string, error) {
 			ms := d.Catalog.Current().ModelsByName(s)
 			if len(ms) == 0 {
@@ -346,6 +369,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[hostkey.HostKey](
 		api, "host-keys", "host-key", d.Stores.HostKey, d.Authz, kmeta,
 		func(k *hostkey.HostKey) error { return k.Validate() },
+		"", // HostKeys are host-owned; caller must supply Owner.ID (host id).
 		listScanResolver(d.Stores.HostKey, kmeta),
 		protect,
 	)
@@ -353,6 +377,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[ratelimit.RateLimit](
 		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
+		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
 		protect,
 	)
@@ -360,6 +385,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[policy.Policy](
 		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
 		func(p *policy.Policy) error { return p.Validate() },
+		meta.OwnerUser,
 		func(s string) (string, error) {
 			p, ok := d.Catalog.Current().PolicyByName(s)
 			if !ok {
@@ -373,6 +399,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[pricing.Pricing](
 		api, "pricings", "pricing", d.Stores.Pricing, d.Authz, prmeta,
 		func(p *pricing.Pricing) error { return p.Validate() },
+		"", // Pricing is host-owned; caller must supply Owner.ID (host id).
 		listScanResolver(d.Stores.Pricing, prmeta),
 		protect,
 	)
@@ -380,6 +407,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[relaykey.RelayKey](
 		api, "relay-keys", "relay-key", d.Stores.RelayKey, d.Authz, rkmeta,
 		func(k *relaykey.RelayKey) error { return k.Validate() },
+		meta.OwnerUser,
 		listScanResolver(d.Stores.RelayKey, rkmeta),
 		protect,
 	)

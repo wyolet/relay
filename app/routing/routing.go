@@ -32,6 +32,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
@@ -109,54 +110,77 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		return nil, ErrPolicyDisabled
 	}
 
-	var chosen *model.Model
+	// Pick the (model, binding, host) triple in one pass. A triple is
+	// allowed when EITHER:
+	//   - The Model's id is in pol.Spec.ModelIDs (legacy literal grant —
+	//     binding-agnostic).
+	//   - At least one ref in pol.Spec.Models matches
+	//     (provider-slug, model-slug, host-slug) per modelref semantics.
+	//
+	// Walks candidates in declared order so the first-enabled-binding
+	// rule still wins when nothing narrows it. anyEnabledModel tracks
+	// whether any candidate could have been picked if the policy had
+	// allowed it — drives the disabled-vs-not-in-policy diagnosis.
+	var (
+		chosen        *model.Model
+		binding       *model.HostBinding
+		chosenHost    *host.Host
+		anyEnabledMod bool
+		anyEnabledBnd bool
+	)
+candidates:
 	for _, m := range models {
 		if !m.IsEnabled() {
 			continue
 		}
+		anyEnabledMod = true
+		providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+		legacyAllowed := false
 		for _, id := range pol.Spec.ModelIDs {
 			if id == m.Meta.ID {
-				chosen = m
+				legacyAllowed = true
 				break
 			}
 		}
-		if chosen != nil {
-			break
+		deprecated := isDeprecated(m)
+		for i := range m.Spec.Hosts {
+			hb := &m.Spec.Hosts[i]
+			if !hb.IsEnabled() {
+				continue
+			}
+			h, ok := snap.Host(hb.HostID)
+			if !ok {
+				continue
+			}
+			anyEnabledBnd = true
+			// Allow paths in priority order:
+			//   1. Legacy literal ModelIDs grant — always allowed.
+			//   2. Modelref match — but if the model is deprecated and
+			//      the policy doesn't include deprecated models, only an
+			//      EXPLICIT model-named ref counts. Wildcard matches
+			//      (provider, provider@host, @host) hide deprecated.
+			if !legacyAllowed {
+				match := refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name, deprecated && !pol.Spec.IncludeDeprecated)
+				if !match {
+					continue
+				}
+			}
+			chosen = m
+			binding = hb
+			chosenHost = h
+			break candidates
 		}
 	}
 	if chosen == nil {
-		// Disambiguate: was the model itself disabled vs not in policy?
-		anyEnabled := false
-		for _, m := range models {
-			if m.IsEnabled() {
-				anyEnabled = true
-				break
-			}
-		}
-		if !anyEnabled {
+		if !anyEnabledMod {
 			return nil, ErrModelDisabled
+		}
+		if !anyEnabledBnd {
+			return nil, ErrNoHostBinding
 		}
 		return nil, ErrModelNotInPolicy
 	}
-
-	// 4. HostBinding — first enabled binding for v1.
-	var binding *model.HostBinding
-	for i := range chosen.Spec.Hosts {
-		hb := &chosen.Spec.Hosts[i]
-		if hb.IsEnabled() {
-			binding = hb
-			break
-		}
-	}
-	if binding == nil {
-		return nil, ErrNoHostBinding
-	}
-
-	// 5. Host
-	h, ok := snap.Host(binding.HostID)
-	if !ok {
-		return nil, ErrHostNotFound
-	}
+	h := chosenHost
 
 	// 6. Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID.
 	keys := hostKeysForHost(snap, pol, h.Meta.ID)
@@ -184,6 +208,49 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 // hostKeysForHost returns the subset of Policy.Spec.HostKeyIDs whose
 // Owner.ID == hostID. Enabled-only; ordered to match Policy's listed
 // order (keypool's prioritized algo depends on this).
+// refsAllow reports whether any of the policy's ref strings matches
+// the candidate (provider, model, host) triple. Refs that fail to parse
+// are skipped silently — Validate rejects them at write time, so a bad
+// ref reaching here means a stored row was hand-edited; ignoring is
+// safer than erroring the request.
+//
+// hideForDeprecated, when true, requires the ref to name the model
+// explicitly (ref.Model == modelSlug, not a wildcard). Wildcard matches
+// — provider, provider@host, @host — are rejected for deprecated models
+// unless the policy opted in via IncludeDeprecated. The reasoning:
+// "anthropic" should not silently grant access to last year's sunset
+// model; "anthropic/claude-3-haiku-20240307" obviously means to.
+func refsAllow(refs []string, providerSlug, modelSlug, hostSlug string, hideForDeprecated bool) bool {
+	for _, raw := range refs {
+		ref, err := modelref.Parse(raw)
+		if err != nil {
+			continue
+		}
+		if !ref.Matches(providerSlug, modelSlug, hostSlug) {
+			continue
+		}
+		if hideForDeprecated && ref.ModelWildcard {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isDeprecated reports whether m's lifecycle status excludes it from
+// wildcard grants by default. Both "deprecated" and "sunset" qualify;
+// "active" (or unset) does not.
+func isDeprecated(m *model.Model) bool {
+	if m.Spec.Deprecation == nil {
+		return false
+	}
+	switch m.Spec.Deprecation.Status {
+	case model.DeprecationDeprecated, model.DeprecationSunset:
+		return true
+	}
+	return false
+}
+
 func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID string) []*hostkey.HostKey {
 	out := make([]*hostkey.HostKey, 0, len(pol.Spec.HostKeyIDs))
 	for _, id := range pol.Spec.HostKeyIDs {

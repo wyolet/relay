@@ -25,7 +25,7 @@ type providerMeta struct {
 	docsURL       string
 	consoleURL    string
 	statusPageURL string
-	logoURL       string
+	iconPath      string
 }
 
 var knownProviders = map[string]providerMeta{
@@ -39,7 +39,7 @@ var knownProviders = map[string]providerMeta{
 		docsURL:       "https://docs.anthropic.com",
 		consoleURL:    "https://console.anthropic.com",
 		statusPageURL: "https://status.anthropic.com",
-		logoURL:       "https://wyolet.dev/logos/anthropic.svg",
+		iconPath:      "/provider/anthropic.svg",
 	},
 	"openai": {
 		name:          "openai",
@@ -51,7 +51,7 @@ var knownProviders = map[string]providerMeta{
 		docsURL:       "https://platform.openai.com/docs",
 		consoleURL:    "https://platform.openai.com",
 		statusPageURL: "https://status.openai.com",
-		logoURL:       "https://wyolet.dev/logos/openai.svg",
+		iconPath:      "/provider/openai.svg",
 	},
 	"ollama": {
 		name:        "ollama",
@@ -60,7 +60,7 @@ var knownProviders = map[string]providerMeta{
 		baseURL:     "http://host.docker.internal:11434",
 		adapter:     "openai", // Ollama exposes OpenAI-compatible endpoint
 		homepageURL: "https://ollama.com",
-		logoURL:     "https://wyolet.dev/logos/ollama.svg",
+		iconPath:    "/provider/ollama.png",
 	},
 }
 
@@ -369,7 +369,7 @@ func buildProvider(pm providerMeta) *manifest.ProviderDTO {
 			HomepageURL:   pm.homepageURL,
 			DocsURL:       pm.docsURL,
 			StatusPageURL: pm.statusPageURL,
-			LogoURL:       pm.logoURL,
+			Icon:          iconFromPath(pm.iconPath),
 		},
 	}
 }
@@ -389,9 +389,16 @@ func buildHost(pm providerMeta) *manifest.HostDTO {
 			DocsURL:       pm.docsURL,
 			ConsoleURL:    pm.consoleURL,
 			StatusPageURL: pm.statusPageURL,
-			LogoURL:       pm.logoURL,
+			Icon:          iconFromPath(pm.iconPath),
 		},
 	}
+}
+
+func iconFromPath(p string) *meta.Icon {
+	if p == "" {
+		return nil
+	}
+	return &meta.Icon{Path: p}
 }
 
 func addRate(rates []pricingRate, meter string, usdPerToken float64, aboveTokens int) []pricingRate {

@@ -11,4 +11,5 @@ spec:
     docsURL: https://platform.openai.com/docs
     consoleURL: https://platform.openai.com
     statusPageURL: https://status.openai.com
-    logoURL: https://wyolet.dev/logos/openai.svg
+    icon:
+      path: /provider/openai.svg

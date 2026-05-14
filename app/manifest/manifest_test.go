@@ -34,7 +34,7 @@ metadata:
 spec:
   models:
     - openai/gpt-4o
-    - claude-3-5-sonnet
+    - anthropic/claude-3-5-sonnet
   hostKeys:
     - openai-key-1
     - bedrock-key-prod
@@ -70,11 +70,11 @@ func TestToPolicy_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToPolicy: %v", err)
 	}
-	if len(pol.Spec.ModelIDs) != 2 {
-		t.Errorf("modelIDs: want 2, got %d", len(pol.Spec.ModelIDs))
+	if len(pol.Spec.Models) != 2 {
+		t.Errorf("models: want 2, got %d", len(pol.Spec.Models))
 	}
-	if pol.Spec.ModelIDs[0] != "model-eee" {
-		t.Errorf("modelIDs[0]: want model-eee, got %q", pol.Spec.ModelIDs[0])
+	if pol.Spec.Models[0] != "openai/gpt-4o" {
+		t.Errorf("models[0]: want openai/gpt-4o (verbatim ref), got %q", pol.Spec.Models[0])
 	}
 	if pol.Spec.RateLimitID != "rl-iii" {
 		t.Errorf("rateLimitID: want rl-iii, got %q", pol.Spec.RateLimitID)
@@ -84,16 +84,15 @@ func TestToPolicy_HappyPath(t *testing.T) {
 	}
 }
 
-func TestToPolicy_MissingRef(t *testing.T) {
+func TestToPolicy_MissingHostKey(t *testing.T) {
 	docs, _ := manifest.Parse(strings.NewReader(policyYAML))
 	emptyResolver := manifest.MapResolver{
-		Models:     map[string]string{},
 		HostKeys:   map[string]string{},
 		RateLimits: map[string]string{},
 	}
 	_, err := manifest.ToPolicy(*docs[0].Policy, emptyResolver)
 	if err == nil {
-		t.Fatal("expected error for missing model ref, got nil")
+		t.Fatal("expected error for missing hostKey ref, got nil")
 	}
 }
 
@@ -105,7 +104,7 @@ func TestFromPolicy_RoundTrip(t *testing.T) {
 		t.Errorf("models: want 2, got %d", len(dto.Spec.Models))
 	}
 	if dto.Spec.Models[0] != "openai/gpt-4o" {
-		t.Errorf("models[0]: want openai/gpt-4o, got %q", dto.Spec.Models[0])
+		t.Errorf("models[0]: want openai/gpt-4o (round-tripped verbatim), got %q", dto.Spec.Models[0])
 	}
 	if dto.Spec.RateLimit != "cheap-tier-rpm" {
 		t.Errorf("rateLimit: want cheap-tier-rpm, got %q", dto.Spec.RateLimit)

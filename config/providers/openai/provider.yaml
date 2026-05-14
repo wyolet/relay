@@ -10,4 +10,5 @@ spec:
     homepageURL: https://openai.com
     docsURL: https://platform.openai.com/docs
     statusPageURL: https://status.openai.com
-    logoURL: https://wyolet.dev/logos/openai.svg
+    icon:
+      path: /provider/openai.svg

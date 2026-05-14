@@ -44,6 +44,7 @@ type Policy struct {
 	ID          string             `db:"id" json:"id"`
 	DisplayName string             `db:"display_name" json:"display_name"`
 	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte             `db:"models" json:"models"`
 }
 
 type PolicyHostKey struct {

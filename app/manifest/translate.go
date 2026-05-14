@@ -28,7 +28,7 @@ func ToProvider(d ProviderDTO, _ Resolver) (*provider.Provider, error) {
 			HomepageURL:   d.Spec.HomepageURL,
 			DocsURL:       d.Spec.DocsURL,
 			StatusPageURL: d.Spec.StatusPageURL,
-			LogoURL:       d.Spec.LogoURL,
+			Icon:          d.Spec.Icon,
 		},
 	}, nil
 }
@@ -43,7 +43,7 @@ func FromProvider(p *provider.Provider, _ ReverseResolver) ProviderDTO {
 			HomepageURL:   p.Spec.HomepageURL,
 			DocsURL:       p.Spec.DocsURL,
 			StatusPageURL: p.Spec.StatusPageURL,
-			LogoURL:       p.Spec.LogoURL,
+			Icon:          p.Spec.Icon,
 		},
 	}
 }
@@ -63,7 +63,7 @@ func ToHost(d HostDTO, _ Resolver) (*host.Host, error) {
 			DocsURL:       d.Spec.DocsURL,
 			ConsoleURL:    d.Spec.ConsoleURL,
 			StatusPageURL: d.Spec.StatusPageURL,
-			LogoURL:       d.Spec.LogoURL,
+			Icon:          d.Spec.Icon,
 		},
 	}, nil
 }
@@ -81,7 +81,7 @@ func FromHost(h *host.Host, _ ReverseResolver) HostDTO {
 			DocsURL:       h.Spec.DocsURL,
 			ConsoleURL:    h.Spec.ConsoleURL,
 			StatusPageURL: h.Spec.StatusPageURL,
-			LogoURL:       h.Spec.LogoURL,
+			Icon:          h.Spec.Icon,
 		},
 	}
 }
@@ -257,14 +257,10 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 // ---------------------------------------------------------------------------
 
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
-	modelIDs := make([]string, 0, len(d.Spec.Models))
-	for _, name := range d.Spec.Models {
-		id, ok := idx.ModelID(name)
-		if !ok {
-			return nil, fmt.Errorf("policy %q: model %q not found", d.Metadata.Name, name)
-		}
-		modelIDs = append(modelIDs, id)
-	}
+	// Spec.Models entries are modelref DSL strings — stored verbatim on
+	// the Policy. Validation (Policy.Validate) re-runs the parser.
+	models := make([]string, 0, len(d.Spec.Models))
+	models = append(models, d.Spec.Models...)
 
 	hostKeyIDs := make([]string, 0, len(d.Spec.HostKeys))
 	for _, name := range d.Spec.HostKeys {
@@ -287,18 +283,23 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	return &policy.Policy{
 		Meta: d.Metadata.toMeta(),
 		Spec: policy.Spec{
-			ModelIDs:          modelIDs,
+			Models:            models,
 			HostKeyIDs:        hostKeyIDs,
 			RateLimitID:       rateLimitID,
 			KeySelection:      policy.KeySelection(d.Spec.KeySelection),
 			SkipDefaultLimits: d.Spec.SkipDefaultLimits,
+			IncludeDeprecated: d.Spec.IncludeDeprecated,
 			Enabled:           d.Spec.Enabled,
 		},
 	}, nil
 }
 
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
-	models := make([]string, 0, len(p.Spec.ModelIDs))
+	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs
+	// is the legacy literal-ID grant; emit its rows as bare model names
+	// for backward-compat with operator-authored YAML.
+	models := make([]string, 0, len(p.Spec.Models)+len(p.Spec.ModelIDs))
+	models = append(models, p.Spec.Models...)
 	for _, id := range p.Spec.ModelIDs {
 		name, _ := rev.ModelName(id)
 		if name == "" {
@@ -335,6 +336,7 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 			RateLimit:         rlName,
 			KeySelection:      string(p.Spec.KeySelection),
 			SkipDefaultLimits: p.Spec.SkipDefaultLimits,
+			IncludeDeprecated: p.Spec.IncludeDeprecated,
 			Enabled:           p.Spec.Enabled,
 		},
 	}

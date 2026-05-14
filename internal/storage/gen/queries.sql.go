@@ -195,7 +195,7 @@ func (q *Queries) GetPassthrough(ctx context.Context, name string) (GetPassthrou
 }
 
 const getPolicy = `-- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies WHERE id = $1
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies WHERE id = $1
 `
 
 type GetPolicyRow struct {
@@ -205,6 +205,7 @@ type GetPolicyRow struct {
 	Metadata    []byte      `db:"metadata" json:"metadata"`
 	Spec        []byte      `db:"spec" json:"spec"`
 	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte      `db:"models" json:"models"`
 }
 
 func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error) {
@@ -217,6 +218,7 @@ func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error
 		&i.Metadata,
 		&i.Spec,
 		&i.RateLimitID,
+		&i.Models,
 	)
 	return i, err
 }
@@ -727,7 +729,7 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 }
 
 const listPoliciesWithRateLimit = `-- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies ORDER BY name
 `
 
 type ListPoliciesWithRateLimitRow struct {
@@ -737,6 +739,7 @@ type ListPoliciesWithRateLimitRow struct {
 	Metadata    []byte      `db:"metadata" json:"metadata"`
 	Spec        []byte      `db:"spec" json:"spec"`
 	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte      `db:"models" json:"models"`
 }
 
 func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPoliciesWithRateLimitRow, error) {
@@ -755,6 +758,7 @@ func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPolicies
 			&i.Metadata,
 			&i.Spec,
 			&i.RateLimitID,
+			&i.Models,
 		); err != nil {
 			return nil, err
 		}
@@ -1104,6 +1108,20 @@ func (q *Queries) ListSettings(ctx context.Context) ([]Setting, error) {
 	return items, nil
 }
 
+const setPolicyModels = `-- name: SetPolicyModels :exec
+UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1
+`
+
+type SetPolicyModelsParams struct {
+	ID     string `db:"id" json:"id"`
+	Models []byte `db:"models" json:"models"`
+}
+
+func (q *Queries) SetPolicyModels(ctx context.Context, arg SetPolicyModelsParams) error {
+	_, err := q.db.Exec(ctx, setPolicyModels, arg.ID, arg.Models)
+	return err
+}
+
 const setPolicyRateLimit = `-- name: SetPolicyRateLimit :exec
 UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1
 `
@@ -1288,13 +1306,14 @@ func (q *Queries) UpsertPassthrough(ctx context.Context, arg UpsertPassthroughPa
 }
 
 const upsertPolicy = `-- name: UpsertPolicy :exec
-INSERT INTO policies (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
+INSERT INTO policies (id, name, display_name, metadata, spec, models, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
+    models = EXCLUDED.models,
     updated_at = NOW()
 `
 
@@ -1304,6 +1323,7 @@ type UpsertPolicyParams struct {
 	DisplayName string `db:"display_name" json:"display_name"`
 	Metadata    []byte `db:"metadata" json:"metadata"`
 	Spec        []byte `db:"spec" json:"spec"`
+	Models      []byte `db:"models" json:"models"`
 }
 
 func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) error {
@@ -1313,6 +1333,7 @@ func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) erro
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.Models,
 	)
 	return err
 }

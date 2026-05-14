@@ -8,4 +8,5 @@ metadata:
         kind: system
 spec:
     homepageURL: https://ollama.com
-    logoURL: https://wyolet.dev/logos/ollama.svg
+    icon:
+      path: /provider/ollama.png
