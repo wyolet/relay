@@ -257,14 +257,10 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 // ---------------------------------------------------------------------------
 
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
-	modelIDs := make([]string, 0, len(d.Spec.Models))
-	for _, name := range d.Spec.Models {
-		id, ok := idx.ModelID(name)
-		if !ok {
-			return nil, fmt.Errorf("policy %q: model %q not found", d.Metadata.Name, name)
-		}
-		modelIDs = append(modelIDs, id)
-	}
+	// Spec.Models entries are modelref DSL strings — stored verbatim on
+	// the Policy. Validation (Policy.Validate) re-runs the parser.
+	models := make([]string, 0, len(d.Spec.Models))
+	models = append(models, d.Spec.Models...)
 
 	hostKeyIDs := make([]string, 0, len(d.Spec.HostKeys))
 	for _, name := range d.Spec.HostKeys {
@@ -287,7 +283,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	return &policy.Policy{
 		Meta: d.Metadata.toMeta(),
 		Spec: policy.Spec{
-			ModelIDs:          modelIDs,
+			Models:            models,
 			HostKeyIDs:        hostKeyIDs,
 			RateLimitID:       rateLimitID,
 			KeySelection:      policy.KeySelection(d.Spec.KeySelection),
@@ -298,7 +294,11 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 }
 
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
-	models := make([]string, 0, len(p.Spec.ModelIDs))
+	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs
+	// is the legacy literal-ID grant; emit its rows as bare model names
+	// for backward-compat with operator-authored YAML.
+	models := make([]string, 0, len(p.Spec.Models)+len(p.Spec.ModelIDs))
+	models = append(models, p.Spec.Models...)
 	for _, id := range p.Spec.ModelIDs {
 		name, _ := rev.ModelName(id)
 		if name == "" {
