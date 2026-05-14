@@ -14,12 +14,29 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
+
+// fakeSnap is a minimal policy.SnapshotReader for tests.
+type fakeSnap struct {
+	pols map[string]*policy.Policy
+	rls  map[string]*ratelimit.RateLimit
+}
+
+func (f *fakeSnap) Policy(id string) (*policy.Policy, bool) {
+	p, ok := f.pols[id]
+	return p, ok
+}
+func (f *fakeSnap) RateLimit(id string) (*ratelimit.RateLimit, bool) {
+	r, ok := f.rls[id]
+	return r, ok
+}
 
 // ---------------------------------------------------------------------------
 // fakeAdapter
@@ -83,18 +100,23 @@ func makeKey(hash, resolved string) *hostkey.HostKey {
 
 func makePolicy() *policy.Policy {
 	return &policy.Policy{
-		Spec: policy.Spec{
-			KeySelection: policy.KeySelectionPrioritized,
-		},
+		Meta: meta.Metadata{Name: "test-policy"},
+		Spec: policy.Spec{KeySelection: policy.KeySelectionPrioritized},
 	}
 }
 
-func newPipeline() *pipeline.Pipeline {
-	return &pipeline.Pipeline{
-		Limiter:  nil,
-		Selector: keypool.New(kv.NewMem(), slog.Default(), nil, nil),
-		Logger:   slog.Default(),
+func newService(snap policy.SnapshotReader) *policy.Service {
+	mem := kv.NewMem()
+	sel := keypool.New(mem, slog.Default(), nil, nil)
+	lim := pkgratelimit.New(mem, slog.Default(), nil)
+	if snap == nil {
+		snap = &fakeSnap{}
 	}
+	return policy.NewService(snap, sel, lim)
+}
+
+func newPipeline() *pipeline.Pipeline {
+	return &pipeline.Pipeline{Policy: newService(nil), Logger: slog.Default()}
 }
 
 func drainResult(t *testing.T, res *pipeline.Result) {
@@ -163,8 +185,6 @@ func TestRetryOnTransient_RotatesKey(t *testing.T) {
 	key1 := makeKey("hash1", "sk-1")
 	key2 := makeKey("hash2", "sk-2")
 
-	sel := keypool.New(kv.NewMem(), slog.Default(), nil, nil)
-
 	netErr := errors.New("network error")
 	adp := &fakeAdapter{
 		callFn: func(_ context.Context, _, key string, _ []byte, _ http.Header) (*http.Response, error) {
@@ -178,7 +198,7 @@ func TestRetryOnTransient_RotatesKey(t *testing.T) {
 		},
 	}
 
-	p := &pipeline.Pipeline{Selector: sel, Logger: slog.Default()}
+	p := newPipeline()
 	req := &pipeline.Request{
 		Adapter: adp,
 		Keys:    []*hostkey.HostKey{key1, key2},
@@ -452,35 +472,25 @@ func TestMaxAttempts_Capped(t *testing.T) {
 func TestReserveFails_BubblesUp(t *testing.T) {
 	t.Parallel()
 
-	// Use a real Limiter with a rule that immediately rejects by setting
-	// Amount=0. A zero-budget rule always fails Reserve.
-	mem := kv.NewMem()
-	lim := pkgratelimit.New(mem, slog.Default(), nil)
-
-	rules := []pkgratelimit.Rule{
-		{
-			Key:      "test-key",
-			Name:     "test-rule",
-			Meter:    "requests",
-			Strategy: pkgratelimit.StrategySlidingWindow,
-			Amount:   0, // immediately exhausted
-			Window:   time.Minute,
-		},
+	// Policy with an RL whose single rule has Amount=0 → always exhausted.
+	rl := &ratelimit.RateLimit{
+		Meta: meta.Metadata{ID: "rl-zero", Name: "zero"},
+		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{
+			Meter: ratelimit.MeterRequests, Amount: 0,
+			Window: time.Minute, Strategy: ratelimit.StrategySlidingWindow,
+		}}},
 	}
+	pol := makePolicy()
+	pol.Spec.RateLimitID = rl.Meta.ID
+
+	svc := newService(&fakeSnap{rls: map[string]*ratelimit.RateLimit{rl.Meta.ID: rl}})
+	p := &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}
 
 	adp := &fakeAdapter{}
-	p := &pipeline.Pipeline{
-		Limiter:  lim,
-		Selector: keypool.New(mem, slog.Default(), nil, nil),
-		Logger:   slog.Default(),
-	}
-
 	_, err := p.Run(context.Background(), &pipeline.Request{
-		Adapter:   adp,
-		Keys:      []*hostkey.HostKey{makeKey("h1", "sk-1")},
-		Policy:    makePolicy(),
-		RateScope: "test-scope",
-		Rules:     rules,
+		Adapter: adp,
+		Keys:    []*hostkey.HostKey{makeKey("h1", "sk-1")},
+		Policy:  pol,
 	})
 
 	if err == nil {

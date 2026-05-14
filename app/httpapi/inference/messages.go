@@ -91,8 +91,6 @@ func handleMessages(d Deps, w http.ResponseWriter, r *http.Request) {
 		Host:        plan.Host,
 		Provider:    plan.Provider,
 		Keys:        plan.Keys,
-		RateScope:   plan.Policy.Meta.Name,
-		Rules:       plan.Rules,
 		ModelName:   plan.Model.Meta.Name,
 	}
 

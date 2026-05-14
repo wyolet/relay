@@ -136,12 +136,7 @@ func main() {
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
-	pl := &pipeline.Pipeline{
-		Limiter:  limiter,
-		Selector: selector,
-		Policy:   policySvc,
-		Logger:   slog.Default(),
-	}
+	pl := &pipeline.Pipeline{Policy: policySvc, Logger: slog.Default()}
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
 	// Adapter registry — one entry per supported wire protocol.

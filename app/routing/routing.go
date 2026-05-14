@@ -33,9 +33,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // Errors returned by Resolve. Each maps to a distinct HTTP status in
@@ -73,7 +71,6 @@ type Plan struct {
 	Host        *host.Host
 	Provider    string
 	Keys        []*hostkey.HostKey
-	Rules       []pkgratelimit.Rule
 }
 
 // Resolver wraps a Catalog snapshot accessor and answers Resolve calls.
@@ -188,14 +185,7 @@ candidates:
 		return nil, ErrNoKeys
 	}
 
-	// 7. Rules — pick the RateLimit the request hits. If the policy
-	// declares per-model bindings, the first binding whose Models matches
-	// the requested model wins; otherwise the policy's flat RateLimitID
-	// applies. A request that matches no binding (and has no flat RL) is
-	// uncapped at this policy.
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
-	rl := selectPolicyRateLimit(snap, pol, providerSlug, chosen.Meta.Name, h.Meta.Name)
-	rules := buildRules(pol, rl)
 
 	return &Plan{
 		Model:       chosen,
@@ -204,7 +194,6 @@ candidates:
 		Host:        h,
 		Provider:    providerSlug,
 		Keys:        keys,
-		Rules:       rules,
 	}, nil
 }
 
@@ -272,21 +261,3 @@ func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID strin
 	return out
 }
 
-// selectPolicyRateLimit picks the RateLimit a policy applies to one
-// request, then resolves the id via the snapshot. Pure policy logic
-// lives on *Policy.SelectRateLimitID; this wrapper just bridges the id
-// to the *RateLimit row.
-func selectPolicyRateLimit(snap *appcatalog.Snapshot, pol *policy.Policy, providerSlug, modelSlug, hostSlug string) *ratelimit.RateLimit {
-	id := pol.SelectRateLimitID(providerSlug, modelSlug, hostSlug)
-	if id == "" {
-		return nil
-	}
-	rl, _ := snap.RateLimit(id)
-	return rl
-}
-
-// buildRules delegates to *Policy.ResolveRules. Returns nil when the
-// policy has no rate limit attached for this request.
-func buildRules(pol *policy.Policy, rl *ratelimit.RateLimit) []pkgratelimit.Rule {
-	return pol.ResolveRules(rl)
-}
