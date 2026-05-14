@@ -12,6 +12,8 @@
 package catalog
 
 import (
+	"sort"
+
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -45,7 +47,8 @@ type Snapshot struct {
 
 	hostKeysByID map[string]*hostkey.HostKey
 
-	rateLimitsByID map[string]*ratelimit.RateLimit
+	rateLimitsByID   map[string]*ratelimit.RateLimit
+	rateLimitsByName map[string]*ratelimit.RateLimit
 
 	relayKeysByID   map[string]*relaykey.RelayKey
 	relayKeysByHash map[string]*relaykey.RelayKey
@@ -155,6 +158,25 @@ func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
 func (s *Snapshot) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	r, ok := s.rateLimitsByID[id]
 	return r, ok
+}
+
+// RateLimitByName returns the enabled RateLimit with this slug, or
+// false. Used by proxy-mode dispatch to look up the system-owned
+// inference-api-proxy / inference-api-proxy-anonymous buckets.
+func (s *Snapshot) RateLimitByName(name string) (*ratelimit.RateLimit, bool) {
+	r, ok := s.rateLimitsByName[name]
+	return r, ok
+}
+
+// Hosts returns all enabled Host rows. Stable order by slug. Used by
+// the /v1/proxy/hosts list endpoint.
+func (s *Snapshot) Hosts() []*host.Host {
+	out := make([]*host.Host, 0, len(s.hostsByID))
+	for _, h := range s.hostsByName {
+		out = append(out, h)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
 }
 
 // RelayKey returns the enabled RelayKey with this id, or false.

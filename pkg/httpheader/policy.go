@@ -11,6 +11,15 @@ var (
 	reURL = regexp.MustCompile(`https?://[^\s]+`)
 )
 
+// Relay-internal control headers. Read at the inference edge by the
+// mode classifier; never forwarded upstream.
+const (
+	HeaderRelayAPIKey   = "X-WR-API-Key"
+	HeaderProxyMode     = "X-WR-Proxy-Mode"
+	HeaderUpstreamHost  = "X-WR-Upstream-Host"
+	ProxyModeValueProxy = "Proxy"
+)
+
 // SafeUpstreamError returns a user-safe error message for an upstream failure,
 // redacting URLs, IP addresses, and other internal details.
 // providerName is the public provider identifier (e.g. "openai").
@@ -34,73 +43,43 @@ var HopByHop = []string{
 	"Upgrade",
 }
 
-// InboundAllowlist is the set of headers that are permitted to pass through
-// inbound to the pipeline. Every header NOT in this list is stripped.
-// Matching is case-insensitive. Prefix-style matchers use a trailing "*".
+// StripDenylist is the negative strip set applied at the inference edge
+// after the mode classifier has captured the relay-internal headers it
+// needs. Everything else passes through to upstream — the relay does
+// not police which vendor-specific headers callers send.
 //
-// Note: Authorization is retained here so that auth middleware (which runs
-// before StripInbound) can still see it. In practice auth middleware removes
-// it before StripInbound is called; any residual Authorization is still
-// dropped by OutboundAllowlist before the upstream request is made.
-var InboundAllowlist = []string{
-	"Content-Type",
-	"Content-Length",
-	"Accept",
-	"Accept-Encoding",
-	"User-Agent",
-	"X-Request-ID",
-	"X-Relay-Metadata",
-	"X-WR-API-Key",
+// Authorization is denylisted at the edge for both modes:
+//   - Normal mode: relay-key value, consumed by auth; adapter injects
+//     the upstream key on the outbound request.
+//   - Proxy mode: caller's upstream key, captured by the classifier;
+//     the proxy forwarder re-attaches it on the outbound request.
+//
+// Either way, ctx is the source of truth post-strip; nothing reads the
+// raw inbound Authorization downstream.
+//
+// Matching is case-insensitive. Trailing "*" is a prefix match.
+var StripDenylist = []string{
 	"Authorization",
-	"Anthropic-Version",
-	"Anthropic-Beta",
-	"Anthropic-Dangerous-Direct-Browser-Access",
-	"X-App",
-	"X-Claude-Code-Session-Id",
-	"X-Stainless-*",
+	"Cookie",
+	"X-WR-*",
+	"X-Relay-Metadata",
 }
 
-// OutboundAllowlist is the set of headers forwarded on upstream requests.
-// Compared to InboundAllowlist:
-//   - X-Relay-Metadata is excluded (M4 contract: never leaked to upstream)
-//   - Authorization is excluded (provider client injects its own key)
-//   - Provider-specific headers are added (e.g. OpenAI-Beta)
-var OutboundAllowlist = []string{
-	"Content-Type",
-	"Content-Length",
-	"Accept",
-	"Accept-Encoding",
-	"User-Agent",
-	"X-Request-ID",
-	"OpenAI-Beta",
-	"Anthropic-Version",
-	"Anthropic-Beta",
-}
-
-// StripInbound removes every header from h that is not in InboundAllowlist.
-// Hop-by-hop headers listed in Connection are also removed (per RFC 7230).
-// Returns the same map for chaining.
-func StripInbound(h http.Header) http.Header {
+// Strip removes relay-internal control headers and hop-by-hop headers
+// from h. Applied once at the inference edge, after the mode classifier
+// has captured what it needs into ctx. Returns the same map for chaining.
+func Strip(h http.Header) http.Header {
 	// RFC 7230: remove headers named in Connection value.
 	if conn := h.Get("Connection"); conn != "" {
 		for _, tok := range strings.Split(conn, ",") {
 			h.Del(strings.TrimSpace(tok))
 		}
 	}
-	for name := range h {
-		if !Match(name, InboundAllowlist) {
-			h.Del(name)
-		}
+	for _, name := range HopByHop {
+		h.Del(name)
 	}
-	return h
-}
-
-// StripOutbound removes every header from h that is not in OutboundAllowlist.
-// This is used by provider clients to sanitize headers before sending upstream.
-// Returns the same map for chaining.
-func StripOutbound(h http.Header) http.Header {
 	for name := range h {
-		if !Match(name, OutboundAllowlist) {
+		if Match(name, StripDenylist) {
 			h.Del(name)
 		}
 	}
@@ -111,7 +90,6 @@ func StripOutbound(h http.Header) http.Header {
 // upstream response before they are propagated back to the caller.
 // Modifies h in place. Returns the same map.
 func SanitizeUpstreamResponse(h http.Header) http.Header {
-	// RFC 7230: remove headers named in Connection value first.
 	if conn := h.Get("Connection"); conn != "" {
 		for _, tok := range strings.Split(conn, ",") {
 			h.Del(strings.TrimSpace(tok))
@@ -125,7 +103,7 @@ func SanitizeUpstreamResponse(h http.Header) http.Header {
 
 // Match reports whether name matches any pattern in patterns,
 // case-insensitively. Patterns may be exact (e.g., "Authorization")
-// or prefix-style with a trailing "*" (e.g., "X-OpenAI-*").
+// or prefix-style with a trailing "*" (e.g., "X-WR-*").
 func Match(name string, patterns []string) bool {
 	lower := strings.ToLower(name)
 	for _, p := range patterns {

@@ -41,6 +41,12 @@ func registerChat(api huma.API, d Deps, mw huma.Middlewares) {
 func handleChat(d Deps, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	cls := ClassificationFrom(ctx)
+	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
+		handleProxy(d, w, r, adapter.OpenAI)
+		return
+	}
+
 	rk := RelayKeyFromContext(ctx)
 	if rk == nil {
 		// Auth middleware should have stopped us; defensive.

@@ -28,6 +28,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/internal/config"
@@ -137,6 +138,7 @@ func main() {
 		Selector: selector,
 		Logger:   slog.Default(),
 	}
+	proxyPipeline := proxy.New(limiter, slog.Default())
 
 	// Adapter registry — one entry per supported wire protocol.
 	adapters := map[adapter.Kind]pipeline.Adapter{
@@ -151,6 +153,7 @@ func main() {
 		Catalog:  cat,
 		Resolver: routing.New(cat),
 		Pipeline: pl,
+		Proxy:    proxyPipeline,
 		Adapters: adapters,
 	})
 

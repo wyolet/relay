@@ -40,6 +40,7 @@ func build(
 		modelsByName:       map[string][]*model.Model{},
 		hostKeysByID:       make(map[string]*hostkey.HostKey, len(keys)),
 		rateLimitsByID:     make(map[string]*ratelimit.RateLimit, len(rls)),
+		rateLimitsByName:   make(map[string]*ratelimit.RateLimit, len(rls)),
 		relayKeysByID:      make(map[string]*relaykey.RelayKey, len(rks)),
 		relayKeysByHash:    make(map[string]*relaykey.RelayKey, len(rks)),
 		modelsByPolicy:     map[string][]*model.Model{},
@@ -95,6 +96,7 @@ func build(
 	}
 	for _, r := range rls {
 		s.rateLimitsByID[r.Meta.ID] = r
+		s.rateLimitsByName[r.Meta.Name] = r
 	}
 
 	// Reverse joins per Policy. Skip refs to rows that aren't in the

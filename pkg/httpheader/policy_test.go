@@ -7,65 +7,96 @@ import (
 	"testing"
 )
 
-func TestStripInbound_PreservesAuth(t *testing.T) {
-	// Authorization is in InboundAllowlist so auth middleware can read it.
-	// OutboundAllowlist (not InboundAllowlist) is what prevents it reaching upstream.
+func TestStrip_RemovesAuthorization(t *testing.T) {
 	h := http.Header{"Authorization": {"Bearer foo"}, "Content-Type": {"application/json"}}
-	StripInbound(h)
-	if h.Get("Authorization") == "" {
-		t.Error("Authorization should be preserved by StripInbound (allowlisted for auth middleware)")
+	Strip(h)
+	if h.Get("Authorization") != "" {
+		t.Error("Authorization should be stripped (captured into ctx upstream of Strip)")
 	}
 	if h.Get("Content-Type") == "" {
 		t.Error("Content-Type should be preserved")
 	}
 }
 
-func TestStripInbound_RemovesProxyAuth(t *testing.T) {
-	h := http.Header{"Proxy-Authorization": {"Basic bar"}}
-	StripInbound(h)
-	if h.Get("Proxy-Authorization") != "" {
-		t.Error("Proxy-Authorization not stripped (not in allowlist)")
-	}
-}
-
-func TestStripInbound_RemovesXOpenAIPrefix(t *testing.T) {
-	// X-OpenAI-* is not in InboundAllowlist; allowlist strips it by default.
-	h := http.Header{"X-Openai-Organization": {"org-123"}, "Accept": {"*/*"}}
-	StripInbound(h)
-	if h.Get("X-Openai-Organization") != "" {
-		t.Error("X-OpenAI-Organization not stripped")
-	}
-	if h.Get("Accept") == "" {
-		t.Error("Accept should be preserved")
-	}
-}
-
-func TestStripInbound_PreservesNormalHeaders(t *testing.T) {
+func TestStrip_RemovesHopByHop(t *testing.T) {
 	h := http.Header{
-		"Content-Type": {"application/json"},
-		"Accept":       {"*/*"},
-		"User-Agent":   {"relay-test"},
+		"Proxy-Authorization": {"Basic bar"},
+		"Keep-Alive":          {"timeout=5"},
+		"Te":                  {"trailers"},
 	}
-	StripInbound(h)
-	if h.Get("Content-Type") == "" {
-		t.Error("Content-Type should be preserved")
-	}
-	if h.Get("Accept") == "" {
-		t.Error("Accept should be preserved")
-	}
-	if h.Get("User-Agent") == "" {
-		t.Error("User-Agent should be preserved")
+	Strip(h)
+	for _, name := range []string{"Proxy-Authorization", "Keep-Alive", "Te"} {
+		if h.Get(name) != "" {
+			t.Errorf("%s should be stripped (hop-by-hop)", name)
+		}
 	}
 }
 
-func TestStripInbound_HonorsConnectionList(t *testing.T) {
+func TestStrip_RemovesXWRHeaders(t *testing.T) {
+	h := http.Header{
+		"X-Wr-Api-Key":       {"wr_foo"},
+		"X-Wr-Proxy-Mode":    {"Proxy"},
+		"X-Wr-Upstream-Host": {"anthropic"},
+	}
+	Strip(h)
+	for k := range h {
+		if strings.HasPrefix(strings.ToLower(k), "x-wr-") {
+			t.Errorf("%s should be stripped (X-WR-* denylist)", k)
+		}
+	}
+}
+
+func TestStrip_RemovesXRelayMetadata(t *testing.T) {
+	h := http.Header{
+		"X-Relay-Metadata": {"env=prod,team=backend"},
+		"Content-Type":     {"application/json"},
+	}
+	Strip(h)
+	if h.Get("X-Relay-Metadata") != "" {
+		t.Error("X-Relay-Metadata must never reach upstream")
+	}
+	if h.Get("Content-Type") == "" {
+		t.Error("Content-Type should be preserved")
+	}
+}
+
+func TestStrip_RemovesCookie(t *testing.T) {
+	h := http.Header{"Cookie": {"sid=abc"}, "Content-Type": {"application/json"}}
+	Strip(h)
+	if h.Get("Cookie") != "" {
+		t.Error("Cookie should be stripped")
+	}
+}
+
+func TestStrip_PreservesUnknownHeaders(t *testing.T) {
+	h := http.Header{
+		"Content-Type":             {"application/json"},
+		"Accept":                   {"*/*"},
+		"User-Agent":               {"relay-test"},
+		"Anthropic-Beta":           {"prompt-caching-2024-07-31"},
+		"X-Stainless-Lang":         {"js"},
+		"X-Claude-Code-Session-Id": {"sess_123"},
+		"X-Some-Vendor-Header":     {"foo"},
+	}
+	Strip(h)
+	for _, name := range []string{
+		"Content-Type", "Accept", "User-Agent",
+		"Anthropic-Beta", "X-Stainless-Lang", "X-Claude-Code-Session-Id",
+		"X-Some-Vendor-Header",
+	} {
+		if h.Get(name) == "" {
+			t.Errorf("%s should be preserved (negative-strip policy)", name)
+		}
+	}
+}
+
+func TestStrip_HonorsConnectionList(t *testing.T) {
 	h := http.Header{
 		"Connection": {"x-custom, X-Other"},
 		"X-Custom":   {"foo"},
 		"X-Other":    {"bar"},
-		"Keep":       {"alive"},
 	}
-	StripInbound(h)
+	Strip(h)
 	if h.Get("X-Custom") != "" {
 		t.Error("X-Custom should be stripped (listed in Connection)")
 	}
@@ -76,15 +107,15 @@ func TestStripInbound_HonorsConnectionList(t *testing.T) {
 
 func TestSanitizeUpstreamResponse_RemovesHopByHop(t *testing.T) {
 	h := http.Header{
-		"Connection":        {"keep-alive"},
-		"Keep-Alive":        {"timeout=5"},
-		"Proxy-Authenticate": {"Basic"},
+		"Connection":          {"keep-alive"},
+		"Keep-Alive":          {"timeout=5"},
+		"Proxy-Authenticate":  {"Basic"},
 		"Proxy-Authorization": {"Basic foo"},
-		"Te":                {"trailers"},
-		"Trailers":          {"X-Foo"},
-		"Transfer-Encoding": {"chunked"},
-		"Upgrade":           {"websocket"},
-		"Content-Type":      {"application/json"},
+		"Te":                  {"trailers"},
+		"Trailers":            {"X-Foo"},
+		"Transfer-Encoding":   {"chunked"},
+		"Upgrade":             {"websocket"},
+		"Content-Type":        {"application/json"},
 	}
 	SanitizeUpstreamResponse(h)
 	for _, name := range HopByHop {
@@ -107,11 +138,11 @@ func TestMatch_CaseInsensitive(t *testing.T) {
 }
 
 func TestMatch_PrefixWildcard(t *testing.T) {
-	if !Match("x-openai-org", []string{"X-OpenAI-*"}) {
+	if !Match("x-wr-api-key", []string{"X-WR-*"}) {
 		t.Error("expected prefix match")
 	}
-	if Match("x-other", []string{"X-OpenAI-*"}) {
-		t.Error("x-other should not match X-OpenAI-*")
+	if Match("x-other", []string{"X-WR-*"}) {
+		t.Error("x-other should not match X-WR-*")
 	}
 }
 
@@ -134,67 +165,5 @@ func TestSafeUpstreamError_RedactsURL(t *testing.T) {
 	}
 	if !strings.Contains(msg, "openai") {
 		t.Errorf("provider name missing: %q", msg)
-	}
-}
-
-func TestStripInbound_PreservesXRelayMetadata(t *testing.T) {
-	// X-Relay-Metadata is in InboundAllowlist so the pipeline can read it.
-	// StripOutbound (not StripInbound) enforces the M4 contract that it never
-	// reaches the upstream provider.
-	h := http.Header{
-		"X-Relay-Metadata": {"env=prod,team=backend"},
-		"Content-Type":     {"application/json"},
-	}
-	StripInbound(h)
-	if h.Get("X-Relay-Metadata") == "" {
-		t.Error("X-Relay-Metadata should be preserved by StripInbound (allowlisted)")
-	}
-	if h.Get("Content-Type") == "" {
-		t.Error("Content-Type should be preserved")
-	}
-}
-
-func TestStripOutbound_RemovesXRelayMetadata(t *testing.T) {
-	// M4 contract: X-Relay-Metadata must never reach upstream.
-	h := http.Header{
-		"X-Relay-Metadata": {"env=prod,team=backend"},
-		"Content-Type":     {"application/json"},
-	}
-	StripOutbound(h)
-	if h.Get("X-Relay-Metadata") != "" {
-		t.Error("X-Relay-Metadata should be stripped from outbound headers (M4 contract)")
-	}
-	if h.Get("Content-Type") == "" {
-		t.Error("Content-Type should be preserved")
-	}
-}
-
-func TestStripOutbound_RemovesAuth(t *testing.T) {
-	// Authorization is stripped from outbound; provider client injects its own key.
-	h := http.Header{
-		"Authorization": {"Bearer caller-key"},
-		"Content-Type":  {"application/json"},
-	}
-	StripOutbound(h)
-	if h.Get("Authorization") != "" {
-		t.Error("Authorization should be stripped by StripOutbound (provider injects its own)")
-	}
-}
-
-func TestStripOutbound_PreservesAllowedHeaders(t *testing.T) {
-	h := http.Header{
-		"Content-Type":    {"application/json"},
-		"Accept-Encoding": {"gzip"},
-		"Openai-Beta":     {"assistants=v1"},
-	}
-	StripOutbound(h)
-	if h.Get("Content-Type") == "" {
-		t.Error("Content-Type should be preserved")
-	}
-	if h.Get("Accept-Encoding") == "" {
-		t.Error("Accept-Encoding should be preserved")
-	}
-	if h.Get("Openai-Beta") == "" {
-		t.Error("OpenAI-Beta should be preserved")
 	}
 }

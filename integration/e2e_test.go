@@ -52,6 +52,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
@@ -122,11 +123,13 @@ func newStack(t *testing.T) *stack {
 	t.Cleanup(func() { _ = kvStore.Close() })
 
 	sessMgr := session.New(kvStore, false, "sess:")
+	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	pl := &pipeline.Pipeline{
-		Limiter:  pkgratelimit.New(kvStore, slog.Default(), nil),
+		Limiter:  limiter,
 		Selector: keypool.New(kvStore, slog.Default(), nil, nil),
 		Logger:   slog.Default(),
 	}
+	proxyPipeline := proxy.New(limiter, slog.Default())
 
 	adapters := map[adapter.Kind]pipeline.Adapter{
 		adapter.OpenAI:    apiopenai.New(),
@@ -150,6 +153,7 @@ func newStack(t *testing.T) *stack {
 		Catalog:  cat,
 		Resolver: routing.New(cat),
 		Pipeline: pl,
+		Proxy:    proxyPipeline,
 		Adapters: adapters,
 	})
 
@@ -654,8 +658,8 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 	// PUT a non-default value.
 	{
 		raw, _ := json.Marshal(settings.ProxyMode{
-			Enabled:          true,
-			AllowedHostSlugs: []string{"openai-direct", "openai-direct", ""},
+			Enabled:              true,
+			AllowUnauthenticated: true,
 		})
 		req, _ := http.NewRequest(http.MethodPut, st.control.URL+path, bytes.NewReader(raw))
 		req.Header.Set("Authorization", "Bearer "+st.adminToken)
@@ -679,9 +683,8 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 		if !body.Value.Enabled {
 			t.Fatalf("PUT echo: Enabled should be true")
 		}
-		// Validate() should have deduped the slug list and dropped empty.
-		if got := body.Value.AllowedHostSlugs; len(got) != 1 || got[0] != "openai-direct" {
-			t.Fatalf("dedupe: want [openai-direct], got %v", got)
+		if !body.Value.AllowUnauthenticated {
+			t.Fatalf("PUT echo: AllowUnauthenticated should be true")
 		}
 	}
 
@@ -697,5 +700,209 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 			t.Fatalf("catalog cache did not see proxy-mode update within deadline")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// seedProxyHost installs a single Host pointing at upstreamURL and a
+// RelayKey unattached to any Policy (proxy mode doesn't need one).
+// Returns the cleartext relay-key bearer.
+func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, relayKey string) {
+	s.t.Helper()
+	ctx := context.Background()
+
+	hst := &host.Host{
+		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-host", DisplayName: "Proxy Host",
+			Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: host.Spec{BaseURL: upstreamURL},
+	}
+	mustUpsert(s.t, s.stores.Host.Upsert(ctx, hst), "host")
+
+	// Need a Policy because RelayKey.Spec.PolicyID is required, even
+	// though proxy mode doesn't consult it.
+	pol := &policy.Policy{
+		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-policy",
+			Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: policy.Spec{KeySelection: policy.KeySelectionPrioritized},
+	}
+	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
+
+	const relayKeyPlain = "rk_test_proxy_secret"
+	rk := &relaykey.RelayKey{
+		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-relaykey",
+			Owner: meta.Owner{Kind: meta.OwnerUser, ID: ids.New()}},
+		Spec: relaykey.Spec{
+			PolicyID: pol.Meta.ID,
+			KeyHash:  sha256Hex(relayKeyPlain),
+			Prefix:   "rk_test",
+		},
+	}
+	mustUpsert(s.t, s.stores.RelayKey.Upsert(ctx, rk), "relaykey")
+
+	if err := s.cat.Reload(ctx); err != nil {
+		s.t.Fatalf("Reload: %v", err)
+	}
+	return hst.Meta.Name, relayKeyPlain
+}
+
+// enableProxyMode flips the proxy-mode settings section and waits for
+// the snapshot cache to reflect it.
+func (s *stack) enableProxyMode(allowAnon bool) {
+	s.t.Helper()
+	raw, _ := json.Marshal(settings.ProxyMode{Enabled: true, AllowUnauthenticated: allowAnon})
+	req, _ := http.NewRequest(http.MethodPut, s.control.URL+"/settings/proxy-mode", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer "+s.adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.t.Fatalf("PUT settings: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		s.t.Fatalf("PUT settings status: %d", resp.StatusCode)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if v, ok := s.cat.Setting("proxy-mode"); ok {
+			if pm, ok := v.(*settings.ProxyMode); ok && pm.Enabled {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("proxy-mode setting did not propagate")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestE2E_ProxyMode_Authed exercises X-WR-Proxy-Mode + X-WR-API-Key.
+// Caller's Authorization is forwarded verbatim; relay does NOT swap it.
+func TestE2E_ProxyMode_Authed(t *testing.T) {
+	captured := newCapturedRequest()
+	const mockResponse = `{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":7,"output_tokens":2}}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, mockResponse)
+	}))
+	defer upstream.Close()
+
+	st := newStack(t)
+	hostSlug, relayKey := st.seedProxyHost(upstream.URL)
+	st.enableProxyMode(false)
+
+	const callerUpstreamKey = "sk-ant-oauth-customer-supplied"
+	body := []byte(`{"model":"claude-opus-4-7","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}`)
+	req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	req.Header.Set("X-WR-API-Key", relayKey)
+	req.Header.Set("X-WR-Upstream-Host", hostSlug)
+	req.Header.Set("Authorization", "Bearer "+callerUpstreamKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: want 200, got %d. body=%s", resp.StatusCode, respBody)
+	}
+	if !bytes.Equal(respBody, []byte(mockResponse)) {
+		t.Fatalf("body mismatch: %s", respBody)
+	}
+
+	got := captured.snapshot()
+	if got.path != "/v1/messages" {
+		t.Errorf("upstream path: want /v1/messages, got %q", got.path)
+	}
+	wantAuth := "Bearer " + callerUpstreamKey
+	if got.auth != wantAuth {
+		t.Errorf("upstream auth: want %q (caller's verbatim), got %q", wantAuth, got.auth)
+	}
+	if !bytes.Equal(got.body, body) {
+		t.Errorf("upstream body mismatch")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+}
+
+// TestE2E_ProxyMode_AnonymousRequiresFlag confirms anonymous proxy is
+// 401 until AllowUnauthenticated is set on the settings section.
+func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
+	captured := newCapturedRequest()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.record(r)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer upstream.Close()
+
+	st := newStack(t)
+	hostSlug, _ := st.seedProxyHost(upstream.URL)
+	st.enableProxyMode(false) // anon disabled
+
+	doAnon := func() *http.Response {
+		req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/messages",
+			bytes.NewReader([]byte(`{"model":"x","messages":[]}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+		req.Header.Set("X-WR-Upstream-Host", hostSlug)
+		req.Header.Set("Authorization", "Bearer sk-customer")
+		resp, _ := http.DefaultClient.Do(req)
+		return resp
+	}
+
+	resp := doAnon()
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anon w/o flag: want 401, got %d", resp.StatusCode)
+	}
+	if got := captured.snapshot(); got.count != 0 {
+		t.Errorf("upstream should NOT be hit when anon disabled (got %d)", got.count)
+	}
+
+	// Flip flag → anon works.
+	st.enableProxyMode(true)
+	resp = doAnon()
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("anon w/ flag: want 200, got %d", resp.StatusCode)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+}
+
+// TestE2E_ProxyMode_UnknownHostSlug confirms a bogus X-WR-Upstream-Host
+// rejects at 400 without hitting any upstream.
+func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Errorf("upstream must NOT be hit on unknown-slug rejection")
+	}))
+	defer upstream.Close()
+
+	st := newStack(t)
+	_, relayKey := st.seedProxyHost(upstream.URL)
+	st.enableProxyMode(false)
+
+	req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/messages",
+		bytes.NewReader([]byte(`{"model":"x","messages":[]}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
+	req.Header.Set("X-WR-API-Key", relayKey)
+	req.Header.Set("X-WR-Upstream-Host", "does-not-exist")
+	req.Header.Set("Authorization", "Bearer sk-x")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: want 400, got %d", resp.StatusCode)
 	}
 }

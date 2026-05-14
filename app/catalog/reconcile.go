@@ -237,7 +237,12 @@ func (c *Catalog) ApplyRateLimitUpsert(r *ratelimit.RateLimit) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
+	// Strip stale name index when slug changed for the same id.
+	if prev, ok := s.rateLimitsByID[r.Meta.ID]; ok && prev.Meta.Name != r.Meta.Name {
+		delete(s.rateLimitsByName, prev.Meta.Name)
+	}
 	s.rateLimitsByID[r.Meta.ID] = r
+	s.rateLimitsByName[r.Meta.Name] = r
 	c.snap.Store(s)
 	return nil
 }
@@ -252,10 +257,12 @@ func (c *Catalog) ApplyRateLimitDelete(id string) error {
 }
 
 func deleteRateLimit(s *Snapshot, id string) {
-	if _, ok := s.rateLimitsByID[id]; !ok {
+	r, ok := s.rateLimitsByID[id]
+	if !ok {
 		return
 	}
 	delete(s.rateLimitsByID, id)
+	delete(s.rateLimitsByName, r.Meta.Name)
 	// Remove from policy reverse join.
 	for polID, rl := range s.rateLimitByPolicy {
 		if rl.Meta.ID == id {
