@@ -7,21 +7,22 @@ import (
 
 func TestParse_ValidShapes(t *testing.T) {
 	cases := []struct {
-		in            string
-		provider      string
-		model         string
-		host          string
-		modelWildcard bool
-		hostWildcard  bool
-		kind          Kind
+		in               string
+		provider         string
+		model            string
+		host             string
+		providerWildcard bool
+		modelWildcard    bool
+		hostWildcard     bool
+		kind             Kind
 	}{
-		{"anthropic", "anthropic", "", "", true, true, KindProvider},
-		{"anthropic/*", "anthropic", "", "", true, true, KindProvider},
-		{"anthropic/claude-opus-4-7", "anthropic", "claude-opus-4-7", "", false, true, KindModel},
-		{"anthropic/claude-opus-4-7@*", "anthropic", "claude-opus-4-7", "", false, true, KindModel},
-		{"anthropic/claude-opus-4-7@bedrock", "anthropic", "claude-opus-4-7", "bedrock", false, false, KindBinding},
-		{"amazon-bedrock/claude-opus-4-7@amazon-bedrock", "amazon-bedrock", "claude-opus-4-7", "amazon-bedrock", false, false, KindBinding},
-		{"openai", "openai", "", "", true, true, KindProvider},
+		{"anthropic", "anthropic", "", "", false, true, true, KindProvider},
+		{"anthropic@bedrock", "anthropic", "", "bedrock", false, true, false, KindProviderOnHost},
+		{"anthropic/claude-opus-4-7", "anthropic", "claude-opus-4-7", "", false, false, true, KindModel},
+		{"anthropic/claude-opus-4-7@bedrock", "anthropic", "claude-opus-4-7", "bedrock", false, false, false, KindBinding},
+		{"amazon-bedrock/claude-opus-4-7@amazon-bedrock", "amazon-bedrock", "claude-opus-4-7", "amazon-bedrock", false, false, false, KindBinding},
+		{"@bedrock", "", "", "bedrock", true, true, false, KindHost},
+		{"@amazon-bedrock", "", "", "amazon-bedrock", true, true, false, KindHost},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -37,6 +38,9 @@ func TestParse_ValidShapes(t *testing.T) {
 			}
 			if r.Host != tc.host {
 				t.Errorf("host: want %q got %q", tc.host, r.Host)
+			}
+			if r.ProviderWildcard != tc.providerWildcard {
+				t.Errorf("providerWildcard: want %v got %v", tc.providerWildcard, r.ProviderWildcard)
 			}
 			if r.ModelWildcard != tc.modelWildcard {
 				t.Errorf("modelWildcard: want %v got %v", tc.modelWildcard, r.ModelWildcard)
@@ -63,14 +67,18 @@ func TestParse_Errors(t *testing.T) {
 		{"", ErrEmpty, ""},
 		{"/foo", nil, "leading /"},
 		{"anthropic/", nil, "trailing /"},
-		{"anthropic@bedrock", nil, "@host is only valid after"},
-		{"anthropic/*@bedrock", nil, "@host is only valid after"},
 		{"anthropic/claude@", nil, "trailing @"},
+		{"@", nil, "trailing @"},
 		{"Anthropic", nil, "DNS-1123"},
 		{"anthropic/Claude", nil, "DNS-1123"},
 		{"anthropic/claude@Bedrock", nil, "DNS-1123"},
 		{"-foo", nil, "DNS-1123"},
 		{"foo-/bar", nil, "DNS-1123"},
+		// `*` is no longer a legal token anywhere in the wire form.
+		{"anthropic/*", nil, "DNS-1123"},
+		{"anthropic/*@bedrock", nil, "DNS-1123"},
+		{"anthropic/claude@*", nil, "DNS-1123"},
+		{"@*", nil, "DNS-1123"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -101,6 +109,11 @@ func TestMatches(t *testing.T) {
 		ref  string
 		want map[triple]bool
 	}{
+		{"@bedrock", map[triple]bool{
+			{"anthropic", "claude-opus-4-7", "bedrock"}: true,
+			{"openai", "gpt-4o", "bedrock"}:             true,
+			{"anthropic", "claude-opus-4-7", "anthropic"}: false,
+		}},
 		{"anthropic", map[triple]bool{
 			{"anthropic", "claude-opus-4-7", "anthropic"}:  true,
 			{"anthropic", "claude-haiku-4-5", "bedrock"}:   true,

@@ -148,6 +148,18 @@ func (s *Snapshot) ModelsByName(name string) []*model.Model {
 	return s.modelsByName[name]
 }
 
+// AllModels returns every enabled Model in stable slug order. Used by
+// the /catalog/resolve endpoint for host-only refs ("@bedrock") that
+// need to walk the entire catalog rather than a single provider.
+func (s *Snapshot) AllModels() []*model.Model {
+	out := make([]*model.Model, 0, len(s.modelsByID))
+	for _, m := range s.modelsByID {
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
 // ModelsByProvider returns every enabled Model whose owning Provider
 // matches providerID. Stable order by slug. Used by the /catalog/resolve
 // admin endpoint to enumerate a provider's catalog.

@@ -1,16 +1,14 @@
 // Package modelref parses the catalog reference DSL used by Policy
 // grants and the /catalog/resolve admin endpoint.
 //
-// Grammar (provider-anchored, no bare-model form):
+// Grammar — five shapes, no wildcards in the wire form. Absence of a
+// segment is the wildcard:
 //
-//	ref ::= provider                              "anthropic"              → all anthropic models, all hosts
-//	      | provider "/" "*"                      "anthropic/*"            → same as above
-//	      | provider "/" model                    "anthropic/claude-opus"  → that model on any host
-//	      | provider "/" model "@" "*"            "anthropic/claude-opus@*" → same
-//	      | provider "/" model "@" host           "anthropic/claude-opus@bedrock" → that model on that host only
-//
-// The `*` token is literal — only meaningful in the model and host
-// positions. No prefix/suffix globbing.
+//	ref ::= provider                         "anthropic"                          all anthropic models, all hosts
+//	      | provider "@" host                "anthropic@bedrock"                  all anthropic models, only on bedrock
+//	      | provider "/" model               "anthropic/claude-opus-4-7"          this model on any host
+//	      | provider "/" model "@" host      "anthropic/claude-opus-4-7@bedrock"  this exact binding only
+//	      | "@" host                         "@bedrock"                           every model on this host
 //
 // Slugs follow DNS-1123 (matches meta.Metadata.Name validation): lower
 // alphanumerics + hyphen, max 63 chars, must start and end with an
@@ -27,19 +25,20 @@ import (
 // Ref is the parsed form of a ref string. The string itself is preserved
 // in Raw so admin UIs can echo it verbatim alongside the expansion.
 type Ref struct {
-	Raw      string
-	Provider string // always set
-	// Model is the model slug, "" when the ref is provider-only or
-	// provider/*.
+	Raw string
+	// Provider is the provider slug. "" when ProviderWildcard is true
+	// (host-only refs of the form "@host").
+	Provider string
+	// Model is the model slug, "" when ModelWildcard is true.
 	Model string
-	// Host is the host slug, "" when the ref omits @host or uses @*.
+	// Host is the host slug, "" when HostWildcard is true.
 	Host string
-	// ModelWildcard is true when the model position is "*" or absent
-	// (i.e. all models for the provider).
+	// ProviderWildcard is true for host-only refs ("@bedrock"). False
+	// for every other shape.
+	ProviderWildcard bool
+	// ModelWildcard is true when the model position is "*" or absent.
 	ModelWildcard bool
-	// HostWildcard is true when the host position is "*" or absent
-	// (i.e. all hosts serving the matched model). False when the ref is
-	// model-less (provider-only) — in that case Host has no meaning.
+	// HostWildcard is true when the host position is "*" or absent.
 	HostWildcard bool
 }
 
@@ -47,15 +46,24 @@ type Ref struct {
 type Kind string
 
 const (
-	KindProvider Kind = "provider" // provider-only or provider/*
-	KindModel    Kind = "model"    // provider/model or provider/model@*
-	KindBinding  Kind = "binding"  // provider/model@host (concrete host)
+	KindProvider       Kind = "provider"         // provider                       — all models, all hosts
+	KindProviderOnHost Kind = "provider-on-host" // provider@host                  — all models, single host
+	KindModel          Kind = "model"            // provider/model                 — single model, all hosts
+	KindBinding        Kind = "binding"          // provider/model@host            — single binding
+	KindHost           Kind = "host"             // @host                          — all providers, all models, single host
 )
 
-// Kind returns the classification of this Ref.
+// Kind returns the classification of this Ref. Five cases driven by
+// the three wildcard bits.
 func (r Ref) Kind() Kind {
+	if r.ProviderWildcard {
+		return KindHost
+	}
 	if r.ModelWildcard {
-		return KindProvider
+		if r.HostWildcard {
+			return KindProvider
+		}
+		return KindProviderOnHost
 	}
 	if r.HostWildcard {
 		return KindModel
@@ -92,13 +100,30 @@ func Parse(s string) (Ref, error) {
 	}
 	ref := Ref{Raw: s}
 
+	// Host-only refs ("@bedrock") — every model from every provider on
+	// this host. Distinct from every other shape, which is provider-
+	// anchored.
+	if strings.HasPrefix(s, "@") {
+		host := s[1:]
+		if host == "" {
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host slug"}
+		}
+		if !slugRe.MatchString(host) {
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "host must be a DNS-1123 slug"}
+		}
+		ref.ProviderWildcard = true
+		ref.ModelWildcard = true
+		ref.Host = host
+		return ref, nil
+	}
+
 	// Optional @host suffix.
 	hostPart := ""
 	if i := strings.LastIndex(s, "@"); i >= 0 {
 		hostPart = s[i+1:]
 		s = s[:i]
 		if hostPart == "" {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host slug or *"}
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host slug"}
 		}
 	}
 
@@ -106,56 +131,33 @@ func Parse(s string) (Ref, error) {
 	slash := strings.IndexByte(s, '/')
 	switch {
 	case slash < 0:
-		// provider only — model and host wildcarded by absence.
+		// provider only — model wildcarded by absence.
 		ref.Provider = s
 		ref.ModelWildcard = true
-		ref.HostWildcard = true
 	case slash == 0:
 		return ref, &SyntaxError{Raw: ref.Raw, Reason: "leading / — provider is required"}
 	default:
 		ref.Provider = s[:slash]
 		ref.Model = s[slash+1:]
 		if ref.Model == "" {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing / requires a model slug or *"}
-		}
-		if ref.Model == "*" {
-			ref.Model = ""
-			ref.ModelWildcard = true
-			ref.HostWildcard = true
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing / requires a model slug"}
 		}
 	}
 
-	// Validate provider segment.
 	if !slugRe.MatchString(ref.Provider) {
 		return ref, &SyntaxError{Raw: ref.Raw, Reason: "provider must be a DNS-1123 slug"}
 	}
-
-	// Model segment (only when not wildcarded).
-	if !ref.ModelWildcard {
-		if !slugRe.MatchString(ref.Model) {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "model must be a DNS-1123 slug or *"}
-		}
+	if !ref.ModelWildcard && !slugRe.MatchString(ref.Model) {
+		return ref, &SyntaxError{Raw: ref.Raw, Reason: "model must be a DNS-1123 slug"}
 	}
 
-	// Host suffix handling.
+	// @host: present → concrete host; absent → host wildcard.
 	if hostPart != "" {
-		if ref.ModelWildcard {
-			// "provider@host" and "provider/*@host" are both rejected —
-			// the @host suffix has no meaning when no specific model is
-			// named. Operators who want "host filter only" can write
-			// per-model entries.
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "@host is only valid after an explicit model slug"}
+		if !slugRe.MatchString(hostPart) {
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "host must be a DNS-1123 slug"}
 		}
-		if hostPart == "*" {
-			ref.HostWildcard = true
-		} else {
-			if !slugRe.MatchString(hostPart) {
-				return ref, &SyntaxError{Raw: ref.Raw, Reason: "host must be a DNS-1123 slug or *"}
-			}
-			ref.Host = hostPart
-		}
-	} else if !ref.ModelWildcard {
-		// provider/model with no @host → all hosts.
+		ref.Host = hostPart
+	} else {
 		ref.HostWildcard = true
 	}
 
@@ -173,17 +175,13 @@ func MustParse(s string) Ref {
 }
 
 // Matches reports whether this Ref allows the (provider, model, host)
-// binding triple. All three inputs are catalog slugs (Meta.Name). The
-// predicate is strict equality with wildcard tolerance:
-//
-//   - Provider must match exactly.
-//   - Model: any slug if ModelWildcard, else exact match.
-//   - Host: any slug if HostWildcard, else exact match.
+// binding triple. All three inputs are catalog slugs (Meta.Name). Each
+// wildcard bit independently relaxes the corresponding equality check.
 //
 // Used by the routing resolver to decide whether a candidate
 // HostBinding is allowed by the caller's Policy.
 func (r Ref) Matches(providerSlug, modelSlug, hostSlug string) bool {
-	if r.Provider != providerSlug {
+	if !r.ProviderWildcard && r.Provider != providerSlug {
 		return false
 	}
 	if !r.ModelWildcard && r.Model != modelSlug {

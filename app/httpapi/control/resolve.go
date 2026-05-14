@@ -84,18 +84,29 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.Hosts = []resolveEntity{}
 		out.Body.Bindings = []resolveBindingRef{}
 
-		prov, ok := snap.ProviderByName(ref.Provider)
-		if !ok {
-			return out, nil // unknown provider — empty match, not an error
-		}
-		out.Body.Provider = &resolveEntity{
-			ID:          prov.Meta.ID,
-			Name:        prov.Meta.Name,
-			DisplayName: prov.Meta.DisplayName,
+		// Host-only refs (@host): no provider to set, walk every model.
+		// Provider-anchored refs: resolve provider first, then walk its
+		// models. Unknown provider on a provider-anchored ref returns
+		// an empty envelope (not 404) so the UI renders "nothing
+		// matches" without branching.
+		var modelsToWalk []*model.Model
+		if ref.ProviderWildcard {
+			modelsToWalk = snap.AllModels()
+		} else {
+			prov, ok := snap.ProviderByName(ref.Provider)
+			if !ok {
+				return out, nil
+			}
+			out.Body.Provider = &resolveEntity{
+				ID:          prov.Meta.ID,
+				Name:        prov.Meta.Name,
+				DisplayName: prov.Meta.DisplayName,
+			}
+			modelsToWalk = snap.ModelsByProvider(prov.Meta.ID)
 		}
 
 		seenHost := map[string]struct{}{}
-		for _, m := range snap.ModelsByProvider(prov.Meta.ID) {
+		for _, m := range modelsToWalk {
 			if !m.IsEnabled() {
 				continue
 			}
@@ -113,7 +124,8 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 				if !ok {
 					continue
 				}
-				if !ref.Matches(prov.Meta.Name, m.Meta.Name, h.Meta.Name) {
+				providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+				if !ref.Matches(providerSlug, m.Meta.Name, h.Meta.Name) {
 					continue
 				}
 				modelMatched = true
