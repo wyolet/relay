@@ -27,18 +27,30 @@ import (
 //
 // Returns nil when rl is nil or has no Rules.
 func Resolve(pol *policy.Policy, rl *RateLimit) []pkgratelimit.Rule {
-	if rl == nil || len(rl.Spec.Rules) == 0 || (rl.Spec.Enabled != nil && !*rl.Spec.Enabled) {
-		return nil
-	}
 	if pol == nil {
 		return nil
 	}
-	scope := pol.Meta.Name
+	return ResolveWithScope("policy", pol.Meta.Name, rl)
+}
+
+// ResolveWithScope is the policy-less variant used by proxy mode, where
+// the rate-limit subject is not a Policy but a per-key hash or per-IP
+// identifier. namespace identifies the bucket family ("proxy",
+// "proxy-anon"); subject is the request's bucket key (relay-key hash,
+// client IP, etc.). Key construction:
+//
+//	"{namespace}:{subject}:{rule-index}:{meter}"
+//
+// Returns nil when rl is nil, disabled, or has no Rules.
+func ResolveWithScope(namespace, subject string, rl *RateLimit) []pkgratelimit.Rule {
+	if rl == nil || len(rl.Spec.Rules) == 0 || (rl.Spec.Enabled != nil && !*rl.Spec.Enabled) {
+		return nil
+	}
 	out := make([]pkgratelimit.Rule, 0, len(rl.Spec.Rules))
 	for i, r := range rl.Spec.Rules {
 		out = append(out, pkgratelimit.Rule{
-			Key:      fmt.Sprintf("policy:%s:%d:%s", scope, i, r.Meter),
-			Name:     fmt.Sprintf("%s on %s", r.Meter, scope),
+			Key:      fmt.Sprintf("%s:%s:%d:%s", namespace, subject, i, r.Meter),
+			Name:     fmt.Sprintf("%s on %s", r.Meter, subject),
 			Meter:    string(r.Meter),
 			Strategy: pkgratelimit.Strategy(r.Strategy),
 			Amount:   r.Amount,
