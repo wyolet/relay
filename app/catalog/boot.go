@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/seed"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
@@ -43,6 +44,7 @@ type Stores struct {
 	Policy    *policy.Store
 	Pricing   *pricing.Store
 	RelayKey  *relaykey.Store
+	Settings  *settings.Store
 }
 
 // Bootstrap wires the eight entity stores against the pool, optionally
@@ -63,12 +65,17 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),
 		RelayKey:  relaykey.NewStore(q),
+		Settings:  settings.NewStore(q),
 	}
 
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
 		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
 	)
+	cat.settings.store = stores.Settings
+	if err := cat.settings.reload(ctx); err != nil {
+		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: initial settings reload: %w", err)
+	}
 
 	if opts.AutoSeedDir != "" {
 		empty, err := isCatalogEmpty(ctx, stores)
@@ -99,6 +106,7 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		policy:    stores.Policy,
 		pricing:   stores.Pricing,
 		relaykey:  stores.RelayKey,
+		settings:  stores.Settings,
 	})
 	return cat, listener, stores, nil
 }

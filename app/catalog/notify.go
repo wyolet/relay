@@ -41,6 +41,7 @@ type notifyEvent struct {
 var validKinds = map[string]struct{}{
 	"provider": {}, "host": {}, "model": {}, "hostkey": {},
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
+	"settings": {},
 }
 
 // parseEvent splits "kind:op:id". Returns false on any malformed input.
@@ -138,6 +139,7 @@ type listenerStores struct {
 	relaykey interface {
 		Get(ctx context.Context, id string) (*relaykey.RelayKey, error)
 	}
+	settings SettingsLister
 }
 
 // ── Listener ──────────────────────────────────────────────────────────────────
@@ -265,6 +267,7 @@ var kindOrder = map[string]int{
 	"policy":    5,
 	"pricing":   6,
 	"relaykey":  7,
+	"settings":  8,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -373,6 +376,13 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return l.cat.ApplyRelayKeyDelete(e.ID)
 		}
 		return l.cat.ApplyRelayKeyUpsert(k)
+
+	case "settings":
+		if e.Op == "delete" {
+			l.cat.settings.applyDelete(e.ID)
+			return nil
+		}
+		return l.cat.settings.applyUpsert(ctx, e.ID)
 	}
 	return nil
 }

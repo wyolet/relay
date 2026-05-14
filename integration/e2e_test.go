@@ -56,6 +56,7 @@ import (
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
+	"github.com/wyolet/relay/app/settings"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
@@ -513,7 +514,8 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 		models,
 		hosts,
 		providers,
-		rate_limits
+		rate_limits,
+		settings
 		RESTART IDENTITY CASCADE`
 	if _, err := st.Pool().Exec(ctx, stmt); err != nil {
 		t.Fatalf("truncateAll: %v", err)
@@ -614,3 +616,86 @@ func findUnresolvedRefs(node any, defined map[string]struct{}) []string {
 // strconvI is a tiny int-to-string helper to avoid pulling strconv into
 // the test file's import surface for this single call site.
 func strconvI(i int) string { return fmt.Sprintf("%d", i) }
+
+// TestE2E_Settings_ProxyMode_RoundTrip exercises GET/PUT on the
+// proxy-mode section and confirms the catalog cache picks up the
+// change via NOTIFY.
+func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
+	st := newStack(t)
+	const path = "/settings/proxy-mode"
+
+	// GET before any write returns defaults.
+	{
+		req, _ := http.NewRequest(http.MethodGet, st.control.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+st.adminToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET status: want 200, got %d", resp.StatusCode)
+		}
+		var body struct {
+			Section string             `json:"section"`
+			Value   settings.ProxyMode `json:"value"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.Section != "proxy-mode" {
+			t.Fatalf("section: want proxy-mode, got %q", body.Section)
+		}
+		if body.Value.Enabled {
+			t.Fatalf("defaults: Enabled should be false")
+		}
+	}
+
+	// PUT a non-default value.
+	{
+		raw, _ := json.Marshal(settings.ProxyMode{
+			Enabled:          true,
+			AllowedHostSlugs: []string{"openai-direct", "openai-direct", ""},
+		})
+		req, _ := http.NewRequest(http.MethodPut, st.control.URL+path, bytes.NewReader(raw))
+		req.Header.Set("Authorization", "Bearer "+st.adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("PUT status: want 200, got %d; body=%s", resp.StatusCode, body)
+		}
+		var body struct {
+			Section string             `json:"section"`
+			Value   settings.ProxyMode `json:"value"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !body.Value.Enabled {
+			t.Fatalf("PUT echo: Enabled should be true")
+		}
+		// Validate() should have deduped the slug list and dropped empty.
+		if got := body.Value.AllowedHostSlugs; len(got) != 1 || got[0] != "openai-direct" {
+			t.Fatalf("dedupe: want [openai-direct], got %v", got)
+		}
+	}
+
+	// NOTIFY propagation: poll the catalog cache until it sees the write.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if v, ok := st.cat.Setting("proxy-mode"); ok {
+			if pm, ok := v.(*settings.ProxyMode); ok && pm.Enabled {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("catalog cache did not see proxy-mode update within deadline")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}

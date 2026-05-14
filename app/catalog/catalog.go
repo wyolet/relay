@@ -31,6 +31,8 @@ type Catalog struct {
 
 	snap atomic.Pointer[Snapshot]
 	rmu  sync.Mutex
+
+	settings settingsHolder
 }
 
 // Per-package narrow Lister interfaces — Catalog only needs List from each.

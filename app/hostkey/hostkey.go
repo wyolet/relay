@@ -40,10 +40,12 @@ type Spec struct {
 	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
 	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
 
-	// Value is cleartext on the write path for ValueKindStored. Never
-	// serialised to JSON (so it never reaches JSONB or API responses); only
-	// YAML readers populate it. Cleared by storage after encryption.
-	Value string `json:"-" yaml:"value,omitempty"`
+	// Value is cleartext on the write path for ValueKindStored. Accepted
+	// from JSON and YAML inputs; never returned on reads — Store.Get
+	// never repopulates it, and marshalSpec strips it before any JSONB
+	// persistence. The `omitempty` tag combined with that read-side
+	// invariant keeps cleartext out of GET responses.
+	Value string `json:"value,omitempty" yaml:"value,omitempty"`
 }
 
 // ValueFrom is the value-mode discriminator. For ValueKindEnv, Env names the
