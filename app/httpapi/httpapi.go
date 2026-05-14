@@ -167,37 +167,53 @@ func schemaNamer(t reflect.Type, hint string) string {
 // own schema in practice (huma inlines single-Body wrappers), but the
 // others are listed so they render cleanly if ever exposed.
 var genericSuffix = map[string]string{
-	"listBody":      "List",
-	"listResponse":  "List",
-	"itemResponse":  "",
-	"createRequest": "CreateRequest",
-	"updateRequest": "UpdateRequest",
+	"listBody":             "List",
+	"listResponse":         "List",
+	"itemResponse":         "",
+	"createRequest":        "CreateRequest",
+	"updateRequest":        "UpdateRequest",
+	"sectionEnvelope":      "Envelope",
+	"sectionResponse":      "Response",
+	"sectionUpdateRequest": "UpdateRequest",
 }
 
-// nameGenericInstantiation produces "<Entity><Suffix>" for a known CRUD
-// wrapper like listBody[policy.Policy] → "PolicyList". Returns "" when
-// the wrapper isn't recognised or the type param isn't a catalog entity;
-// caller falls back to sanitizing the raw bracketed name.
+// nameGenericInstantiation produces "<Name><Suffix>" for a known
+// generic wrapper. Returns "" when the wrapper isn't recognised or no
+// field's type can be resolved to a registered name; caller falls back
+// to sanitizing the raw bracketed type name.
+//
+// Resolution walks every field of the wrapper looking for one whose
+// element type sits in either entityNameByPkg (catalog kinds) or
+// settingsPkgPath (typed sections like ProxyMode). This handles
+// wrappers where the type parameter isn't the first field — e.g.
+// sectionEnvelope{Section, Value T}.
 func nameGenericInstantiation(t reflect.Type, base string) string {
 	suffix, known := genericSuffix[base]
 	if !known {
 		return ""
 	}
-	if t.Kind() != reflect.Struct || t.NumField() == 0 {
+	if t.Kind() != reflect.Struct {
 		return ""
 	}
-	// The wrapper's first (and usually only) field carries the type
-	// parameter — Items []*T for listBody, Body T/*T for the rest.
-	f := t.Field(0).Type
-	for f.Kind() == reflect.Ptr || f.Kind() == reflect.Slice || f.Kind() == reflect.Array {
-		f = f.Elem()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i).Type
+		for f.Kind() == reflect.Ptr || f.Kind() == reflect.Slice || f.Kind() == reflect.Array {
+			f = f.Elem()
+		}
+		if entity, ok := entityNameByPkg[f.PkgPath()]; ok {
+			return entity + suffix
+		}
+		if f.PkgPath() == settingsPkgPath && f.Name() != "" && f.Name() != "SectionName" {
+			return f.Name() + suffix
+		}
 	}
-	entity, ok := entityNameByPkg[f.PkgPath()]
-	if !ok {
-		return ""
-	}
-	return entity + suffix
+	return ""
 }
+
+// settingsPkgPath is the import path of app/settings. Types living
+// here (ProxyMode and any future section) are surfaced in OpenAPI
+// schema names alongside the catalog entities.
+const settingsPkgPath = "github.com/wyolet/relay/app/settings"
 
 // sanitizeSchemaName collapses characters that are valid in Go type names
 // (dots, brackets, asterisks from generic instantiations) into underscores
