@@ -27,13 +27,14 @@ ON CONFLICT (id) DO UPDATE SET
     updated_at = NOW();
 
 -- name: UpsertPolicy :exec
-INSERT INTO policies (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
+INSERT INTO policies (id, name, display_name, metadata, spec, models, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
+    models = EXCLUDED.models,
     updated_at = NOW();
 
 -- UpsertSecret is kept for the seed CLI (YAML-import path). Deprecated for new code; use InsertSecretEnv / InsertSecretStored.
@@ -202,7 +203,7 @@ DELETE FROM policy_host_keys WHERE policy_id = $1;
 INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
 
 -- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies ORDER BY name;
 
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
@@ -251,7 +252,10 @@ SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value
 SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1;
 
 -- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id FROM policies WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies WHERE id = $1;
+
+-- name: SetPolicyModels :exec
+UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 
 -- name: GetPricing :one
 SELECT id, name, display_name, host_id, metadata, spec FROM pricings WHERE id = $1;

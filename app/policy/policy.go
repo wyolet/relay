@@ -26,6 +26,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/modelref"
 )
 
 // Policy is the routing/auth bundle. Composition layer enforces that every
@@ -39,7 +40,20 @@ type Policy struct {
 // Spec carries the membership lists, the single rate-limit, and the
 // strategy knobs.
 type Spec struct {
-	// ModelIDs is the set of Models this Policy exposes (m:n with Model).
+	// Models is the catalog grant — a list of ref strings parsed by
+	// app/modelref. See its package doc for the grammar. Each entry can
+	// match a single binding ("anthropic/claude-opus-4-7@bedrock"), all
+	// hosts for a model ("anthropic/claude-opus-4-7" or trailing @*),
+	// or every model under a provider ("anthropic" or "anthropic/*").
+	//
+	// Patterns expand against the live catalog at snapshot build time,
+	// so a wildcard automatically includes models added later.
+	Models []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1"`
+
+	// ModelIDs is the legacy literal-ID grant — exact Model UUIDs, no
+	// wildcards. Coexists with Models during the transition; the
+	// snapshot expands both into the same bindingsByPolicy index.
+	// New grants should prefer Models.
 	ModelIDs []string `json:"modelIds,omitempty" yaml:"modelIds,omitempty" validate:"omitempty,dive,uuid"`
 
 	// HostKeyIDs is the set of HostKeys this Policy can draw from
@@ -112,6 +126,29 @@ func (p *Policy) Validate() error {
 	}
 	if err := uniqueIDs("hostKeyIds", p.Meta.Name, p.Spec.HostKeyIDs); err != nil {
 		return err
+	}
+	if err := validateModelRefs(p.Meta.Name, p.Spec.Models); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateModelRefs runs the modelref parser over every entry and
+// rejects duplicates. Parser errors carry their own message; the policy
+// name is prepended for context.
+func validateModelRefs(policyName string, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, raw := range refs {
+		if _, dup := seen[raw]; dup {
+			return fmt.Errorf("policy %q: duplicate models entry %q", policyName, raw)
+		}
+		seen[raw] = struct{}{}
+		if _, err := modelref.Parse(raw); err != nil {
+			return fmt.Errorf("policy %q: %w", policyName, err)
+		}
 	}
 	return nil
 }

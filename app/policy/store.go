@@ -89,6 +89,11 @@ func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
 	if r.RateLimitID.Valid {
 		spec.RateLimitID = r.RateLimitID.String
 	}
+	if len(r.Models) > 0 {
+		if err := json.Unmarshal(r.Models, &spec.Models); err != nil {
+			return nil, fmt.Errorf("models: %w", err)
+		}
+	}
 	modelRows, err := q.GetPolicyModels(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("policy.Get models: %w", err)
@@ -179,6 +184,11 @@ func fromRow(r gen.ListPoliciesWithRateLimitRow) (*Policy, error) {
 	if r.RateLimitID.Valid {
 		spec.RateLimitID = r.RateLimitID.String
 	}
+	if len(r.Models) > 0 {
+		if err := json.Unmarshal(r.Models, &spec.Models); err != nil {
+			return nil, fmt.Errorf("models: %w", err)
+		}
+	}
 	return &Policy{Meta: md, Spec: spec}, nil
 }
 
@@ -192,9 +202,17 @@ func toUpsertParams(p *Policy) (gen.UpsertPolicyParams, error) {
 	specCopy.ModelIDs = nil
 	specCopy.HostKeyIDs = nil
 	specCopy.RateLimitID = ""
+	specCopy.Models = nil // models lives in its own column
 	specJSON, err := json.Marshal(specCopy)
 	if err != nil {
 		return gen.UpsertPolicyParams{}, fmt.Errorf("spec: %w", err)
+	}
+	modelsJSON := []byte("[]")
+	if len(p.Spec.Models) > 0 {
+		modelsJSON, err = json.Marshal(p.Spec.Models)
+		if err != nil {
+			return gen.UpsertPolicyParams{}, fmt.Errorf("models: %w", err)
+		}
 	}
 	return gen.UpsertPolicyParams{
 		ID:          p.Meta.ID,
@@ -202,5 +220,6 @@ func toUpsertParams(p *Policy) (gen.UpsertPolicyParams, error) {
 		DisplayName: p.Meta.DisplayName,
 		Metadata:    metaJSON,
 		Spec:        specJSON,
+		Models:      modelsJSON,
 	}, nil
 }
