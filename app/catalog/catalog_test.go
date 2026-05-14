@@ -315,3 +315,76 @@ func TestReload_AliasCollisionAllowed(t *testing.T) {
 		t.Errorf("got %d matches for shared alias, want 2", len(got))
 	}
 }
+
+// hostOwnedPolicy builds a Policy owned by the given host id.
+func hostOwnedPolicy(name, hostID string) *policy.Policy {
+	return &policy.Policy{
+		Meta: meta.Metadata{
+			ID:   meta.NewID(),
+			Name: name,
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
+		},
+	}
+}
+
+// TestReload_HostPoliciesMenu_OK accepts a host whose Spec.Policies all
+// resolve to host-owned policies of that same host, with DefaultPolicy
+// in the menu.
+func TestReload_HostPoliciesMenu_OK(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
+	hosts[0].Spec.Policies = []string{tier.Meta.ID}
+	hosts[0].Spec.DefaultPolicy = tier.Meta.ID
+	pols = append(pols, tier)
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+}
+
+// TestReload_HostPoliciesMenu_UnknownPolicyFails rejects a host menu
+// entry that doesn't resolve.
+func TestReload_HostPoliciesMenu_UnknownPolicyFails(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	hosts[0].Spec.Policies = []string{meta.NewID()} // dangling id
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "unknown or disabled policy") {
+		t.Fatalf("expected unknown policy error, got %v", err)
+	}
+}
+
+// TestReload_HostPoliciesMenu_WrongOwnerFails rejects a host menu entry
+// whose Policy is owned by a different host (or by user/system).
+func TestReload_HostPoliciesMenu_WrongOwnerFails(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	// Tier policy owned by a phantom host, not hosts[0].
+	stray := hostOwnedPolicy("stray-tier", meta.NewID())
+	hosts[0].Spec.Policies = []string{stray.Meta.ID}
+	pols = append(pols, stray)
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not host-owned by this host") {
+		t.Fatalf("expected wrong-owner error, got %v", err)
+	}
+}
+
+// TestReload_HostPoliciesMenu_DefaultNotInMenuFails rejects a
+// DefaultPolicy that points outside Spec.Policies.
+func TestReload_HostPoliciesMenu_DefaultNotInMenuFails(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
+	other := hostOwnedPolicy("openai-tier-y", hosts[0].Meta.ID)
+	hosts[0].Spec.Policies = []string{tier.Meta.ID}
+	hosts[0].Spec.DefaultPolicy = other.Meta.ID // not in Spec.Policies
+	pols = append(pols, tier, other)
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "defaultPolicy") {
+		t.Fatalf("expected defaultPolicy error, got %v", err)
+	}
+}

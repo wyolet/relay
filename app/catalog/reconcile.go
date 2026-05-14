@@ -65,6 +65,10 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 
+	if err := validateHostInSnap(h, s); err != nil {
+		return err
+	}
+
 	if old, ok := s.hostsByID[h.Meta.ID]; ok {
 		delete(s.hostsByName, old.Meta.Name)
 		delete(s.hostsByID, old.Meta.ID)
