@@ -10,4 +10,5 @@ spec:
     homepageURL: https://www.anthropic.com
     docsURL: https://docs.anthropic.com
     statusPageURL: https://status.anthropic.com
-    logoURL: https://wyolet.dev/logos/anthropic.svg
+    icon:
+      path: /provider/anthropic.svg

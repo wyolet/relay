@@ -66,6 +66,14 @@ type Owner struct {
 	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"`
 }
 
+// Icon describes a visual asset for a catalog entity (Provider, Host).
+// Path is relative — typically "/provider/anthropic.svg" — and the
+// frontend prefixes its own asset-base URL at render time. Relay does
+// not serve the asset; this field is operator metadata.
+type Icon struct {
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+}
+
 // OwnerKind enumerates provenance categories.
 type OwnerKind string
 

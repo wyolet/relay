@@ -28,7 +28,7 @@ func ToProvider(d ProviderDTO, _ Resolver) (*provider.Provider, error) {
 			HomepageURL:   d.Spec.HomepageURL,
 			DocsURL:       d.Spec.DocsURL,
 			StatusPageURL: d.Spec.StatusPageURL,
-			LogoURL:       d.Spec.LogoURL,
+			Icon:          d.Spec.Icon,
 		},
 	}, nil
 }
@@ -43,7 +43,7 @@ func FromProvider(p *provider.Provider, _ ReverseResolver) ProviderDTO {
 			HomepageURL:   p.Spec.HomepageURL,
 			DocsURL:       p.Spec.DocsURL,
 			StatusPageURL: p.Spec.StatusPageURL,
-			LogoURL:       p.Spec.LogoURL,
+			Icon:          p.Spec.Icon,
 		},
 	}
 }
@@ -63,7 +63,7 @@ func ToHost(d HostDTO, _ Resolver) (*host.Host, error) {
 			DocsURL:       d.Spec.DocsURL,
 			ConsoleURL:    d.Spec.ConsoleURL,
 			StatusPageURL: d.Spec.StatusPageURL,
-			LogoURL:       d.Spec.LogoURL,
+			Icon:          d.Spec.Icon,
 		},
 	}, nil
 }
@@ -81,7 +81,7 @@ func FromHost(h *host.Host, _ ReverseResolver) HostDTO {
 			DocsURL:       h.Spec.DocsURL,
 			ConsoleURL:    h.Spec.ConsoleURL,
 			StatusPageURL: h.Spec.StatusPageURL,
-			LogoURL:       h.Spec.LogoURL,
+			Icon:          h.Spec.Icon,
 		},
 	}
 }
