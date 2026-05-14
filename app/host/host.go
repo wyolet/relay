@@ -61,13 +61,15 @@ type Spec struct {
 func (h *Host) IsEnabled() bool { return h.Spec.Enabled == nil || *h.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
-// the Host-specific invariant that Owner.Kind is system.
+// the Host-specific invariant that Owner.Kind, when set, is system. Empty
+// is accepted — Hosts are inherently system-defined infrastructure, so
+// YAML authors are not required to spell that out.
 func (h *Host) Validate() error {
 	if err := meta.Validator.Struct(h); err != nil {
 		return err
 	}
 	if h.Meta.Owner.Kind != "" && h.Meta.Owner.Kind != meta.OwnerSystem {
-		return fmt.Errorf("host %q: owner.kind must be system, got %q", h.Meta.Name, h.Meta.Owner.Kind)
+		return fmt.Errorf("host %q: owner.kind must be system or empty, got %q", h.Meta.Name, h.Meta.Owner.Kind)
 	}
 	return nil
 }

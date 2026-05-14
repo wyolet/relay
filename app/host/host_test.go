@@ -21,6 +21,14 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("ok empty owner", func(t *testing.T) {
+		h := fix("openai-direct")
+		h.Meta.Owner = meta.Owner{}
+		if err := h.Validate(); err != nil {
+			t.Fatalf("empty owner should be accepted: %v", err)
+		}
+	})
+
 	for _, tc := range []struct {
 		name string
 		h    *Host

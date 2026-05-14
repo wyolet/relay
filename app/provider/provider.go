@@ -35,13 +35,15 @@ type Spec struct {
 func (p *Provider) IsEnabled() bool { return p.Spec.Enabled == nil || *p.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
-// the Provider-specific invariant that Owner.Kind is system.
+// the Provider-specific invariant that Owner.Kind, when set, is system.
+// Empty is accepted — Providers are inherently system-defined, so YAML
+// authors are not required to spell that out.
 func (p *Provider) Validate() error {
 	if err := meta.Validator.Struct(p); err != nil {
 		return err
 	}
 	if p.Meta.Owner.Kind != "" && p.Meta.Owner.Kind != meta.OwnerSystem {
-		return fmt.Errorf("provider %q: owner.kind must be system, got %q", p.Meta.Name, p.Meta.Owner.Kind)
+		return fmt.Errorf("provider %q: owner.kind must be system or empty, got %q", p.Meta.Name, p.Meta.Owner.Kind)
 	}
 	return nil
 }
