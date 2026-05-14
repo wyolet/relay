@@ -86,10 +86,19 @@ func validateCross(
 		}
 	}
 
-	// Spec.HostID → Host for HostKeys.
+	// Spec.HostID → Host and Spec.PolicyID → host-owned Policy for HostKeys.
+	// The Policy must be owned by the same host the key targets.
 	for _, k := range enabledKeys {
 		if _, ok := hostIDs[k.Spec.HostID]; !ok {
 			return fmt.Errorf("hostkey %q: spec.hostId %q does not match any Host", k.Meta.Name, k.Spec.HostID)
+		}
+		pol, ok := polByID[k.Spec.PolicyID]
+		if !ok {
+			return fmt.Errorf("hostkey %q: spec.policyId %q references unknown or disabled policy", k.Meta.Name, k.Spec.PolicyID)
+		}
+		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != k.Spec.HostID {
+			return fmt.Errorf("hostkey %q: policy %q is not host-owned by host %q (owner=%s/%s)",
+				k.Meta.Name, pol.Meta.Name, k.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
 		}
 	}
 

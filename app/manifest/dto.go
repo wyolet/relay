@@ -155,7 +155,10 @@ type HostKeyDTO struct {
 }
 
 type HostKeySpec struct {
+	// HostID and PolicyID carry *names* on the wire; translate resolves
+	// to ids when producing the domain shape.
 	HostID      string           `json:"hostId"                yaml:"hostId"`
+	PolicyID    string           `json:"policyId"              yaml:"policyId"`
 	ValueFrom   HostKeyValueFrom `json:"valueFrom"             yaml:"valueFrom"`
 	DefaultTier string           `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty"`
 	Enabled     *bool            `json:"enabled,omitempty"     yaml:"enabled,omitempty"`

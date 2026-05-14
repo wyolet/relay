@@ -239,7 +239,7 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 // HostKey
 // ---------------------------------------------------------------------------
 
-// ToHostKey resolves Spec.HostID (host name → id).
+// ToHostKey resolves Spec.HostID and Spec.PolicyID (name → id).
 func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 	m := d.Metadata.toMeta()
 	if m.Owner.Kind == "" {
@@ -251,10 +251,17 @@ func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 			hostID = id
 		}
 	}
+	policyID := d.Spec.PolicyID
+	if policyID != "" {
+		if id, ok := idx.PolicyID(policyID); ok {
+			policyID = id
+		}
+	}
 	return &hostkey.HostKey{
 		Meta: m,
 		Spec: hostkey.Spec{
-			HostID: hostID,
+			HostID:   hostID,
+			PolicyID: policyID,
 			ValueFrom: hostkey.ValueFrom{
 				Kind: hostkey.ValueKind(d.Spec.ValueFrom.Kind),
 				Env:  d.Spec.ValueFrom.Env,
@@ -274,12 +281,19 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 			hostID = hname
 		}
 	}
+	policyID := k.Spec.PolicyID
+	if policyID != "" {
+		if pname, ok := rev.PolicyName(policyID); ok {
+			policyID = pname
+		}
+	}
 	return HostKeyDTO{
 		APIVersion: APIVersion,
 		Kind:       "HostKey",
 		Metadata:   wm,
 		Spec: HostKeySpec{
-			HostID: hostID,
+			HostID:   hostID,
+			PolicyID: policyID,
 			ValueFrom: HostKeyValueFrom{
 				Kind: string(k.Spec.ValueFrom.Kind),
 				Env:  k.Spec.ValueFrom.Env,

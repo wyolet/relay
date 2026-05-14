@@ -81,6 +81,15 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		},
 	}
 
+	// Host-owned tier policy the hostkeys mirror.
+	hostTier := &policy.Policy{
+		Meta: meta.Metadata{
+			ID:    meta.NewID(),
+			Name:  "openai-tier-default",
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
+		},
+	}
+
 	k1 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k1",
@@ -88,6 +97,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		},
 		Spec: hostkey.Spec{
 			HostID:    hostID,
+			PolicyID:  hostTier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K1"},
 		},
 	}
@@ -98,6 +108,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		},
 		Spec: hostkey.Spec{
 			HostID:    hostID,
+			PolicyID:  hostTier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K2"},
 		},
 	}
@@ -150,7 +161,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		Spec: host.Spec{BaseURL: "https://api.openai.com"},
 	}
 
-	return provList{prov}, hostList{h}, polList{pol}, modList{m1, m2}, keyList{k1, k2}, rlList{rl}, rkList{rk}
+	return provList{prov}, hostList{h}, polList{pol, hostTier}, modList{m1, m2}, keyList{k1, k2}, rlList{rl}, rkList{rk}
 }
 
 func TestReload_HappyPath(t *testing.T) {
@@ -369,6 +380,55 @@ func TestReload_HostPoliciesMenu_WrongOwnerFails(t *testing.T) {
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "not host-owned by this host") {
 		t.Fatalf("expected wrong-owner error, got %v", err)
+	}
+}
+
+// TestReload_HostKeyPolicy_UnknownFails rejects a HostKey whose
+// Spec.PolicyID doesn't resolve.
+func TestReload_HostKeyPolicy_UnknownFails(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	keys[0].Spec.PolicyID = meta.NewID() // dangling
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "policyId") {
+		t.Fatalf("expected unknown policy error, got %v", err)
+	}
+}
+
+// TestReload_HostKeyPolicy_WrongHostFails rejects a HostKey whose
+// PolicyID resolves but is owned by a different host than HostID.
+func TestReload_HostKeyPolicy_WrongHostFails(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	otherHost := meta.NewID()
+	strayTier := &policy.Policy{
+		Meta: meta.Metadata{
+			ID:    meta.NewID(),
+			Name:  "stray-tier",
+			Owner: meta.Owner{Kind: meta.OwnerHost, ID: otherHost},
+		},
+	}
+	pols = append(pols, strayTier)
+	keys[0].Spec.PolicyID = strayTier.Meta.ID
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not host-owned by host") {
+		t.Fatalf("expected wrong-host error, got %v", err)
+	}
+}
+
+// TestReload_HostKeyPolicy_UserOwnedRejected rejects pointing a HostKey
+// at an inbound (user-owned) Policy instead of a host-owned tier.
+func TestReload_HostKeyPolicy_UserOwnedRejected(t *testing.T) {
+	provs, hosts, pols, models, keys, rls, rks := fixture()
+	// pols[0] is "cheap-tier", Owner.Kind=user. Point the hostkey at it.
+	keys[0].Spec.PolicyID = pols[0].Meta.ID
+
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	err := c.Reload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "not host-owned by host") {
+		t.Fatalf("expected user-owned-policy rejection, got %v", err)
 	}
 }
 

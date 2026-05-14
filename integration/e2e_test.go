@@ -193,6 +193,13 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	}
 	mustUpsert(s.t, s.stores.Host.Upsert(ctx, hst), "host")
 
+	// Host-owned tier policy the hostkey will mirror. Empty rules =
+	// no relay-side cap for this test.
+	hostTier := &policy.Policy{
+		Meta: meta.Metadata{ID: ids.New(), Name: "test-host-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
+	}
+	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, hostTier), "host-tier")
+
 	// Use stored-mode for the host key so we get a cleartext Value
 	// round-tripped through the encryption + the snapshot. The
 	// integration is the point.
@@ -203,6 +210,7 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
+			PolicyID:  hostTier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"},
 		},
 	}
@@ -392,10 +400,13 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 	hst := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "h1", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: upstream.URL}}
 	mustUpsert(t, st.stores.Host.Upsert(ctx, hst), "host")
 
+	hostTier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "h1-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}}}
+	mustUpsert(t, st.stores.Policy.Upsert(ctx, hostTier), "host-tier")
+
 	_ = os.Setenv("E2E_HOSTKEY_VAL", "sk-mock")
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "hk1", Owner: meta.Owner{Kind: meta.OwnerUser}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: hostTier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "hostkey")
 
