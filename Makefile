@@ -142,8 +142,16 @@ logs: ## tail relay-a/b logs
 migrate: ## run migrations against dev-stack PG
 	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay migrate up
 
-seed: ## seed catalog from ./config (canonical) — system RLs + providers + users
+seed: seed-system seed-catalog ## seed both relay-internal yamls (./config) and the public catalog (../relay-catalog/data)
+
+seed-system: ## seed relay-internal yamls from ./config — system RLs + users
 	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from config --apply
+
+seed-catalog: ## seed the public catalog from $$RELAY_CATALOG_DIR (default ../relay-catalog/data)
+	@if [ -z "$${RELAY_CATALOG_DIR:-}" ] && [ ! -d ../relay-catalog/data ]; then \
+		echo "error: set RELAY_CATALOG_DIR or clone wyolet/relay-catalog as ../relay-catalog"; exit 1; \
+	fi
+	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from "$${RELAY_CATALOG_DIR:-../relay-catalog/data}" --apply
 
 seed-loadtest: ## seed catalog from deploy/compose/config (load-tester fixtures)
 	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from deploy/compose/config --apply
