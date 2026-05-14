@@ -33,6 +33,11 @@ type resolveEntity struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName,omitempty"`
+	// Deprecated is "deprecated" | "sunset" | "" (active or unset). Set
+	// only on model entries; provider/host entries leave it blank. The
+	// picker uses this to grey out / badge wildcard matches that would
+	// be excluded from a Policy without IncludeDeprecated.
+	Deprecated string `json:"deprecated,omitempty"`
 }
 
 type resolveBindingRef struct {
@@ -147,7 +152,11 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 }
 
 func entityFromModel(m *model.Model) resolveEntity {
-	return resolveEntity{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
+	e := resolveEntity{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
+	if m.Spec.Deprecation != nil {
+		e.Deprecated = string(m.Spec.Deprecation.Status)
+	}
+	return e
 }
 
 func entityFromHost(h *host.Host) resolveEntity {

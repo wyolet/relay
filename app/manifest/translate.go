@@ -288,6 +288,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			RateLimitID:       rateLimitID,
 			KeySelection:      policy.KeySelection(d.Spec.KeySelection),
 			SkipDefaultLimits: d.Spec.SkipDefaultLimits,
+			IncludeDeprecated: d.Spec.IncludeDeprecated,
 			Enabled:           d.Spec.Enabled,
 		},
 	}, nil
@@ -335,6 +336,7 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 			RateLimit:         rlName,
 			KeySelection:      string(p.Spec.KeySelection),
 			SkipDefaultLimits: p.Spec.SkipDefaultLimits,
+			IncludeDeprecated: p.Spec.IncludeDeprecated,
 			Enabled:           p.Spec.Enabled,
 		},
 	}

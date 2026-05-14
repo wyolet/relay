@@ -142,6 +142,7 @@ candidates:
 				break
 			}
 		}
+		deprecated := isDeprecated(m)
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
 			if !hb.IsEnabled() {
@@ -152,8 +153,17 @@ candidates:
 				continue
 			}
 			anyEnabledBnd = true
-			if !legacyAllowed && !refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name) {
-				continue
+			// Allow paths in priority order:
+			//   1. Legacy literal ModelIDs grant — always allowed.
+			//   2. Modelref match — but if the model is deprecated and
+			//      the policy doesn't include deprecated models, only an
+			//      EXPLICIT model-named ref counts. Wildcard matches
+			//      (provider, provider@host, @host) hide deprecated.
+			if !legacyAllowed {
+				match := refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name, deprecated && !pol.Spec.IncludeDeprecated)
+				if !match {
+					continue
+				}
 			}
 			chosen = m
 			binding = hb
@@ -203,15 +213,40 @@ candidates:
 // are skipped silently — Validate rejects them at write time, so a bad
 // ref reaching here means a stored row was hand-edited; ignoring is
 // safer than erroring the request.
-func refsAllow(refs []string, providerSlug, modelSlug, hostSlug string) bool {
+//
+// hideForDeprecated, when true, requires the ref to name the model
+// explicitly (ref.Model == modelSlug, not a wildcard). Wildcard matches
+// — provider, provider@host, @host — are rejected for deprecated models
+// unless the policy opted in via IncludeDeprecated. The reasoning:
+// "anthropic" should not silently grant access to last year's sunset
+// model; "anthropic/claude-3-haiku-20240307" obviously means to.
+func refsAllow(refs []string, providerSlug, modelSlug, hostSlug string, hideForDeprecated bool) bool {
 	for _, raw := range refs {
 		ref, err := modelref.Parse(raw)
 		if err != nil {
 			continue
 		}
-		if ref.Matches(providerSlug, modelSlug, hostSlug) {
-			return true
+		if !ref.Matches(providerSlug, modelSlug, hostSlug) {
+			continue
 		}
+		if hideForDeprecated && ref.ModelWildcard {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isDeprecated reports whether m's lifecycle status excludes it from
+// wildcard grants by default. Both "deprecated" and "sunset" qualify;
+// "active" (or unset) does not.
+func isDeprecated(m *model.Model) bool {
+	if m.Spec.Deprecation == nil {
+		return false
+	}
+	switch m.Spec.Deprecation.Status {
+	case model.DeprecationDeprecated, model.DeprecationSunset:
+		return true
 	}
 	return false
 }

@@ -140,7 +140,7 @@ type HostKeyValueFrom struct {
 	Env  string `json:"env,omitempty" yaml:"env,omitempty"`
 }
 
-// PolicyDTO is the wire form of a Policy. Models/HostKeys/RateLimit are names.
+// PolicyDTO carries policy-level model-handling flags + the grant list.
 type PolicyDTO struct {
 	APIVersion string     `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string     `json:"kind"       yaml:"kind"`
@@ -158,6 +158,7 @@ type PolicySpec struct {
 
 	KeySelection      string `json:"keySelection,omitempty"      yaml:"keySelection,omitempty"`
 	SkipDefaultLimits bool   `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
+	IncludeDeprecated bool   `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
 	Enabled           *bool  `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
 }
 

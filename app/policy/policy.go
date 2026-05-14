@@ -73,6 +73,13 @@ type Spec struct {
 	// performed by the composition layer.
 	SkipDefaultLimits bool `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
 
+	// IncludeDeprecated controls whether wildcard Models entries expand
+	// to models whose Spec.Deprecation.Status is "deprecated" or
+	// "sunset". Default false (deprecated models excluded). Literal
+	// grants in Models always resolve regardless — if you explicitly
+	// name a deprecated model by slug, you mean to grant it.
+	IncludeDeprecated bool `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
+
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
