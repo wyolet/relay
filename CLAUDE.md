@@ -95,14 +95,46 @@ internal/                  — composition root / boundary
 cmd/relay/                 — the binary entrypoint
 cmd/litellm-import/        — fetches LiteLLM JSON → manifest YAMLs
 
-config/                    — operator-authored YAML catalog
-  providers/, hosts/, pricing/, ratelimits/, users/
+config/                    — relay-local YAML (NOT the public catalog)
+  ratelimits/system.yaml   — relay-internal admission/DoS rules
+  users/                   — deployment-specific admin credentials
 
 migrations/postgres/       — versioned SQL up + down
 
 deploy/compose/            — dev pg, test pg, smoke stack
 docs/                      — design + runbook + roadmap
 ```
+
+## Public catalog lives in a separate repo
+
+The provider/host/model/pricing/policy YAMLs are NOT in this repo. They
+live in `wyolet/relay-catalog` and are consumed by the seed loader at
+boot (released tarball, pinned by tag via `RELAY_CATALOG_VERSION`, with
+a `go:embed`'d default baked into the relay binary for airgapped /
+first-boot scenarios).
+
+What this repo owns:
+
+- `config/ratelimits/system.yaml` — relay-internal admission rules.
+- `config/users/` — deployment-specific admin credentials.
+- The seed *loader* code (`app/seed`), the manifest DTOs (`app/manifest`),
+  the schema validator (`*.Validate()`), and the `cmd/catalog-validate`
+  binary the catalog repo's CI invokes.
+
+What `wyolet/relay-catalog` owns:
+
+- `providers/`, `hosts/`, `models/`, `pricing/`, `policies/`, and the
+  host-owned `ratelimits/` (tier RLs only).
+- Each release publishes a tarball + sidecar `index.json` + sha256.
+- Schema is versioned by the `apiVersion` field; bumping the relay's
+  schema means cutting a matching tag in the catalog repo.
+
+When you need a sample YAML to reason about, check
+`wyolet/relay-catalog`'s `main` branch (or pull a tagged tarball). Do
+NOT regenerate them in this repo.
+
+Catalog extraction is in flight as of 2026-05; see also the seed-source
+refactor (`SeedSource` interface, `localDirSource` / `tarballSource`).
 
 ## Locked architectural decisions
 

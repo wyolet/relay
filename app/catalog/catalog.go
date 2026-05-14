@@ -149,7 +149,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		hostIDs[h.Meta.ID] = struct{}{}
 	}
 
-	if err := validateCross(providerIDs, hostIDs, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings); err != nil {
+	if err := validateCross(providerIDs, hostIDs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings); err != nil {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 

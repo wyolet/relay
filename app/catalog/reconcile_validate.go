@@ -3,12 +3,40 @@ package catalog
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/relaykey"
 )
+
+// validateHostInSnap checks cross-refs for a single Host against snap.
+// Enforces the host-policies menu invariant:
+//   - Every id in Spec.Policies resolves to an enabled host-owned Policy
+//     whose Owner.ID is this host.
+//   - Spec.DefaultPolicy, when set, is one of Spec.Policies.
+func validateHostInSnap(h *host.Host, s *Snapshot) error {
+	menu := make(map[string]struct{}, len(h.Spec.Policies))
+	for _, polID := range h.Spec.Policies {
+		pol, ok := s.policiesByID[polID]
+		if !ok {
+			return fmt.Errorf("host %q: policies references unknown or disabled policy %q", h.Meta.Name, polID)
+		}
+		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != h.Meta.ID {
+			return fmt.Errorf("host %q: policy %q is not host-owned by this host (owner=%s/%s)",
+				h.Meta.Name, pol.Meta.Name, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
+		}
+		menu[polID] = struct{}{}
+	}
+	if h.Spec.DefaultPolicy != "" {
+		if _, ok := menu[h.Spec.DefaultPolicy]; !ok {
+			return fmt.Errorf("host %q: defaultPolicy %q is not in spec.policies", h.Meta.Name, h.Spec.DefaultPolicy)
+		}
+	}
+	return nil
+}
 
 // validateModelInSnap checks cross-refs for a single Model against snap.
 func validateModelInSnap(m *model.Model, s *Snapshot) error {
