@@ -46,6 +46,12 @@ func main() {
 		case "migrate":
 			slog.Info("relay: 'migrate' subcommand currently runs implicitly on boot")
 			return
+		case "seed":
+			if err := runSeed(os.Args[2:]); err != nil {
+				slog.Error("seed failed", "err", err)
+				os.Exit(1)
+			}
+			return
 		}
 	}
 
