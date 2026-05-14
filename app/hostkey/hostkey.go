@@ -1,6 +1,7 @@
 // Package hostkey is the domain layer for the HostKey entity — a credential
 // the relay uses to authenticate to a Host (a serving endpoint). A HostKey
-// belongs to a Host (Meta.Owner.Kind=host, Meta.Owner.ID=host id).
+// is owned by the actor that created it (Meta.Owner.Kind=user, or
+// =system for YAML-seeded keys) and *targets* a Host via Spec.HostID.
 //
 // Two value modes:
 //
@@ -36,6 +37,9 @@ type HostKey struct {
 // Spec carries non-secret config and the value-mode discriminator. Cleartext
 // (Value) is write-only via YAML; storage encrypts and discards it.
 type Spec struct {
+	// HostID is the id of the Host this key authenticates to. Required.
+	// Replaces the pre-refactor Meta.Owner pointing at a Host.
+	HostID      string    `json:"hostId"                yaml:"hostId"                validate:"required"`
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
 	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
 	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
@@ -67,22 +71,26 @@ const (
 func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
-//   - Owner.Kind must be host; Owner.ID required.
+//   - Owner.Kind must be user or system (the actor that created the key);
+//     keys are not owned by the Host they authenticate to.
+//   - Spec.HostID is required; it points at the Host this key targets.
 //   - ValueKindEnv requires Spec.ValueFrom.Env; cleartext Value must be empty.
 //   - ValueKindStored requires non-empty cleartext Spec.Value at write time;
 //     ValueFrom.Env must be empty.
 //
-// Cross-entity checks (Owner.ID resolves to a Host) live in the composition
+// Cross-entity checks (Spec.HostID resolves to a Host) live in the composition
 // layer.
 func (k *HostKey) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err
 	}
-	if k.Meta.Owner.Kind != meta.OwnerHost {
-		return fmt.Errorf("hostkey %q: owner.kind must be host, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+	switch k.Meta.Owner.Kind {
+	case meta.OwnerUser, meta.OwnerSystem:
+	default:
+		return fmt.Errorf("hostkey %q: owner.kind must be user or system, got %q", k.Meta.Name, k.Meta.Owner.Kind)
 	}
-	if k.Meta.Owner.ID == "" {
-		return fmt.Errorf("hostkey %q: owner.id is required (host id)", k.Meta.Name)
+	if k.Spec.HostID == "" {
+		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
 	}
 	switch k.Spec.ValueFrom.Kind {
 	case ValueKindEnv:

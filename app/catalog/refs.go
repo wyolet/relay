@@ -58,8 +58,8 @@ func outboundModelRefs(m *model.Model) []refKey {
 }
 
 func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {
-	if k.Meta.Owner.Kind == meta.OwnerHost && k.Meta.Owner.ID != "" {
-		return []refKey{{Kind: refHost, ID: k.Meta.Owner.ID}}
+	if k.Spec.HostID != "" {
+		return []refKey{{Kind: refHost, ID: k.Spec.HostID}}
 	}
 	return nil
 }

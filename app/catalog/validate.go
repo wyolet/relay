@@ -60,10 +60,10 @@ func validateCross(
 		}
 	}
 
-	// Owner.ID → Host for HostKeys.
+	// Spec.HostID → Host for HostKeys.
 	for _, k := range enabledKeys {
-		if _, ok := hostIDs[k.Meta.Owner.ID]; !ok {
-			return fmt.Errorf("hostkey %q: owner.id %q does not match any Host", k.Meta.Name, k.Meta.Owner.ID)
+		if _, ok := hostIDs[k.Spec.HostID]; !ok {
+			return fmt.Errorf("hostkey %q: spec.hostId %q does not match any Host", k.Meta.Name, k.Spec.HostID)
 		}
 	}
 

@@ -84,18 +84,20 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 	k1 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k1",
-			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
+			Owner: meta.Owner{Kind: meta.OwnerSystem},
 		},
 		Spec: hostkey.Spec{
+			HostID:    hostID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K1"},
 		},
 	}
 	k2 := &hostkey.HostKey{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "k2",
-			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
+			Owner: meta.Owner{Kind: meta.OwnerSystem},
 		},
 		Spec: hostkey.Spec{
+			HostID:    hostID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K2"},
 		},
 	}

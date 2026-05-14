@@ -30,7 +30,6 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
@@ -261,7 +260,7 @@ func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID strin
 		if k.Spec.Enabled != nil && !*k.Spec.Enabled {
 			continue
 		}
-		if k.Meta.Owner.Kind != meta.OwnerHost || k.Meta.Owner.ID != hostID {
+		if k.Spec.HostID != hostID {
 			continue
 		}
 		out = append(out, k)

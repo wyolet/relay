@@ -75,8 +75,8 @@ func TestApply_UpsertNew(t *testing.T) {
 	}
 
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-hk", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
-		Spec: hostkey.Spec{ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K_NEW"}},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-hk", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Spec: hostkey.Spec{HostID: hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K_NEW"}},
 	}
 	if err := c.ApplyHostKeyUpsert(hk); err != nil {
 		t.Fatalf("ApplyHostKeyUpsert: %v", err)
