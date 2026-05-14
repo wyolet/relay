@@ -35,6 +35,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/internal/storage/gen"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
 
@@ -247,5 +248,43 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 	}
 	if got.Resolved != "sk-test-secret" {
 		t.Errorf("hostkey resolved value mismatch: got %q", got.Resolved)
+	}
+
+	if v := stores.HostKey.KeyVersion(); v != 1 {
+		t.Errorf("expected key version 1 pre-rotate, got %d", v)
+	}
+	newKey := []byte(strings.Repeat("n", 32))
+	res, err := stores.HostKey.Rotate(ctx, newKey)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if res.Rotated != 1 || res.NewVersion != 2 {
+		t.Errorf("rotate result: got %+v want {1, 2}", res)
+	}
+	if v := stores.HostKey.KeyVersion(); v != 2 {
+		t.Errorf("expected key version 2 post-rotate, got %d", v)
+	}
+
+	// After rotation the in-process key is the new one — Get must still
+	// resolve the same cleartext.
+	got2, err := stores.HostKey.Get(ctx, k.Meta.ID)
+	if err != nil {
+		t.Fatalf("get hostkey post-rotate: %v", err)
+	}
+	if got2.Resolved != "sk-test-secret" {
+		t.Errorf("post-rotate resolved mismatch: got %q", got2.Resolved)
+	}
+
+	// Ciphertext must have changed (re-encrypted under new key with fresh
+	// nonce). Pull raw rows to verify.
+	rows, err := gen.New(pool).ListStoredSecretsForRotation(ctx)
+	if err != nil {
+		t.Fatalf("list rotated: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 stored row, got %d", len(rows))
+	}
+	if !rows[0].ValueKeyVersion.Valid || rows[0].ValueKeyVersion.Int32 != 2 {
+		t.Errorf("row version: got %+v want 2", rows[0].ValueKeyVersion)
 	}
 }

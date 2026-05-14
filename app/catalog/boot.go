@@ -60,7 +60,7 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		Provider:  provider.NewStore(q),
 		Host:      host.NewStore(q),
 		Model:     model.NewStore(q),
-		HostKey:   hostkey.NewStore(q, opts.MasterKey),
+		HostKey:   hostkey.NewStore(q, opts.Pool, opts.MasterKey),
 		RateLimit: ratelimit.NewStore(q),
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),
@@ -75,6 +75,9 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 	cat.settings.store = stores.Settings
 	if err := cat.settings.reload(ctx); err != nil {
 		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: initial settings reload: %w", err)
+	}
+	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
+		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: load key version: %w", err)
 	}
 
 	if opts.AutoSeedDir != "" {

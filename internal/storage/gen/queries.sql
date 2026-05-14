@@ -5,7 +5,18 @@ SELECT id, name, display_name, metadata, spec FROM providers ORDER BY name;
 SELECT id, name, display_name, metadata, spec FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets ORDER BY name;
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets ORDER BY name;
+
+-- name: ListStoredSecretsForRotation :many
+SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id;
+
+-- name: UpdateSecretCiphertext :exec
+UPDATE secrets
+SET value_ciphertext  = $2,
+    value_nonce       = $3,
+    value_key_version = $4,
+    updated_at        = NOW()
+WHERE id = $1 AND value_kind = 'stored';
 
 -- name: ListModels :many
 SELECT id, name, display_name, metadata, spec FROM models ORDER BY name;
@@ -52,51 +63,55 @@ ON CONFLICT (id) DO UPDATE SET
 INSERT INTO secrets (id, name, display_name, value_kind, value_from_env, metadata, spec)
 VALUES ($1, $2, $3, 'env', $4, $5, $6)
 ON CONFLICT (id) DO UPDATE
-    SET name           = EXCLUDED.name,
-        display_name   = EXCLUDED.display_name,
-        value_kind     = 'env',
-        value_from_env = EXCLUDED.value_from_env,
-        value_ciphertext = NULL,
-        value_nonce      = NULL,
-        metadata         = EXCLUDED.metadata,
-        spec             = EXCLUDED.spec,
-        updated_at       = NOW()
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec;
+    SET name              = EXCLUDED.name,
+        display_name      = EXCLUDED.display_name,
+        value_kind        = 'env',
+        value_from_env    = EXCLUDED.value_from_env,
+        value_ciphertext  = NULL,
+        value_nonce       = NULL,
+        value_key_version = NULL,
+        metadata          = EXCLUDED.metadata,
+        spec              = EXCLUDED.spec,
+        updated_at        = NOW()
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
 -- name: InsertSecretStored :one
-INSERT INTO secrets (id, name, display_name, value_kind, value_ciphertext, value_nonce, metadata, spec)
-VALUES ($1, $2, $3, 'stored', $4, $5, $6, $7)
+INSERT INTO secrets (id, name, display_name, value_kind, value_ciphertext, value_nonce, value_key_version, metadata, spec)
+VALUES ($1, $2, $3, 'stored', $4, $5, $6, $7, $8)
 ON CONFLICT (id) DO UPDATE
-    SET name             = EXCLUDED.name,
-        display_name     = EXCLUDED.display_name,
-        value_kind       = 'stored',
-        value_from_env   = NULL,
-        value_ciphertext = EXCLUDED.value_ciphertext,
-        value_nonce      = EXCLUDED.value_nonce,
-        metadata         = EXCLUDED.metadata,
-        spec             = EXCLUDED.spec,
-        updated_at       = NOW()
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec;
+    SET name              = EXCLUDED.name,
+        display_name      = EXCLUDED.display_name,
+        value_kind        = 'stored',
+        value_from_env    = NULL,
+        value_ciphertext  = EXCLUDED.value_ciphertext,
+        value_nonce       = EXCLUDED.value_nonce,
+        value_key_version = EXCLUDED.value_key_version,
+        metadata          = EXCLUDED.metadata,
+        spec              = EXCLUDED.spec,
+        updated_at        = NOW()
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
 -- name: UpdateSecretEnv :one
 UPDATE secrets
-SET value_kind       = 'env',
-    value_from_env   = $2,
-    value_ciphertext = NULL,
-    value_nonce      = NULL,
-    updated_at       = NOW()
+SET value_kind        = 'env',
+    value_from_env    = $2,
+    value_ciphertext  = NULL,
+    value_nonce       = NULL,
+    value_key_version = NULL,
+    updated_at        = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec;
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
 -- name: UpdateSecretStored :one
 UPDATE secrets
-SET value_kind       = 'stored',
-    value_from_env   = NULL,
-    value_ciphertext = $2,
-    value_nonce      = $3,
-    updated_at       = NOW()
+SET value_kind        = 'stored',
+    value_from_env    = NULL,
+    value_ciphertext  = $2,
+    value_nonce       = $3,
+    value_key_version = $4,
+    updated_at        = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec;
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
 -- name: DeleteSecret :exec
 DELETE FROM secrets WHERE id = $1;
@@ -246,7 +261,7 @@ SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1;
 SELECT id, name, display_name, metadata, spec FROM models WHERE id = $1;
 
 -- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE id = $1;
 
 -- name: GetRateLimit :one
 SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1;

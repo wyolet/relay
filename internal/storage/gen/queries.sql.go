@@ -400,7 +400,7 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 }
 
 const getSecret = `-- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets WHERE id = $1
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE id = $1
 `
 
 type GetSecretRow struct {
@@ -413,6 +413,7 @@ type GetSecretRow struct {
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 }
 
 func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error) {
@@ -428,6 +429,7 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
 		&i.ValueNonce,
+		&i.ValueKeyVersion,
 	)
 	return i, err
 }
@@ -492,16 +494,17 @@ const insertSecretEnv = `-- name: InsertSecretEnv :one
 INSERT INTO secrets (id, name, display_name, value_kind, value_from_env, metadata, spec)
 VALUES ($1, $2, $3, 'env', $4, $5, $6)
 ON CONFLICT (id) DO UPDATE
-    SET name           = EXCLUDED.name,
-        display_name   = EXCLUDED.display_name,
-        value_kind     = 'env',
-        value_from_env = EXCLUDED.value_from_env,
-        value_ciphertext = NULL,
-        value_nonce      = NULL,
-        metadata         = EXCLUDED.metadata,
-        spec             = EXCLUDED.spec,
-        updated_at       = NOW()
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+    SET name              = EXCLUDED.name,
+        display_name      = EXCLUDED.display_name,
+        value_kind        = 'env',
+        value_from_env    = EXCLUDED.value_from_env,
+        value_ciphertext  = NULL,
+        value_nonce       = NULL,
+        value_key_version = NULL,
+        metadata          = EXCLUDED.metadata,
+        spec              = EXCLUDED.spec,
+        updated_at        = NOW()
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
 `
 
 type InsertSecretEnvParams struct {
@@ -521,6 +524,7 @@ type InsertSecretEnvRow struct {
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
 }
@@ -543,6 +547,7 @@ func (q *Queries) InsertSecretEnv(ctx context.Context, arg InsertSecretEnvParams
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
 		&i.ValueNonce,
+		&i.ValueKeyVersion,
 		&i.Metadata,
 		&i.Spec,
 	)
@@ -550,29 +555,31 @@ func (q *Queries) InsertSecretEnv(ctx context.Context, arg InsertSecretEnvParams
 }
 
 const insertSecretStored = `-- name: InsertSecretStored :one
-INSERT INTO secrets (id, name, display_name, value_kind, value_ciphertext, value_nonce, metadata, spec)
-VALUES ($1, $2, $3, 'stored', $4, $5, $6, $7)
+INSERT INTO secrets (id, name, display_name, value_kind, value_ciphertext, value_nonce, value_key_version, metadata, spec)
+VALUES ($1, $2, $3, 'stored', $4, $5, $6, $7, $8)
 ON CONFLICT (id) DO UPDATE
-    SET name             = EXCLUDED.name,
-        display_name     = EXCLUDED.display_name,
-        value_kind       = 'stored',
-        value_from_env   = NULL,
-        value_ciphertext = EXCLUDED.value_ciphertext,
-        value_nonce      = EXCLUDED.value_nonce,
-        metadata         = EXCLUDED.metadata,
-        spec             = EXCLUDED.spec,
-        updated_at       = NOW()
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+    SET name              = EXCLUDED.name,
+        display_name      = EXCLUDED.display_name,
+        value_kind        = 'stored',
+        value_from_env    = NULL,
+        value_ciphertext  = EXCLUDED.value_ciphertext,
+        value_nonce       = EXCLUDED.value_nonce,
+        value_key_version = EXCLUDED.value_key_version,
+        metadata          = EXCLUDED.metadata,
+        spec              = EXCLUDED.spec,
+        updated_at        = NOW()
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
 `
 
 type InsertSecretStoredParams struct {
-	ID              string `db:"id" json:"id"`
-	Name            string `db:"name" json:"name"`
-	DisplayName     string `db:"display_name" json:"display_name"`
-	ValueCiphertext []byte `db:"value_ciphertext" json:"value_ciphertext"`
-	ValueNonce      []byte `db:"value_nonce" json:"value_nonce"`
-	Metadata        []byte `db:"metadata" json:"metadata"`
-	Spec            []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
 }
 
 type InsertSecretStoredRow struct {
@@ -583,6 +590,7 @@ type InsertSecretStoredRow struct {
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
 }
@@ -594,6 +602,7 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 		arg.DisplayName,
 		arg.ValueCiphertext,
 		arg.ValueNonce,
+		arg.ValueKeyVersion,
 		arg.Metadata,
 		arg.Spec,
 	)
@@ -606,6 +615,7 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
 		&i.ValueNonce,
+		&i.ValueKeyVersion,
 		&i.Metadata,
 		&i.Spec,
 	)
@@ -1039,7 +1049,7 @@ func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce FROM secrets ORDER BY name
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
@@ -1052,6 +1062,7 @@ type ListSecretsRow struct {
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 }
 
 func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
@@ -1073,6 +1084,7 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 			&i.ValueFromEnv,
 			&i.ValueCiphertext,
 			&i.ValueNonce,
+			&i.ValueKeyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1098,6 +1110,42 @@ func (q *Queries) ListSettings(ctx context.Context) ([]Setting, error) {
 	for rows.Next() {
 		var i Setting
 		if err := rows.Scan(&i.Section, &i.Value, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoredSecretsForRotation = `-- name: ListStoredSecretsForRotation :many
+SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id
+`
+
+type ListStoredSecretsForRotationRow struct {
+	ID              string      `db:"id" json:"id"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
+}
+
+func (q *Queries) ListStoredSecretsForRotation(ctx context.Context) ([]ListStoredSecretsForRotationRow, error) {
+	rows, err := q.db.Query(ctx, listStoredSecretsForRotation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoredSecretsForRotationRow
+	for rows.Next() {
+		var i ListStoredSecretsForRotationRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ValueCiphertext,
+			&i.ValueNonce,
+			&i.ValueKeyVersion,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1136,15 +1184,42 @@ func (q *Queries) SetPolicyRateLimit(ctx context.Context, arg SetPolicyRateLimit
 	return err
 }
 
+const updateSecretCiphertext = `-- name: UpdateSecretCiphertext :exec
+UPDATE secrets
+SET value_ciphertext  = $2,
+    value_nonce       = $3,
+    value_key_version = $4,
+    updated_at        = NOW()
+WHERE id = $1 AND value_kind = 'stored'
+`
+
+type UpdateSecretCiphertextParams struct {
+	ID              string      `db:"id" json:"id"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
+}
+
+func (q *Queries) UpdateSecretCiphertext(ctx context.Context, arg UpdateSecretCiphertextParams) error {
+	_, err := q.db.Exec(ctx, updateSecretCiphertext,
+		arg.ID,
+		arg.ValueCiphertext,
+		arg.ValueNonce,
+		arg.ValueKeyVersion,
+	)
+	return err
+}
+
 const updateSecretEnv = `-- name: UpdateSecretEnv :one
 UPDATE secrets
-SET value_kind       = 'env',
-    value_from_env   = $2,
-    value_ciphertext = NULL,
-    value_nonce      = NULL,
-    updated_at       = NOW()
+SET value_kind        = 'env',
+    value_from_env    = $2,
+    value_ciphertext  = NULL,
+    value_nonce       = NULL,
+    value_key_version = NULL,
+    updated_at        = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
 `
 
 type UpdateSecretEnvParams struct {
@@ -1160,6 +1235,7 @@ type UpdateSecretEnvRow struct {
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
 }
@@ -1175,6 +1251,7 @@ func (q *Queries) UpdateSecretEnv(ctx context.Context, arg UpdateSecretEnvParams
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
 		&i.ValueNonce,
+		&i.ValueKeyVersion,
 		&i.Metadata,
 		&i.Spec,
 	)
@@ -1183,19 +1260,21 @@ func (q *Queries) UpdateSecretEnv(ctx context.Context, arg UpdateSecretEnvParams
 
 const updateSecretStored = `-- name: UpdateSecretStored :one
 UPDATE secrets
-SET value_kind       = 'stored',
-    value_from_env   = NULL,
-    value_ciphertext = $2,
-    value_nonce      = $3,
-    updated_at       = NOW()
+SET value_kind        = 'stored',
+    value_from_env    = NULL,
+    value_ciphertext  = $2,
+    value_nonce       = $3,
+    value_key_version = $4,
+    updated_at        = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, metadata, spec
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
 `
 
 type UpdateSecretStoredParams struct {
-	ID              string `db:"id" json:"id"`
-	ValueCiphertext []byte `db:"value_ciphertext" json:"value_ciphertext"`
-	ValueNonce      []byte `db:"value_nonce" json:"value_nonce"`
+	ID              string      `db:"id" json:"id"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 }
 
 type UpdateSecretStoredRow struct {
@@ -1206,12 +1285,18 @@ type UpdateSecretStoredRow struct {
 	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
 	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
 }
 
 func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStoredParams) (UpdateSecretStoredRow, error) {
-	row := q.db.QueryRow(ctx, updateSecretStored, arg.ID, arg.ValueCiphertext, arg.ValueNonce)
+	row := q.db.QueryRow(ctx, updateSecretStored,
+		arg.ID,
+		arg.ValueCiphertext,
+		arg.ValueNonce,
+		arg.ValueKeyVersion,
+	)
 	var i UpdateSecretStoredRow
 	err := row.Scan(
 		&i.ID,
@@ -1221,6 +1306,7 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
 		&i.ValueNonce,
+		&i.ValueKeyVersion,
 		&i.Metadata,
 		&i.Spec,
 	)
