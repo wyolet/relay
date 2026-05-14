@@ -33,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -232,10 +233,18 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 		t.Fatalf("upsert host: %v", err)
 	}
 
+	tier := &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "openai-stored-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
+	}
+	if err := stores.Policy.Upsert(ctx, tier); err != nil {
+		t.Fatalf("upsert tier policy: %v", err)
+	}
+
 	k := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "stored-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
+			PolicyID:  tier.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored},
 			Value:     "sk-test-secret",
 		},

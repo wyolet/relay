@@ -65,6 +65,14 @@ func validateHostKeyInSnap(k *hostkey.HostKey, s *Snapshot) error {
 	if _, ok := s.hostsByID[k.Spec.HostID]; !ok {
 		return fmt.Errorf("hostkey %q: spec.hostId %q does not match any enabled Host", k.Meta.Name, k.Spec.HostID)
 	}
+	pol, ok := s.policiesByID[k.Spec.PolicyID]
+	if !ok {
+		return fmt.Errorf("hostkey %q: spec.policyId %q references unknown or disabled policy", k.Meta.Name, k.Spec.PolicyID)
+	}
+	if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != k.Spec.HostID {
+		return fmt.Errorf("hostkey %q: policy %q is not host-owned by host %q (owner=%s/%s)",
+			k.Meta.Name, pol.Meta.Name, k.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
+	}
 	return nil
 }
 

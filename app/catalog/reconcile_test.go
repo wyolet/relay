@@ -74,9 +74,16 @@ func TestApply_UpsertNew(t *testing.T) {
 		t.Fatalf("ApplyRateLimitUpsert: %v", err)
 	}
 
+	hostTier := &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-host-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
+	}
+	if err := c.ApplyPolicyUpsert(hostTier); err != nil {
+		t.Fatalf("ApplyPolicyUpsert hostTier: %v", err)
+	}
+
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "new-hk", Owner: meta.Owner{Kind: meta.OwnerUser}},
-		Spec: hostkey.Spec{HostID: hostID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K_NEW"}},
+		Spec: hostkey.Spec{HostID: hostID, PolicyID: hostTier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "K_NEW"}},
 	}
 	if err := c.ApplyHostKeyUpsert(hk); err != nil {
 		t.Fatalf("ApplyHostKeyUpsert: %v", err)

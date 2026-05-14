@@ -39,7 +39,15 @@ type HostKey struct {
 type Spec struct {
 	// HostID is the id of the Host this key authenticates to. Required.
 	// Replaces the pre-refactor Meta.Owner pointing at a Host.
-	HostID      string    `json:"hostId"                yaml:"hostId"                validate:"required"`
+	HostID string `json:"hostId" yaml:"hostId" validate:"required"`
+
+	// PolicyID is the id of the host-owned tier Policy this key mirrors.
+	// Required: every key must declare an upstream tier so the pipeline
+	// has rate-limit rules to apply. The referenced Policy must be host-
+	// owned (Owner.Kind=host) AND its Owner.ID must equal HostID — i.e.
+	// a key can only mirror a policy belonging to its own host. Cross-
+	// entity validation lives in the composition layer.
+	PolicyID    string    `json:"policyId" yaml:"policyId" validate:"required"`
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
 	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
 	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
@@ -74,12 +82,14 @@ func (k *HostKey) IsEnabled() bool { return k.Spec.Enabled == nil || *k.Spec.Ena
 //   - Owner.Kind must be user or system (the actor that created the key);
 //     keys are not owned by the Host they authenticate to.
 //   - Spec.HostID is required; it points at the Host this key targets.
+//   - Spec.PolicyID is required; it picks the upstream tier Policy this
+//     key mirrors.
 //   - ValueKindEnv requires Spec.ValueFrom.Env; cleartext Value must be empty.
 //   - ValueKindStored requires non-empty cleartext Spec.Value at write time;
 //     ValueFrom.Env must be empty.
 //
-// Cross-entity checks (Spec.HostID resolves to a Host) live in the composition
-// layer.
+// Cross-entity checks (HostID resolves to a Host; PolicyID resolves to a
+// host-owned Policy of THAT host) live in the composition layer.
 func (k *HostKey) Validate() error {
 	if err := meta.Validator.Struct(k); err != nil {
 		return err
@@ -91,6 +101,9 @@ func (k *HostKey) Validate() error {
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
+	}
+	if k.Spec.PolicyID == "" {
+		return fmt.Errorf("hostkey %q: spec.policyId is required", k.Meta.Name)
 	}
 	switch k.Spec.ValueFrom.Kind {
 	case ValueKindEnv:
