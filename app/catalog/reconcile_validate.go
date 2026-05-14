@@ -93,6 +93,12 @@ func validatePolicyInSnap(p *policy.Policy, s *Snapshot) error {
 			return fmt.Errorf("policy %q: rateLimitId references unknown or disabled rate limit %q", p.Meta.Name, p.Spec.RateLimitID)
 		}
 	}
+	for i, b := range p.Spec.RLBindings {
+		if _, ok := s.rateLimitsByID[b.RateLimitID]; !ok {
+			return fmt.Errorf("policy %q: rlBindings[%d] references unknown or disabled rate limit %q",
+				p.Meta.Name, i, b.RateLimitID)
+		}
+	}
 	return nil
 }
 

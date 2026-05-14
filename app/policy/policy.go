@@ -60,9 +60,23 @@ type Spec struct {
 	// (m:n with ProviderKey). Order is significant for KeySelectionPrioritized.
 	HostKeyIDs []string `json:"hostKeyIds,omitempty" yaml:"hostKeyIds,omitempty" validate:"omitempty,dive,uuid"`
 
-	// RateLimitID is the single RateLimit applied to traffic through this
-	// Policy. Optional — empty means no policy-level rate limiting.
+	// RateLimitID is a single RateLimit applied uniformly to every model
+	// the policy grants. Mutually exclusive with RLBindings — pick one or
+	// the other (or neither for an uncapped policy). The flat form is the
+	// common case for user-authored policies that don't differentiate
+	// caps per model.
 	RateLimitID string `json:"rateLimitId,omitempty" yaml:"rateLimitId,omitempty" validate:"omitempty,uuid"`
+
+	// RLBindings declares per-model rate-limit mappings. Use this when
+	// caps vary by the model being called (the typical host-tier case
+	// where, e.g., gpt-4o has different TPM than gpt-4o-mini at the same
+	// upstream tier). At request time the first binding whose Models
+	// matches the requested model contributes its RateLimit's rules; a
+	// model not covered by any binding is uncapped at this policy.
+	//
+	// Each binding must declare at least one entry in Models. Mutually
+	// exclusive with RateLimitID — Validate rejects setting both.
+	RLBindings []RLBinding `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty" validate:"omitempty,dive"`
 
 	// KeySelection is the algorithm used to pick a ProviderKey from the
 	// healthy pool. Defaults to prioritized.
@@ -82,6 +96,16 @@ type Spec struct {
 
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// RLBinding maps a set of Models to one RateLimit. The Models list uses
+// the modelref DSL (same grammar as Policy.Spec.Models): a single binding
+// can name explicit models, a provider/host wildcard, etc. Resolution
+// scans bindings in declared order and the first match wins; authors
+// should keep model sets disjoint within a policy.
+type RLBinding struct {
+	Models      []string `json:"models"      yaml:"models"      validate:"required,min=1,dive,min=1"`
+	RateLimitID string   `json:"rateLimitId" yaml:"rateLimitId" validate:"required,uuid"`
 }
 
 // KeySelection controls how the keypool picks a ProviderKey from the
@@ -136,6 +160,10 @@ func (p *Policy) Validate() error {
 		}
 	default:
 		return fmt.Errorf("policy %q: owner.kind required (user|system|host)", p.Meta.Name)
+	}
+	// RateLimit shape: flat singular OR per-model bindings, never both.
+	if p.Spec.RateLimitID != "" && len(p.Spec.RLBindings) > 0 {
+		return fmt.Errorf("policy %q: rateLimitId and rlBindings are mutually exclusive", p.Meta.Name)
 	}
 	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
 		return err

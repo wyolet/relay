@@ -333,6 +333,22 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 		rateLimitID = id
 	}
 
+	rlBindings := make([]policy.RLBinding, 0, len(d.Spec.RLBindings))
+	for i, b := range d.Spec.RLBindings {
+		if b.RateLimit == "" {
+			return nil, fmt.Errorf("policy %q: rlBindings[%d].rateLimit is required", d.Metadata.Name, i)
+		}
+		id, ok := idx.RateLimitID(b.RateLimit)
+		if !ok {
+			return nil, fmt.Errorf("policy %q: rlBindings[%d] rateLimit %q not found",
+				d.Metadata.Name, i, b.RateLimit)
+		}
+		rlBindings = append(rlBindings, policy.RLBinding{
+			Models:      append([]string{}, b.Models...),
+			RateLimitID: id,
+		})
+	}
+
 	m := d.Metadata.toMeta()
 	if m.Owner.Kind == meta.OwnerHost && m.Owner.ID != "" {
 		if hid, ok := idx.HostID(m.Owner.ID); ok {
@@ -345,6 +361,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			Models:            models,
 			HostKeyIDs:        hostKeyIDs,
 			RateLimitID:       rateLimitID,
+			RLBindings:        rlBindings,
 			KeySelection:      policy.KeySelection(d.Spec.KeySelection),
 			SkipDefaultLimits: d.Spec.SkipDefaultLimits,
 			IncludeDeprecated: d.Spec.IncludeDeprecated,
@@ -385,6 +402,18 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 		rlName = name
 	}
 
+	bindings := make([]RLBindingDTO, 0, len(p.Spec.RLBindings))
+	for _, b := range p.Spec.RLBindings {
+		rl := b.RateLimitID
+		if name, ok := rev.RateLimitName(rl); ok {
+			rl = name
+		}
+		bindings = append(bindings, RLBindingDTO{
+			Models:    append([]string{}, b.Models...),
+			RateLimit: rl,
+		})
+	}
+
 	return PolicyDTO{
 		APIVersion: APIVersion,
 		Kind:       "Policy",
@@ -393,6 +422,7 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 			Models:            models,
 			HostKeys:          hostKeys,
 			RateLimit:         rlName,
+			RLBindings:        bindings,
 			KeySelection:      string(p.Spec.KeySelection),
 			SkipDefaultLimits: p.Spec.SkipDefaultLimits,
 			IncludeDeprecated: p.Spec.IncludeDeprecated,

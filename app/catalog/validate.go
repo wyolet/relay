@@ -119,6 +119,12 @@ func validateCross(
 				return fmt.Errorf("policy %q: rateLimitId references unknown or disabled rate limit %q", p.Meta.Name, p.Spec.RateLimitID)
 			}
 		}
+		for i, b := range p.Spec.RLBindings {
+			if _, ok := rlByID[b.RateLimitID]; !ok {
+				return fmt.Errorf("policy %q: rlBindings[%d] references unknown or disabled rate limit %q",
+					p.Meta.Name, i, b.RateLimitID)
+			}
+		}
 	}
 
 	// RelayKey.Spec.PolicyID resolves.
