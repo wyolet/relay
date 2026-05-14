@@ -123,14 +123,20 @@ func registerSettingsList(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 }
 
+// sectionEnvelope is the named (non-anonymous) Body type for a typed
+// section response. Lifting it out of sectionResponse keeps the OpenAPI
+// schema id stable across generic instantiations — anonymous Body
+// structs produce hint-based names that don't match the emitted $ref.
+type sectionEnvelope[T any] struct {
+	Section settings.SectionName `json:"section"`
+	Value   T                    `json:"value"`
+}
+
 // sectionResponse is the typed wrapper returned by GET/PUT for one
 // section. Declared at package level so each generic instantiation has
 // a stable type name (same reason as the CRUD wrappers in crud.go).
 type sectionResponse[T any] struct {
-	Body struct {
-		Section settings.SectionName `json:"section"`
-		Value   T                    `json:"value"`
-	}
+	Body sectionEnvelope[T]
 }
 
 type sectionUpdateRequest[T any] struct {
