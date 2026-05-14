@@ -24,22 +24,33 @@ func RelayKeyFromContext(ctx context.Context) *relaykey.RelayKey {
 	return nil
 }
 
-// RelayKeyAuthMiddleware authenticates Authorization: Bearer <token>
-// against the snapshot's RelayKey-by-hash index. On success it injects
-// the *relaykey.RelayKey into ctx; on failure 401s with the OpenAI-
-// shape error envelope.
+// RelayKeyAuthMiddleware authenticates the inbound relay key according
+// to the request's Mode classification (set by ClassifyMiddleware
+// upstream):
 //
-// cat is read on every request so admins toggling Enabled / RevokedAt
-// take effect within the NOTIFY debounce window.
+//   - ModeNormal       — relay key is required; lookup must succeed.
+//   - ModeProxyAuthed  — relay key is required; lookup must succeed.
+//   - ModeProxyAnonymous — no relay key; this middleware is a no-op and
+//     no *RelayKey is stashed on ctx.
+//
+// Snapshot is read on every request so admins toggling Enabled /
+// RevokedAt take effect within the NOTIFY debounce window.
 func RelayKeyAuthMiddleware(cat *appcatalog.Catalog) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tok := bearer(r.Header.Get("Authorization"))
-			if tok == "" {
-				writeAuthErr(w, "missing bearer token")
+			cls := ClassificationFrom(r.Context())
+			if cls.Mode == ModeProxyAnonymous {
+				// Gate (Settings.ProxyMode.AllowUnauthenticated) is checked
+				// downstream in the handler; this middleware just doesn't
+				// require a relay key.
+				next.ServeHTTP(w, r)
 				return
 			}
-			rk, ok := cat.Current().RelayKeyByHash(hashToken(tok))
+			if cls.RelayKey == "" {
+				writeAuthErr(w, "missing relay key")
+				return
+			}
+			rk, ok := cat.Current().RelayKeyByHash(hashToken(cls.RelayKey))
 			if !ok {
 				writeAuthErr(w, "invalid api key")
 				return

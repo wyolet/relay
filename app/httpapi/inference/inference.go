@@ -16,6 +16,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
 )
 
@@ -33,11 +34,15 @@ type Deps struct {
 	// ready Plan against the snapshot.
 	Resolver *routing.Resolver
 
-	// Pipeline orchestrates one inference request end-to-end.
+	// Pipeline orchestrates one normal-mode inference request.
 	Pipeline *pipeline.Pipeline
 
+	// Proxy orchestrates a proxy-mode (BYO upstream key) request.
+	Proxy *proxy.Pipeline
+
 	// Adapters keys the wire-protocol implementation by adapter.Kind.
-	// Handlers look up the binding's Adapter Kind here at request time.
+	// Handlers look up the binding's Adapter Kind here at request time;
+	// proxy mode looks up the extractor by inbound endpoint shape.
 	Adapters map[adapter.Kind]pipeline.Adapter
 }
 
@@ -63,11 +68,16 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// /healthz is public.
 	registerHealth(api, d)
 
-	// All /v1/* operations require a valid relay key.
-	authMW := huma.Middlewares{httpapi.HumaAuth(RelayKeyAuthMiddleware(d.Catalog))}
-	registerChat(api, d, authMW)
-	registerMessages(api, d, authMW)
-	registerModels(api, d, authMW)
+	// /v1/* operations classify the request mode first, then conditionally
+	// auth: normal + proxy-authed need a relay key; proxy-anonymous skips.
+	mw := huma.Middlewares{
+		httpapi.HumaAuth(ClassifyMiddleware()),
+		httpapi.HumaAuth(RelayKeyAuthMiddleware(d.Catalog)),
+	}
+	registerChat(api, d, mw)
+	registerMessages(api, d, mw)
+	registerModels(api, d, mw)
+	registerProxyHosts(api, d, mw)
 
 	return api
 }

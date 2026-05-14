@@ -35,6 +35,12 @@ func registerMessages(api huma.API, d Deps, mw huma.Middlewares) {
 func handleMessages(d Deps, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	cls := ClassificationFrom(ctx)
+	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
+		handleProxy(d, w, r, adapter.Anthropic)
+		return
+	}
+
 	rk := RelayKeyFromContext(ctx)
 	if rk == nil {
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated", "missing relay key")
