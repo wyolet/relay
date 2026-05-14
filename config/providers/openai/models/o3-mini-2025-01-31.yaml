@@ -4,7 +4,7 @@ metadata:
     name: o3-mini-2025-01-31
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: o-series
         source: litellm

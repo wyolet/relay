@@ -363,7 +363,7 @@ func buildProvider(pm providerMeta) *manifest.ProviderDTO {
 			Name:        pm.name,
 			DisplayName: pm.displayName,
 			Description: pm.description,
-			Owner:       meta.Owner{Kind: meta.OwnerSystem},
+			Owner:       manifest.WireOwner{Kind: meta.OwnerSystem},
 		},
 		Spec: manifest.ProviderSpec{
 			HomepageURL:   pm.homepageURL,
@@ -381,7 +381,7 @@ func buildHost(pm providerMeta) *manifest.HostDTO {
 		Metadata: manifest.WireMeta{
 			Name:        pm.name,
 			DisplayName: pm.displayName,
-			Owner:       meta.Owner{Kind: meta.OwnerSystem},
+			Owner:       manifest.WireOwner{Kind: meta.OwnerSystem},
 		},
 		Spec: manifest.HostSpec{
 			BaseURL:       pm.baseURL,
@@ -498,7 +498,7 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		Metadata: manifest.WireMeta{
 			Name:   g.Canonical,
 			Labels: labels,
-			Owner:  meta.Owner{Kind: meta.OwnerProvider, ID: pm.name},
+			Owner:  manifest.WireOwner{Kind: meta.OwnerProvider, Name: pm.name},
 		},
 		Spec: manifest.ModelSpec{
 			Hosts: []manifest.HostBindingDTO{{

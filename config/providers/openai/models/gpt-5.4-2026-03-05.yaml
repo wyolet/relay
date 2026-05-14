@@ -4,7 +4,7 @@ metadata:
     name: gpt-5.4-2026-03-05
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

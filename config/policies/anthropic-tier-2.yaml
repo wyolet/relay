@@ -1,0 +1,31 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: anthropic-tier-2-rl
+  displayName: Anthropic Tier 2 rate limits
+  description: "Anthropic Usage Tier 2 ($40 credit purchase). Numbers per docs.anthropic.com, Claude Sonnet 4.x reference. Tokens meter encodes ITPM; OTPM is 90k separately."
+  owner:
+    kind: host
+    name: anthropic
+spec:
+  enabled: true
+  rules:
+    - meter: requests
+      amount: 1000
+      window: 1m
+      strategy: sliding-window
+    - meter: tokens
+      amount: 450000
+      window: 1m
+      strategy: sliding-window
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Policy
+metadata:
+  name: anthropic-tier-2
+  displayName: Anthropic Tier 2
+  owner:
+    kind: host
+    name: anthropic
+spec:
+  rateLimit: anthropic-tier-2-rl

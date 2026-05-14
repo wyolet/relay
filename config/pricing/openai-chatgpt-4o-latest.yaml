@@ -4,7 +4,7 @@ metadata:
     name: openai-chatgpt-4o-latest
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

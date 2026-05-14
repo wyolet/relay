@@ -4,7 +4,7 @@ metadata:
     name: ollama/llama2
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/llama2
         source: litellm

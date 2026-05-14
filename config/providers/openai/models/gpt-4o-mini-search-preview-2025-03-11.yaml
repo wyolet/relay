@@ -4,7 +4,7 @@ metadata:
     name: gpt-4o-mini-search-preview-2025-03-11
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

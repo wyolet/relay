@@ -1,0 +1,31 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: anthropic-tier-1-rl
+  displayName: Anthropic Tier 1 rate limits
+  description: "Anthropic Usage Tier 1 ($5 credit purchase). Numbers per docs.anthropic.com, Claude Sonnet 4.x reference. Tokens meter encodes ITPM (input tokens per minute) — the binding constraint; OTPM is 8k separately but the relay's meter doesn't yet split input/output."
+  owner:
+    kind: host
+    name: anthropic
+spec:
+  enabled: true
+  rules:
+    - meter: requests
+      amount: 50
+      window: 1m
+      strategy: sliding-window
+    - meter: tokens
+      amount: 30000
+      window: 1m
+      strategy: sliding-window
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Policy
+metadata:
+  name: anthropic-tier-1
+  displayName: Anthropic Tier 1
+  owner:
+    kind: host
+    name: anthropic
+spec:
+  rateLimit: anthropic-tier-1-rl

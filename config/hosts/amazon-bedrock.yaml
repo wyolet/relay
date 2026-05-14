@@ -16,3 +16,6 @@ spec:
     statusPageURL: https://health.aws.amazon.com/health/status
     icon:
       path: /provider/amazon-bedrock.svg
+    policies:
+      - bedrock-default
+    defaultPolicy: bedrock-default

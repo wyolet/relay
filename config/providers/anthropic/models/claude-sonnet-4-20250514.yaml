@@ -4,7 +4,7 @@ metadata:
     name: claude-sonnet-4-20250514
     owner:
         kind: provider
-        id: anthropic
+        name: anthropic
     labels:
         family: claude
         source: litellm

@@ -4,7 +4,7 @@ metadata:
     name: gpt-4o-realtime-preview-2025-06-03
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

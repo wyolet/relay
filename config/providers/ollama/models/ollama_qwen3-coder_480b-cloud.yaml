@@ -4,7 +4,7 @@ metadata:
     name: ollama/qwen3-coder:480b-cloud
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/qwen3
         source: litellm

@@ -4,7 +4,7 @@ metadata:
     name: claude-opus-4-7-20260416
     owner:
         kind: provider
-        id: anthropic
+        name: anthropic
     labels:
         family: claude
         source: litellm

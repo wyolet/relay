@@ -4,7 +4,7 @@ metadata:
     name: gpt-realtime-mini
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

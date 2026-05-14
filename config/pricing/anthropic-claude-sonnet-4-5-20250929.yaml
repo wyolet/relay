@@ -4,7 +4,7 @@ metadata:
     name: anthropic-claude-sonnet-4-5-20250929
     owner:
         kind: host
-        id: anthropic
+        name: anthropic
 spec:
     currency: USD
     targetModels:

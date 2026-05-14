@@ -4,7 +4,7 @@ metadata:
     name: chatgpt-4o-latest
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: chatgpt
         source: litellm

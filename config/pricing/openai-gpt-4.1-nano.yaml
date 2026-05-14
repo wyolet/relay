@@ -4,7 +4,7 @@ metadata:
     name: openai-gpt-4.1-nano
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

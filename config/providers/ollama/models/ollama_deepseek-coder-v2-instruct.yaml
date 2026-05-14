@@ -4,7 +4,7 @@ metadata:
     name: ollama/deepseek-coder-v2-instruct
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/deepseek
         source: litellm

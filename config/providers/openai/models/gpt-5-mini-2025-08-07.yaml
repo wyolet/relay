@@ -4,7 +4,7 @@ metadata:
     name: gpt-5-mini-2025-08-07
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

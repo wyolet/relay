@@ -123,10 +123,19 @@ func (p *Policy) Validate() error {
 	}
 	switch p.Meta.Owner.Kind {
 	case meta.OwnerUser, meta.OwnerSystem:
-	case meta.OwnerProvider:
-		return fmt.Errorf("policy %q: owner.kind must be user or system, got provider", p.Meta.Name)
+	case meta.OwnerHost:
+		// Host-owned policies are tier definitions published by a Host as
+		// part of its menu. They carry rules and (optionally) model lists
+		// but never inbound grants — HostKeyIDs is meaningless for an
+		// upstream tier.
+		if p.Meta.Owner.ID == "" {
+			return fmt.Errorf("policy %q: owner.id is required for host-owned policy", p.Meta.Name)
+		}
+		if len(p.Spec.HostKeyIDs) > 0 {
+			return fmt.Errorf("policy %q: host-owned policies must not list hostKeyIds", p.Meta.Name)
+		}
 	default:
-		return fmt.Errorf("policy %q: owner.kind required (user|system)", p.Meta.Name)
+		return fmt.Errorf("policy %q: owner.kind required (user|system|host)", p.Meta.Name)
 	}
 	if err := uniqueIDs("modelIds", p.Meta.Name, p.Spec.ModelIDs); err != nil {
 		return err

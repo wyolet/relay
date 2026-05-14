@@ -1,0 +1,23 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: ollama-unbounded-rl
+  displayName: Ollama unbounded
+  description: "Self-hosted Ollama has no provider-imposed upstream limits — saturation is a property of the local GPU. Empty rules = no relay-side cap."
+  owner:
+    kind: host
+    name: ollama
+spec:
+  enabled: false
+  rules: []
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Policy
+metadata:
+  name: ollama-unbounded
+  displayName: Ollama (unbounded)
+  owner:
+    kind: host
+    name: ollama
+spec:
+  rateLimit: ollama-unbounded-rl

@@ -4,7 +4,7 @@ metadata:
     name: openai-gpt-realtime-2025-08-28
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

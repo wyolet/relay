@@ -4,7 +4,7 @@ metadata:
     name: ollama/internlm2_5-20b-chat
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/internlm2_5
         source: litellm

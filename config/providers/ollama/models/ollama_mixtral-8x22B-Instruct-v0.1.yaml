@@ -4,7 +4,7 @@ metadata:
     name: ollama/mixtral-8x22B-Instruct-v0.1
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/mixtral
         source: litellm

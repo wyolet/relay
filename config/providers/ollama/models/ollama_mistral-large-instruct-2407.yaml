@@ -4,7 +4,7 @@ metadata:
     name: ollama/mistral-large-instruct-2407
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/mistral
         source: litellm

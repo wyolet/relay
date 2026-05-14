@@ -95,7 +95,7 @@ func TestValidate(t *testing.T) {
 				p.Meta.Owner = meta.Owner{Kind: meta.OwnerProvider, ID: meta.NewID()}
 				return p
 			}(),
-			want: "owner.kind must be user or system",
+			want: "owner.kind required",
 		},
 		{
 			name: "missing owner",

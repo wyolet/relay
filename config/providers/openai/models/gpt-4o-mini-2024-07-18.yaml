@@ -4,7 +4,7 @@ metadata:
     name: gpt-4o-mini-2024-07-18
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm
