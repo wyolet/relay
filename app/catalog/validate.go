@@ -3,7 +3,9 @@ package catalog
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
@@ -35,6 +37,7 @@ import (
 func validateCross(
 	providerIDs map[string]struct{},
 	hostIDs map[string]struct{},
+	enabledHosts []*host.Host,
 	enabledPols []*policy.Policy,
 	enabledRKs []*relaykey.RelayKey,
 	enabledModels []*model.Model,
@@ -46,6 +49,29 @@ func validateCross(
 	keyByID := indexBy(enabledKeys, func(k *hostkey.HostKey) string { return k.Meta.ID })
 	rlByID := indexBy(enabledRLs, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
 	polByID := indexBy(enabledPols, func(p *policy.Policy) string { return p.Meta.ID })
+
+	// Host.Spec.Policies entries must resolve to enabled host-owned
+	// Policies whose Owner.ID is this host. DefaultPolicy, when set,
+	// must appear in Policies.
+	for _, h := range enabledHosts {
+		menu := make(map[string]struct{}, len(h.Spec.Policies))
+		for _, polID := range h.Spec.Policies {
+			pol, ok := polByID[polID]
+			if !ok {
+				return fmt.Errorf("host %q: policies references unknown or disabled policy %q", h.Meta.Name, polID)
+			}
+			if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != h.Meta.ID {
+				return fmt.Errorf("host %q: policy %q is not host-owned by this host (owner=%s/%s)",
+					h.Meta.Name, pol.Meta.Name, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
+			}
+			menu[polID] = struct{}{}
+		}
+		if h.Spec.DefaultPolicy != "" {
+			if _, ok := menu[h.Spec.DefaultPolicy]; !ok {
+				return fmt.Errorf("host %q: defaultPolicy %q is not in spec.policies", h.Meta.Name, h.Spec.DefaultPolicy)
+			}
+		}
+	}
 
 	// Owner.ID → Provider (vendor) for Models.
 	for _, m := range enabledModels {
