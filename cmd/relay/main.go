@@ -79,8 +79,8 @@ func main() {
 		Pool:      st.Pool(),
 		MasterKey: cfg.MasterKey,
 	}
-	if cfg.AutoSeedIfEmpty {
-		bootOpts.AutoSeedDir = cfg.ConfigDir
+	if cfg.AutoSeedIfEmpty && cfg.CatalogDir != "" {
+		bootOpts.AutoSeedDir = cfg.CatalogDir
 	}
 
 	cat, listener, stores, err := appcatalog.Bootstrap(bootCtx, bootOpts)

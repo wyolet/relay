@@ -121,11 +121,24 @@ What this repo owns:
   the schema validator (`*.Validate()`), and the `cmd/catalog-validate`
   binary the catalog repo's CI invokes.
 
-What `wyolet/relay-catalog` owns:
+What `wyolet/relay-catalog` owns (under its `data/` root):
 
-- `providers/`, `hosts/`, `models/`, `pricing/`, `policies/`, and the
-  host-owned `ratelimits/` (tier RLs only).
-- Each release publishes a tarball + sidecar `index.json` + sha256.
+```
+data/
+  providers/<provider>/provider.yaml
+                       models/<model>.yaml
+  hosts/<host>/host.yaml
+               pricing/<model>.yaml
+               policies/<policy>.yaml          (Policy + optional RateLimit
+                                                in one file, --- separated)
+```
+
+Ownership drives placement: providers own their models, hosts own their
+pricing + tier policies + the tier-policies' RateLimits. Filenames omit
+the parent prefix (e.g. `pricing/gpt-4o.yaml` not `openai-gpt-4o.yaml`),
+but `metadata.name` still carries the full slug for cross-refs.
+
+- Each release will publish a tarball + sidecar `index.json` + sha256.
 - Schema is versioned by the `apiVersion` field; bumping the relay's
   schema means cutting a matching tag in the catalog repo.
 
@@ -133,8 +146,14 @@ When you need a sample YAML to reason about, check
 `wyolet/relay-catalog`'s `main` branch (or pull a tagged tarball). Do
 NOT regenerate them in this repo.
 
-Catalog extraction is in flight as of 2026-05; see also the seed-source
-refactor (`SeedSource` interface, `localDirSource` / `tarballSource`).
+**Local consumption (today, until the tarball fetcher lands):**
+
+- `RELAY_CONFIG_DIR` (default `config`) — relay-internal yamls only.
+- `RELAY_CATALOG_DIR` — local clone of `wyolet/relay-catalog`'s `data/`
+  tree. When set + `RELAY_AUTO_SEED_IF_EMPTY=1` + PG is empty, Bootstrap
+  walks it recursively and seeds. Unset disables auto-seed.
+- The recursive `manifest.LoadDir` is layout-agnostic — dispatches on
+  each YAML's `kind` field, so the nested catalog tree just works.
 
 ## Locked architectural decisions
 
