@@ -200,8 +200,9 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		s.t.Fatalf("setenv: %v", err)
 	}
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
+		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
+			HostID:    hst.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"},
 		},
 	}
@@ -393,8 +394,8 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 
 	_ = os.Setenv("E2E_HOSTKEY_VAL", "sk-mock")
 	hk := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "hk1", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
-		Spec: hostkey.Spec{ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"}},
+		Meta: meta.Metadata{ID: ids.New(), Name: "hk1", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "hostkey")
 

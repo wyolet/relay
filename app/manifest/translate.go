@@ -207,17 +207,22 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 // HostKey
 // ---------------------------------------------------------------------------
 
-// ToHostKey resolves the owner host name → id from Metadata.Owner.ID.
+// ToHostKey resolves Spec.HostID (host name → id).
 func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 	m := d.Metadata.toMeta()
-	if m.Owner.Kind == meta.OwnerHost && m.Owner.ID != "" {
-		if hid, ok := idx.HostID(m.Owner.ID); ok {
-			m.Owner.ID = hid
+	if m.Owner.Kind == "" {
+		m.Owner.Kind = meta.OwnerSystem
+	}
+	hostID := d.Spec.HostID
+	if hostID != "" {
+		if id, ok := idx.HostID(hostID); ok {
+			hostID = id
 		}
 	}
 	return &hostkey.HostKey{
 		Meta: m,
 		Spec: hostkey.Spec{
+			HostID: hostID,
 			ValueFrom: hostkey.ValueFrom{
 				Kind: hostkey.ValueKind(d.Spec.ValueFrom.Kind),
 				Env:  d.Spec.ValueFrom.Env,
@@ -231,9 +236,10 @@ func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 
 func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 	wm := metaToWire(k.Meta)
-	if k.Meta.Owner.Kind == meta.OwnerHost && k.Meta.Owner.ID != "" {
-		if hname, ok := rev.HostName(k.Meta.Owner.ID); ok {
-			wm.Owner.ID = hname
+	hostID := k.Spec.HostID
+	if hostID != "" {
+		if hname, ok := rev.HostName(hostID); ok {
+			hostID = hname
 		}
 	}
 	return HostKeyDTO{
@@ -241,6 +247,7 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 		Kind:       "HostKey",
 		Metadata:   wm,
 		Spec: HostKeySpec{
+			HostID: hostID,
 			ValueFrom: HostKeyValueFrom{
 				Kind: string(k.Spec.ValueFrom.Kind),
 				Env:  k.Spec.ValueFrom.Env,

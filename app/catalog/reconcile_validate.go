@@ -34,8 +34,8 @@ func validateModelInSnap(m *model.Model, s *Snapshot) error {
 
 // validateHostKeyInSnap checks cross-refs for a single HostKey against snap.
 func validateHostKeyInSnap(k *hostkey.HostKey, s *Snapshot) error {
-	if _, ok := s.hostsByID[k.Meta.Owner.ID]; !ok {
-		return fmt.Errorf("hostkey %q: owner.id %q does not match any enabled Host", k.Meta.Name, k.Meta.Owner.ID)
+	if _, ok := s.hostsByID[k.Spec.HostID]; !ok {
+		return fmt.Errorf("hostkey %q: spec.hostId %q does not match any enabled Host", k.Meta.Name, k.Spec.HostID)
 	}
 	return nil
 }

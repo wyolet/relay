@@ -120,7 +120,7 @@ type HostBindingDTO struct {
 	Enabled      *bool  `json:"enabled,omitempty"      yaml:"enabled,omitempty"`
 }
 
-// HostKeyDTO is the wire form of a HostKey. Owner.ID is a host *name* here.
+// HostKeyDTO is the wire form of a HostKey. Spec.HostID is a host *name* here.
 type HostKeyDTO struct {
 	APIVersion string      `json:"apiVersion" yaml:"apiVersion"`
 	Kind       string      `json:"kind"       yaml:"kind"`
@@ -129,6 +129,7 @@ type HostKeyDTO struct {
 }
 
 type HostKeySpec struct {
+	HostID      string           `json:"hostId"                yaml:"hostId"`
 	ValueFrom   HostKeyValueFrom `json:"valueFrom"             yaml:"valueFrom"`
 	DefaultTier string           `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty"`
 	Enabled     *bool            `json:"enabled,omitempty"     yaml:"enabled,omitempty"`

@@ -232,8 +232,9 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 	}
 
 	k := &hostkey.HostKey{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "stored-k", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "stored-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
+			HostID:    hst.Meta.ID,
 			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored},
 			Value:     "sk-test-secret",
 		},

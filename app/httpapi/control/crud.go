@@ -369,7 +369,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[hostkey.HostKey](
 		api, "host-keys", "host-key", d.Stores.HostKey, d.Authz, kmeta,
 		func(k *hostkey.HostKey) error { return k.Validate() },
-		"", // HostKeys are host-owned; caller must supply Owner.ID (host id).
+		meta.OwnerUser,
 		listScanResolver(d.Stores.HostKey, kmeta),
 		protect,
 	)

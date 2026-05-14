@@ -11,9 +11,12 @@ func fix(name string, kind ValueKind) *HostKey {
 	k := &HostKey{
 		Meta: meta.Metadata{
 			Name:  name,
-			Owner: meta.Owner{Kind: meta.OwnerHost, ID: meta.NewID()},
+			Owner: meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()},
 		},
-		Spec: Spec{ValueFrom: ValueFrom{Kind: kind}},
+		Spec: Spec{
+			HostID:    meta.NewID(),
+			ValueFrom: ValueFrom{Kind: kind},
+		},
 	}
 	switch kind {
 	case ValueKindEnv:
@@ -42,14 +45,14 @@ func TestValidate(t *testing.T) {
 		want string
 	}{
 		{
-			name: "user owner rejected",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerUser; return k }(),
-			want: "owner.kind must be host",
+			name: "host owner rejected",
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerHost; return k }(),
+			want: "owner.kind must be user or system",
 		},
 		{
 			name: "missing host id",
-			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.ID = ""; return k }(),
-			want: "owner.id is required",
+			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Spec.HostID = ""; return k }(),
+			want: "HostID",
 		},
 		{
 			name: "env mode missing env",
