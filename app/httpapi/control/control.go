@@ -85,6 +85,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerMisc(api, d, protect)   // /master-key/generate, /reload
 	registerCRUD(api, d, protect)   // 8 kinds × CRUD
 	registerSettings(api, d, protect)
+	registerResolve(api, d, protect)
 
 	return api
 }
