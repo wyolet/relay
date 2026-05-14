@@ -4,7 +4,7 @@ metadata:
     name: gpt-5-search-api
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

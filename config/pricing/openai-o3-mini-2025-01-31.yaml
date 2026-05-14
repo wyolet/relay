@@ -4,7 +4,7 @@ metadata:
     name: openai-o3-mini-2025-01-31
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

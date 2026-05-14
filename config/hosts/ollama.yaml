@@ -10,3 +10,6 @@ spec:
     homepageURL: https://ollama.com
     icon:
       path: /provider/ollama.png
+    policies:
+      - ollama-unbounded
+    defaultPolicy: ollama-unbounded

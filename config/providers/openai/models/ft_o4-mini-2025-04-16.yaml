@@ -4,7 +4,7 @@ metadata:
     name: ft:o4-mini-2025-04-16
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: ft:o4
         source: litellm

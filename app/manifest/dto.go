@@ -12,8 +12,30 @@ type WireMeta struct {
 	Name        string            `json:"name"                  yaml:"name"`
 	DisplayName string            `json:"displayName,omitempty" yaml:"displayName,omitempty"`
 	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
-	Owner       meta.Owner        `json:"owner,omitempty"       yaml:"owner,omitempty"`
+	Owner       WireOwner         `json:"owner,omitempty"       yaml:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
+}
+
+// WireOwner is the wire form of meta.Owner. The referenced row is named —
+// translate functions resolve Name → id when producing the domain shape,
+// and reverse-resolve id → Name when emitting the wire shape. ID is the
+// id-form for API clients that already hold a UUID; either field is
+// accepted on read, with ID taking precedence.
+type WireOwner struct {
+	Kind meta.OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Name string         `json:"name,omitempty" yaml:"name,omitempty"`
+	ID   string         `json:"id,omitempty"   yaml:"id,omitempty"`
+}
+
+// ref returns whichever identifier the caller supplied — id takes
+// precedence so API roundtrips that emit id keep working without a name
+// resolver. Translate code treats the result as a name-or-id and runs
+// the resolver against it.
+func (o WireOwner) ref() string {
+	if o.ID != "" {
+		return o.ID
+	}
+	return o.Name
 }
 
 func (w WireMeta) toMeta() meta.Metadata {
@@ -22,7 +44,7 @@ func (w WireMeta) toMeta() meta.Metadata {
 		Name:        w.Name,
 		DisplayName: w.DisplayName,
 		Description: w.Description,
-		Owner:       w.Owner,
+		Owner:       meta.Owner{Kind: w.Owner.Kind, ID: w.Owner.ref()},
 		Labels:      w.Labels,
 	}
 }
@@ -33,7 +55,7 @@ func metaToWire(m meta.Metadata) WireMeta {
 		Name:        m.Name,
 		DisplayName: m.DisplayName,
 		Description: m.Description,
-		Owner:       m.Owner,
+		Owner:       WireOwner{Kind: m.Owner.Kind, Name: m.Owner.ID},
 		Labels:      m.Labels,
 	}
 }
@@ -66,6 +88,10 @@ type HostDTO struct {
 type HostSpec struct {
 	BaseURL       string            `json:"baseURL"               yaml:"baseURL"`
 	Backend       map[string]string `json:"backend,omitempty"     yaml:"backend,omitempty"`
+	// Policies holds policy *names* (wire form), resolved to ids on parse.
+	Policies      []string          `json:"policies,omitempty"    yaml:"policies,omitempty"`
+	// DefaultPolicy is a policy *name* (wire form) referencing one of Policies.
+	DefaultPolicy string            `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
 	Enabled       *bool             `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
 	HomepageURL   string            `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
 	DocsURL       string            `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`

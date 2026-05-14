@@ -52,12 +52,28 @@ func FromProvider(p *provider.Provider, _ ReverseResolver) ProviderDTO {
 // Host
 // ---------------------------------------------------------------------------
 
-func ToHost(d HostDTO, _ Resolver) (*host.Host, error) {
+func ToHost(d HostDTO, idx Resolver) (*host.Host, error) {
+	policies := make([]string, 0, len(d.Spec.Policies))
+	for _, name := range d.Spec.Policies {
+		if id, ok := idx.PolicyID(name); ok {
+			policies = append(policies, id)
+		} else {
+			policies = append(policies, name)
+		}
+	}
+	defaultPolicy := d.Spec.DefaultPolicy
+	if defaultPolicy != "" {
+		if id, ok := idx.PolicyID(defaultPolicy); ok {
+			defaultPolicy = id
+		}
+	}
 	return &host.Host{
 		Meta: d.Metadata.toMeta(),
 		Spec: host.Spec{
 			BaseURL:       d.Spec.BaseURL,
 			Backend:       d.Spec.Backend,
+			Policies:      policies,
+			DefaultPolicy: defaultPolicy,
 			Enabled:       d.Spec.Enabled,
 			HomepageURL:   d.Spec.HomepageURL,
 			DocsURL:       d.Spec.DocsURL,
@@ -68,7 +84,21 @@ func ToHost(d HostDTO, _ Resolver) (*host.Host, error) {
 	}, nil
 }
 
-func FromHost(h *host.Host, _ ReverseResolver) HostDTO {
+func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
+	policies := make([]string, 0, len(h.Spec.Policies))
+	for _, id := range h.Spec.Policies {
+		if name, ok := rev.PolicyName(id); ok {
+			policies = append(policies, name)
+		} else {
+			policies = append(policies, id)
+		}
+	}
+	defaultPolicy := h.Spec.DefaultPolicy
+	if defaultPolicy != "" {
+		if name, ok := rev.PolicyName(defaultPolicy); ok {
+			defaultPolicy = name
+		}
+	}
 	return HostDTO{
 		APIVersion: APIVersion,
 		Kind:       "Host",
@@ -76,6 +106,8 @@ func FromHost(h *host.Host, _ ReverseResolver) HostDTO {
 		Spec: HostSpec{
 			BaseURL:       h.Spec.BaseURL,
 			Backend:       h.Spec.Backend,
+			Policies:      policies,
+			DefaultPolicy: defaultPolicy,
 			Enabled:       h.Spec.Enabled,
 			HomepageURL:   h.Spec.HomepageURL,
 			DocsURL:       h.Spec.DocsURL,
@@ -171,7 +203,7 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 	// Render owner provider id → name
 	if m.Meta.Owner.Kind == meta.OwnerProvider && m.Meta.Owner.ID != "" {
 		if pname, ok := rev.ProviderName(m.Meta.Owner.ID); ok {
-			wm.Owner.ID = pname
+			wm.Owner.Name = pname
 		}
 	}
 
@@ -287,8 +319,14 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 		rateLimitID = id
 	}
 
+	m := d.Metadata.toMeta()
+	if m.Owner.Kind == meta.OwnerHost && m.Owner.ID != "" {
+		if hid, ok := idx.HostID(m.Owner.ID); ok {
+			m.Owner.ID = hid
+		}
+	}
 	return &policy.Policy{
-		Meta: d.Metadata.toMeta(),
+		Meta: m,
 		Spec: policy.Spec{
 			Models:            models,
 			HostKeyIDs:        hostKeyIDs,
@@ -353,8 +391,10 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 // RateLimit
 // ---------------------------------------------------------------------------
 
-// ToRateLimit converts a RateLimitDTO to a domain RateLimit. No cross-refs.
-func ToRateLimit(d RateLimitDTO, _ Resolver) (*ratelimit.RateLimit, error) {
+// ToRateLimit converts a RateLimitDTO to a domain RateLimit. Resolves
+// owner.id from a host *name* to its id when Owner.Kind=host (the wire
+// form uses names for human readability).
+func ToRateLimit(d RateLimitDTO, idx Resolver) (*ratelimit.RateLimit, error) {
 	rules := make([]ratelimit.Rule, 0, len(d.Spec.Rules))
 	for i, r := range d.Spec.Rules {
 		w, err := parseDuration(r.Window)
@@ -368,8 +408,14 @@ func ToRateLimit(d RateLimitDTO, _ Resolver) (*ratelimit.RateLimit, error) {
 			Strategy: ratelimit.Strategy(r.Strategy),
 		})
 	}
+	m := d.Metadata.toMeta()
+	if m.Owner.Kind == meta.OwnerHost && m.Owner.ID != "" {
+		if hid, ok := idx.HostID(m.Owner.ID); ok {
+			m.Owner.ID = hid
+		}
+	}
 	return &ratelimit.RateLimit{
-		Meta: d.Metadata.toMeta(),
+		Meta: m,
 		Spec: ratelimit.Spec{
 			Rules:   rules,
 			Enabled: d.Spec.Enabled,
@@ -445,7 +491,7 @@ func FromPricing(p *pricing.Pricing, rev ReverseResolver) PricingDTO {
 	wm := metaToWire(p.Meta)
 	if p.Meta.Owner.Kind == meta.OwnerHost && p.Meta.Owner.ID != "" {
 		if hname, ok := rev.HostName(p.Meta.Owner.ID); ok {
-			wm.Owner.ID = hname
+			wm.Owner.Name = hname
 		}
 	}
 

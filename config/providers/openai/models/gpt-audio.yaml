@@ -4,7 +4,7 @@ metadata:
     name: gpt-audio
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

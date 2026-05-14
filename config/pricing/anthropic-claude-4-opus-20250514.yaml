@@ -4,7 +4,7 @@ metadata:
     name: anthropic-claude-4-opus-20250514
     owner:
         kind: host
-        id: anthropic
+        name: anthropic
 spec:
     currency: USD
     targetModels:

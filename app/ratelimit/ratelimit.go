@@ -93,8 +93,12 @@ func (r *RateLimit) Validate() error {
 		if r.Meta.Owner.ID == "" {
 			return fmt.Errorf("ratelimit %q: owner.id is required (provider id)", r.Meta.Name)
 		}
+	case meta.OwnerHost:
+		if r.Meta.Owner.ID == "" {
+			return fmt.Errorf("ratelimit %q: owner.id is required (host id)", r.Meta.Name)
+		}
 	default:
-		return fmt.Errorf("ratelimit %q: owner.kind required (system|provider|user)", r.Meta.Name)
+		return fmt.Errorf("ratelimit %q: owner.kind required (system|provider|host|user)", r.Meta.Name)
 	}
 	return nil
 }

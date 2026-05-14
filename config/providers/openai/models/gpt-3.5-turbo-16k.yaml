@@ -4,7 +4,7 @@ metadata:
     name: gpt-3.5-turbo-16k
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: gpt
         source: litellm

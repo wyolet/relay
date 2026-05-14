@@ -4,7 +4,7 @@ metadata:
     name: claude-3-7-sonnet-20250219
     owner:
         kind: provider
-        id: anthropic
+        name: anthropic
     labels:
         family: claude
         source: litellm

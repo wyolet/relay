@@ -1,0 +1,31 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: anthropic-tier-4-rl
+  displayName: Anthropic Tier 4 rate limits
+  description: "Anthropic Usage Tier 4 ($400 credit purchase). Numbers per docs.anthropic.com, Claude Sonnet 4.x reference. Tokens meter encodes ITPM; OTPM is 400k separately. For Opus 4.x the ITPM is much higher (10M); operators serving Opus-heavy workloads should clone this and bump."
+  owner:
+    kind: host
+    name: anthropic
+spec:
+  enabled: true
+  rules:
+    - meter: requests
+      amount: 4000
+      window: 1m
+      strategy: sliding-window
+    - meter: tokens
+      amount: 2000000
+      window: 1m
+      strategy: sliding-window
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Policy
+metadata:
+  name: anthropic-tier-4
+  displayName: Anthropic Tier 4
+  owner:
+    kind: host
+    name: anthropic
+spec:
+  rateLimit: anthropic-tier-4-rl

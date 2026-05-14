@@ -1,0 +1,32 @@
+apiVersion: relay.wyolet.dev/v1
+kind: RateLimit
+metadata:
+  name: openai-tier-1-rl
+  displayName: OpenAI Tier 1 rate limits
+  description: "OpenAI Usage Tier 1 ($5+ paid). Numbers reflect gpt-5 / gpt-5.4 defaults per the OpenAI Devs announcement bumping Tier 1 TPM from 30k → 500k (Sep 2024). Smaller models (gpt-5-mini, embeddings) have higher TPM caps."
+  owner:
+    kind: host
+    name: openai
+spec:
+  enabled: true
+  rules:
+    - meter: requests
+      amount: 500
+      window: 1m
+      strategy: sliding-window
+    - meter: tokens
+      amount: 500000
+      window: 1m
+      strategy: sliding-window
+---
+apiVersion: relay.wyolet.dev/v1
+kind: Policy
+metadata:
+  name: openai-tier-1
+  displayName: OpenAI Tier 1
+  description: "Upstream tier policy for OpenAI Usage Tier 1. HostKeys on this tier mirror these rate limits."
+  owner:
+    kind: host
+    name: openai
+spec:
+  rateLimit: openai-tier-1-rl

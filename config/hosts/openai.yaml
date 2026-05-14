@@ -13,3 +13,10 @@ spec:
     statusPageURL: https://status.openai.com
     icon:
       path: /provider/openai.svg
+    policies:
+      - openai-tier-1
+      - openai-tier-2
+      - openai-tier-3
+      - openai-tier-4
+      - openai-tier-5
+    defaultPolicy: openai-tier-1

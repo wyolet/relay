@@ -4,7 +4,7 @@ metadata:
     name: openai-gpt-realtime-mini-2025-10-06
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

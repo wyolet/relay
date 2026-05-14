@@ -4,7 +4,7 @@ metadata:
     name: o1-2024-12-17
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: o-series
         source: litellm

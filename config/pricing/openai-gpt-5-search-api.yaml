@@ -4,7 +4,7 @@ metadata:
     name: openai-gpt-5-search-api
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

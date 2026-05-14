@@ -4,7 +4,7 @@ metadata:
     name: o1
     owner:
         kind: provider
-        id: openai
+        name: openai
     labels:
         family: o1
         source: litellm

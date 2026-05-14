@@ -4,7 +4,7 @@ metadata:
     name: anthropic-claude-haiku-4-5-20251001
     owner:
         kind: host
-        id: anthropic
+        name: anthropic
 spec:
     currency: USD
     targetModels:

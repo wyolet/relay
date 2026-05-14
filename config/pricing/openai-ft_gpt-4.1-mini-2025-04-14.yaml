@@ -4,7 +4,7 @@ metadata:
     name: openai-ft_gpt-4.1-mini-2025-04-14
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

@@ -4,7 +4,7 @@ metadata:
     name: openai-gpt-4o-mini-search-preview-2025-03-11
     owner:
         kind: host
-        id: openai
+        name: openai
 spec:
     currency: USD
     targetModels:

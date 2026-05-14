@@ -4,7 +4,7 @@ metadata:
     name: ollama/gpt-oss:120b-cloud
     owner:
         kind: provider
-        id: ollama
+        name: ollama
     labels:
         family: ollama/gpt
         source: litellm
