@@ -41,6 +41,7 @@ type Config struct {
 	CHRetentionDays   int
 	AutoSeedIfEmpty   bool
 	ConfigDir         string
+	CatalogDir        string
 	InstanceID        string
 	EventlogDir       string
 	MaxRequestBytes   int64 // 0 = use httpmw.DefaultMaxRequestBytes
@@ -124,6 +125,16 @@ func Load() (*Config, error) {
 	if cfg.ConfigDir == "" {
 		cfg.ConfigDir = "config"
 	}
+
+	// CatalogDir points at a local clone of wyolet/relay-catalog's data/
+	// directory (or a forked equivalent). Used by Bootstrap auto-seed when
+	// PG is empty. Empty disables auto-seed even if RELAY_AUTO_SEED_IF_EMPTY
+	// is set — operators in airgapped/managed deploys leave it unset and
+	// rely on admin API writes or a pre-populated DB.
+	//
+	// This is the dev/airgapped escape hatch; the tarball-fetcher (planned)
+	// will be the production default once shipped.
+	cfg.CatalogDir = os.Getenv("RELAY_CATALOG_DIR")
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")

@@ -27,7 +27,11 @@ type BootstrapOptions struct {
 	MasterKey []byte
 
 	// AutoSeedDir, when non-empty AND the catalog is empty in PG, triggers
-	// a YAML import from this directory before the initial Reload.
+	// a YAML import from this directory before the initial Reload. The
+	// expected layout matches wyolet/relay-catalog's data/ tree (providers/
+	// <provider>/{provider.yaml,models/}, hosts/<host>/{host.yaml,pricing/,
+	// policies/}). filepath.WalkDir walks the tree; dispatch is by the
+	// kind field in each YAML doc, so the nested layout is transparent.
 	// Idempotent: if any catalog row already exists, seeding is skipped.
 	AutoSeedDir string
 }
