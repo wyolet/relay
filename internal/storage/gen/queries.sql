@@ -274,3 +274,19 @@ VALUES ($1, $2, NOW())
 ON CONFLICT (name) DO UPDATE SET
     spec       = EXCLUDED.spec,
     updated_at = NOW();
+
+-- name: ListSettings :many
+SELECT section, value, updated_at FROM settings ORDER BY section;
+
+-- name: GetSetting :one
+SELECT section, value, updated_at FROM settings WHERE section = $1;
+
+-- name: UpsertSetting :exec
+INSERT INTO settings (section, value, updated_at)
+VALUES ($1, $2, NOW())
+ON CONFLICT (section) DO UPDATE SET
+    value = EXCLUDED.value,
+    updated_at = NOW();
+
+-- name: DeleteSetting :exec
+DELETE FROM settings WHERE section = $1;

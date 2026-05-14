@@ -119,6 +119,15 @@ func (q *Queries) DeleteSecret(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteSetting = `-- name: DeleteSetting :exec
+DELETE FROM settings WHERE section = $1
+`
+
+func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
+	_, err := q.db.Exec(ctx, deleteSetting, section)
+	return err
+}
+
 const getHost = `-- name: GetHost :one
 SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1
 `
@@ -418,6 +427,17 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 		&i.ValueCiphertext,
 		&i.ValueNonce,
 	)
+	return i, err
+}
+
+const getSetting = `-- name: GetSetting :one
+SELECT section, value, updated_at FROM settings WHERE section = $1
+`
+
+func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, error) {
+	row := q.db.QueryRow(ctx, getSetting, section)
+	var i Setting
+	err := row.Scan(&i.Section, &i.Value, &i.UpdatedAt)
 	return i, err
 }
 
@@ -1060,6 +1080,30 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 	return items, nil
 }
 
+const listSettings = `-- name: ListSettings :many
+SELECT section, value, updated_at FROM settings ORDER BY section
+`
+
+func (q *Queries) ListSettings(ctx context.Context) ([]Setting, error) {
+	rows, err := q.db.Query(ctx, listSettings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Setting
+	for rows.Next() {
+		var i Setting
+		if err := rows.Scan(&i.Section, &i.Value, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setPolicyRateLimit = `-- name: SetPolicyRateLimit :exec
 UPDATE policies SET rate_limit_id = $2, updated_at = NOW() WHERE id = $1
 `
@@ -1457,5 +1501,23 @@ func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) erro
 		arg.Metadata,
 		arg.Spec,
 	)
+	return err
+}
+
+const upsertSetting = `-- name: UpsertSetting :exec
+INSERT INTO settings (section, value, updated_at)
+VALUES ($1, $2, NOW())
+ON CONFLICT (section) DO UPDATE SET
+    value = EXCLUDED.value,
+    updated_at = NOW()
+`
+
+type UpsertSettingParams struct {
+	Section string `db:"section" json:"section"`
+	Value   []byte `db:"value" json:"value"`
+}
+
+func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
+	_, err := q.db.Exec(ctx, upsertSetting, arg.Section, arg.Value)
 	return err
 }

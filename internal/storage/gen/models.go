@@ -129,3 +129,9 @@ type Secret struct {
 	ID              string             `db:"id" json:"id"`
 	DisplayName     string             `db:"display_name" json:"display_name"`
 }
+
+type Setting struct {
+	Section   string             `db:"section" json:"section"`
+	Value     []byte             `db:"value" json:"value"`
+	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
