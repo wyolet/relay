@@ -187,11 +187,13 @@ candidates:
 		return nil, ErrNoKeys
 	}
 
-	// 7. Rules
-	var rl *ratelimit.RateLimit
-	if pol.Spec.RateLimitID != "" {
-		rl, _ = snap.RateLimit(pol.Spec.RateLimitID)
-	}
+	// 7. Rules — pick the RateLimit the request hits. If the policy
+	// declares per-model bindings, the first binding whose Models matches
+	// the requested model wins; otherwise the policy's flat RateLimitID
+	// applies. A request that matches no binding (and has no flat RL) is
+	// uncapped at this policy.
+	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
+	rl := selectPolicyRateLimit(snap, pol, providerSlug, chosen.Meta.Name, h.Meta.Name)
 	rules := buildRules(pol, rl)
 
 	return &Plan{
@@ -266,6 +268,29 @@ func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID strin
 		out = append(out, k)
 	}
 	return out
+}
+
+// selectPolicyRateLimit picks the RateLimit a policy applies to one
+// request. When pol.Spec.RLBindings is non-empty, the first binding
+// whose Models matches the (provider, model, host) triple wins. When
+// RLBindings is empty the flat pol.Spec.RateLimitID is used. Returns
+// nil when no rate-limit applies (binding miss with no flat fallback,
+// or unresolvable RL id).
+func selectPolicyRateLimit(snap *appcatalog.Snapshot, pol *policy.Policy, providerSlug, modelSlug, hostSlug string) *ratelimit.RateLimit {
+	if len(pol.Spec.RLBindings) > 0 {
+		for _, b := range pol.Spec.RLBindings {
+			if refsAllow(b.Models, providerSlug, modelSlug, hostSlug, false) {
+				rl, _ := snap.RateLimit(b.RateLimitID)
+				return rl
+			}
+		}
+		return nil
+	}
+	if pol.Spec.RateLimitID != "" {
+		rl, _ := snap.RateLimit(pol.Spec.RateLimitID)
+		return rl
+	}
+	return nil
 }
 
 // buildRules translates a Policy + its RateLimit into pkgratelimit.Rules

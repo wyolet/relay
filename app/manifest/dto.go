@@ -182,14 +182,27 @@ type PolicySpec struct {
 	// Models holds model *names* (wire form).
 	Models []string `json:"models,omitempty"    yaml:"models,omitempty"`
 	// HostKeys holds host-key *names* (wire form).
-	HostKeys  []string `json:"hostKeys,omitempty"  yaml:"hostKeys,omitempty"`
-	// RateLimit holds a rate-limit *name* (wire form).
+	HostKeys []string `json:"hostKeys,omitempty"  yaml:"hostKeys,omitempty"`
+
+	// RateLimit holds a rate-limit *name* (wire form). Mutually exclusive
+	// with RLBindings.
 	RateLimit string `json:"rateLimit,omitempty" yaml:"rateLimit,omitempty"`
+
+	// RLBindings is the per-model rate-limit map (wire form). Each entry's
+	// RateLimit field carries a *name* that translate resolves to an id.
+	RLBindings []RLBindingDTO `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty"`
 
 	KeySelection      string `json:"keySelection,omitempty"      yaml:"keySelection,omitempty"`
 	SkipDefaultLimits bool   `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
 	IncludeDeprecated bool   `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
 	Enabled           *bool  `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
+}
+
+// RLBindingDTO is the wire form of a policy.RLBinding. Models are modelref
+// DSL strings carried verbatim; RateLimit is a name resolved to an id.
+type RLBindingDTO struct {
+	Models    []string `json:"models"    yaml:"models"`
+	RateLimit string   `json:"rateLimit" yaml:"rateLimit"`
 }
 
 // RateLimitDTO is the wire form of a RateLimit. No cross-refs.

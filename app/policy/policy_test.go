@@ -30,6 +30,16 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
+	t.Run("ok with rlBindings", func(t *testing.T) {
+		p := fix("p")
+		p.Spec.RLBindings = []RLBinding{
+			{Models: []string{"gpt-4o", "o1"}, RateLimitID: meta.NewID()},
+			{Models: []string{"gpt-4o-mini"}, RateLimitID: meta.NewID()},
+		}
+		if err := p.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
 
 	for _, tc := range []struct {
 		name string
@@ -101,6 +111,43 @@ func TestValidate(t *testing.T) {
 			name: "missing owner",
 			p:    func() *Policy { p := fix("x"); p.Meta.Owner.Kind = ""; return p }(),
 			want: "owner.kind required",
+		},
+		{
+			name: "flat RL and bindings are mutually exclusive",
+			p: func() *Policy {
+				p := fix("x")
+				p.Spec.RateLimitID = meta.NewID()
+				p.Spec.RLBindings = []RLBinding{{
+					Models:      []string{"gpt-4o"},
+					RateLimitID: meta.NewID(),
+				}}
+				return p
+			}(),
+			want: "mutually exclusive",
+		},
+		{
+			name: "rlBinding without models rejected",
+			p: func() *Policy {
+				p := fix("x")
+				p.Spec.RLBindings = []RLBinding{{
+					Models:      nil,
+					RateLimitID: meta.NewID(),
+				}}
+				return p
+			}(),
+			want: "Models",
+		},
+		{
+			name: "rlBinding without rateLimitId rejected",
+			p: func() *Policy {
+				p := fix("x")
+				p.Spec.RLBindings = []RLBinding{{
+					Models:      []string{"gpt-4o"},
+					RateLimitID: "",
+				}}
+				return p
+			}(),
+			want: "RateLimitID",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

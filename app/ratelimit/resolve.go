@@ -7,6 +7,18 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
+// PerModelScope adds the request model id to a bucket key so per-model
+// rules partition correctly. Used when a Policy.RLBinding has non-empty
+// Models (otherwise the binding is "any model" and gets one shared
+// bucket). The modelID suffix lives in the key, not the namespace, so
+// the Lua hash-tag boundary still groups all of a key's buckets.
+func PerModelScope(base, modelID string) string {
+	if modelID == "" {
+		return base
+	}
+	return base + ":m:" + modelID
+}
+
 // Resolve produces the []pkgratelimit.Rule the limiter understands from
 // a Policy + its attached RateLimit. The pipeline calls pkg/ratelimit
 // directly with this slice; there is no intermediate adapter wrapper.
