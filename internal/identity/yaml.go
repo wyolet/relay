@@ -56,6 +56,13 @@ func (s *Store) ByUsername(username string) (*User, bool) {
 func LoadYAML(dir string) (*Store, error) {
 	store := &Store{users: map[string]*User{}}
 
+	// Tolerate a missing dir — operators may run without YAML-backed
+	// users (admin-token-only deployments, fresh PG-first bring-up).
+	// main.go already handles "no users loaded" gracefully.
+	if _, statErr := os.Stat(dir); errors.Is(statErr, fs.ErrNotExist) {
+		return store, nil
+	}
+
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
