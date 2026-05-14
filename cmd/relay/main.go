@@ -162,6 +162,9 @@ func main() {
 	var ctrlSrv *http.Server
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlRouter := chi.NewRouter()
+		if len(cfg.ControlAllowOrigins) > 0 {
+			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
+		}
 		control.Mount(ctrlRouter, control.Deps{
 			Identity:     idStore,
 			Sessions:     sessMgr,
