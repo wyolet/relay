@@ -408,7 +408,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
-		rateLimitGuard,
+		nil,
 		protect,
 	)
 
@@ -423,7 +423,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			return p.Meta.ID, nil
 		},
-		policyGuard,
+		nil,
 		protect,
 	)
 
