@@ -9,7 +9,11 @@
 //   2. Policy: comes from the authenticated RelayKey's PolicyID. (No
 //      "default route" indirection in the new arch — RelayKey → Policy
 //      is direct. Anonymous traffic is served by a separate package.)
-//   3. Authorization: model must appear in Policy.Spec.ModelIDs.
+//   3. Authorization: model must be allowed by the Policy. Allowed if
+//      its id is in Spec.ModelIDs, OR Spec.Models (modelref DSL) matches,
+//      OR — when both grant fields are empty — the policy is an implicit
+//      wildcard: any model reachable via its hostkeys is allowed. The
+//      hostkey-coverage check below is the real gate in that case.
 //   4. HostBinding: pick one Host from Model.Spec.Hosts the operator has
 //      bound. v1 picks the first enabled binding; multi-host failover is
 //      a future feature.
@@ -125,6 +129,12 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		anyEnabledMod bool
 		anyEnabledBnd bool
 	)
+	// A Policy with neither ModelIDs nor Models set is an *implicit
+	// wildcard*: it grants every model reachable through the policy's
+	// hostkeys. The hostkey-coverage check downstream is the real
+	// authorization gate; Spec.Models, when set, narrows that gate. This
+	// matches the documented semantics on policy.Spec.Models.
+	wildcardGrant := len(pol.Spec.ModelIDs) == 0 && len(pol.Spec.Models) == 0
 candidates:
 	for _, m := range models {
 		if !m.IsEnabled() {
@@ -152,15 +162,21 @@ candidates:
 			anyEnabledBnd = true
 			// Allow paths in priority order:
 			//   1. Legacy literal ModelIDs grant — always allowed.
-			//   2. Modelref match — but if the model is deprecated and
-			//      the policy doesn't include deprecated models, only an
-			//      EXPLICIT model-named ref counts. Wildcard matches
-			//      (provider, provider@host, @host) hide deprecated.
-			if !legacyAllowed {
-				match := refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name, deprecated && !pol.Spec.IncludeDeprecated)
-				if !match {
-					continue
+			//   2. Modelref match in Spec.Models — wildcard refs hide
+			//      deprecated models unless IncludeDeprecated.
+			//   3. Implicit wildcard (both grant fields empty) — same
+			//      deprecated-hide rule as a top-level wildcard ref.
+			allowed := legacyAllowed
+			if !allowed {
+				switch {
+				case len(pol.Spec.Models) > 0:
+					allowed = refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name, deprecated && !pol.Spec.IncludeDeprecated)
+				case wildcardGrant:
+					allowed = !deprecated || pol.Spec.IncludeDeprecated
 				}
+			}
+			if !allowed {
+				continue
 			}
 			chosen = m
 			binding = hb

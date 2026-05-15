@@ -51,12 +51,20 @@ type Spec struct {
 	//
 	// Patterns expand against the live catalog at snapshot build time,
 	// so a wildcard automatically includes models added later.
+	//
+	// **Empty Models AND empty ModelIDs is treated as an implicit
+	// wildcard**: every model reachable through the policy's HostKeys is
+	// allowed. The hostkey-coverage check at routing time is the real
+	// authorization gate in that case; Models/ModelIDs, when set, narrow
+	// that gate. Deprecated models are hidden from the implicit wildcard
+	// unless Spec.IncludeDeprecated.
 	Models []string `json:"models,omitempty" yaml:"models,omitempty" validate:"omitempty,dive,min=1"`
 
 	// ModelIDs is the legacy literal-ID grant — exact Model UUIDs, no
 	// wildcards. Coexists with Models during the transition; the
 	// snapshot expands both into the same bindingsByPolicy index.
-	// New grants should prefer Models.
+	// New grants should prefer Models. See Models above for the
+	// empty-list = implicit-wildcard rule.
 	ModelIDs []string `json:"modelIds,omitempty" yaml:"modelIds,omitempty" validate:"omitempty,dive,uuid"`
 
 	// HostKeyIDs is the set of HostKeys this Policy can draw from

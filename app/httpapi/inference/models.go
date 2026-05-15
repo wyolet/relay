@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/wyolet/relay/app/routing"
 )
 
 // modelObject is the OpenAI list-models entry shape.
@@ -44,12 +46,19 @@ func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
 
 		out := &modelsOutput{}
 		out.Body.Object = "list"
-		out.Body.Data = make([]modelObject, 0, len(pol.Spec.ModelIDs))
-		for _, mid := range pol.Spec.ModelIDs {
-			m, ok := snap.Model(mid)
-			if !ok || !m.IsEnabled() {
+		// Enumerate every enabled model and ask routing whether the
+		// policy reaches it. Covers all three grant forms (literal
+		// ModelIDs, modelref Spec.Models, and implicit-wildcard when
+		// both are empty) without duplicating the logic here.
+		seen := map[string]struct{}{}
+		for _, m := range snap.AllModels() {
+			if _, dup := seen[m.Meta.Name]; dup {
 				continue
 			}
+			if !routing.PolicyAllows(snap, pol, m) {
+				continue
+			}
+			seen[m.Meta.Name] = struct{}{}
 			ownedBy := ""
 			if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
 				ownedBy = pname
