@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"fmt"
+
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -65,16 +67,13 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 
-	if err := validateHostInSnap(h, s); err != nil {
-		return err
-	}
-
+	clean := sanitizeHost(h, s.policiesByID)
 	if old, ok := s.hostsByID[h.Meta.ID]; ok {
 		delete(s.hostsByName, old.Meta.Name)
 		delete(s.hostsByID, old.Meta.ID)
 	}
-	s.hostsByID[h.Meta.ID] = h
-	s.hostsByName[h.Meta.Name] = h
+	s.hostsByID[clean.Meta.ID] = clean
+	s.hostsByName[clean.Meta.Name] = clean
 	c.snap.Store(s)
 	return nil
 }
@@ -96,6 +95,7 @@ func deleteHost(s *Snapshot, id string) {
 	delete(s.hostsByID, id)
 	delete(s.hostsByName, h.Meta.Name)
 	cascadeDelete(s, refHost, id)
+	resanitizeModelsAfterHostChange(s)
 }
 
 // ── Model ─────────────────────────────────────────────────────────────────
@@ -110,10 +110,13 @@ func (c *Catalog) ApplyModelUpsert(m *model.Model) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	if err := validateModelInSnap(m, s); err != nil {
-		return err
+	clean, keep := sanitizeModel(m, snapIDs(s.providersByID), snapIDs(s.hostsByID))
+	if !keep {
+		deleteModel(s, m.Meta.ID)
+		c.snap.Store(s)
+		return nil
 	}
-	insertModel(s, m)
+	insertModel(s, clean)
 	c.snap.Store(s)
 	return nil
 }
@@ -172,6 +175,7 @@ func deleteModel(s *Snapshot, id string) {
 		}
 	}
 	cascadeDelete(s, refModel, id)
+	resanitizePoliciesAfterParentChange(s)
 }
 
 // ── HostKey ───────────────────────────────────────────────────────────────
@@ -186,10 +190,13 @@ func (c *Catalog) ApplyHostKeyUpsert(k *hostkey.HostKey) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	if err := validateHostKeyInSnap(k, s); err != nil {
-		return err
+	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), s.policiesByID)
+	if !keep {
+		deleteHostKey(s, k.Meta.ID)
+		c.snap.Store(s)
+		return nil
 	}
-	insertHostKey(s, k)
+	insertHostKey(s, clean)
 	c.snap.Store(s)
 	return nil
 }
@@ -227,6 +234,7 @@ func deleteHostKey(s *Snapshot, id string) {
 		s.hostKeysByPolicy[polID] = removeHostKeyFromSlice(keys, id)
 	}
 	cascadeDelete(s, refHostKey, id)
+	resanitizePoliciesAfterParentChange(s)
 }
 
 // ── RateLimit ─────────────────────────────────────────────────────────────
@@ -274,6 +282,7 @@ func deleteRateLimit(s *Snapshot, id string) {
 		}
 	}
 	cascadeDelete(s, refRateLimit, id)
+	resanitizePoliciesAfterParentChange(s)
 }
 
 // ── Policy ────────────────────────────────────────────────────────────────
@@ -288,10 +297,8 @@ func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	if err := validatePolicyInSnap(p, s); err != nil {
-		return err
-	}
-	insertPolicy(s, p)
+	clean := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID))
+	insertPolicy(s, clean)
 	c.snap.Store(s)
 	return nil
 }
@@ -347,6 +354,7 @@ func deletePolicy(s *Snapshot, id string) {
 	delete(s.hostKeysByPolicy, id)
 	delete(s.rateLimitByPolicy, id)
 	cascadeDelete(s, refPolicy, id)
+	resanitizeHostsAfterPolicyChange(s)
 }
 
 // ── Pricing ───────────────────────────────────────────────────────────────
@@ -361,10 +369,25 @@ func (c *Catalog) ApplyPricingUpsert(p *pricing.Pricing) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	if err := validatePricingInSnap(p, s); err != nil {
-		return err
+	clean, keep := sanitizePricing(p, snapIDs(s.hostsByID), snapIDs(s.modelsByID))
+	if !keep {
+		deletePricing(s, p.Meta.ID)
+		// Also check duplicate-pricing invariant on the cleaned row before
+		// inserting; not applicable here since !keep aborts.
+		c.snap.Store(s)
+		return nil
 	}
-	insertPricing(s, p)
+	// Enforce the duplicate-pricing invariant (two enabled rows competing
+	// for the same model+host slot) — this is a real authoring bug and
+	// stays hard-fail.
+	for _, modelID := range clean.Spec.TargetModelIDs {
+		key := modelID + "|" + clean.Meta.Owner.ID
+		if existing, dup := s.pricingByModelHost[key]; dup && existing.Meta.ID != clean.Meta.ID {
+			return fmt.Errorf("duplicate pricing: pricing %q and %q both cover model %q for the same host",
+				existing.Meta.Name, clean.Meta.Name, modelID)
+		}
+	}
+	insertPricing(s, clean)
 	c.snap.Store(s)
 	return nil
 }
@@ -420,10 +443,13 @@ func (c *Catalog) ApplyRelayKeyUpsert(k *relaykey.RelayKey) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	if err := validateRelayKeyInSnap(k, s); err != nil {
-		return err
+	clean, keep := sanitizeRelayKey(k, snapIDs(s.policiesByID))
+	if !keep {
+		deleteRelayKey(s, k.Meta.ID)
+		c.snap.Store(s)
+		return nil
 	}
-	insertRelayKey(s, k)
+	insertRelayKey(s, clean)
 	c.snap.Store(s)
 	return nil
 }

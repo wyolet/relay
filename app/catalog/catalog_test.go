@@ -225,27 +225,43 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 	}
 }
 
-func TestReload_DisabledModelFailsValidation(t *testing.T) {
+// Disabling a Model still referenced by a Policy used to fail Reload.
+// Now Reload succeeds and the policy's snapshot copy has the dead id
+// silently stripped from Spec.ModelIDs.
+func TestReload_DisabledModelDropsFromPolicyRefs(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
 	fls := false
 	models[0].Spec.Enabled = &fls
+	disabledID := models[0].Meta.ID
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "unknown or disabled model") {
-		t.Fatalf("expected unknown-or-disabled-model error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	pol, _ := c.Current().PolicyByName("cheap-tier")
+	for _, id := range pol.Spec.ModelIDs {
+		if id == disabledID {
+			t.Errorf("disabled model id %q still in policy.Spec.ModelIDs", id)
+		}
 	}
 }
 
-func TestReload_RelayKeyToDisabledPolicyFails(t *testing.T) {
+// Disabling a Policy still referenced by a RelayKey used to fail Reload.
+// Now Reload succeeds and the RelayKey is silently dropped from the
+// snapshot (its required ref is gone).
+func TestReload_RelayKeyToDisabledPolicyDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
+	// rks[0] points at pols[0]; disable rks[0] too so an explicit "I want
+	// this dropped" doesn't muddy the test of soft-dropping unrelated keys.
+	// Other relaykeys (if any) pointing at the disabled policy must also
+	// disappear from the snapshot.
+	rks[0].Spec.Enabled = &fls
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "unknown or disabled policy") {
-		t.Fatalf("expected unknown-or-disabled-policy error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
 	}
 }
 
@@ -354,51 +370,63 @@ func TestReload_HostPoliciesMenu_OK(t *testing.T) {
 	}
 }
 
-// TestReload_HostPoliciesMenu_UnknownPolicyFails rejects a host menu
-// entry that doesn't resolve.
-func TestReload_HostPoliciesMenu_UnknownPolicyFails(t *testing.T) {
+// Unknown policy ids in a Host's menu are silently dropped from the
+// snapshot copy. PG retains the full list.
+func TestReload_HostPoliciesMenu_UnknownPolicyDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	hosts[0].Spec.Policies = []string{meta.NewID()} // dangling id
+	bad := meta.NewID()
+	hosts[0].Spec.Policies = []string{bad}
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "unknown or disabled policy") {
-		t.Fatalf("expected unknown policy error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	h, _ := c.Current().HostByName(hosts[0].Meta.Name)
+	for _, id := range h.Spec.Policies {
+		if id == bad {
+			t.Errorf("dangling policy id %q still in host.Spec.Policies", bad)
+		}
 	}
 }
 
-// TestReload_HostPoliciesMenu_WrongOwnerFails rejects a host menu entry
-// whose Policy is owned by a different host (or by user/system).
-func TestReload_HostPoliciesMenu_WrongOwnerFails(t *testing.T) {
+// A menu entry whose Policy is owned by a different host is also dropped.
+func TestReload_HostPoliciesMenu_WrongOwnerDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	// Tier policy owned by a phantom host, not hosts[0].
 	stray := hostOwnedPolicy("stray-tier", meta.NewID())
 	hosts[0].Spec.Policies = []string{stray.Meta.ID}
 	pols = append(pols, stray)
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "not host-owned by this host") {
-		t.Fatalf("expected wrong-owner error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	h, _ := c.Current().HostByName(hosts[0].Meta.Name)
+	for _, id := range h.Spec.Policies {
+		if id == stray.Meta.ID {
+			t.Errorf("wrong-owner policy id %q still in host.Spec.Policies", stray.Meta.ID)
+		}
 	}
 }
 
-// TestReload_HostKeyPolicy_UnknownFails rejects a HostKey whose
-// Spec.PolicyID doesn't resolve.
-func TestReload_HostKeyPolicy_UnknownFails(t *testing.T) {
+// A HostKey whose Spec.PolicyID doesn't resolve is dropped from the
+// snapshot (the ref is required to function).
+func TestReload_HostKeyPolicy_UnknownDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	keys[0].Spec.PolicyID = meta.NewID() // dangling
+	keys[0].Spec.PolicyID = meta.NewID()
+	bad := keys[0].Meta.ID
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "policyId") {
-		t.Fatalf("expected unknown policy error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	if _, ok := c.Current().HostKey(bad); ok {
+		t.Errorf("hostkey with dangling policyId should not be in snapshot")
 	}
 }
 
-// TestReload_HostKeyPolicy_WrongHostFails rejects a HostKey whose
-// PolicyID resolves but is owned by a different host than HostID.
-func TestReload_HostKeyPolicy_WrongHostFails(t *testing.T) {
+// A HostKey whose Policy resolves but is owned by a different host is
+// also dropped.
+func TestReload_HostKeyPolicy_WrongHostDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
 	otherHost := meta.NewID()
 	strayTier := &policy.Policy{
@@ -410,41 +438,47 @@ func TestReload_HostKeyPolicy_WrongHostFails(t *testing.T) {
 	}
 	pols = append(pols, strayTier)
 	keys[0].Spec.PolicyID = strayTier.Meta.ID
+	bad := keys[0].Meta.ID
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "not host-owned by host") {
-		t.Fatalf("expected wrong-host error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	if _, ok := c.Current().HostKey(bad); ok {
+		t.Errorf("hostkey with wrong-host policy should not be in snapshot")
 	}
 }
 
-// TestReload_HostKeyPolicy_UserOwnedRejected rejects pointing a HostKey
-// at an inbound (user-owned) Policy instead of a host-owned tier.
-func TestReload_HostKeyPolicy_UserOwnedRejected(t *testing.T) {
+// Pointing a HostKey at a user-owned Policy is also a soft drop.
+func TestReload_HostKeyPolicy_UserOwnedDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	// pols[0] is "cheap-tier", Owner.Kind=user. Point the hostkey at it.
-	keys[0].Spec.PolicyID = pols[0].Meta.ID
+	keys[0].Spec.PolicyID = pols[0].Meta.ID // user-owned cheap-tier
+	bad := keys[0].Meta.ID
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "not host-owned by host") {
-		t.Fatalf("expected user-owned-policy rejection, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	if _, ok := c.Current().HostKey(bad); ok {
+		t.Errorf("hostkey pointing at user-owned policy should not be in snapshot")
 	}
 }
 
-// TestReload_HostPoliciesMenu_DefaultNotInMenuFails rejects a
-// DefaultPolicy that points outside Spec.Policies.
-func TestReload_HostPoliciesMenu_DefaultNotInMenuFails(t *testing.T) {
+// DefaultPolicy outside the menu is silently cleared in the snapshot copy.
+func TestReload_HostPoliciesMenu_DefaultNotInMenuClears(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
 	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
 	other := hostOwnedPolicy("openai-tier-y", hosts[0].Meta.ID)
 	hosts[0].Spec.Policies = []string{tier.Meta.ID}
-	hosts[0].Spec.DefaultPolicy = other.Meta.ID // not in Spec.Policies
+	hosts[0].Spec.DefaultPolicy = other.Meta.ID
 	pols = append(pols, tier, other)
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	err := c.Reload(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "defaultPolicy") {
-		t.Fatalf("expected defaultPolicy error, got %v", err)
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	h, _ := c.Current().HostByName(hosts[0].Meta.Name)
+	if h.Spec.DefaultPolicy != "" {
+		t.Errorf("defaultPolicy outside menu should be cleared in snapshot, got %q", h.Spec.DefaultPolicy)
 	}
 }

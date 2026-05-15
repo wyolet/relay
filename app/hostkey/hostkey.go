@@ -32,6 +32,19 @@ type HostKey struct {
 	Resolved string `json:"-" yaml:"-"`
 	// KeyHash is sha256 hex (first 6 bytes) of Resolved, for telemetry.
 	KeyHash string `json:"-" yaml:"-"`
+
+	// Derived: populated by the control-API enrich step from the catalog
+	// snapshot; not stored and not loaded from YAML. Lists every user
+	// Policy whose Spec.HostKeyIDs references this HostKey, so the admin
+	// UI can show where a key is in use.
+	Policies []PolicyRef `json:"policies,omitempty" yaml:"-"`
+}
+
+// PolicyRef is the lightweight {id, name} pair used in derived reverse-ref
+// lists exposed by the control API.
+type PolicyRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // Spec carries non-secret config and the value-mode discriminator. Cleartext
