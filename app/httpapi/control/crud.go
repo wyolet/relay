@@ -490,6 +490,98 @@ func cascadeHostKeyDetach(d Deps) cascadeFn[hostkey.HostKey] {
 	}
 }
 
+// cascadePolicyDetach scrubs every JSONB reference to the deleted Policy
+// before the row is removed:
+//   - relay_keys.spec.policyId → cleared; the key becomes policy-less and
+//     follows settings.Inference.AllowMissingPolicy on the hot path.
+//   - host_keys.spec.policyId → cleared; the key is left without a tier
+//     policy and is dropped from the snapshot by sanitizeHostKey until
+//     reattached.
+//   - hosts.spec.policies[] entries equal to this id → removed.
+//   - hosts.spec.defaultPolicy equal to this id → cleared.
+//
+// PG-side FKs only cover the join tables (policy_models, policy_host_keys
+// — both CASCADE). Everything else lives in spec JSONB and needs app-
+// level cleanup.
+func cascadePolicyDetach(d Deps) cascadeFn[policy.Policy] {
+	return func(ctx context.Context, p *policy.Policy) error {
+		if p == nil || d.Stores == nil {
+			return nil
+		}
+		id := p.Meta.ID
+
+		if d.Stores.RelayKey != nil {
+			rks, err := d.Stores.RelayKey.List(ctx)
+			if err != nil {
+				return fmt.Errorf("list relay-keys: %w", err)
+			}
+			for _, k := range rks {
+				if k.Spec.PolicyID != id {
+					continue
+				}
+				k.Spec.PolicyID = ""
+				if err := d.Stores.RelayKey.Upsert(ctx, k); err != nil {
+					return fmt.Errorf("detach from relay-key %q: %w", k.Meta.Name, err)
+				}
+			}
+		}
+
+		if d.Stores.HostKey != nil {
+			keys, err := d.Stores.HostKey.List(ctx)
+			if err != nil {
+				return fmt.Errorf("list host-keys: %w", err)
+			}
+			for _, k := range keys {
+				if k.Spec.PolicyID != id {
+					continue
+				}
+				k.Spec.PolicyID = ""
+				if err := d.Stores.HostKey.Upsert(ctx, k); err != nil {
+					return fmt.Errorf("detach from host-key %q: %w", k.Meta.Name, err)
+				}
+			}
+		}
+
+		if d.Stores.Host != nil {
+			hosts, err := d.Stores.Host.List(ctx)
+			if err != nil {
+				return fmt.Errorf("list hosts: %w", err)
+			}
+			for _, h := range hosts {
+				changed := false
+				if h.Spec.DefaultPolicy == id {
+					h.Spec.DefaultPolicy = ""
+					changed = true
+				}
+				if len(h.Spec.Policies) > 0 {
+					filtered := make([]string, 0, len(h.Spec.Policies))
+					for _, pid := range h.Spec.Policies {
+						if pid == id {
+							changed = true
+							continue
+						}
+						filtered = append(filtered, pid)
+					}
+					if changed {
+						if len(filtered) == 0 {
+							h.Spec.Policies = nil
+						} else {
+							h.Spec.Policies = filtered
+						}
+					}
+				}
+				if !changed {
+					continue
+				}
+				if err := d.Stores.Host.Upsert(ctx, h); err != nil {
+					return fmt.Errorf("detach from host %q: %w", h.Meta.Name, err)
+				}
+			}
+		}
+		return nil
+	}
+}
+
 // cascadeRateLimitDetach strips the deleted RateLimit id from every
 // policy's Spec.RLBindings before the row is removed. The flat
 // policies.rate_limit_id column is already handled by PG (FK SET NULL),
@@ -637,7 +729,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		listScanResolver(d.Stores.Policy, polmeta),
 		nil,
 		nil,
-		nil,
+		cascadePolicyDetach(d),
 		nil,
 		false,
 		protect,
