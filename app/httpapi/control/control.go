@@ -88,6 +88,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerReferences(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
+	registerDebug(api, d, protect)
 
 	return api
 }
