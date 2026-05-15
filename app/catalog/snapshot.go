@@ -180,6 +180,70 @@ func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
 	return k, ok
 }
 
+// AllProviders / AllPolicies / AllHostKeys / AllRelayKeys / AllRateLimits
+// / AllPricings return the full enabled set in stable slug order. Used
+// by the debug-snapshot endpoint; never on the hot path.
+
+// AllProviders returns every Provider in the snapshot, sorted by slug.
+func (s *Snapshot) AllProviders() []*provider.Provider {
+	out := make([]*provider.Provider, 0, len(s.providersByID))
+	for _, p := range s.providersByID {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllPolicies returns every Policy in the snapshot, sorted by slug.
+func (s *Snapshot) AllPolicies() []*policy.Policy {
+	out := make([]*policy.Policy, 0, len(s.policiesByID))
+	for _, p := range s.policiesByID {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllHostKeys returns every HostKey in the snapshot, sorted by slug.
+func (s *Snapshot) AllHostKeys() []*hostkey.HostKey {
+	out := make([]*hostkey.HostKey, 0, len(s.hostKeysByID))
+	for _, k := range s.hostKeysByID {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllRelayKeys returns every RelayKey in the snapshot, sorted by slug.
+func (s *Snapshot) AllRelayKeys() []*relaykey.RelayKey {
+	out := make([]*relaykey.RelayKey, 0, len(s.relayKeysByID))
+	for _, k := range s.relayKeysByID {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllRateLimits returns every RateLimit in the snapshot, sorted by slug.
+func (s *Snapshot) AllRateLimits() []*ratelimit.RateLimit {
+	out := make([]*ratelimit.RateLimit, 0, len(s.rateLimitsByID))
+	for _, r := range s.rateLimitsByID {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllPricings returns every Pricing in the snapshot, sorted by slug.
+func (s *Snapshot) AllPricings() []*pricing.Pricing {
+	out := make([]*pricing.Pricing, 0, len(s.pricingsByID))
+	for _, p := range s.pricingsByID {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
 // HostKeysForHost returns every enabled HostKey whose Spec.HostID
 // matches hostID. Order is by hostkey slug — stable across snapshots.
 // Used by routing's policy-less flow (settings.Inference.AllowMissingPolicy)
