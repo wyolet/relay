@@ -16,7 +16,7 @@ import (
 // resolveQuery accepts one or more refs. Pass each as a repeated query
 // parameter: GET /catalog/resolve?ref=anthropic&ref=openai/gpt-5
 type resolveQuery struct {
-	Refs []string `query:"ref" required:"true" doc:"One or more catalog refs in the modelref DSL: provider[/model][@host], or @host. Repeat the parameter to union multiple refs."`
+	Refs []string `query:"ref,explode" required:"true" doc:"One or more catalog refs in the modelref DSL: provider[/model][@host], or @host. Repeat the parameter to union multiple refs."`
 }
 
 // resolveOutput is the union expansion of all refs in the request.
