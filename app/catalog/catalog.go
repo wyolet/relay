@@ -29,8 +29,9 @@ type Catalog struct {
 	relayKeys  RelayKeyLister
 	pricings   PricingLister
 
-	snap atomic.Pointer[Snapshot]
-	rmu  sync.Mutex
+	snap  atomic.Pointer[Snapshot]
+	ready atomic.Bool
+	rmu   sync.Mutex
 
 	settings settingsHolder
 }
@@ -94,6 +95,19 @@ func New(
 // returned pointer is immutable until the next successful Reload.
 func (c *Catalog) Current() *Snapshot { return c.snap.Load() }
 
+// IsReady reports whether the catalog has built its first snapshot
+// successfully. Until then, the in-memory snapshot is the zero-value
+// returned by New — empty maps that look identical to a legitimately
+// empty catalog. The inference plane uses this to refuse traffic with
+// 503 instead of silently serving "no models found" lookups.
+func (c *Catalog) IsReady() bool { return c.ready.Load() }
+
+// markReady is called by Reload after the first successful snapshot
+// swap. Subsequent reloads don't toggle it back — once ready, stays
+// ready. A failed reload after that point keeps serving the previous
+// snapshot per the existing contract.
+func (c *Catalog) markReady() { c.ready.Store(true) }
+
 // Reload reads every store, filters to enabled rows, runs cross-entity
 // validation, builds a fresh Snapshot, and atomic-swaps it in. On any
 // error the existing Snapshot stays live — callers can retry.
@@ -155,6 +169,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 
 	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings)
 	c.snap.Store(snap)
+	c.markReady()
 	return nil
 }
 
