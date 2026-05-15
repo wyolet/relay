@@ -28,6 +28,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionProxyMode,
 		Description: "Proxy-mode flow gate. Controls whether the relay accepts inference requests where the caller supplies their own upstream provider key.",
 	})
+	registerSettingsSection[settings.Inference](api, d, protect, settings.Section{
+		Name:        settings.SectionInference,
+		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets RelayKeys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
+	})
 	registerSettingsList(api, d, protect)
 	registerSettingsSectionsCatalog(api, d, protect)
 }

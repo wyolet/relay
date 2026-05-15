@@ -16,9 +16,15 @@ func (s *Snapshot) addRelayKeys(rks []*relaykey.RelayKey, pols idSet) {
 	}
 }
 
-// sanitizeRelayKey drops the key when its target Policy isn't resolvable
-// — without a policy the inbound auth has no grants to apply.
+// sanitizeRelayKey keeps the key when it's policy-less (PolicyID empty —
+// the inference settings flag decides runtime behavior) or when its
+// target Policy resolves. Drops it only when PolicyID is set but
+// points at a row that doesn't exist or is disabled.
 func sanitizeRelayKey(k *relaykey.RelayKey, pols idSet) (*relaykey.RelayKey, bool) {
+	if k.Spec.PolicyID == "" {
+		clean := *k
+		return &clean, true
+	}
 	if _, ok := pols[k.Spec.PolicyID]; !ok {
 		return nil, false
 	}

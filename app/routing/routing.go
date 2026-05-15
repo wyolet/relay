@@ -38,6 +38,7 @@ import (
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/settings"
 )
 
 // Errors returned by Resolve. Each maps to a distinct HTTP status in
@@ -52,6 +53,10 @@ var (
 	ErrNoHostBinding    = errors.New("routing: no enabled host binding for model")
 	ErrHostNotFound     = errors.New("routing: host not found")
 	ErrNoKeys           = errors.New("routing: no host keys available for this host")
+
+	// ErrPolicyless is returned when a RelayKey has no PolicyID and the
+	// inference settings forbid policy-less traffic.
+	ErrPolicyless = errors.New("routing: relay key has no policy and policy-less traffic is disabled")
 )
 
 // Request carries the inbound resolution inputs.
@@ -100,9 +105,17 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
-	// ModelsByName returns all models sharing the slug (across providers);
-	// for the bound RelayKey's Policy we need the one whose ID is allowed.
-	// Walk policy's allowed IDs and intersect.
+	// Policy-less flow: when the RelayKey has no attached Policy, the
+	// behavior is decided by settings.Inference.AllowMissingPolicy. When
+	// allowed, the request bypasses the policy-grant + policy-RL paths
+	// and just needs a (model, host) triple the relay has a hostkey for.
+	if req.RelayKey.Spec.PolicyID == "" {
+		if !r.allowPolicylessTraffic() {
+			return nil, ErrPolicyless
+		}
+		return r.resolvePolicyless(snap, models)
+	}
+
 	pol, ok := snap.Policy(req.RelayKey.Spec.PolicyID)
 	if !ok {
 		return nil, ErrPolicyNotFound
@@ -257,6 +270,74 @@ func isDeprecated(m *model.Model) bool {
 		return true
 	}
 	return false
+}
+
+// allowPolicylessTraffic reads settings.Inference.AllowMissingPolicy.
+// Missing or malformed setting → false (closed default).
+func (r *Resolver) allowPolicylessTraffic() bool {
+	v, ok := r.cat.Setting(settings.SectionInference)
+	if !ok {
+		return false
+	}
+	cfg, ok := v.(*settings.Inference)
+	if !ok || cfg == nil {
+		return false
+	}
+	return cfg.AllowMissingPolicy
+}
+
+// resolvePolicyless picks the first (model, binding, host) triple where
+// the relay has any enabled hostkey for the host. No policy filter, no
+// policy-level rate limits — Plan.Policy is nil, Plan.Keys is the full
+// pool of hostkeys for the chosen host.
+func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model) (*Plan, error) {
+	var (
+		anyEnabledMod bool
+		anyEnabledBnd bool
+	)
+	for _, m := range models {
+		if !m.IsEnabled() {
+			continue
+		}
+		anyEnabledMod = true
+		// Skip deprecated models by default for the same reason wildcard
+		// grants do — the operator would explicitly grant a sunset model
+		// by configuring a Policy if they meant to.
+		if isDeprecated(m) {
+			continue
+		}
+		for i := range m.Spec.Hosts {
+			hb := &m.Spec.Hosts[i]
+			if !hb.IsEnabled() {
+				continue
+			}
+			h, ok := snap.Host(hb.HostID)
+			if !ok {
+				continue
+			}
+			anyEnabledBnd = true
+			keys := snap.HostKeysForHost(h.Meta.ID)
+			if len(keys) == 0 {
+				continue
+			}
+			providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+			return &Plan{
+				Model:       m,
+				Policy:      nil,
+				HostBinding: hb,
+				Host:        h,
+				Provider:    providerSlug,
+				Keys:        keys,
+			}, nil
+		}
+	}
+	if !anyEnabledMod {
+		return nil, ErrModelDisabled
+	}
+	if !anyEnabledBnd {
+		return nil, ErrNoHostBinding
+	}
+	return nil, ErrNoKeys
 }
 
 func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID string) []*hostkey.HostKey {
