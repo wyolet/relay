@@ -36,6 +36,7 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
@@ -87,29 +88,23 @@ type fixture struct {
 // here; structured logs are observed in unit tests and real runs.
 var silentLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+// benchSnap is an empty SnapshotReader — bench policy has no RL, so
+// the limiter is never invoked from the policy.Service path.
+type benchSnap struct{}
+
+func (benchSnap) Policy(string) (*policy.Policy, bool)              { return nil, false }
+func (benchSnap) RateLimit(string) (*ratelimit.RateLimit, bool)     { return nil, false }
+
 func newFixture(withLimiter bool) *fixture {
 	kvStore := kv.NewMem()
 	selector := keypool.New(kvStore, silentLogger, nil, nil)
-
 	var limiter *pkgratelimit.Limiter
-	var rules []pkgratelimit.Rule
 	if withLimiter {
 		limiter = pkgratelimit.New(kvStore, silentLogger, nil)
-		rules = []pkgratelimit.Rule{{
-			Key:      "bench:scope:0:requests",
-			Name:     "requests on bench",
-			Meter:    "requests",
-			Strategy: pkgratelimit.StrategyFixedWindow,
-			Amount:   1_000_000_000, // never trip
-			Window:   time.Hour,
-		}}
 	}
 
-	p := &pipeline.Pipeline{
-		Limiter:  limiter,
-		Selector: selector,
-		Logger:   silentLogger,
-	}
+	svc := policy.NewService(benchSnap{}, selector, limiter)
+	p := &pipeline.Pipeline{Policy: svc, Logger: silentLogger}
 
 	pol := &policy.Policy{Spec: policy.Spec{KeySelection: policy.KeySelectionPrioritized}}
 	key := &hostkey.HostKey{Resolved: "sk-bench", KeyHash: "bench-hash"}
@@ -121,8 +116,6 @@ func newFixture(withLimiter bool) *fixture {
 		Adapter:     &stubAdapter{body: `{"id":"x","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`, tokens: pkgusage.Tokens{"input": 1, "output": 1}},
 		Policy:      pol,
 		Keys:        []*hostkey.HostKey{key},
-		RateScope:   "bench",
-		Rules:       rules,
 		ModelName:   "bench-model",
 	}
 	return &fixture{pipe: p, req: req}
