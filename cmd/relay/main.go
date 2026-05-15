@@ -85,20 +85,20 @@ func main() {
 		bootOpts.AutoSeedDir = cfg.CatalogDir
 	}
 
-	cat, listener, stores, err := appcatalog.Bootstrap(bootCtx, bootOpts)
+	// Stores-first: wire the catalog stores synchronously so the control
+	// plane can serve CRUD even if the data-plane snapshot bootstrap
+	// fails or stalls. Hydrate (seed + first Reload + NOTIFY listener)
+	// runs in the background with retry — inference middleware gates
+	// on catalog.IsReady() and returns 503 until the snapshot is built.
+	cat, stores, err := appcatalog.BootstrapStores(bootCtx, bootOpts)
 	if err != nil {
-		slog.Error("catalog bootstrap failed", "err", err)
+		slog.Error("catalog stores init failed", "err", err)
 		os.Exit(1)
 	}
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
-	go func() {
-		if err := listener.Run(listenerCtx); err != nil && err != context.Canceled {
-			slog.Error("catalog listener exited", "err", err)
-		}
-	}()
-	slog.Info("catalog bootstrapped", "auto_seed_dir", bootOpts.AutoSeedDir)
+	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
 
 	// Identity store — fatal if YAML is malformed (login would silently
 	// be disabled otherwise). Empty store is fine (login returns 503).
@@ -213,6 +213,36 @@ func main() {
 	}
 	_ = inferSrv.Shutdown(shutCtx)
 	cancelListener()
+}
+
+// hydrateLoop runs Catalog.Hydrate with exponential backoff until it
+// succeeds, then starts the NOTIFY listener. Survives transient PG /
+// seed errors without taking the process down; the data plane returns
+// 503 until the first Hydrate completes. Once successful, the function
+// blocks on Listener.Run until the parent context is cancelled.
+func hydrateLoop(ctx context.Context, cat *appcatalog.Catalog, stores *appcatalog.Stores, opts appcatalog.BootstrapOptions) {
+	delay := time.Second
+	const maxDelay = 30 * time.Second
+	for {
+		listener, err := cat.Hydrate(ctx, stores, opts)
+		if err == nil {
+			slog.Info("catalog hydrated", "auto_seed_dir", opts.AutoSeedDir)
+			if err := listener.Run(ctx); err != nil && err != context.Canceled {
+				slog.Error("catalog listener exited", "err", err)
+			}
+			return
+		}
+		slog.Error("catalog hydrate failed; retrying", "err", err, "delay", delay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
 }
 
 // loadDotEnv reads a .env file and sets any KEY=VALUE pair whose key is not

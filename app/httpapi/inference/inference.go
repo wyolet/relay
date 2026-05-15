@@ -70,7 +70,11 @@ func Mount(r chi.Router, d Deps) huma.API {
 
 	// /v1/* operations classify the request mode first, then conditionally
 	// auth: normal + proxy-authed need a relay key; proxy-anonymous skips.
+	// The readiness gate runs ahead of both — until the catalog has
+	// completed its first Reload, /v1/* returns 503 instead of an
+	// empty-snapshot 404. /healthz stays unaffected.
 	mw := huma.Middlewares{
+		httpapi.HumaAuth(ReadinessMiddleware(d.Catalog)),
 		httpapi.HumaAuth(ClassifyMiddleware()),
 		httpapi.HumaAuth(RelayKeyAuthMiddleware(d.Catalog)),
 	}

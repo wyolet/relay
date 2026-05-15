@@ -51,13 +51,13 @@ type Stores struct {
 	Settings  *settings.Store
 }
 
-// Bootstrap wires the eight entity stores against the pool, optionally
-// seeds from YAML when the catalog is empty, runs an initial Reload, and
-// constructs a Listener primed for Run(ctx). The Listener is not started
-// — caller decides when to call Listener.Run (typically in a goroutine).
-func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener, *Stores, error) {
+// BootstrapStores wires the eight entity stores against the pool and
+// constructs a Catalog. Does NOT touch row data — no seed, no Reload.
+// Use when the control plane needs the stores but data-plane readiness
+// is deferred (see (*Catalog).Hydrate). Cheap and rarely fails.
+func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Stores, error) {
 	if opts.Pool == nil {
-		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: Pool is required")
+		return nil, nil, fmt.Errorf("catalog.BootstrapStores: Pool is required")
 	}
 	q := gen.New(opts.Pool)
 	stores := &Stores{
@@ -71,23 +71,30 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		RelayKey:  relaykey.NewStore(q),
 		Settings:  settings.NewStore(q),
 	}
-
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
 		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
 	)
 	cat.settings.store = stores.Settings
-	if err := cat.settings.reload(ctx); err != nil {
-		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: initial settings reload: %w", err)
+	return cat, stores, nil
+}
+
+// Hydrate is the expensive half of bootstrap: reload settings, load the
+// hostkey master-key version, optionally auto-seed from YAML, run the
+// first catalog Reload, and construct a NOTIFY listener primed for Run.
+// On any error the Catalog's IsReady stays false and the caller can
+// retry — handlers gate on it and return 503 in the meantime.
+func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOptions) (*Listener, error) {
+	if err := c.settings.reload(ctx); err != nil {
+		return nil, fmt.Errorf("catalog.Hydrate: settings reload: %w", err)
 	}
 	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
-		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: load key version: %w", err)
+		return nil, fmt.Errorf("catalog.Hydrate: load key version: %w", err)
 	}
-
 	if opts.AutoSeedDir != "" {
 		empty, err := isCatalogEmpty(ctx, stores)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: check empty: %w", err)
+			return nil, fmt.Errorf("catalog.Hydrate: check empty: %w", err)
 		}
 		if empty {
 			if _, err := seed.Run(ctx, seed.Options{
@@ -95,16 +102,14 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 				YAMLDir:   opts.AutoSeedDir,
 				MasterKey: opts.MasterKey,
 			}); err != nil {
-				return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: auto-seed: %w", err)
+				return nil, fmt.Errorf("catalog.Hydrate: auto-seed: %w", err)
 			}
 		}
 	}
-
-	if err := cat.Reload(ctx); err != nil {
-		return nil, nil, nil, fmt.Errorf("catalog.Bootstrap: initial reload: %w", err)
+	if err := c.Reload(ctx); err != nil {
+		return nil, fmt.Errorf("catalog.Hydrate: initial reload: %w", err)
 	}
-
-	listener := NewListener(cat, opts.Pool, listenerStores{
+	listener := NewListener(c, opts.Pool, listenerStores{
 		provider:  stores.Provider,
 		host:      stores.Host,
 		model:     stores.Model,
@@ -115,6 +120,21 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		relaykey:  stores.RelayKey,
 		settings:  stores.Settings,
 	})
+	return listener, nil
+}
+
+// Bootstrap is the legacy one-shot: stores + Hydrate in a single call.
+// Kept for tests and any caller that doesn't need split-boot semantics.
+// Returns the same triple as before plus the listener primed for Run.
+func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener, *Stores, error) {
+	cat, stores, err := BootstrapStores(ctx, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	listener, err := cat.Hydrate(ctx, stores, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	return cat, listener, stores, nil
 }
 
