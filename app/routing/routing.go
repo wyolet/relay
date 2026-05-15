@@ -33,9 +33,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // Errors returned by Resolve. Each maps to a distinct HTTP status in
@@ -71,8 +69,8 @@ type Plan struct {
 	Policy      *policy.Policy
 	HostBinding *model.HostBinding
 	Host        *host.Host
+	Provider    string
 	Keys        []*hostkey.HostKey
-	Rules       []pkgratelimit.Rule
 }
 
 // Resolver wraps a Catalog snapshot accessor and answers Resolve calls.
@@ -187,22 +185,15 @@ candidates:
 		return nil, ErrNoKeys
 	}
 
-	// 7. Rules — pick the RateLimit the request hits. If the policy
-	// declares per-model bindings, the first binding whose Models matches
-	// the requested model wins; otherwise the policy's flat RateLimitID
-	// applies. A request that matches no binding (and has no flat RL) is
-	// uncapped at this policy.
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
-	rl := selectPolicyRateLimit(snap, pol, providerSlug, chosen.Meta.Name, h.Meta.Name)
-	rules := buildRules(pol, rl)
 
 	return &Plan{
 		Model:       chosen,
 		Policy:      pol,
 		HostBinding: binding,
 		Host:        h,
+		Provider:    providerSlug,
 		Keys:        keys,
-		Rules:       rules,
 	}, nil
 }
 
@@ -270,38 +261,3 @@ func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID strin
 	return out
 }
 
-// selectPolicyRateLimit picks the RateLimit a policy applies to one
-// request. When pol.Spec.RLBindings is non-empty, the first binding
-// whose Models matches the (provider, model, host) triple wins. When
-// RLBindings is empty the flat pol.Spec.RateLimitID is used. Returns
-// nil when no rate-limit applies (binding miss with no flat fallback,
-// or unresolvable RL id).
-func selectPolicyRateLimit(snap *appcatalog.Snapshot, pol *policy.Policy, providerSlug, modelSlug, hostSlug string) *ratelimit.RateLimit {
-	if len(pol.Spec.RLBindings) > 0 {
-		for _, b := range pol.Spec.RLBindings {
-			if refsAllow(b.Models, providerSlug, modelSlug, hostSlug, false) {
-				rl, _ := snap.RateLimit(b.RateLimitID)
-				return rl
-			}
-		}
-		return nil
-	}
-	if pol.Spec.RateLimitID != "" {
-		rl, _ := snap.RateLimit(pol.Spec.RateLimitID)
-		return rl
-	}
-	return nil
-}
-
-// buildRules translates a Policy + its RateLimit into pkgratelimit.Rules
-// the limiter understands. v1 supports the policy-level rate limit; per-
-// key rules and system rate limits are deferred to the routing layer
-// reaching parity with legacy.
-//
-// Returns nil when the policy has no rate limit attached.
-func buildRules(pol *policy.Policy, rl *ratelimit.RateLimit) []pkgratelimit.Rule {
-	if rl == nil {
-		return nil
-	}
-	return ratelimit.Resolve(pol, rl)
-}

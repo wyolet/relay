@@ -4,10 +4,14 @@
 // (round-robin counters), and "pool_lru:<poolName>:<keyHash>"
 // (LRU timestamps).
 //
-// Supported selection strategies (policy.KeySelection):
+// Supported selection strategies (KeySelection):
 //   - "prioritized" (default) — always pick the first healthy key in declaration order.
 //   - "round-robin" — distribute traffic evenly using a counter.
 //   - "least-recently-used" — pick the key with the oldest last-used timestamp.
+//
+// The KeySelection enum lives in this package (not policy) so policy can
+// import keypool without creating a cycle when its Service composes
+// Selector + Limiter at runtime.
 package keypool
 
 import (
@@ -20,9 +24,24 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/reqid"
+)
+
+// KeySelection is the algorithm a Selector uses to pick from healthy
+// candidates. Persisted as a string in Policy.Spec.KeySelection.
+type KeySelection string
+
+const (
+	// KeySelectionPrioritized drains keys in declaration order — the
+	// first healthy key in the candidate set wins. Default.
+	KeySelectionPrioritized KeySelection = "prioritized"
+	// KeySelectionRoundRobin rotates evenly across healthy keys via a
+	// per-scope counter.
+	KeySelectionRoundRobin KeySelection = "round-robin"
+	// KeySelectionLeastRecentlyUsed prefers the key whose last successful
+	// use was furthest in the past.
+	KeySelectionLeastRecentlyUsed KeySelection = "least-recently-used"
 )
 
 // FailureKind classifies the upstream failure for circuit-breaker transitions.
@@ -125,8 +144,10 @@ func lruKey(poolName, keyHash string) string {
 	return fmt.Sprintf("{pool_lru:%s}:%s", poolName, keyHash)
 }
 
-// Pick returns a healthy HostKey from pool. The selection strategy is
-// determined by pool.Spec.KeySelection (default: prioritized).
+// Pick returns a healthy HostKey from the candidate set. scope is the
+// kv key tag (typically the owning Policy's Meta.Name) used for the
+// round-robin counter and LRU timestamps. algo is the selection
+// strategy; empty falls back to KeySelectionPrioritized.
 //
 // exclude is an optional list of keys to skip even if healthy (e.g. for
 // retry-with-exclusion in future callers). Pass nil to skip the check.
@@ -134,7 +155,7 @@ func lruKey(poolName, keyHash string) string {
 // Open keys past their OpenUntil are auto-transitioned to HalfOpen and become
 // eligible. Concurrent Picks may both pick the same half-open key; the
 // caller's RecordSuccess/RecordFailure resolves the outcome (acceptable).
-func (s *Selector) Pick(ctx context.Context, pool *policy.Policy, keys []*hostkey.HostKey, exclude ...[]*hostkey.HostKey) (*hostkey.HostKey, error) {
+func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, keys []*hostkey.HostKey, exclude ...[]*hostkey.HostKey) (*hostkey.HostKey, error) {
 	now := s.clock()
 
 	// Build exclude set for O(1) lookup.
@@ -188,17 +209,17 @@ func (s *Selector) Pick(ctx context.Context, pool *policy.Policy, keys []*hostke
 		return nil, ErrNoHealthyKeys
 	}
 
-	strategy := policy.KeySelectionPrioritized
-	if pool != nil && pool.Spec.KeySelection != "" {
-		strategy = pool.Spec.KeySelection
+	strategy := algo
+	if strategy == "" {
+		strategy = KeySelectionPrioritized
 	}
 
 	switch strategy {
-	case policy.KeySelectionRoundRobin:
-		return s.pickRoundRobin(ctx, pool, healthy)
+	case KeySelectionRoundRobin:
+		return s.pickRoundRobin(ctx, scope, healthy)
 
-	case policy.KeySelectionLeastRecentlyUsed:
-		return s.pickLRU(ctx, pool, healthy)
+	case KeySelectionLeastRecentlyUsed:
+		return s.pickLRU(ctx, scope, healthy)
 
 	default: // "prioritized" or empty — first healthy in declaration order.
 		return healthy[0].key, nil
@@ -206,15 +227,15 @@ func (s *Selector) Pick(ctx context.Context, pool *policy.Policy, keys []*hostke
 }
 
 // pickRoundRobin selects a candidate using a modular counter stored in Redis.
-func (s *Selector) pickRoundRobin(ctx context.Context, pool *policy.Policy, healthy []candidate) (*hostkey.HostKey, error) {
+func (s *Selector) pickRoundRobin(ctx context.Context, scope string, healthy []candidate) (*hostkey.HostKey, error) {
 	var idx int64
-	err := s.state.WithLock(ctx, []string{roundRobinKey(pool.Meta.Name)}, func(ctx context.Context) error {
+	err := s.state.WithLock(ctx, []string{roundRobinKey(scope)}, func(ctx context.Context) error {
 		var ierr error
-		idx, ierr = s.state.Incr(ctx, roundRobinKey(pool.Meta.Name), 1)
+		idx, ierr = s.state.Incr(ctx, roundRobinKey(scope), 1)
 		if ierr == nil {
 			// Refresh 30-day TTL on every increment. Redis reclaims counters for
 			// deleted pools without affecting modular-index correctness.
-			_ = s.state.Expire(ctx, roundRobinKey(pool.Meta.Name), ttlRoundRobin)
+			_ = s.state.Expire(ctx, roundRobinKey(scope), ttlRoundRobin)
 		}
 		return ierr
 	})
@@ -227,7 +248,7 @@ func (s *Selector) pickRoundRobin(ctx context.Context, pool *policy.Policy, heal
 
 // pickLRU selects the healthy candidate with the oldest last-use timestamp
 // (or never-used) and updates its timestamp.
-func (s *Selector) pickLRU(ctx context.Context, pool *policy.Policy, healthy []candidate) (*hostkey.HostKey, error) {
+func (s *Selector) pickLRU(ctx context.Context, scope string, healthy []candidate) (*hostkey.HostKey, error) {
 	var (
 		chosen    *hostkey.HostKey
 		chosenTS  int64 = -1 // -1 = not yet set
@@ -235,7 +256,7 @@ func (s *Selector) pickLRU(ctx context.Context, pool *policy.Policy, healthy []c
 	)
 
 	for _, c := range healthy {
-		k := lruKey(pool.Meta.Name, c.key.KeyHash)
+		k := lruKey(scope, c.key.KeyHash)
 		raw, err := s.state.Get(ctx, k)
 		if err != nil || len(raw) == 0 {
 			// Never used — immediately preferred.
@@ -267,7 +288,7 @@ func (s *Selector) pickLRU(ctx context.Context, pool *policy.Policy, healthy []c
 
 	// Stamp last-use timestamp.
 	now := s.clock().UnixMilli()
-	k := lruKey(pool.Meta.Name, chosen.KeyHash)
+	k := lruKey(scope, chosen.KeyHash)
 	_ = s.state.Set(ctx, k, []byte(strconv.FormatInt(now, 10)), ttlLRU)
 
 	return chosen, nil
@@ -276,8 +297,8 @@ func (s *Selector) pickLRU(ctx context.Context, pool *policy.Policy, healthy []c
 // PickWithExclude is a convenience wrapper around Pick that accepts an explicit
 // exclude list. Callers that always have an exclude slice can use this to avoid
 // the variadic syntax.
-func (s *Selector) PickWithExclude(ctx context.Context, pool *policy.Policy, keys []*hostkey.HostKey, exclude []*hostkey.HostKey) (*hostkey.HostKey, error) {
-	return s.Pick(ctx, pool, keys, exclude)
+func (s *Selector) PickWithExclude(ctx context.Context, scope string, algo KeySelection, keys []*hostkey.HostKey, exclude []*hostkey.HostKey) (*hostkey.HostKey, error) {
+	return s.Pick(ctx, scope, algo, keys, exclude)
 }
 
 // ClearCircuit deletes the circuit-breaker record for a key from the KV

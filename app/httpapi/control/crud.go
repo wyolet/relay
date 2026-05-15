@@ -87,6 +87,11 @@ var errSlugNotFound = errors.New("not found")
 // metadata.owner.kind. Pass "" for kinds where the caller must always
 // supply owner.kind explicitly (e.g. Model needs Owner.Kind=provider
 // with a specific Owner.ID; the API can't default it).
+// mutationGuard runs before create/update/delete. action is "create",
+// "update", or "delete". For create, existing is nil. For delete,
+// incoming is nil. Return a non-nil error to block the mutation with 403.
+type mutationGuard[T any] func(action string, existing, incoming *T) error
+
 func registerKind[T any](
 	api huma.API,
 	plural, singular string,
@@ -96,6 +101,7 @@ func registerKind[T any](
 	validate func(*T) error,
 	defaultOwnerKind meta.OwnerKind,
 	resolveSlug func(slug string) (string, error),
+	guard mutationGuard[T],
 	protect huma.Middlewares,
 ) {
 	base := "/" + plural
@@ -200,6 +206,11 @@ func registerKind[T any](
 				return nil, huma.Error400BadRequest(err.Error())
 			}
 		}
+		if guard != nil {
+			if err := guard("create", nil, v); err != nil {
+				return nil, huma.Error403Forbidden(err.Error())
+			}
+		}
 		if err := store.Upsert(ctx, v); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -223,7 +234,8 @@ func registerKind[T any](
 		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if _, err := store.Get(ctx, in.ID); err != nil {
+		existing, err := store.Get(ctx, in.ID)
+		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
 		v := &in.Body
@@ -232,6 +244,11 @@ func registerKind[T any](
 		if validate != nil {
 			if err := validate(v); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
+			}
+		}
+		if guard != nil {
+			if err := guard("update", existing, v); err != nil {
+				return nil, huma.Error403Forbidden(err.Error())
 			}
 		}
 		if err := store.Upsert(ctx, v); err != nil {
@@ -257,6 +274,15 @@ func registerKind[T any](
 	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
 		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
+		}
+		existing, err := store.Get(ctx, in.ID)
+		if err != nil || existing == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
+		}
+		if guard != nil {
+			if err := guard("delete", existing, nil); err != nil {
+				return nil, huma.Error403Forbidden(err.Error())
+			}
 		}
 		if err := store.Delete(ctx, in.ID); err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
@@ -326,8 +352,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[provider.Provider](
 		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
 		func(p *provider.Provider) error { return p.Validate() },
-		"", // Provider requires Owner.Kind=system per Validate, but the API blocks system.
-		// Net: Providers can't be created via API; they ship through seed.
+		"",
 		func(s string) (string, error) {
 			p, ok := d.Catalog.Current().ProviderByName(s)
 			if !ok {
@@ -335,13 +360,14 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			return p.Meta.ID, nil
 		},
+		nil,
 		protect,
 	)
 
 	registerKind[host.Host](
 		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
 		func(h *host.Host) error { return h.Validate() },
-		"", // Hosts ship through seed (system-owned), not the API.
+		"",
 		func(s string) (string, error) {
 			h, ok := d.Catalog.Current().HostByName(s)
 			if !ok {
@@ -349,13 +375,14 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			return h.Meta.ID, nil
 		},
+		nil,
 		protect,
 	)
 
 	registerKind[model.Model](
 		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
 		func(m *model.Model) error { return m.Validate() },
-		"", // Models are provider-owned; caller must supply Owner.ID (provider id).
+		"",
 		func(s string) (string, error) {
 			ms := d.Catalog.Current().ModelsByName(s)
 			if len(ms) == 0 {
@@ -363,6 +390,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			return ms[0].Meta.ID, nil
 		},
+		nil,
 		protect,
 	)
 
@@ -371,6 +399,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(k *hostkey.HostKey) error { return k.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.HostKey, kmeta),
+		nil,
 		protect,
 	)
 
@@ -379,6 +408,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
+		rateLimitGuard,
 		protect,
 	)
 
@@ -393,14 +423,16 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			return p.Meta.ID, nil
 		},
+		policyGuard,
 		protect,
 	)
 
 	registerKind[pricing.Pricing](
 		api, "pricings", "pricing", d.Stores.Pricing, d.Authz, prmeta,
 		func(p *pricing.Pricing) error { return p.Validate() },
-		"", // Pricing is host-owned; caller must supply Owner.ID (host id).
+		"",
 		listScanResolver(d.Stores.Pricing, prmeta),
+		nil,
 		protect,
 	)
 
@@ -409,6 +441,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(k *relaykey.RelayKey) error { return k.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RelayKey, rkmeta),
+		nil,
 		protect,
 	)
 }

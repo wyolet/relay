@@ -25,8 +25,11 @@ package policy
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/modelref"
+	"github.com/wyolet/relay/app/ratelimit"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // Policy is the routing/auth bundle. Composition layer enforces that every
@@ -79,8 +82,10 @@ type Spec struct {
 	RLBindings []RLBinding `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty" validate:"omitempty,dive"`
 
 	// KeySelection is the algorithm used to pick a ProviderKey from the
-	// healthy pool. Defaults to prioritized.
-	KeySelection KeySelection `json:"keySelection,omitempty" yaml:"keySelection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used"`
+	// healthy pool. Defaults to prioritized. The enum lives in app/keypool
+	// (the consumer); policy re-exports the constants via type aliases
+	// for backward source-compatibility.
+	KeySelection keypool.KeySelection `json:"keySelection,omitempty" yaml:"keySelection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used"`
 
 	// SkipDefaultLimits opts out of the implicit "every Policy targeting an
 	// auth-required Provider must enforce at least requests + tokens" rule
@@ -108,30 +113,61 @@ type RLBinding struct {
 	RateLimitID string   `json:"rateLimitId" yaml:"rateLimitId" validate:"required,uuid"`
 }
 
-// KeySelection controls how the keypool picks a ProviderKey from the
-// healthy candidates that satisfy this Policy.
-type KeySelection string
+// KeySelection is an alias for keypool.KeySelection so existing callers
+// can keep writing policy.KeySelection without an import change. The
+// canonical definition lives in app/keypool.
+type KeySelection = keypool.KeySelection
 
+// Re-exported constants for source compatibility.
 const (
-	// KeySelectionPrioritized drains keys in declaration order — the first
-	// healthy key in HostKeyIDs wins. Default.
-	KeySelectionPrioritized KeySelection = "prioritized"
-	// KeySelectionRoundRobin rotates evenly across healthy keys.
-	KeySelectionRoundRobin KeySelection = "round-robin"
-	// KeySelectionLeastRecentlyUsed prefers the key whose last successful
-	// use was furthest in the past.
-	KeySelectionLeastRecentlyUsed KeySelection = "least-recently-used"
+	KeySelectionPrioritized       = keypool.KeySelectionPrioritized
+	KeySelectionRoundRobin        = keypool.KeySelectionRoundRobin
+	KeySelectionLeastRecentlyUsed = keypool.KeySelectionLeastRecentlyUsed
 )
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (p *Policy) IsEnabled() bool { return p.Spec.Enabled == nil || *p.Spec.Enabled }
 
 // EffectiveKeySelection returns KeySelection or the prioritized default.
-func (p *Policy) EffectiveKeySelection() KeySelection {
+func (p *Policy) EffectiveKeySelection() keypool.KeySelection {
 	if p.Spec.KeySelection == "" {
-		return KeySelectionPrioritized
+		return keypool.KeySelectionPrioritized
 	}
 	return p.Spec.KeySelection
+}
+
+// SelectRateLimitID returns the id of the RateLimit that applies to one
+// request triple, or "" when the policy doesn't cap this request.
+//
+// Resolution: when Spec.RLBindings is non-empty, the first binding whose
+// Models matches the (provider, model, host) triple wins. Otherwise the
+// flat Spec.RateLimitID is used. A request that matches no binding and
+// has no flat fallback is uncapped at this policy.
+//
+// Pure query — no snapshot lookup, no I/O. Caller resolves the id to a
+// *ratelimit.RateLimit via the snapshot.
+func (p *Policy) SelectRateLimitID(providerSlug, modelSlug, hostSlug string) string {
+	if p == nil {
+		return ""
+	}
+	for _, b := range p.Spec.RLBindings {
+		if modelref.MatchAny(b.Models, providerSlug, modelSlug, hostSlug) {
+			return b.RateLimitID
+		}
+	}
+	return p.Spec.RateLimitID
+}
+
+// ResolveRules converts the given RateLimit into the limiter's Rule
+// shape, scoped by this policy's slug. Returns nil when rl is nil,
+// disabled, or has no Rules. This is the runtime equivalent of the old
+// ratelimit.Resolve(pol, rl) function — moved here so app/ratelimit
+// stays free of policy imports.
+func (p *Policy) ResolveRules(rl *ratelimit.RateLimit) []pkgratelimit.Rule {
+	if p == nil {
+		return nil
+	}
+	return ratelimit.ResolveWithScope("policy", p.Meta.Name, rl)
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:

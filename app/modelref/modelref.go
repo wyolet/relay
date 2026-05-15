@@ -180,6 +180,24 @@ func MustParse(s string) Ref {
 //
 // Used by the routing resolver to decide whether a candidate
 // HostBinding is allowed by the caller's Policy.
+// MatchAny reports whether any ref string in refs matches the given
+// (provider, model, host) triple. Refs that fail to parse are skipped
+// silently — Validate rejects malformed refs at write time, so a bad
+// ref reaching here means hand-edited data; ignoring is safer than
+// erroring at request time.
+func MatchAny(refs []string, providerSlug, modelSlug, hostSlug string) bool {
+	for _, raw := range refs {
+		ref, err := Parse(raw)
+		if err != nil {
+			continue
+		}
+		if ref.Matches(providerSlug, modelSlug, hostSlug) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r Ref) Matches(providerSlug, modelSlug, hostSlug string) bool {
 	if !r.ProviderWildcard && r.Provider != providerSlug {
 		return false

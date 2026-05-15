@@ -11,9 +11,16 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/kv"
 )
+
+// poolRef is a tiny test-only struct that mirrors what Pick now takes:
+// a kv scope tag plus a selection strategy. Keeps the tests free of an
+// app/policy import (which would cycle via policy → keypool).
+type poolRef struct {
+	scope string
+	algo  KeySelection
+}
 
 // helpers
 
@@ -35,15 +42,12 @@ func key(name, hash string) *hostkey.HostKey {
 	}
 }
 
-func pool(name string) *policy.Policy {
-	return &policy.Policy{Meta: meta.Metadata{Name: name}}
+func pool(name string) poolRef {
+	return poolRef{scope: name}
 }
 
-func poolWithStrategy(name string, strategy policy.KeySelection) *policy.Policy {
-	return &policy.Policy{
-		Meta: meta.Metadata{Name: name},
-		Spec: policy.Spec{KeySelection: strategy},
-	}
+func poolWithStrategy(name string, strategy KeySelection) poolRef {
+	return poolRef{scope: name, algo: strategy}
 }
 
 // frozen clock helpers
@@ -84,7 +88,7 @@ func TestAuthFailureIsIndefinite(t *testing.T) {
 		t.Fatal("want open+indefinite")
 	}
 	p := pool("p")
-	_, err := sel.Pick(ctx, p, []*hostkey.HostKey{key("s", k)})
+	_, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
 	if err != ErrNoHealthyKeys {
 		t.Fatalf("want ErrNoHealthyKeys, got %v", err)
 	}
@@ -101,7 +105,7 @@ func TestRateLimitShortStaysClosed(t *testing.T) {
 		t.Fatalf("want closed, got %v", rec.State)
 	}
 	p := pool("p2")
-	got, err := sel.Pick(ctx, p, []*hostkey.HostKey{key("s", k)})
+	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,14 +125,14 @@ func TestRateLimitLongOpensForDuration(t *testing.T) {
 	// at t+10s — still open
 	sel.clock = frozenClock(t0.Add(10 * time.Second))
 	p := pool("p3")
-	_, err := sel.Pick(ctx, p, []*hostkey.HostKey{key("s", k)})
+	_, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
 	if err != ErrNoHealthyKeys {
 		t.Fatalf("want ErrNoHealthyKeys at t+10s, got %v", err)
 	}
 
 	// at t+31s — should auto-transition to half-open and be eligible
 	sel.clock = frozenClock(t0.Add(31 * time.Second))
-	got, err := sel.Pick(ctx, p, []*hostkey.HostKey{key("s", k)})
+	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
 	if err != nil {
 		t.Fatalf("want key at t+31s, got err %v", err)
 	}
@@ -164,7 +168,7 @@ func TestServerErrorBackoffEscalates(t *testing.T) {
 	// Past OpenUntil → half-open probe; record success → BackoffStep=0.
 	sel.clock = frozenClock(t0.Add(9 * time.Second))
 	p := pool("p4")
-	got, err := sel.Pick(ctx, p, []*hostkey.HostKey{key("s", k)})
+	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
 	if err != nil || got.KeyHash != k {
 		t.Fatal("expected half-open pick")
 	}
@@ -200,10 +204,10 @@ func TestPick_RoundRobin(t *testing.T) {
 		key("b", "hB"),
 		key("c", "hC"),
 	}
-	p := poolWithStrategy("rr", policy.KeySelectionRoundRobin)
+	p := poolWithStrategy("rr", KeySelectionRoundRobin)
 	counts := map[string]int{}
 	for i := 0; i < 30; i++ {
-		got, err := sel.Pick(ctx, p, keys)
+		got, err := sel.Pick(ctx, p.scope, p.algo, keys)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -226,9 +230,9 @@ func TestPick_SkipsOpen(t *testing.T) {
 		key("b", "hB"),
 		key("c", "hC"),
 	}
-	p := poolWithStrategy("skip", policy.KeySelectionRoundRobin)
+	p := poolWithStrategy("skip", KeySelectionRoundRobin)
 	for i := 0; i < 20; i++ {
-		got, err := sel.Pick(ctx, p, keys)
+		got, err := sel.Pick(ctx, p.scope, p.algo, keys)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -250,7 +254,7 @@ func TestPick_NoHealthy(t *testing.T) {
 		sel.RecordFailure(ctx, k.KeyHash, FailureAuth, 0)
 	}
 	p := pool("none")
-	_, err := sel.Pick(ctx, p, keys)
+	_, err := sel.Pick(ctx, p.scope, p.algo, keys)
 	if err != ErrNoHealthyKeys {
 		t.Fatalf("want ErrNoHealthyKeys, got %v", err)
 	}
@@ -266,12 +270,12 @@ func TestPick_HalfOpenOnceVisible(t *testing.T) {
 	p := pool("ho")
 	sec := key("s", k)
 
-	got, err := sel.Pick(ctx, p, []*hostkey.HostKey{sec})
+	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{sec})
 	if err != nil || got.KeyHash != k {
 		t.Fatalf("first pick: want key, got err=%v", err)
 	}
 	// Second pick without recording outcome — should not panic.
-	_, err2 := sel.Pick(ctx, p, []*hostkey.HostKey{sec})
+	_, err2 := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{sec})
 	_ = err2 // half-open may be returned or not; just no panic
 }
 
@@ -284,7 +288,7 @@ func TestPickConcurrent(t *testing.T) {
 		key("b", "cB"),
 		key("c", "cC"),
 	}
-	p := poolWithStrategy("concurrent", policy.KeySelectionRoundRobin)
+	p := poolWithStrategy("concurrent", KeySelectionRoundRobin)
 	var (
 		mu     sync.Mutex
 		counts = map[string]int{}
@@ -295,7 +299,7 @@ func TestPickConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			got, err := sel.Pick(ctx, p, keys)
+			got, err := sel.Pick(ctx, p.scope, p.algo, keys)
 			if err != nil {
 				errCnt.Add(1)
 				return
@@ -346,9 +350,9 @@ func TestPick_Prioritized_HealthyFirst(t *testing.T) {
 		key("b", "hB"),
 		key("c", "hC"),
 	}
-	p := poolWithStrategy("pri", policy.KeySelectionPrioritized)
+	p := poolWithStrategy("pri", KeySelectionPrioritized)
 	for i := 0; i < 10; i++ {
-		got, err := sel.Pick(ctx, p, keys)
+		got, err := sel.Pick(ctx, p.scope, p.algo, keys)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,8 +372,8 @@ func TestPick_Prioritized_SkipsOpenFirst(t *testing.T) {
 		key("b", "hB"),
 		key("c", "hC"),
 	}
-	p := poolWithStrategy("pri2", policy.KeySelectionPrioritized)
-	got, err := sel.Pick(ctx, p, keys)
+	p := poolWithStrategy("pri2", KeySelectionPrioritized)
+	got, err := sel.Pick(ctx, p.scope, p.algo, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +390,7 @@ func TestPick_LRU_PrefersNeverUsed(t *testing.T) {
 
 	clk := frozenClock(t0)
 	sel := New(ms, noopLogger(), clk, nil)
-	p := poolWithStrategy("lru1", policy.KeySelectionLeastRecentlyUsed)
+	p := poolWithStrategy("lru1", KeySelectionLeastRecentlyUsed)
 
 	secA := key("a", "hA")
 	secB := key("b", "hB")
@@ -394,13 +398,13 @@ func TestPick_LRU_PrefersNeverUsed(t *testing.T) {
 
 	// Stamp A at t0, B at t0+1s.
 	sel.clock = frozenClock(t0)
-	_, _ = sel.Pick(ctx, poolWithStrategy("lru1", policy.KeySelectionLeastRecentlyUsed), []*hostkey.HostKey{secA})
+	_, _ = sel.Pick(ctx, "lru1", KeySelectionLeastRecentlyUsed, []*hostkey.HostKey{secA})
 	sel.clock = frozenClock(t0.Add(time.Second))
-	_, _ = sel.Pick(ctx, poolWithStrategy("lru1", policy.KeySelectionLeastRecentlyUsed), []*hostkey.HostKey{secB})
+	_, _ = sel.Pick(ctx, "lru1", KeySelectionLeastRecentlyUsed, []*hostkey.HostKey{secB})
 
 	// Now pick from all three — C was never used, prefer C.
 	sel.clock = frozenClock(t0.Add(2 * time.Second))
-	got, err := sel.Pick(ctx, p, []*hostkey.HostKey{secA, secB, secC})
+	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB, secC})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,22 +420,22 @@ func TestPick_LRU_PrefersOldest(t *testing.T) {
 	ctx := context.Background()
 
 	sel := New(ms, noopLogger(), frozenClock(t0), nil)
-	p := poolWithStrategy("lru2", policy.KeySelectionLeastRecentlyUsed)
+	p := poolWithStrategy("lru2", KeySelectionLeastRecentlyUsed)
 	secA := key("a", "hA")
 	secB := key("b", "hB")
 	secC := key("c", "hC")
 
 	// Stamp all three at increasing times.
 	sel.clock = frozenClock(t0.Add(1 * time.Second))
-	_, _ = sel.Pick(ctx, p, []*hostkey.HostKey{secA})
+	_, _ = sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA})
 	sel.clock = frozenClock(t0.Add(2 * time.Second))
-	_, _ = sel.Pick(ctx, p, []*hostkey.HostKey{secB})
+	_, _ = sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secB})
 	sel.clock = frozenClock(t0.Add(3 * time.Second))
-	_, _ = sel.Pick(ctx, p, []*hostkey.HostKey{secC})
+	_, _ = sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secC})
 
 	// Next pick: A has oldest stamp (t0+1s) → prefer A.
 	sel.clock = frozenClock(t0.Add(4 * time.Second))
-	got, err := sel.Pick(ctx, p, []*hostkey.HostKey{secA, secB, secC})
+	got, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB, secC})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +445,7 @@ func TestPick_LRU_PrefersOldest(t *testing.T) {
 
 	// Now A has been used at t0+4s; next pick prefers B (t0+2s).
 	sel.clock = frozenClock(t0.Add(5 * time.Second))
-	got2, err := sel.Pick(ctx, p, []*hostkey.HostKey{secA, secB, secC})
+	got2, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB, secC})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +465,7 @@ func TestPick_Exclude(t *testing.T) {
 	p := pool("excl")
 
 	for i := 0; i < 20; i++ {
-		got, err := sel.Pick(ctx, p, keys, []*hostkey.HostKey{secA})
+		got, err := sel.Pick(ctx, p.scope, p.algo, keys, []*hostkey.HostKey{secA})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -477,7 +481,7 @@ func TestPick_ExcludeAll(t *testing.T) {
 	ctx := context.Background()
 	secA := key("a", "hA")
 	p := pool("excl-all")
-	_, err := sel.Pick(ctx, p, []*hostkey.HostKey{secA}, []*hostkey.HostKey{secA})
+	_, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{secA}, []*hostkey.HostKey{secA})
 	if err != ErrNoHealthyKeys {
 		t.Fatalf("want ErrNoHealthyKeys when all excluded, got %v", err)
 	}
@@ -600,7 +604,7 @@ func TestPickWithExclude_Convenience(t *testing.T) {
 	secA := key("a", "hA")
 	secB := key("b", "hB")
 	p := pool("conv")
-	got, err := sel.PickWithExclude(ctx, p, []*hostkey.HostKey{secA, secB}, []*hostkey.HostKey{secA})
+	got, err := sel.PickWithExclude(ctx, p.scope, p.algo, []*hostkey.HostKey{secA, secB}, []*hostkey.HostKey{secA})
 	if err != nil {
 		t.Fatal(err)
 	}

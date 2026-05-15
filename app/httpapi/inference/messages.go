@@ -87,9 +87,10 @@ func handleMessages(d Deps, w http.ResponseWriter, r *http.Request) {
 		HostBaseURL: plan.Host.Spec.BaseURL,
 		Adapter:     ad,
 		Policy:      plan.Policy,
+		Model:       plan.Model,
+		Host:        plan.Host,
+		Provider:    plan.Provider,
 		Keys:        plan.Keys,
-		RateScope:   plan.Policy.Meta.Name,
-		Rules:       plan.Rules,
 		ModelName:   plan.Model.Meta.Name,
 	}
 
