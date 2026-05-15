@@ -26,8 +26,14 @@ type RelayKey struct {
 // hex of the bearer token (lowercase, 64 chars); the plaintext is never
 // stored anywhere.
 type Spec struct {
-	// PolicyID is the Policy this RelayKey serves under. Required.
-	PolicyID string `json:"policyId" yaml:"policyId" validate:"required,uuid"`
+	// PolicyID is the Policy this RelayKey serves under. **Optional** —
+	// when empty, the key is "policy-less" and the relay's behavior is
+	// controlled by the inference settings section
+	// (AllowMissingPolicy). A policy-less key with that flag on is
+	// allowed to reach any model served by any host the relay has
+	// hostkeys for, with no policy-level rate limits. With the flag off,
+	// such requests are rejected.
+	PolicyID string `json:"policyId,omitempty" yaml:"policyId,omitempty" validate:"omitempty,uuid"`
 
 	// KeyHash is sha256(plaintext) hex. Required and immutable after create.
 	KeyHash string `json:"keyHash" yaml:"keyHash" validate:"required,len=64,hexadecimal"`

@@ -180,6 +180,25 @@ func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
 	return k, ok
 }
 
+// HostKeysForHost returns every enabled HostKey whose Spec.HostID
+// matches hostID. Order is by hostkey slug — stable across snapshots.
+// Used by routing's policy-less flow (settings.Inference.AllowMissingPolicy)
+// where the policy doesn't narrow the pool.
+func (s *Snapshot) HostKeysForHost(hostID string) []*hostkey.HostKey {
+	out := make([]*hostkey.HostKey, 0)
+	for _, k := range s.hostKeysByID {
+		if k.Spec.HostID != hostID {
+			continue
+		}
+		if !k.IsEnabled() {
+			continue
+		}
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
 // RateLimit returns the enabled RateLimit with this id, or false.
 func (s *Snapshot) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	r, ok := s.rateLimitsByID[id]

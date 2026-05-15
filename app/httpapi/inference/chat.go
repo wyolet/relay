@@ -142,6 +142,8 @@ func mapRoutingErr(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_not_found", "policy not found")
 	case errors.Is(err, routing.ErrPolicyDisabled):
 		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_disabled", "policy is disabled")
+	case errors.Is(err, routing.ErrPolicyless):
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policyless_disabled", "this relay key has no policy attached; policy-less traffic is disabled on this relay")
 	case errors.Is(err, routing.ErrModelNotInPolicy):
 		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", "model is not allowed by this policy")
 	case errors.Is(err, routing.ErrNoHostBinding):

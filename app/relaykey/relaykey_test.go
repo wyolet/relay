@@ -27,16 +27,19 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("empty policyId is allowed (policy-less key)", func(t *testing.T) {
+		k := fix("k")
+		k.Spec.PolicyID = ""
+		if err := k.Validate(); err != nil {
+			t.Fatalf("policy-less should validate, got %v", err)
+		}
+	})
+
 	for _, tc := range []struct {
 		name string
 		k    *RelayKey
 		want string
 	}{
-		{
-			name: "missing policyId",
-			k:    func() *RelayKey { k := fix("k"); k.Spec.PolicyID = ""; return k }(),
-			want: "PolicyID",
-		},
 		{
 			name: "policyId not uuid",
 			k:    func() *RelayKey { k := fix("k"); k.Spec.PolicyID = "not-a-uuid"; return k }(),
