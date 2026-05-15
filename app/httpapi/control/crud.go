@@ -92,6 +92,27 @@ var errSlugNotFound = errors.New("not found")
 // incoming is nil. Return a non-nil error to block the mutation with 403.
 type mutationGuard[T any] func(action string, existing, incoming *T) error
 
+// enrichFn populates derived (non-stored) fields on a freshly-loaded entity
+// before it's returned by list/get/create/update. Per the derived-field
+// convention, target fields must carry `yaml:"-"` and a `// Derived:` doc
+// comment at the field site (see app/hostkey/hostkey.go for the canonical
+// example). Nil enrichFn is a no-op.
+type enrichFn[T any] func(ctx context.Context, t *T)
+
+// cascadeFn runs after the delete authz check and before store.Delete. It
+// detaches the soon-to-be-deleted row from any referencing entities so the
+// underlying FK constraints don't reject the delete. A non-nil error
+// aborts the delete with a 500 — cascade failures shouldn't be silent,
+// but the caller's request still fails closed.
+type cascadeFn[T any] func(ctx context.Context, t *T) error
+
+// mergeOnUpdateFn copies fields the API allows to be omitted on update from
+// the existing row onto the incoming body, before validate/upsert run.
+// Used for write-only secrets where "no value shipped" means "keep
+// existing" (e.g. hostkey stored-mode value); without this they'd fail
+// Validate. Nil is a no-op.
+type mergeOnUpdateFn[T any] func(existing, incoming *T)
+
 func registerKind[T any](
 	api huma.API,
 	plural, singular string,
@@ -102,6 +123,9 @@ func registerKind[T any](
 	defaultOwnerKind meta.OwnerKind,
 	resolveSlug func(slug string) (string, error),
 	guard mutationGuard[T],
+	enrich enrichFn[T],
+	cascade cascadeFn[T],
+	mergeUpdate mergeOnUpdateFn[T],
 	protect huma.Middlewares,
 ) {
 	base := "/" + plural
@@ -126,6 +150,11 @@ func registerKind[T any](
 		}
 		if items == nil {
 			items = []*T{}
+		}
+		if enrich != nil {
+			for _, it := range items {
+				enrich(ctx, it)
+			}
 		}
 		out := &listResponse[T]{}
 		out.Body.Items = items
@@ -156,6 +185,9 @@ func registerKind[T any](
 		v, err := store.Get(ctx, id)
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
+		}
+		if enrich != nil {
+			enrich(ctx, v)
 		}
 		return &itemResponse[T]{Body: v}, nil
 	})
@@ -218,6 +250,9 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
 		}
+		if enrich != nil {
+			enrich(ctx, created)
+		}
 		return &itemResponse[T]{Body: created}, nil
 	})
 
@@ -241,6 +276,9 @@ func registerKind[T any](
 		v := &in.Body
 		m := metaOf(v)
 		m.ID = in.ID // path id wins over body id
+		if mergeUpdate != nil {
+			mergeUpdate(existing, v)
+		}
 		if validate != nil {
 			if err := validate(v); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
@@ -257,6 +295,9 @@ func registerKind[T any](
 		updated, err := store.Get(ctx, in.ID)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("updated but could not read back: " + err.Error())
+		}
+		if enrich != nil {
+			enrich(ctx, updated)
 		}
 		return &itemResponse[T]{Body: updated}, nil
 	})
@@ -282,6 +323,11 @@ func registerKind[T any](
 		if guard != nil {
 			if err := guard("delete", existing, nil); err != nil {
 				return nil, huma.Error403Forbidden(err.Error())
+			}
+		}
+		if cascade != nil {
+			if err := cascade(ctx, existing); err != nil {
+				return nil, huma.Error500InternalServerError("cascade: " + err.Error())
 			}
 		}
 		if err := store.Delete(ctx, in.ID); err != nil {
@@ -337,6 +383,88 @@ func listScanResolver[T any](store entityStore[T], metaOf func(*T) *meta.Metadat
 	}
 }
 
+// enrichHostKeyPolicies returns an enrichFn that fills HostKey.Policies
+// with the user Policies that reference this key via Spec.HostKeyIDs,
+// read off the current catalog snapshot. Reverse-ref summary for the
+// admin UI; never persisted (the field is yaml:"-" and skipped by the
+// store).
+func enrichHostKeyPolicies(d Deps) enrichFn[hostkey.HostKey] {
+	return func(ctx context.Context, k *hostkey.HostKey) {
+		if k == nil || d.Stores == nil || d.Stores.Policy == nil {
+			return
+		}
+		pols, err := d.Stores.Policy.List(ctx)
+		if err != nil {
+			return
+		}
+		var refs []hostkey.PolicyRef
+		for _, p := range pols {
+			for _, id := range p.Spec.HostKeyIDs {
+				if id == k.Meta.ID {
+					refs = append(refs, hostkey.PolicyRef{ID: p.Meta.ID, Name: p.Meta.Name})
+					break
+				}
+			}
+		}
+		k.Policies = refs
+	}
+}
+
+// cascadeHostKeyDetach returns a cascade that strips the deleted HostKey's
+// id from every Policy.Spec.HostKeyIDs that references it. Required because
+// the policy_host_keys join table FK-constrains a HostKey delete; without
+// detachment Postgres rejects with SQLSTATE 23503. Walks the Policy store
+// directly (not the snapshot) so disabled policies are caught too.
+func cascadeHostKeyDetach(d Deps) cascadeFn[hostkey.HostKey] {
+	return func(ctx context.Context, k *hostkey.HostKey) error {
+		if k == nil || d.Stores == nil || d.Stores.Policy == nil {
+			return nil
+		}
+		pols, err := d.Stores.Policy.List(ctx)
+		if err != nil {
+			return fmt.Errorf("list policies: %w", err)
+		}
+		for _, p := range pols {
+			before := p.Spec.HostKeyIDs
+			filtered := before[:0:0]
+			changed := false
+			for _, id := range before {
+				if id == k.Meta.ID {
+					changed = true
+					continue
+				}
+				filtered = append(filtered, id)
+			}
+			if !changed {
+				continue
+			}
+			p.Spec.HostKeyIDs = filtered
+			if err := d.Stores.Policy.Upsert(ctx, p); err != nil {
+				return fmt.Errorf("detach from policy %q: %w", p.Meta.Name, err)
+			}
+		}
+		return nil
+	}
+}
+
+// mergeHostKeyPreserveValue treats an empty Spec.Value on a stored-mode
+// update as "keep the existing key" — the caller wants to edit metadata
+// or rebind to a different policy/host without rotating the credential.
+// A non-empty Value still means rotation. Env-mode keys carry no value
+// here, so this is a no-op for them.
+func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
+	if existing == nil || incoming == nil {
+		return
+	}
+	if incoming.Spec.ValueFrom.Kind != hostkey.ValueKindStored {
+		return
+	}
+	if incoming.Spec.Value != "" {
+		return
+	}
+	incoming.Spec.Value = existing.Resolved
+}
+
 // registerCRUD wires the eight kinds onto api. metaOf closures + slug
 // resolvers are supplied per kind.
 func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
@@ -353,13 +481,10 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
 		func(p *provider.Provider) error { return p.Validate() },
 		"",
-		func(s string) (string, error) {
-			p, ok := d.Catalog.Current().ProviderByName(s)
-			if !ok {
-				return "", errSlugNotFound
-			}
-			return p.Meta.ID, nil
-		},
+		listScanResolver(d.Stores.Provider, pmeta),
+		nil,
+		nil,
+		nil,
 		nil,
 		protect,
 	)
@@ -368,13 +493,10 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
 		func(h *host.Host) error { return h.Validate() },
 		"",
-		func(s string) (string, error) {
-			h, ok := d.Catalog.Current().HostByName(s)
-			if !ok {
-				return "", errSlugNotFound
-			}
-			return h.Meta.ID, nil
-		},
+		listScanResolver(d.Stores.Host, hmeta),
+		nil,
+		nil,
+		nil,
 		nil,
 		protect,
 	)
@@ -383,13 +505,10 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
 		func(m *model.Model) error { return m.Validate() },
 		"",
-		func(s string) (string, error) {
-			ms := d.Catalog.Current().ModelsByName(s)
-			if len(ms) == 0 {
-				return "", errSlugNotFound
-			}
-			return ms[0].Meta.ID, nil
-		},
+		listScanResolver(d.Stores.Model, mmeta),
+		nil,
+		nil,
+		nil,
 		nil,
 		protect,
 	)
@@ -400,6 +519,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		meta.OwnerUser,
 		listScanResolver(d.Stores.HostKey, kmeta),
 		nil,
+		enrichHostKeyPolicies(d),
+		cascadeHostKeyDetach(d),
+		mergeHostKeyPreserveValue,
 		protect,
 	)
 
@@ -409,6 +531,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
 		nil,
+		nil,
+		nil,
+		nil,
 		protect,
 	)
 
@@ -416,13 +541,10 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
 		func(p *policy.Policy) error { return p.Validate() },
 		meta.OwnerUser,
-		func(s string) (string, error) {
-			p, ok := d.Catalog.Current().PolicyByName(s)
-			if !ok {
-				return "", errSlugNotFound
-			}
-			return p.Meta.ID, nil
-		},
+		listScanResolver(d.Stores.Policy, polmeta),
+		nil,
+		nil,
+		nil,
 		nil,
 		protect,
 	)
@@ -433,6 +555,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		"",
 		listScanResolver(d.Stores.Pricing, prmeta),
 		nil,
+		nil,
+		nil,
+		nil,
 		protect,
 	)
 
@@ -441,6 +566,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(k *relaykey.RelayKey) error { return k.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RelayKey, rkmeta),
+		nil,
+		nil,
+		nil,
 		nil,
 		protect,
 	)
