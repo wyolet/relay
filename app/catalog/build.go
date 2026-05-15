@@ -1,3 +1,13 @@
+// Snapshot assembly. build is intentionally a thin orchestrator: it
+// computes the input-id sets and calls each kind's addX method in the
+// order their dependencies require. The per-kind logic (sanitize +
+// register) lives in build_<kind>.go.
+//
+// Cross-references in each entity are *sanitized* against the input
+// enabled-id sets before insertion: a ref to a missing or disabled row
+// is silently dropped from the snapshot copy. The full row stays in
+// Postgres for the control plane. Reload never fails over a stale ref —
+// the snapshot is always the consistent reachable subgraph.
 package catalog
 
 import (
@@ -11,14 +21,6 @@ import (
 	"github.com/wyolet/relay/app/relaykey"
 )
 
-// build assembles a Snapshot from already enabled-filtered rows. Every row
-// passed in enters the snapshot — there is no reachability pruning.
-//
-// Reverse joins (modelsByPolicy, pricingByModelHost) are derived from cross-
-// refs at the end. A ref to a row that's not in the snapshot is silently
-// skipped — that's how cascade invalidation degrades after a parent disables.
-// validateCross rejects dangling refs before we get here, so this is a
-// defensive guard only.
 func build(
 	provs []*provider.Provider,
 	hosts []*host.Host,
@@ -29,24 +31,52 @@ func build(
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
 ) *Snapshot {
-	s := &Snapshot{
-		providersByID:      make(map[string]*provider.Provider, len(provs)),
-		providersByName:    make(map[string]*provider.Provider, len(provs)),
-		hostsByID:          make(map[string]*host.Host, len(hosts)),
-		hostsByName:        make(map[string]*host.Host, len(hosts)),
-		policiesByID:       make(map[string]*policy.Policy, len(pols)),
-		policiesByName:     make(map[string]*policy.Policy, len(pols)),
-		modelsByID:         make(map[string]*model.Model, len(models)),
+	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings))
+
+	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
+	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
+	modelIDs := setFromIDs(models, func(m *model.Model) string { return m.Meta.ID })
+	keyIDs := setFromIDs(keys, func(k *hostkey.HostKey) string { return k.Meta.ID })
+	rlIDs := setFromIDs(rls, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
+	polByID := make(map[string]*policy.Policy, len(pols))
+	polIDSet := make(idSet, len(pols))
+	for _, p := range pols {
+		polByID[p.Meta.ID] = p
+		polIDSet[p.Meta.ID] = struct{}{}
+	}
+
+	s.addProviders(provs)
+	s.addRateLimits(rls)
+	s.addHosts(hosts, polByID)
+	s.addPolicies(pols, modelIDs, keyIDs, rlIDs)
+	s.addModels(models, providerIDs, hostIDs)
+	s.addHostKeys(keys, hostIDs, polByID)
+	s.addRelayKeys(rks, polIDSet)
+	s.computePolicyReverseJoins()
+	s.addPricings(pricings, hostIDs, modelIDs)
+
+	return s
+}
+
+func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings int) *Snapshot {
+	return &Snapshot{
+		providersByID:      make(map[string]*provider.Provider, nProvs),
+		providersByName:    make(map[string]*provider.Provider, nProvs),
+		hostsByID:          make(map[string]*host.Host, nHosts),
+		hostsByName:        make(map[string]*host.Host, nHosts),
+		policiesByID:       make(map[string]*policy.Policy, nPols),
+		policiesByName:     make(map[string]*policy.Policy, nPols),
+		modelsByID:         make(map[string]*model.Model, nModels),
 		modelsByName:       map[string][]*model.Model{},
-		hostKeysByID:       make(map[string]*hostkey.HostKey, len(keys)),
-		rateLimitsByID:     make(map[string]*ratelimit.RateLimit, len(rls)),
-		rateLimitsByName:   make(map[string]*ratelimit.RateLimit, len(rls)),
-		relayKeysByID:      make(map[string]*relaykey.RelayKey, len(rks)),
-		relayKeysByHash:    make(map[string]*relaykey.RelayKey, len(rks)),
+		hostKeysByID:       make(map[string]*hostkey.HostKey, nKeys),
+		rateLimitsByID:     make(map[string]*ratelimit.RateLimit, nRLs),
+		rateLimitsByName:   make(map[string]*ratelimit.RateLimit, nRLs),
+		relayKeysByID:      make(map[string]*relaykey.RelayKey, nRks),
+		relayKeysByHash:    make(map[string]*relaykey.RelayKey, nRks),
 		modelsByPolicy:     map[string][]*model.Model{},
 		hostKeysByPolicy:   map[string][]*hostkey.HostKey{},
 		rateLimitByPolicy:  map[string]*ratelimit.RateLimit{},
-		pricingsByID:       make(map[string]*pricing.Pricing, len(pricings)),
+		pricingsByID:       make(map[string]*pricing.Pricing, nPricings),
 		pricingByModelHost: map[string]*pricing.Pricing{},
 		refsByProvider:     map[string]refSet{},
 		refsByHost:         map[string]refSet{},
@@ -55,81 +85,4 @@ func build(
 		refsByRateLimit:    map[string]refSet{},
 		refsByPolicy:       map[string]refSet{},
 	}
-
-	for _, p := range provs {
-		s.providersByID[p.Meta.ID] = p
-		s.providersByName[p.Meta.Name] = p
-	}
-	for _, h := range hosts {
-		s.hostsByID[h.Meta.ID] = h
-		s.hostsByName[h.Meta.Name] = h
-	}
-	for _, p := range pols {
-		s.policiesByID[p.Meta.ID] = p
-		s.policiesByName[p.Meta.Name] = p
-		s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
-	}
-	for _, k := range rks {
-		s.relayKeysByID[k.Meta.ID] = k
-		if k.Spec.KeyHash != "" {
-			s.relayKeysByHash[k.Spec.KeyHash] = k
-		}
-		s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
-	}
-	for _, m := range models {
-		s.modelsByID[m.Meta.ID] = m
-		// Index by the slug so callers can address the model with
-		// `"model": "<slug>"`. Aliases extend addressability — a model
-		// can be reached by both its slug and any declared alias.
-		s.modelsByName[m.Meta.Name] = append(s.modelsByName[m.Meta.Name], m)
-		for _, a := range m.Spec.Aliases {
-			if a == m.Meta.Name {
-				continue // already indexed via slug
-			}
-			s.modelsByName[a] = append(s.modelsByName[a], m)
-		}
-		s.registerRefs(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
-	}
-	for _, k := range keys {
-		s.hostKeysByID[k.Meta.ID] = k
-		s.registerRefs(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
-	}
-	for _, r := range rls {
-		s.rateLimitsByID[r.Meta.ID] = r
-		s.rateLimitsByName[r.Meta.Name] = r
-	}
-
-	// Reverse joins per Policy. Skip refs to rows that aren't in the
-	// snapshot (defensive; validateCross already rejected dangling refs).
-	for _, p := range pols {
-		for _, id := range p.Spec.ModelIDs {
-			if m, ok := s.modelsByID[id]; ok {
-				s.modelsByPolicy[p.Meta.ID] = append(s.modelsByPolicy[p.Meta.ID], m)
-			}
-		}
-		for _, id := range p.Spec.HostKeyIDs {
-			if k, ok := s.hostKeysByID[id]; ok {
-				s.hostKeysByPolicy[p.Meta.ID] = append(s.hostKeysByPolicy[p.Meta.ID], k)
-			}
-		}
-		if p.Spec.RateLimitID != "" {
-			if r, ok := s.rateLimitsByID[p.Spec.RateLimitID]; ok {
-				s.rateLimitByPolicy[p.Meta.ID] = r
-			}
-		}
-	}
-
-	for _, p := range pricings {
-		s.pricingsByID[p.Meta.ID] = p
-		hostID := p.Meta.Owner.ID
-		for _, modelID := range p.Spec.TargetModelIDs {
-			if _, ok := s.modelsByID[modelID]; !ok {
-				continue
-			}
-			s.pricingByModelHost[modelID+"|"+hostID] = p
-		}
-		s.registerRefs(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
-	}
-
-	return s
 }

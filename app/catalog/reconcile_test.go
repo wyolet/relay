@@ -196,24 +196,33 @@ func TestApply_DeleteCascadesToPricing(t *testing.T) {
 	}
 }
 
-func TestApply_DeleteCascadesToPolicy(t *testing.T) {
+// Deleting a Model used to cascade-delete its referencing Policy. Now the
+// Policy survives with the dead modelID silently stripped from its
+// snapshot Spec — PG retains the original list.
+func TestApply_DeleteModelStripsFromPolicy(t *testing.T) {
 	c := catalogFromFixture(t)
 	s0 := c.Current()
 
-	// Find a model bound to the fixture policy.
 	pol, _ := s0.PolicyByName("cheap-tier")
 	models := s0.ModelsInPolicy(pol.Meta.ID)
 	if len(models) == 0 {
 		t.Fatal("no models in policy")
 	}
+	gone := models[0].Meta.ID
 
-	if err := c.ApplyModelDelete(models[0].Meta.ID); err != nil {
+	if err := c.ApplyModelDelete(gone); err != nil {
 		t.Fatalf("ApplyModelDelete: %v", err)
 	}
 
 	s := c.Current()
-	if _, ok := s.Policy(pol.Meta.ID); ok {
-		t.Error("policy should have been cascade-deleted (dangling modelID)")
+	got, ok := s.Policy(pol.Meta.ID)
+	if !ok {
+		t.Fatal("policy should survive a soft-ref parent delete")
+	}
+	for _, id := range got.Spec.ModelIDs {
+		if id == gone {
+			t.Errorf("deleted model %q still in policy.Spec.ModelIDs", gone)
+		}
 	}
 }
 
