@@ -84,6 +84,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerAuth(api, d)            // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerMisc(api, d, protect)   // /master-key/generate, /reload
 	registerCRUD(api, d, protect)   // 8 kinds × CRUD
+	registerHostKeyRotate(api, d, protect)
+	registerReferences(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 

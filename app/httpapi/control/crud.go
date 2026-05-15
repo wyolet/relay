@@ -126,6 +126,7 @@ func registerKind[T any](
 	enrich enrichFn[T],
 	cascade cascadeFn[T],
 	mergeUpdate mergeOnUpdateFn[T],
+	disallowDelete bool,
 	protect huma.Middlewares,
 ) {
 	base := "/" + plural
@@ -302,6 +303,14 @@ func registerKind[T any](
 		return &itemResponse[T]{Body: updated}, nil
 	})
 
+	if disallowDelete {
+		// Catalog-managed kinds (provider, host, model) aren't user-
+		// deletable through the API; they're seeded and the right move is
+		// to disable. Skip wiring the DELETE handler entirely so the
+		// router returns 405 Method Not Allowed.
+		return
+	}
+
 	// Delete by id
 	huma.Register(api, huma.Operation{
 		OperationID:   "delete_" + singular,
@@ -383,6 +392,40 @@ func listScanResolver[T any](store entityStore[T], metaOf func(*T) *meta.Metadat
 	}
 }
 
+// guardHostKeyPolicyOwnership rejects hostkey create/update when the
+// referenced Policy isn't host-owned by the key's HostID. Cross-entity
+// invariant the per-row hostkey.Validate() can't enforce (it has no
+// access to the policy store). Reads PG directly so disabled rows are
+// considered too — a hostkey rebound to a disabled tier policy is still
+// a structural mismatch, not just a soft drop. Delete is unaffected.
+func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
+	return func(action string, _, incoming *hostkey.HostKey) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		// Rotation must go through POST /host-keys/by-id/{id}/rotate,
+		// not PUT — a stray value field on update would silently rotate
+		// the credential.
+		if action == "update" && incoming.Spec.ValueFrom.Kind == hostkey.ValueKindStored && incoming.Spec.Value != "" {
+			return fmt.Errorf("value cannot be set on update — use POST /host-keys/by-id/{id}/rotate to rotate the credential")
+		}
+		// Cross-entity invariant: policy must be host-owned by the
+		// hostkey's HostID. Per-row Validate() can't see other stores.
+		if d.Stores == nil || d.Stores.Policy == nil {
+			return nil
+		}
+		pol, err := d.Stores.Policy.Get(context.Background(), incoming.Spec.PolicyID)
+		if err != nil || pol == nil {
+			return fmt.Errorf("policy %q does not exist", incoming.Spec.PolicyID)
+		}
+		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != incoming.Spec.HostID {
+			return fmt.Errorf("policy %q is not host-owned by host %q (owner=%s/%s)",
+				pol.Meta.Name, incoming.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
+		}
+		return nil
+	}
+}
+
 // enrichHostKeyPolicies returns an enrichFn that fills HostKey.Policies
 // with the user Policies that reference this key via Spec.HostKeyIDs,
 // read off the current catalog snapshot. Reverse-ref summary for the
@@ -447,6 +490,51 @@ func cascadeHostKeyDetach(d Deps) cascadeFn[hostkey.HostKey] {
 	}
 }
 
+// cascadeRateLimitDetach strips the deleted RateLimit id from every
+// policy's Spec.RLBindings before the row is removed. The flat
+// policies.rate_limit_id column is already handled by PG (FK SET NULL),
+// but RLBindings lives in the spec JSONB and PG can't touch it.
+// Without this, a deleted RL would leave dangling binding ids that the
+// catalog snapshot would silently drop on reload — workable, but the
+// data plane sees a stale view until reload runs.
+func cascadeRateLimitDetach(d Deps) cascadeFn[ratelimit.RateLimit] {
+	return func(ctx context.Context, r *ratelimit.RateLimit) error {
+		if r == nil || d.Stores == nil || d.Stores.Policy == nil {
+			return nil
+		}
+		pols, err := d.Stores.Policy.List(ctx)
+		if err != nil {
+			return fmt.Errorf("list policies: %w", err)
+		}
+		for _, p := range pols {
+			if len(p.Spec.RLBindings) == 0 {
+				continue
+			}
+			filtered := make([]policy.RLBinding, 0, len(p.Spec.RLBindings))
+			changed := false
+			for _, b := range p.Spec.RLBindings {
+				if b.RateLimitID == r.Meta.ID {
+					changed = true
+					continue
+				}
+				filtered = append(filtered, b)
+			}
+			if !changed {
+				continue
+			}
+			if len(filtered) == 0 {
+				p.Spec.RLBindings = nil
+			} else {
+				p.Spec.RLBindings = filtered
+			}
+			if err := d.Stores.Policy.Upsert(ctx, p); err != nil {
+				return fmt.Errorf("detach from policy %q: %w", p.Meta.Name, err)
+			}
+		}
+		return nil
+	}
+}
+
 // mergeHostKeyPreserveValue treats an empty Spec.Value on a stored-mode
 // update as "keep the existing key" — the caller wants to edit metadata
 // or rebind to a different policy/host without rotating the credential.
@@ -486,6 +574,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		true, // catalog-managed; disable instead of delete
 		protect,
 	)
 
@@ -498,6 +587,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		true, // catalog-managed; disable instead of delete
 		protect,
 	)
 
@@ -510,6 +600,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		true, // catalog-managed; disable instead of delete
 		protect,
 	)
 
@@ -518,10 +609,11 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(k *hostkey.HostKey) error { return k.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.HostKey, kmeta),
-		nil,
+		guardHostKey(d),
 		enrichHostKeyPolicies(d),
 		cascadeHostKeyDetach(d),
 		mergeHostKeyPreserveValue,
+		false,
 		protect,
 	)
 
@@ -532,8 +624,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		listScanResolver(d.Stores.RateLimit, rlmeta),
 		nil,
 		nil,
+		cascadeRateLimitDetach(d),
 		nil,
-		nil,
+		false,
 		protect,
 	)
 
@@ -546,6 +639,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		false,
 		protect,
 	)
 
@@ -558,6 +652,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		false,
 		protect,
 	)
 
@@ -570,6 +665,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		false,
 		protect,
 	)
 }
