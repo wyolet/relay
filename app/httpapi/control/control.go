@@ -86,6 +86,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerCRUD(api, d, protect)   // 8 kinds × CRUD
 	registerHostKeyRotate(api, d, protect)
 	registerReferences(api, d, protect)
+	registerPolicyRelayKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerDebug(api, d, protect)
