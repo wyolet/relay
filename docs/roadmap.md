@@ -11,91 +11,7 @@ waiting to be written; the path under `docs/` is the placeholder.
 
 ## Now — priority queue
 
-These three are next, in this order. Settings unblocks proxy
-configuration plumbing; proxy is a thinner orchestrator that
-benefits from Settings being shaped already; batch is the heaviest
-and lands once the simpler flows are in.
-
-### 1. Settings API (typed sectioned config)
-
-What: `GET /settings/{section}` and `PUT /settings/{section}` per
-known section (passthrough, limits, branding, …). Backed by a
-generic `settings(key TEXT PK, value JSONB NOT NULL, updated_at
-TIMESTAMPTZ)` table. Each section has a typed Go struct validated
-server-side; the DB stores opaque JSON.
-
-Why: Closes the `/passthrough` and `/attachments` removals from
-stage 3 and gives a stable home for every future "global config
-section." Pattern matches Stripe/GitHub/Linear. The "single-row
-table per section" anti-pattern is what we chose not to do.
-
-First section to ship: **passthrough** — the singleton that gates
-proxy-mode anonymous traffic. Required input to (2) below.
-
-Size: ~2 days. Migration + admin handler factory + one section.
-
-Where: `app/settings/` (new package); `app/httpapi/control/settings.go`;
-new migration; `cmd/relay/main.go` wiring.
-
-### 2. Proxy mode — separate flow (`app/proxy`)
-
-What: A second inference flow for "no relay key, caller brings their
-own upstream key." Distinct package from `app/pipeline`, not a branch
-in pipeline. Endpoint: same `/v1/chat/completions` and `/v1/messages`
-shapes — the handler dispatches between pipeline (relay-key auth) and
-proxy (passthrough auth) based on the inbound `Authorization` header
-shape and the Settings.passthrough config.
-
-Why: Captures a real customer segment — Claude Code, CLI dev tools,
-and similar callers want "log my traffic, don't manage my keys."
-Already a documented architecture seam ("anonymous mode is a separate
-package, not a branch"); this just builds it.
-
-Size: ~2-3 days. The proxy orchestrator is thin (no key-pool
-selection, no per-key breaker; just rate-limit + stream-through).
-Inference handlers grow a dispatch step.
-
-Where: `app/proxy/` (new package); inference handlers grow a
-dispatch fork; `Settings.Passthrough` from (1) gates it.
-
-Dependencies: Settings (1) — at minimum the passthrough section
-must exist so admins can enable/disable per-route or globally.
-
-### 3. Batch subsystem
-
-What: Relay primitive for fire-and-forget bulk submissions. Customer
-posts a batch, gets a batch ID, polls or receives a webhook on
-completion, fetches the results blob (from S3 or relay storage).
-Worker pool drains jobs; uses provider batch APIs when available
-(50% discount passthrough) and simulates via concurrent pipeline
-calls otherwise.
-
-Why: Differentiator. CLAUDE.md calls this the "third pillar" and the
-infra-grade angle LiteLLM/OpenRouter can't match cleanly. Real demand
-from teams running daily eval / dataset enrichment / nightly summary
-jobs.
-
-Sub-tasks:
-- Schema: `batches(id, policy_id, status, created_at, completed_at,
-  result_uri, error)` + `batch_items(batch_id, idx, input, output,
-  status, error)`.
-- Customer API: `POST /v1/batches`, `GET /v1/batches/{id}`,
-  `POST /v1/batches/{id}/cancel`, webhook on completion.
-- Worker: long-running goroutine that pulls pending items, runs them
-  through the existing app/pipeline (which already orchestrates
-  retries, key selection, etc.), writes results.
-- Provider batch passthrough: detect when the chosen Host's adapter
-  exposes a batch API (OpenAI does; Anthropic does); pass through
-  if so. Otherwise simulate.
-- Storage: results to S3 (opt-in) or to a `batch_results` table for
-  small batches.
-
-Size: ~2 weeks. Schema + API + worker + provider-batch dispatch +
-result storage + webhook signing.
-
-Where: `app/batch/` (new package); `app/httpapi/inference/batches.go`;
-new migrations; possibly `cmd/relay-batch-worker/` if we want the
-worker as a separate binary.
+_(empty — Settings API and Proxy mode shipped; Batch subsystem moved to icebox.)_
 
 ---
 
@@ -189,9 +105,8 @@ Open design questions:
 - What's the default-tier fallback rule?
 - Does pricing-by-tier survive a re-import from LiteLLM?
 
-Driven by: batch subsystem (priority 3) needs this to honour the 50%
-discount of provider batch APIs. Could ship inline with batch or
-right after — flag during design.
+Driven by: batch subsystem needs this to honour the 50% discount of
+provider batch APIs. Revisit if/when batch comes off the icebox.
 
 ### Non-token pricing meters
 
@@ -217,6 +132,21 @@ in seeded config is text-only.
 
 These were considered, found not to clear the bar, and parked. Touch
 only if a concrete external signal flips the call.
+
+### Batch subsystem
+
+Relay primitive for fire-and-forget bulk submissions. Customer posts
+a batch, gets an ID, polls or receives a webhook on completion,
+fetches results from S3 or relay storage. Worker pool drains jobs;
+uses provider batch APIs (50% discount passthrough) when available,
+simulates via concurrent pipeline calls otherwise. Schema:
+`batches` + `batch_items`. Customer API: `POST /v1/batches`,
+`GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`, webhook on
+completion. Size: ~2 weeks. Where: `app/batch/`,
+`app/httpapi/inference/batches.go`, new migrations. Unblock signal:
+concrete customer ask for bulk eval / dataset enrichment / nightly
+summary workflows where simulated batch via the realtime path
+doesn't suffice.
 
 ### Cross-shape translation
 

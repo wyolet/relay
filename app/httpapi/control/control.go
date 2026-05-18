@@ -73,6 +73,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 	cfg.Info.Description = "Admin plane. Authentication, catalog CRUD, and " +
 		"operational endpoints. Firewalled separately from the data plane."
 	cfg.OpenAPI.Components.Schemas = httpapi.NewRegistry()
+	cfg.DocsPath = ""
+	r.Get("/docs", httpapi.ScalarHandler("Wyolet Relay — Control", "/openapi.json"))
 	api := humachi.New(r, cfg)
 
 	// Protected-route middleware: every op that mutates state or returns

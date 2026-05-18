@@ -62,6 +62,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 		"Anthropic-shape requests; bytes are forwarded to the upstream " +
 		"provider with usage extracted from the response."
 	cfg.OpenAPI.Components.Schemas = httpapi.NewRegistry()
+	cfg.DocsPath = ""
+	r.Get("/docs", httpapi.ScalarHandler("Wyolet Relay — Inference", "/openapi.json"))
 
 	api := humachi.New(r, cfg)
 
