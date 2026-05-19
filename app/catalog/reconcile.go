@@ -137,6 +137,9 @@ func insertModel(s *Snapshot, m *model.Model) {
 		for _, a := range old.Spec.Aliases {
 			s.modelsByName[a] = removeModelFromSlice(s.modelsByName[a], old.Meta.ID)
 		}
+		for _, snap := range old.Spec.Snapshots {
+			delete(s.snapshotsByName, snap.Name)
+		}
 		// Remove from any policy reverse joins.
 		for polID, models := range s.modelsByPolicy {
 			s.modelsByPolicy[polID] = removeModelFromSlice(models, old.Meta.ID)
@@ -146,6 +149,10 @@ func insertModel(s *Snapshot, m *model.Model) {
 	s.modelsByID[m.Meta.ID] = m
 	for _, a := range m.Spec.Aliases {
 		s.modelsByName[a] = append(s.modelsByName[a], m)
+	}
+	for i := range m.Spec.Snapshots {
+		snap := &m.Spec.Snapshots[i]
+		s.snapshotsByName[snap.Name] = snapshotRef{Model: m, Snapshot: snap}
 	}
 	s.registerRefs(refKey{Kind: refModel, ID: m.Meta.ID}, outboundModelRefs(m))
 	// Rebuild policy reverse joins for policies that reference this model.
@@ -160,6 +167,9 @@ func deleteModel(s *Snapshot, id string) {
 	s.unregisterRefs(refKey{Kind: refModel, ID: id}, outboundModelRefs(m))
 	for _, a := range m.Spec.Aliases {
 		s.modelsByName[a] = removeModelFromSlice(s.modelsByName[a], id)
+	}
+	for _, snap := range m.Spec.Snapshots {
+		delete(s.snapshotsByName, snap.Name)
 	}
 	delete(s.modelsByID, id)
 	// Remove from policy joins.

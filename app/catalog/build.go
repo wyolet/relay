@@ -68,6 +68,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		policiesByName:     make(map[string]*policy.Policy, nPols),
 		modelsByID:         make(map[string]*model.Model, nModels),
 		modelsByName:       map[string][]*model.Model{},
+		snapshotsByName:    map[string]snapshotRef{},
 		hostKeysByID:       make(map[string]*hostkey.HostKey, nKeys),
 		rateLimitsByID:     make(map[string]*ratelimit.RateLimit, nRLs),
 		rateLimitsByName:   make(map[string]*ratelimit.RateLimit, nRLs),
