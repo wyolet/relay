@@ -26,18 +26,23 @@ func SanitizeFilename(name string) string {
 	return strings.NewReplacer(":", "_", "/", "_").Replace(name)
 }
 
-// WriteToDisk writes translated DTOs as YAML files under outDir:
+// WriteToDisk writes translated DTOs as YAML files under outDir, using the
+// catalog-repo layout consumed by wyolet/relay-catalog:
 //
-//	<outDir>/hosts/<name>.yaml
-//	<outDir>/providers/<name>/provider.yaml
-//	<outDir>/providers/<name>/models/<model>.yaml
+//	<outDir>/hosts/<host>/host.yaml
+//	<outDir>/hosts/<host>/pricing/<model>.yaml
+//	<outDir>/providers/<provider>/provider.yaml
+//	<outDir>/providers/<provider>/models/<model>.yaml
 //
-// Existing files are always overwritten.
+// Existing files are always overwritten. Pricing nests under the owning
+// host (Owner.ID on PricingDTO carries the host name). Hand-curated files
+// the importer doesn't emit (policies/, secrets/, ...) are left untouched
+// when outDir contains them.
 func WriteToDisk(outDir string, result *TranslateResult) (*WriteResult, error) {
 	wr := &WriteResult{}
 
 	for _, h := range result.Hosts {
-		path := filepath.Join(outDir, "hosts", h.Metadata.Name+".yaml")
+		path := filepath.Join(outDir, "hosts", h.Metadata.Name, "host.yaml")
 		if err := writeYAML(path, h); err != nil {
 			slog.Error("litellm-import: write host failed", "path", path, "err", err)
 			wr.Errors++
@@ -72,8 +77,15 @@ func WriteToDisk(outDir string, result *TranslateResult) (*WriteResult, error) {
 	}
 
 	for _, p := range result.Pricings {
-		filename := SanitizeFilename(p.Metadata.Name) + ".yaml"
-		path := filepath.Join(outDir, "pricing", filename)
+		hostName := p.Metadata.Owner.ID
+		// Strip the "<host>-" prefix added in buildPricing for a cleaner
+		// per-host filename (the host directory already carries the host).
+		base := strings.TrimPrefix(p.Metadata.Name, hostName+"-")
+		if base == p.Metadata.Name {
+			base = p.Metadata.Name
+		}
+		filename := SanitizeFilename(base) + ".yaml"
+		path := filepath.Join(outDir, "hosts", hostName, "pricing", filename)
 		if err := writeYAML(path, p); err != nil {
 			slog.Error("litellm-import: write pricing failed", "path", path, "err", err)
 			wr.Errors++
