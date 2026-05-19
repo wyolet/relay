@@ -18,7 +18,9 @@ func fix(name string) *Model {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: validProvID()},
 		},
 		Spec: Spec{
-			Hosts: []HostBinding{{HostID: meta.NewID(), UpstreamName: "u", Adapter: adapters.OpenAI}},
+			Hosts:     []HostBinding{{HostID: meta.NewID(), UpstreamName: "u", Adapter: adapters.OpenAI}},
+			Snapshots: []Snapshot{{Name: name + "-snap", OriginalName: name + "-snap"}},
+			Pointer:   name + "-snap",
 		},
 	}
 }
@@ -105,6 +107,63 @@ func TestValidate(t *testing.T) {
 				return m
 			}(),
 			want: "collides with the model's own name",
+		},
+		{
+			name: "missing snapshots",
+			m:    func() *Model { m := fix("x"); m.Spec.Snapshots = nil; m.Spec.Pointer = ""; return m }(),
+			want: "Snapshots",
+		},
+		{
+			name: "missing pointer",
+			m:    func() *Model { m := fix("x"); m.Spec.Pointer = ""; return m }(),
+			want: "Pointer",
+		},
+		{
+			name: "snapshot missing originalName",
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Snapshots[0].OriginalName = ""
+				return m
+			}(),
+			want: "OriginalName",
+		},
+		{
+			name: "duplicate snapshot",
+			m: func() *Model {
+				m := fix("x")
+				dup := m.Spec.Snapshots[0]
+				m.Spec.Snapshots = append(m.Spec.Snapshots, dup)
+				return m
+			}(),
+			want: "duplicate snapshot",
+		},
+		{
+			name: "snapshot collides with model name",
+			m: func() *Model {
+				m := fix("gpt-4o")
+				m.Spec.Snapshots = []Snapshot{{Name: "gpt-4o", OriginalName: "gpt-4o"}}
+				m.Spec.Pointer = "gpt-4o"
+				return m
+			}(),
+			want: "collides with the model's own name",
+		},
+		{
+			name: "snapshot collides with alias",
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Aliases = []string{"x-snap"}
+				return m
+			}(),
+			want: "collides with alias",
+		},
+		{
+			name: "pointer does not match any snapshot",
+			m: func() *Model {
+				m := fix("x")
+				m.Spec.Pointer = "nope"
+				return m
+			}(),
+			want: "pointer \"nope\" does not match",
 		},
 		{
 			name: "bad deprecation status",
