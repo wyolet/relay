@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -86,14 +87,10 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Kind) (*mode
 		}
 		seen := map[string]struct{}{}
 		for _, m := range snap.AllModels() {
-			if _, dup := seen[m.Meta.Name]; dup {
-				continue
-			}
 			if !modelHasReachableBinding(snap, m, adapterFilter) {
 				continue
 			}
-			seen[m.Meta.Name] = struct{}{}
-			out.Body.Data = append(out.Body.Data, toModelObject(snap, m))
+			appendModelRows(&out.Body.Data, snap, m, seen)
 		}
 		return out, nil
 	}
@@ -104,19 +101,62 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Kind) (*mode
 	}
 	seen := map[string]struct{}{}
 	for _, m := range snap.AllModels() {
-		if _, dup := seen[m.Meta.Name]; dup {
-			continue
-		}
 		if !routing.PolicyAllows(snap, pol, m) {
 			continue
 		}
 		if adapterFilter != "" && !modelHasAdapter(m, adapterFilter) {
 			continue
 		}
-		seen[m.Meta.Name] = struct{}{}
-		out.Body.Data = append(out.Body.Data, toModelObject(snap, m))
+		appendModelRows(&out.Body.Data, snap, m, seen)
 	}
 	return out, nil
+}
+
+// appendModelRows emits one row per Model name plus one row per Snapshot,
+// deduplicating on id. Matches OpenAI's listing where bare aliases and
+// dated snapshots both appear (e.g. gpt-4o and gpt-4o-2024-11-20).
+func appendModelRows(out *[]modelObject, snap *catalog.Snapshot, m *model.Model, seen map[string]struct{}) {
+	ownedBy := ""
+	if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
+		ownedBy = pname
+	}
+	modelCreated := ids.UnixSec(m.Meta.ID)
+
+	if _, dup := seen[m.Meta.Name]; !dup {
+		seen[m.Meta.Name] = struct{}{}
+		*out = append(*out, modelObject{
+			ID:      m.Meta.Name,
+			Object:  "model",
+			Created: modelCreated,
+			OwnedBy: ownedBy,
+		})
+	}
+	for i := range m.Spec.Snapshots {
+		s := &m.Spec.Snapshots[i]
+		if _, dup := seen[s.Name]; dup {
+			continue
+		}
+		seen[s.Name] = struct{}{}
+		*out = append(*out, modelObject{
+			ID:      s.Name,
+			Object:  "model",
+			Created: snapshotCreated(s, modelCreated),
+			OwnedBy: ownedBy,
+		})
+	}
+}
+
+// snapshotCreated returns ReleasedAt parsed as midnight UTC if available,
+// else falls back to the owning Model's creation timestamp.
+func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
+	if s.ReleasedAt == "" {
+		return fallback
+	}
+	t, err := time.Parse("2006-01-02", s.ReleasedAt)
+	if err != nil {
+		return fallback
+	}
+	return t.UTC().Unix()
 }
 
 // modelHasReachableBinding returns true iff the model has at least one
@@ -153,15 +193,3 @@ func modelHasAdapter(m *model.Model, kind adapters.Kind) bool {
 	return false
 }
 
-func toModelObject(snap *catalog.Snapshot, m *model.Model) modelObject {
-	ownedBy := ""
-	if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
-		ownedBy = pname
-	}
-	return modelObject{
-		ID:      m.Meta.Name,
-		Object:  "model",
-		Created: ids.UnixSec(m.Meta.ID),
-		OwnedBy: ownedBy,
-	}
-}
