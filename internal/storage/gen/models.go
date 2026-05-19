@@ -28,13 +28,6 @@ type Model struct {
 	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
-type PassthroughConfig struct {
-	Name      string             `db:"name" json:"name"`
-	Spec      []byte             `db:"spec" json:"spec"`
-	CreatedAt pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-}
-
 type Policy struct {
 	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`
@@ -99,16 +92,6 @@ type RateLimit struct {
 type RelayKey struct {
 	Name        string             `db:"name" json:"name"`
 	KeyHash     string             `db:"key_hash" json:"key_hash"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ID          string             `db:"id" json:"id"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-}
-
-type Route struct {
-	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`
 	Spec        []byte             `db:"spec" json:"spec"`
 	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`

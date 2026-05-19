@@ -21,9 +21,6 @@ WHERE id = $1 AND value_kind = 'stored';
 -- name: ListModels :many
 SELECT id, name, display_name, metadata, spec FROM models ORDER BY name;
 
--- name: ListRoutes :many
-SELECT id, name, display_name, metadata, spec FROM routes ORDER BY name;
-
 -- name: ListRateLimits :many
 SELECT id, name, display_name, metadata, spec FROM rate_limits ORDER BY name;
 
@@ -126,16 +123,6 @@ ON CONFLICT (id) DO UPDATE SET
     spec = EXCLUDED.spec,
     updated_at = NOW();
 
--- name: UpsertRoute :exec
-INSERT INTO routes (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata = EXCLUDED.metadata,
-    spec = EXCLUDED.spec,
-    updated_at = NOW();
-
 -- name: UpsertRateLimit :exec
 INSERT INTO rate_limits (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -154,9 +141,6 @@ DELETE FROM policies WHERE id = $1;
 
 -- name: DeleteModel :exec
 DELETE FROM models WHERE id = $1;
-
--- name: DeleteRoute :exec
-DELETE FROM routes WHERE id = $1;
 
 -- name: DeleteRateLimit :exec
 DELETE FROM rate_limits WHERE id = $1;
@@ -248,9 +232,6 @@ DELETE FROM pricing_models WHERE pricing_id = $1;
 -- name: InsertPricingModel :exec
 INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
 
--- name: GetPassthrough :one
-SELECT name, spec FROM passthrough_config WHERE name = $1;
-
 -- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec FROM providers WHERE id = $1;
 
@@ -287,12 +268,6 @@ SELECT pricing_id, model_id, position FROM pricing_models WHERE pricing_id = $1 
 -- name: GetPolicyHostKeys :many
 SELECT policy_id, host_key_id, position FROM policy_host_keys WHERE policy_id = $1 ORDER BY position;
 
--- name: UpsertPassthrough :exec
-INSERT INTO passthrough_config (name, spec, updated_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (name) DO UPDATE SET
-    spec       = EXCLUDED.spec,
-    updated_at = NOW();
 
 -- name: ListSettings :many
 SELECT section, value, updated_at FROM settings ORDER BY section;
