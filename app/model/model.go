@@ -54,6 +54,21 @@ type Spec struct {
 	ProviderModelPageURL string   `json:"providerModelPageURL,omitempty" yaml:"providerModelPageURL,omitempty" validate:"omitempty,http_url"`
 
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
+
+	// Snapshots are the dated checkpoints this Model exposes. Every Model has
+	// at least one. Pointer names the snapshot the bare Model name resolves
+	// to at request time.
+	Snapshots []Snapshot `json:"snapshots" yaml:"snapshots" validate:"required,min=1,dive"`
+	Pointer   string     `json:"pointer"   yaml:"pointer"   validate:"required"`
+}
+
+// Snapshot is a dated checkpoint of a Model. Name is the customer-facing
+// identifier (matches what the SDK sends in the `model` field for pinned
+// requests). OriginalName is the wire name sent to the upstream provider.
+type Snapshot struct {
+	Name         string `json:"name"                  yaml:"name"                  validate:"required,hostname_rfc1123"`
+	ReleasedAt   string `json:"releasedAt,omitempty"  yaml:"releasedAt,omitempty"`
+	OriginalName string `json:"originalName"          yaml:"originalName"          validate:"required"`
 }
 
 // Capabilities is the bag-of-bools feature flags every model declares.
@@ -163,6 +178,23 @@ func (m *Model) Validate() error {
 			return fmt.Errorf("model %q: duplicate host binding %q", m.Meta.Name, b.HostID)
 		}
 		hosts[b.HostID] = struct{}{}
+	}
+	snaps := make(map[string]struct{}, len(m.Spec.Snapshots))
+	for _, s := range m.Spec.Snapshots {
+		key := lower(s.Name)
+		if _, dup := snaps[key]; dup {
+			return fmt.Errorf("model %q: duplicate snapshot %q", m.Meta.Name, s.Name)
+		}
+		snaps[key] = struct{}{}
+		if _, alias := seen[key]; alias {
+			return fmt.Errorf("model %q: snapshot %q collides with alias", m.Meta.Name, s.Name)
+		}
+		if key == ownName {
+			return fmt.Errorf("model %q: snapshot %q collides with the model's own name", m.Meta.Name, s.Name)
+		}
+	}
+	if _, ok := snaps[lower(m.Spec.Pointer)]; !ok {
+		return fmt.Errorf("model %q: pointer %q does not match any snapshot", m.Meta.Name, m.Spec.Pointer)
 	}
 	return nil
 }

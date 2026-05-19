@@ -136,6 +136,9 @@ type ModelSpec struct {
 	ProviderModelPageURL string   `json:"providerModelPageURL,omitempty" yaml:"providerModelPageURL,omitempty"`
 
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+
+	Snapshots []model.Snapshot `json:"snapshots" yaml:"snapshots"`
+	Pointer   string           `json:"pointer"   yaml:"pointer"`
 }
 
 // HostBindingDTO is one host binding in the wire form. Host is a name string.

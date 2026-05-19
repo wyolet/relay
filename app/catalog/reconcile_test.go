@@ -56,8 +56,10 @@ func TestApply_UpsertNew(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-x", Adapter: adapters.OpenAI}},
-			Aliases: []string{"gpt/x"},
+			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-x", Adapter: adapters.OpenAI}},
+			Aliases:   []string{"gpt/x"},
+			Snapshots: []model.Snapshot{{Name: "gpt-x-2025-01-01", OriginalName: "gpt-x-2025-01-01"}},
+			Pointer:   "gpt-x-2025-01-01",
 		},
 	}
 	if err := c.ApplyModelUpsert(m); err != nil {
@@ -133,8 +135,10 @@ func TestApply_UpsertExisting(t *testing.T) {
 	updated := &model.Model{
 		Meta: orig.Meta, // same ID
 		Spec: model.Spec{
-			Hosts:   orig.Spec.Hosts,
-			Aliases: []string{"updated/alias"},
+			Hosts:     orig.Spec.Hosts,
+			Aliases:   []string{"updated/alias"},
+			Snapshots: orig.Spec.Snapshots,
+			Pointer:   orig.Spec.Pointer,
 		},
 	}
 
@@ -306,8 +310,10 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: firstHostID, UpstreamName: "extra", Adapter: adapters.OpenAI}},
-			Aliases: []string{"extra/model"},
+			Hosts:     []model.HostBinding{{HostID: firstHostID, UpstreamName: "extra", Adapter: adapters.OpenAI}},
+			Aliases:   []string{"extra/model"},
+			Snapshots: []model.Snapshot{{Name: "extra-model-2025-01-01", OriginalName: "extra"}},
+			Pointer:   "extra-model-2025-01-01",
 		},
 	}
 	if err := c.ApplyModelUpsert(m); err != nil {

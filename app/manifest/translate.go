@@ -180,6 +180,8 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		License:              d.Spec.License,
 		ProviderModelPageURL: d.Spec.ProviderModelPageURL,
 		Enabled:              d.Spec.Enabled,
+		Snapshots:            d.Spec.Snapshots,
+		Pointer:              d.Spec.Pointer,
 	}
 	return m, nil
 }
@@ -231,6 +233,8 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 			License:              m.Spec.License,
 			ProviderModelPageURL: m.Spec.ProviderModelPageURL,
 			Enabled:              m.Spec.Enabled,
+			Snapshots:            m.Spec.Snapshots,
+			Pointer:              m.Spec.Pointer,
 		},
 	}
 }

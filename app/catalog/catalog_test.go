@@ -66,8 +66,10 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o", Adapter: adapters.OpenAI}},
-			Aliases: []string{"openai/gpt-4o"},
+			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o", Adapter: adapters.OpenAI}},
+			Aliases:   []string{"openai/gpt-4o"},
+			Snapshots: []model.Snapshot{{Name: "gpt-4o-2025-01-01", OriginalName: "gpt-4o-2025-01-01"}},
+			Pointer:   "gpt-4o-2025-01-01",
 		},
 	}
 	m2 := &model.Model{
@@ -76,8 +78,10 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:   []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini", Adapter: adapters.OpenAI}},
-			Aliases: []string{"openai/gpt-4o-mini", "openai/mini"},
+			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini", Adapter: adapters.OpenAI}},
+			Aliases:   []string{"openai/gpt-4o-mini", "openai/mini"},
+			Snapshots: []model.Snapshot{{Name: "gpt-4o-mini-2025-01-01", OriginalName: "gpt-4o-mini-2025-01-01"}},
+			Pointer:   "gpt-4o-mini-2025-01-01",
 		},
 	}
 
