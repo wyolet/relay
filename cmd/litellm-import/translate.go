@@ -105,14 +105,32 @@ func extractDateSuffix(name string) string {
 	return ""
 }
 
-// Group holds a canonical model name, optional aliases, and the entry data.
+// snapshotEntry is one dated checkpoint within a Group.
+type snapshotEntry struct {
+	Name         string // litellm entry name (e.g. gpt-4o-2024-08-06)
+	OriginalName string // what we send upstream (same as Name today)
+	ReleasedAt   string // YYYY-MM-DD parsed from the date suffix, if any
+}
+
+// Group is one Model worth of LiteLLM entries: a stable Model name, the
+// dated Snapshots that live under it, the snapshot the bare name resolves
+// to, optional moving-label aliases (-latest, -preview, ...), and the
+// canonical entry whose capabilities/pricing represent the group.
 type Group struct {
-	Canonical string
+	ModelName string
+	Snapshots []snapshotEntry
+	Pointer   string
 	Aliases   []string
 	Entry     Entry
 }
 
-// CollapseAliases groups entries by base name and picks a canonical per group.
+var movingLabelRE = regexp.MustCompile(`-(latest|preview|current)$`)
+
+// CollapseAliases groups entries by base name. Each dated entry becomes a
+// Snapshot; -latest/-preview/-current become Model aliases; if no dated
+// entries exist a default Snapshot named after the model is synthesized.
+// On capability/pricing conflict, dated members are emitted as separate
+// single-snapshot Models.
 func CollapseAliases(entries map[string]Entry) []Group {
 	byBase := map[string][]string{}
 	for name := range entries {
@@ -121,63 +139,90 @@ func CollapseAliases(entries map[string]Entry) []Group {
 	}
 
 	var groups []Group
-	for _, names := range byBase {
+	for base, names := range byBase {
 		sort.Strings(names)
-		if len(names) == 1 {
-			groups = append(groups, Group{Canonical: names[0], Entry: entries[names[0]]})
-			continue
+
+		var dated, moving []string
+		bareExists := false
+		for _, n := range names {
+			switch {
+			case extractDateSuffix(n) != "":
+				dated = append(dated, n)
+			case movingLabelRE.MatchString(n):
+				moving = append(moving, n)
+			case n == base:
+				bareExists = true
+			default:
+				moving = append(moving, n) // unrecognized → treat as alias
+			}
 		}
 
+		// Pick the canonical entry: latest dated, else bare, else any.
 		canonical := ""
-		for _, n := range names {
-			if extractDateSuffix(n) != "" {
-				canonical = n
-				break
-			}
-		}
-		if canonical == "" {
-			b := baseName(names[0])
-			for _, n := range names {
-				if n == b {
-					canonical = n
-					break
-				}
-			}
-		}
-		if canonical == "" {
+		if len(dated) > 0 {
+			canonical = dated[len(dated)-1] // sorted ascending → last is newest
+		} else if bareExists {
+			canonical = base
+		} else {
 			canonical = names[0]
 		}
-
 		canonicalEntry := entries[canonical]
+
+		// Conflict check across dated members. If any conflict, fall back
+		// to emitting each dated entry as its own single-snapshot Model.
 		hasConflict := false
-		for _, n := range names {
+		for _, n := range dated {
 			if n == canonical {
 				continue
 			}
 			if entriesConflict(canonicalEntry, entries[n]) {
-				slog.Warn("litellm-import: alias conflict — emitting separately", "canonical", canonical, "alias", n)
+				slog.Warn("litellm-import: snapshot conflict — emitting separately", "model", base, "snapshot", n)
 				hasConflict = true
 			}
 		}
-
 		if hasConflict {
-			for _, n := range names {
-				groups = append(groups, Group{Canonical: n, Entry: entries[n]})
+			for _, n := range dated {
+				groups = append(groups, Group{
+					ModelName: n,
+					Snapshots: []snapshotEntry{{Name: n, OriginalName: n, ReleasedAt: parseReleasedAt(n)}},
+					Pointer:   n,
+					Entry:     entries[n],
+				})
 			}
 			continue
 		}
 
-		var aliases []string
-		for _, n := range names {
-			if n != canonical {
-				aliases = append(aliases, n)
-			}
+		var snaps []snapshotEntry
+		for _, n := range dated {
+			snaps = append(snaps, snapshotEntry{Name: n, OriginalName: n, ReleasedAt: parseReleasedAt(n)})
 		}
-		groups = append(groups, Group{Canonical: canonical, Aliases: aliases, Entry: canonicalEntry})
+		pointer := ""
+		if len(snaps) > 0 {
+			pointer = snaps[len(snaps)-1].Name // newest
+		} else {
+			snaps = []snapshotEntry{{Name: base, OriginalName: base}}
+			pointer = base
+		}
+		groups = append(groups, Group{
+			ModelName: base,
+			Snapshots: snaps,
+			Pointer:   pointer,
+			Aliases:   moving,
+			Entry:     canonicalEntry,
+		})
 	}
 
-	sort.Slice(groups, func(i, j int) bool { return groups[i].Canonical < groups[j].Canonical })
+	sort.Slice(groups, func(i, j int) bool { return groups[i].ModelName < groups[j].ModelName })
 	return groups
+}
+
+// parseReleasedAt turns the LiteLLM date suffix (YYYYMMDD) into ISO YYYY-MM-DD.
+func parseReleasedAt(name string) string {
+	s := extractDateSuffix(name)
+	if len(s) != 8 {
+		return ""
+	}
+	return s[:4] + "-" + s[4:6] + "-" + s[6:8]
 }
 
 func entriesConflict(a, b Entry) bool {
@@ -338,7 +383,7 @@ func Translate(entries map[string]Entry, sourceVersion string) (*TranslateResult
 
 		m, err := buildModel(g, pm, sourceVersion, today)
 		if err != nil {
-			return nil, fmt.Errorf("translate: model %q: %w", g.Canonical, err)
+			return nil, fmt.Errorf("translate: model %q: %w", g.ModelName, err)
 		}
 		result.Models = append(result.Models, m)
 
@@ -434,7 +479,7 @@ func buildPricing(g Group, pm providerMeta) *PricingDTO {
 		return nil
 	}
 
-	name := pm.name + "-" + SanitizeFilename(g.Canonical)
+	name := pm.name + "-" + SanitizeFilename(g.ModelName)
 	return &PricingDTO{
 		APIVersion: "relay.wyolet.dev/v1",
 		Kind:       "Pricing",
@@ -444,7 +489,7 @@ func buildPricing(g Group, pm providerMeta) *PricingDTO {
 		},
 		Spec: pricingSpec{
 			Currency:     "USD",
-			TargetModels: []string{g.Canonical},
+			TargetModels: []string{g.ModelName},
 			Rates:        rates,
 		},
 	}
@@ -483,7 +528,7 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		Batch:             hasBatchEndpoint(e),
 	}
 
-	family := inferFamily(g.Canonical)
+	family := inferFamily(g.ModelName)
 	labels := map[string]string{
 		"source":         "litellm",
 		"source_version": version,
@@ -492,18 +537,39 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		labels["family"] = family
 	}
 
+	snaps := make([]model.Snapshot, 0, len(g.Snapshots))
+	for _, s := range g.Snapshots {
+		snaps = append(snaps, model.Snapshot{
+			Name:         s.Name,
+			OriginalName: s.OriginalName,
+			ReleasedAt:   s.ReleasedAt,
+		})
+	}
+
+	// UpstreamName at the binding level is the legacy single-snapshot
+	// field. Routing (stage 4) reads originalName from the resolved
+	// snapshot instead; we populate this to the pointer's originalName
+	// so the existing per-binding required field stays satisfied.
+	pointerOriginal := g.Pointer
+	for _, s := range g.Snapshots {
+		if s.Name == g.Pointer {
+			pointerOriginal = s.OriginalName
+			break
+		}
+	}
+
 	return &manifest.ModelDTO{
 		APIVersion: manifest.APIVersion,
 		Kind:       "Model",
 		Metadata: manifest.WireMeta{
-			Name:   g.Canonical,
+			Name:   g.ModelName,
 			Labels: labels,
 			Owner:  manifest.WireOwner{Kind: meta.OwnerProvider, Name: pm.name},
 		},
 		Spec: manifest.ModelSpec{
 			Hosts: []manifest.HostBindingDTO{{
 				Host:         pm.name,
-				UpstreamName: g.Canonical,
+				UpstreamName: pointerOriginal,
 				Adapter:      pm.adapter,
 			}},
 			Family:              family,
@@ -514,6 +580,8 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 			ContextWindowTotal:  total,
 			Deprecation:         deprecationInfo(e, today),
 			Aliases:             g.Aliases,
+			Snapshots:           snaps,
+			Pointer:             g.Pointer,
 		},
 	}, nil
 }
