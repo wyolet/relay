@@ -77,15 +77,16 @@ func Parse(r io.Reader) ([]Document, error) {
 			docIdx++
 			continue
 		}
-		if env.APIVersion != APIVersion {
-			return nil, fmt.Errorf("wire: doc %d: unsupported apiVersion %q (want %q)", docIdx, env.APIVersion, APIVersion)
-		}
 		// Skip kinds owned by sibling subsystems that share the config tree.
 		// Identity (User, Group, Role) lives in config/users/ alongside catalog
-		// YAML; the catalog seeder must walk past it without erroring.
+		// YAML and carries its own apiVersion — the catalog seeder must walk
+		// past it without enforcing the manifest schema version.
 		if isForeignKind(env.Kind) {
 			docIdx++
 			continue
+		}
+		if env.APIVersion != APIVersion {
+			return nil, fmt.Errorf("wire: doc %d: unsupported apiVersion %q (want %q)", docIdx, env.APIVersion, APIVersion)
 		}
 		if env.Metadata.Name == "" {
 			return nil, fmt.Errorf("wire: doc %d kind=%s: metadata.name required", docIdx, env.Kind)
