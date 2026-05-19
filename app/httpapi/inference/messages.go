@@ -15,11 +15,21 @@ import (
 )
 
 func registerMessages(api huma.API, d Deps, mw huma.Middlewares) {
+	registerMessagesAt(api, d, mw, "/v1/messages", "messages",
+		"Create a message (Anthropic-compatible)")
+	registerMessagesAt(api, d, mw, "/anthropic/v1/messages", "anthropic_messages",
+		"Create a message via the explicit /anthropic namespace")
+}
+
+// registerMessagesAt registers one POST endpoint that delegates to
+// handleMessages. Parameterised path so legacy /v1/* and namespaced
+// /anthropic/v1/* both serve the same handler.
+func registerMessagesAt(api huma.API, d Deps, mw huma.Middlewares, path, opID, summary string) {
 	huma.Register(api, huma.Operation{
-		OperationID: "messages",
+		OperationID: opID,
 		Method:      http.MethodPost,
-		Path:        "/v1/messages",
-		Summary:     "Create a message (Anthropic-compatible)",
+		Path:        path,
+		Summary:     summary,
 		Tags:        []string{"inference"},
 		Middlewares: mw,
 		Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
