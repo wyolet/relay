@@ -101,15 +101,6 @@ func (q *Queries) DeleteRelayKey(ctx context.Context, id string) error {
 	return err
 }
 
-const deleteRoute = `-- name: DeleteRoute :exec
-DELETE FROM routes WHERE id = $1
-`
-
-func (q *Queries) DeleteRoute(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, deleteRoute, id)
-	return err
-}
-
 const deleteSecret = `-- name: DeleteSecret :exec
 DELETE FROM secrets WHERE id = $1
 `
@@ -175,22 +166,6 @@ func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) 
 		&i.Metadata,
 		&i.Spec,
 	)
-	return i, err
-}
-
-const getPassthrough = `-- name: GetPassthrough :one
-SELECT name, spec FROM passthrough_config WHERE name = $1
-`
-
-type GetPassthroughRow struct {
-	Name string `db:"name" json:"name"`
-	Spec []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) GetPassthrough(ctx context.Context, name string) (GetPassthroughRow, error) {
-	row := q.db.QueryRow(ctx, getPassthrough, name)
-	var i GetPassthroughRow
-	err := row.Scan(&i.Name, &i.Spec)
 	return i, err
 }
 
@@ -1010,44 +985,6 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 	return items, nil
 }
 
-const listRoutes = `-- name: ListRoutes :many
-SELECT id, name, display_name, metadata, spec FROM routes ORDER BY name
-`
-
-type ListRoutesRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) ListRoutes(ctx context.Context) ([]ListRoutesRow, error) {
-	rows, err := q.db.Query(ctx, listRoutes)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListRoutesRow
-	for rows.Next() {
-		var i ListRoutesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.DisplayName,
-			&i.Metadata,
-			&i.Spec,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listSecrets = `-- name: ListSecrets :many
 SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets ORDER BY name
 `
@@ -1373,24 +1310,6 @@ func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error 
 	return err
 }
 
-const upsertPassthrough = `-- name: UpsertPassthrough :exec
-INSERT INTO passthrough_config (name, spec, updated_at)
-VALUES ($1, $2, NOW())
-ON CONFLICT (name) DO UPDATE SET
-    spec       = EXCLUDED.spec,
-    updated_at = NOW()
-`
-
-type UpsertPassthroughParams struct {
-	Name string `db:"name" json:"name"`
-	Spec []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) UpsertPassthrough(ctx context.Context, arg UpsertPassthroughParams) error {
-	_, err := q.db.Exec(ctx, upsertPassthrough, arg.Name, arg.Spec)
-	return err
-}
-
 const upsertPolicy = `-- name: UpsertPolicy :exec
 INSERT INTO policies (id, name, display_name, metadata, spec, models, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -1544,36 +1463,6 @@ func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) 
 		arg.Name,
 		arg.DisplayName,
 		arg.KeyHash,
-		arg.Metadata,
-		arg.Spec,
-	)
-	return err
-}
-
-const upsertRoute = `-- name: UpsertRoute :exec
-INSERT INTO routes (id, name, display_name, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
-ON CONFLICT (id) DO UPDATE SET
-    name = EXCLUDED.name,
-    display_name = EXCLUDED.display_name,
-    metadata = EXCLUDED.metadata,
-    spec = EXCLUDED.spec,
-    updated_at = NOW()
-`
-
-type UpsertRouteParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) UpsertRoute(ctx context.Context, arg UpsertRouteParams) error {
-	_, err := q.db.Exec(ctx, upsertRoute,
-		arg.ID,
-		arg.Name,
-		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
 	)

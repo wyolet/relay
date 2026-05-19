@@ -160,7 +160,7 @@ seed-loadtest: ## seed catalog from deploy/compose/config (load-tester fixtures)
 
 # Tables wiped by `make seed-wipe`. Preserves settings + schema_migrations.
 # Order is for readability; CASCADE handles the FKs either way.
-SEED_WIPE_TABLES := relay_keys pricing_models pricings policy_host_keys policy_models policies rate_limits models hosts providers secrets routes pools attachments passthrough_config
+SEED_WIPE_TABLES := relay_keys pricing_models pricings policy_host_keys policy_models policies rate_limits models hosts providers secrets
 
 seed-wipe: ## TRUNCATE all catalog tables (keeps settings, users, schema_migrations). Destructive.
 	@printf "About to TRUNCATE: $(SEED_WIPE_TABLES)\nPG_DSN=$(PG_DSN)\nType 'yes' to continue: " && read ans && [ "$$ans" = "yes" ] || (echo "aborted"; exit 1)
