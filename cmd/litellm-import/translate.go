@@ -86,7 +86,9 @@ var skippedProviders = map[string]string{
 	"azure_ai":                  "requires custom config",
 }
 
-var dateSuffixRE = regexp.MustCompile(`-(\d{8})$`)
+// Matches both compact (-YYYYMMDD, Anthropic-style) and dashed
+// (-YYYY-MM-DD, OpenAI-style) date suffixes.
+var dateSuffixRE = regexp.MustCompile(`-(\d{4})-?(\d{2})-?(\d{2})$`)
 var suffixesToStrip = []string{"-latest", "-preview", "-current"}
 
 func baseName(name string) string {
@@ -97,12 +99,14 @@ func baseName(name string) string {
 	return n
 }
 
+// extractDateSuffix returns the date in compact YYYYMMDD form, regardless
+// of which separator style the source name used.
 func extractDateSuffix(name string) string {
 	m := dateSuffixRE.FindStringSubmatch(name)
-	if m != nil {
-		return m[1]
+	if m == nil {
+		return ""
 	}
-	return ""
+	return m[1] + m[2] + m[3]
 }
 
 // snapshotEntry is one dated checkpoint within a Group.

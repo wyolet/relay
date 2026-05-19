@@ -64,7 +64,12 @@ func WriteToDisk(outDir string, result *TranslateResult) (*WriteResult, error) {
 	}
 
 	for _, m := range result.Models {
-		providerName := m.Metadata.Owner.ID // set to provider name in buildModel
+		// buildModel populates Owner.Name (Owner.ID stays empty for the
+		// pre-resolution wire form). Fall back to Owner.ID for robustness.
+		providerName := m.Metadata.Owner.Name
+		if providerName == "" {
+			providerName = m.Metadata.Owner.ID
+		}
 		filename := SanitizeFilename(m.Metadata.Name) + ".yaml"
 		path := filepath.Join(outDir, "providers", providerName, "models", filename)
 		if err := writeYAML(path, m); err != nil {
