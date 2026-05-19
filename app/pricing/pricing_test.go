@@ -67,3 +67,30 @@ func TestRateFor_MissingMeter(t *testing.T) {
 		t.Error("expected ok=false for missing meter")
 	}
 }
+
+func TestMeterForUsageKey(t *testing.T) {
+	cases := map[string]Meter{
+		"input":                  MeterTokensInput,
+		"output":                 MeterTokensOutput,
+		"cache_read":             MeterTokensCacheRead,
+		"cache_creation":         MeterTokensCacheCreation,
+		"reasoning":              MeterTokensReasoning,
+		"audio_input":            MeterTokensAudioInput,
+		"audio_output":           MeterTokensAudioOutput,
+		"accepted_prediction":    MeterTokensAcceptedPrediction,
+		"rejected_prediction":    MeterTokensRejectedPrediction,
+		"server_tool_use_input":  MeterTokensServerToolUseInput,
+		"server_tool_use_output": MeterTokensServerToolUseOutput,
+	}
+	for k, want := range cases {
+		t.Run(k, func(t *testing.T) {
+			got, ok := MeterForUsageKey(k)
+			if !ok || got != want {
+				t.Fatalf("got (%q, %v), want (%q, true)", got, ok, want)
+			}
+		})
+	}
+	if _, ok := MeterForUsageKey("nope"); ok {
+		t.Error("expected ok=false for unknown key")
+	}
+}

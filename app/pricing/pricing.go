@@ -1,7 +1,7 @@
 // Package pricing is the domain layer for the Pricing entity — a named rate
 // sheet owned by a Host and applied to one or more Models. One Pricing row
 // holds every rate that bills against a (model, host) pair: input, output,
-// cache_read, cache_write, reasoning, and any context-tier variants.
+// cache_read, cache_creation, reasoning, audio_*, and any context-tier variants.
 //
 // Pricing is owner=host so that "Anthropic's price list" and "Bedrock's
 // price list" are two distinct entities even when they cover overlapping
@@ -36,7 +36,7 @@ type Spec struct {
 // threshold. The billing-time picker walks rates for the meter and applies
 // the largest qualifying threshold.
 type Rate struct {
-	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_write tokens.reasoning"`
+	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.reasoning tokens.audio_input tokens.audio_output tokens.accepted_prediction tokens.rejected_prediction tokens.server_tool_use_input tokens.server_tool_use_output"`
 	Unit        Unit    `json:"unit"                  yaml:"unit"                  validate:"required,oneof=per_million per_unit"`
 	Amount      float64 `json:"amount"                yaml:"amount"                validate:"required,gt=0"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty" validate:"gte=0"`
@@ -47,12 +47,49 @@ type Rate struct {
 type Meter string
 
 const (
-	MeterTokensInput      Meter = "tokens.input"
-	MeterTokensOutput     Meter = "tokens.output"
-	MeterTokensCacheRead  Meter = "tokens.cache_read"
-	MeterTokensCacheWrite Meter = "tokens.cache_write"
-	MeterTokensReasoning  Meter = "tokens.reasoning"
+	MeterTokensInput               Meter = "tokens.input"
+	MeterTokensOutput              Meter = "tokens.output"
+	MeterTokensCacheRead           Meter = "tokens.cache_read"
+	MeterTokensCacheCreation       Meter = "tokens.cache_creation"
+	MeterTokensReasoning           Meter = "tokens.reasoning"
+	MeterTokensAudioInput          Meter = "tokens.audio_input"
+	MeterTokensAudioOutput         Meter = "tokens.audio_output"
+	MeterTokensAcceptedPrediction  Meter = "tokens.accepted_prediction"
+	MeterTokensRejectedPrediction  Meter = "tokens.rejected_prediction"
+	MeterTokensServerToolUseInput  Meter = "tokens.server_tool_use_input"
+	MeterTokensServerToolUseOutput Meter = "tokens.server_tool_use_output"
 )
+
+// MeterForUsageKey maps a usage.Tokens key (as emitted by
+// Adapter.ExtractTokens) to its corresponding pricing Meter. Returns
+// the meter and true if known, or "" and false for unpriced keys.
+func MeterForUsageKey(k string) (Meter, bool) {
+	switch k {
+	case "input":
+		return MeterTokensInput, true
+	case "output":
+		return MeterTokensOutput, true
+	case "cache_read":
+		return MeterTokensCacheRead, true
+	case "cache_creation":
+		return MeterTokensCacheCreation, true
+	case "reasoning":
+		return MeterTokensReasoning, true
+	case "audio_input":
+		return MeterTokensAudioInput, true
+	case "audio_output":
+		return MeterTokensAudioOutput, true
+	case "accepted_prediction":
+		return MeterTokensAcceptedPrediction, true
+	case "rejected_prediction":
+		return MeterTokensRejectedPrediction, true
+	case "server_tool_use_input":
+		return MeterTokensServerToolUseInput, true
+	case "server_tool_use_output":
+		return MeterTokensServerToolUseOutput, true
+	}
+	return "", false
+}
 
 // Unit is how Amount is interpreted. per_million is the common case for
 // token rates (Amount=2.50 means $2.50 per 1M tokens). per_unit is for
