@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/app/api/anthropic"
+	"github.com/wyolet/relay/app/adapters/anthropic"
 	"github.com/wyolet/relay/app/keypool"
 )
 

@@ -10,7 +10,7 @@
 // Model.Spec.Capabilities; an adapter's job is wire format, not feature
 // negotiation. A future "adapter framework" may bundle capability
 // expectations per adapter Kind, but today the two concerns are separate.
-package adapter
+package adapters
 
 // Kind is the wire-protocol identifier.
 type Kind string

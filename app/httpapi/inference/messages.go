@@ -8,10 +8,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
-	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
-	pkganthropic "github.com/wyolet/relay/pkg/api/anthropic"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
 )
 
 func registerMessages(api huma.API, d Deps, mw huma.Middlewares) {
@@ -37,7 +37,7 @@ func handleMessages(d Deps, w http.ResponseWriter, r *http.Request) {
 
 	cls := ClassificationFrom(ctx)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
-		handleProxy(d, w, r, adapter.Anthropic)
+		handleProxy(d, w, r, adapters.Anthropic)
 		return
 	}
 
@@ -68,7 +68,7 @@ func handleMessages(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if plan.HostBinding.Adapter != adapter.Anthropic {
+	if plan.HostBinding.Adapter != adapters.Anthropic {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "adapter_mismatch",
 			"model is not served via the Anthropic shape on this host; use /v1/chat/completions if applicable")
 		return

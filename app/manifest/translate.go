@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -144,7 +144,7 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		bindings = append(bindings, model.HostBinding{
 			HostID:       hostID,
 			UpstreamName: b.UpstreamName,
-			Adapter:      adapter.Kind(b.Adapter),
+			Adapter:      adapters.Kind(b.Adapter),
 			Enabled:      b.Enabled,
 		})
 	}

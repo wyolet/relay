@@ -8,9 +8,9 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/wyolet/relay/app/adapter"
-	apianthropic "github.com/wyolet/relay/app/api/anthropic"
-	apiopenai "github.com/wyolet/relay/app/api/openai"
+	"github.com/wyolet/relay/app/adapters"
+	apianthropic "github.com/wyolet/relay/app/adapters/anthropic"
+	apiopenai "github.com/wyolet/relay/app/adapters/openai"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/proxy"
 	apprl "github.com/wyolet/relay/app/ratelimit"
@@ -30,7 +30,7 @@ const (
 // handleProxy is the shared proxy-mode flow called by /v1/chat/completions
 // and /v1/messages. adapterKind pins the token extractor (and is used in
 // future per-host adapter-mismatch checks).
-func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapter.Kind) {
+func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Kind) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
 
@@ -110,11 +110,11 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 // post-flight. The same adapter implementations from app/api/* serve
 // here — they implement TokenExtractor by virtue of having
 // ExtractTokens.
-func extractorFor(kind adapter.Kind) proxy.TokenExtractor {
+func extractorFor(kind adapters.Kind) proxy.TokenExtractor {
 	switch kind {
-	case adapter.OpenAI:
+	case adapters.OpenAI:
 		return apiopenai.New()
-	case adapter.Anthropic:
+	case adapters.Anthropic:
 		return apianthropic.New()
 	}
 	return nil

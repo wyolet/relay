@@ -10,11 +10,11 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
-	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
-	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 func registerChat(api huma.API, d Deps, mw huma.Middlewares) {
@@ -43,7 +43,7 @@ func handleChat(d Deps, w http.ResponseWriter, r *http.Request) {
 
 	cls := ClassificationFrom(ctx)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
-		handleProxy(d, w, r, adapter.OpenAI)
+		handleProxy(d, w, r, adapters.OpenAI)
 		return
 	}
 
@@ -84,7 +84,7 @@ func handleChat(d Deps, w http.ResponseWriter, r *http.Request) {
 	// Adapter mismatch — caller hit /v1/chat/completions but the
 	// model's binding declares adapter=anthropic. Reject; cross-shape
 	// translation is intentionally not v1.
-	if plan.HostBinding.Adapter != adapter.OpenAI {
+	if plan.HostBinding.Adapter != adapters.OpenAI {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "adapter_mismatch",
 			"model is not served via the OpenAI shape on this host; use /v1/messages if applicable")
 		return

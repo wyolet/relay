@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/wyolet/relay/pkg/api/openai"
+	"github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // ToOpenAI converts a MessagesRequest into an OpenAI FullChatRequest.
