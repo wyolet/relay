@@ -18,11 +18,21 @@ import (
 )
 
 func registerChat(api huma.API, d Deps, mw huma.Middlewares) {
+	registerChatAt(api, d, mw, "/v1/chat/completions", "chat_completions",
+		"Create a chat completion (OpenAI-compatible)")
+	registerChatAt(api, d, mw, "/openai/v1/chat/completions", "openai_chat_completions",
+		"Create a chat completion via the explicit /openai namespace")
+}
+
+// registerChatAt registers one POST endpoint that delegates to handleChat.
+// The path is parameterised so we can expose the same flow at the legacy
+// /v1/* path and the namespaced /openai/v1/* path simultaneously.
+func registerChatAt(api huma.API, d Deps, mw huma.Middlewares, path, opID, summary string) {
 	huma.Register(api, huma.Operation{
-		OperationID: "chat_completions",
+		OperationID: opID,
 		Method:      http.MethodPost,
-		Path:        "/v1/chat/completions",
-		Summary:     "Create a chat completion (OpenAI-compatible)",
+		Path:        path,
+		Summary:     summary,
 		Tags:        []string{"inference"},
 		Middlewares: mw,
 		Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},

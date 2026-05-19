@@ -5,14 +5,19 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/ids"
 )
 
 // modelObject is the OpenAI list-models entry shape.
 type modelObject struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
+	Created int64  `json:"created"`
 	OwnedBy string `json:"owned_by"`
 }
 
@@ -23,93 +28,140 @@ type modelsOutput struct {
 	}
 }
 
-// registerModels serves GET /v1/models — list of models accessible to
-// the authenticated relay key.
+// registerModels serves GET /v1/models and GET /openai/v1/models — the
+// list of models accessible to the authenticated relay key. The /openai
+// namespace additionally filters out any model that has no enabled host
+// binding declaring `adapter: openai`, since the OpenAI SDK can't reach
+// those even if policy allows them.
 //
 // Policy-bound key: enumerates every enabled model and asks
 // routing.PolicyAllows. Covers literal ModelIDs grants, modelref
-// Spec.Models grants, and the implicit-wildcard case (both fields
-// empty).
+// Spec.Models grants, and the implicit-wildcard case (both fields empty).
 //
 // Policy-less key (Spec.PolicyID empty + settings.Inference.
-// AllowMissingPolicy on): returns every enabled model that has at
-// least one enabled host binding to a host the relay has hostkeys for.
+// AllowMissingPolicy on): returns every enabled model that has at least
+// one enabled host binding to a host the relay has hostkeys for.
 func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
+	registerModelsAt(api, d, mw, "/v1/models", "")
+	registerModelsAt(api, d, mw, "/openai/v1/models", adapters.OpenAI)
+}
+
+// registerModelsAt registers a single list-models endpoint at path. If
+// adapterFilter is non-empty, only models with at least one enabled host
+// binding declaring that adapter are returned.
+func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, adapterFilter adapters.Kind) {
+	opID := "list_models"
+	summary := "List models accessible to the caller (OpenAI-compatible)"
+	if adapterFilter != "" {
+		opID = "list_models_" + string(adapterFilter)
+		summary = "List models reachable via the " + string(adapterFilter) + " wire shape"
+	}
 	huma.Register(api, huma.Operation{
-		OperationID: "list_models",
+		OperationID: opID,
 		Method:      "GET",
-		Path:        "/v1/models",
-		Summary:     "List models accessible to the caller (OpenAI-compatible)",
+		Path:        path,
+		Summary:     summary,
 		Tags:        []string{"inference"},
 		Middlewares: mw,
 		Errors:      []int{401, 403, 500},
 	}, func(ctx context.Context, _ *struct{}) (*modelsOutput, error) {
-		rk := RelayKeyFromContext(ctx)
-		if rk == nil {
-			return nil, huma.Error401Unauthorized("missing relay key")
-		}
-		snap := d.Catalog.Current()
-		out := &modelsOutput{}
-		out.Body.Object = "list"
+		return listModels(ctx, d, adapterFilter)
+	})
+}
 
-		if rk.Spec.PolicyID == "" {
-			v, _ := d.Catalog.Setting(settings.SectionInference)
-			cfg, _ := v.(*settings.Inference)
-			if cfg == nil || !cfg.AllowMissingPolicy {
-				return nil, huma.Error403Forbidden("policy-less traffic is disabled on this relay")
-			}
-			seen := map[string]struct{}{}
-			for _, m := range snap.AllModels() {
-				if _, dup := seen[m.Meta.Name]; dup {
-					continue
-				}
-				for i := range m.Spec.Hosts {
-					hb := &m.Spec.Hosts[i]
-					if !hb.IsEnabled() {
-						continue
-					}
-					if len(snap.HostKeysForHost(hb.HostID)) == 0 {
-						continue
-					}
-					ownedBy := ""
-					if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
-						ownedBy = pname
-					}
-					out.Body.Data = append(out.Body.Data, modelObject{
-						ID:      m.Meta.Name,
-						Object:  "model",
-						OwnedBy: ownedBy,
-					})
-					seen[m.Meta.Name] = struct{}{}
-					break
-				}
-			}
-			return out, nil
-		}
+func listModels(ctx context.Context, d Deps, adapterFilter adapters.Kind) (*modelsOutput, error) {
+	rk := RelayKeyFromContext(ctx)
+	if rk == nil {
+		return nil, huma.Error401Unauthorized("missing relay key")
+	}
+	snap := d.Catalog.Current()
+	out := &modelsOutput{}
+	out.Body.Object = "list"
 
-		pol, ok := snap.Policy(rk.Spec.PolicyID)
-		if !ok {
-			return nil, huma.Error500InternalServerError("policy not found for relay key")
+	if rk.Spec.PolicyID == "" {
+		v, _ := d.Catalog.Setting(settings.SectionInference)
+		cfg, _ := v.(*settings.Inference)
+		if cfg == nil || !cfg.AllowMissingPolicy {
+			return nil, huma.Error403Forbidden("policy-less traffic is disabled on this relay")
 		}
 		seen := map[string]struct{}{}
 		for _, m := range snap.AllModels() {
 			if _, dup := seen[m.Meta.Name]; dup {
 				continue
 			}
-			if !routing.PolicyAllows(snap, pol, m) {
+			if !modelHasReachableBinding(snap, m, adapterFilter) {
 				continue
 			}
 			seen[m.Meta.Name] = struct{}{}
-			ownedBy := ""
-			if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
-				ownedBy = pname
-			}
-			out.Body.Data = append(out.Body.Data, modelObject{
-				ID:      m.Meta.Name,
-				Object:  "model",
-				OwnedBy: ownedBy,
-			})
+			out.Body.Data = append(out.Body.Data, toModelObject(snap, m))
 		}
 		return out, nil
-	})
+	}
+
+	pol, ok := snap.Policy(rk.Spec.PolicyID)
+	if !ok {
+		return nil, huma.Error500InternalServerError("policy not found for relay key")
+	}
+	seen := map[string]struct{}{}
+	for _, m := range snap.AllModels() {
+		if _, dup := seen[m.Meta.Name]; dup {
+			continue
+		}
+		if !routing.PolicyAllows(snap, pol, m) {
+			continue
+		}
+		if adapterFilter != "" && !modelHasAdapter(m, adapterFilter) {
+			continue
+		}
+		seen[m.Meta.Name] = struct{}{}
+		out.Body.Data = append(out.Body.Data, toModelObject(snap, m))
+	}
+	return out, nil
+}
+
+// modelHasReachableBinding returns true iff the model has at least one
+// enabled host binding to a host with credentials, optionally restricted
+// to a specific adapter kind.
+func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Kind) bool {
+	for i := range m.Spec.Hosts {
+		hb := &m.Spec.Hosts[i]
+		if !hb.IsEnabled() {
+			continue
+		}
+		if adapterFilter != "" && hb.Adapter != adapterFilter {
+			continue
+		}
+		if len(snap.HostKeysForHost(hb.HostID)) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// modelHasAdapter returns true iff the model has at least one enabled
+// binding declaring kind, regardless of credentials. Used for policy-bound
+// keys where the routing layer will surface a no-keys error rather than
+// silently hiding the model.
+func modelHasAdapter(m *model.Model, kind adapters.Kind) bool {
+	for i := range m.Spec.Hosts {
+		hb := &m.Spec.Hosts[i]
+		if hb.IsEnabled() && hb.Adapter == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func toModelObject(snap *catalog.Snapshot, m *model.Model) modelObject {
+	ownedBy := ""
+	if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
+		ownedBy = pname
+	}
+	return modelObject{
+		ID:      m.Meta.Name,
+		Object:  "model",
+		Created: ids.UnixSec(m.Meta.ID),
+		OwnedBy: ownedBy,
+	}
 }
