@@ -69,16 +69,11 @@ func TestParse_Errors(t *testing.T) {
 		{"anthropic/", nil, "trailing /"},
 		{"anthropic/claude@", nil, "trailing @"},
 		{"@", nil, "trailing @"},
-		{"Anthropic", nil, "DNS-1123"},
-		{"anthropic/Claude", nil, "DNS-1123"},
-		{"anthropic/claude@Bedrock", nil, "DNS-1123"},
-		{"-foo", nil, "DNS-1123"},
-		{"foo-/bar", nil, "DNS-1123"},
-		// `*` is no longer a legal token anywhere in the wire form.
-		{"anthropic/*", nil, "DNS-1123"},
-		{"anthropic/*@bedrock", nil, "DNS-1123"},
-		{"anthropic/claude@*", nil, "DNS-1123"},
-		{"@*", nil, "DNS-1123"},
+		// `*` has no slug-compatible characters → rejected after normalization.
+		{"anthropic/*", nil, "slug-compatible"},
+		{"anthropic/*@bedrock", nil, "slug-compatible"},
+		{"anthropic/claude@*", nil, "slug-compatible"},
+		{"@*", nil, "slug-compatible"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -98,6 +93,38 @@ func TestParse_Errors(t *testing.T) {
 			}
 			if tc.reason != "" && !contains(se.Reason, tc.reason) {
 				t.Errorf("reason: want substring %q, got %q", tc.reason, se.Reason)
+			}
+		})
+	}
+}
+
+func TestParse_NormalizesToSlug(t *testing.T) {
+	cases := []struct {
+		in       string
+		provider string
+		model    string
+		host     string
+	}{
+		{"openai/gpt-5.5", "openai", "gpt-5-5", ""},
+		{"OpenAI/GPT-4o", "openai", "gpt-4o", ""},
+		{"openai/ft:gpt-3.5-turbo", "openai", "ft-gpt-3-5-turbo", ""},
+		{"anthropic/claude-3@Bedrock", "anthropic", "claude-3", "bedrock"},
+		{"@Amazon-Bedrock", "", "", "amazon-bedrock"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			ref, err := Parse(tc.in)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", tc.in, err)
+			}
+			if ref.Provider != tc.provider {
+				t.Errorf("Provider = %q, want %q", ref.Provider, tc.provider)
+			}
+			if ref.Model != tc.model {
+				t.Errorf("Model = %q, want %q", ref.Model, tc.model)
+			}
+			if ref.Host != tc.host {
+				t.Errorf("Host = %q, want %q", ref.Host, tc.host)
 			}
 		})
 	}

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // Ref is the parsed form of a ref string. The string itself is preserved
@@ -94,11 +96,25 @@ func (e *SyntaxError) Error() string {
 // Parse turns a ref string into a Ref. Returns ErrEmpty on "" and
 // *SyntaxError on a malformed input. The parser never touches the
 // catalog — it only enforces grammar.
+//
+// Each segment (provider, model, host) is slug-normalized via pkg/slug
+// before matching, so authors can paste real-world names (e.g.
+// "openai/gpt-5.5") and the ref resolves against the catalog's slug
+// form ("openai/gpt-5-5"). The `/` and `@` separators are structural
+// and never normalized away.
 func Parse(s string) (Ref, error) {
 	if s == "" {
 		return Ref{}, ErrEmpty
 	}
 	ref := Ref{Raw: s}
+
+	normalize := func(raw, segment string) (string, error) {
+		n := slug.From(raw)
+		if n == "" || !slugRe.MatchString(n) {
+			return "", &SyntaxError{Raw: ref.Raw, Reason: segment + " has no slug-compatible characters"}
+		}
+		return n, nil
+	}
 
 	// Host-only refs ("@bedrock") — every model from every provider on
 	// this host. Distinct from every other shape, which is provider-
@@ -106,14 +122,15 @@ func Parse(s string) (Ref, error) {
 	if strings.HasPrefix(s, "@") {
 		host := s[1:]
 		if host == "" {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host slug"}
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host"}
 		}
-		if !slugRe.MatchString(host) {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "host must be a DNS-1123 slug"}
+		n, err := normalize(host, "host")
+		if err != nil {
+			return ref, err
 		}
 		ref.ProviderWildcard = true
 		ref.ModelWildcard = true
-		ref.Host = host
+		ref.Host = n
 		return ref, nil
 	}
 
@@ -123,40 +140,46 @@ func Parse(s string) (Ref, error) {
 		hostPart = s[i+1:]
 		s = s[:i]
 		if hostPart == "" {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host slug"}
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing @ requires a host"}
 		}
 	}
 
 	// provider[/model]
 	slash := strings.IndexByte(s, '/')
+	var rawProvider, rawModel string
 	switch {
 	case slash < 0:
-		// provider only — model wildcarded by absence.
-		ref.Provider = s
+		rawProvider = s
 		ref.ModelWildcard = true
 	case slash == 0:
 		return ref, &SyntaxError{Raw: ref.Raw, Reason: "leading / — provider is required"}
 	default:
-		ref.Provider = s[:slash]
-		ref.Model = s[slash+1:]
-		if ref.Model == "" {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing / requires a model slug"}
+		rawProvider = s[:slash]
+		rawModel = s[slash+1:]
+		if rawModel == "" {
+			return ref, &SyntaxError{Raw: ref.Raw, Reason: "trailing / requires a model"}
 		}
 	}
 
-	if !slugRe.MatchString(ref.Provider) {
-		return ref, &SyntaxError{Raw: ref.Raw, Reason: "provider must be a DNS-1123 slug"}
+	p, err := normalize(rawProvider, "provider")
+	if err != nil {
+		return ref, err
 	}
-	if !ref.ModelWildcard && !slugRe.MatchString(ref.Model) {
-		return ref, &SyntaxError{Raw: ref.Raw, Reason: "model must be a DNS-1123 slug"}
+	ref.Provider = p
+	if !ref.ModelWildcard {
+		m, err := normalize(rawModel, "model")
+		if err != nil {
+			return ref, err
+		}
+		ref.Model = m
 	}
 
-	// @host: present → concrete host; absent → host wildcard.
 	if hostPart != "" {
-		if !slugRe.MatchString(hostPart) {
-			return ref, &SyntaxError{Raw: ref.Raw, Reason: "host must be a DNS-1123 slug"}
+		h, err := normalize(hostPart, "host")
+		if err != nil {
+			return ref, err
 		}
-		ref.Host = hostPart
+		ref.Host = h
 	} else {
 		ref.HostWildcard = true
 	}

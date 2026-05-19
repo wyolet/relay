@@ -40,6 +40,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // Errors returned by Resolve. Each maps to a distinct HTTP status in
@@ -234,11 +235,16 @@ candidates:
 }
 
 // resolveModel maps an inbound model name to a (Model, Snapshot) pair.
-// Customer-facing addressability is purely via Snapshot.Name — the bare
-// Model slug (Meta.Name) is admin-only and not accepted on /v1/* paths.
-// Returns an empty slice when the name doesn't match any snapshot.
+// The input is slug-normalized before lookup so customers can type the
+// upstream wire form (e.g. "gpt-5.5") or the slug form ("gpt-5-5") and
+// either resolves. The resolved Snapshot's Upstream() carries the real
+// upstream name for the body rewrite.
 func resolveModel(snap *appcatalog.Snapshot, name string) ([]*model.Model, *model.Snapshot) {
-	if m, s, ok := snap.SnapshotByName(name); ok {
+	key := slug.From(name)
+	if key == "" {
+		return nil, nil
+	}
+	if m, s, ok := snap.SnapshotByName(key); ok {
 		return []*model.Model{m}, s
 	}
 	return nil, nil

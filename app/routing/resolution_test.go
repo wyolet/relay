@@ -113,11 +113,20 @@ func TestResolve_RealModelStrings(t *testing.T) {
 		customerSends  string
 		expectUpstream string
 	}{
+		// Slug form — resolves directly.
 		{"gpt-5-5", "gpt-5.5"},
 		{"gpt-5-5-2026-04-23", "gpt-5.5-2026-04-23"},
 		{"ollama-llama2-7b", "ollama/llama2:7b"},
 		{"ft-gpt-3-5-turbo", "ft:gpt-3.5-turbo"},
-		{"gpt-4o-2024-11-20", "gpt-4o-2024-11-20"}, // already clean → no rewrite
+		{"gpt-4o-2024-11-20", "gpt-4o-2024-11-20"},
+		// Real-world form — slug.From on input collapses dots/colons/
+		// slashes and finds the same snapshot.
+		{"gpt-5.5", "gpt-5.5"},
+		{"gpt-5.5-2026-04-23", "gpt-5.5-2026-04-23"},
+		{"ollama/llama2:7b", "ollama/llama2:7b"},
+		{"ft:gpt-3.5-turbo", "ft:gpt-3.5-turbo"},
+		// Case insensitivity (slug.From lowercases).
+		{"GPT-5.5", "gpt-5.5"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.customerSends, func(t *testing.T) {
