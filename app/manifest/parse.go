@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -102,6 +103,12 @@ func Parse(r io.Reader) ([]Document, error) {
 // LoadDir walks dir for .yaml / .yml files and parses each. Documents from
 // all files are merged into a single slice. File order is deterministic
 // (lexicographic).
+//
+// Any directory named "drafts" at any depth is skipped, as is any file
+// matching "*.draft.yaml" / "*.draft.yml". The catalog uses these to gate
+// resources that have been imported but not yet curated (e.g. unverified
+// baseURL/adapter). Promote by moving the subtree out of drafts/ or by
+// dropping the .draft suffix.
 func LoadDir(dir string) ([]Document, error) {
 	var all []Document
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -109,10 +116,17 @@ func LoadDir(dir string) ([]Document, error) {
 			return walkErr
 		}
 		if d.IsDir() {
+			if d.Name() == "drafts" {
+				return fs.SkipDir
+			}
 			return nil
 		}
-		ext := filepath.Ext(path)
+		name := d.Name()
+		ext := filepath.Ext(name)
 		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		if strings.HasSuffix(name, ".draft"+ext) {
 			return nil
 		}
 		f, err := os.Open(path)

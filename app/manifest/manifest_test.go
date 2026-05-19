@@ -1,6 +1,8 @@
 package manifest_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -269,5 +271,38 @@ func TestToPricing_HappyPath(t *testing.T) {
 	}
 	if p.Spec.Rates[0].Amount != 3.00 {
 		t.Errorf("rates[0].amount: want 3.00, got %f", p.Spec.Rates[0].Amount)
+	}
+}
+
+func TestLoadDirSkipsDrafts(t *testing.T) {
+	dir := t.TempDir()
+	body := func(name string) string {
+		return `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Provider
+metadata: { name: ` + name + ` }
+`
+	}
+	mustWrite := func(p, b string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(filepath.Join(dir, "providers", "live", "provider.yaml"), body("live"))
+	mustWrite(filepath.Join(dir, "drafts", "providers", "drafted-dir", "provider.yaml"), body("drafted-dir"))
+	mustWrite(filepath.Join(dir, "providers", "live", "extra.draft.yaml"), body("drafted-file"))
+
+	docs, err := manifest.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("got %d docs, want 1 (drafts/ + *.draft.yaml should be skipped)", len(docs))
+	}
+	if docs[0].Provider == nil || docs[0].Provider.Metadata.Name != "live" {
+		t.Fatalf("expected the live provider, got %+v", docs[0])
 	}
 }
