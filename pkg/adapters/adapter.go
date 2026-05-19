@@ -1,11 +1,11 @@
 // Package api defines the cross-shape adapter interface.
 // OpenAI shape is the canonical hub; all other shapes convert through it.
-package api
+package adapters
 
 import (
 	"errors"
 
-	"github.com/wyolet/relay/pkg/api/openai"
+	"github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // ErrNotImplemented is returned by stub adapter methods not yet written.

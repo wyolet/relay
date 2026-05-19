@@ -38,9 +38,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapter"
-	apianthropic "github.com/wyolet/relay/app/api/anthropic"
-	apiopenai "github.com/wyolet/relay/app/api/openai"
+	"github.com/wyolet/relay/app/adapters"
+	apianthropic "github.com/wyolet/relay/app/adapters/anthropic"
+	apiopenai "github.com/wyolet/relay/app/adapters/openai"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
@@ -131,9 +131,9 @@ func newStack(t *testing.T) *stack {
 	}
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
-	adapters := map[adapter.Kind]pipeline.Adapter{
-		adapter.OpenAI:    apiopenai.New(),
-		adapter.Anthropic: apianthropic.New(),
+	adapterRegistry := map[adapters.Kind]pipeline.Adapter{
+		adapters.OpenAI:    apiopenai.New(),
+		adapters.Anthropic: apianthropic.New(),
 	}
 
 	const adminToken = "test-admin-token"
@@ -154,7 +154,7 @@ func newStack(t *testing.T) *stack {
 		Resolver: routing.New(cat),
 		Pipeline: pl,
 		Proxy:    proxyPipeline,
-		Adapters: adapters,
+		Adapters: adapterRegistry,
 	})
 
 	ctrlSrv := httptest.NewServer(ctrlRouter)
@@ -222,7 +222,7 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 			Hosts: []model.HostBinding{{
 				HostID:       hst.Meta.ID,
 				UpstreamName: "test-model",
-				Adapter:      adapter.OpenAI,
+				Adapter:      adapters.OpenAI,
 			}},
 		},
 	}
@@ -415,7 +415,7 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 		Spec: model.Spec{Hosts: []model.HostBinding{{
 			HostID:       hst.Meta.ID,
 			UpstreamName: "anthrop-model",
-			Adapter:      adapter.Anthropic, // mismatched for /v1/chat/completions
+			Adapter:      adapters.Anthropic, // mismatched for /v1/chat/completions
 		}}},
 	}
 	mustUpsert(t, st.stores.Model.Upsert(ctx, mdl), "model")

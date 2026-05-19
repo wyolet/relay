@@ -12,7 +12,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
@@ -40,10 +40,10 @@ type Deps struct {
 	// Proxy orchestrates a proxy-mode (BYO upstream key) request.
 	Proxy *proxy.Pipeline
 
-	// Adapters keys the wire-protocol implementation by adapter.Kind.
+	// Adapters keys the wire-protocol implementation by adapters.Kind.
 	// Handlers look up the binding's Adapter Kind here at request time;
 	// proxy mode looks up the extractor by inbound endpoint shape.
-	Adapters map[adapter.Kind]pipeline.Adapter
+	Adapters map[adapters.Kind]pipeline.Adapter
 }
 
 // Pinger reports backend health for /healthz. Storage satisfies this

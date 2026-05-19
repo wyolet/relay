@@ -19,9 +19,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapter"
-	apianthropic "github.com/wyolet/relay/app/api/anthropic"
-	apiopenai "github.com/wyolet/relay/app/api/openai"
+	"github.com/wyolet/relay/app/adapters"
+	apianthropic "github.com/wyolet/relay/app/adapters/anthropic"
+	apiopenai "github.com/wyolet/relay/app/adapters/openai"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -140,9 +140,9 @@ func main() {
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
 	// Adapter registry — one entry per supported wire protocol.
-	adapters := map[adapter.Kind]pipeline.Adapter{
-		adapter.OpenAI:    apiopenai.New(),
-		adapter.Anthropic: apianthropic.New(),
+	adapterRegistry := map[adapters.Kind]pipeline.Adapter{
+		adapters.OpenAI:    apiopenai.New(),
+		adapters.Anthropic: apianthropic.New(),
 	}
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
@@ -153,7 +153,7 @@ func main() {
 		Resolver: routing.New(cat),
 		Pipeline: pl,
 		Proxy:    proxyPipeline,
-		Adapters: adapters,
+		Adapters: adapterRegistry,
 	})
 
 	inferAddr := ":8080"

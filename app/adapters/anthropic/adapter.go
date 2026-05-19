@@ -10,7 +10,7 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
-	pkganthropic "github.com/wyolet/relay/pkg/api/anthropic"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
 

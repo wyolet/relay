@@ -8,7 +8,7 @@ package model
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/meta"
 )
 
@@ -94,7 +94,7 @@ type Modalities struct {
 type HostBinding struct {
 	HostID       string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
 	UpstreamName string        `json:"upstreamName"       yaml:"upstreamName"       validate:"required"`
-	Adapter      adapter.Kind  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
+	Adapter      adapters.Kind  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
 	Enabled      *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
 }
 

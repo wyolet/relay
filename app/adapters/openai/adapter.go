@@ -11,7 +11,7 @@ import (
 
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
-	pkgopenai "github.com/wyolet/relay/pkg/api/openai"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
 

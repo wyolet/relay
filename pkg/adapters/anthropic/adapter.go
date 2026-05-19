@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/wyolet/relay/pkg/api/openai"
+	"github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // AnthropicAdapter implements api.Adapter for the Anthropic Messages shape.
