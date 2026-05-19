@@ -89,6 +89,75 @@ func TestExtractTokens_StreamingFinalChunk(t *testing.T) {
 	}
 }
 
+func TestExtractTokens_AudioMeters(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"prompt_tokens": 100,
+			"completion_tokens": 50,
+			"prompt_tokens_details": {"cached_tokens": 20, "audio_tokens": 30},
+			"completion_tokens_details": {"audio_tokens": 12}
+		}
+	}`)
+	tok := ExtractTokens(body)
+	if tok == nil {
+		t.Fatal("expected non-nil")
+	}
+	if tok["audio_input"] != 30 {
+		t.Errorf("audio_input: want 30, got %d", tok["audio_input"])
+	}
+	if tok["audio_output"] != 12 {
+		t.Errorf("audio_output: want 12, got %d", tok["audio_output"])
+	}
+	if tok["cache_read"] != 20 {
+		t.Errorf("cache_read: want 20, got %d", tok["cache_read"])
+	}
+}
+
+func TestExtractTokens_SpeculativeDecoding(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"prompt_tokens": 100,
+			"completion_tokens": 50,
+			"completion_tokens_details": {
+				"accepted_prediction_tokens": 40,
+				"rejected_prediction_tokens": 8
+			}
+		}
+	}`)
+	tok := ExtractTokens(body)
+	if tok == nil {
+		t.Fatal("expected non-nil")
+	}
+	if tok["accepted_prediction"] != 40 {
+		t.Errorf("accepted_prediction: want 40, got %d", tok["accepted_prediction"])
+	}
+	if tok["rejected_prediction"] != 8 {
+		t.Errorf("rejected_prediction: want 8, got %d", tok["rejected_prediction"])
+	}
+}
+
+func TestExtractTokens_AllZeroDetailFieldsStaySilent(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"prompt_tokens": 10,
+			"completion_tokens": 5,
+			"prompt_tokens_details": {"cached_tokens": 0, "audio_tokens": 0},
+			"completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0,
+				"accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}
+		}
+	}`)
+	tok := ExtractTokens(body)
+	if tok == nil {
+		t.Fatal("expected non-nil")
+	}
+	for _, k := range []string{"cache_read", "audio_input", "reasoning", "audio_output",
+		"accepted_prediction", "rejected_prediction"} {
+		if _, has := tok[k]; has {
+			t.Errorf("%s should not appear when zero", k)
+		}
+	}
+}
+
 func TestExtractTokens_NoCacheOrReasoning(t *testing.T) {
 	body := []byte(`{"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
 	tok := ExtractTokens(body)
