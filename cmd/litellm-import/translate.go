@@ -64,26 +64,35 @@ var knownProviders = map[string]providerMeta{
 	},
 }
 
-var skippedProviders = map[string]string{
-	"openai_compatible":         "requires custom config",
-	"vertex_ai-language-models": "no provider client yet",
-	"gemini":                    "no provider client yet",
-	"bedrock":                   "requires BYO config",
-	"groq":                      "provider client not implemented",
-	"deepseek":                  "provider client not implemented",
-	"fireworks_ai":              "provider client not implemented",
-	"together_ai":               "provider client not implemented",
-	"perplexity":                "provider client not implemented",
-	"mistral":                   "provider client not implemented",
-	"cohere_chat":               "provider client not implemented",
-	"cohere":                    "provider client not implemented",
-	"replicate":                 "provider client not implemented",
-	"huggingface":               "provider client not implemented",
-	"aleph_alpha":               "provider client not implemented",
-	"nlp_cloud":                 "provider client not implemented",
-	"sagemaker":                 "provider client not implemented",
-	"azure":                     "requires custom config",
-	"azure_ai":                  "requires custom config",
+// skippedProviders is intentionally empty after the v1alpha2 reimport —
+// the catalog now ingests every LiteLLM provider so future curation can
+// happen by hand rather than another importer run.
+var skippedProviders = map[string]string{}
+
+// titleCase turns "fireworks_ai" → "Fireworks Ai" for synthesized displayName.
+func titleCase(s string) string {
+	parts := strings.Split(strings.ReplaceAll(s, "-", "_"), "_")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+// fallbackProvider synthesizes a minimal providerMeta for any litellm_provider
+// not in knownProviders. Adapter defaults to "openai" (the most common
+// compat shape); the catalog author fixes baseURL + adapter by hand.
+func fallbackProvider(name string) providerMeta {
+	display := titleCase(name)
+	return providerMeta{
+		name:        name,
+		displayName: display,
+		description: display + " — auto-imported, requires hand curation.",
+		baseURL:     "",
+		adapter:     "openai",
+	}
 }
 
 // Matches both compact (-YYYYMMDD, Anthropic-style) and dashed
@@ -362,8 +371,7 @@ func Translate(entries map[string]Entry, sourceVersion string) (*TranslateResult
 			result.SkippedProvider++
 			continue
 		}
-		if _, ok := knownProviders[e.LiteLLMProvider]; !ok {
-			slog.Info("litellm-import: unknown provider — skipping", "provider", e.LiteLLMProvider, "model", k)
+		if e.LiteLLMProvider == "" {
 			result.SkippedProvider++
 			continue
 		}
@@ -376,7 +384,7 @@ func Translate(entries map[string]Entry, sourceVersion string) (*TranslateResult
 		e := g.Entry
 		pm, ok := knownProviders[e.LiteLLMProvider]
 		if !ok {
-			continue
+			pm = fallbackProvider(e.LiteLLMProvider)
 		}
 
 		if !seenProviders[e.LiteLLMProvider] {
