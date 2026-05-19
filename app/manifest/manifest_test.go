@@ -27,7 +27,7 @@ var testRev = manifest.MapReverseResolver{
 }
 
 const policyYAML = `
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: Policy
 metadata:
   name: cheap-tier
@@ -112,13 +112,13 @@ func TestFromPolicy_RoundTrip(t *testing.T) {
 }
 
 const multiDocYAML = `
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: Provider
 metadata:
   name: anthropic
 spec: {}
 ---
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: Host
 metadata:
   name: anthropic-direct
@@ -156,7 +156,7 @@ spec: {}
 }
 
 const modelYAML = `
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: Model
 metadata:
   name: claude-3-5-sonnet
@@ -190,7 +190,7 @@ func TestToModel_HappyPath(t *testing.T) {
 }
 
 const rateLimitYAML = `
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: RateLimit
 metadata:
   name: cheap-tier-rpm
@@ -223,7 +223,7 @@ func TestToRateLimit_HappyPath(t *testing.T) {
 }
 
 const pricingYAML = `
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: Pricing
 metadata:
   name: anthropic-direct-pricing

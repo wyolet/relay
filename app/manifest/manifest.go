@@ -17,4 +17,8 @@
 //  3. Call FromXxx(domain, rev) → wire DTO suitable for JSON/YAML output
 package manifest
 
-const APIVersion = "relay.wyolet.dev/v1"
+// APIVersion is the catalog schema version every relay-aware YAML must
+// declare. v1alpha2 introduces Model.Spec.Snapshots + Pointer and the
+// expanded pricing meter enum. Bumping is a wipe-and-reseed migration —
+// the parser rejects mismatched versions outright.
+const APIVersion = "relay.wyolet.dev/v1alpha2"

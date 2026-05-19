@@ -1,4 +1,4 @@
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: RateLimit
 metadata:
   name: control-api
@@ -18,7 +18,7 @@ spec:
       window: 1m
       strategy: sliding-window
 ---
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: RateLimit
 metadata:
   name: inference-api
@@ -30,7 +30,7 @@ spec:
   enabled: false
   rules: []
 ---
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: RateLimit
 metadata:
   name: inference-api-proxy
@@ -42,7 +42,7 @@ spec:
   enabled: false
   rules: []
 ---
-apiVersion: relay.wyolet.dev/v1
+apiVersion: relay.wyolet.dev/v1alpha2
 kind: RateLimit
 metadata:
   name: inference-api-proxy-anonymous
