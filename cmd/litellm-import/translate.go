@@ -419,7 +419,7 @@ func buildPricing(g Group, pm providerMeta) *PricingDTO {
 
 	rates = addRate(rates, "tokens.input", e.InputCostPerToken, 0)
 	rates = addRate(rates, "tokens.output", e.OutputCostPerToken, 0)
-	rates = addRate(rates, "tokens.cache_write", e.CacheCreationInputTokenCost, 0)
+	rates = addRate(rates, "tokens.cache_creation", e.CacheCreationInputTokenCost, 0)
 	rates = addRate(rates, "tokens.cache_read", e.CacheReadInputTokenCost, 0)
 	rates = addRate(rates, "tokens.reasoning", e.OutputCostPerReasoningToken, 0)
 
