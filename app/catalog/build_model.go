@@ -16,6 +16,10 @@ func (s *Snapshot) addModels(models []*model.Model, providers, hosts idSet) {
 			}
 			s.modelsByName[a] = append(s.modelsByName[a], clean)
 		}
+		for i := range clean.Spec.Snapshots {
+			snap := &clean.Spec.Snapshots[i]
+			s.snapshotsByName[snap.Name] = snapshotRef{Model: clean, Snapshot: snap}
+		}
 		s.registerRefs(refKey{Kind: refModel, ID: clean.Meta.ID}, outboundModelRefs(m))
 	}
 }

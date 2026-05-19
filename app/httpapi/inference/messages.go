@@ -91,8 +91,13 @@ func handleMessages(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	upstreamBody := body
+	if plan.Snapshot != nil && plan.Snapshot.OriginalName != "" {
+		upstreamBody = rewriteModelField(body, plan.Snapshot.OriginalName)
+	}
+
 	preq := &pipeline.Request{
-		Body:        body,
+		Body:        upstreamBody,
 		Headers:     r.Header,
 		HostBaseURL: plan.Host.Spec.BaseURL,
 		Adapter:     ad,

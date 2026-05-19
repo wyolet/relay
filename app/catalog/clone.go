@@ -20,8 +20,9 @@ func (s *Snapshot) clone() *Snapshot {
 		policiesByID:   shallowMap(s.policiesByID),
 		policiesByName: shallowMap(s.policiesByName),
 
-		modelsByID:   shallowMap(s.modelsByID),
-		modelsByName: copySliceMap(s.modelsByName),
+		modelsByID:      shallowMap(s.modelsByID),
+		modelsByName:    copySliceMap(s.modelsByName),
+		snapshotsByName: shallowMap(s.snapshotsByName),
 
 		hostKeysByID:     shallowMap(s.hostKeysByID),
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),

@@ -45,6 +45,12 @@ type Snapshot struct {
 	// the caller's Policy.
 	modelsByName map[string][]*model.Model
 
+	// snapshotsByName indexes every Model.Spec.Snapshot's Name → owning
+	// Model. Used by request-time resolution to honor pinned snapshot
+	// names (e.g. "gpt-4o-2024-11-20") before falling back to the bare
+	// Model name and following its Pointer.
+	snapshotsByName map[string]snapshotRef
+
 	hostKeysByID map[string]*hostkey.HostKey
 
 	rateLimitsByID   map[string]*ratelimit.RateLimit
@@ -73,6 +79,13 @@ type Snapshot struct {
 	refsByHostKey   map[string]refSet
 	refsByRateLimit map[string]refSet
 	refsByPolicy    map[string]refSet
+}
+
+// snapshotRef links a Snapshot back to its owning Model. Stored in the
+// snapshot-name index so request-time lookup can return both in one shot.
+type snapshotRef struct {
+	Model    *model.Model
+	Snapshot *model.Snapshot
 }
 
 // ── Read accessors ─────────────────────────────────────────────────────────
@@ -146,6 +159,17 @@ func (s *Snapshot) Model(id string) (*model.Model, bool) {
 // X-Relay-Provider header.
 func (s *Snapshot) ModelsByName(name string) []*model.Model {
 	return s.modelsByName[name]
+}
+
+// SnapshotByName returns the Model + Snapshot for a pinned snapshot name,
+// or false. Snapshot names are catalog-wide unique (validation enforces no
+// collision with the owning Model's name or aliases).
+func (s *Snapshot) SnapshotByName(name string) (*model.Model, *model.Snapshot, bool) {
+	r, ok := s.snapshotsByName[name]
+	if !ok {
+		return nil, nil, false
+	}
+	return r.Model, r.Snapshot, true
 }
 
 // AllModels returns every enabled Model in stable slug order. Used by
