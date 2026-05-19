@@ -152,11 +152,10 @@ func (s *Snapshot) Model(id string) (*model.Model, bool) {
 	return m, ok
 }
 
-// ModelsByName returns every enabled Model whose Spec.Aliases contains
-// this name. The list is empty for unknown names. Multiple Models may share
-// an alias when the same wire name is intentionally hosted by more than one
-// Provider; consumers disambiguate with a host suffix or the
-// X-Relay-Provider header.
+// ModelsByName returns every enabled Model whose Meta.Name matches.
+// The slug is unique per kind, but the index is multivalued to absorb
+// transient overlap during reload. Customer-facing addressing uses
+// SnapshotByName instead — this accessor is admin-only.
 func (s *Snapshot) ModelsByName(name string) []*model.Model {
 	return s.modelsByName[name]
 }

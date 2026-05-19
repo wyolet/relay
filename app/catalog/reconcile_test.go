@@ -57,7 +57,6 @@ func TestApply_UpsertNew(t *testing.T) {
 		},
 		Spec: model.Spec{
 			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-x", Adapter: adapters.OpenAI}},
-			Aliases:   []string{"gpt/x"},
 			Snapshots: []model.Snapshot{{Name: "gpt-x-2025-01-01", OriginalName: "gpt-x-2025-01-01"}},
 			Pointer:   "gpt-x-2025-01-01",
 		},
@@ -110,8 +109,11 @@ func TestApply_UpsertNew(t *testing.T) {
 	if _, ok := s.Host(hostID); !ok {
 		t.Error("host missing")
 	}
-	if got := s.ModelsByName("gpt/x"); len(got) != 1 {
-		t.Errorf("model alias: got %d, want 1", len(got))
+	if got := s.ModelsByName("gpt-x"); len(got) != 1 {
+		t.Errorf("model by name: got %d, want 1", len(got))
+	}
+	if _, _, ok := s.SnapshotByName("gpt-x-2025-01-01"); !ok {
+		t.Error("snapshot lookup failed")
 	}
 	if _, ok := s.Policy(pol.Meta.ID); !ok {
 		t.Error("policy missing")
@@ -136,7 +138,6 @@ func TestApply_UpsertExisting(t *testing.T) {
 		Meta: orig.Meta, // same ID
 		Spec: model.Spec{
 			Hosts:     orig.Spec.Hosts,
-			Aliases:   []string{"updated/alias"},
 			Snapshots: orig.Spec.Snapshots,
 			Pointer:   orig.Spec.Pointer,
 		},
@@ -147,15 +148,9 @@ func TestApply_UpsertExisting(t *testing.T) {
 	}
 	s := c.Current()
 
-	// New alias present.
-	if got := s.ModelsByName("updated/alias"); len(got) != 1 {
-		t.Errorf("new alias: got %d, want 1", len(got))
-	}
-	// Old aliases gone.
-	for _, a := range orig.Spec.Aliases {
-		if got := s.ModelsByName(a); len(got) != 0 {
-			t.Errorf("old alias %q still present", a)
-		}
+	// Model still resolvable by its own name after upsert.
+	if got := s.ModelsByName(orig.Meta.Name); len(got) != 1 {
+		t.Errorf("model name: got %d, want 1", len(got))
 	}
 }
 
@@ -311,7 +306,6 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 		},
 		Spec: model.Spec{
 			Hosts:     []model.HostBinding{{HostID: firstHostID, UpstreamName: "extra", Adapter: adapters.OpenAI}},
-			Aliases:   []string{"extra/model"},
 			Snapshots: []model.Snapshot{{Name: "extra-model-2025-01-01", OriginalName: "extra"}},
 			Pointer:   "extra-model-2025-01-01",
 		},

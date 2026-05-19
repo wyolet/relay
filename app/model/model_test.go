@@ -91,24 +91,6 @@ func TestValidate(t *testing.T) {
 			want: "owner.id is required",
 		},
 		{
-			name: "duplicate alias",
-			m: func() *Model {
-				m := fix("x")
-				m.Spec.Aliases = []string{"GPT-4o", "gpt-4o"}
-				return m
-			}(),
-			want: "duplicate alias",
-		},
-		{
-			name: "alias collides with own name",
-			m: func() *Model {
-				m := fix("gpt-4o")
-				m.Spec.Aliases = []string{"GPT-4O"}
-				return m
-			}(),
-			want: "collides with the model's own name",
-		},
-		{
 			name: "missing snapshots",
 			m:    func() *Model { m := fix("x"); m.Spec.Snapshots = nil; m.Spec.Pointer = ""; return m }(),
 			want: "Snapshots",
@@ -119,15 +101,6 @@ func TestValidate(t *testing.T) {
 			want: "Pointer",
 		},
 		{
-			name: "snapshot missing originalName",
-			m: func() *Model {
-				m := fix("x")
-				m.Spec.Snapshots[0].OriginalName = ""
-				return m
-			}(),
-			want: "OriginalName",
-		},
-		{
 			name: "duplicate snapshot",
 			m: func() *Model {
 				m := fix("x")
@@ -136,25 +109,6 @@ func TestValidate(t *testing.T) {
 				return m
 			}(),
 			want: "duplicate snapshot",
-		},
-		{
-			name: "snapshot collides with model name",
-			m: func() *Model {
-				m := fix("gpt-4o")
-				m.Spec.Snapshots = []Snapshot{{Name: "gpt-4o", OriginalName: "gpt-4o"}}
-				m.Spec.Pointer = "gpt-4o"
-				return m
-			}(),
-			want: "collides with the model's own name",
-		},
-		{
-			name: "snapshot collides with alias",
-			m: func() *Model {
-				m := fix("x")
-				m.Spec.Aliases = []string{"x-snap"}
-				return m
-			}(),
-			want: "collides with alias",
 		},
 		{
 			name: "pointer does not match any snapshot",
@@ -179,6 +133,25 @@ func TestValidate(t *testing.T) {
 			err := tc.m.Validate()
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotUpstream(t *testing.T) {
+	cases := []struct {
+		name string
+		s    Snapshot
+		want string
+	}{
+		{"empty originalName falls back to name", Snapshot{Name: "gpt-4o-2024-11-20"}, "gpt-4o-2024-11-20"},
+		{"originalName carries the upstream form", Snapshot{Name: "gpt-5-5", OriginalName: "gpt-5.5"}, "gpt-5.5"},
+		{"colons and slashes preserved in original", Snapshot{Name: "ollama-llama2-7b", OriginalName: "ollama/llama2:7b"}, "ollama/llama2:7b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.s.Upstream(); got != tc.want {
+				t.Errorf("Upstream() = %q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -67,7 +67,6 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		},
 		Spec: model.Spec{
 			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o", Adapter: adapters.OpenAI}},
-			Aliases:   []string{"openai/gpt-4o"},
 			Snapshots: []model.Snapshot{{Name: "gpt-4o-2025-01-01", OriginalName: "gpt-4o-2025-01-01"}},
 			Pointer:   "gpt-4o-2025-01-01",
 		},
@@ -79,7 +78,6 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		},
 		Spec: model.Spec{
 			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini", Adapter: adapters.OpenAI}},
-			Aliases:   []string{"openai/gpt-4o-mini", "openai/mini"},
 			Snapshots: []model.Snapshot{{Name: "gpt-4o-mini-2025-01-01", OriginalName: "gpt-4o-mini-2025-01-01"}},
 			Pointer:   "gpt-4o-mini-2025-01-01",
 		},
@@ -179,11 +177,11 @@ func TestReload_HappyPath(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); !ok {
 		t.Error("policy not in snapshot")
 	}
-	if got := s.ModelsByName("openai/gpt-4o-mini"); len(got) != 1 {
-		t.Errorf("model not in snapshot: got %d matches, want 1", len(got))
+	if got := s.ModelsByName("gpt-4o-mini"); len(got) != 1 {
+		t.Errorf("model by slug: got %d matches, want 1", len(got))
 	}
-	if got := s.ModelsByName("openai/mini"); len(got) != 1 {
-		t.Errorf("alias lookup failed: got %d matches, want 1", len(got))
+	if _, _, ok := s.SnapshotByName("gpt-4o-mini-2025-01-01"); !ok {
+		t.Error("snapshot lookup failed")
 	}
 	if _, ok := s.RelayKeyByHash(strings.Repeat("a", 64)); !ok {
 		t.Error("relaykey hash lookup failed")
@@ -221,11 +219,11 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 	if _, ok := s.PolicyByName("cheap-tier"); ok {
 		t.Error("disabled policy should be evicted")
 	}
-	if got := s.ModelsByName("openai/gpt-4o"); len(got) != 1 {
+	if got := s.ModelsByName("gpt-4o"); len(got) != 1 {
 		t.Errorf("model should stay (independently enabled): got %d", len(got))
 	}
-	if got := s.ModelsByName("openai/gpt-4o-mini"); len(got) != 1 {
-		t.Errorf("aliased model should stay: got %d", len(got))
+	if got := s.ModelsByName("gpt-4o-mini"); len(got) != 1 {
+		t.Errorf("second model should stay: got %d", len(got))
 	}
 }
 
@@ -324,26 +322,6 @@ func TestReload_DuplicatePricingFails(t *testing.T) {
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "duplicate pricing") {
 		t.Fatalf("expected duplicate pricing error, got %v", err)
-	}
-}
-
-// TestReload_AliasCollisionAllowed proves the multivalued index: two
-// reachable Models can share an alias intentionally (e.g. the same wire
-// name "gpt-5" served by both openai-direct and an azure deployment).
-// Consumers disambiguate downstream with a suffix or header.
-func TestReload_AliasCollisionAllowed(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
-	// Both models claim the same wire alias "shared".
-	models[0].Spec.Aliases = append(models[0].Spec.Aliases, "shared")
-	models[1].Spec.Aliases = append(models[1].Spec.Aliases, "shared")
-
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	got := c.Current().ModelsByName("shared")
-	if len(got) != 2 {
-		t.Errorf("got %d matches for shared alias, want 2", len(got))
 	}
 }
 

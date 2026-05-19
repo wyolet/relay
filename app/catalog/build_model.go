@@ -10,12 +10,6 @@ func (s *Snapshot) addModels(models []*model.Model, providers, hosts idSet) {
 		}
 		s.modelsByID[clean.Meta.ID] = clean
 		s.modelsByName[clean.Meta.Name] = append(s.modelsByName[clean.Meta.Name], clean)
-		for _, a := range clean.Spec.Aliases {
-			if a == clean.Meta.Name {
-				continue
-			}
-			s.modelsByName[a] = append(s.modelsByName[a], clean)
-		}
 		for i := range clean.Spec.Snapshots {
 			snap := &clean.Spec.Snapshots[i]
 			s.snapshotsByName[snap.Name] = snapshotRef{Model: clean, Snapshot: snap}

@@ -129,7 +129,6 @@ type ModelSpec struct {
 	DeprecationDate string      `json:"deprecationDate,omitempty" yaml:"deprecationDate,omitempty"`
 	Deprecation     *model.Deprecation `json:"deprecation,omitempty"     yaml:"deprecation,omitempty"`
 
-	Aliases              []string `json:"aliases,omitempty"              yaml:"aliases,omitempty"`
 	Tags                 []string `json:"tags,omitempty"                 yaml:"tags,omitempty"`
 	Documentation        string   `json:"documentation,omitempty"        yaml:"documentation,omitempty"`
 	License              string   `json:"license,omitempty"              yaml:"license,omitempty"`

@@ -108,8 +108,8 @@ func handleChat(d Deps, w http.ResponseWriter, r *http.Request) {
 	}
 
 	upstreamBody := body
-	if plan.Snapshot != nil && plan.Snapshot.OriginalName != "" {
-		upstreamBody = rewriteModelField(body, plan.Snapshot.OriginalName)
+	if plan.Snapshot != nil {
+		upstreamBody = rewriteModelField(body, plan.Snapshot.Upstream())
 	}
 
 	preq := &pipeline.Request{

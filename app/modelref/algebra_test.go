@@ -48,7 +48,10 @@ func TestParse_FiveShapes(t *testing.T) {
 // ---------- Validate rejects bad input ----------
 
 func TestValidate_Rejects(t *testing.T) {
-	bad := []string{"", "anthropic*", "*", "/anthropic", "anthropic/", "anthropic@", "Anthropic", "@", "anthropic/Model"}
+	// After slug normalization on parse, mixed-case and dotted/colon
+	// input is accepted; only structural breakage and wildcard tokens
+	// (no slug chars) still fail.
+	bad := []string{"", "*", "/anthropic", "anthropic/", "anthropic@", "@"}
 	for _, s := range bad {
 		if err := Validate(s); err == nil {
 			t.Errorf("Validate(%q) = nil, want error", s)
