@@ -1,4 +1,4 @@
-.PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed restart \
+.PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
         version release release-minor release-major \
         sqlc-generate test test-integration \
@@ -58,7 +58,9 @@ help: ## Show this help
 	@echo '  make down              stop + remove (no volume drop)'
 	@echo '  make logs              tail relay-a/b logs'
 	@echo '  make migrate           run migrations against dev-stack PG'
-	@echo '  make seed              load deploy/compose/config into PG'
+	@echo '  make seed              seed config/ + catalog into PG (no wipe)'
+	@echo '  make seed-wipe         TRUNCATE all catalog tables (keeps settings + users). Destructive.'
+	@echo '  make seed-reset        wipe then seed — full catalog reset'
 	@echo '  make restart           restart relay-a/b + nginx after a code change'
 	@echo ''
 	@echo '🛂 Control plane:'
@@ -155,6 +157,16 @@ seed-catalog: ## seed the public catalog from $$RELAY_CATALOG_DIR (default ../re
 
 seed-loadtest: ## seed catalog from deploy/compose/config (load-tester fixtures)
 	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from deploy/compose/config --apply
+
+# Tables wiped by `make seed-wipe`. Preserves settings + schema_migrations.
+# Order is for readability; CASCADE handles the FKs either way.
+SEED_WIPE_TABLES := relay_keys pricing_models pricings policy_host_keys policy_models policies rate_limits models hosts providers secrets routes pools attachments passthrough_config
+
+seed-wipe: ## TRUNCATE all catalog tables (keeps settings, users, schema_migrations). Destructive.
+	@printf "About to TRUNCATE: $(SEED_WIPE_TABLES)\nPG_DSN=$(PG_DSN)\nType 'yes' to continue: " && read ans && [ "$$ans" = "yes" ] || (echo "aborted"; exit 1)
+	psql '$(PG_DSN)' -c 'TRUNCATE $(shell echo $(SEED_WIPE_TABLES) | tr ' ' ',') CASCADE;'
+
+seed-reset: seed-wipe seed ## wipe catalog tables then seed-system + seed-catalog
 
 restart: ## restart relay-a/b + nginx after a rebuild
 	docker compose $(COMPOSE_DEV_ARGS) up -d --build relay-a relay-b
