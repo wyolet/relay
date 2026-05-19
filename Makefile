@@ -59,7 +59,7 @@ help: ## Show this help
 	@echo '  make logs              tail relay-a/b logs'
 	@echo '  make migrate           run migrations against dev-stack PG'
 	@echo '  make seed              seed config/ + catalog into PG (no wipe)'
-	@echo '  make seed-wipe         TRUNCATE all catalog tables (keeps settings + users). Destructive.'
+	@echo '  make seed-wipe         delete system/host/provider-owned catalog rows (keeps user-owned + settings)'
 	@echo '  make seed-reset        wipe then seed — full catalog reset'
 	@echo '  make restart           restart relay-a/b + nginx after a code change'
 	@echo ''
@@ -158,13 +158,32 @@ seed-catalog: ## seed the public catalog from $$RELAY_CATALOG_DIR (default ../re
 seed-loadtest: ## seed catalog from deploy/compose/config (load-tester fixtures)
 	RELAY_PG_DSN='$(PG_DSN)' go run ./cmd/relay seed --from deploy/compose/config --apply
 
-# Tables wiped by `make seed-wipe`. Preserves settings + schema_migrations.
-# Order is for readability; CASCADE handles the FKs either way.
-SEED_WIPE_TABLES := relay_keys pricing_models pricings policy_host_keys policy_models policies rate_limits models hosts providers secrets
+# `make seed-wipe` deletes rows whose metadata.owner.kind is one of
+# system/host/provider — the catalog tier. User-owned rows (the operator's
+# own relay keys, hand-edited policies, BYO host keys) survive. Settings
+# and schema_migrations are never touched.
+SEED_WIPE_KINDS := 'system','host','provider'
 
-seed-wipe: ## TRUNCATE all catalog tables (keeps settings, users, schema_migrations). Destructive.
-	@printf "About to TRUNCATE: $(SEED_WIPE_TABLES)\nPG_DSN=$(PG_DSN)\nType 'yes' to continue: " && read ans && [ "$$ans" = "yes" ] || (echo "aborted"; exit 1)
-	psql '$(PG_DSN)' -c 'TRUNCATE $(shell echo $(SEED_WIPE_TABLES) | tr ' ' ',') CASCADE;'
+# Delete order respects FK RESTRICTs: drop dependents (policy/pricing/
+# secret rows) before the models/hosts/providers they point at. Join
+# tables (policy_models, policy_host_keys, pricing_models) cascade with
+# their owning rows.
+define SEED_WIPE_SQL
+BEGIN;
+DELETE FROM pricings    WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+DELETE FROM policies    WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+DELETE FROM secrets     WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+DELETE FROM rate_limits WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+DELETE FROM models      WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+DELETE FROM hosts       WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+DELETE FROM providers   WHERE metadata->'owner'->>'kind' IN ($(SEED_WIPE_KINDS));
+COMMIT;
+endef
+export SEED_WIPE_SQL
+
+seed-wipe: ## delete system/host/provider-owned catalog rows (keeps user-owned + settings). Destructive.
+	@printf "About to delete owner.kind ∈ ($(SEED_WIPE_KINDS)) rows from pricings/policies/secrets/rate_limits/models/hosts/providers.\nUser-owned rows + settings survive.\nPG_DSN=$(PG_DSN)\nType 'yes' to continue: " && read ans && [ "$$ans" = "yes" ] || (echo "aborted"; exit 1)
+	@echo "$$SEED_WIPE_SQL" | psql '$(PG_DSN)' -v ON_ERROR_STOP=1
 
 seed-reset: seed-wipe seed ## wipe catalog tables then seed-system + seed-catalog
 
