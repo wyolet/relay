@@ -481,7 +481,7 @@ func buildPricing(g Group, pm providerMeta) *PricingDTO {
 
 	name := pm.name + "-" + SanitizeFilename(g.ModelName)
 	return &PricingDTO{
-		APIVersion: "relay.wyolet.dev/v1",
+		APIVersion: manifest.APIVersion,
 		Kind:       "Pricing",
 		Metadata: pricingMeta{
 			Name:  name,
