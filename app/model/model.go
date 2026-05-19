@@ -1,6 +1,8 @@
-// Package model is the domain layer for the Model entity — a published LLM
-// behind a Provider. The wire shape sent upstream is Spec.UpstreamName; the
-// catalog handle is Meta.Name (slug) with optional Spec.Aliases.
+// Package model is the domain layer for the Model entity — a container
+// for a family of dated checkpoints (Snapshots) served via one or more
+// Hosts. Meta.Name is the admin / catalog slug; customers address the
+// model by sending a Snapshot.Name in the request body. Snapshot.Pointer
+// names the default snapshot displayed in /v1/models.
 //
 // Pricing and RateLimit attachments are deferred until those packages land.
 package model
@@ -47,7 +49,6 @@ type Spec struct {
 	DeprecationDate string       `json:"deprecationDate,omitempty" yaml:"deprecationDate,omitempty"`
 	Deprecation     *Deprecation `json:"deprecation,omitempty"     yaml:"deprecation,omitempty"`
 
-	Aliases              []string `json:"aliases,omitempty"              yaml:"aliases,omitempty"`
 	Tags                 []string `json:"tags,omitempty"                 yaml:"tags,omitempty"`
 	Documentation        string   `json:"documentation,omitempty"        yaml:"documentation,omitempty"`
 	License              string   `json:"license,omitempty"              yaml:"license,omitempty"`
@@ -63,12 +64,23 @@ type Spec struct {
 }
 
 // Snapshot is a dated checkpoint of a Model. Name is the customer-facing
-// identifier (matches what the SDK sends in the `model` field for pinned
-// requests). OriginalName is the wire name sent to the upstream provider.
+// identifier (DNS-1123 slug; matches what the SDK sends in the `model`
+// field). OriginalName is the upstream wire name; when omitted it
+// defaults to Name — the common case where the slug-safe name already
+// matches what the provider expects.
 type Snapshot struct {
-	Name         string `json:"name"                  yaml:"name"                  validate:"required,hostname_rfc1123"`
-	ReleasedAt   string `json:"releasedAt,omitempty"  yaml:"releasedAt,omitempty"`
-	OriginalName string `json:"originalName"          yaml:"originalName"          validate:"required"`
+	Name         string `json:"name"                   yaml:"name"                   validate:"required,hostname_rfc1123"`
+	ReleasedAt   string `json:"releasedAt,omitempty"   yaml:"releasedAt,omitempty"`
+	OriginalName string `json:"originalName,omitempty" yaml:"originalName,omitempty"`
+}
+
+// Upstream returns the wire name to send to the provider — OriginalName
+// when set, otherwise Name.
+func (s Snapshot) Upstream() string {
+	if s.OriginalName != "" {
+		return s.OriginalName
+	}
+	return s.Name
 }
 
 // Capabilities is the bag-of-bools feature flags every model declares.
@@ -138,15 +150,14 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the Model-specific invariants:
 //   - Owner is required and must be provider-kind with a non-empty ID.
-//     Models always belong to a Provider; "system" or user-created models
-//     are exposed by attaching them to a relay-owned Provider (e.g. "wr"),
-//     not by changing the owner kind.
-//   - Aliases are non-empty, case-insensitively unique, and must not
-//     collide with the Model's own Meta.Name.
+//     Models always belong to a Provider.
+//   - Host bindings are unique by HostID.
+//   - Snapshot names are unique within the model and Pointer must name
+//     one of them.
 //
 // Cross-entity checks (Owner.ID resolves to a real Provider; Deprecation.
-// Replacement resolves to a real Model; alias uniqueness across Models) live
-// in the composition layer.
+// Replacement resolves to a real Model; snapshot-name uniqueness across
+// the catalog) live in the composition layer.
 func (m *Model) Validate() error {
 	if err := meta.Validator.Struct(m); err != nil {
 		return err
@@ -156,21 +167,6 @@ func (m *Model) Validate() error {
 	}
 	if m.Meta.Owner.ID == "" {
 		return fmt.Errorf("model %q: owner.id is required (provider id)", m.Meta.Name)
-	}
-	ownName := lower(m.Meta.Name)
-	seen := make(map[string]struct{}, len(m.Spec.Aliases))
-	for _, a := range m.Spec.Aliases {
-		if a == "" {
-			return fmt.Errorf("model %q: alias is empty", m.Meta.Name)
-		}
-		key := lower(a)
-		if key == ownName {
-			return fmt.Errorf("model %q: alias %q collides with the model's own name", m.Meta.Name, a)
-		}
-		if _, dup := seen[key]; dup {
-			return fmt.Errorf("model %q: duplicate alias %q", m.Meta.Name, a)
-		}
-		seen[key] = struct{}{}
 	}
 	hosts := make(map[string]struct{}, len(m.Spec.Hosts))
 	for _, b := range m.Spec.Hosts {
@@ -186,12 +182,6 @@ func (m *Model) Validate() error {
 			return fmt.Errorf("model %q: duplicate snapshot %q", m.Meta.Name, s.Name)
 		}
 		snaps[key] = struct{}{}
-		if _, alias := seen[key]; alias {
-			return fmt.Errorf("model %q: snapshot %q collides with alias", m.Meta.Name, s.Name)
-		}
-		if key == ownName {
-			return fmt.Errorf("model %q: snapshot %q collides with the model's own name", m.Meta.Name, s.Name)
-		}
 	}
 	if _, ok := snaps[lower(m.Spec.Pointer)]; !ok {
 		return fmt.Errorf("model %q: pointer %q does not match any snapshot", m.Meta.Name, m.Spec.Pointer)

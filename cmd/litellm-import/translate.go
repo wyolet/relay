@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // providerMeta holds static display + endpoint metadata per known litellm_provider.
@@ -118,32 +119,31 @@ func extractDateSuffix(name string) string {
 	return m[1] + m[2] + m[3]
 }
 
-// snapshotEntry is one dated checkpoint within a Group.
+// snapshotEntry is one addressable checkpoint within a Group. Name is the
+// DNS-1123 slug customers send in requests; OriginalName is the upstream
+// wire form, populated only when it differs from Name.
 type snapshotEntry struct {
-	Name         string // litellm entry name (e.g. gpt-4o-2024-08-06)
-	OriginalName string // what we send upstream (same as Name today)
-	ReleasedAt   string // YYYY-MM-DD parsed from the date suffix, if any
+	Name         string
+	OriginalName string
+	ReleasedAt   string
 }
 
-// Group is one Model worth of LiteLLM entries: a stable Model name, the
-// dated Snapshots that live under it, the snapshot the bare name resolves
-// to, optional moving-label aliases (-latest, -preview, ...), and the
-// canonical entry whose capabilities/pricing represent the group.
+// Group is one Model worth of LiteLLM entries: a slug-safe Model name,
+// the snapshots that live under it (one per addressable LiteLLM entry
+// in the family), the default-pointer snapshot, and the canonical entry
+// whose capabilities/pricing represent the family.
 type Group struct {
 	ModelName string
 	Snapshots []snapshotEntry
 	Pointer   string
-	Aliases   []string
 	Entry     Entry
 }
 
-var movingLabelRE = regexp.MustCompile(`-(latest|preview|current)$`)
-
-// CollapseAliases groups entries by base name. Each dated entry becomes a
-// Snapshot; -latest/-preview/-current become Model aliases; if no dated
-// entries exist a default Snapshot named after the model is synthesized.
-// On capability/pricing conflict, dated members are emitted as separate
-// single-snapshot Models.
+// CollapseAliases groups LiteLLM entries by base family stem and emits
+// every member as a Snapshot under one Model. Conflict-handling (split
+// when dated members disagree on pricing/capabilities) is dropped — the
+// catalog is hand-curated from this regen forward; the canonical (newest
+// dated) entry's pricing/capabilities cover the whole family.
 func CollapseAliases(entries map[string]Entry) []Group {
 	byBase := map[string][]string{}
 	for name := range entries {
@@ -155,72 +155,66 @@ func CollapseAliases(entries map[string]Entry) []Group {
 	for base, names := range byBase {
 		sort.Strings(names)
 
-		var dated, moving []string
-		bareExists := false
+		// Canonical entry: latest dated → bare → first.
+		canonical := ""
+		var latestDated string
 		for _, n := range names {
-			switch {
-			case extractDateSuffix(n) != "":
-				dated = append(dated, n)
-			case movingLabelRE.MatchString(n):
-				moving = append(moving, n)
-			case n == base:
-				bareExists = true
-			default:
-				moving = append(moving, n) // unrecognized → treat as alias
+			if extractDateSuffix(n) != "" {
+				latestDated = n // sorted ascending → last wins
 			}
 		}
-
-		// Pick the canonical entry: latest dated, else bare, else any.
-		canonical := ""
-		if len(dated) > 0 {
-			canonical = dated[len(dated)-1] // sorted ascending → last is newest
-		} else if bareExists {
-			canonical = base
-		} else {
+		switch {
+		case latestDated != "":
+			canonical = latestDated
+		default:
 			canonical = names[0]
 		}
 		canonicalEntry := entries[canonical]
 
-		// Conflict check across dated members. If any conflict, fall back
-		// to emitting each dated entry as its own single-snapshot Model.
-		hasConflict := false
-		for _, n := range dated {
-			if n == canonical {
+		snaps := make([]snapshotEntry, 0, len(names))
+		seen := map[string]struct{}{}
+		var pointer string
+		for _, n := range names {
+			s := slug.From(n)
+			if s == "" {
+				slog.Warn("litellm-import: skipping unslugifiable entry", "name", n)
 				continue
 			}
-			if entriesConflict(canonicalEntry, entries[n]) {
-				slog.Warn("litellm-import: snapshot conflict — emitting separately", "model", base, "snapshot", n)
-				hasConflict = true
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			orig := ""
+			if s != n {
+				orig = n
+			}
+			snaps = append(snaps, snapshotEntry{
+				Name:         s,
+				OriginalName: orig,
+				ReleasedAt:   parseReleasedAt(n),
+			})
+			if n == base {
+				pointer = s
 			}
 		}
-		if hasConflict {
-			for _, n := range dated {
-				groups = append(groups, Group{
-					ModelName: n,
-					Snapshots: []snapshotEntry{{Name: n, OriginalName: n, ReleasedAt: parseReleasedAt(n)}},
-					Pointer:   n,
-					Entry:     entries[n],
-				})
-			}
+		if len(snaps) == 0 {
 			continue
 		}
+		if pointer == "" {
+			// No bare entry in the family — point at the newest dated, or
+			// fall back to the first listed snapshot.
+			pointer = snaps[len(snaps)-1].Name
+			if latestDated != "" {
+				if s := slug.From(latestDated); s != "" {
+					pointer = s
+				}
+			}
+		}
 
-		var snaps []snapshotEntry
-		for _, n := range dated {
-			snaps = append(snaps, snapshotEntry{Name: n, OriginalName: n, ReleasedAt: parseReleasedAt(n)})
-		}
-		pointer := ""
-		if len(snaps) > 0 {
-			pointer = snaps[len(snaps)-1].Name // newest
-		} else {
-			snaps = []snapshotEntry{{Name: base, OriginalName: base}}
-			pointer = base
-		}
 		groups = append(groups, Group{
-			ModelName: base,
+			ModelName: slug.From(base),
 			Snapshots: snaps,
 			Pointer:   pointer,
-			Aliases:   moving,
 			Entry:     canonicalEntry,
 		})
 	}
@@ -420,7 +414,6 @@ func buildProvider(pm providerMeta) *manifest.ProviderDTO {
 			Name:        pm.name,
 			DisplayName: pm.displayName,
 			Description: pm.description,
-			Owner:       manifest.WireOwner{Kind: meta.OwnerSystem},
 		},
 		Spec: manifest.ProviderSpec{
 			HomepageURL:   pm.homepageURL,
@@ -438,7 +431,6 @@ func buildHost(pm providerMeta) *manifest.HostDTO {
 		Metadata: manifest.WireMeta{
 			Name:        pm.name,
 			DisplayName: pm.displayName,
-			Owner:       manifest.WireOwner{Kind: meta.OwnerSystem},
 		},
 		Spec: manifest.HostSpec{
 			BaseURL:       pm.baseURL,
@@ -558,14 +550,18 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		})
 	}
 
-	// UpstreamName at the binding level is the legacy single-snapshot
-	// field. Routing (stage 4) reads originalName from the resolved
-	// snapshot instead; we populate this to the pointer's originalName
-	// so the existing per-binding required field stays satisfied.
-	pointerOriginal := g.Pointer
+	// HostBinding.UpstreamName is the legacy per-binding field. Routing
+	// reads OriginalName from the resolved snapshot instead; we populate
+	// this to the pointer snapshot's upstream form (OriginalName when set,
+	// else Name) to satisfy the still-required field.
+	pointerUpstream := g.Pointer
 	for _, s := range g.Snapshots {
 		if s.Name == g.Pointer {
-			pointerOriginal = s.OriginalName
+			if s.OriginalName != "" {
+				pointerUpstream = s.OriginalName
+			} else {
+				pointerUpstream = s.Name
+			}
 			break
 		}
 	}
@@ -581,7 +577,7 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		Spec: manifest.ModelSpec{
 			Hosts: []manifest.HostBindingDTO{{
 				Host:         pm.name,
-				UpstreamName: pointerOriginal,
+				UpstreamName: pointerUpstream,
 				Adapter:      pm.adapter,
 			}},
 			Family:              family,
@@ -591,7 +587,6 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 			ContextWindowOutput: outputMax,
 			ContextWindowTotal:  total,
 			Deprecation:         deprecationInfo(e, today),
-			Aliases:             g.Aliases,
 			Snapshots:           snaps,
 			Pointer:             g.Pointer,
 		},

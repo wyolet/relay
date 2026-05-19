@@ -134,9 +134,7 @@ func insertModel(s *Snapshot, m *model.Model) {
 	// Remove old aliases/refs if updating.
 	if old, ok := s.modelsByID[m.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refModel, ID: old.Meta.ID}, outboundModelRefs(old))
-		for _, a := range old.Spec.Aliases {
-			s.modelsByName[a] = removeModelFromSlice(s.modelsByName[a], old.Meta.ID)
-		}
+		s.modelsByName[old.Meta.Name] = removeModelFromSlice(s.modelsByName[old.Meta.Name], old.Meta.ID)
 		for _, snap := range old.Spec.Snapshots {
 			delete(s.snapshotsByName, snap.Name)
 		}
@@ -147,9 +145,7 @@ func insertModel(s *Snapshot, m *model.Model) {
 		delete(s.modelsByID, old.Meta.ID)
 	}
 	s.modelsByID[m.Meta.ID] = m
-	for _, a := range m.Spec.Aliases {
-		s.modelsByName[a] = append(s.modelsByName[a], m)
-	}
+	s.modelsByName[m.Meta.Name] = append(s.modelsByName[m.Meta.Name], m)
 	for i := range m.Spec.Snapshots {
 		snap := &m.Spec.Snapshots[i]
 		s.snapshotsByName[snap.Name] = snapshotRef{Model: m, Snapshot: snap}
@@ -165,9 +161,7 @@ func deleteModel(s *Snapshot, id string) {
 		return
 	}
 	s.unregisterRefs(refKey{Kind: refModel, ID: id}, outboundModelRefs(m))
-	for _, a := range m.Spec.Aliases {
-		s.modelsByName[a] = removeModelFromSlice(s.modelsByName[a], id)
-	}
+	s.modelsByName[m.Meta.Name] = removeModelFromSlice(s.modelsByName[m.Meta.Name], id)
 	for _, snap := range m.Spec.Snapshots {
 		delete(s.snapshotsByName, snap.Name)
 	}

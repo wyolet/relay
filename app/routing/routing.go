@@ -4,8 +4,9 @@
 // of the snapshot.
 //
 // Resolution flow:
-//   1. Model: caller supplies model name (header or body); look it up
-//      via snapshot.ModelsByName.
+//   1. Model: caller supplies a snapshot name (from the request body's
+//      `model` field); look it up via snapshot.SnapshotByName. The owning
+//      Model + the picked Snapshot are carried into the Plan.
 //   2. Policy: comes from the authenticated RelayKey's PolicyID. (No
 //      "default route" indirection in the new arch — RelayKey → Policy
 //      is direct. Anonymous traffic is served by a separate package.)
@@ -74,10 +75,8 @@ type Request struct {
 // converts this to pipeline.Request, dropping fields the pipeline
 // doesn't need.
 //
-// Snapshot is the dated checkpoint the caller's model name resolved to:
-// either a direct snapshot-name match, or the Model's Pointer when the
-// caller used the bare Model name. The handler rewrites the request body's
-// `model` field to Snapshot.OriginalName before invoking the adapter.
+// Snapshot is the resolved checkpoint. The handler rewrites the request
+// body's `model` field to Snapshot.Upstream() before invoking the adapter.
 type Plan struct {
 	Model       *model.Model
 	Snapshot    *model.Snapshot
@@ -106,9 +105,8 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	}
 	snap := r.cat.Current()
 
-	// 1. Model. Resolution order:
-	//    a. Pinned snapshot — exact match on a Spec.Snapshot's Name.
-	//    b. Model name (Meta.Name or alias) — follow Spec.Pointer to its snapshot.
+	// 1. Snapshot lookup — customer-facing addressing is purely by
+	//    snapshot name. Model.Meta.Name is admin-only.
 	models, snapMatch := resolveModel(snap, req.ModelName)
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
@@ -226,7 +224,7 @@ candidates:
 
 	return &Plan{
 		Model:       chosen,
-		Snapshot:    pickSnapshot(chosen, snapMatch),
+		Snapshot:    snapMatch,
 		Policy:      pol,
 		HostBinding: binding,
 		Host:        h,
@@ -235,35 +233,15 @@ candidates:
 	}, nil
 }
 
-// resolveModel implements the v1alpha2 lookup order:
-//  1. If req.ModelName matches a Spec.Snapshot's Name, return the owning
-//     Model + that snapshot.
-//  2. Otherwise look up by Model name (Meta.Name or alias). When the
-//     winning Model has snapshots, return the one named by Spec.Pointer.
-//
-// snapMatch is non-nil only when the caller pinned a specific snapshot
-// name; downstream code may use it to skip pointer resolution per candidate.
+// resolveModel maps an inbound model name to a (Model, Snapshot) pair.
+// Customer-facing addressability is purely via Snapshot.Name — the bare
+// Model slug (Meta.Name) is admin-only and not accepted on /v1/* paths.
+// Returns an empty slice when the name doesn't match any snapshot.
 func resolveModel(snap *appcatalog.Snapshot, name string) ([]*model.Model, *model.Snapshot) {
 	if m, s, ok := snap.SnapshotByName(name); ok {
 		return []*model.Model{m}, s
 	}
-	return snap.ModelsByName(name), nil
-}
-
-// pickSnapshot returns the snapshot for m: the pinned one if non-nil,
-// otherwise the snapshot named by m.Spec.Pointer. Returns nil if no
-// snapshot can be selected (catalog inconsistency — validation should
-// prevent this).
-func pickSnapshot(m *model.Model, pinned *model.Snapshot) *model.Snapshot {
-	if pinned != nil {
-		return pinned
-	}
-	for i := range m.Spec.Snapshots {
-		if m.Spec.Snapshots[i].Name == m.Spec.Pointer {
-			return &m.Spec.Snapshots[i]
-		}
-	}
-	return nil
+	return nil, nil
 }
 
 // hostKeysForHost returns the subset of Policy.Spec.HostKeyIDs whose
@@ -363,7 +341,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 			providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
 			return &Plan{
 				Model:       m,
-				Snapshot:    pickSnapshot(m, snapMatch),
+				Snapshot:    snapMatch,
 				Policy:      nil,
 				HostBinding: hb,
 				Host:        h,

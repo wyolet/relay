@@ -112,9 +112,9 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Kind) (*mode
 	return out, nil
 }
 
-// appendModelRows emits one row per Model name plus one row per Snapshot,
-// deduplicating on id. Matches OpenAI's listing where bare aliases and
-// dated snapshots both appear (e.g. gpt-4o and gpt-4o-2024-11-20).
+// appendModelRows emits one row per Snapshot, deduplicating on id.
+// Customer-facing addressability is purely via Snapshot.Name — the
+// Model.Meta.Name slug is admin-only and never exposed here.
 func appendModelRows(out *[]modelObject, snap *catalog.Snapshot, m *model.Model, seen map[string]struct{}) {
 	ownedBy := ""
 	if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
@@ -122,15 +122,6 @@ func appendModelRows(out *[]modelObject, snap *catalog.Snapshot, m *model.Model,
 	}
 	modelCreated := ids.UnixSec(m.Meta.ID)
 
-	if _, dup := seen[m.Meta.Name]; !dup {
-		seen[m.Meta.Name] = struct{}{}
-		*out = append(*out, modelObject{
-			ID:      m.Meta.Name,
-			Object:  "model",
-			Created: modelCreated,
-			OwnedBy: ownedBy,
-		})
-	}
 	for i := range m.Spec.Snapshots {
 		s := &m.Spec.Snapshots[i]
 		if _, dup := seen[s.Name]; dup {
