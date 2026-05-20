@@ -18,7 +18,7 @@ func fix(name string) *Model {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: validProvID()},
 		},
 		Spec: Spec{
-			Hosts:     []HostBinding{{HostID: meta.NewID(), UpstreamName: "u", Adapter: adapters.OpenAI}},
+			Hosts:     []HostBinding{{HostID: meta.NewID(), Adapter: adapters.OpenAI}},
 			Snapshots: []Snapshot{{Name: name + "-snap", OriginalName: name + "-snap"}},
 			Pointer:   name + "-snap",
 		},
@@ -48,13 +48,13 @@ func TestValidate(t *testing.T) {
 			want: "Hosts",
 		},
 		{
-			name: "host binding missing upstreamName",
+			name: "host binding snapshot ref unknown",
 			m: func() *Model {
 				m := fix("x")
-				m.Spec.Hosts[0].UpstreamName = ""
+				m.Spec.Hosts[0].Snapshots = []string{"nope"}
 				return m
 			}(),
-			want: "UpstreamName",
+			want: "unknown snapshot",
 		},
 		{
 			name: "host binding missing hostId",
@@ -70,7 +70,7 @@ func TestValidate(t *testing.T) {
 			m: func() *Model {
 				m := fix("x")
 				dup := m.Spec.Hosts[0].HostID
-				m.Spec.Hosts = append(m.Spec.Hosts, HostBinding{HostID: dup, UpstreamName: "u2", Adapter: adapters.OpenAI})
+				m.Spec.Hosts = append(m.Spec.Hosts, HostBinding{HostID: dup, Adapter: adapters.OpenAI})
 				return m
 			}(),
 			want: "duplicate host binding",

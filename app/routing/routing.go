@@ -175,6 +175,9 @@ candidates:
 			if !hb.IsEnabled() {
 				continue
 			}
+			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
+				continue
+			}
 			h, ok := snap.Host(hb.HostID)
 			if !ok {
 				continue
@@ -333,6 +336,9 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
 			if !hb.IsEnabled() {
+				continue
+			}
+			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
 				continue
 			}
 			h, ok := snap.Host(hb.HostID)

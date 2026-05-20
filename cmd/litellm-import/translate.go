@@ -550,22 +550,6 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		})
 	}
 
-	// HostBinding.UpstreamName is the legacy per-binding field. Routing
-	// reads OriginalName from the resolved snapshot instead; we populate
-	// this to the pointer snapshot's upstream form (OriginalName when set,
-	// else Name) to satisfy the still-required field.
-	pointerUpstream := g.Pointer
-	for _, s := range g.Snapshots {
-		if s.Name == g.Pointer {
-			if s.OriginalName != "" {
-				pointerUpstream = s.OriginalName
-			} else {
-				pointerUpstream = s.Name
-			}
-			break
-		}
-	}
-
 	return &manifest.ModelDTO{
 		APIVersion: manifest.APIVersion,
 		Kind:       "Model",
@@ -576,9 +560,8 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 		},
 		Spec: manifest.ModelSpec{
 			Hosts: []manifest.HostBindingDTO{{
-				Host:         pm.name,
-				UpstreamName: pointerUpstream,
-				Adapter:      pm.adapter,
+				Host:    pm.name,
+				Adapter: pm.adapter,
 			}},
 			Family:              family,
 			Capabilities:        caps,

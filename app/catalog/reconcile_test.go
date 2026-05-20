@@ -56,7 +56,7 @@ func TestApply_UpsertNew(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-x", Adapter: adapters.OpenAI}},
+			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "gpt-x-2025-01-01", OriginalName: "gpt-x-2025-01-01"}},
 			Pointer:   "gpt-x-2025-01-01",
 		},
@@ -305,7 +305,7 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: firstHostID, UpstreamName: "extra", Adapter: adapters.OpenAI}},
+			Hosts:     []model.HostBinding{{HostID: firstHostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "extra-model-2025-01-01", OriginalName: "extra"}},
 			Pointer:   "extra-model-2025-01-01",
 		},

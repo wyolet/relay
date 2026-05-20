@@ -142,10 +142,10 @@ type ModelSpec struct {
 
 // HostBindingDTO is one host binding in the wire form. Host is a name string.
 type HostBindingDTO struct {
-	Host         string `json:"host"                   yaml:"host"`
-	UpstreamName string `json:"upstreamName"           yaml:"upstreamName"`
-	Adapter      string `json:"adapter"                yaml:"adapter"`
-	Enabled      *bool  `json:"enabled,omitempty"      yaml:"enabled,omitempty"`
+	Host      string   `json:"host"                yaml:"host"`
+	Adapter   string   `json:"adapter"             yaml:"adapter"`
+	Enabled   *bool    `json:"enabled,omitempty"   yaml:"enabled,omitempty"`
+	Snapshots []string `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
 }
 
 // HostKeyDTO is the wire form of a HostKey. Spec.HostID is a host *name* here.
