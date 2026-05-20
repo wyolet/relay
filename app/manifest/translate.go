@@ -21,7 +21,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func ToProvider(d ProviderDTO, _ Resolver) (*provider.Provider, error) {
-	return &provider.Provider{
+	p := &provider.Provider{
 		Meta: d.Metadata.toMeta(),
 		Spec: provider.Spec{
 			Enabled:       d.Spec.Enabled,
@@ -30,7 +30,14 @@ func ToProvider(d ProviderDTO, _ Resolver) (*provider.Provider, error) {
 			StatusPageURL: d.Spec.StatusPageURL,
 			Icon:          d.Spec.Icon,
 		},
-	}, nil
+	}
+	// Default owner.kind to "system" when the wire form left it empty
+	// (catalog-supplied providers are system-owned by convention; BYO
+	// providers must declare kind: user explicitly).
+	if p.Meta.Owner.Kind == "" {
+		p.Meta.Owner.Kind = meta.OwnerSystem
+	}
+	return p, nil
 }
 
 func FromProvider(p *provider.Provider, _ ReverseResolver) ProviderDTO {
@@ -67,7 +74,7 @@ func ToHost(d HostDTO, idx Resolver) (*host.Host, error) {
 			defaultPolicy = id
 		}
 	}
-	return &host.Host{
+	h := &host.Host{
 		Meta: d.Metadata.toMeta(),
 		Spec: host.Spec{
 			BaseURL:       d.Spec.BaseURL,
@@ -81,7 +88,12 @@ func ToHost(d HostDTO, idx Resolver) (*host.Host, error) {
 			StatusPageURL: d.Spec.StatusPageURL,
 			Icon:          d.Spec.Icon,
 		},
-	}, nil
+	}
+	// Default owner.kind to "system" when wire form left it empty.
+	if h.Meta.Owner.Kind == "" {
+		h.Meta.Owner.Kind = meta.OwnerSystem
+	}
+	return h, nil
 }
 
 func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
