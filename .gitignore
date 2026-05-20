@@ -37,3 +37,4 @@ bench/*.json
 /replay
 error.log
 /litellm-import
+/ollama-models-dump.json
