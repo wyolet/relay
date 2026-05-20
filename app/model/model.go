@@ -114,15 +114,35 @@ type Modalities struct {
 	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
 }
 
-// HostBinding declares that a Model is callable via a particular Host,
-// what name the Host's upstream API expects, and which wire-protocol
-// adapter the relay must use to talk to it. One Model lists one binding
+// HostBinding declares that a Model is callable via a particular Host
+// using a specific wire-protocol adapter. One Model lists one binding
 // per Host that serves it.
+//
+// Snapshots optionally narrows which of the Model's snapshots this host
+// can serve. Empty/nil means "all snapshots"; a non-empty list filters
+// routing to those names only. Use this when one Host can address only
+// a subset of the Model's snapshots (e.g. ollama-cloud serves the
+// -cloud-tagged variants; ollama-self serves the bare-tagged ones).
 type HostBinding struct {
-	HostID       string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
-	UpstreamName string        `json:"upstreamName"       yaml:"upstreamName"       validate:"required"`
-	Adapter      adapters.Kind  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
-	Enabled      *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
+	HostID    string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
+	Adapter   adapters.Kind  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
+	Enabled   *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
+	Snapshots []string      `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
+}
+
+// Serves reports whether this binding is eligible to route requests for
+// the given snapshot name. Empty Snapshots means "all"; otherwise checks
+// membership.
+func (b HostBinding) Serves(snapshotName string) bool {
+	if len(b.Snapshots) == 0 {
+		return true
+	}
+	for _, s := range b.Snapshots {
+		if s == snapshotName {
+			return true
+		}
+	}
+	return false
 }
 
 // IsEnabled returns true when the binding's Enabled is unset or explicitly true.
@@ -185,6 +205,13 @@ func (m *Model) Validate() error {
 	}
 	if _, ok := snaps[lower(m.Spec.Pointer)]; !ok {
 		return fmt.Errorf("model %q: pointer %q does not match any snapshot", m.Meta.Name, m.Spec.Pointer)
+	}
+	for i, b := range m.Spec.Hosts {
+		for _, sn := range b.Snapshots {
+			if _, ok := snaps[lower(sn)]; !ok {
+				return fmt.Errorf("model %q: hosts[%d] snapshots references unknown snapshot %q", m.Meta.Name, i, sn)
+			}
+		}
 	}
 	return nil
 }

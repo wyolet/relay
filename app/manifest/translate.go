@@ -142,10 +142,10 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 			return nil, fmt.Errorf("model %q: hosts[%d]: host %q not found", d.Metadata.Name, i, b.Host)
 		}
 		bindings = append(bindings, model.HostBinding{
-			HostID:       hostID,
-			UpstreamName: b.UpstreamName,
-			Adapter:      adapters.Kind(b.Adapter),
-			Enabled:      b.Enabled,
+			HostID:    hostID,
+			Adapter:   adapters.Kind(b.Adapter),
+			Enabled:   b.Enabled,
+			Snapshots: b.Snapshots,
 		})
 	}
 
@@ -193,10 +193,10 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 			name = b.HostID // fallback to id
 		}
 		bindings = append(bindings, HostBindingDTO{
-			Host:         name,
-			UpstreamName: b.UpstreamName,
-			Adapter:      string(b.Adapter),
-			Enabled:      b.Enabled,
+			Host:      name,
+			Adapter:   string(b.Adapter),
+			Enabled:   b.Enabled,
+			Snapshots: b.Snapshots,
 		})
 	}
 

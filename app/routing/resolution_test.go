@@ -69,7 +69,7 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-5.5", Adapter: adapters.OpenAI}},
+			Hosts: []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{
 				mkSnap("gpt-5.5"),
 				mkSnap("gpt-5.5-2026-04-23"),

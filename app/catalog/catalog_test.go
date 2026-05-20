@@ -66,7 +66,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o", Adapter: adapters.OpenAI}},
+			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "gpt-4o-2025-01-01", OriginalName: "gpt-4o-2025-01-01"}},
 			Pointer:   "gpt-4o-2025-01-01",
 		},
@@ -77,7 +77,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, UpstreamName: "gpt-4o-mini", Adapter: adapters.OpenAI}},
+			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "gpt-4o-mini-2025-01-01", OriginalName: "gpt-4o-mini-2025-01-01"}},
 			Pointer:   "gpt-4o-mini-2025-01-01",
 		},
