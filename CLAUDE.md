@@ -314,10 +314,15 @@ Future-proof seams (already wired; do not bypass):
   S3. Bounded channels with drop-on-full and a Prometheus drop
   counter. Never unbounded queues. Never block-on-send on the hot
   path.
-- **Cross-shape translation is disabled** in v1. A request hitting
-  `/v1/chat/completions` for a Model whose binding declares
-  `Adapter: anthropic` returns 400. Same the other way. Re-enabling
-  is a future slice (`docs/roadmap.md` track D).
+- **Cross-shape translation** is live with OpenAI as the canonical hub:
+  every non-OpenAI adapter implements four transforms against OpenAI's
+  types (`Translator` interface in `app/adapters/translator.go`); the
+  OpenAI adapter is `Identity`. When inbound shape == upstream shape, the
+  translator pair is identity → byte-equivalent passthrough. Lossy
+  fields and the path forward to a richer internal shape live in
+  `docs/adapters.md`. Per-shape route mounting lives under
+  `app/adapters/<name>/routes.go` — `app/httpapi/inference/` is
+  shape-agnostic.
 
 ### Post-flight contract
 
@@ -384,8 +389,10 @@ Full guide: `docs/cluster.md`.
 - Tee model: response bytes pass through to the caller; the post-
   flight goroutine sees a buffered copy via `io.TeeReader` once
   `Body.Close()` fires.
-- Same-shape passthrough is the 95% case. Cross-shape transform is
-  off-path in v1.
+- Same-shape passthrough is the 95% case. Cross-shape transform runs
+  per-chunk via stateful translators (`docs/adapters.md`) — each SSE
+  event is parsed at the `\n\n` boundary, translated upstream→OpenAI→
+  inbound, flushed. Either side may be identity (no-op) when shapes match.
 
 ### Key pooling
 
