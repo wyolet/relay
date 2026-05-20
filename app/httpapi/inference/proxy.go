@@ -30,7 +30,7 @@ const (
 // handleProxy is the shared proxy-mode flow called by /v1/chat/completions
 // and /v1/messages. adapterKind pins the token extractor (and is used in
 // future per-host adapter-mismatch checks).
-func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Kind) {
+func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
 
@@ -110,8 +110,8 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 // post-flight. The same adapter implementations from app/api/* serve
 // here — they implement TokenExtractor by virtue of having
 // ExtractTokens.
-func extractorFor(kind adapters.Kind) proxy.TokenExtractor {
-	switch kind {
+func extractorFor(name adapters.Name) proxy.TokenExtractor {
+	switch name {
 	case adapters.OpenAI:
 		return apiopenai.New()
 	case adapters.Anthropic:

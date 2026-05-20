@@ -21,7 +21,7 @@ type providerMeta struct {
 	displayName   string
 	description   string
 	baseURL       string
-	adapter       string // adapter.Kind value: "openai" or "anthropic"
+	adapter       string // adapter.Name value: "openai" or "anthropic"
 	homepageURL   string
 	docsURL       string
 	consoleURL    string

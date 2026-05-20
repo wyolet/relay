@@ -140,7 +140,7 @@ func main() {
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
 	// Adapter registry — one entry per supported wire protocol.
-	adapterRegistry := map[adapters.Kind]pipeline.Adapter{
+	adapterRegistry := map[adapters.Name]pipeline.Adapter{
 		adapters.OpenAI:    apiopenai.New(),
 		adapters.Anthropic: apianthropic.New(),
 	}

@@ -131,7 +131,7 @@ func newStack(t *testing.T) *stack {
 	}
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
-	adapterRegistry := map[adapters.Kind]pipeline.Adapter{
+	adapterRegistry := map[adapters.Name]pipeline.Adapter{
 		adapters.OpenAI:    apiopenai.New(),
 		adapters.Anthropic: apianthropic.New(),
 	}

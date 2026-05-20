@@ -155,7 +155,7 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		}
 		bindings = append(bindings, model.HostBinding{
 			HostID:    hostID,
-			Adapter:   adapters.Kind(b.Adapter),
+			Adapter:   adapters.Name(b.Adapter),
 			Enabled:   b.Enabled,
 			Snapshots: b.Snapshots,
 		})

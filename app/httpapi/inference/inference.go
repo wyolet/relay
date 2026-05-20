@@ -40,10 +40,10 @@ type Deps struct {
 	// Proxy orchestrates a proxy-mode (BYO upstream key) request.
 	Proxy *proxy.Pipeline
 
-	// Adapters keys the wire-protocol implementation by adapters.Kind.
-	// Handlers look up the binding's Adapter Kind here at request time;
+	// Adapters keys the wire-protocol implementation by adapters.Name.
+	// Handlers look up the binding's Adapter Name here at request time;
 	// proxy mode looks up the extractor by inbound endpoint shape.
-	Adapters map[adapters.Kind]pipeline.Adapter
+	Adapters map[adapters.Name]pipeline.Adapter
 }
 
 // Pinger reports backend health for /healthz. Storage satisfies this
