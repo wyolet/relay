@@ -192,6 +192,11 @@ func streamTranslated(w http.ResponseWriter, body io.ReadCloser, upstreamT, inbo
 		if len(out) == 0 {
 			continue
 		}
+		// Translator outputs (anthropic.sseBytes) already terminate with
+		// \n\n. Identity passthrough strips terminators via the scanner.
+		// Trim then re-add exactly one \n\n so we don't double up and
+		// confuse strict SSE clients (cc, Anthropic SDK).
+		out = bytes.TrimRight(out, "\n")
 		_, _ = w.Write(out)
 		_, _ = w.Write([]byte("\n\n"))
 		if flusher != nil {
