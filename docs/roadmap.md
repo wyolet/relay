@@ -11,7 +11,127 @@ waiting to be written; the path under `docs/` is the placeholder.
 
 ## Now — priority queue
 
-_(empty — Settings API and Proxy mode shipped; Batch subsystem moved to icebox.)_
+Five items, in this order. Order is intentional: secrets unblocks every
+deployment that mandates a non-env secret store; batch is the heaviest
+build and the headline differentiator; webhooks unlock async UX once
+batch lands; new transports broaden the wire surface; new adapters
+broaden the upstream surface.
+
+### 1. Pluggable secret backends
+
+What: extract `pkg/secret` with a `Resolver` interface. Built-in
+resolvers: `env` (env-ref, today) and `stored` (AES-GCM in PG, today).
+Add subpackages for Vault, AWS Secrets Manager, AWS KMS, GCP Secret
+Manager, Kubernetes Secrets. `HostKey.ValueFrom` grows new `kind`
+values that select a resolver.
+
+Why: larger deployments mandate a specific secret store; today
+`app/hostkey` only supports env + stored. A Resolver seam makes new
+backends additive instead of a rewrite.
+
+Size: ~3-4 days for the seam + one external backend (AWS Secrets
+Manager first — most-requested). Each additional backend ~half day.
+
+Where: `pkg/secret/` (new), `pkg/secret/aws/`, `pkg/secret/vault/`, …;
+`app/hostkey` dispatches through Resolver; migration adds new
+`kind` variants.
+
+### 2. Batch processing (relay-native)
+
+What: relay primitive for fire-and-forget bulk submissions, **working
+for any upstream regardless of whether the provider exposes a batch
+API**. Customer posts a batch, gets an ID, polls or receives a webhook
+on completion, fetches results from S3 or relay storage. Worker pool
+drains jobs through the existing `app/pipeline` (which already handles
+retries / key selection / breakers). When the chosen Host's adapter
+exposes a native batch API, pass through (50% discount); otherwise
+simulate via concurrent pipeline calls.
+
+Why: documented as the "third pillar" / infra-grade differentiator.
+Relay-native batch means a customer can flip "run as batch" on any
+model and get cost/throughput benefits even on providers that don't
+ship a batch API.
+
+Schema: `batches(id, policy_id, status, created_at, completed_at,
+result_uri, error)` + `batch_items(batch_id, idx, input, output,
+status, error)`. Customer API: `POST /v1/batches`,
+`GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`.
+
+Size: ~2 weeks. Schema + API + worker + provider-batch dispatch +
+result storage.
+
+Where: `app/batch/` (new), `app/httpapi/inference/batches.go`, new
+migrations, possibly `cmd/relay-batch-worker/` if the worker becomes
+a separate binary.
+
+Dependencies: lands cleaner once (3) exists so batch completion can
+emit a webhook instead of forcing customer polling.
+
+### 3. Webhooks per request-authoring unit
+
+What: configurable outbound webhooks fired on terminal request /
+batch events (completion, failure, rate-limit, breaker trip). Open
+design question: **what level does the webhook attach to** — per
+RelayKey, per Policy, per User, or all three with precedence rules.
+Most likely answer: per RelayKey (finest grain that always exists),
+falling back to per Policy (operator default), with per-User reserved
+for SaaS-mode tenant defaults once B2 lands.
+
+Schema: `webhooks(id, owner_kind, owner_id, url, events, secret_id,
+status, created_at)` + delivery log. HMAC signing via stored secret.
+Retry policy + DLQ.
+
+Why: every async flow (batch first, long-running stream second) needs
+push-style notification or customers eat polling cost. Also a
+foundational SaaS feature.
+
+Size: ~1 week. Includes a short design doc to pin the owner-kind
+question before code.
+
+Where: `app/webhook/` (new), `app/httpapi/control/webhooks.go`, new
+migration. Delivery worker likely reuses the batch worker pool.
+
+Dependencies: write the design doc first (`docs/webhooks.md`) to
+resolve the owner-kind question.
+
+### 4. WebSocket transport
+
+What: second customer-facing transport after HTTP. `/v1/ws` (and a
+shape-matching anthropic endpoint) accepting framed requests over a
+single long-lived connection; multiplexed responses streamed back on
+the same socket. Same pipeline underneath; the transport layer
+translates frame ↔ `pipeline.Request` / `pipeline.Result`.
+
+Why: meaningful latency win for chatty clients (IDE / agent loops)
+that pay TLS handshake + HTTP overhead per turn. Also matches what
+some upstreams (OpenAI Realtime, Anthropic streaming) increasingly
+expose.
+
+Size: ~1 week. Frame protocol + handler + reuse of the existing
+adapter/pipeline stack.
+
+Where: `app/httpapi/inference/ws.go` + `app/transport/ws/` (or
+similar). `app/pipeline` stays untouched — transport is a thin
+shell around it.
+
+### 5. Expanded adapter support
+
+What: add new wire-shape adapters beyond `openai` and `anthropic`.
+Concrete candidates (rough order of demand): Google Gemini native,
+Cohere, Mistral native (currently OpenAI-compatible so usable via
+`openai` adapter, but native unlocks features), AWS Bedrock Converse
+API.
+
+Why: every new adapter widens the addressable upstream set. The
+adapter seam (`app/adapter.Kind` + `app/api/<kind>` per shape) is
+already in place — adding one is a contained slice.
+
+Size: ~3-5 days per adapter (shape parser, Call, ExtractTokens,
+streaming, tests).
+
+Where: `pkg/api/<kind>/` (pure shape, vendorable) +
+`app/api/<kind>/` (relay-side glue); register new `Kind` in
+`app/adapter`.
 
 ---
 
@@ -105,8 +225,9 @@ Open design questions:
 - What's the default-tier fallback rule?
 - Does pricing-by-tier survive a re-import from LiteLLM?
 
-Driven by: batch subsystem needs this to honour the 50% discount of
-provider batch APIs. Revisit if/when batch comes off the icebox.
+Driven by: batch subsystem (Now #2) needs this to honour the 50%
+discount of provider batch APIs. Could ship inline with batch or
+right after — flag during design.
 
 ### Non-token pricing meters
 
@@ -132,21 +253,6 @@ in seeded config is text-only.
 
 These were considered, found not to clear the bar, and parked. Touch
 only if a concrete external signal flips the call.
-
-### Batch subsystem
-
-Relay primitive for fire-and-forget bulk submissions. Customer posts
-a batch, gets an ID, polls or receives a webhook on completion,
-fetches results from S3 or relay storage. Worker pool drains jobs;
-uses provider batch APIs (50% discount passthrough) when available,
-simulates via concurrent pipeline calls otherwise. Schema:
-`batches` + `batch_items`. Customer API: `POST /v1/batches`,
-`GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`, webhook on
-completion. Size: ~2 weeks. Where: `app/batch/`,
-`app/httpapi/inference/batches.go`, new migrations. Unblock signal:
-concrete customer ask for bulk eval / dataset enrichment / nightly
-summary workflows where simulated batch via the realtime path
-doesn't suffice.
 
 ### Cross-shape translation
 
