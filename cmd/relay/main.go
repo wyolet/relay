@@ -140,20 +140,37 @@ func main() {
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
 	// Adapter registry — one entry per supported wire protocol.
-	adapterRegistry := map[adapters.Kind]pipeline.Adapter{
+	adapterRegistry := map[adapters.Name]pipeline.Adapter{
 		adapters.OpenAI:    apiopenai.New(),
 		adapters.Anthropic: apianthropic.New(),
+	}
+
+	// Translator registry — same keys; identity for OpenAI, real
+	// transforms for everything else. See docs/adapters.md.
+	translatorRegistry := adapters.Registry{
+		adapters.OpenAI:    apiopenai.Translator{},
+		adapters.Anthropic: apianthropic.Translator{},
+	}
+
+	// Per-adapter route registration — each adapter owns its inbound
+	// HTTP surface. Adding a new shape adds an entry here and a
+	// MountRoutes function in app/adapters/<name>/routes.go.
+	routeMounters := []inference.RouteMounter{
+		apiopenai.MountRoutes,
+		apianthropic.MountRoutes,
 	}
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:   st,
-		Catalog:  cat,
-		Resolver: routing.New(cat),
-		Pipeline: pl,
-		Proxy:    proxyPipeline,
-		Adapters: adapterRegistry,
+		Pinger:        st,
+		Catalog:       cat,
+		Resolver:      routing.New(cat),
+		Pipeline:      pl,
+		Proxy:         proxyPipeline,
+		Adapters:      adapterRegistry,
+		Translators:   translatorRegistry,
+		RouteMounters: routeMounters,
 	})
 
 	inferAddr := ":8080"

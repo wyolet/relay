@@ -50,7 +50,7 @@ func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
 // registerModelsAt registers a single list-models endpoint at path. If
 // adapterFilter is non-empty, only models with at least one enabled host
 // binding declaring that adapter are returned.
-func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, adapterFilter adapters.Kind) {
+func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, adapterFilter adapters.Name) {
 	opID := "list_models"
 	summary := "List models accessible to the caller (OpenAI-compatible)"
 	if adapterFilter != "" {
@@ -70,7 +70,7 @@ func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, ad
 	})
 }
 
-func listModels(ctx context.Context, d Deps, adapterFilter adapters.Kind) (*modelsOutput, error) {
+func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*modelsOutput, error) {
 	rk := RelayKeyFromContext(ctx)
 	if rk == nil {
 		return nil, huma.Error401Unauthorized("missing relay key")
@@ -153,7 +153,7 @@ func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
 // modelHasReachableBinding returns true iff the model has at least one
 // enabled host binding to a host with credentials, optionally restricted
 // to a specific adapter kind.
-func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Kind) bool {
+func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Name) bool {
 	for i := range m.Spec.Hosts {
 		hb := &m.Spec.Hosts[i]
 		if !hb.IsEnabled() {
@@ -174,10 +174,10 @@ func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFil
 // binding declaring kind, regardless of credentials. Used for policy-bound
 // keys where the routing layer will surface a no-keys error rather than
 // silently hiding the model.
-func modelHasAdapter(m *model.Model, kind adapters.Kind) bool {
+func modelHasAdapter(m *model.Model, name adapters.Name) bool {
 	for i := range m.Spec.Hosts {
 		hb := &m.Spec.Hosts[i]
-		if hb.IsEnabled() && hb.Adapter == kind {
+		if hb.IsEnabled() && hb.Adapter == name {
 			return true
 		}
 	}

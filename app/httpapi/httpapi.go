@@ -111,7 +111,7 @@ func installSchemaNamer() {}
 //     prepended so the 8 colliding `Spec` types become `ProviderSpec`,
 //     `HostSpec`, `ModelSpec`, etc. without renaming the Go types.
 //   - Types in non-entity packages (meta.Metadata, meta.Owner,
-//     adapter.Kind, …) keep their bare names — they don't collide.
+//     adapter.Name, …) keep their bare names — they don't collide.
 //
 // Plane Mount() functions install the returned registry on their
 // huma.Config.

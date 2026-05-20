@@ -20,6 +20,11 @@ import (
 	"github.com/wyolet/relay/app/routing"
 )
 
+// RouteMounter is what an adapter package exposes to mount its own
+// inbound HTTP surface. Each adapter (openai, anthropic, ...) provides
+// a MountRoutes(api, deps, mw) function matching this signature.
+type RouteMounter = func(api huma.API, d Deps, mw huma.Middlewares)
+
 // Deps is the typed dependency bundle for the data plane.
 type Deps struct {
 	// Pinger reports backend health for /healthz. Storage satisfies
@@ -40,10 +45,22 @@ type Deps struct {
 	// Proxy orchestrates a proxy-mode (BYO upstream key) request.
 	Proxy *proxy.Pipeline
 
-	// Adapters keys the wire-protocol implementation by adapters.Kind.
-	// Handlers look up the binding's Adapter Kind here at request time;
+	// Adapters keys the wire-protocol implementation by adapters.Name.
+	// Handlers look up the binding's Adapter Name here at request time;
 	// proxy mode looks up the extractor by inbound endpoint shape.
-	Adapters map[adapters.Kind]pipeline.Adapter
+	Adapters map[adapters.Name]pipeline.Adapter
+
+	// Translators keys the shape Translator by adapters.Name. Each route
+	// handler picks its own inbound translator (by route) and the
+	// upstream translator (from plan.HostBinding.Adapter) and chains
+	// them. Identity (OpenAI) is no-op so passthrough stays cheap.
+	Translators adapters.Registry
+
+	// RouteMounters are per-adapter route registration functions. Each
+	// adapter package exposes a MountRoutes that satisfies RouteMounter;
+	// cmd/relay/main.go wires them in. Order is iteration order over the
+	// slice; should not matter in practice (paths are distinct).
+	RouteMounters []RouteMounter
 }
 
 // Pinger reports backend health for /healthz. Storage satisfies this
@@ -80,8 +97,9 @@ func Mount(r chi.Router, d Deps) huma.API {
 		httpapi.HumaAuth(ClassifyMiddleware()),
 		httpapi.HumaAuth(RelayKeyAuthMiddleware(d.Catalog)),
 	}
-	registerChat(api, d, mw)
-	registerMessages(api, d, mw)
+	for _, mount := range d.RouteMounters {
+		mount(api, d, mw)
+	}
 	registerModels(api, d, mw)
 	registerProxyHosts(api, d, mw)
 

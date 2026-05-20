@@ -125,7 +125,7 @@ type Modalities struct {
 // -cloud-tagged variants; ollama-self serves the bare-tagged ones).
 type HostBinding struct {
 	HostID    string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
-	Adapter   adapters.Kind  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
+	Adapter   adapters.Name  `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic"`
 	Enabled   *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
 	Snapshots []string      `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
 }

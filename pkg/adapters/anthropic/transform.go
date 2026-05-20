@@ -36,7 +36,7 @@ func ToOpenAI(r *MessagesRequest) (*openai.FullChatRequest, error) {
 		}
 		out.Messages = append(out.Messages, openai.ChatMessage{
 			Role:    m.Role,
-			Content: m.Content,
+			Content: convertContentToOpenAI(m.Content),
 		})
 	}
 
@@ -117,7 +117,7 @@ func FromOpenAI(r *openai.FullChatRequest) (*MessagesRequest, error) {
 		}
 		b, _ := json.Marshal(map[string]json.RawMessage{
 			"role":    mustMarshal(m.Role),
-			"content": m.Content,
+			"content": convertContentFromOpenAI(m.Content),
 		})
 		out.Messages = append(out.Messages, b)
 	}
