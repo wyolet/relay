@@ -169,17 +169,24 @@ func main() {
 		apianthropic.MountRoutes,
 	}
 
+	// Per-inbound-shape cross-shape handlers. Inference dispatch consults
+	// this when the inbound shape can't byte-pass to the resolved upstream.
+	crossShapeHandlers := map[adapters.Name]inference.CrossShapeHandler{
+		adapters.OpenAIResponses: apiopenai.DispatchResponsesCrossShape,
+	}
+
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:        st,
-		Catalog:       cat,
-		Resolver:      routing.New(cat),
-		Pipeline:      pl,
-		Proxy:         proxyPipeline,
-		Adapters:      adapterRegistry,
-		Translators:   translatorRegistry,
-		RouteMounters: routeMounters,
+		Pinger:             st,
+		Catalog:            cat,
+		Resolver:           routing.New(cat),
+		Pipeline:           pl,
+		Proxy:              proxyPipeline,
+		Adapters:           adapterRegistry,
+		Translators:        translatorRegistry,
+		RouteMounters:      routeMounters,
+		CrossShapeHandlers: crossShapeHandlers,
 	})
 
 	inferAddr := ":8080"

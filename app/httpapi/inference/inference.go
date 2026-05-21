@@ -7,6 +7,7 @@ package inference
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -24,6 +25,15 @@ import (
 // inbound HTTP surface. Each adapter (openai, anthropic, ...) provides
 // a MountRoutes(api, deps, mw) function matching this signature.
 type RouteMounter = func(api huma.API, d Deps, mw huma.Middlewares)
+
+// CrossShapeHandler handles dispatch when the inbound shape needs
+// non-trivial translation to the upstream wire format. Each adapter that
+// owns an inbound shape with cross-shape semantics (e.g. openai_responses
+// against non-OpenAI hosts) registers one. Dispatch routes to it instead
+// of the byte-pass path. Keeps inference shape-agnostic — it only knows
+// "is there a handler for this inbound shape" without importing the
+// adapter packages.
+type CrossShapeHandler = func(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan)
 
 // Deps is the typed dependency bundle for the data plane.
 type Deps struct {
@@ -61,6 +71,12 @@ type Deps struct {
 	// cmd/relay/main.go wires them in. Order is iteration order over the
 	// slice; should not matter in practice (paths are distinct).
 	RouteMounters []RouteMounter
+
+	// CrossShapeHandlers keys per-inbound-shape cross-shape dispatch by
+	// adapters.Name. Populated by the composition root from each adapter
+	// package that owns one. Dispatch consults this when the inbound shape
+	// can't byte-pass to the resolved upstream.
+	CrossShapeHandlers map[adapters.Name]CrossShapeHandler
 }
 
 // Pinger reports backend health for /healthz. Storage satisfies this

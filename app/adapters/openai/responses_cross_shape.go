@@ -2,21 +2,34 @@
 // can't speak Responses natively. Two upstream shapes are supported:
 //
 //   - OpenAI-compatible (Adapter=OpenAI, host != "openai") — Ollama, Together,
-//     Groq, Fireworks, Azure OpenAI, Bedrock OpenAI-compat. Translate Responses
-//     ↔ Chat Completions via cctranslator and forward to /v1/chat/completions.
+//     Groq, Fireworks, Azure OpenAI, Bedrock OpenAI-compat. Translate
+//     Responses ↔ Chat Completions via cctranslator and forward to
+//     /v1/chat/completions.
 //
 //   - Anthropic (Adapter=Anthropic) — api.anthropic.com, Bedrock Claude,
-//     Vertex Claude. Translate Responses ↔ /v1/messages via anthropictranslator.
+//     Vertex Claude. Translate Responses ↔ /v1/messages via
+//     anthropictranslator.
 //
 // OpenAI proper (Adapter=OpenAI, host="openai") never reaches this file —
-// dispatch.go keeps that path as a byte-pass to /v1/responses.
+// inference.Dispatch keeps that path as a byte-pass to /v1/responses.
 //
-// Responses-only fields (previous_response_id, store, background, conversation,
-// include[], context_management, service_tier, safety_identifier,
-// prompt_cache_key) are rejected by each translator's request stage and
-// surface here as a 400.
+// Responses-only fields (previous_response_id, store, background,
+// conversation, include[], context_management, service_tier,
+// safety_identifier, prompt_cache_key) are rejected by each translator's
+// request stage and surface here as a 400.
+//
+// Why this bypasses the adapters.Translator interface
+//
+// The Translator interface in app/adapters/translator.go works against the
+// OpenAI Chat Completions hub (canonical = openai.FullChatRequest /
+// openai.ChatResponse). Responses can't round-trip through that hub without
+// losing tool taxonomy, reasoning state, and the typed item array, so
+// Responses inbound runs against direct pairwise translators (cctranslator,
+// anthropictranslator) wired here. This is Phase 1.5 of docs/canonical-protocol.md;
+// Phase 2 reorganizes both inbound paths against a relay-internal canonical
+// and this file's hook goes away.
 
-package inference
+package openai
 
 import (
 	"bufio"
@@ -26,6 +39,7 @@ import (
 	"strconv"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
@@ -34,15 +48,15 @@ import (
 	"github.com/wyolet/relay/pkg/adapters/openai/responses/cctranslator"
 )
 
-// dispatchResponsesCrossShape runs the Responses request through the
-// translator pair that matches plan.HostBinding.Adapter. Caller has already
-// resolved plan and verified that this is not the OpenAI-proper byte-pass case.
-func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan) {
+// DispatchResponsesCrossShape is the inference.CrossShapeHandler for
+// adapters.OpenAIResponses. Registered on inference.Deps.CrossShapeHandlers
+// by the composition root.
+func DispatchResponsesCrossShape(d inference.Deps, w http.ResponseWriter, r *http.Request, in inference.DispatchInput, plan *routing.Plan) {
 	ctx := r.Context()
 
 	req, err := responses.Parse(in.Body)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_responses_request", err.Error())
+		inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_responses_request", err.Error())
 		return
 	}
 	req.Model = plan.Snapshot.Upstream()
@@ -50,7 +64,7 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 	upstreamKey := plan.HostBinding.Adapter
 	upstreamAdapter, ok := d.Adapters[upstreamKey]
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
+		inference.WriteAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
 			"no adapter registered for "+string(upstreamKey))
 		return
 	}
@@ -65,39 +79,36 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 	case adapters.OpenAI:
 		ccReq, terr := cctranslator.RequestToCC(req)
 		if terr != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", terr.Error())
+			inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", terr.Error())
 			return
 		}
 		wireBody, err = json.Marshal(ccReq)
 		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
+			inference.WriteAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
 			return
 		}
-		modelOverride := req.Model
-		reqCopy := req // capture for closures
 		toResponse = func(b []byte) (*responses.Response, error) {
 			var cc pkgopenai.ChatResponse
 			if uerr := json.Unmarshal(b, &cc); uerr != nil {
 				return nil, uerr
 			}
-			return cctranslator.CCToResponse(reqCopy, &cc, modelOverride)
+			return cctranslator.CCToResponse(req, &cc, req.Model)
 		}
-		streamTrans = ccStreamAdapter{s: cctranslator.NewStream(req)}
+		streamTrans = cctranslator.NewStream(req)
 
 	case adapters.Anthropic:
 		wireBody, err = anthropictranslator.RequestToAnthropic(req)
 		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
+			inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 			return
 		}
-		reqCopyA := req // capture for closure
 		toResponse = func(b []byte) (*responses.Response, error) {
-			return anthropictranslator.AnthropicToResponse(reqCopyA, b)
+			return anthropictranslator.AnthropicToResponse(req, b)
 		}
-		streamTrans = anthropicStreamAdapter{s: anthropictranslator.NewStream(req)}
+		streamTrans = anthropictranslator.NewStream(req)
 
 	default:
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses_unsupported_host",
+		inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses_unsupported_host",
 			"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
 				" (adapter="+string(upstreamKey)+") which has no Responses-capable upstream")
 		return
@@ -118,7 +129,7 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 
 	result, err := d.Pipeline.Run(ctx, preq)
 	if err != nil {
-		mapPipelineErr(w, err)
+		inference.MapPipelineErr(w, err)
 		return
 	}
 	defer result.Body.Close()
@@ -126,7 +137,8 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 	if in.Stream {
 		// Streaming: upstream Content-Length is meaningless for the
 		// translated SSE; Go will chunk-encode the response.
-		copyResponseHeaders(w, result.Headers)
+		inference.ForwardUpstreamHeaders(w.Header(), result.Headers)
+		w.Header().Del("Content-Length")
 		w.WriteHeader(result.Status)
 		streamResponsesFrames(w, result.Body, streamTrans)
 		return
@@ -135,33 +147,15 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 	// Sync: translate first so we can set the actual Content-Length on the
 	// translated body (upstream's value describes a different byte size).
 	out := translateBufferedBody(result.Body, toResponse)
-	copyResponseHeaders(w, result.Headers)
+	inference.ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 	w.WriteHeader(result.Status)
 	_, _ = w.Write(out)
 }
 
-// copyResponseHeaders copies upstream → client, dropping hop-by-hop and
-// upstream Content-Length (the translated body has a different size; caller
-// either lets Go chunk for streams or sets the correct length itself).
-func copyResponseHeaders(w http.ResponseWriter, src http.Header) {
-	for k, vs := range src {
-		if isHopByHop(k) {
-			continue
-		}
-		if http.CanonicalHeaderKey(k) == "Content-Length" {
-			continue
-		}
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
-}
-
 // translateBufferedBody reads the full upstream body, runs the translator,
 // and returns the bytes to write to the client. On translator or marshal
-// failure the raw upstream body passes through (matches bufferTranslated's
-// behavior in dispatch.go).
+// failure the raw upstream body passes through.
 func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*responses.Response, error)) []byte {
 	raw, err := io.ReadAll(body)
 	if err != nil {
@@ -178,40 +172,10 @@ func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*respons
 	return out
 }
 
-// responsesStreamTranslator is the common Translate-per-chunk interface
-// satisfied by both cctranslator.Stream and anthropictranslator.Stream.
-// Their SSEFrame types differ but both expose Event/Data and Bytes(); we
-// adapt each through a small wrapper below.
+// responsesStreamTranslator is the common per-chunk interface satisfied by
+// both cctranslator.Stream and anthropictranslator.Stream.
 type responsesStreamTranslator interface {
-	Translate(chunk []byte) ([][]byte, error)
-}
-
-type ccStreamAdapter struct{ s *cctranslator.Stream }
-
-func (c ccStreamAdapter) Translate(chunk []byte) ([][]byte, error) {
-	frames, err := c.s.Translate(chunk)
-	if err != nil {
-		return nil, err
-	}
-	out := make([][]byte, 0, len(frames))
-	for _, f := range frames {
-		out = append(out, f.Bytes())
-	}
-	return out, nil
-}
-
-type anthropicStreamAdapter struct{ s *anthropictranslator.Stream }
-
-func (a anthropicStreamAdapter) Translate(chunk []byte) ([][]byte, error) {
-	frames, err := a.s.Translate(chunk)
-	if err != nil {
-		return nil, err
-	}
-	out := make([][]byte, 0, len(frames))
-	for _, f := range frames {
-		out = append(out, f.Bytes())
-	}
-	return out, nil
+	Translate(chunk []byte) ([]responses.SSEFrame, error)
 }
 
 // streamResponsesFrames consumes SSE chunks from body, feeds each to the
@@ -223,7 +187,7 @@ func streamResponsesFrames(w http.ResponseWriter, body io.ReadCloser, st respons
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	scanner.Split(splitSSEChunks)
+	scanner.Split(inference.SplitSSEChunks)
 
 	for scanner.Scan() {
 		chunk := append([]byte(nil), scanner.Bytes()...)
@@ -231,11 +195,12 @@ func streamResponsesFrames(w http.ResponseWriter, body io.ReadCloser, st respons
 		// expect the raw frame they would receive on the wire.
 		chunk = append(chunk, '\n', '\n')
 
-		out, err := st.Translate(chunk)
+		frames, err := st.Translate(chunk)
 		if err != nil {
 			return
 		}
-		for _, b := range out {
+		for _, f := range frames {
+			b := f.Bytes()
 			if len(b) == 0 {
 				continue
 			}

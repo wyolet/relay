@@ -92,14 +92,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	}
 	defer result.Body.Close()
 
-	for k, vs := range result.Headers {
-		if isHopByHop(k) {
-			continue
-		}
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
+	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
 	_, _ = io.Copy(w, result.Body)
 }

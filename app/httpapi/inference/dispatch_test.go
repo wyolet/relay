@@ -148,7 +148,21 @@ func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 			adapters.OpenAIEmbeddings: stubTranslator{},
 			adapters.Anthropic:        stubTranslator{},
 		},
+		// Stub cross-shape handler — these tests verify inference's
+		// routing decision (byte-pass vs hook), not the real handler's
+		// internal behavior. The real openai handler is exercised in
+		// app/adapters/openai/responses_cross_shape_test.go.
+		CrossShapeHandlers: map[adapters.Name]CrossShapeHandler{
+			adapters.OpenAIResponses: stubCrossShapeHandler,
+		},
 	}
+}
+
+// stubCrossShapeHandler writes a sentinel response so tests can detect
+// that the dispatch routed to a cross-shape handler (rather than
+// byte-passing).
+func stubCrossShapeHandler(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan) {
+	writeAPIError(w, http.StatusTeapot, "stub", "cross_shape_invoked", "stub cross-shape handler")
 }
 
 // withNormalContext injects a ModeNormal classification and relay key into
@@ -205,11 +219,11 @@ func TestDispatch_Responses_OpenAIProperHost_BytePass(t *testing.T) {
 	}
 }
 
-// TestDispatch_Responses_OpenAICompatHost_CrossShape verifies that a host
+// TestDispatch_Responses_OpenAICompatHost_RoutesToHook verifies that a host
 // with Adapter=OpenAI but Meta.Name != "openai" (Ollama, Groq, Together,
-// Fireworks, etc.) takes the cctranslator cross-shape path, not the
-// old "responses_unsupported_host" rejection.
-func TestDispatch_Responses_OpenAICompatHost_CrossShape(t *testing.T) {
+// Fireworks, etc.) hits the registered CrossShapeHandler instead of the
+// byte-pass path. The stub handler returns 418 so we know it ran.
+func TestDispatch_Responses_OpenAICompatHost_RoutesToHook(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
@@ -224,21 +238,14 @@ func TestDispatch_Responses_OpenAICompatHost_CrossShape(t *testing.T) {
 		Stream:    false,
 	})
 
-	if w.Code == http.StatusBadRequest {
-		e := parseDispatchErr(t, w.Body.Bytes())
-		if e.Error.Code == "responses_unsupported_host" {
-			t.Fatalf("old guard still fires on OpenAI-compat host — cross-shape path not taken")
-		}
-		// invalid_responses_request / translate_request would mean the parse
-		// failed; that's a body-shape issue, not what we're testing.
+	if w.Code != http.StatusTeapot {
+		t.Fatalf("want 418 (stub hook), got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestDispatch_Responses_AnthropicHost_CrossShape verifies that a host with
-// Adapter=Anthropic takes the anthropictranslator cross-shape path. The
-// stub adapter fails the pipeline call after translation, but the guard
-// itself must not fire.
-func TestDispatch_Responses_AnthropicHost_CrossShape(t *testing.T) {
+// TestDispatch_Responses_AnthropicHost_RoutesToHook verifies that a host
+// with Adapter=Anthropic also routes to the registered CrossShapeHandler.
+func TestDispatch_Responses_AnthropicHost_RoutesToHook(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 
@@ -253,21 +260,18 @@ func TestDispatch_Responses_AnthropicHost_CrossShape(t *testing.T) {
 		Stream:    false,
 	})
 
-	if w.Code == http.StatusBadRequest {
-		e := parseDispatchErr(t, w.Body.Bytes())
-		if e.Error.Code == "responses_unsupported_host" {
-			t.Fatalf("guard fired for Anthropic host — anthropictranslator path not taken")
-		}
+	if w.Code != http.StatusTeapot {
+		t.Fatalf("want 418 (stub hook), got %d; body: %s", w.Code, w.Body.String())
 	}
 }
 
-// TestDispatch_Responses_CrossShape_RejectsPreviousResponseID verifies that
-// Responses-only fields (previous_response_id) get rejected at the
-// translator boundary with a 400 translate_request when routed to a CC
-// upstream. (On OpenAI proper byte-pass, they pass through untouched.)
-func TestDispatch_Responses_CrossShape_RejectsPreviousResponseID(t *testing.T) {
+// TestDispatch_Responses_NoHookRegistered verifies that when an
+// inbound shape needs cross-shape dispatch but no handler is registered,
+// dispatch returns 500 no_cross_shape_handler.
+func TestDispatch_Responses_NoHookRegistered(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
 	d := buildDeps(t, cat)
+	d.CrossShapeHandlers = nil
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	r = withNormalContext(r, rk)
@@ -275,17 +279,16 @@ func TestDispatch_Responses_CrossShape_RejectsPreviousResponseID(t *testing.T) {
 
 	Dispatch(d, w, r, DispatchInput{
 		Inbound:   adapters.OpenAIResponses,
-		Body:      []byte(`{"model":"test-model","input":"hi","previous_response_id":"resp_123"}`),
+		Body:      []byte(`{"model":"test-model","input":"hi"}`),
 		ModelName: "test-model",
 		Stream:    false,
 	})
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d; body: %s", w.Code, w.Body.String())
 	}
-	e := parseDispatchErr(t, w.Body.Bytes())
-	if e.Error.Code != "translate_request" {
-		t.Errorf("error code: want translate_request, got %q (msg: %s)", e.Error.Code, e.Error.Message)
+	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "no_cross_shape_handler" {
+		t.Errorf("error code: want no_cross_shape_handler, got %q", e.Error.Code)
 	}
 }
 
