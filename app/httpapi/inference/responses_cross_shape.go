@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
@@ -118,14 +119,32 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 	}
 	defer result.Body.Close()
 
-	for k, vs := range result.Headers {
+	if in.Stream {
+		// Streaming: upstream Content-Length is meaningless for the
+		// translated SSE; Go will chunk-encode the response.
+		copyResponseHeaders(w, result.Headers)
+		w.WriteHeader(result.Status)
+		streamResponsesFrames(w, result.Body, streamTrans)
+		return
+	}
+
+	// Sync: translate first so we can set the actual Content-Length on the
+	// translated body (upstream's value describes a different byte size).
+	out := translateBufferedBody(result.Body, toResponse)
+	copyResponseHeaders(w, result.Headers)
+	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+	w.WriteHeader(result.Status)
+	_, _ = w.Write(out)
+}
+
+// copyResponseHeaders copies upstream → client, dropping hop-by-hop and
+// upstream Content-Length (the translated body has a different size; caller
+// either lets Go chunk for streams or sets the correct length itself).
+func copyResponseHeaders(w http.ResponseWriter, src http.Header) {
+	for k, vs := range src {
 		if isHopByHop(k) {
 			continue
 		}
-		// Drop upstream Content-Length — the translated body has a different
-		// byte length than the upstream wire form. Go's stdlib will set the
-		// correct length itself on a buffered write, or use chunked for
-		// streaming.
 		if http.CanonicalHeaderKey(k) == "Content-Length" {
 			continue
 		}
@@ -133,34 +152,26 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 			w.Header().Add(k, v)
 		}
 	}
-	w.WriteHeader(result.Status)
-
-	if in.Stream {
-		streamResponsesFrames(w, result.Body, streamTrans)
-		return
-	}
-	bufferResponses(w, result.Body, toResponse)
 }
 
-// bufferResponses reads the full upstream body, translates to a Responses
-// response struct, marshals to JSON, and writes. On translator failure the
-// raw upstream body is passed through (matches bufferTranslated's behavior).
-func bufferResponses(w http.ResponseWriter, body io.ReadCloser, toResponse func([]byte) (*responses.Response, error)) {
+// translateBufferedBody reads the full upstream body, runs the translator,
+// and returns the bytes to write to the client. On translator or marshal
+// failure the raw upstream body passes through (matches bufferTranslated's
+// behavior in dispatch.go).
+func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*responses.Response, error)) []byte {
 	raw, err := io.ReadAll(body)
 	if err != nil {
-		return
+		return nil
 	}
 	resp, err := toResponse(raw)
 	if err != nil {
-		_, _ = w.Write(raw)
-		return
+		return raw
 	}
 	out, err := json.Marshal(resp)
 	if err != nil {
-		_, _ = w.Write(raw)
-		return
+		return raw
 	}
-	_, _ = w.Write(out)
+	return out
 }
 
 // responsesStreamTranslator is the common Translate-per-chunk interface
