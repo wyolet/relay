@@ -141,15 +141,19 @@ func main() {
 
 	// Adapter registry — one entry per supported wire protocol.
 	adapterRegistry := map[adapters.Name]pipeline.Adapter{
-		adapters.OpenAI:    apiopenai.New(),
-		adapters.Anthropic: apianthropic.New(),
+		adapters.OpenAI:          apiopenai.New(),
+		adapters.OpenAIResponses: apiopenai.New(apiopenai.WithPath("/v1/responses")),
+		adapters.Anthropic:       apianthropic.New(),
 	}
 
 	// Translator registry — same keys; identity for OpenAI, real
 	// transforms for everything else. See docs/adapters.md.
+	// OpenAIResponses uses identity for Phase 1 (byte-passthrough);
+	// a real Responses↔OpenAI translator lands in Phase 2.
 	translatorRegistry := adapters.Registry{
-		adapters.OpenAI:    apiopenai.Translator{},
-		adapters.Anthropic: apianthropic.Translator{},
+		adapters.OpenAI:          apiopenai.Translator{},
+		adapters.OpenAIResponses: apiopenai.Translator{},
+		adapters.Anthropic:       apianthropic.Translator{},
 	}
 
 	// Per-adapter route registration — each adapter owns its inbound
@@ -157,6 +161,7 @@ func main() {
 	// MountRoutes function in app/adapters/<name>/routes.go.
 	routeMounters := []inference.RouteMounter{
 		apiopenai.MountRoutes,
+		apiopenai.MountResponsesRoutes,
 		apianthropic.MountRoutes,
 	}
 
