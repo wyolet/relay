@@ -25,12 +25,17 @@ const (
 	// AWS Bedrock (Claude on Bedrock keeps the Anthropic shape) and via
 	// GCP Vertex.
 	Anthropic Name = "anthropic"
+
+	// OpenAIResponses is the OpenAI Responses API shape (POST /v1/responses).
+	// Distinct from OpenAI (Chat Completions) because the upstream path differs.
+	// Phase 1: byte-passthrough only; no cross-shape translation.
+	OpenAIResponses Name = "openai_responses"
 )
 
 // Valid reports whether n is one of the supported adapter names.
 func (n Name) Valid() bool {
 	switch n {
-	case OpenAI, Anthropic:
+	case OpenAI, Anthropic, OpenAIResponses:
 		return true
 	}
 	return false
@@ -38,4 +43,4 @@ func (n Name) Valid() bool {
 
 // All returns every supported Name. Stable order: useful for tests and
 // CLI flag help text. Order does not imply preference.
-func All() []Name { return []Name{OpenAI, Anthropic} }
+func All() []Name { return []Name{OpenAI, Anthropic, OpenAIResponses} }
