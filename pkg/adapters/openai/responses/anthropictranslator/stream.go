@@ -42,6 +42,8 @@ type emittedItem struct {
 // server_tool_use blocks are dropped (not modeled in v1 canonical output).
 // redacted_thinking blocks are dropped.
 type Stream struct {
+	req *responses.Request // original request, echoed into completed event
+
 	// response-level state set from message_start
 	responseID  string
 	model       string
@@ -63,8 +65,10 @@ type Stream struct {
 }
 
 // NewStream returns a new stateful Anthropic → Responses SSE translator.
-func NewStream() *Stream {
-	return &Stream{}
+// req is the original Responses API request; it is echoed into the
+// response.completed event. Pass nil to omit echo fields (tests).
+func NewStream(req *responses.Request) *Stream {
+	return &Stream{req: req}
 }
 
 // Translate converts one Anthropic SSE chunk (raw bytes of one SSE frame,
@@ -451,14 +455,14 @@ func (s *Stream) handleMessageStop() ([]SSEFrame, error) {
 	// Reconstruct final output from done items.
 	output := s.buildOutputItems()
 
+	// input_tokens_details and output_tokens_details are always set (spec required).
 	total := s.inputTokens + s.outputTokens
 	u := &responses.Usage{
-		InputTokens:  s.inputTokens,
-		OutputTokens: s.outputTokens,
-		TotalTokens:  total,
-	}
-	if s.cachedTokens > 0 {
-		u.InputTokensDetails = &responses.InputDeets{CachedTokens: s.cachedTokens}
+		InputTokens:         s.inputTokens,
+		OutputTokens:        s.outputTokens,
+		TotalTokens:         total,
+		InputTokensDetails:  responses.InputDeets{CachedTokens: s.cachedTokens},
+		OutputTokensDetails: responses.OutputDeets{},
 	}
 
 	finalResp := &responses.Response{
@@ -474,6 +478,8 @@ func (s *Stream) handleMessageStop() ([]SSEFrame, error) {
 	if incomplete != "" {
 		finalResp.IncompleteDetails = &responses.IncompleteDetails{Reason: incomplete}
 	}
+
+	responses.EchoRequest(finalResp, s.req)
 
 	var eventName string
 	switch status {

@@ -54,6 +54,9 @@ type anthropicCitation struct {
 // AnthropicToResponse converts an Anthropic Messages response body (JSON bytes)
 // to a Responses API Response.
 //
+// req is the original Responses API request; its fields are echoed into the
+// response per the OpenAI spec. Pass nil for tests that don't need echo fields.
+//
 // Block mapping:
 //   - "text" → message item with output_text part (url_citation annotations mapped;
 //     char_location/page_location citations are dropped — v1 lossy)
@@ -70,7 +73,7 @@ type anthropicCitation struct {
 //   - "refusal" → completed / refusal (text content is the refusal text)
 //   - "pause_turn" → incomplete / pause_turn
 //   - default → completed / stop
-func AnthropicToResponse(body []byte) (*responses.Response, error) {
+func AnthropicToResponse(req *responses.Request, body []byte) (*responses.Response, error) {
 	var ar anthropicResponseFull
 	if err := json.Unmarshal(body, &ar); err != nil {
 		return nil, fmt.Errorf("anthropic response: %w", err)
@@ -151,20 +154,19 @@ func AnthropicToResponse(body []byte) (*responses.Response, error) {
 		resp.IncompleteDetails = &responses.IncompleteDetails{Reason: incomplete}
 	}
 
-	// Build usage.
+	// Build usage. input_tokens_details and output_tokens_details are always
+	// set (spec required), with zero values when not available.
 	total := ar.Usage.InputTokens + ar.Usage.OutputTokens
 	u := &responses.Usage{
-		InputTokens:  ar.Usage.InputTokens,
-		OutputTokens: ar.Usage.OutputTokens,
-		TotalTokens:  total,
-	}
-	if ar.Usage.CacheReadInputTokens > 0 {
-		u.InputTokensDetails = &responses.InputDeets{
-			CachedTokens: ar.Usage.CacheReadInputTokens,
-		}
+		InputTokens:         ar.Usage.InputTokens,
+		OutputTokens:        ar.Usage.OutputTokens,
+		TotalTokens:         total,
+		InputTokensDetails:  responses.InputDeets{CachedTokens: ar.Usage.CacheReadInputTokens},
+		OutputTokensDetails: responses.OutputDeets{},
 	}
 	resp.Usage = u
 
+	responses.EchoRequest(resp, req)
 	return resp, nil
 }
 

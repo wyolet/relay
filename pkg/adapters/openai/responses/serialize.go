@@ -5,45 +5,10 @@ import (
 	"fmt"
 )
 
-// Marshal encodes a Response to wire JSON.
+// Marshal encodes a Response to wire JSON via the struct's MarshalJSON.
 // Output items are marshaled via their individual MarshalJSON implementations.
 func Marshal(resp *Response) ([]byte, error) {
-	// wireResponse is the flat wire shape. Output is encoded as a raw array
-	// to delegate to each Item's MarshalJSON.
-	type wireResponse struct {
-		ID                string             `json:"id"`
-		Object            string             `json:"object"`
-		CreatedAt         int64              `json:"created_at"`
-		Model             string             `json:"model"`
-		Status            Status             `json:"status"`
-		FinishReason      FinishReason       `json:"finish_reason,omitempty"`
-		Output            []json.RawMessage  `json:"output"`
-		Usage             *Usage             `json:"usage,omitempty"`
-		Error             *Error             `json:"error,omitempty"`
-		IncompleteDetails *IncompleteDetails `json:"incomplete_details,omitempty"`
-	}
-
-	outputRaws := make([]json.RawMessage, len(resp.Output))
-	for i, item := range resp.Output {
-		b, err := json.Marshal(item)
-		if err != nil {
-			return nil, fmt.Errorf("output[%d]: %w", i, err)
-		}
-		outputRaws[i] = b
-	}
-
-	return json.Marshal(wireResponse{
-		ID:                resp.ID,
-		Object:            resp.Object,
-		CreatedAt:         resp.CreatedAt,
-		Model:             resp.Model,
-		Status:            resp.Status,
-		FinishReason:      resp.FinishReason,
-		Output:            outputRaws,
-		Usage:             resp.Usage,
-		Error:             resp.Error,
-		IncompleteDetails: resp.IncompleteDetails,
-	})
+	return json.Marshal(resp)
 }
 
 // UnmarshalResponse decodes a wire JSON response into a *Response.

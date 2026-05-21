@@ -33,12 +33,10 @@ func TestResponseRoundTrip(t *testing.T) {
 			},
 		},
 		Usage: &Usage{
-			InputTokens:  10,
-			OutputTokens: 5,
-			TotalTokens:  15,
-			InputTokensDetails: &InputDeets{
-				CachedTokens: 3,
-			},
+			InputTokens:        10,
+			OutputTokens:       5,
+			TotalTokens:        15,
+			InputTokensDetails: InputDeets{CachedTokens: 3},
 		},
 	}
 
@@ -91,9 +89,6 @@ func TestResponseRoundTrip(t *testing.T) {
 	if resp2.Usage.TotalTokens != 15 {
 		t.Errorf("total_tokens: %d", resp2.Usage.TotalTokens)
 	}
-	if resp2.Usage.InputTokensDetails == nil {
-		t.Fatal("input_tokens_details is nil")
-	}
 	if resp2.Usage.InputTokensDetails.CachedTokens != 3 {
 		t.Errorf("cached_tokens: %d", resp2.Usage.InputTokensDetails.CachedTokens)
 	}
@@ -107,12 +102,10 @@ func TestResponseWithOutputTokensDetails(t *testing.T) {
 		Status: StatusCompleted,
 		Output: []Item{},
 		Usage: &Usage{
-			InputTokens:  100,
-			OutputTokens: 50,
-			TotalTokens:  150,
-			OutputTokensDetails: &OutputDeets{
-				ReasoningTokens: 20,
-			},
+			InputTokens:         100,
+			OutputTokens:        50,
+			TotalTokens:         150,
+			OutputTokensDetails: OutputDeets{ReasoningTokens: 20},
 		},
 	}
 	b, err := Marshal(resp)
@@ -122,9 +115,6 @@ func TestResponseWithOutputTokensDetails(t *testing.T) {
 	resp2, err := UnmarshalResponse(b)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if resp2.Usage.OutputTokensDetails == nil {
-		t.Fatal("output_tokens_details is nil")
 	}
 	if resp2.Usage.OutputTokensDetails.ReasoningTokens != 20 {
 		t.Errorf("reasoning_tokens: %d", resp2.Usage.OutputTokensDetails.ReasoningTokens)

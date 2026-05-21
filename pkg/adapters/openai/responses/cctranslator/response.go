@@ -8,10 +8,14 @@ import (
 )
 
 // CCToResponse converts a Chat Completions non-streaming response to a
-// Responses API Response object. modelOverride, when non-empty, replaces the
-// model field from the CC response (useful when the upstream echoes a
-// deployment alias rather than the logical model name).
-func CCToResponse(cc *openai.ChatResponse, modelOverride string) (*responses.Response, error) {
+// Responses API Response object.
+//
+// req is the original Responses API request; its fields are echoed into the
+// response per the OpenAI spec. Pass nil for tests that don't need echo fields.
+// modelOverride, when non-empty, replaces the model field from the CC response
+// (useful when the upstream echoes a deployment alias rather than the logical
+// model name).
+func CCToResponse(req *responses.Request, cc *openai.ChatResponse, modelOverride string) (*responses.Response, error) {
 	model := cc.Model
 	if modelOverride != "" {
 		model = modelOverride
@@ -43,6 +47,7 @@ func CCToResponse(cc *openai.ChatResponse, modelOverride string) (*responses.Res
 		resp.Output = buildOutput(cc.ID, firstChoice)
 	}
 
+	responses.EchoRequest(resp, req)
 	return resp, nil
 }
 
@@ -121,17 +126,18 @@ func buildOutput(ccID string, ch *openai.Choice) []responses.Item {
 }
 
 // translateUsage maps CC Usage → Responses Usage.
+// InputTokensDetails and OutputTokensDetails are always populated (spec required).
 func translateUsage(u *openai.Usage) *responses.Usage {
 	ru := &responses.Usage{
 		InputTokens:  u.PromptTokens,
 		OutputTokens: u.CompletionTokens,
 		TotalTokens:  u.TotalTokens,
 	}
-	if u.PromptDetails != nil && u.PromptDetails.CachedTokens > 0 {
-		ru.InputTokensDetails = &responses.InputDeets{CachedTokens: u.PromptDetails.CachedTokens}
+	if u.PromptDetails != nil {
+		ru.InputTokensDetails = responses.InputDeets{CachedTokens: u.PromptDetails.CachedTokens}
 	}
-	if u.CompletionDetails != nil && u.CompletionDetails.ReasoningTokens > 0 {
-		ru.OutputTokensDetails = &responses.OutputDeets{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
+	if u.CompletionDetails != nil {
+		ru.OutputTokensDetails = responses.OutputDeets{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
 	}
 	return ru
 }

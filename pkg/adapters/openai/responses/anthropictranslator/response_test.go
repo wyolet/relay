@@ -23,7 +23,7 @@ func TestAnthropicToResponse_TextBlock(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestAnthropicToResponse_ToolUseBlock(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestAnthropicToResponse_ThinkingBlock(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestAnthropicToResponse_StopReasonVariants(t *testing.T) {
 				"stop_reason": tc.stopReason,
 				"usage":       map[string]any{"input_tokens": 1, "output_tokens": 1},
 			})
-			resp, err := AnthropicToResponse(body)
+			resp, err := AnthropicToResponse(nil, body)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -247,16 +247,13 @@ func TestAnthropicToResponse_UsageWithCachedTokens(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if resp.Usage == nil {
 		t.Fatal("usage is nil")
-	}
-	if resp.Usage.InputTokensDetails == nil {
-		t.Fatal("input_tokens_details is nil")
 	}
 	if resp.Usage.InputTokensDetails.CachedTokens != 80 {
 		t.Errorf("cached_tokens: got %d want 80", resp.Usage.InputTokensDetails.CachedTokens)
@@ -279,7 +276,7 @@ func TestAnthropicToResponse_Refusal(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -341,7 +338,7 @@ func TestAnthropicToResponse_URLCitationAnnotations(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -384,7 +381,7 @@ func TestAnthropicToResponse_RedactedThinkingDropped(t *testing.T) {
 		},
 	})
 
-	resp, err := AnthropicToResponse(body)
+	resp, err := AnthropicToResponse(nil, body)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

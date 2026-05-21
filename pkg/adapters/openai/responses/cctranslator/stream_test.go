@@ -126,7 +126,7 @@ func strOf(s string) *string { return &s }
 // ---- tests ----
 
 func TestStream_SimpleText(t *testing.T) {
-	s := NewStream()
+	s := NewStream(nil)
 	chunks := [][]byte{
 		makeChunk("id1", "gpt-4o", strOf("Hello"), nil, nil, nil),
 		makeChunk("id1", "gpt-4o", strOf(", world"), nil, nil, nil),
@@ -190,7 +190,7 @@ func TestStream_SimpleText(t *testing.T) {
 }
 
 func TestStream_ToolCall(t *testing.T) {
-	s := NewStream()
+	s := NewStream(nil)
 	// Chunk 1: tool_call with name; first args chunk.
 	tc1 := []map[string]any{
 		{"index": 0, "id": "call_abc", "type": "function", "function": map[string]any{"name": "get_weather", "arguments": `{"loc`}},
@@ -284,7 +284,7 @@ func TestStream_ToolCall(t *testing.T) {
 
 func TestStream_TextThenToolCall(t *testing.T) {
 	// Text chunk first, then tool_call chunk — message item should close before tool item opens.
-	s := NewStream()
+	s := NewStream(nil)
 	tc := []map[string]any{
 		{"index": 0, "id": "call_1", "type": "function", "function": map[string]any{"name": "fn", "arguments": `{}`}},
 	}
@@ -363,7 +363,7 @@ func TestStream_TextThenToolCall(t *testing.T) {
 
 func TestStream_ReasoningThenText(t *testing.T) {
 	// Reasoning chunk first, then text.
-	s := NewStream()
+	s := NewStream(nil)
 
 	// Reasoning chunk: non-standard delta.reasoning_content field.
 	reasoningChunk := []byte(fmt.Sprintf(`data: {"id":"id4","object":"chat.completion.chunk","created":1700000000,"model":"o1","choices":[{"index":0,"delta":{"reasoning_content":"let me think"},"finish_reason":null}]}`))
@@ -424,7 +424,7 @@ func TestStream_ReasoningThenText(t *testing.T) {
 }
 
 func TestStream_UsageInFinalResponse(t *testing.T) {
-	s := NewStream()
+	s := NewStream(nil)
 	usageMap := map[string]any{
 		"prompt_tokens":     20,
 		"completion_tokens": 10,
@@ -458,7 +458,7 @@ func TestStream_UsageInFinalResponse(t *testing.T) {
 
 func TestStream_EmptyContent_Skipped(t *testing.T) {
 	// Empty string content should not open a message item.
-	s := NewStream()
+	s := NewStream(nil)
 	empty := ""
 	chunks := [][]byte{
 		makeChunk("id6", "gpt-4o", &empty, nil, strOf("stop"), nil),
@@ -475,7 +475,7 @@ func TestStream_EmptyContent_Skipped(t *testing.T) {
 
 func TestStream_MultipleToolCalls(t *testing.T) {
 	// Two simultaneous tool calls (different indices in same chunk).
-	s := NewStream()
+	s := NewStream(nil)
 	tc := []map[string]any{
 		{"index": 0, "id": "call_A", "type": "function", "function": map[string]any{"name": "fnA", "arguments": `{"a":1}`}},
 		{"index": 1, "id": "call_B", "type": "function", "function": map[string]any{"name": "fnB", "arguments": `{"b":2}`}},
