@@ -26,8 +26,8 @@ import (
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
 	"github.com/wyolet/relay/pkg/slug"
+	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
 
 // --- catalog list stubs for dispatch tests ---
@@ -51,9 +51,9 @@ func (l rkListD) List(context.Context) ([]*relaykey.RelayKey, error)   { return 
 func (l rcListD) List(context.Context) ([]*pricing.Pricing, error)     { return l, nil }
 
 // buildDispatchCatalog creates a catalog with a model bound to the given
-// hostName (Meta.Name) with adapter=openai. Returns the catalog and the
-// relay key that authorises access.
-func buildDispatchCatalog(t *testing.T, hostName string) (*catalog.Catalog, *relaykey.RelayKey) {
+// hostName (Meta.Name) with the provided adapter. Returns the catalog and
+// the relay key that authorises access.
+func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name) (*catalog.Catalog, *relaykey.RelayKey) {
 	t.Helper()
 
 	provID := meta.NewID()
@@ -75,11 +75,11 @@ func buildDispatchCatalog(t *testing.T, hostName string) (*catalog.Catalog, *rel
 		Spec: hostkey.Spec{HostID: hostID, PolicyID: polID, Value: "sk-test", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
 	}
 	m := &model.Model{
-		Meta: meta.Metadata{ID: modID, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
+		Meta: meta.Metadata{ID: modID, Name: "test-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
-			Snapshots: []model.Snapshot{{Name: slug.From("gpt-4o")}},
-			Pointer:   slug.From("gpt-4o"),
+			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: hostAdapter}},
+			Snapshots: []model.Snapshot{{Name: slug.From("test-model")}},
+			Pointer:   slug.From("test-model"),
 		},
 	}
 	pol := &policy.Policy{
@@ -114,13 +114,13 @@ type stubAdapter struct{}
 func (stubAdapter) Call(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
 	return nil, fmt.Errorf("stub: no upstream")
 }
-func (stubAdapter) ExtractTokens(_ []byte) pkgusage.Tokens            { return nil }
+func (stubAdapter) ExtractTokens(_ []byte) pkgusage.Tokens { return nil }
 func (stubAdapter) Retryable(_ *http.Response) (bool, keypool.FailureKind, time.Duration) {
 	return false, 0, 0
 }
 
-// stubTranslator satisfies adapters.Translator using pkg openai identity.
-// It's an adapters.Identity wrapper — avoids importing app/adapters/openai.
+// stubTranslator satisfies adapters.Translator using the Identity base.
+// Avoids importing app/adapters/openai to prevent import cycles.
 type stubTranslator struct{ adapters.Identity }
 
 func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
@@ -137,17 +137,22 @@ func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 		Pipeline: pl,
 		Proxy:    proxy.New(limiter, nil),
 		Adapters: map[adapters.Name]pipeline.Adapter{
-			adapters.OpenAI:          stubAdapter{},
-			adapters.OpenAIResponses: stubAdapter{},
+			adapters.OpenAI:           stubAdapter{},
+			adapters.OpenAIResponses:  stubAdapter{},
+			adapters.OpenAIEmbeddings: stubAdapter{},
+			adapters.Anthropic:        stubAdapter{},
 		},
 		Translators: adapters.Registry{
-			adapters.OpenAI:          stubTranslator{},
-			adapters.OpenAIResponses: stubTranslator{},
+			adapters.OpenAI:           stubTranslator{},
+			adapters.OpenAIResponses:  stubTranslator{},
+			adapters.OpenAIEmbeddings: stubTranslator{},
+			adapters.Anthropic:        stubTranslator{},
 		},
 	}
 }
 
-// withNormalContext injects a ModeNormal classification and relay key into r's context.
+// withNormalContext injects a ModeNormal classification and relay key into
+// r's context, simulating what the classifier + auth middleware would do.
 func withNormalContext(r *http.Request, rk *relaykey.RelayKey) *http.Request {
 	ctx := WithClassification(r.Context(), Classification{Mode: ModeNormal})
 	ctx = context.WithValue(ctx, ctxRelayKeyT{}, rk)
@@ -175,7 +180,7 @@ func parseDispatchErr(t *testing.T, body []byte) errBody {
 // Inbound=OpenAIResponses on a non-"openai" host returns 400
 // responses_unsupported_host.
 func TestDispatch_ResponsesGuard_NonOpenAIHost(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "groq") // host.Meta.Name = "groq"
+	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
@@ -184,8 +189,8 @@ func TestDispatch_ResponsesGuard_NonOpenAIHost(t *testing.T) {
 
 	Dispatch(d, w, r, DispatchInput{
 		Inbound:   adapters.OpenAIResponses,
-		Body:      []byte(`{"model":"gpt-4o","stream":false}`),
-		ModelName: "gpt-4o",
+		Body:      []byte(`{"model":"test-model","stream":false}`),
+		ModelName: "test-model",
 		Stream:    false,
 	})
 
@@ -203,7 +208,7 @@ func TestDispatch_ResponsesGuard_NonOpenAIHost(t *testing.T) {
 // the pipeline (which fails because the upstream is unreachable, but
 // that's a different error — the guard itself does not fire).
 func TestDispatch_ResponsesGuard_OpenAIHost(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai") // host.Meta.Name = "openai"
+	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
@@ -212,13 +217,11 @@ func TestDispatch_ResponsesGuard_OpenAIHost(t *testing.T) {
 
 	Dispatch(d, w, r, DispatchInput{
 		Inbound:   adapters.OpenAIResponses,
-		Body:      []byte(`{"model":"gpt-4o","stream":false}`),
-		ModelName: "gpt-4o",
+		Body:      []byte(`{"model":"test-model","stream":false}`),
+		ModelName: "test-model",
 		Stream:    false,
 	})
 
-	// Guard passed: status is NOT 400 responses_unsupported_host.
-	// The pipeline hits the unreachable upstream and returns 502.
 	if w.Code == http.StatusBadRequest {
 		e := parseDispatchErr(t, w.Body.Bytes())
 		if e.Error.Code == "responses_unsupported_host" {
@@ -227,11 +230,89 @@ func TestDispatch_ResponsesGuard_OpenAIHost(t *testing.T) {
 	}
 }
 
-// TestDispatch_NormalOpenAI_UnaffectedByGuard confirms that a standard
-// Inbound=OpenAI request on a non-"openai" host (e.g. "groq") is not
-// blocked by the Phase 1 guard (the guard is Responses-only).
-func TestDispatch_NormalOpenAI_UnaffectedByGuard(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "groq")
+// TestDispatch_EmbeddingsGuard_AnthropicHost verifies that
+// Inbound=OpenAIEmbeddings on a host with adapter=anthropic returns 400
+// embeddings_unsupported_host.
+func TestDispatch_EmbeddingsGuard_AnthropicHost(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/openai/v1/embeddings", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAIEmbeddings,
+		Body:      []byte(`{"model":"test-model","input":"hello"}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	e := parseDispatchErr(t, w.Body.Bytes())
+	if e.Error.Code != "embeddings_unsupported_host" {
+		t.Errorf("error code: want embeddings_unsupported_host, got %q", e.Error.Code)
+	}
+}
+
+// TestDispatch_EmbeddingsGuard_OpenAICompatHost verifies that
+// Inbound=OpenAIEmbeddings on a host with adapter=openai passes the guard
+// even when the host name is not "openai" (e.g. "ollama-self", "together").
+func TestDispatch_EmbeddingsGuard_OpenAICompatHost(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/openai/v1/embeddings", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAIEmbeddings,
+		Body:      []byte(`{"model":"test-model","input":"hello"}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code == http.StatusBadRequest {
+		e := parseDispatchErr(t, w.Body.Bytes())
+		if e.Error.Code == "embeddings_unsupported_host" {
+			t.Fatalf("guard fired for OpenAI-compat host %q but should not have", "ollama-self")
+		}
+	}
+}
+
+// TestDispatch_EmbeddingsGuard_OpenAINamedHost verifies that the guard
+// also accepts the canonical host "openai" (adapter=openai).
+func TestDispatch_EmbeddingsGuard_OpenAINamedHost(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/openai/v1/embeddings", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAIEmbeddings,
+		Body:      []byte(`{"model":"test-model","input":"hello"}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code == http.StatusBadRequest {
+		e := parseDispatchErr(t, w.Body.Bytes())
+		if e.Error.Code == "embeddings_unsupported_host" {
+			t.Fatalf("guard fired for host 'openai' but should not have")
+		}
+	}
+}
+
+// TestDispatch_NormalOpenAI_UnaffectedByGuards confirms that a standard
+// Inbound=OpenAI request is not blocked by either the Responses or
+// Embeddings guard (the guards are shape-conditional).
+func TestDispatch_NormalOpenAI_UnaffectedByGuards(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -240,15 +321,15 @@ func TestDispatch_NormalOpenAI_UnaffectedByGuard(t *testing.T) {
 
 	Dispatch(d, w, r, DispatchInput{
 		Inbound:   adapters.OpenAI,
-		Body:      []byte(`{"model":"gpt-4o","stream":false}`),
-		ModelName: "gpt-4o",
+		Body:      []byte(`{"model":"test-model","stream":false}`),
+		ModelName: "test-model",
 		Stream:    false,
 	})
 
 	if w.Code == http.StatusBadRequest {
 		e := parseDispatchErr(t, w.Body.Bytes())
-		if e.Error.Code == "responses_unsupported_host" {
-			t.Fatalf("Responses guard fired on standard OpenAI request — guard is shape-conditional")
+		if e.Error.Code == "responses_unsupported_host" || e.Error.Code == "embeddings_unsupported_host" {
+			t.Fatalf("guard fired on standard OpenAI request — guards are shape-conditional (got %q)", e.Error.Code)
 		}
 	}
 }
