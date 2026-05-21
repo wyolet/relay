@@ -10,30 +10,6 @@ import (
 	"github.com/wyolet/relay/pkg/adapters/openai/responses"
 )
 
-// SSEFrame is one server-sent event ready for the wire.
-type SSEFrame struct {
-	Event string // one of the responses.Event* constants
-	Data  []byte // JSON-marshaled event payload
-}
-
-// Bytes serializes the frame to its on-wire SSE form:
-//
-//	event: <name>\ndata: <json>\n\n
-//
-// The data line carries no trailing newline before the terminator.
-func (f SSEFrame) Bytes() []byte {
-	var b bytes.Buffer
-	if f.Event != "" {
-		b.WriteString("event: ")
-		b.WriteString(f.Event)
-		b.WriteByte('\n')
-	}
-	b.WriteString("data: ")
-	b.Write(f.Data)
-	b.WriteString("\n\n")
-	return b.Bytes()
-}
-
 // itemKind distinguishes which output item type a tracked slot represents.
 type itemKind int
 
@@ -92,10 +68,10 @@ func NewStream(req *responses.Request) *Stream {
 }
 
 // Translate processes one CC SSE chunk and returns zero or more Responses
-// SSEFrames. On [DONE], it closes any open items and emits the final
+// responses.SSEFrames. On [DONE], it closes any open items and emits the final
 // response.completed event.
-func (s *Stream) Translate(ccChunk []byte) ([]SSEFrame, error) {
-	_, data, ok := parseSSEChunk(ccChunk)
+func (s *Stream) Translate(ccChunk []byte) ([]responses.SSEFrame, error) {
+	_, data, ok := responses.ParseSSEChunk(ccChunk)
 	if !ok {
 		return nil, nil
 	}
@@ -113,7 +89,7 @@ func (s *Stream) Translate(ccChunk []byte) ([]SSEFrame, error) {
 		s.lastUsage = chunk.Usage
 	}
 
-	var frames []SSEFrame
+	var frames []responses.SSEFrame
 
 	// Initialize on first chunk.
 	if !s.lifecycleEmitted {
@@ -172,8 +148,8 @@ func (s *Stream) Translate(ccChunk []byte) ([]SSEFrame, error) {
 }
 
 // handleDone closes any open items and emits the final response.completed.
-func (s *Stream) handleDone() ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) handleDone() ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	// Close open reasoning item.
 	if s.reasoningItem != nil {
@@ -220,13 +196,13 @@ func (s *Stream) handleDone() ([]SSEFrame, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cc stream: marshal completed event: %w", err)
 	}
-	frames = append(frames, SSEFrame{Event: finalEvent, Data: b})
+	frames = append(frames, responses.SSEFrame{Event: finalEvent, Data: b})
 
 	return frames, nil
 }
 
 // emitLifecycle emits response.created then response.in_progress.
-func (s *Stream) emitLifecycle() ([]SSEFrame, error) {
+func (s *Stream) emitLifecycle() ([]responses.SSEFrame, error) {
 	stub := &responses.Response{
 		ID:        s.responseID,
 		Object:    "response",
@@ -243,7 +219,7 @@ func (s *Stream) emitLifecycle() ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []SSEFrame{
+	return []responses.SSEFrame{
 		{Event: responses.EventCreated, Data: createdPayload},
 		{Event: responses.EventInProgress, Data: inProgressPayload},
 	}, nil
@@ -251,8 +227,8 @@ func (s *Stream) emitLifecycle() ([]SSEFrame, error) {
 
 // handleReasoningDelta opens a reasoning item on first delta and emits
 // reasoning_text.delta.
-func (s *Stream) handleReasoningDelta(text string) ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) handleReasoningDelta(text string) ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	if s.reasoningItem == nil {
 		// First reasoning chunk: close any open msg item (shouldn't happen, but safe).
@@ -282,7 +258,7 @@ func (s *Stream) handleReasoningDelta(text string) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		frames = append(frames, SSEFrame{Event: responses.EventOutputItemAdded, Data: addedPayload})
+		frames = append(frames, responses.SSEFrame{Event: responses.EventOutputItemAdded, Data: addedPayload})
 	}
 
 	s.reasoningItem.textBuf += text
@@ -296,15 +272,15 @@ func (s *Stream) handleReasoningDelta(text string) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventReasoningTextDelta, Data: delta})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventReasoningTextDelta, Data: delta})
 
 	return frames, nil
 }
 
 // handleTextDelta opens a message item + content part on first delta, and
 // emits output_text.delta for subsequent ones.
-func (s *Stream) handleTextDelta(text string) ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) handleTextDelta(text string) ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	if text == "" {
 		return nil, nil
@@ -350,7 +326,7 @@ func (s *Stream) handleTextDelta(text string) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		frames = append(frames, SSEFrame{Event: responses.EventOutputItemAdded, Data: addedPayload})
+		frames = append(frames, responses.SSEFrame{Event: responses.EventOutputItemAdded, Data: addedPayload})
 
 		// response.content_part.added
 		partPayload, err := json.Marshal(&responses.ContentPartAddedEvent{
@@ -362,7 +338,7 @@ func (s *Stream) handleTextDelta(text string) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		frames = append(frames, SSEFrame{Event: responses.EventContentPartAdded, Data: partPayload})
+		frames = append(frames, responses.SSEFrame{Event: responses.EventContentPartAdded, Data: partPayload})
 	}
 
 	s.msgItem.textBuf += text
@@ -376,15 +352,15 @@ func (s *Stream) handleTextDelta(text string) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventOutputTextDelta, Data: deltaPayload})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventOutputTextDelta, Data: deltaPayload})
 
 	return frames, nil
 }
 
 // handleToolCallDelta opens a function_call item on first delta for a given
 // tool call index and emits function_call_arguments.delta.
-func (s *Stream) handleToolCallDelta(tc openai.ToolCallChunk) ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) handleToolCallDelta(tc openai.ToolCallChunk) ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	// Close open message item before starting tool calls.
 	if s.msgItem != nil {
@@ -438,7 +414,7 @@ func (s *Stream) handleToolCallDelta(tc openai.ToolCallChunk) ([]SSEFrame, error
 		if err != nil {
 			return nil, err
 		}
-		frames = append(frames, SSEFrame{Event: responses.EventOutputItemAdded, Data: addedPayload})
+		frames = append(frames, responses.SSEFrame{Event: responses.EventOutputItemAdded, Data: addedPayload})
 	}
 
 	// Accumulate and emit args delta.
@@ -453,15 +429,15 @@ func (s *Stream) handleToolCallDelta(tc openai.ToolCallChunk) ([]SSEFrame, error
 		if err != nil {
 			return nil, err
 		}
-		frames = append(frames, SSEFrame{Event: responses.EventFunctionCallArgumentsDelta, Data: deltaPayload})
+		frames = append(frames, responses.SSEFrame{Event: responses.EventFunctionCallArgumentsDelta, Data: deltaPayload})
 	}
 
 	return frames, nil
 }
 
 // closeMsgItem emits output_text.done → content_part.done → output_item.done.
-func (s *Stream) closeMsgItem(ti *trackedItem) ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) closeMsgItem(ti *trackedItem) ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	textDone, err := json.Marshal(&responses.OutputTextDoneEvent{
 		ItemID:       ti.itemID,
@@ -472,7 +448,7 @@ func (s *Stream) closeMsgItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventOutputTextDone, Data: textDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventOutputTextDone, Data: textDone})
 
 	finalPart := &responses.OutputTextPart{Text: ti.textBuf}
 	partDone, err := json.Marshal(&responses.ContentPartDoneEvent{
@@ -484,7 +460,7 @@ func (s *Stream) closeMsgItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventContentPartDone, Data: partDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventContentPartDone, Data: partDone})
 
 	finalMsg := &responses.Message{
 		ID:      ti.itemID,
@@ -499,15 +475,15 @@ func (s *Stream) closeMsgItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventOutputItemDone, Data: itemDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventOutputItemDone, Data: itemDone})
 
 	s.closedItems = append(s.closedItems, finalMsg)
 	return frames, nil
 }
 
 // closeReasoningItem emits reasoning_text.done → output_item.done.
-func (s *Stream) closeReasoningItem(ti *trackedItem) ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) closeReasoningItem(ti *trackedItem) ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	textDone, err := json.Marshal(&responses.ReasoningTextDoneEvent{
 		ItemID:       ti.itemID,
@@ -518,7 +494,7 @@ func (s *Stream) closeReasoningItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventReasoningTextDone, Data: textDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventReasoningTextDone, Data: textDone})
 
 	finalItem := &responses.Reasoning{
 		ID:      ti.itemID,
@@ -532,15 +508,15 @@ func (s *Stream) closeReasoningItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventOutputItemDone, Data: itemDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventOutputItemDone, Data: itemDone})
 
 	s.closedItems = append(s.closedItems, finalItem)
 	return frames, nil
 }
 
 // closeToolItem emits function_call_arguments.done → output_item.done.
-func (s *Stream) closeToolItem(ti *trackedItem) ([]SSEFrame, error) {
-	var frames []SSEFrame
+func (s *Stream) closeToolItem(ti *trackedItem) ([]responses.SSEFrame, error) {
+	var frames []responses.SSEFrame
 
 	argsDone, err := json.Marshal(&responses.FunctionCallArgumentsDoneEvent{
 		ItemID:      ti.itemID,
@@ -551,7 +527,7 @@ func (s *Stream) closeToolItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventFunctionCallArgumentsDone, Data: argsDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventFunctionCallArgumentsDone, Data: argsDone})
 
 	finalItem := &responses.FunctionCall{
 		ID:        ti.itemID,
@@ -568,7 +544,7 @@ func (s *Stream) closeToolItem(ti *trackedItem) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	frames = append(frames, SSEFrame{Event: responses.EventOutputItemDone, Data: itemDone})
+	frames = append(frames, responses.SSEFrame{Event: responses.EventOutputItemDone, Data: itemDone})
 
 	s.closedItems = append(s.closedItems, finalItem)
 	return frames, nil
@@ -612,16 +588,3 @@ func extractReasoningContent(raw []byte) string {
 	return probe.Choices[0].Delta.ReasoningContent
 }
 
-// parseSSEChunk extracts the data payload from a raw SSE chunk.
-// Mirrors the implementation in pkg/adapters/anthropic for consistency.
-func parseSSEChunk(chunk []byte) (event string, data []byte, ok bool) {
-	lines := bytes.Split(bytes.TrimRight(chunk, "\n"), []byte("\n"))
-	for _, line := range lines {
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event = string(bytes.TrimSpace(line[6:]))
-		} else if bytes.HasPrefix(line, []byte("data:")) {
-			data = bytes.TrimSpace(line[5:])
-		}
-	}
-	return event, data, len(data) > 0
-}

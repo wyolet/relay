@@ -90,9 +90,9 @@ type TopLogprob struct {
 
 // OutputTextPart is an output_text content part with optional annotations and logprobs.
 type OutputTextPart struct {
-	Text        string        `json:"text"`
-	Annotations []Annotation  `json:"-"` // polymorphic; see MarshalJSON
-	Logprobs    []TokenLogprob `json:"logprobs,omitempty"`
+	Text        string         `json:"text"`
+	Annotations []Annotation   `json:"-"` // polymorphic; see MarshalJSON
+	Logprobs    []TokenLogprob `json:"-"` // spec requires []; see MarshalJSON
 }
 
 func (*OutputTextPart) isPart()           {}

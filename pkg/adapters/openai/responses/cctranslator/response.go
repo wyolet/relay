@@ -77,11 +77,6 @@ func buildOutput(ccID string, ch *openai.Choice) []responses.Item {
 	var items []responses.Item
 	msg := ch.Message
 
-	// Reasoning content (o-series and compatible models).
-	// CC puts reasoning_content on the message; we surface it as a Reasoning item.
-	// Note: reasoning_content is not in the standard openai.ChatResponseMessage struct,
-	// but we handle it via the text content path below if a model echoes it differently.
-
 	// Message item — emit when there is text content or a refusal.
 	var textContent string
 	if msg.Content != nil {
