@@ -11,10 +11,27 @@ import (
 )
 
 // SSEFrame is one server-sent event ready for the wire.
-// The caller is responsible for adding the SSE envelope ("event: …\ndata: …\n\n").
 type SSEFrame struct {
 	Event string // one of the responses.Event* constants
 	Data  []byte // JSON-marshaled event payload
+}
+
+// Bytes serializes the frame to its on-wire SSE form:
+//
+//	event: <name>\ndata: <json>\n\n
+//
+// The data line carries no trailing newline before the terminator.
+func (f SSEFrame) Bytes() []byte {
+	var b bytes.Buffer
+	if f.Event != "" {
+		b.WriteString("event: ")
+		b.WriteString(f.Event)
+		b.WriteByte('\n')
+	}
+	b.WriteString("data: ")
+	b.Write(f.Data)
+	b.WriteString("\n\n")
+	return b.Bytes()
 }
 
 // itemKind distinguishes which output item type a tracked slot represents.

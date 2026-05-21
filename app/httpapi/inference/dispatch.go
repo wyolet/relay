@@ -72,15 +72,15 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 
-	// Phase 1: Responses inbound only supports OpenAI upstream. Ollama,
-	// Bedrock-compat, Groq, and other OpenAI-shape hosts don't expose
-	// /v1/responses; we'd forward to the wrong path with no value. Phase 2
-	// adds cross-shape translation (canonical-at-center) and lifts this guard.
+	// Responses inbound:
+	//   - OpenAI proper (Adapter=OpenAI, host="openai") → fall through to
+	//     the byte-pass path below (upstreamKey override → /v1/responses).
+	//   - Any other Adapter=OpenAI (Ollama, Groq, Together…) or
+	//     Adapter=Anthropic → cross-shape translation via dispatchResponsesCrossShape.
+	//   - Other adapters → cross-shape handler returns 400.
 	if in.Inbound == adapters.OpenAIResponses {
-		if plan.HostBinding.Adapter != adapters.OpenAI || plan.Host.Meta.Name != "openai" {
-			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses_unsupported_host",
-				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
-					" which does not support the Responses API; use /openai/v1/chat/completions instead")
+		if !(plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai") {
+			dispatchResponsesCrossShape(d, w, r, in, plan)
 			return
 		}
 	}
