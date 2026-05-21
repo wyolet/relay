@@ -40,7 +40,7 @@ func CCToResponse(cc *openai.ChatResponse, modelOverride string) (*responses.Res
 	resp.Status, resp.FinishReason, resp.IncompleteDetails = mapFinishReason(firstChoice)
 
 	if firstChoice != nil {
-		resp.Output = buildOutput(firstChoice)
+		resp.Output = buildOutput(cc.ID, firstChoice)
 	}
 
 	return resp, nil
@@ -67,7 +67,8 @@ func mapFinishReason(choice *openai.Choice) (responses.Status, responses.FinishR
 
 // buildOutput constructs the Responses output []Item from a CC choice.
 // Ordering: reasoning item (if present) → message item → function_call items.
-func buildOutput(ch *openai.Choice) []responses.Item {
+// ccID is the CC response id, used to synthesize stable per-item ids.
+func buildOutput(ccID string, ch *openai.Choice) []responses.Item {
 	var items []responses.Item
 	msg := ch.Message
 
@@ -88,7 +89,13 @@ func buildOutput(ch *openai.Choice) []responses.Item {
 
 	if textContent != "" || refusal != "" || len(msg.ToolCalls) == 0 {
 		msgItem := &responses.Message{
-			Role: responses.RoleAssistant,
+			// Spec marks id, role, content, status, type as required on
+			// OutputMessage. Synthesize id from the CC response id + choice
+			// index so different choices get distinct ids; mark completed
+			// since this is the final non-streaming response.
+			ID:     "msg_" + ccID,
+			Role:   responses.RoleAssistant,
+			Status: responses.StatusCompleted,
 		}
 		if textContent != "" {
 			msgItem.Content = []responses.Part{&responses.OutputTextPart{Text: textContent}}

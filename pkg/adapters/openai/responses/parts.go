@@ -107,17 +107,23 @@ func (p *OutputTextPart) MarshalJSON() ([]byte, error) {
 		}
 		annRaws[i] = b
 	}
+	// OpenAI spec requires both annotations and logprobs on every output_text
+	// part; emit empty arrays (not null, not omitted) when we have none.
+	logprobs := p.Logprobs
+	if logprobs == nil {
+		logprobs = []TokenLogprob{}
+	}
 	type wire struct {
-		Type        PartType         `json:"type"`
-		Text        string           `json:"text"`
-		Annotations []json.RawMessage `json:"annotations,omitempty"`
-		Logprobs    []TokenLogprob   `json:"logprobs,omitempty"`
+		Type        PartType          `json:"type"`
+		Text        string            `json:"text"`
+		Annotations []json.RawMessage `json:"annotations"`
+		Logprobs    []TokenLogprob    `json:"logprobs"`
 	}
 	return json.Marshal(wire{
 		Type:        PartTypeOutputText,
 		Text:        p.Text,
 		Annotations: annRaws,
-		Logprobs:    p.Logprobs,
+		Logprobs:    logprobs,
 	})
 }
 
