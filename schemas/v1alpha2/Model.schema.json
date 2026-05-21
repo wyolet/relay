@@ -1,0 +1,315 @@
+{
+  "$defs": {
+    "Capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "assistantPrefill": {
+          "type": "boolean"
+        },
+        "audio": {
+          "type": "boolean"
+        },
+        "audioInput": {
+          "type": "boolean"
+        },
+        "audioOutput": {
+          "type": "boolean"
+        },
+        "batch": {
+          "type": "boolean"
+        },
+        "chat": {
+          "type": "boolean"
+        },
+        "computerUse": {
+          "type": "boolean"
+        },
+        "embeddings": {
+          "type": "boolean"
+        },
+        "fileInput": {
+          "type": "boolean"
+        },
+        "jsonMode": {
+          "type": "boolean"
+        },
+        "parallelTools": {
+          "type": "boolean"
+        },
+        "promptCache": {
+          "type": "boolean"
+        },
+        "reasoning": {
+          "type": "boolean"
+        },
+        "streaming": {
+          "type": "boolean"
+        },
+        "structuredOutputs": {
+          "type": "boolean"
+        },
+        "systemMessages": {
+          "type": "boolean"
+        },
+        "tools": {
+          "type": "boolean"
+        },
+        "vision": {
+          "type": "boolean"
+        },
+        "webSearch": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Deprecation": {
+      "additionalProperties": false,
+      "properties": {
+        "replacement": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "sunsetDate": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "HostBindingDTO": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "host": {
+          "type": "string"
+        },
+        "snapshots": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "adapter"
+      ],
+      "type": "object"
+    },
+    "Modalities": {
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "output": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ModelSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "contextWindowInput": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "contextWindowOutput": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "contextWindowTotal": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "deprecation": {
+          "$ref": "#/$defs/Deprecation"
+        },
+        "deprecationDate": {
+          "type": "string"
+        },
+        "documentation": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "family": {
+          "type": "string"
+        },
+        "hosts": {
+          "items": {
+            "$ref": "#/$defs/HostBindingDTO"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "knowledgeCutoff": {
+          "type": "string"
+        },
+        "license": {
+          "type": "string"
+        },
+        "maxOutputTokens": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "modalities": {
+          "$ref": "#/$defs/Modalities"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "providerModelPageURL": {
+          "type": "string"
+        },
+        "releaseDate": {
+          "type": "string"
+        },
+        "snapshots": {
+          "items": {
+            "$ref": "#/$defs/Snapshot"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hosts",
+        "snapshots",
+        "pointer"
+      ],
+      "type": "object"
+    },
+    "Snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "originalName": {
+          "type": "string"
+        },
+        "releasedAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/WireOwner"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Model.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/WireMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/ModelSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Model",
+  "type": "object"
+}

@@ -1,0 +1,104 @@
+{
+  "$defs": {
+    "Icon": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ProviderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "docsURL": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "homepageURL": {
+          "type": "string"
+        },
+        "icon": {
+          "$ref": "#/$defs/Icon"
+        },
+        "statusPageURL": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "WireMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/WireOwner"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Provider.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/WireMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/ProviderSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Provider",
+  "type": "object"
+}
