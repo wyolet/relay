@@ -122,6 +122,13 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 		if isHopByHop(k) {
 			continue
 		}
+		// Drop upstream Content-Length — the translated body has a different
+		// byte length than the upstream wire form. Go's stdlib will set the
+		// correct length itself on a buffered write, or use chunked for
+		// streaming.
+		if http.CanonicalHeaderKey(k) == "Content-Length" {
+			continue
+		}
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}
