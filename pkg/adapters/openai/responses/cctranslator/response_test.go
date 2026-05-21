@@ -77,6 +77,15 @@ func TestCCToResponse_SimpleText(t *testing.T) {
 		t.Errorf("text: got %q, want Hello!", otp.Text)
 	}
 
+	// The synthesized Message item must carry id + status — spec marks both
+	// as required on output_message items. id is derived from the CC id.
+	if msg.ID != "msg_chatcmpl-123" {
+		t.Errorf("message id: got %q, want msg_chatcmpl-123", msg.ID)
+	}
+	if msg.Status != responses.StatusCompleted {
+		t.Errorf("message status: got %q, want completed", msg.Status)
+	}
+
 	if resp.Usage == nil {
 		t.Fatal("usage is nil")
 	}

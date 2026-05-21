@@ -61,6 +61,14 @@ func TestAnthropicToResponse_TextBlock(t *testing.T) {
 		t.Errorf("text: got %q", part.Text)
 	}
 
+	// Spec marks id + status as required on output_message items.
+	if msg.ID != "msg_0" {
+		t.Errorf("message id: got %q, want msg_0", msg.ID)
+	}
+	if msg.Status != responses.StatusCompleted {
+		t.Errorf("message status: got %q, want completed", msg.Status)
+	}
+
 	if resp.Usage == nil {
 		t.Fatal("usage is nil")
 	}
