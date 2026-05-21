@@ -6,6 +6,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"net/http"
 	"time"
 
@@ -14,6 +15,17 @@ import (
 	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
+
+// http1Transport disables HTTP/2 negotiation. OpenAI's /v1/responses endpoint
+// returns GOAWAY frames mid-request over HTTP/2 from Go's stdlib client,
+// causing "unexpected EOF" errors; /v1/chat/completions is unaffected.
+// Forcing HTTP/1.1 sidesteps the issue. Track as a follow-up: the underlying
+// cause may be in net/http's HTTP/2 stack or in OpenAI's edge.
+func http1Transport() *http.Transport {
+	return &http.Transport{
+		TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
+	}
+}
 
 // compile-time interface check
 var _ pipeline.Adapter = (*Adapter)(nil)
@@ -46,9 +58,10 @@ type Adapter struct {
 
 // New returns a ready-to-use Adapter. The default HTTP client has a 5-minute
 // timeout, matching the legacy internal/provider/openai/client.go behaviour.
+// HTTP/2 is disabled — see http1Transport.
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
-		client: &http.Client{Timeout: defaultTimeout},
+		client: &http.Client{Timeout: defaultTimeout, Transport: http1Transport()},
 		path:   chatPath,
 	}
 	for _, o := range opts {
