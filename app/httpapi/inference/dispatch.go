@@ -85,12 +85,29 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		}
 	}
 
-	// When the inbound shape is OpenAIResponses, use the dedicated upstream
-	// adapter (which POSTs to /v1/responses) and the OpenAIResponses
-	// translator key. sameShape=true → byte-passthrough, no body translation.
+	// Phase 1: Embeddings inbound requires an OpenAI-compatible upstream.
+	// Anthropic hosts don't expose /v1/embeddings; any other OpenAI-shape
+	// host (Voyage, Together, Fireworks, Cohere compat, Ollama, etc.) is
+	// accepted. Phase 2 is N/A — Anthropic has no embeddings API to translate
+	// to, so this guard is permanent.
+	if in.Inbound == adapters.OpenAIEmbeddings {
+		if plan.HostBinding.Adapter != adapters.OpenAI {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "embeddings_unsupported_host",
+				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
+					" (adapter="+string(plan.HostBinding.Adapter)+") which does not support OpenAI-compatible embeddings")
+			return
+		}
+	}
+
+	// When the inbound shape is one of the alt-path OpenAI variants, use the
+	// dedicated upstream adapter (POSTs to /v1/responses or /v1/embeddings)
+	// and matching translator key. sameShape=true → byte-passthrough.
 	upstreamKey := plan.HostBinding.Adapter
 	if in.Inbound == adapters.OpenAIResponses {
 		upstreamKey = adapters.OpenAIResponses
+	}
+	if in.Inbound == adapters.OpenAIEmbeddings {
+		upstreamKey = adapters.OpenAIEmbeddings
 	}
 
 	upstreamAdapter, ok := d.Adapters[upstreamKey]

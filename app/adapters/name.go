@@ -30,12 +30,18 @@ const (
 	// Distinct from OpenAI (Chat Completions) because the upstream path differs.
 	// Phase 1: byte-passthrough only; no cross-shape translation.
 	OpenAIResponses Name = "openai_responses"
+
+	// OpenAIEmbeddings is the OpenAI Embeddings API shape (POST /v1/embeddings).
+	// Distinct from OpenAI (Chat Completions) because the upstream path differs.
+	// Supported by any OpenAI-compatible host (Voyage, Together, Fireworks,
+	// Cohere compat, etc.). Phase 1: byte-passthrough only.
+	OpenAIEmbeddings Name = "openai_embeddings"
 )
 
 // Valid reports whether n is one of the supported adapter names.
 func (n Name) Valid() bool {
 	switch n {
-	case OpenAI, Anthropic, OpenAIResponses:
+	case OpenAI, Anthropic, OpenAIResponses, OpenAIEmbeddings:
 		return true
 	}
 	return false
@@ -43,4 +49,4 @@ func (n Name) Valid() bool {
 
 // All returns every supported Name. Stable order: useful for tests and
 // CLI flag help text. Order does not imply preference.
-func All() []Name { return []Name{OpenAI, Anthropic, OpenAIResponses} }
+func All() []Name { return []Name{OpenAI, Anthropic, OpenAIResponses, OpenAIEmbeddings} }
