@@ -18,7 +18,7 @@ func sseChunk(event string, data any) []byte {
 // all emitted event names.
 func collectEvents(t *testing.T, chunks [][]byte) []string {
 	t.Helper()
-	s := NewStream()
+	s := NewStream(nil)
 	var names []string
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
@@ -164,7 +164,7 @@ func TestStream_SimpleText(t *testing.T) {
 		messageStopChunk(),
 	}
 
-	s := NewStream()
+	s := NewStream(nil)
 	var allFrames []SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
@@ -222,7 +222,7 @@ func TestStream_ToolUse(t *testing.T) {
 		messageStopChunk(),
 	}
 
-	s := NewStream()
+	s := NewStream(nil)
 	var allFrames []SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
@@ -278,7 +278,7 @@ func TestStream_ThinkingThenText(t *testing.T) {
 		messageStopChunk(),
 	}
 
-	s := NewStream()
+	s := NewStream(nil)
 	var allFrames []SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
@@ -335,7 +335,7 @@ func TestStream_ThinkingThenText(t *testing.T) {
 
 func TestStream_PingIgnored(t *testing.T) {
 	ping := sseChunk("ping", map[string]any{"type": "ping"})
-	s := NewStream()
+	s := NewStream(nil)
 	frames, err := s.Translate(ping)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -353,7 +353,7 @@ func TestStream_ErrorChunk(t *testing.T) {
 			"message": "Anthropic is overloaded",
 		},
 	})
-	s := NewStream()
+	s := NewStream(nil)
 	frames, err := s.Translate(errChunk)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

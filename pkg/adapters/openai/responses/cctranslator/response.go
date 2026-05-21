@@ -8,10 +8,14 @@ import (
 )
 
 // CCToResponse converts a Chat Completions non-streaming response to a
-// Responses API Response object. modelOverride, when non-empty, replaces the
-// model field from the CC response (useful when the upstream echoes a
-// deployment alias rather than the logical model name).
-func CCToResponse(cc *openai.ChatResponse, modelOverride string) (*responses.Response, error) {
+// Responses API Response object.
+//
+// req is the original Responses API request; its fields are echoed into the
+// response per the OpenAI spec. Pass nil for tests that don't need echo fields.
+// modelOverride, when non-empty, replaces the model field from the CC response
+// (useful when the upstream echoes a deployment alias rather than the logical
+// model name).
+func CCToResponse(req *responses.Request, cc *openai.ChatResponse, modelOverride string) (*responses.Response, error) {
 	model := cc.Model
 	if modelOverride != "" {
 		model = modelOverride
@@ -40,9 +44,10 @@ func CCToResponse(cc *openai.ChatResponse, modelOverride string) (*responses.Res
 	resp.Status, resp.FinishReason, resp.IncompleteDetails = mapFinishReason(firstChoice)
 
 	if firstChoice != nil {
-		resp.Output = buildOutput(firstChoice)
+		resp.Output = buildOutput(cc.ID, firstChoice)
 	}
 
+	responses.EchoRequest(resp, req)
 	return resp, nil
 }
 
@@ -67,7 +72,8 @@ func mapFinishReason(choice *openai.Choice) (responses.Status, responses.FinishR
 
 // buildOutput constructs the Responses output []Item from a CC choice.
 // Ordering: reasoning item (if present) → message item → function_call items.
-func buildOutput(ch *openai.Choice) []responses.Item {
+// ccID is the CC response id, used to synthesize stable per-item ids.
+func buildOutput(ccID string, ch *openai.Choice) []responses.Item {
 	var items []responses.Item
 	msg := ch.Message
 
@@ -88,7 +94,13 @@ func buildOutput(ch *openai.Choice) []responses.Item {
 
 	if textContent != "" || refusal != "" || len(msg.ToolCalls) == 0 {
 		msgItem := &responses.Message{
-			Role: responses.RoleAssistant,
+			// Spec marks id, role, content, status, type as required on
+			// OutputMessage. Synthesize id from the CC response id + choice
+			// index so different choices get distinct ids; mark completed
+			// since this is the final non-streaming response.
+			ID:     "msg_" + ccID,
+			Role:   responses.RoleAssistant,
+			Status: responses.StatusCompleted,
 		}
 		if textContent != "" {
 			msgItem.Content = []responses.Part{&responses.OutputTextPart{Text: textContent}}
@@ -114,17 +126,18 @@ func buildOutput(ch *openai.Choice) []responses.Item {
 }
 
 // translateUsage maps CC Usage → Responses Usage.
+// InputTokensDetails and OutputTokensDetails are always populated (spec required).
 func translateUsage(u *openai.Usage) *responses.Usage {
 	ru := &responses.Usage{
 		InputTokens:  u.PromptTokens,
 		OutputTokens: u.CompletionTokens,
 		TotalTokens:  u.TotalTokens,
 	}
-	if u.PromptDetails != nil && u.PromptDetails.CachedTokens > 0 {
-		ru.InputTokensDetails = &responses.InputDeets{CachedTokens: u.PromptDetails.CachedTokens}
+	if u.PromptDetails != nil {
+		ru.InputTokensDetails = responses.InputDeets{CachedTokens: u.PromptDetails.CachedTokens}
 	}
-	if u.CompletionDetails != nil && u.CompletionDetails.ReasoningTokens > 0 {
-		ru.OutputTokensDetails = &responses.OutputDeets{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
+	if u.CompletionDetails != nil {
+		ru.OutputTokensDetails = responses.OutputDeets{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
 	}
 	return ru
 }

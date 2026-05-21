@@ -57,6 +57,8 @@ type trackedItem struct {
 // Stream is a stateful per-stream translator that converts CC SSE chunks
 // to Responses SSE frames. Create one per upstream response stream.
 type Stream struct {
+	req *responses.Request // original request, echoed into completed event
+
 	responseID string
 	model      string
 	created    int64
@@ -80,8 +82,11 @@ type Stream struct {
 }
 
 // NewStream returns a fresh Stream ready to process CC chunks.
-func NewStream() *Stream {
+// req is the original Responses API request; it is echoed into the
+// response.completed event. Pass nil to omit echo fields (tests).
+func NewStream(req *responses.Request) *Stream {
 	return &Stream{
+		req:       req,
 		toolItems: make(map[int]*trackedItem),
 	}
 }
@@ -584,6 +589,7 @@ func (s *Stream) buildFinalResponse() *responses.Response {
 		resp.Usage = translateUsage(s.lastUsage)
 	}
 
+	responses.EchoRequest(resp, s.req)
 	return resp
 }
 

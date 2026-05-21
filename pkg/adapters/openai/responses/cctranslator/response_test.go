@@ -32,7 +32,7 @@ func TestCCToResponse_SimpleText(t *testing.T) {
 		},
 	}
 
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestCCToResponse_ModelOverride(t *testing.T) {
 		Model:   "gpt-4o-deployment-alias",
 		Choices: []openai.Choice{{FinishReason: "stop", Message: openai.ChatResponseMessage{Content: &content}}},
 	}
-	resp, err := CCToResponse(cc, "gpt-4o")
+	resp, err := CCToResponse(nil, cc, "gpt-4o")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestCCToResponse_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCCToResponse_TextAndToolCalls(t *testing.T) {
 			},
 		},
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestCCToResponse_FinishReasonLength(t *testing.T) {
 			{FinishReason: "length", Message: openai.ChatResponseMessage{Content: &content}},
 		},
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestCCToResponse_FinishReasonContentFilter(t *testing.T) {
 			{FinishReason: "content_filter", Message: openai.ChatResponseMessage{Content: &content}},
 		},
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestCCToResponse_UsageDetails(t *testing.T) {
 			},
 		},
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -283,11 +283,11 @@ func TestCCToResponse_UsageDetails(t *testing.T) {
 	if resp.Usage.TotalTokens != 150 {
 		t.Errorf("total_tokens: got %d, want 150", resp.Usage.TotalTokens)
 	}
-	if resp.Usage.InputTokensDetails == nil || resp.Usage.InputTokensDetails.CachedTokens != 40 {
-		t.Errorf("input_tokens_details: got %+v", resp.Usage.InputTokensDetails)
+	if resp.Usage.InputTokensDetails.CachedTokens != 40 {
+		t.Errorf("input_tokens_details.cached_tokens: got %d, want 40", resp.Usage.InputTokensDetails.CachedTokens)
 	}
-	if resp.Usage.OutputTokensDetails == nil || resp.Usage.OutputTokensDetails.ReasoningTokens != 10 {
-		t.Errorf("output_tokens_details: got %+v", resp.Usage.OutputTokensDetails)
+	if resp.Usage.OutputTokensDetails.ReasoningTokens != 10 {
+		t.Errorf("output_tokens_details.reasoning_tokens: got %d, want 10", resp.Usage.OutputTokensDetails.ReasoningTokens)
 	}
 }
 
@@ -296,7 +296,7 @@ func TestCCToResponse_NoChoices(t *testing.T) {
 		ID:    "c6",
 		Model: "gpt-4o",
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestCCToResponse_NullContent_ToolCallsOnly(t *testing.T) {
 			},
 		},
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -353,7 +353,7 @@ func TestCCToResponse_Refusal(t *testing.T) {
 			},
 		},
 	}
-	resp, err := CCToResponse(cc, "")
+	resp, err := CCToResponse(nil, cc, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

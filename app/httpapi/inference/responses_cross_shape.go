@@ -74,14 +74,15 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 			return
 		}
 		modelOverride := req.Model
+		reqCopy := req // capture for closures
 		toResponse = func(b []byte) (*responses.Response, error) {
 			var cc pkgopenai.ChatResponse
 			if uerr := json.Unmarshal(b, &cc); uerr != nil {
 				return nil, uerr
 			}
-			return cctranslator.CCToResponse(&cc, modelOverride)
+			return cctranslator.CCToResponse(reqCopy, &cc, modelOverride)
 		}
-		streamTrans = ccStreamAdapter{s: cctranslator.NewStream()}
+		streamTrans = ccStreamAdapter{s: cctranslator.NewStream(req)}
 
 	case adapters.Anthropic:
 		wireBody, err = anthropictranslator.RequestToAnthropic(req)
@@ -89,8 +90,11 @@ func dispatchResponsesCrossShape(d Deps, w http.ResponseWriter, r *http.Request,
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 			return
 		}
-		toResponse = anthropictranslator.AnthropicToResponse
-		streamTrans = anthropicStreamAdapter{s: anthropictranslator.NewStream()}
+		reqCopyA := req // capture for closure
+		toResponse = func(b []byte) (*responses.Response, error) {
+			return anthropictranslator.AnthropicToResponse(reqCopyA, b)
+		}
+		streamTrans = anthropicStreamAdapter{s: anthropictranslator.NewStream(req)}
 
 	default:
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses_unsupported_host",
