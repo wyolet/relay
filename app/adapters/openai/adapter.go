@@ -33,6 +33,7 @@ var _ pipeline.Adapter = (*Adapter)(nil)
 const (
 	chatPath       = "/v1/chat/completions"
 	responsesPath  = "/v1/responses"
+	embeddingsPath = "/v1/embeddings"
 	defaultTimeout = 5 * time.Minute
 )
 
@@ -45,7 +46,8 @@ func WithClient(c *http.Client) Option {
 }
 
 // WithPath overrides the upstream POST path. Defaults to /v1/chat/completions.
-// Use responsesPath for the Responses API adapter instance.
+// Use responsesPath for the Responses API adapter; embeddingsPath for the
+// Embeddings API adapter.
 func WithPath(p string) Option {
 	return func(a *Adapter) { a.path = p }
 }
