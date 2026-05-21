@@ -16,9 +16,28 @@ three.
 
 `wyolet/relay-catalog` has its own `go.mod` and imports
 `github.com/wyolet/relay/app/catalogvalidate` directly. CI runs a tiny
-Go binary that composes relay's graph linter with catalog-specific
-curation rules (e.g. "every Provider has at least one Model in the
-ollama bindings"). One pass, full coverage.
+Go binary that composes relay's schema-generic graph linter with the
+catalog's own [Rule]-based curation conventions.
+
+### The Rule struct (relay-side)
+
+```go
+// app/catalogvalidate/rule.go
+type Rule struct {
+    Name        string   // kebab-case id, used by --skip and docs
+    Description string   // one-line human summary
+    Severity    Severity // default severity; --strict can promote
+    Check       func([]manifest.Document) []Issue
+}
+
+func RunRules(rules []Rule, docs []manifest.Document, skip map[string]bool) []Issue
+```
+
+Rules are first-class values, not anonymous functions. That gives every
+rule a stable handle for ignore flags, surfaces them in `--list`
+output, and lets us auto-generate docs from the rule slice.
+
+### Composing in the catalog repo
 
 ```go
 // catalog-repo/cmd/validate/main.go
@@ -27,15 +46,49 @@ package main
 import (
     "github.com/wyolet/relay/app/catalogvalidate"
     "github.com/wyolet/relay/app/manifest"
+
+    "github.com/wyolet/relay-catalog/cmd/validate/rules"
 )
 
 func main() {
     docs, _ := manifest.LoadDir("data")
     issues := catalogvalidate.ValidateGraph(docs)
-    issues = append(issues, catalogSpecificRules(docs)...)
-    // ... print, exit on errors
+    issues = append(issues, catalogvalidate.RunRules(rules.All, docs, skip)...)
+    if strict {
+        issues = catalogvalidate.Promote(issues)
+    }
+    // print, exit on errors
 }
 ```
+
+```go
+// catalog-repo/cmd/validate/rules/ollama_tags.go
+package rules
+
+import (
+    "github.com/wyolet/relay/app/catalogvalidate"
+    "github.com/wyolet/relay/app/manifest"
+)
+
+var All = []catalogvalidate.Rule{
+    {
+        Name:        "ollama-source-tag",
+        Description: "Models with ollama-shaped originalName must carry source-ollama-library tag",
+        Severity:    catalogvalidate.SeverityWarning,
+        Check:       checkOllamaSourceTag,
+    },
+    // ... more rules
+}
+```
+
+Each rule lives in its own file, gets its own unit tests, and is
+discoverable via `validate --list` or by reading the `All` slice.
+
+### Promote / strict mode
+
+`Promote(issues)` returns a copy where every warning becomes an error.
+Useful for release-prep CI (`validate --strict ./data`) to surface
+suppressible curation hints as hard errors before tagging.
 
 ## In your editor
 

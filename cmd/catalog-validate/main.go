@@ -1,20 +1,27 @@
-// catalog-validate runs catalogvalidate.ValidateGraph against a directory
-// of YAML manifests and prints findings. Designed for invocation from the
-// catalog repo's CI:
+// catalog-validate runs the schema-generic graph linter
+// (catalogvalidate.ValidateGraph) against a directory of YAML manifests
+// and prints findings. Catalog repos with their own curation conventions
+// don't use this binary directly — they import app/catalogvalidate as a
+// library and compose their own []Rule slice via RunRules. See
+// docs/catalog-validation.md.
 //
-//	go run github.com/wyolet/relay/cmd/catalog-validate ./data
+// Usage:
+//
+//	catalog-validate [--strict] <dir>
+//
+// Flags:
+//
+//	--strict   promote warnings to errors before exit
 //
 // Exit codes:
 //
-//	0  no errors (warnings may be present)
+//	0  no errors (warnings may be present unless --strict)
 //	1  at least one error
 //	2  internal failure (couldn't load, etc.)
-//
-// The same package (app/catalogvalidate) is importable; CI in the catalog
-// repo can compose additional curation rules on top.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -23,11 +30,20 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: catalog-validate <dir>")
+	var strict bool
+	flag.BoolVar(&strict, "strict", false, "promote warnings to errors before exit")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: catalog-validate [--strict] <dir>")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	if flag.NArg() != 1 {
+		flag.Usage()
 		os.Exit(2)
 	}
-	dir := os.Args[1]
+	dir := flag.Arg(0)
+
 	docs, err := manifest.LoadDir(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load %s: %v\n", dir, err)
@@ -35,6 +51,10 @@ func main() {
 	}
 
 	issues := catalogvalidate.ValidateGraph(docs)
+	if strict {
+		issues = catalogvalidate.Promote(issues)
+	}
+
 	fmt.Print(catalogvalidate.Format(issues))
 
 	if catalogvalidate.HasErrors(issues) {
