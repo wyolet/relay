@@ -20,6 +20,7 @@ var _ pipeline.Adapter = (*Adapter)(nil)
 
 const (
 	chatPath       = "/v1/chat/completions"
+	responsesPath  = "/v1/responses"
 	defaultTimeout = 5 * time.Minute
 )
 
@@ -31,9 +32,16 @@ func WithClient(c *http.Client) Option {
 	return func(a *Adapter) { a.client = c }
 }
 
+// WithPath overrides the upstream POST path. Defaults to /v1/chat/completions.
+// Use responsesPath for the Responses API adapter instance.
+func WithPath(p string) Option {
+	return func(a *Adapter) { a.path = p }
+}
+
 // Adapter implements pipeline.Adapter for OpenAI (and Ollama).
 type Adapter struct {
 	client *http.Client
+	path   string
 }
 
 // New returns a ready-to-use Adapter. The default HTTP client has a 5-minute
@@ -41,6 +49,7 @@ type Adapter struct {
 func New(opts ...Option) *Adapter {
 	a := &Adapter{
 		client: &http.Client{Timeout: defaultTimeout},
+		path:   chatPath,
 	}
 	for _, o := range opts {
 		o(a)
@@ -48,12 +57,12 @@ func New(opts ...Option) *Adapter {
 	return a
 }
 
-// Call issues POST {baseURL}/v1/chat/completions with the supplied body and
-// API key. Any headers in hdr are forwarded as-is before the Relay-specific
-// headers are set (so the caller can forward client headers without
-// overriding Authorization).
+// Call issues POST {baseURL}{path} with the supplied body and API key.
+// Any headers in hdr are forwarded as-is before the Relay-specific headers
+// are set (so the caller can forward client headers without overriding
+// Authorization).
 func (a *Adapter) Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+chatPath, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+a.path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
