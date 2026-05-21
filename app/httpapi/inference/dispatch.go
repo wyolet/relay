@@ -72,22 +72,43 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 
-	upstreamAdapter, ok := d.Adapters[plan.HostBinding.Adapter]
+	// Phase 1: Responses inbound only supports OpenAI upstream. Ollama,
+	// Bedrock-compat, Groq, and other OpenAI-shape hosts don't expose
+	// /v1/responses; we'd forward to the wrong path with no value. Phase 2
+	// adds cross-shape translation (canonical-at-center) and lifts this guard.
+	if in.Inbound == adapters.OpenAIResponses {
+		if plan.HostBinding.Adapter != adapters.OpenAI || plan.Host.Meta.Name != "openai" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses_unsupported_host",
+				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
+					" which does not support the Responses API; use /openai/v1/chat/completions instead")
+			return
+		}
+	}
+
+	// When the inbound shape is OpenAIResponses, use the dedicated upstream
+	// adapter (which POSTs to /v1/responses) and the OpenAIResponses
+	// translator key. sameShape=true → byte-passthrough, no body translation.
+	upstreamKey := plan.HostBinding.Adapter
+	if in.Inbound == adapters.OpenAIResponses {
+		upstreamKey = adapters.OpenAIResponses
+	}
+
+	upstreamAdapter, ok := d.Adapters[upstreamKey]
 	if !ok {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
-			"no adapter registered for "+string(plan.HostBinding.Adapter))
+			"no adapter registered for "+string(upstreamKey))
 		return
 	}
 
 	inboundT := d.Translators.Get(in.Inbound)
-	upstreamT := d.Translators.Get(plan.HostBinding.Adapter)
+	upstreamT := d.Translators.Get(upstreamKey)
 	if inboundT == nil || upstreamT == nil {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_translator",
-			"missing translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Adapter))
+			"missing translator for "+string(in.Inbound)+" or "+string(upstreamKey))
 		return
 	}
 
-	sameShape := in.Inbound == plan.HostBinding.Adapter
+	sameShape := in.Inbound == upstreamKey
 
 	// Build the wire body for the upstream call.
 	wireBody, err := buildWireBody(in.Body, plan.Snapshot.Upstream(), sameShape, inboundT, upstreamT)
