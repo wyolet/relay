@@ -176,38 +176,12 @@ func parseDispatchErr(t *testing.T, body []byte) errBody {
 	return e
 }
 
-// TestDispatch_ResponsesGuard_NonOpenAIHost verifies that
-// Inbound=OpenAIResponses on a non-"openai" host returns 400
-// responses_unsupported_host.
-func TestDispatch_ResponsesGuard_NonOpenAIHost(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAI)
-	d := buildDeps(t, cat)
-
-	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	r = withNormalContext(r, rk)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.OpenAIResponses,
-		Body:      []byte(`{"model":"test-model","stream":false}`),
-		ModelName: "test-model",
-		Stream:    false,
-	})
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d; body: %s", w.Code, w.Body.String())
-	}
-	e := parseDispatchErr(t, w.Body.Bytes())
-	if e.Error.Code != "responses_unsupported_host" {
-		t.Errorf("error code: want responses_unsupported_host, got %q", e.Error.Code)
-	}
-}
-
-// TestDispatch_ResponsesGuard_OpenAIHost verifies that
-// Inbound=OpenAIResponses on host "openai" passes the guard and reaches
-// the pipeline (which fails because the upstream is unreachable, but
-// that's a different error — the guard itself does not fire).
-func TestDispatch_ResponsesGuard_OpenAIHost(t *testing.T) {
+// TestDispatch_Responses_OpenAIProperHost_BytePass verifies that
+// Inbound=OpenAIResponses on host "openai" (Adapter=OpenAI) takes the
+// byte-pass path. The pipeline fails on the stub adapter, but neither
+// the cross-shape "responses_unsupported_host" nor "translate_request"
+// codes fire — those only show up on the cross-shape paths.
+func TestDispatch_Responses_OpenAIProperHost_BytePass(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
@@ -224,9 +198,94 @@ func TestDispatch_ResponsesGuard_OpenAIHost(t *testing.T) {
 
 	if w.Code == http.StatusBadRequest {
 		e := parseDispatchErr(t, w.Body.Bytes())
-		if e.Error.Code == "responses_unsupported_host" {
-			t.Fatalf("guard fired for host 'openai' but should not have")
+		switch e.Error.Code {
+		case "responses_unsupported_host", "translate_request", "invalid_responses_request":
+			t.Fatalf("byte-pass path should not have hit a cross-shape error: %q (%s)", e.Error.Code, e.Error.Message)
 		}
+	}
+}
+
+// TestDispatch_Responses_OpenAICompatHost_CrossShape verifies that a host
+// with Adapter=OpenAI but Meta.Name != "openai" (Ollama, Groq, Together,
+// Fireworks, etc.) takes the cctranslator cross-shape path, not the
+// old "responses_unsupported_host" rejection.
+func TestDispatch_Responses_OpenAICompatHost_CrossShape(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAIResponses,
+		Body:      []byte(`{"model":"test-model","input":"hi","stream":false}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code == http.StatusBadRequest {
+		e := parseDispatchErr(t, w.Body.Bytes())
+		if e.Error.Code == "responses_unsupported_host" {
+			t.Fatalf("old guard still fires on OpenAI-compat host — cross-shape path not taken")
+		}
+		// invalid_responses_request / translate_request would mean the parse
+		// failed; that's a body-shape issue, not what we're testing.
+	}
+}
+
+// TestDispatch_Responses_AnthropicHost_CrossShape verifies that a host with
+// Adapter=Anthropic takes the anthropictranslator cross-shape path. The
+// stub adapter fails the pipeline call after translation, but the guard
+// itself must not fire.
+func TestDispatch_Responses_AnthropicHost_CrossShape(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAIResponses,
+		Body:      []byte(`{"model":"test-model","input":"hi","stream":false}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code == http.StatusBadRequest {
+		e := parseDispatchErr(t, w.Body.Bytes())
+		if e.Error.Code == "responses_unsupported_host" {
+			t.Fatalf("guard fired for Anthropic host — anthropictranslator path not taken")
+		}
+	}
+}
+
+// TestDispatch_Responses_CrossShape_RejectsPreviousResponseID verifies that
+// Responses-only fields (previous_response_id) get rejected at the
+// translator boundary with a 400 translate_request when routed to a CC
+// upstream. (On OpenAI proper byte-pass, they pass through untouched.)
+func TestDispatch_Responses_CrossShape_RejectsPreviousResponseID(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAIResponses,
+		Body:      []byte(`{"model":"test-model","input":"hi","previous_response_id":"resp_123"}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	e := parseDispatchErr(t, w.Body.Bytes())
+	if e.Error.Code != "translate_request" {
+		t.Errorf("error code: want translate_request, got %q (msg: %s)", e.Error.Code, e.Error.Message)
 	}
 }
 
