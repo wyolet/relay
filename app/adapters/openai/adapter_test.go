@@ -193,3 +193,46 @@ func TestCall_NoAPIKey(t *testing.T) {
 		t.Errorf("expected no auth header for empty key, got %q", gotAuth)
 	}
 }
+
+// TestWithPath verifies that WithPath("/v1/responses") makes Call POST to
+// /v1/responses instead of the default /v1/chat/completions.
+func TestWithPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := New(WithClient(srv.Client()), WithPath(responsesPath))
+	resp, err := a.Call(t.Context(), srv.URL, "sk-test", []byte(`{"model":"gpt-4o"}`), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotPath != responsesPath {
+		t.Errorf("path: want %s, got %s", responsesPath, gotPath)
+	}
+}
+
+// TestDefaultPath verifies New() without WithPath still hits /v1/chat/completions.
+func TestDefaultPath(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := New(WithClient(srv.Client()))
+	resp, err := a.Call(t.Context(), srv.URL, "sk-test", []byte(`{"model":"gpt-4o"}`), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotPath != chatPath {
+		t.Errorf("default path: want %s, got %s", chatPath, gotPath)
+	}
+}
