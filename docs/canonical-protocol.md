@@ -1,6 +1,8 @@
 # Canonical Protocol — design doc
 
-**Status**: draft, 2026-05-21. Living document. Decisions land here as we make them; the code reflects this doc, not vice versa.
+**Status (2026-05-22)**: **Phase 2 shipped.** `pkg/relay/v1/` is the canonical protocol package; the OpenAI and Anthropic vendor adapters target it via the `v1.Translator` interface; the generic `app/adapter/` framework provides `Spec` + `Registry` + dispatch glue. Verified end-to-end via `make smoke-mock` (recorded fixture replay) and live Claude Code → relay → ollama-self/gpt-oss-120b tool-use round-trip.
+
+This doc continues as the living source for protocol decisions; the code now reflects the doc (was: doc preceded code). Living document — decisions land here when made.
 
 This doc covers the relay's **canonical inbound protocol** — the API the relay exposes on the bare `/v1/*` namespace as its own wire shape, independent of OpenAI / Anthropic / Gemini specifics.
 
@@ -421,14 +423,20 @@ Listed as the doc evolves. Each gets a decision (with reasoning) when we lock it
 
 ---
 
-## Relation to current work (2026-05-21)
+## Phase history
 
-- **Phase 1 (PR #175, merged or in review)**: `/openai/v1/responses` byte-pass inbound. No canonical work; just routes Responses bytes to OpenAI's `/v1/responses` upstream. Does not commit any canonical decisions.
-- **Phase 1.5 (queued)**: Hand-written Responses Go types in `pkg/adapters/openai/responses/`. Wire-compatible with OpenAI's Responses; **the design of these types is the testbed for canonical decisions**. What works there informs what the canonical types look like.
-- **Phase 1.5 cross-shape (queued)**: Responses inbound → CC upstream serializer, Responses inbound → Anthropic upstream serializer. Each handles its translation directly. The cross-shape work surfaces the lossiness questions in concrete code.
-- **Phase 2 (this doc → code)**: Canonical types extracted into `pkg/relay/v1/`, CC inbound and Anthropic inbound rewritten as peer adapters targeting canonical, server tools and MCP added incrementally.
+- **Phase 1** (PR #175): `/openai/v1/responses` byte-pass inbound. No canonical work; just routes Responses bytes to OpenAI's `/v1/responses` upstream.
+- **Phase 1.5** (PRs #176–#183): hand-written Responses Go types in `pkg/adapters/openai/responses/` + pairwise `cctranslator` / `anthropictranslator` packages that did Responses↔CC and Responses↔Anthropic directly. The design of these types was the testbed for canonical.
+- **Phase 2 — shipped 2026-05-22** (PRs #185–#189):
+  - PR #185 — canonical types extracted into `pkg/relay/v1/`; narrowed-Responses (drop the 9 stateful OpenAI-isms; refusal becomes a stop_reason; add `extensions` envelope and `provider_data` opaque field); `v1.Translator` interface defined.
+  - PR #186 — `pkg/adapters/openai/` rewritten against canonical; both CC and Responses wire shapes target canonical; `cctranslator/` deleted; OpenAI Responses inbound cuts over to the canonical chain.
+  - PR #187 — `pkg/adapters/anthropic/` rewritten against canonical; `anthropictranslator/` deleted; all four Anthropic-touching dispatch paths now go through canonical.
+  - PR #189 — generic `app/adapter/` framework + collapse of `app/adapters/<vendor>/` packages + deletion of `Deps.CrossShapeHandlers`. `dispatch.go` is now fully shape-agnostic.
 
-The doc is the gate for Phase 2 starting. Code work on Phase 2 begins after the questions above are answered.
+Verification:
+- Unit translator coverage: 67–73% on OpenAI / Anthropic canonical translators (~100 round-trip tests including composed E2E).
+- `make smoke-mock` replays recorded OpenAI fixtures (parallel tool-calls + 146-chunk SSE) through `relay → openai-mock.wyolet.dev`; byte-identical end-to-end.
+- Live Claude Code → relay → ollama-self/gpt-oss-120b tool-use round-trip verified (caught + fixed one real bug — `content_block_start` shape for tool_use blocks was missing `id`/`name`/`input` fields; PR #189 fix `5e1a26c`).
 
 ---
 

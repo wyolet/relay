@@ -29,15 +29,21 @@ LiteLLM for teams running millions of LLM requests per day.
 |---|---|
 | Catalog (8 entities, snapshot, NOTIFY listener) | Shipped |
 | Admin API (auth, CRUD, sessions) | Shipped |
-| Data-plane `/v1/*` (chat completions, messages, models) | Shipped |
+| Data-plane `/v1/*` (chat completions, messages, responses, embeddings, models) | Shipped |
 | Adapter dispatch per HostBinding | Shipped |
+| **Canonical protocol `pkg/relay/v1/`** (typed item array, six-event streams) | **Shipped (PR #185)** |
+| **Cross-vendor translation via canonical** (Anthropic ↔ canonical ↔ CC verified end-to-end) | **Shipped (PRs #186–187)** |
+| **Generic `app/adapter/` framework** (no per-vendor packages in `app/`) | **Shipped (PR #189)** |
+| Mock-based smoke (`make smoke-mock`) | **Shipped** — fixture replay through real Caddy edge |
 | Observability emit (OTel + ClickHouse) | Scaffolding present; **rewiring is roadmap A2** |
-| E2E test against mock upstream | **roadmap A1** |
 | Multi-tenancy (Org/Workspace/Project) | **roadmap B2** |
 | Postgres-backed users + signup | **roadmap B1**; today identity is YAML |
 | Real authz (Casbin) | **roadmap B3**; today is "any authenticated caller can do anything" |
+| Batch API | **roadmap D** |
 
-See [`docs/roadmap.md`](docs/roadmap.md) for the full picture.
+See [`docs/roadmap.md`](docs/roadmap.md) for the full picture and
+[`docs/canonical-protocol.md`](docs/canonical-protocol.md) for the
+relay-canonical protocol design.
 
 ## Quickstart
 

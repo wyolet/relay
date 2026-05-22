@@ -42,7 +42,9 @@ architectural suggestions.
 
 ## Repository layout
 
-The codebase is organised by responsibility, not by entity:
+The codebase is organised by responsibility. Canonical Phase 2 shipped
+2026-05-22 (PRs #185–189); the layout below reflects post-migration
+state.
 
 ```
 app/                       — the application: domain + composition + handlers
@@ -53,17 +55,24 @@ app/                       — the application: domain + composition + handlers
    policy,relaykey,pricing}/  — 8 entity packages
                              — each: domain types, Validate(), Store{List,
                                      Get,Upsert,Delete}
-  adapter/                 — wire-protocol Kind enum (openai, anthropic)
+  adapter/                 — generic adapter framework (singular):
+                             Spec, Registry, generic pipeline.Adapter
+                             parameterised by upstream URL + auth strategy.
+                             ONE Spec literal per wire shape lives in
+                             cmd/relay/main.go.
+  adapters/                — vocabulary only: Name constants + the OLD
+                             adapters.Translator interface (PR 5 deletes
+                             the latter; the file is unreferenced).
   pipeline/                — pure orchestration: reserve → pick key →
                              Adapter.Call → stream → post-flight emit
   routing/                 — snapshot lookup → Plan{Model, Policy,
                              HostBinding, Host, Keys, Rules}
-  api/openai/              — pipeline.Adapter impl (OpenAI wire shape)
-  api/anthropic/           — pipeline.Adapter impl (Anthropic wire shape)
   keypool/                 — key selection + per-key circuit breaker
+                             (state at `secret_health:*` in kv)
   ratelimit/               — Resolve(policy, rl) → []pkgratelimit.Rule
   httpapi/                 — the HTTP layer
-    inference/             — data plane: /v1/* + /healthz
+    inference/             — data plane: /v1/* + /healthz; shape-agnostic
+                             Dispatch with NO per-vendor branching
     control/               — admin plane: /auth/* + CRUD + /version + ...
   manifest/                — YAML DTOs + translate ↔ domain
   seed/                    — YAML → Postgres orchestration
@@ -71,8 +80,22 @@ app/                       — the application: domain + composition + handlers
   authz/                   — Authorizer interface (v1: AlwaysAllow)
   actor/                   — Actor in context (user/admin-token)
 
-pkg/                       — shared, vendorable, no Relay-specific imports
-  api/{openai,anthropic}/  — pure shape: parse, types, token extraction
+pkg/                       — shared, vendorable, ZERO relay-app imports
+  relay/v1/                — CANONICAL protocol: types, Translator
+                             interface, Name + Registry, 6-event streams.
+                             Imports nothing of ours.
+  adapters/openai/         — OpenAI vendor adapter (one folder, all
+                             wire shapes that vendor serves):
+                             • chat_request.go, parse.go, tokens.go,
+                               context.go, types.go — Chat Completions
+                             • responses_*.go — Responses API types
+                             • translator_cc.go — v1.Translator for CC
+                             • translator_responses.go — v1.Translator
+                               for Responses + ComposedStream helper
+  adapters/anthropic/      — Anthropic vendor adapter:
+                             • parse.go, content.go, stream.go,
+                               tokens.go, types.go, transform.go
+                             • translator_canonical.go — v1.Translator
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   eventlog/                — file + ClickHouse usage event sinks
@@ -81,8 +104,6 @@ pkg/                       — shared, vendorable, no Relay-specific imports
   ids/, slug/              — UUIDv7, slug minting + collision suffixes
   metrics/                 — Prometheus registry + counters
   reqid/                   — request-id middleware (+ OTel span)
-  transport/               — message channel (currently only used by
-                             legacy paths; candidate for deletion)
   usage/                   — Tokens type alias
 
 internal/                  — composition root / boundary
@@ -92,8 +113,11 @@ internal/                  — composition root / boundary
   usage/                   — observability scaffolding (NOT wired post-cutover;
                              see docs/roadmap.md A2)
 
-cmd/relay/                 — the binary entrypoint
+cmd/relay/                 — the binary entrypoint AND the ONLY place
+                             where vendor names appear in code form
 cmd/litellm-import/        — fetches LiteLLM JSON → manifest YAMLs
+cmd/catalog-validate/      — schema-validates the catalog repo's data tree
+cmd/catalog-schemas/       — regenerates JSON Schemas for catalog kinds
 
 config/                    — relay-local YAML (NOT the public catalog)
   ratelimits/system.yaml   — relay-internal admission/DoS rules
@@ -103,7 +127,21 @@ migrations/postgres/       — versioned SQL up + down
 
 deploy/compose/            — dev pg, test pg, smoke stack
 docs/                      — design + runbook + roadmap
+integration/               — make test-integration + make smoke-mock
 ```
+
+**Deleted in canonical Phase 2 (do not recreate):**
+
+- `app/adapters/openai/` and `app/adapters/anthropic/` — Relay-side glue
+  collapsed into the generic `app/adapter/` framework.
+- `pkg/adapters/openai/responses/{cctranslator,anthropictranslator}/`
+  pairwise translator packages — replaced by canonical chain
+  composition (see docs/canonical-protocol.md).
+- `Deps.CrossShapeHandlers` + `inference.CrossShapeHandler` — the
+  temporary hook is gone; dispatch is uniform.
+- `Deps.Translators` (the old `adapters.Registry` keyed on the
+  CC-as-canonical Translator interface). `Deps.Specs *adapter.Registry`
+  replaces it.
 
 ## Public catalog lives in a separate repo
 
@@ -154,6 +192,56 @@ NOT regenerate them in this repo.
   walks it recursively and seeds. Unset disables auto-seed.
 - The recursive `manifest.LoadDir` is layout-agnostic — dispatches on
   each YAML's `kind` field, so the nested catalog tree just works.
+
+## Codebase rules (non-negotiable)
+
+These are the load-bearing rules every change must obey. Authoritative
+source: `docs/canonical-protocol.md` "Codebase rules" section. Quoted
+here because new sessions must inherit them.
+
+1. **Canonical knows nothing.** `pkg/relay/v1/` declares its own types,
+   `Translator` interface, `Name` + `Registry`, and nothing else. Zero
+   imports of `app/`, `internal/`, or any `pkg/adapters/<vendor>/`.
+2. **Vendors import canonical.** Each `pkg/adapters/<vendor>/` imports
+   `pkg/relay/v1/` and implements its `Translator`. Vendor adapters
+   never import each other.
+3. **One folder per vendor, not per wire shape.** `pkg/adapters/openai/`
+   owns all OpenAI wire shapes (CC, Responses, Embeddings) as files.
+   Wire-shape names never appear in folder paths.
+4. **No vendor names in `app/` code.** Enforceable by
+   `grep -rE "openai|anthropic" app/ --include="*.go"` — should return
+   only catalog data string lookups, error messages, URL paths, and
+   `cmd/relay/main.go`. Dispatch, routing, pipeline, registry, http-mw,
+   inference — none of them branch on or import a vendor.
+5. **Composition root is the only place vendor names appear in code.**
+   `cmd/relay/main.go` builds `adapter.Spec` literals; every other
+   binary, test, or service consumes adapters via the `Registry`.
+6. **Adapters are stateless pure transforms.** A `Translator` is six
+   methods (parse/serialize × request/response + the two stream
+   factories). No per-request state on the `Translator` value — per-
+   stream state lives in the closures the stream factories return.
+7. **`extensions` envelope for cross-cutting concerns.** Anything that
+   doesn't map cleanly across vendors (cache hints, safety settings,
+   RAG documents) lives in `Request.Extensions` / `Response.Extensions`
+   (`map[string]json.RawMessage`). Vendor adapters that understand a key
+   emit the corresponding wire field; adapters that don't, ignore it.
+   No new top-level canonical field for vendor-specific features.
+8. **`provider_data` for same-vendor opaque blobs.** Signed/encrypted
+   vendor payloads (Anthropic thinking signatures, OpenAI
+   `encrypted_content`) carry on the relevant item (`reasoning`,
+   `tool_call`, `message`) as a `json.RawMessage`. Round-tripped
+   verbatim within a vendor; dropped cross-vendor.
+9. **Refusal is a stop_reason, not an item type.** The model's refusal
+   text appears as a normal `message` item's text content with
+   `finish_reason: "refusal"` on the response. There is no
+   `refusal_part` type.
+10. **`pkg/` purity preserved.** No `pkg/` package imports anything from
+    `app/` or `internal/`. `pkg/relay/v1/` and `pkg/adapters/<vendor>/`
+    together form a vendorable translation library.
+
+The grep tests for rules 1, 2, 4, 10 must hold on every commit.
+
+---
 
 ## Locked architectural decisions
 
@@ -222,11 +310,19 @@ pure helpers.
 A single Host (e.g. AWS Bedrock) can serve models that speak different
 wire protocols — Claude (Anthropic shape) and Llama (OpenAI shape).
 The dispatch key therefore lives on the per-`(Model, Host)` binding,
-not on the Host. `app/adapter.Kind` is `openai | anthropic` today;
-new kinds correspond to new `app/api/<kind>` packages.
+not on the Host. `HostBinding.Adapter` is `openai | anthropic` today;
+new vendors land as a new `pkg/adapters/<vendor>/` package implementing
+`v1.Translator` plus a `Spec` registration in `cmd/relay/main.go`.
 
 Ollama uses `Adapter: openai` (it exposes an OpenAI-compatible
 endpoint).
+
+Three OpenAI wire shapes are registered as separate Specs sharing the
+same underlying vendor package: `openai` (CC), `openai_responses`
+(Responses API), `openai_embeddings` (Embeddings — `BytePass: true`).
+The Spec carries inbound URL paths, upstream URL path, auth strategy,
+translator, optional `IsNativePath` predicate (used by the OpenAI
+Responses spec to byte-pass when the host is OpenAI proper).
 
 ### Admin CRUD surface
 
@@ -293,14 +389,10 @@ Future-proof seams (already wired; do not bypass):
 
 - **No Postgres calls** on the request path. Catalog reads come from
   the in-memory `app/catalog.Snapshot` only.
-- **Default rich parsing**: full body parse to a typed shape-specific
-  struct via `pkg/api/<shape>.Parse`. `RELAY_RICH_PARSING=off` reverts
-  to minimal parse (model/stream/user/raw). `messages` content is
-  never deep-parsed; raw body is retained for byte-equivalent upstream
-  forward.
-- **Pure shape stays vendorable**: `pkg/api/<shape>` has zero Relay
-  imports. Relay-specific glue (`Call`, `Retryable`, `ExtractTokens`)
-  lives in `app/api/<shape>`.
+- **Pure shape stays vendorable**: `pkg/adapters/<vendor>/` has zero
+  `app/` or `internal/` imports. Vendor adapter's `pipeline.Adapter`
+  implementation is generic (`app/adapter.specAdapter`) parameterised
+  by upstream URL + auth strategy from the Spec.
 - **Token counts come from the provider response** — no relay-side
   tokenisation. The `Adapter.ExtractTokens([]byte)` contract.
 - **One Redis Lua call per request** is the goal: rate-limit reserve
@@ -314,15 +406,16 @@ Future-proof seams (already wired; do not bypass):
   S3. Bounded channels with drop-on-full and a Prometheus drop
   counter. Never unbounded queues. Never block-on-send on the hot
   path.
-- **Cross-shape translation** is live with OpenAI as the canonical hub:
-  every non-OpenAI adapter implements four transforms against OpenAI's
-  types (`Translator` interface in `app/adapters/translator.go`); the
-  OpenAI adapter is `Identity`. When inbound shape == upstream shape, the
-  translator pair is identity → byte-equivalent passthrough. Lossy
-  fields and the path forward to a richer internal shape live in
-  `docs/adapters.md`. Per-shape route mounting lives under
-  `app/adapters/<name>/routes.go` — `app/httpapi/inference/` is
-  shape-agnostic.
+- **Cross-shape translation** runs against a relay-native canonical
+  (`pkg/relay/v1/`, narrowed Responses shape). Every vendor adapter
+  implements `v1.Translator`'s six methods (parse/serialize × request/
+  response + two stream factories). Composition handles any A→B route
+  — no pairwise packages. When inbound shape == upstream shape (same-
+  shape) or the inbound spec's `IsNativePath` matches, dispatch byte-
+  passes via `io.Copy`. `BytePass: true` shapes (Embeddings) never
+  translate. Otherwise the canonical chain runs. `app/httpapi/inference/`
+  is shape-agnostic; route mounting is generic via
+  `inference.MountRegistry(specRegistry)`.
 
 ### Post-flight contract
 
@@ -483,6 +576,14 @@ roadmap A3. We're temporarily flying blind on regressions.
 - Smoke tests run against `deploy/compose/docker-compose.test.yml` —
   ephemeral pg on `127.0.0.1:5499`, brought up via `make
   test-integration`.
+- Higher-fidelity smoke: `make smoke-mock` replays recorded OpenAI
+  fixtures (`wyolet/spec-mock-openai`) through relay → Caddy →
+  spec-mock-openai. Validates wire-level dispatch end-to-end with real
+  recorded conversations including parallel tool-calls + streaming.
+- When a misconfigured upstream trips key-pool breakers, `make
+  breakers-reset` clears `secret_health:*` keys in valkey so subsequent
+  fixed requests can land instead of returning "no healthy keys in
+  pool".
 
 ## When in doubt
 

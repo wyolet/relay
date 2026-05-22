@@ -1,13 +1,28 @@
 # Roadmap
 
-The `app/` architecture cutover (PRs #110–#115) is done; E2E test
-landed in #117. This doc tracks what comes next, in **priority order**.
+This doc tracks what comes next, in **priority order**.
 
 Items list **what / why / rough size / where it lives**. When "where"
 would take more than a sentence, the item is its own design doc
 waiting to be written; the path under `docs/` is the placeholder.
 
----
+## Recently shipped
+
+- **`app/` architecture cutover** (PRs #110–#115) — done.
+- **v1alpha2 catalog** (PRs #156–#172, catalog PRs #4–#7) — embedded
+  Snapshots, HostBinding.Snapshots filter, Aliases removed, owner
+  defaults at translate.
+- **OpenAI Responses inbound + cross-shape (Phase 1/1.5)** (PRs #175–#183).
+- **Canonical Phase 2** (PRs #185–#189, 2026-05-22):
+  - `pkg/relay/v1/` canonical protocol package (narrowed Responses;
+    stateless; `extensions` envelope; `provider_data` opaque field).
+  - OpenAI + Anthropic vendor adapters target canonical via
+    `v1.Translator`. Pairwise translator packages deleted.
+  - Generic `app/adapter/` framework (`Spec` + `Registry`). Per-vendor
+    `app/adapters/<vendor>/` packages deleted. Dispatch is shape-
+    agnostic. `Deps.CrossShapeHandlers` deleted.
+  - Verified via `make smoke-mock` + live Claude Code →
+    ollama-self/gpt-oss-120b tool-use round-trip.
 
 ## Now — priority queue
 
