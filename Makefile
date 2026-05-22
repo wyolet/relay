@@ -1,7 +1,7 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
         version release release-minor release-major \
-        sqlc-generate test test-integration smoke-mock \
+        sqlc-generate test test-integration smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean schemas catalog-validate
 
@@ -127,6 +127,12 @@ dev-redis: ## bring up just the valkey container, host-published on $(RELAY_VALK
 
 dev-down: ## stop the valkey container
 	docker compose $(COMPOSE_DEV_ARGS) stop valkey
+
+breakers-reset: ## clear all keypool circuit-breaker state in valkey (lets the next request retry from healthy)
+	@for k in $$(docker exec relay-valkey valkey-cli --scan --pattern 'secret_health:*'); do \
+		docker exec -i relay-valkey valkey-cli del "$$k" >/dev/null; \
+	done
+	@echo "circuit breakers cleared"
 
 # --- full compose stack ---
 
