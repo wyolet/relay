@@ -8,6 +8,7 @@ package pipeline
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -123,6 +125,11 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 		excluded []*hostkey.HostKey
 		acq      *policy.Acquisition
 		resp     *http.Response
+		// Last upstream response observed during retry. Carried into the
+		// final error so callers see *why* upstream rejected (otherwise
+		// "all keys exhausted" hides the actual auth/quota/server message).
+		lastStatus int
+		lastBody   string
 	)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
@@ -150,7 +157,8 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 
 		retry, kind, retryAfter := classify(req.Adapter, resp, err)
 		if resp != nil {
-			drainAndClose(resp.Body)
+			lastStatus = resp.StatusCode
+			lastBody = readBodyExcerpt(resp, 512)
 		}
 		if !retry {
 			break
@@ -163,7 +171,56 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 	if err == nil {
 		err = ErrAllKeysExhausted
 	}
+	if errors.Is(err, ErrAllKeysExhausted) && lastStatus != 0 {
+		err = &UpstreamFailureError{Status: lastStatus, Body: lastBody, Cause: err}
+	}
 	return nil, err
+}
+
+// UpstreamFailureError wraps ErrAllKeysExhausted with the last upstream
+// status + body excerpt so handlers can surface what actually went wrong
+// (otherwise the caller just sees "all upstream keys failed" with no
+// context — auth? quota? bad model? unknown).
+type UpstreamFailureError struct {
+	Status int
+	Body   string
+	Cause  error
+}
+
+func (e *UpstreamFailureError) Error() string {
+	body := e.Body
+	if body == "" {
+		body = "(empty body)"
+	}
+	return fmt.Sprintf("upstream returned %d: %s", e.Status, body)
+}
+
+func (e *UpstreamFailureError) Unwrap() error { return e.Cause }
+
+// readBodyExcerpt reads up to max bytes from resp.Body, drains the rest,
+// and returns the read bytes as a string. Honors Content-Encoding: gzip
+// (Anthropic compresses error bodies) so the excerpt is human-readable
+// rather than raw deflate. Empty if body is nil or unreadable.
+func readBodyExcerpt(resp *http.Response, max int) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var src io.Reader = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gr, err := gzip.NewReader(resp.Body)
+		if err == nil {
+			defer gr.Close()
+			src = gr
+		}
+	}
+	buf := make([]byte, max)
+	n, _ := io.ReadFull(src, buf)
+	if n == 0 {
+		return ""
+	}
+	_, _ = io.Copy(io.Discard, src)
+	return strings.TrimSpace(string(buf[:n]))
 }
 
 func shouldRetry(a Adapter, resp *http.Response) bool {

@@ -58,9 +58,15 @@ func mapRoutingErr(w http.ResponseWriter, err error) {
 
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
+	var upstream *pipeline.UpstreamFailureError
 	switch {
 	case errors.Is(err, pipeline.ErrNoKeys):
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys")
+	case errors.As(err, &upstream):
+		// Surface the upstream's actual status + body so callers see auth /
+		// quota / bad-model messages instead of a generic "keys exhausted".
+		msg := "all upstream keys failed; " + upstream.Error()
+		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unavailable", msg)
 	case errors.Is(err, pipeline.ErrAllKeysExhausted):
 		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unavailable", "all upstream keys failed")
 	case errors.Is(err, pipeline.ErrAdapterMissing):
