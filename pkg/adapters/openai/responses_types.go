@@ -1,0 +1,91 @@
+package openai
+
+// ResponsesItemType is the wire discriminator for the Responses API Input/Output item union.
+type ResponsesItemType string
+
+const (
+	ResponsesItemTypeMessage            ResponsesItemType = "message"
+	ResponsesItemTypeFunctionCall       ResponsesItemType = "function_call"
+	ResponsesItemTypeFunctionCallOutput ResponsesItemType = "function_call_output"
+	ResponsesItemTypeReasoning          ResponsesItemType = "reasoning"
+)
+
+// ResponsesPartType is the wire discriminator for the Responses API Content part union.
+type ResponsesPartType string
+
+const (
+	ResponsesPartTypeInputText  ResponsesPartType = "input_text"
+	ResponsesPartTypeInputImage ResponsesPartType = "input_image"
+	ResponsesPartTypeInputFile  ResponsesPartType = "input_file"
+	ResponsesPartTypeOutputText ResponsesPartType = "output_text"
+	ResponsesPartTypeRefusal    ResponsesPartType = "refusal"
+)
+
+// ResponsesToolType is the wire discriminator for the Responses API Tool union.
+type ResponsesToolType string
+
+const (
+	ResponsesToolTypeFunction ResponsesToolType = "function"
+)
+
+// ResponsesRole enumerates valid message roles in the Responses API.
+type ResponsesRole string
+
+const (
+	ResponsesRoleUser      ResponsesRole = "user"
+	ResponsesRoleAssistant ResponsesRole = "assistant"
+	ResponsesRoleSystem    ResponsesRole = "system"
+	ResponsesRoleDeveloper ResponsesRole = "developer"
+)
+
+// ResponsesStatus is the item or response lifecycle state.
+type ResponsesStatus string
+
+const (
+	ResponsesStatusCompleted  ResponsesStatus = "completed"
+	ResponsesStatusIncomplete ResponsesStatus = "incomplete"
+	ResponsesStatusFailed     ResponsesStatus = "failed"
+	ResponsesStatusInProgress ResponsesStatus = "in_progress"
+)
+
+// ResponsesFinishReason explains why generation stopped.
+type ResponsesFinishReason string
+
+const (
+	ResponsesFinishReasonStop          ResponsesFinishReason = "stop"
+	ResponsesFinishReasonLength        ResponsesFinishReason = "length"
+	ResponsesFinishReasonContentFilter ResponsesFinishReason = "content_filter"
+	ResponsesFinishReasonToolCalls     ResponsesFinishReason = "tool_calls"
+)
+
+// ResponsesItem is a sealed interface for elements of the Responses API Input or Output array.
+// The only valid concrete types are *ResponsesMessage, *ResponsesFunctionCall,
+// *ResponsesFunctionCallOutput, and *ResponsesReasoning.
+// External packages may not implement this interface.
+type ResponsesItem interface {
+	isResponsesItem()
+	ResponsesItemType() ResponsesItemType
+}
+
+// ResponsesPart is a sealed interface for elements of a Responses API message's Content array.
+// Valid concrete types: *ResponsesTextPart, *ResponsesImagePart, *ResponsesFilePart (input),
+// *ResponsesOutputTextPart, *ResponsesRefusalPart (output).
+type ResponsesPart interface {
+	isResponsesPart()
+	ResponsesPartType() ResponsesPartType
+}
+
+// ResponsesTool is a sealed interface for elements of the Responses API Tools array.
+// The only valid concrete type is *ResponsesFunctionTool.
+type ResponsesTool interface {
+	isResponsesTool()
+	ResponsesToolType() ResponsesToolType
+}
+
+// ResponsesAnnotation is a sealed interface for citation annotations on output text.
+// Concrete types: *ResponsesURLCitationAnnotation, *ResponsesFileCitationAnnotation,
+// *ResponsesRawAnnotation.
+type ResponsesAnnotation interface {
+	isResponsesAnnotation()
+	ResponsesAnnotationType() string
+}

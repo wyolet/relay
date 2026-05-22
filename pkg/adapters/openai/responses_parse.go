@@ -1,20 +1,19 @@
-package responses
+package openai
 
 import (
 	"encoding/json"
 	"fmt"
 )
 
-// Parse decodes a POST /v1/responses body into a *Request.
+// ParseResponsesRequest decodes a POST /v1/responses body into a *ResponsesRequest.
 //
 // Normalization applied:
-//   - string input → []Item{&Message{Role:RoleUser, Content:[]Part{&TextPart{...}}}}
-//   - string content inside messages → []Part{&TextPart{...}}
+//   - string input → []ResponsesItem{&ResponsesMessage{Role:ResponsesRoleUser, Content:[]ResponsesPart{&ResponsesTextPart{...}}}}
+//   - string content inside messages → []ResponsesPart{&ResponsesTextPart{...}}
 //   - unsupported item types return an explicit error (caller maps to 400)
 //   - unsupported tool types return an explicit error (caller maps to 400)
 //   - metadata exceeding caps returns an explicit error (caller maps to 400)
-func Parse(body []byte) (*Request, error) {
-	// wireRequest mirrors the JSON shape before normalization.
+func ParseResponsesRequest(body []byte) (*ResponsesRequest, error) {
 	var wire struct {
 		Model  string          `json:"model"`
 		Input  json.RawMessage `json:"input"`
@@ -28,8 +27,8 @@ func Parse(body []byte) (*Request, error) {
 		TopK            *int     `json:"top_k"`
 		MaxOutputTokens *int     `json:"max_output_tokens"`
 
-		Text      *TextConfig      `json:"text"`
-		Reasoning *ReasoningConfig `json:"reasoning"`
+		Text      *ResponsesTextConfig      `json:"text"`
+		Reasoning *ResponsesReasoningConfig `json:"reasoning"`
 
 		ParallelToolCalls *bool             `json:"parallel_tool_calls"`
 		Metadata          map[string]string `json:"metadata"`
@@ -61,13 +60,13 @@ func Parse(body []byte) (*Request, error) {
 	}
 
 	// Normalize input.
-	input, err := normalizeInput(wire.Input)
+	input, err := responsesNormalizeInput(wire.Input)
 	if err != nil {
 		return nil, fmt.Errorf("input: %w", err)
 	}
 
 	// Parse tools.
-	var tools Tools
+	var tools ResponsesTools
 	if len(wire.Tools) > 0 && string(wire.Tools) != "null" {
 		if err := json.Unmarshal(wire.Tools, &tools); err != nil {
 			return nil, fmt.Errorf("tools: %w", err)
@@ -75,9 +74,9 @@ func Parse(body []byte) (*Request, error) {
 	}
 
 	// Parse tool_choice.
-	var toolChoice *ToolChoice
+	var toolChoice *ResponsesToolChoice
 	if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
-		var tc ToolChoice
+		var tc ResponsesToolChoice
 		if err := json.Unmarshal(wire.ToolChoice, &tc); err != nil {
 			return nil, fmt.Errorf("tool_choice: %w", err)
 		}
@@ -86,12 +85,12 @@ func Parse(body []byte) (*Request, error) {
 
 	// Validate metadata.
 	if len(wire.Metadata) > 0 {
-		if err := validateMetadata(wire.Metadata); err != nil {
+		if err := responsesValidateMetadata(wire.Metadata); err != nil {
 			return nil, fmt.Errorf("metadata: %w", err)
 		}
 	}
 
-	return &Request{
+	return &ResponsesRequest{
 		Model:        wire.Model,
 		Input:        input,
 		Instructions: wire.Instructions,
@@ -127,9 +126,9 @@ func Parse(body []byte) (*Request, error) {
 	}, nil
 }
 
-// normalizeInput converts the wire input (string or array) to []Item.
-// String "hello" → []Item{&Message{Role:RoleUser, Content:[]Part{&TextPart{Text:"hello"}}}}.
-func normalizeInput(raw json.RawMessage) ([]Item, error) {
+// responsesNormalizeInput converts the wire input (string or array) to []ResponsesItem.
+// String "hello" → []ResponsesItem{&ResponsesMessage{Role:ResponsesRoleUser, Content:[]ResponsesPart{&ResponsesTextPart{Text:"hello"}}}}.
+func responsesNormalizeInput(raw json.RawMessage) ([]ResponsesItem, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("empty")
 	}
@@ -138,17 +137,17 @@ func normalizeInput(raw json.RawMessage) ([]Item, error) {
 		if err := json.Unmarshal(raw, &s); err != nil {
 			return nil, err
 		}
-		return []Item{&Message{
-			Role:    RoleUser,
-			Content: []Part{&TextPart{Text: s}},
+		return []ResponsesItem{&ResponsesMessage{
+			Role:    ResponsesRoleUser,
+			Content: []ResponsesPart{&ResponsesTextPart{Text: s}},
 		}}, nil
 	}
-	return unmarshalItems(raw)
+	return responsesUnmarshalItems(raw)
 }
 
-// validateMetadata enforces the caps on the metadata map:
+// responsesValidateMetadata enforces the caps on the metadata map:
 // ≤16 entries, key ≤64 chars (DNS-1123 charset), value ≤256 chars (ASCII printable).
-func validateMetadata(m map[string]string) error {
+func responsesValidateMetadata(m map[string]string) error {
 	if len(m) > 16 {
 		return fmt.Errorf("too many entries: %d (max 16)", len(m))
 	}
@@ -159,17 +158,17 @@ func validateMetadata(m map[string]string) error {
 		if len(v) > 256 {
 			return fmt.Errorf("value for key %q exceeds 256 characters", k)
 		}
-		if !validMetaKey(k) {
+		if !responsesValidMetaKey(k) {
 			return fmt.Errorf("key %q contains invalid characters (DNS-1123 charset required)", k)
 		}
-		if !validMetaValue(v) {
+		if !responsesValidMetaValue(v) {
 			return fmt.Errorf("value for key %q contains non-printable or disallowed ASCII characters", k)
 		}
 	}
 	return nil
 }
 
-func validMetaKey(s string) bool {
+func responsesValidMetaKey(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
@@ -184,7 +183,7 @@ func validMetaKey(s string) bool {
 	return true
 }
 
-func validMetaValue(s string) bool {
+func responsesValidMetaValue(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c < 0x20 || c > 0x7E {
@@ -194,10 +193,8 @@ func validMetaValue(s string) bool {
 	return true
 }
 
-// Hints is the minimal set of fields extracted by RoutingHints.
-// Fields match those extracted by the Chat Completions parse path, plus
-// Responses-specific additions.
-type Hints struct {
+// ResponsesHints is the minimal set of fields extracted by ResponsesRoutingHints.
+type ResponsesHints struct {
 	Model              string
 	Stream             bool
 	User               string
@@ -206,10 +203,10 @@ type Hints struct {
 	Background         *bool
 }
 
-// RoutingHints extracts the minimum fields needed for route-layer decisions
+// ResponsesRoutingHints extracts the minimum fields needed for route-layer decisions
 // without fully parsing the request body. Returns an error only for invalid JSON
 // or missing model.
-func RoutingHints(body []byte) (*Hints, error) {
+func ResponsesRoutingHints(body []byte) (*ResponsesHints, error) {
 	var w struct {
 		Model              string `json:"model"`
 		Stream             *bool  `json:"stream"`
@@ -224,7 +221,7 @@ func RoutingHints(body []byte) (*Hints, error) {
 	if w.Model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
-	h := &Hints{
+	h := &ResponsesHints{
 		Model:              w.Model,
 		User:               w.User,
 		PreviousResponseID: w.PreviousResponseID,

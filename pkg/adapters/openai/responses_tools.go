@@ -1,31 +1,31 @@
-package responses
+package openai
 
 import (
 	"encoding/json"
 	"fmt"
 )
 
-// FunctionTool is the only supported tool type in v1.
-type FunctionTool struct {
+// ResponsesFunctionTool is the only supported tool type in Responses API v1.
+type ResponsesFunctionTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON schema; kept raw to avoid re-encoding user schemas
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-func (*FunctionTool) isTool()          {}
-func (*FunctionTool) ToolType() ToolType { return ToolTypeFunction }
+func (*ResponsesFunctionTool) isResponsesTool()                       {}
+func (*ResponsesFunctionTool) ResponsesToolType() ResponsesToolType   { return ResponsesToolTypeFunction }
 
-func (f *FunctionTool) MarshalJSON() ([]byte, error) {
+func (f *ResponsesFunctionTool) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type        ToolType        `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		Parameters  json.RawMessage `json:"parameters"`
-		Strict      *bool           `json:"strict,omitempty"`
+		Type        ResponsesToolType `json:"type"`
+		Name        string            `json:"name"`
+		Description string            `json:"description,omitempty"`
+		Parameters  json.RawMessage   `json:"parameters"`
+		Strict      *bool             `json:"strict,omitempty"`
 	}
 	return json.Marshal(wire{
-		Type:        ToolTypeFunction,
+		Type:        ResponsesToolTypeFunction,
 		Name:        f.Name,
 		Description: f.Description,
 		Parameters:  f.Parameters,
@@ -33,11 +33,11 @@ func (f *FunctionTool) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// Tools is a polymorphic slice of Tool values. Its UnmarshalJSON rejects
+// ResponsesTools is a polymorphic slice of ResponsesTool values. Its UnmarshalJSON rejects
 // unsupported tool types with an explicit error so callers can map to 400.
-type Tools []Tool
+type ResponsesTools []ResponsesTool
 
-func (ts Tools) MarshalJSON() ([]byte, error) {
+func (ts ResponsesTools) MarshalJSON() ([]byte, error) {
 	raws := make([]json.RawMessage, len(ts))
 	for i, t := range ts {
 		b, err := json.Marshal(t)
@@ -49,14 +49,14 @@ func (ts Tools) MarshalJSON() ([]byte, error) {
 	return json.Marshal(raws)
 }
 
-func (ts *Tools) UnmarshalJSON(data []byte) error {
+func (ts *ResponsesTools) UnmarshalJSON(data []byte) error {
 	var raws []json.RawMessage
 	if err := json.Unmarshal(data, &raws); err != nil {
 		return fmt.Errorf("tools array: %w", err)
 	}
-	result := make(Tools, 0, len(raws))
+	result := make(ResponsesTools, 0, len(raws))
 	for _, raw := range raws {
-		t, err := unmarshalTool(raw)
+		t, err := responsesUnmarshalTool(raw)
 		if err != nil {
 			return err
 		}
@@ -66,18 +66,18 @@ func (ts *Tools) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// unmarshalTool decodes a single tool. Returns an explicit error for types
+// responsesUnmarshalTool decodes a single tool. Returns an explicit error for types
 // outside the v1 supported set.
-func unmarshalTool(data []byte) (Tool, error) {
+func responsesUnmarshalTool(data []byte) (ResponsesTool, error) {
 	var probe struct {
-		Type ToolType `json:"type"`
+		Type ResponsesToolType `json:"type"`
 	}
 	if err := json.Unmarshal(data, &probe); err != nil {
 		return nil, fmt.Errorf("tool: %w", err)
 	}
 	switch probe.Type {
-	case ToolTypeFunction:
-		var v FunctionTool
+	case ResponsesToolTypeFunction:
+		var v ResponsesFunctionTool
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("function tool: %w", err)
 		}
@@ -87,14 +87,14 @@ func unmarshalTool(data []byte) (Tool, error) {
 	}
 }
 
-// ToolChoice is polymorphic: a string shorthand ("auto", "required", "none")
+// ResponsesToolChoice is polymorphic: a string shorthand ("auto", "required", "none")
 // or a {type:"function", name:"..."} object.
-type ToolChoice struct {
+type ResponsesToolChoice struct {
 	Mode         string // "auto" | "required" | "none" | "function"
 	FunctionName string // only when Mode == "function"
 }
 
-func (tc ToolChoice) MarshalJSON() ([]byte, error) {
+func (tc ResponsesToolChoice) MarshalJSON() ([]byte, error) {
 	switch tc.Mode {
 	case "auto", "required", "none":
 		return json.Marshal(tc.Mode)
@@ -104,13 +104,11 @@ func (tc ToolChoice) MarshalJSON() ([]byte, error) {
 			Name string `json:"name"`
 		}{Type: "function", Name: tc.FunctionName})
 	default:
-		// Fall back to marshaling the mode as a string even if unexpected.
 		return json.Marshal(tc.Mode)
 	}
 }
 
-func (tc *ToolChoice) UnmarshalJSON(data []byte) error {
-	// String form: "auto" | "required" | "none"
+func (tc *ResponsesToolChoice) UnmarshalJSON(data []byte) error {
 	if len(data) > 0 && data[0] == '"' {
 		var s string
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -119,7 +117,6 @@ func (tc *ToolChoice) UnmarshalJSON(data []byte) error {
 		tc.Mode = s
 		return nil
 	}
-	// Object form: {type:"function", name:"..."}
 	var obj struct {
 		Type string `json:"type"`
 		Name string `json:"name"`

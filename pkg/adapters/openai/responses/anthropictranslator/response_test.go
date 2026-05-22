@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 func TestAnthropicToResponse_TextBlock(t *testing.T) {
@@ -37,23 +37,23 @@ func TestAnthropicToResponse_TextBlock(t *testing.T) {
 	if resp.Model != "claude-opus-4-5" {
 		t.Errorf("model: got %q", resp.Model)
 	}
-	if resp.Status != responses.StatusCompleted {
+	if resp.Status != pkgopenai.ResponsesStatusCompleted {
 		t.Errorf("status: got %q", resp.Status)
 	}
-	if resp.FinishReason != responses.FinishReasonStop {
+	if resp.FinishReason != pkgopenai.ResponsesFinishReasonStop {
 		t.Errorf("finish_reason: got %q", resp.FinishReason)
 	}
 	if len(resp.Output) != 1 {
 		t.Fatalf("output len: got %d want 1", len(resp.Output))
 	}
-	msg, ok := resp.Output[0].(*responses.Message)
+	msg, ok := resp.Output[0].(*pkgopenai.ResponsesMessage)
 	if !ok {
-		t.Fatalf("output[0] is %T, want *responses.Message", resp.Output[0])
+		t.Fatalf("output[0] is %T, want *pkgopenai.ResponsesMessage", resp.Output[0])
 	}
 	if len(msg.Content) != 1 {
 		t.Fatalf("content len: got %d", len(msg.Content))
 	}
-	part, ok := msg.Content[0].(*responses.OutputTextPart)
+	part, ok := msg.Content[0].(*pkgopenai.ResponsesOutputTextPart)
 	if !ok {
 		t.Fatalf("content[0] is %T", msg.Content[0])
 	}
@@ -65,7 +65,7 @@ func TestAnthropicToResponse_TextBlock(t *testing.T) {
 	if msg.ID != "msg_0" {
 		t.Errorf("message id: got %q, want msg_0", msg.ID)
 	}
-	if msg.Status != responses.StatusCompleted {
+	if msg.Status != pkgopenai.ResponsesStatusCompleted {
 		t.Errorf("message status: got %q, want completed", msg.Status)
 	}
 
@@ -109,18 +109,18 @@ func TestAnthropicToResponse_ToolUseBlock(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Status != responses.StatusCompleted {
+	if resp.Status != pkgopenai.ResponsesStatusCompleted {
 		t.Errorf("status: got %q", resp.Status)
 	}
-	if resp.FinishReason != responses.FinishReasonToolCalls {
+	if resp.FinishReason != pkgopenai.ResponsesFinishReasonToolCalls {
 		t.Errorf("finish_reason: got %q", resp.FinishReason)
 	}
 	if len(resp.Output) != 1 {
 		t.Fatalf("output len: got %d", len(resp.Output))
 	}
-	fc, ok := resp.Output[0].(*responses.FunctionCall)
+	fc, ok := resp.Output[0].(*pkgopenai.ResponsesFunctionCall)
 	if !ok {
-		t.Fatalf("output[0] is %T, want *responses.FunctionCall", resp.Output[0])
+		t.Fatalf("output[0] is %T, want *pkgopenai.ResponsesFunctionCall", resp.Output[0])
 	}
 	if fc.CallID != "toolu_01" {
 		t.Errorf("call_id: got %q", fc.CallID)
@@ -168,18 +168,18 @@ func TestAnthropicToResponse_ThinkingBlock(t *testing.T) {
 	}
 
 	// First item should be reasoning.
-	reasoning, ok := resp.Output[0].(*responses.Reasoning)
+	reasoning, ok := resp.Output[0].(*pkgopenai.ResponsesReasoning)
 	if !ok {
-		t.Fatalf("output[0] is %T, want *responses.Reasoning", resp.Output[0])
+		t.Fatalf("output[0] is %T, want *pkgopenai.ResponsesReasoning", resp.Output[0])
 	}
 	if len(reasoning.Summary) == 0 || reasoning.Summary[0].Text == "" {
 		t.Error("reasoning summary should contain thinking text")
 	}
 
 	// Second item should be message.
-	msg, ok := resp.Output[1].(*responses.Message)
+	msg, ok := resp.Output[1].(*pkgopenai.ResponsesMessage)
 	if !ok {
-		t.Fatalf("output[1] is %T, want *responses.Message", resp.Output[1])
+		t.Fatalf("output[1] is %T, want *pkgopenai.ResponsesMessage", resp.Output[1])
 	}
 	if len(msg.Content) == 0 {
 		t.Fatal("message content is empty")
@@ -189,18 +189,18 @@ func TestAnthropicToResponse_ThinkingBlock(t *testing.T) {
 func TestAnthropicToResponse_StopReasonVariants(t *testing.T) {
 	cases := []struct {
 		stopReason     string
-		wantStatus     responses.Status
-		wantFinish     responses.FinishReason
+		wantStatus     pkgopenai.ResponsesStatus
+		wantFinish     pkgopenai.ResponsesFinishReason
 		wantIncomplete string
 	}{
-		{"end_turn", responses.StatusCompleted, responses.FinishReasonStop, ""},
-		{"stop_sequence", responses.StatusCompleted, responses.FinishReasonStop, ""},
-		{"max_tokens", responses.StatusIncomplete, responses.FinishReasonLength, "max_output_tokens"},
-		{"tool_use", responses.StatusCompleted, responses.FinishReasonToolCalls, ""},
-		{"refusal", responses.StatusCompleted, "refusal", ""},
-		{"pause_turn", responses.StatusIncomplete, "", "pause_turn"},
-		{"", responses.StatusCompleted, responses.FinishReasonStop, ""},
-		{"unknown_future", responses.StatusCompleted, responses.FinishReasonStop, ""},
+		{"end_turn", pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonStop, ""},
+		{"stop_sequence", pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonStop, ""},
+		{"max_tokens", pkgopenai.ResponsesStatusIncomplete, pkgopenai.ResponsesFinishReasonLength, "max_output_tokens"},
+		{"tool_use", pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonToolCalls, ""},
+		{"refusal", pkgopenai.ResponsesStatusCompleted, "refusal", ""},
+		{"pause_turn", pkgopenai.ResponsesStatusIncomplete, "", "pause_turn"},
+		{"", pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonStop, ""},
+		{"unknown_future", pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonStop, ""},
 	}
 
 	for _, tc := range cases {
@@ -289,7 +289,7 @@ func TestAnthropicToResponse_Refusal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if resp.Status != responses.StatusCompleted {
+	if resp.Status != pkgopenai.ResponsesStatusCompleted {
 		t.Errorf("status: got %q", resp.Status)
 	}
 	if resp.FinishReason != "refusal" {
@@ -299,11 +299,11 @@ func TestAnthropicToResponse_Refusal(t *testing.T) {
 	if len(resp.Output) == 0 {
 		t.Fatal("output should not be empty for refusal")
 	}
-	msg, ok := resp.Output[0].(*responses.Message)
+	msg, ok := resp.Output[0].(*pkgopenai.ResponsesMessage)
 	if !ok {
 		t.Fatalf("output[0] is %T", resp.Output[0])
 	}
-	part, ok := msg.Content[0].(*responses.OutputTextPart)
+	part, ok := msg.Content[0].(*pkgopenai.ResponsesOutputTextPart)
 	if !ok {
 		t.Fatalf("content[0] is %T", msg.Content[0])
 	}
@@ -351,11 +351,11 @@ func TestAnthropicToResponse_URLCitationAnnotations(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msg, ok := resp.Output[0].(*responses.Message)
+	msg, ok := resp.Output[0].(*pkgopenai.ResponsesMessage)
 	if !ok {
 		t.Fatalf("output[0] is %T", resp.Output[0])
 	}
-	part, ok := msg.Content[0].(*responses.OutputTextPart)
+	part, ok := msg.Content[0].(*pkgopenai.ResponsesOutputTextPart)
 	if !ok {
 		t.Fatalf("content[0] is %T", msg.Content[0])
 	}
@@ -363,7 +363,7 @@ func TestAnthropicToResponse_URLCitationAnnotations(t *testing.T) {
 	if len(part.Annotations) != 1 {
 		t.Errorf("annotations len: got %d want 1 (char_location should be dropped)", len(part.Annotations))
 	}
-	cit, ok := part.Annotations[0].(*responses.URLCitationAnnotation)
+	cit, ok := part.Annotations[0].(*pkgopenai.ResponsesURLCitationAnnotation)
 	if !ok {
 		t.Fatalf("annotation[0] is %T", part.Annotations[0])
 	}
