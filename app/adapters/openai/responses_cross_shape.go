@@ -3,8 +3,8 @@
 //
 //   - OpenAI-compatible (Adapter=OpenAI, host != "openai") — Ollama, Together,
 //     Groq, Fireworks, Azure OpenAI, Bedrock OpenAI-compat. Translate
-//     Responses ↔ Chat Completions via cctranslator and forward to
-//     /v1/chat/completions.
+//     Responses ↔ Chat Completions via the canonical chain
+//     (ResponsesTranslator + CCTranslator) and forward to /v1/chat/completions.
 //
 //   - Anthropic (Adapter=Anthropic) — api.anthropic.com, Bedrock Claude,
 //     Vertex Claude. Translate Responses ↔ /v1/messages via
@@ -17,17 +17,6 @@
 // conversation, include[], context_management, service_tier,
 // safety_identifier, prompt_cache_key) are rejected by each translator's
 // request stage and surface here as a 400.
-//
-// Why this bypasses the adapters.Translator interface
-//
-// The Translator interface in app/adapters/translator.go works against the
-// OpenAI Chat Completions hub (canonical = openai.FullChatRequest /
-// openai.ChatResponse). Responses can't round-trip through that hub without
-// losing tool taxonomy, reasoning state, and the typed item array, so
-// Responses inbound runs against direct pairwise translators (cctranslator,
-// anthropictranslator) wired here. This is Phase 1.5 of docs/canonical-protocol.md;
-// Phase 2 reorganizes both inbound paths against a relay-internal canonical
-// and this file's hook goes away.
 
 package openai
 
@@ -43,9 +32,8 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
 	"github.com/wyolet/relay/pkg/adapters/openai/responses/anthropictranslator"
-	"github.com/wyolet/relay/pkg/adapters/openai/responses/cctranslator"
+	v1 "github.com/wyolet/relay/pkg/relay/v1"
 )
 
 // DispatchResponsesCrossShape is the inference.CrossShapeHandler for
@@ -54,7 +42,7 @@ import (
 func DispatchResponsesCrossShape(d inference.Deps, w http.ResponseWriter, r *http.Request, in inference.DispatchInput, plan *routing.Plan) {
 	ctx := r.Context()
 
-	req, err := responses.Parse(in.Body)
+	req, err := pkgopenai.ParseResponsesRequest(in.Body)
 	if err != nil {
 		inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_responses_request", err.Error())
 		return
@@ -71,30 +59,39 @@ func DispatchResponsesCrossShape(d inference.Deps, w http.ResponseWriter, r *htt
 
 	var (
 		wireBody    []byte
-		toResponse  func([]byte) (*responses.Response, error)
+		toResponse  func([]byte) (*pkgopenai.ResponsesResponse, error)
 		streamTrans responsesStreamTranslator
 	)
 
 	switch upstreamKey {
 	case adapters.OpenAI:
-		ccReq, terr := cctranslator.RequestToCC(req)
+		// Canonical chain: Responses → canonical → CC upstream → canonical → Responses.
+		rt := pkgopenai.ResponsesTranslator{}
+		ct := pkgopenai.CCTranslator{}
+		canonical, terr := rt.ParseRequest(in.Body)
 		if terr != nil {
 			inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", terr.Error())
 			return
 		}
-		wireBody, err = json.Marshal(ccReq)
-		if err != nil {
-			inference.WriteAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
+		canonical.Model = v1.ModelRefs{req.Model}
+		wireBody, terr = ct.SerializeRequest(canonical)
+		if terr != nil {
+			inference.WriteAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", terr.Error())
 			return
 		}
-		toResponse = func(b []byte) (*responses.Response, error) {
-			var cc pkgopenai.ChatResponse
-			if uerr := json.Unmarshal(b, &cc); uerr != nil {
-				return nil, uerr
+		toResponse = func(b []byte) (*pkgopenai.ResponsesResponse, error) {
+			canResp, perr := ct.ParseResponse(b)
+			if perr != nil {
+				return nil, perr
 			}
-			return cctranslator.CCToResponse(req, &cc, req.Model)
+			out, serr := rt.SerializeResponse(canResp, canonical)
+			if serr != nil {
+				return nil, serr
+			}
+			return pkgopenai.UnmarshalResponsesResponse(out)
 		}
-		streamTrans = cctranslator.NewStream(req)
+		composed := pkgopenai.NewComposedStream(ct.NewToCanonicalStream(), rt.NewFromCanonicalStream())
+		streamTrans = composed
 
 	case adapters.Anthropic:
 		wireBody, err = anthropictranslator.RequestToAnthropic(req)
@@ -102,7 +99,7 @@ func DispatchResponsesCrossShape(d inference.Deps, w http.ResponseWriter, r *htt
 			inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 			return
 		}
-		toResponse = func(b []byte) (*responses.Response, error) {
+		toResponse = func(b []byte) (*pkgopenai.ResponsesResponse, error) {
 			return anthropictranslator.AnthropicToResponse(req, b)
 		}
 		streamTrans = anthropictranslator.NewStream(req)
@@ -156,7 +153,7 @@ func DispatchResponsesCrossShape(d inference.Deps, w http.ResponseWriter, r *htt
 // translateBufferedBody reads the full upstream body, runs the translator,
 // and returns the bytes to write to the client. On translator or marshal
 // failure the raw upstream body passes through.
-func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*responses.Response, error)) []byte {
+func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*pkgopenai.ResponsesResponse, error)) []byte {
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		return nil
@@ -173,9 +170,9 @@ func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*respons
 }
 
 // responsesStreamTranslator is the common per-chunk interface satisfied by
-// both cctranslator.Stream and anthropictranslator.Stream.
+// both pkgopenai.ComposedStream and anthropictranslator.Stream.
 type responsesStreamTranslator interface {
-	Translate(chunk []byte) ([]responses.SSEFrame, error)
+	Translate(chunk []byte) ([]pkgopenai.ResponsesSSEFrame, error)
 }
 
 // streamResponsesFrames consumes SSE chunks from body, feeds each to the
