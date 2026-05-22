@@ -20,6 +20,9 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
+	v1 "github.com/wyolet/relay/pkg/relay/v1"
 )
 
 // DispatchInput is what a per-shape route passes to Dispatch after its
@@ -133,6 +136,19 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 
 	sameShape := in.Inbound == upstreamKey
+
+	// Canonical cross-shape: when Anthropic is one side of the exchange,
+	// route through the canonical chain (v1.Translator) instead of the
+	// OpenAI-as-hub path. Covers two pairs:
+	//   inbound=CC + upstream=Anthropic  (CC → canonical → Anthropic)
+	//   inbound=Anthropic + upstream=OpenAI (Anthropic → canonical → CC)
+	if !sameShape {
+		if (in.Inbound == adapters.OpenAI && upstreamKey == adapters.Anthropic) ||
+			(in.Inbound == adapters.Anthropic && upstreamKey == adapters.OpenAI) {
+			dispatchCanonical(d, w, r, in, plan, upstreamAdapter)
+			return
+		}
+	}
 
 	// Build the wire body for the upstream call.
 	wireBody, err := buildWireBody(in.Body, plan.Snapshot.Upstream(), sameShape, inboundT, upstreamT)
@@ -261,6 +277,161 @@ func bufferTranslated(w http.ResponseWriter, body io.ReadCloser, upstreamT, inbo
 		return
 	}
 	_, _ = w.Write(out)
+}
+
+// dispatchCanonical handles cross-shape dispatch when Anthropic is one side
+// of the exchange. Uses v1.Translator canonical chain instead of the OpenAI-hub path.
+// Supported pairs:
+//
+//	inbound=CC + upstream=Anthropic: CCTranslator → canonical → AnthropicTranslator
+//	inbound=Anthropic + upstream=OpenAI: AnthropicTranslator → canonical → CCTranslator
+func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter) {
+	ctx := r.Context()
+
+	var inboundV1, upstreamV1 v1.Translator
+	switch {
+	case in.Inbound == adapters.OpenAI && plan.HostBinding.Adapter == adapters.Anthropic:
+		inboundV1 = pkgopenai.CCTranslator{}
+		upstreamV1 = pkganthropic.AnthropicTranslator{}
+	case in.Inbound == adapters.Anthropic && plan.HostBinding.Adapter == adapters.OpenAI:
+		inboundV1 = pkganthropic.AnthropicTranslator{}
+		upstreamV1 = pkgopenai.CCTranslator{}
+	default:
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "canonical_dispatch_unsupported",
+			"no canonical translator pair for "+string(in.Inbound)+"→"+string(plan.HostBinding.Adapter))
+		return
+	}
+
+	canonReq, err := inboundV1.ParseRequest(in.Body)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
+		return
+	}
+	canonReq.Model = v1.ModelRefs{plan.Snapshot.Upstream()}
+
+	wireBody, err := upstreamV1.SerializeRequest(canonReq)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
+		return
+	}
+
+	preq := &pipeline.Request{
+		Body:        wireBody,
+		Headers:     r.Header,
+		HostBaseURL: plan.Host.Spec.BaseURL,
+		Adapter:     upstreamAdapter,
+		Policy:      plan.Policy,
+		Model:       plan.Model,
+		Host:        plan.Host,
+		Provider:    plan.Provider,
+		Keys:        plan.Keys,
+		ModelName:   plan.Model.Meta.Name,
+	}
+
+	result, pErr := d.Pipeline.Run(ctx, preq)
+	if pErr != nil {
+		mapPipelineErr(w, pErr)
+		return
+	}
+	defer result.Body.Close()
+
+	ForwardUpstreamHeaders(w.Header(), result.Headers)
+	w.WriteHeader(result.Status)
+
+	if in.Stream {
+		streamCanonical(w, result.Body, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
+		return
+	}
+	bufferCanonical(w, result.Body, canonReq, upstreamV1, inboundV1)
+}
+
+// streamCanonical chains upstream→canonical→inbound per-chunk transforms.
+// toCanon converts upstream SSE chunks to canonical SSE.
+// fromCanon converts canonical SSE chunks to inbound SSE.
+func streamCanonical(w http.ResponseWriter, body io.ReadCloser, toCanon, fromCanon func([]byte) ([]byte, error)) {
+	flusher, _ := w.(http.Flusher)
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Split(splitSSEChunks)
+
+	for scanner.Scan() {
+		chunk := append([]byte(nil), scanner.Bytes()...)
+		chunk = append(chunk, '\n', '\n')
+
+		var out []byte
+		if toCanon != nil {
+			translated, err := toCanon(chunk)
+			if err != nil {
+				return
+			}
+			out = translated
+		} else {
+			out = chunk
+		}
+
+		if fromCanon != nil && len(out) > 0 {
+			// Split canonical output into individual frames for the inbound translator.
+			frames := splitCanonFrames(out)
+			out = nil
+			for _, f := range frames {
+				translated, err := fromCanon(f)
+				if err != nil {
+					return
+				}
+				out = append(out, translated...)
+			}
+		}
+
+		if len(out) == 0 {
+			continue
+		}
+		out = bytes.TrimRight(out, "\n")
+		_, _ = w.Write(out)
+		_, _ = w.Write([]byte("\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+}
+
+// bufferCanonical handles the sync (non-streaming) canonical cross-shape response.
+func bufferCanonical(w http.ResponseWriter, body io.ReadCloser, canonReq *v1.Request, upstreamV1, inboundV1 v1.Translator) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return
+	}
+	canResp, err := upstreamV1.ParseResponse(raw)
+	if err != nil {
+		_, _ = w.Write(raw)
+		return
+	}
+	out, err := inboundV1.SerializeResponse(canResp, canonReq)
+	if err != nil {
+		_, _ = w.Write(raw)
+		return
+	}
+	_, _ = w.Write(out)
+}
+
+// splitCanonFrames splits concatenated canonical SSE bytes into individual frames.
+func splitCanonFrames(b []byte) [][]byte {
+	var frames [][]byte
+	for len(b) > 0 {
+		idx := bytes.Index(b, []byte("\n\n"))
+		if idx < 0 {
+			trimmed := bytes.TrimSpace(b)
+			if len(trimmed) > 0 {
+				frames = append(frames, append(b, '\n', '\n'))
+			}
+			break
+		}
+		frame := b[:idx+2]
+		if len(bytes.TrimSpace(b[:idx])) > 0 {
+			frames = append(frames, frame)
+		}
+		b = b[idx+2:]
+	}
+	return frames
 }
 
 // splitSSEChunks is a bufio.SplitFunc that splits on the SSE event
