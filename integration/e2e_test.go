@@ -39,9 +39,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapters"
-	apianthropic "github.com/wyolet/relay/app/adapters/anthropic"
-	apiopenai "github.com/wyolet/relay/app/adapters/openai"
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/authz"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -130,30 +131,49 @@ func newStack(t *testing.T) *stack {
 	pl := &pipeline.Pipeline{Policy: policySvc, Logger: slog.Default()}
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
-	adapterRegistry := map[adapters.Name]pipeline.Adapter{
-		adapters.OpenAI:           apiopenai.New(),
-		adapters.OpenAIResponses:  apiopenai.New(apiopenai.WithPath("/v1/responses")),
-		adapters.OpenAIEmbeddings: apiopenai.New(apiopenai.WithPath("/v1/embeddings")),
-		adapters.Anthropic:        apianthropic.New(),
+	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
+	anthropicAuth := adapter.AuthStrategy{
+		Header:       "x-api-key",
+		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	}
-
-	translatorRegistry := adapters.Registry{
-		adapters.OpenAI:           apiopenai.Translator{},
-		adapters.OpenAIResponses:  apiopenai.Translator{},
-		adapters.OpenAIEmbeddings: apiopenai.Translator{},
-		adapters.Anthropic:        apianthropic.Translator{},
-	}
-
-	routeMounters := []inference.RouteMounter{
-		apiopenai.MountRoutes,
-		apiopenai.MountResponsesRoutes,
-		apiopenai.MountEmbeddingsRoutes,
-		apianthropic.MountRoutes,
-	}
-
-	crossShapeHandlers := map[adapters.Name]inference.CrossShapeHandler{
-		adapters.OpenAIResponses: apiopenai.DispatchResponsesCrossShape,
-	}
+	specRegistry := adapter.NewRegistry(
+		(&adapter.Spec{
+			Name:          adapters.OpenAI,
+			InboundPaths:  []adapter.InboundPath{{Path: "/v1/chat/completions", OperationID: "chat_completions", Summary: "Create a chat completion (OpenAI-compatible)"}},
+			UpstreamPath:  "/v1/chat/completions",
+			Auth:          openaiAuth,
+			Translator:    pkgopenai.CCTranslator{},
+			ExtractTokens: pkgopenai.ExtractTokens,
+		}).Build(),
+		(&adapter.Spec{
+			Name:          adapters.OpenAIResponses,
+			InboundPaths:  []adapter.InboundPath{{Path: "/v1/responses", OperationID: "responses_create", Summary: "Create a response (OpenAI Responses API)"}},
+			UpstreamPath:  "/v1/responses",
+			Auth:          openaiAuth,
+			Translator:    pkgopenai.ResponsesTranslator{},
+			ExtractTokens: pkgopenai.ExtractTokens,
+			UseHTTP1:      true,
+			IsNativePath: func(plan *routing.Plan) bool {
+				return plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+			},
+		}).Build(),
+		(&adapter.Spec{
+			Name:          adapters.OpenAIEmbeddings,
+			InboundPaths:  []adapter.InboundPath{{Path: "/v1/embeddings", OperationID: "embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"}},
+			UpstreamPath:  "/v1/embeddings",
+			Auth:          openaiAuth,
+			BytePass:      true,
+			ExtractTokens: pkgopenai.ExtractTokens,
+		}).Build(),
+		(&adapter.Spec{
+			Name:          adapters.Anthropic,
+			InboundPaths:  []adapter.InboundPath{{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"}},
+			UpstreamPath:  "/v1/messages",
+			Auth:          anthropicAuth,
+			Translator:    pkganthropic.AnthropicTranslator{},
+			ExtractTokens: pkganthropic.ExtractTokens,
+		}).Build(),
+	)
 
 	const adminToken = "test-admin-token"
 
@@ -168,15 +188,14 @@ func newStack(t *testing.T) *stack {
 
 	inferRouter := chi.NewRouter()
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:             st,
-		Catalog:            cat,
-		Resolver:           routing.New(cat),
-		Pipeline:           pl,
-		Proxy:              proxyPipeline,
-		Adapters:           adapterRegistry,
-		Translators:        translatorRegistry,
-		RouteMounters:      routeMounters,
-		CrossShapeHandlers: crossShapeHandlers,
+		Pinger:        st,
+		Catalog:       cat,
+		Resolver:      routing.New(cat),
+		Pipeline:      pl,
+		Proxy:         proxyPipeline,
+		Adapters:      specRegistry.AdapterMap(),
+		Specs:         specRegistry,
+		RouteMounters: []inference.RouteMounter{inference.MountRegistry(specRegistry)},
 	})
 
 	ctrlSrv := httptest.NewServer(ctrlRouter)

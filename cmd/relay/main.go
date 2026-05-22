@@ -20,8 +20,9 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapters"
-	apianthropic "github.com/wyolet/relay/app/adapters/anthropic"
-	apiopenai "github.com/wyolet/relay/app/adapters/openai"
+	"github.com/wyolet/relay/app/adapter"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -139,54 +140,78 @@ func main() {
 	pl := &pipeline.Pipeline{Policy: policySvc, Logger: slog.Default()}
 	proxyPipeline := proxy.New(limiter, slog.Default())
 
-	// Adapter registry — one entry per supported wire protocol.
-	adapterRegistry := map[adapters.Name]pipeline.Adapter{
-		adapters.OpenAI:           apiopenai.New(),
-		adapters.OpenAIResponses:  apiopenai.New(apiopenai.WithPath("/v1/responses")),
-		adapters.OpenAIEmbeddings: apiopenai.New(apiopenai.WithPath("/v1/embeddings")),
-		adapters.Anthropic:        apianthropic.New(),
+	// Adapter specs — one Spec per supported wire shape. The composition
+	// root is the only place vendor names appear; everything else looks
+	// up by adapters.Name via the registry.
+	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
+	anthropicAuth := adapter.AuthStrategy{
+		Header:       "x-api-key",
+		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	}
 
-	// Translator registry — same keys; identity for OpenAI, real
-	// transforms for everything else. See docs/adapters.md.
-	// OpenAIResponses uses identity for Phase 1 (byte-passthrough);
-	// real Responses↔OpenAI translator lands in Phase 2.
-	// OpenAIEmbeddings uses identity (Anthropic has no embeddings API).
-	translatorRegistry := adapters.Registry{
-		adapters.OpenAI:           apiopenai.Translator{},
-		adapters.OpenAIResponses:  apiopenai.Translator{},
-		adapters.OpenAIEmbeddings: apiopenai.Translator{},
-		adapters.Anthropic:        apianthropic.Translator{},
+	specs := []*adapter.Spec{
+		(&adapter.Spec{
+			Name: adapters.OpenAI,
+			InboundPaths: []adapter.InboundPath{
+				{Path: "/v1/chat/completions", OperationID: "chat_completions", Summary: "Create a chat completion (OpenAI-compatible)"},
+				{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion via the explicit /openai namespace"},
+			},
+			UpstreamPath:  "/v1/chat/completions",
+			Auth:          openaiAuth,
+			Translator:    pkgopenai.CCTranslator{},
+			ExtractTokens: pkgopenai.ExtractTokens,
+		}).Build(),
+		(&adapter.Spec{
+			Name: adapters.OpenAIResponses,
+			InboundPaths: []adapter.InboundPath{
+				{Path: "/v1/responses", OperationID: "responses_create", Summary: "Create a response (OpenAI Responses API)"},
+				{Path: "/openai/v1/responses", OperationID: "openai_responses_create", Summary: "Create a response via the explicit /openai namespace"},
+			},
+			UpstreamPath:  "/v1/responses",
+			Auth:          openaiAuth,
+			Translator:    pkgopenai.ResponsesTranslator{},
+			ExtractTokens: pkgopenai.ExtractTokens,
+			UseHTTP1:      true,
+			IsNativePath: func(plan *routing.Plan) bool {
+				return plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+			},
+		}).Build(),
+		(&adapter.Spec{
+			Name: adapters.OpenAIEmbeddings,
+			InboundPaths: []adapter.InboundPath{
+				{Path: "/v1/embeddings", OperationID: "embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"},
+				{Path: "/openai/v1/embeddings", OperationID: "openai_embeddings_create", Summary: "Create embeddings via the explicit /openai namespace"},
+			},
+			UpstreamPath:  "/v1/embeddings",
+			Auth:          openaiAuth,
+			BytePass:      true,
+			ExtractTokens: pkgopenai.ExtractTokens,
+		}).Build(),
+		(&adapter.Spec{
+			Name: adapters.Anthropic,
+			InboundPaths: []adapter.InboundPath{
+				{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"},
+				{Path: "/anthropic/v1/messages", OperationID: "anthropic_messages", Summary: "Create a message via the explicit /anthropic namespace"},
+			},
+			UpstreamPath:  "/v1/messages",
+			Auth:          anthropicAuth,
+			Translator:    pkganthropic.AnthropicTranslator{},
+			ExtractTokens: pkganthropic.ExtractTokens,
+		}).Build(),
 	}
-
-	// Per-adapter route registration — each adapter owns its inbound
-	// HTTP surface. Adding a new shape adds an entry here and a
-	// MountRoutes function in app/adapters/<name>/routes.go.
-	routeMounters := []inference.RouteMounter{
-		apiopenai.MountRoutes,
-		apiopenai.MountResponsesRoutes,
-		apiopenai.MountEmbeddingsRoutes,
-		apianthropic.MountRoutes,
-	}
-
-	// Per-inbound-shape cross-shape handlers. Inference dispatch consults
-	// this when the inbound shape can't byte-pass to the resolved upstream.
-	crossShapeHandlers := map[adapters.Name]inference.CrossShapeHandler{
-		adapters.OpenAIResponses: apiopenai.DispatchResponsesCrossShape,
-	}
+	specRegistry := adapter.NewRegistry(specs...)
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:             st,
-		Catalog:            cat,
-		Resolver:           routing.New(cat),
-		Pipeline:           pl,
-		Proxy:              proxyPipeline,
-		Adapters:           adapterRegistry,
-		Translators:        translatorRegistry,
-		RouteMounters:      routeMounters,
-		CrossShapeHandlers: crossShapeHandlers,
+		Pinger:        st,
+		Catalog:       cat,
+		Resolver:      routing.New(cat),
+		Pipeline:      pl,
+		Proxy:         proxyPipeline,
+		Adapters:      specRegistry.AdapterMap(),
+		Specs:         specRegistry,
+		RouteMounters: []inference.RouteMounter{inference.MountRegistry(specRegistry)},
 	})
 
 	inferAddr := ":8080"
