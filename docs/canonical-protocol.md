@@ -78,6 +78,32 @@ These are the rules the canonical's design follows:
 
 ---
 
+## Codebase rules (non-negotiable)
+
+These rules govern how the canonical protocol relates to the rest of the repo. Phase 2 work and everything after must obey them.
+
+1. **Canonical knows nothing.** `pkg/relay/v1/` (the canonical protocol package) declares its own types, its `Translator` interface, its `Name` + `Registry`, and nothing else. It does not import any `pkg/adapters/<vendor>/`, any `app/` package, or any vendor-named symbol. It is the lowest layer.
+
+2. **Vendors import canonical.** Each `pkg/adapters/<vendor>/` package imports `pkg/relay/v1/` and implements its `Translator` interface. Vendor adapters never import each other.
+
+3. **One folder per vendor, not per wire shape.** `pkg/adapters/openai/` owns *all* OpenAI wire shapes (Chat Completions, Responses, Embeddings, …) as files within the package. Adding a second wire shape for a vendor is a new file in the existing folder, never a new sibling package. Wire-shape names never appear in folder paths.
+
+4. **No vendor names in `app/` code.** Grep test: `grep -rE "openai|anthropic|gemini|cohere" app/ --include="*.go"` returns only catalog data references (string lookups against persisted names), error messages, and the composition root (`cmd/relay/main.go`). Dispatch, routing, pipeline, registry, http-mw — none of them branch on or import a vendor.
+
+5. **Composition root is the only place vendor names appear in code.** `cmd/relay/main.go` imports the vendor adapter packages and registers them with the `app/adapter/` framework. Every other binary, test, or service consumes adapters through the `Registry`.
+
+6. **Adapters are stateless pure transforms.** A `Translator` is six methods (parse/serialize × request/response, plus the two stream factories). No per-request state is held on the `Translator` value itself — the stream factories return per-stream closures, but the `Translator` instance is reused across requests. Per-request data the wire renderer needs (e.g. OpenAI Responses' request-echo fields) is passed explicitly through the call signature.
+
+7. **`extensions` envelope for cross-cutting concerns.** Anything that doesn't map cleanly across all vendors (cache hints, safety settings, RAG document context) lives in the `extensions: map[string]json.RawMessage` envelope on `Request` and `Response`. Vendor adapters that understand a key emit the corresponding wire field; adapters that don't, ignore it. No new top-level canonical field for vendor-specific features.
+
+8. **`provider_data` for same-vendor opaque blobs.** Signed/encrypted vendor payloads (Anthropic thinking signatures, OpenAI `encrypted_content`, etc.) are carried on the relevant item (`reasoning`, `tool_call`, `message`) as a `provider_data json.RawMessage` field. Round-tripped verbatim when going back to the same vendor; dropped when going cross-vendor. Customers never construct it.
+
+9. **Refusal is a stop_reason, not an item type.** Doc principle 4 (item taxonomy section): the model's refusal text appears as a normal `message` item's text content with `finish_reason: "refusal"` on the response. There is no `refusal_part` type.
+
+10. **`pkg/` purity preserved.** No `pkg/` package imports anything from `app/` or `internal/`. `pkg/relay/v1/` and `pkg/adapters/<vendor>/` together form a vendorable translation library: someone external can `go get` them and use them without pulling the Relay app.
+
+---
+
 ## Item taxonomy — v1
 
 Closed union, 4 types. Adding a new item type requires a protocol bump.
