@@ -127,6 +127,7 @@ func registerKind[T any](
 	cascade cascadeFn[T],
 	mergeUpdate mergeOnUpdateFn[T],
 	disallowDelete bool,
+	skipCreate bool,
 	protect huma.Middlewares,
 ) {
 	base := "/" + plural
@@ -193,69 +194,73 @@ func registerKind[T any](
 		return &itemResponse[T]{Body: v}, nil
 	})
 
-	// Create
-	huma.Register(api, huma.Operation{
-		OperationID:   "create_" + singular,
-		Method:        http.MethodPost,
-		Path:          base,
-		Summary:       "Create " + singular,
-		Tags:          []string{tag},
-		Middlewares:   protect,
-		DefaultStatus: http.StatusCreated,
-		Errors:        []int{400, 401, 500},
-	}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
-		if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
-		v := &in.Body
-		m := metaOf(v)
-		// Server stamps id+slug. Client-supplied id is discarded so id
-		// provenance is auditable.
-		m.ID = ids.New()
-		if m.Name == "" {
-			base := slug.From(m.DisplayName)
-			if base == "" {
-				base = singular
+	// Create — skipped for kinds whose creation requires custom logic
+	// (e.g. relay-keys, which generate plaintext server-side and return
+	// it once in the response body).
+	if !skipCreate {
+		huma.Register(api, huma.Operation{
+			OperationID:   "create_" + singular,
+			Method:        http.MethodPost,
+			Path:          base,
+			Summary:       "Create " + singular,
+			Tags:          []string{tag},
+			Middlewares:   protect,
+			DefaultStatus: http.StatusCreated,
+			Errors:        []int{400, 401, 500},
+		}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
+			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular}); err != nil {
+				return nil, mapAuthzErr(err)
 			}
-			m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
-		}
-		// API never creates system-owned rows. system is reserved for
-		// seed paths (Store.Upsert directly, bypassing this handler).
-		// When defaultOwnerKind is set, an empty owner gets stamped;
-		// an explicit "system" gets rejected. Kinds without a default
-		// (Model, HostKey) require the caller to specify owner.kind
-		// because their valid owner is per-row.
-		if m.Owner.Kind == meta.OwnerSystem {
-			return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
-		}
-		if m.Owner.Kind == "" && defaultOwnerKind != "" {
-			m.Owner.Kind = defaultOwnerKind
-		}
-		// Validate AFTER stamping id+slug so the entity's Validate() sees
-		// the same shape the store will persist. Rejecting here keeps bad
-		// rows out of PG (which would otherwise break Bootstrap).
-		if validate != nil {
-			if err := validate(v); err != nil {
-				return nil, huma.Error400BadRequest(err.Error())
+			v := &in.Body
+			m := metaOf(v)
+			// Server stamps id+slug. Client-supplied id is discarded so id
+			// provenance is auditable.
+			m.ID = ids.New()
+			if m.Name == "" {
+				base := slug.From(m.DisplayName)
+				if base == "" {
+					base = singular
+				}
+				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-		}
-		if guard != nil {
-			if err := guard("create", nil, v); err != nil {
-				return nil, huma.Error403Forbidden(err.Error())
+			// API never creates system-owned rows. system is reserved for
+			// seed paths (Store.Upsert directly, bypassing this handler).
+			// When defaultOwnerKind is set, an empty owner gets stamped;
+			// an explicit "system" gets rejected. Kinds without a default
+			// (Model, HostKey) require the caller to specify owner.kind
+			// because their valid owner is per-row.
+			if m.Owner.Kind == meta.OwnerSystem {
+				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
-		}
-		if err := store.Upsert(ctx, v); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
-		}
-		created, err := store.Get(ctx, m.ID)
-		if err != nil {
-			return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
-		}
-		if enrich != nil {
-			enrich(ctx, created)
-		}
-		return &itemResponse[T]{Body: created}, nil
-	})
+			if m.Owner.Kind == "" && defaultOwnerKind != "" {
+				m.Owner.Kind = defaultOwnerKind
+			}
+			// Validate AFTER stamping id+slug so the entity's Validate() sees
+			// the same shape the store will persist. Rejecting here keeps bad
+			// rows out of PG (which would otherwise break Bootstrap).
+			if validate != nil {
+				if err := validate(v); err != nil {
+					return nil, huma.Error400BadRequest(err.Error())
+				}
+			}
+			if guard != nil {
+				if err := guard("create", nil, v); err != nil {
+					return nil, huma.Error403Forbidden(err.Error())
+				}
+			}
+			if err := store.Upsert(ctx, v); err != nil {
+				return nil, huma.Error500InternalServerError(err.Error())
+			}
+			created, err := store.Get(ctx, m.ID)
+			if err != nil {
+				return nil, huma.Error500InternalServerError("created but could not read back: " + err.Error())
+			}
+			if enrich != nil {
+				enrich(ctx, created)
+			}
+			return &itemResponse[T]{Body: created}, nil
+		})
+	}
 
 	// Update by id
 	huma.Register(api, huma.Operation{
@@ -667,6 +672,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		true, // catalog-managed; disable instead of delete
+		false,
 		protect,
 	)
 
@@ -680,6 +686,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		true, // catalog-managed; disable instead of delete
+		false,
 		protect,
 	)
 
@@ -693,6 +700,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		true, // catalog-managed; disable instead of delete
+		false,
 		protect,
 	)
 
@@ -705,6 +713,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		enrichHostKeyPolicies(d),
 		cascadeHostKeyDetach(d),
 		mergeHostKeyPreserveValue,
+		false,
 		false,
 		protect,
 	)
@@ -719,6 +728,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		cascadeRateLimitDetach(d),
 		nil,
 		false,
+		false,
 		protect,
 	)
 
@@ -731,6 +741,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		cascadePolicyDetach(d),
 		nil,
+		false,
 		false,
 		protect,
 	)
@@ -745,9 +756,13 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		false,
+		false,
 		protect,
 	)
 
+	// relay-keys uses a custom POST handler (registerRelayKeyCreate) that
+	// generates the bearer plaintext server-side and returns it once. The
+	// generic CRUD POST is therefore skipped here.
 	registerKind[relaykey.RelayKey](
 		api, "relay-keys", "relay-key", d.Stores.RelayKey, d.Authz, rkmeta,
 		func(k *relaykey.RelayKey) error { return k.Validate() },
@@ -758,6 +773,8 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		false,
+		true, // skipCreate
 		protect,
 	)
+	registerRelayKeyCreate(api, d, protect)
 }

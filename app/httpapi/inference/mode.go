@@ -3,6 +3,7 @@ package inference
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -151,6 +152,7 @@ func ClassifyMiddleware() func(http.Handler) http.Handler {
 }
 
 func writeClassifyErr(w http.ResponseWriter, err error) {
+	slog.Warn("inference: classify rejected", "status", 400, "code", "bad_request", "msg", err.Error())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"bad_request","message":"` + err.Error() + `"}}`))

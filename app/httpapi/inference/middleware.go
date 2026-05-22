@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -83,6 +84,7 @@ func hashToken(token string) string {
 }
 
 func writeAuthErr(w http.ResponseWriter, msg string) {
+	slog.Warn("inference: auth rejected", "status", 401, "code", "unauthenticated", "msg", msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"unauthenticated","message":"` + msg + `"}}`))

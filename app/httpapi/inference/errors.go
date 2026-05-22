@@ -3,6 +3,7 @@ package inference
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/wyolet/relay/app/httpapi"
@@ -20,6 +21,12 @@ func WriteAPIError(w http.ResponseWriter, status int, errType, code, msg string)
 // writeAPIError is the internal form used by handlers inside this
 // package; WriteAPIError is the exported wrapper for adapter packages.
 func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string) {
+	slog.Warn("inference: error response",
+		"status", status,
+		"type", errType,
+		"code", code,
+		"msg", msg,
+	)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	env := httpapi.OpenAIError{

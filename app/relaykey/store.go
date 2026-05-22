@@ -99,6 +99,7 @@ func toUpsertParams(k *RelayKey) (gen.UpsertRelayKeyParams, error) {
 		ID:          k.Meta.ID,
 		Name:        k.Meta.Name,
 		DisplayName: k.Meta.DisplayName,
+		KeyHash:     k.Spec.KeyHash,
 		Metadata:    metaJSON,
 		Spec:        specJSON,
 	}, nil

@@ -70,6 +70,13 @@ type Request struct {
 	// RelayKey is the authenticated key (already validated for auth).
 	// Its Spec.PolicyID drives policy selection.
 	RelayKey *relaykey.RelayKey
+
+	// SkipKeyCheck, when true, suppresses the Policy.HostKeyIDs → host
+	// coverage gate. Used by proxy mode: the caller brings their own
+	// upstream credentials, so the relay's keypool is irrelevant — only
+	// the (model, binding, host) tuple matters. Plan.Keys is nil in
+	// this mode.
+	SkipKeyCheck bool
 }
 
 // Plan is the fully-resolved input the pipeline consumes. The handler
@@ -219,9 +226,14 @@ candidates:
 	h := chosenHost
 
 	// 6. Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID.
-	keys := hostKeysForHost(snap, pol, h.Meta.ID)
-	if len(keys) == 0 {
-		return nil, ErrNoKeys
+	// Proxy mode (SkipKeyCheck) bypasses this gate; the caller's own
+	// upstream credentials replace the keypool.
+	var keys []*hostkey.HostKey
+	if !req.SkipKeyCheck {
+		keys = hostKeysForHost(snap, pol, h.Meta.ID)
+		if len(keys) == 0 {
+			return nil, ErrNoKeys
+		}
 	}
 
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
