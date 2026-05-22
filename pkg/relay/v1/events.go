@@ -28,12 +28,17 @@ type GenerationCreatedEvent struct {
 }
 
 // ItemStartedEvent signals that a new item has begun. Carries enough metadata
-// to identify the item type without the full item body.
+// to identify the item type without the full item body. For FunctionCall items
+// Name is populated up front so downstream serializers (e.g. Anthropic's
+// tool_use content_block_start, which requires the tool name on the open frame)
+// can emit shape-correct wire bytes from the start event alone.
 type ItemStartedEvent struct {
 	ItemID   string   `json:"item_id"`
 	ItemType ItemType `json:"item_type"`
 	// Index is the position of this item in the output array.
 	Index int `json:"index"`
+	// Name is the function name for FunctionCall items. Empty for other kinds.
+	Name string `json:"name,omitempty"`
 }
 
 // ItemDeltaEvent carries an incremental chunk into the current item.

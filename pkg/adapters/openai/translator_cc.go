@@ -1111,6 +1111,7 @@ func (s *ccToCanonicalStream) handleToolCallDelta(tc ToolCallChunk) ([]v1.SSEFra
 			ItemID:   ti.itemID,
 			ItemType: v1.ItemTypeFunctionCall,
 			Index:    ti.outputIndex,
+			Name:     ti.name,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemStarted, Data: startData})
 	}
