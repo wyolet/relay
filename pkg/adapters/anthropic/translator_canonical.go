@@ -942,25 +942,31 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 	idx := s.blockIndex
 	s.blockIndex++
 
-	var blockType string
+	// Each Anthropic content block type requires different fields on the
+	// opening frame. Emitting the wrong shape (e.g. text:"" on tool_use)
+	// trips strict clients like Claude Code with `undefined.slice()` when
+	// they read name/text from the block before any delta arrives.
+	var cb map[string]any
 	switch e.ItemType {
 	case v1.ItemTypeMessage:
-		blockType = "text"
+		cb = map[string]any{"type": "text", "text": ""}
 	case v1.ItemTypeFunctionCall:
-		blockType = "tool_use"
+		cb = map[string]any{
+			"type":  "tool_use",
+			"id":    e.ItemID,
+			"name":  e.Name,
+			"input": map[string]any{},
+		}
 	case v1.ItemTypeReasoning:
-		blockType = "thinking"
+		cb = map[string]any{"type": "thinking", "thinking": "", "signature": ""}
 	default:
 		return nil, nil
 	}
 
 	cbs, _ := json.Marshal(map[string]any{
-		"type":  "content_block_start",
-		"index": idx,
-		"content_block": map[string]string{
-			"type": blockType,
-			"text": "",
-		},
+		"type":          "content_block_start",
+		"index":         idx,
+		"content_block": cb,
 	})
 	return anthropicSSEBytes("content_block_start", string(cbs)), nil
 }
