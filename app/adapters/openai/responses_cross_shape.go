@@ -7,8 +7,8 @@
 //     (ResponsesTranslator + CCTranslator) and forward to /v1/chat/completions.
 //
 //   - Anthropic (Adapter=Anthropic) — api.anthropic.com, Bedrock Claude,
-//     Vertex Claude. Translate Responses ↔ /v1/messages via
-//     anthropictranslator.
+//     Vertex Claude. Translate Responses ↔ /v1/messages via the canonical chain
+//     (ResponsesTranslator + AnthropicTranslator).
 //
 // OpenAI proper (Adapter=OpenAI, host="openai") never reaches this file —
 // inference.Dispatch keeps that path as a byte-pass to /v1/responses.
@@ -31,8 +31,8 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
 	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
-	"github.com/wyolet/relay/pkg/adapters/openai/responses/anthropictranslator"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
 )
 
@@ -94,15 +94,32 @@ func DispatchResponsesCrossShape(d inference.Deps, w http.ResponseWriter, r *htt
 		streamTrans = composed
 
 	case adapters.Anthropic:
-		wireBody, err = anthropictranslator.RequestToAnthropic(req)
-		if err != nil {
-			inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
+		// Canonical chain: Responses → canonical → Anthropic upstream → canonical → Responses.
+		rt := pkgopenai.ResponsesTranslator{}
+		aT := pkganthropic.AnthropicTranslator{}
+		canonical, terr := rt.ParseRequest(in.Body)
+		if terr != nil {
+			inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", terr.Error())
+			return
+		}
+		canonical.Model = v1.ModelRefs{req.Model}
+		wireBody, terr = aT.SerializeRequest(canonical)
+		if terr != nil {
+			inference.WriteAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", terr.Error())
 			return
 		}
 		toResponse = func(b []byte) (*pkgopenai.ResponsesResponse, error) {
-			return anthropictranslator.AnthropicToResponse(req, b)
+			canResp, perr := aT.ParseResponse(b)
+			if perr != nil {
+				return nil, perr
+			}
+			out, serr := rt.SerializeResponse(canResp, canonical)
+			if serr != nil {
+				return nil, serr
+			}
+			return pkgopenai.UnmarshalResponsesResponse(out)
 		}
-		streamTrans = anthropictranslator.NewStream(req)
+		streamTrans = pkgopenai.NewComposedStream(aT.NewToCanonicalStream(), rt.NewFromCanonicalStream())
 
 	default:
 		inference.WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses_unsupported_host",
@@ -169,8 +186,8 @@ func translateBufferedBody(body io.ReadCloser, toResponse func([]byte) (*pkgopen
 	return out
 }
 
-// responsesStreamTranslator is the common per-chunk interface satisfied by
-// both pkgopenai.ComposedStream and anthropictranslator.Stream.
+// responsesStreamTranslator is the per-chunk interface satisfied by
+// pkgopenai.ComposedStream (used for every upstream shape).
 type responsesStreamTranslator interface {
 	Translate(chunk []byte) ([]pkgopenai.ResponsesSSEFrame, error)
 }
