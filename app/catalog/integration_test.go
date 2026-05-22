@@ -158,7 +158,9 @@ func TestIntegration_DeleteCascadesToPricing(t *testing.T) {
 	mdl := &model.Model{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-test", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{HostID: hst.Meta.ID, Adapter: adapters.OpenAI}},
+			Hosts:     []model.HostBinding{{HostID: hst.Meta.ID, Adapter: adapters.OpenAI}},
+			Snapshots: []model.Snapshot{{Name: "gpt-test"}},
+			Pointer:   "gpt-test",
 		},
 	}
 	pr := &pricing.Pricing{
