@@ -1,25 +1,25 @@
-package responses
+package openai
 
 import "encoding/json"
 
-// Request is the parsed body for POST /v1/responses.
-// Input is always normalized to []Item internally; callers never see the
+// ResponsesRequest is the parsed body for POST /v1/responses.
+// Input is always normalized to []ResponsesItem internally; callers never see the
 // string form.
-type Request struct {
-	Model  string `json:"model"`
-	Input  []Item `json:"-"` // normalized; string form is expanded at parse
+type ResponsesRequest struct {
+	Model  string         `json:"model"`
+	Input  []ResponsesItem `json:"-"` // normalized; string form is expanded at parse
 
-	Instructions string     `json:"instructions,omitempty"`
-	Tools        Tools      `json:"tools,omitempty"`
-	ToolChoice   *ToolChoice `json:"tool_choice,omitempty"`
+	Instructions string              `json:"instructions,omitempty"`
+	Tools        ResponsesTools      `json:"tools,omitempty"`
+	ToolChoice   *ResponsesToolChoice `json:"tool_choice,omitempty"`
 
 	Temperature     *float64 `json:"temperature,omitempty"`
 	TopP            *float64 `json:"top_p,omitempty"`
 	TopK            *int     `json:"top_k,omitempty"`
 	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
 
-	Text      *TextConfig      `json:"text,omitempty"`
-	Reasoning *ReasoningConfig `json:"reasoning,omitempty"`
+	Text      *ResponsesTextConfig      `json:"text,omitempty"`
+	Reasoning *ResponsesReasoningConfig `json:"reasoning,omitempty"`
 
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
@@ -42,22 +42,22 @@ type Request struct {
 	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
 }
 
-// TextConfig controls the output text format.
-type TextConfig struct {
-	Format *Format `json:"format,omitempty"`
+// ResponsesTextConfig controls the output text format.
+type ResponsesTextConfig struct {
+	Format *ResponsesFormat `json:"format,omitempty"`
 }
 
-// Format specifies the response format type.
+// ResponsesFormat specifies the response format type.
 // Type is one of: "text", "json_object", "json_schema".
-type Format struct {
+type ResponsesFormat struct {
 	Type   string          `json:"type"`
 	Name   string          `json:"name,omitempty"`   // json_schema only
 	Schema json.RawMessage `json:"schema,omitempty"` // json_schema only
 	Strict *bool           `json:"strict,omitempty"` // json_schema only
 }
 
-// ReasoningConfig controls reasoning effort.
+// ResponsesReasoningConfig controls reasoning effort.
 // Effort is one of: "none", "minimal", "low", "medium", "high", "xhigh".
-type ReasoningConfig struct {
+type ResponsesReasoningConfig struct {
 	Effort string `json:"effort,omitempty"`
 }

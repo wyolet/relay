@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // helper to build a pointer to bool
@@ -24,13 +24,13 @@ func decodeRequest(t *testing.T, b []byte) map[string]any {
 // ---- test cases ----
 
 func TestRequestToAnthropic_SimpleText(t *testing.T) {
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model:        "claude-opus-4-5",
 		Instructions: "You are a helpful assistant.",
-		Input: []responses.Item{
-			&responses.Message{
-				Role:    responses.RoleUser,
-				Content: []responses.Part{&responses.TextPart{Text: "Hello!"}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleUser,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Hello!"}},
 			},
 		},
 	}
@@ -66,16 +66,16 @@ func TestRequestToAnthropic_SimpleText(t *testing.T) {
 
 func TestRequestToAnthropic_FunctionTools(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-3-5-sonnet-20241022",
-		Input: []responses.Item{
-			&responses.Message{
-				Role:    responses.RoleUser,
-				Content: []responses.Part{&responses.TextPart{Text: "Search for something."}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleUser,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Search for something."}},
 			},
 		},
-		Tools: responses.Tools{
-			&responses.FunctionTool{
+		Tools: pkgopenai.ResponsesTools{
+			&pkgopenai.ResponsesFunctionTool{
 				Name:        "search",
 				Description: "Search the web",
 				Parameters:  schema,
@@ -111,14 +111,14 @@ func TestRequestToAnthropic_FunctionTools(t *testing.T) {
 
 func TestRequestToAnthropic_MultimodalImage(t *testing.T) {
 	t.Run("data_url", func(t *testing.T) {
-		req := &responses.Request{
+		req := &pkgopenai.ResponsesRequest{
 			Model: "claude-3-5-sonnet-20241022",
-			Input: []responses.Item{
-				&responses.Message{
-					Role: responses.RoleUser,
-					Content: []responses.Part{
-						&responses.TextPart{Text: "What is in this image?"},
-						&responses.ImagePart{ImageURL: "data:image/jpeg;base64,/9j/abc"},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{
+					Role: pkgopenai.ResponsesRoleUser,
+					Content: []pkgopenai.ResponsesPart{
+						&pkgopenai.ResponsesTextPart{Text: "What is in this image?"},
+						&pkgopenai.ResponsesImagePart{ImageURL: "data:image/jpeg;base64,/9j/abc"},
 					},
 				},
 			},
@@ -152,13 +152,13 @@ func TestRequestToAnthropic_MultimodalImage(t *testing.T) {
 	})
 
 	t.Run("plain_url", func(t *testing.T) {
-		req := &responses.Request{
+		req := &pkgopenai.ResponsesRequest{
 			Model: "claude-3-5-sonnet-20241022",
-			Input: []responses.Item{
-				&responses.Message{
-					Role: responses.RoleUser,
-					Content: []responses.Part{
-						&responses.ImagePart{ImageURL: "https://example.com/img.png"},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{
+					Role: pkgopenai.ResponsesRoleUser,
+					Content: []pkgopenai.ResponsesPart{
+						&pkgopenai.ResponsesImagePart{ImageURL: "https://example.com/img.png"},
 					},
 				},
 			},
@@ -186,20 +186,20 @@ func TestRequestToAnthropic_ToolCallHistory(t *testing.T) {
 	// A FunctionCall item followed by a FunctionCallOutput item should produce:
 	// 1. assistant message with tool_use content block
 	// 2. user message with tool_result content block
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-opus-4-5",
-		Input: []responses.Item{
-			&responses.Message{
-				Role:    responses.RoleUser,
-				Content: []responses.Part{&responses.TextPart{Text: "Use the search tool."}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleUser,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Use the search tool."}},
 			},
-			&responses.FunctionCall{
+			&pkgopenai.ResponsesFunctionCall{
 				ID:        "fc_01",
 				CallID:    "call_abc",
 				Name:      "search",
 				Arguments: `{"q":"golang"}`,
 			},
-			&responses.FunctionCallOutput{
+			&pkgopenai.ResponsesFunctionCallOutput{
 				CallID: "call_abc",
 				Output: "Go is a statically typed language.",
 			},
@@ -246,15 +246,15 @@ func TestRequestToAnthropic_ToolCallHistory(t *testing.T) {
 }
 
 func TestRequestToAnthropic_ReasoningEffort(t *testing.T) {
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-opus-4-5",
-		Input: []responses.Item{
-			&responses.Message{
-				Role:    responses.RoleUser,
-				Content: []responses.Part{&responses.TextPart{Text: "Think hard."}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleUser,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Think hard."}},
 			},
 		},
-		Reasoning: &responses.ReasoningConfig{Effort: "high"},
+		Reasoning: &pkgopenai.ResponsesReasoningConfig{Effort: "high"},
 	}
 
 	b, err := RequestToAnthropic(req)
@@ -274,16 +274,16 @@ func TestRequestToAnthropic_ReasoningEffort(t *testing.T) {
 
 func TestRequestToAnthropic_ParallelToolCallsFalse(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object"}`)
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-3-5-sonnet-20241022",
-		Input: []responses.Item{
-			&responses.Message{
-				Role:    responses.RoleUser,
-				Content: []responses.Part{&responses.TextPart{Text: "Use tools."}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleUser,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Use tools."}},
 			},
 		},
-		Tools: responses.Tools{
-			&responses.FunctionTool{Name: "mytool", Parameters: schema},
+		Tools: pkgopenai.ResponsesTools{
+			&pkgopenai.ResponsesFunctionTool{Name: "mytool", Parameters: schema},
 		},
 		ParallelToolCalls: boolPtr(false),
 	}
@@ -305,11 +305,11 @@ func TestRequestToAnthropic_ParallelToolCallsFalse(t *testing.T) {
 
 func TestRequestToAnthropic_MaxOutputTokens(t *testing.T) {
 	t.Run("explicit", func(t *testing.T) {
-		req := &responses.Request{
+		req := &pkgopenai.ResponsesRequest{
 			Model:           "claude-opus-4-5",
 			MaxOutputTokens: intPtr(2048),
-			Input: []responses.Item{
-				&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 			},
 		}
 		b, err := RequestToAnthropic(req)
@@ -323,10 +323,10 @@ func TestRequestToAnthropic_MaxOutputTokens(t *testing.T) {
 	})
 
 	t.Run("default", func(t *testing.T) {
-		req := &responses.Request{
+		req := &pkgopenai.ResponsesRequest{
 			Model: "claude-opus-4-5",
-			Input: []responses.Item{
-				&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 			},
 		}
 		b, err := RequestToAnthropic(req)
@@ -355,13 +355,13 @@ func TestRequestToAnthropic_ToolChoiceMappings(t *testing.T) {
 	schema := json.RawMessage(`{}`)
 	for _, tc := range cases {
 		t.Run(tc.mode, func(t *testing.T) {
-			req := &responses.Request{
+			req := &pkgopenai.ResponsesRequest{
 				Model: "claude-3-5-sonnet-20241022",
-				Input: []responses.Item{
-					&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+				Input: []pkgopenai.ResponsesItem{
+					&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 				},
-				Tools: responses.Tools{&responses.FunctionTool{Name: "mytool", Parameters: schema}},
-				ToolChoice: &responses.ToolChoice{Mode: tc.mode, FunctionName: tc.fn},
+				Tools: pkgopenai.ResponsesTools{&pkgopenai.ResponsesFunctionTool{Name: "mytool", Parameters: schema}},
+				ToolChoice: &pkgopenai.ResponsesToolChoice{Mode: tc.mode, FunctionName: tc.fn},
 			}
 			b, err := RequestToAnthropic(req)
 			if err != nil {
@@ -383,16 +383,16 @@ func TestRequestToAnthropic_ToolChoiceMappings(t *testing.T) {
 }
 
 func TestRequestToAnthropic_DeveloperRoleCoercedToSystem(t *testing.T) {
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-opus-4-5",
-		Input: []responses.Item{
-			&responses.Message{
-				Role:    responses.RoleDeveloper,
-				Content: []responses.Part{&responses.TextPart{Text: "Be concise."}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleDeveloper,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Be concise."}},
 			},
-			&responses.Message{
-				Role:    responses.RoleUser,
-				Content: []responses.Part{&responses.TextPart{Text: "Hello."}},
+			&pkgopenai.ResponsesMessage{
+				Role:    pkgopenai.ResponsesRoleUser,
+				Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Hello."}},
 			},
 		},
 	}
@@ -415,79 +415,79 @@ func TestRequestToAnthropic_DeveloperRoleCoercedToSystem(t *testing.T) {
 }
 
 func TestRequestToAnthropic_RejectionFields(t *testing.T) {
-	base := func() *responses.Request {
-		return &responses.Request{
+	base := func() *pkgopenai.ResponsesRequest {
+		return &pkgopenai.ResponsesRequest{
 			Model: "claude-opus-4-5",
-			Input: []responses.Item{
-				&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 			},
 		}
 	}
 
 	cases := []struct {
 		name    string
-		mutate  func(*responses.Request)
+		mutate  func(*pkgopenai.ResponsesRequest)
 		wantErr string
 	}{
 		{
 			"previous_response_id",
-			func(r *responses.Request) { r.PreviousResponseID = "resp_123" },
+			func(r *pkgopenai.ResponsesRequest) { r.PreviousResponseID = "resp_123" },
 			"previous_response_id",
 		},
 		{
 			"store_true",
-			func(r *responses.Request) { r.Store = boolPtr(true) },
+			func(r *pkgopenai.ResponsesRequest) { r.Store = boolPtr(true) },
 			"store",
 		},
 		{
 			"conversation",
-			func(r *responses.Request) { r.Conversation = "conv_123" },
+			func(r *pkgopenai.ResponsesRequest) { r.Conversation = "conv_123" },
 			"conversation",
 		},
 		{
 			"background_true",
-			func(r *responses.Request) { r.Background = boolPtr(true) },
+			func(r *pkgopenai.ResponsesRequest) { r.Background = boolPtr(true) },
 			"background",
 		},
 		{
 			"truncation",
-			func(r *responses.Request) { r.Truncation = "auto" },
+			func(r *pkgopenai.ResponsesRequest) { r.Truncation = "auto" },
 			"truncation",
 		},
 		{
 			"service_tier",
-			func(r *responses.Request) { r.ServiceTier = "premium" },
+			func(r *pkgopenai.ResponsesRequest) { r.ServiceTier = "premium" },
 			"service_tier",
 		},
 		{
 			"safety_identifier",
-			func(r *responses.Request) { r.SafetyIdentifier = "safe_123" },
+			func(r *pkgopenai.ResponsesRequest) { r.SafetyIdentifier = "safe_123" },
 			"safety_identifier",
 		},
 		{
 			"prompt_cache_key",
-			func(r *responses.Request) { r.PromptCacheKey = "pck_123" },
+			func(r *pkgopenai.ResponsesRequest) { r.PromptCacheKey = "pck_123" },
 			"prompt_cache_key",
 		},
 		{
 			"include",
-			func(r *responses.Request) { r.Include = []string{"reasoning"} },
+			func(r *pkgopenai.ResponsesRequest) { r.Include = []string{"reasoning"} },
 			"include",
 		},
 		{
 			"logprobs",
-			func(r *responses.Request) { r.Logprobs = boolPtr(true) },
+			func(r *pkgopenai.ResponsesRequest) { r.Logprobs = boolPtr(true) },
 			"logprobs",
 		},
 		{
 			"top_logprobs",
-			func(r *responses.Request) { r.TopLogprobs = intPtr(5) },
+			func(r *pkgopenai.ResponsesRequest) { r.TopLogprobs = intPtr(5) },
 			"top_logprobs",
 		},
 		{
 			"json_object_format",
-			func(r *responses.Request) {
-				r.Text = &responses.TextConfig{Format: &responses.Format{Type: "json_object"}}
+			func(r *pkgopenai.ResponsesRequest) {
+				r.Text = &pkgopenai.ResponsesTextConfig{Format: &pkgopenai.ResponsesFormat{Type: "json_object"}}
 			},
 			"json_object",
 		},
@@ -509,10 +509,10 @@ func TestRequestToAnthropic_RejectionFields(t *testing.T) {
 }
 
 func TestRequestToAnthropic_StoreFalseNotRejected(t *testing.T) {
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-opus-4-5",
-		Input: []responses.Item{
-			&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 		},
 		Store: boolPtr(false),
 	}
@@ -524,13 +524,13 @@ func TestRequestToAnthropic_StoreFalseNotRejected(t *testing.T) {
 
 func TestRequestToAnthropic_JSONSchemaFormat(t *testing.T) {
 	schema := json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-opus-4-5",
-		Input: []responses.Item{
-			&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "Answer in JSON."}}},
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "Answer in JSON."}}},
 		},
-		Text: &responses.TextConfig{
-			Format: &responses.Format{
+		Text: &pkgopenai.ResponsesTextConfig{
+			Format: &pkgopenai.ResponsesFormat{
 				Type:   "json_schema",
 				Name:   "answer_schema",
 				Schema: schema,
@@ -556,10 +556,10 @@ func TestRequestToAnthropic_JSONSchemaFormat(t *testing.T) {
 
 func TestRequestToAnthropic_MetadataUserID(t *testing.T) {
 	t.Run("from_user_field", func(t *testing.T) {
-		req := &responses.Request{
+		req := &pkgopenai.ResponsesRequest{
 			Model: "claude-opus-4-5",
-			Input: []responses.Item{
-				&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 			},
 			User: "user-123",
 		}
@@ -575,10 +575,10 @@ func TestRequestToAnthropic_MetadataUserID(t *testing.T) {
 	})
 
 	t.Run("metadata_user_id_wins", func(t *testing.T) {
-		req := &responses.Request{
+		req := &pkgopenai.ResponsesRequest{
 			Model: "claude-opus-4-5",
-			Input: []responses.Item{
-				&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
+			Input: []pkgopenai.ResponsesItem{
+				&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
 			},
 			User:     "user-field",
 			Metadata: map[string]string{"user_id": "meta-user"},
@@ -596,11 +596,11 @@ func TestRequestToAnthropic_MetadataUserID(t *testing.T) {
 }
 
 func TestRequestToAnthropic_ReasoningItemDropped(t *testing.T) {
-	req := &responses.Request{
+	req := &pkgopenai.ResponsesRequest{
 		Model: "claude-opus-4-5",
-		Input: []responses.Item{
-			&responses.Message{Role: responses.RoleUser, Content: []responses.Part{&responses.TextPart{Text: "hi"}}},
-			&responses.Reasoning{
+		Input: []pkgopenai.ResponsesItem{
+			&pkgopenai.ResponsesMessage{Role: pkgopenai.ResponsesRoleUser, Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesTextPart{Text: "hi"}}},
+			&pkgopenai.ResponsesReasoning{
 				ID:               "rs_01",
 				EncryptedContent: "encrypted-blob",
 			},

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // anthropicResponseFull is the full Anthropic Messages response shape, including
@@ -73,13 +73,13 @@ type anthropicCitation struct {
 //   - "refusal" → completed / refusal (text content is the refusal text)
 //   - "pause_turn" → incomplete / pause_turn
 //   - default → completed / stop
-func AnthropicToResponse(req *responses.Request, body []byte) (*responses.Response, error) {
+func AnthropicToResponse(req *pkgopenai.ResponsesRequest, body []byte) (*pkgopenai.ResponsesResponse, error) {
 	var ar anthropicResponseFull
 	if err := json.Unmarshal(body, &ar); err != nil {
 		return nil, fmt.Errorf("anthropic response: %w", err)
 	}
 
-	resp := &responses.Response{
+	resp := &pkgopenai.ResponsesResponse{
 		ID:        ar.ID,
 		Object:    "response",
 		CreatedAt: time.Now().Unix(),
@@ -91,15 +91,15 @@ func AnthropicToResponse(req *responses.Request, body []byte) (*responses.Respon
 	for _, block := range ar.Content {
 		switch block.Type {
 		case "text":
-			part := &responses.OutputTextPart{
+			part := &pkgopenai.ResponsesOutputTextPart{
 				Text:        block.Text,
 				Annotations: mapCitations(block.Citations),
 			}
-			msg := &responses.Message{
+			msg := &pkgopenai.ResponsesMessage{
 				ID:      fmt.Sprintf("msg_%d", outputIndex),
-				Status:  responses.StatusCompleted,
-				Role:    responses.RoleAssistant,
-				Content: []responses.Part{part},
+				Status:  pkgopenai.ResponsesStatusCompleted,
+				Role:    pkgopenai.ResponsesRoleAssistant,
+				Content: []pkgopenai.ResponsesPart{part},
 			}
 			resp.Output = append(resp.Output, msg)
 			outputIndex++
@@ -109,12 +109,12 @@ func AnthropicToResponse(req *responses.Request, body []byte) (*responses.Respon
 			if len(block.Input) > 0 {
 				args = string(block.Input)
 			}
-			fc := &responses.FunctionCall{
+			fc := &pkgopenai.ResponsesFunctionCall{
 				ID:        fmt.Sprintf("fc_%d", outputIndex),
 				CallID:    block.ID,
 				Name:      block.Name,
 				Arguments: args,
-				Status:    responses.StatusCompleted,
+				Status:    pkgopenai.ResponsesStatusCompleted,
 			}
 			resp.Output = append(resp.Output, fc)
 			outputIndex++
@@ -123,10 +123,10 @@ func AnthropicToResponse(req *responses.Request, body []byte) (*responses.Respon
 			if block.Thinking == "" {
 				continue
 			}
-			r := &responses.Reasoning{
+			r := &pkgopenai.ResponsesReasoning{
 				ID:     fmt.Sprintf("rs_%d", outputIndex),
-				Status: responses.StatusCompleted,
-				Summary: []responses.SummaryText{
+				Status: pkgopenai.ResponsesStatusCompleted,
+				Summary: []pkgopenai.ResponsesSummaryText{
 					{Text: block.Thinking},
 				},
 			}
@@ -151,55 +151,55 @@ func AnthropicToResponse(req *responses.Request, body []byte) (*responses.Respon
 	resp.Status = status
 	resp.FinishReason = finish
 	if incomplete != "" {
-		resp.IncompleteDetails = &responses.IncompleteDetails{Reason: incomplete}
+		resp.IncompleteDetails = &pkgopenai.ResponsesIncompleteDetails{Reason: incomplete}
 	}
 
 	// Build usage. input_tokens_details and output_tokens_details are always
 	// set (spec required), with zero values when not available.
 	total := ar.Usage.InputTokens + ar.Usage.OutputTokens
-	u := &responses.Usage{
+	u := &pkgopenai.ResponsesUsage{
 		InputTokens:         ar.Usage.InputTokens,
 		OutputTokens:        ar.Usage.OutputTokens,
 		TotalTokens:         total,
-		InputTokensDetails:  responses.InputDeets{CachedTokens: ar.Usage.CacheReadInputTokens},
-		OutputTokensDetails: responses.OutputDeets{},
+		InputTokensDetails:  pkgopenai.ResponsesInputDeets{CachedTokens: ar.Usage.CacheReadInputTokens},
+		OutputTokensDetails: pkgopenai.ResponsesOutputDeets{},
 	}
 	resp.Usage = u
 
-	responses.EchoRequest(resp, req)
+	pkgopenai.ResponsesEchoRequest(resp, req)
 	return resp, nil
 }
 
 // mapStopReason converts an Anthropic stop_reason to Responses status,
 // finish_reason, and incomplete_details.reason.
-func mapStopReason(reason string) (responses.Status, responses.FinishReason, string) {
+func mapStopReason(reason string) (pkgopenai.ResponsesStatus, pkgopenai.ResponsesFinishReason, string) {
 	switch reason {
 	case "end_turn", "stop_sequence", "":
-		return responses.StatusCompleted, responses.FinishReasonStop, ""
+		return pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonStop, ""
 	case "max_tokens":
-		return responses.StatusIncomplete, responses.FinishReasonLength, "max_output_tokens"
+		return pkgopenai.ResponsesStatusIncomplete, pkgopenai.ResponsesFinishReasonLength, "max_output_tokens"
 	case "tool_use":
-		return responses.StatusCompleted, responses.FinishReasonToolCalls, ""
+		return pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonToolCalls, ""
 	case "refusal":
-		return responses.StatusCompleted, "refusal", ""
+		return pkgopenai.ResponsesStatusCompleted, "refusal", ""
 	case "pause_turn":
-		return responses.StatusIncomplete, "", "pause_turn"
+		return pkgopenai.ResponsesStatusIncomplete, "", "pause_turn"
 	default:
-		return responses.StatusCompleted, responses.FinishReasonStop, ""
+		return pkgopenai.ResponsesStatusCompleted, pkgopenai.ResponsesFinishReasonStop, ""
 	}
 }
 
 // mapCitations converts Anthropic url_citation annotations to Responses
 // URLCitationAnnotation values. char_location and page_location citations
 // have no clean Responses equivalent and are dropped (v1 lossy).
-func mapCitations(cits []anthropicCitation) []responses.Annotation {
+func mapCitations(cits []anthropicCitation) []pkgopenai.ResponsesAnnotation {
 	if len(cits) == 0 {
 		return nil
 	}
-	var out []responses.Annotation
+	var out []pkgopenai.ResponsesAnnotation
 	for _, c := range cits {
 		if c.Type == "url_citation" {
-			out = append(out, &responses.URLCitationAnnotation{
+			out = append(out, &pkgopenai.ResponsesURLCitationAnnotation{
 				URL:        c.URL,
 				Title:      c.Title,
 				StartIndex: c.StartIndex,

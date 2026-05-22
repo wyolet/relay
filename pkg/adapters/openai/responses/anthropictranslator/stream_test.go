@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // sseChunk formats a raw Anthropic SSE chunk from event name + data map.
@@ -32,8 +32,8 @@ func collectEvents(t *testing.T, chunks [][]byte) []string {
 	return names
 }
 
-// decodeFrame decodes the Data field of an responses.SSEFrame into a map.
-func decodeFrame(t *testing.T, f responses.SSEFrame) map[string]any {
+// decodeFrame decodes the Data field of an pkgopenai.ResponsesSSEFrame into a map.
+func decodeFrame(t *testing.T, f pkgopenai.ResponsesSSEFrame) map[string]any {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal(f.Data, &m); err != nil {
@@ -165,7 +165,7 @@ func TestStream_SimpleText(t *testing.T) {
 	}
 
 	s := NewStream(nil)
-	var allFrames []responses.SSEFrame
+	var allFrames []pkgopenai.ResponsesSSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -181,17 +181,17 @@ func TestStream_SimpleText(t *testing.T) {
 
 	// Expected sequence
 	want := []string{
-		responses.EventCreated,
-		responses.EventInProgress,
-		responses.EventOutputItemAdded,
-		responses.EventContentPartAdded,
-		responses.EventOutputTextDelta,
-		responses.EventOutputTextDelta,
-		responses.EventOutputTextDelta,
-		responses.EventOutputTextDone,
-		responses.EventContentPartDone,
-		responses.EventOutputItemDone,
-		responses.EventCompleted,
+		pkgopenai.ResponsesEventCreated,
+		pkgopenai.ResponsesEventInProgress,
+		pkgopenai.ResponsesEventOutputItemAdded,
+		pkgopenai.ResponsesEventContentPartAdded,
+		pkgopenai.ResponsesEventOutputTextDelta,
+		pkgopenai.ResponsesEventOutputTextDelta,
+		pkgopenai.ResponsesEventOutputTextDelta,
+		pkgopenai.ResponsesEventOutputTextDone,
+		pkgopenai.ResponsesEventContentPartDone,
+		pkgopenai.ResponsesEventOutputItemDone,
+		pkgopenai.ResponsesEventCompleted,
 	}
 	if len(events) != len(want) {
 		t.Fatalf("events: got %v want %v", events, want)
@@ -223,7 +223,7 @@ func TestStream_ToolUse(t *testing.T) {
 	}
 
 	s := NewStream(nil)
-	var allFrames []responses.SSEFrame
+	var allFrames []pkgopenai.ResponsesSSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -238,14 +238,14 @@ func TestStream_ToolUse(t *testing.T) {
 	}
 
 	want := []string{
-		responses.EventCreated,
-		responses.EventInProgress,
-		responses.EventOutputItemAdded,
-		responses.EventFunctionCallArgumentsDelta,
-		responses.EventFunctionCallArgumentsDelta,
-		responses.EventFunctionCallArgumentsDone,
-		responses.EventOutputItemDone,
-		responses.EventCompleted,
+		pkgopenai.ResponsesEventCreated,
+		pkgopenai.ResponsesEventInProgress,
+		pkgopenai.ResponsesEventOutputItemAdded,
+		pkgopenai.ResponsesEventFunctionCallArgumentsDelta,
+		pkgopenai.ResponsesEventFunctionCallArgumentsDelta,
+		pkgopenai.ResponsesEventFunctionCallArgumentsDone,
+		pkgopenai.ResponsesEventOutputItemDone,
+		pkgopenai.ResponsesEventCompleted,
 	}
 	if len(events) != len(want) {
 		t.Fatalf("events: got %v want %v", events, want)
@@ -279,7 +279,7 @@ func TestStream_ThinkingThenText(t *testing.T) {
 	}
 
 	s := NewStream(nil)
-	var allFrames []responses.SSEFrame
+	var allFrames []pkgopenai.ResponsesSSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -295,24 +295,24 @@ func TestStream_ThinkingThenText(t *testing.T) {
 
 	// Should see thinking item sequence, then text item sequence.
 	want := []string{
-		responses.EventCreated,
-		responses.EventInProgress,
+		pkgopenai.ResponsesEventCreated,
+		pkgopenai.ResponsesEventInProgress,
 		// thinking block
-		responses.EventOutputItemAdded,
-		responses.EventContentPartAdded,
-		responses.EventReasoningTextDelta,
-		responses.EventReasoningTextDone,
-		responses.EventContentPartDone,
-		responses.EventOutputItemDone,
+		pkgopenai.ResponsesEventOutputItemAdded,
+		pkgopenai.ResponsesEventContentPartAdded,
+		pkgopenai.ResponsesEventReasoningTextDelta,
+		pkgopenai.ResponsesEventReasoningTextDone,
+		pkgopenai.ResponsesEventContentPartDone,
+		pkgopenai.ResponsesEventOutputItemDone,
 		// text block
-		responses.EventOutputItemAdded,
-		responses.EventContentPartAdded,
-		responses.EventOutputTextDelta,
-		responses.EventOutputTextDone,
-		responses.EventContentPartDone,
-		responses.EventOutputItemDone,
+		pkgopenai.ResponsesEventOutputItemAdded,
+		pkgopenai.ResponsesEventContentPartAdded,
+		pkgopenai.ResponsesEventOutputTextDelta,
+		pkgopenai.ResponsesEventOutputTextDone,
+		pkgopenai.ResponsesEventContentPartDone,
+		pkgopenai.ResponsesEventOutputItemDone,
 		// completed
-		responses.EventCompleted,
+		pkgopenai.ResponsesEventCompleted,
 	}
 	if len(events) != len(want) {
 		t.Fatalf("events:\n  got  %v\n  want %v", events, want)
@@ -361,8 +361,8 @@ func TestStream_ErrorChunk(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("expected 1 frame, got %d", len(frames))
 	}
-	if frames[0].Event != responses.EventError {
-		t.Errorf("event: got %q want %q", frames[0].Event, responses.EventError)
+	if frames[0].Event != pkgopenai.ResponsesEventError {
+		t.Errorf("event: got %q want %q", frames[0].Event, pkgopenai.ResponsesEventError)
 	}
 	m := decodeFrame(t, frames[0])
 	if m["message"] != "Anthropic is overloaded" {
@@ -371,7 +371,7 @@ func TestStream_ErrorChunk(t *testing.T) {
 }
 
 func TestStream_Bytes(t *testing.T) {
-	f := responses.SSEFrame{Event: "response.created", Data: []byte(`{"response":{}}`)}
+	f := pkgopenai.ResponsesSSEFrame{Event: "response.created", Data: []byte(`{"response":{}}`)}
 	b := f.Bytes()
 	got := string(b)
 	want := "event: response.created\ndata: {\"response\":{}}\n\n"
@@ -392,7 +392,7 @@ func TestStream_MaxTokensIncomplete(t *testing.T) {
 
 	events := collectEvents(t, chunks)
 	last := events[len(events)-1]
-	if last != responses.EventIncomplete {
-		t.Errorf("last event: got %q want %q", last, responses.EventIncomplete)
+	if last != pkgopenai.ResponsesEventIncomplete {
+		t.Errorf("last event: got %q want %q", last, pkgopenai.ResponsesEventIncomplete)
 	}
 }

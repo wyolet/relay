@@ -1,42 +1,42 @@
-package responses
+package openai
 
 import "encoding/json"
 
-// Response is the non-streaming response object from POST /v1/responses.
+// ResponsesResponse is the non-streaming response object from POST /v1/responses.
 // Required fields per the OpenAI spec are always serialized (no omitempty).
 // Request-echo fields (Instructions, Tools, ToolChoice, ParallelToolCalls,
 // Metadata, Temperature, TopP) must be populated by the translators from the
-// original *Request so the body matches the spec's required-field list.
-type Response struct {
-	ID           string       `json:"id"`
-	Object       string       `json:"object"`       // always "response"
-	CreatedAt    int64        `json:"created_at"`   // unix seconds
-	Model        string       `json:"model"`
-	Status       Status       `json:"status"`
-	FinishReason FinishReason `json:"finish_reason,omitempty"`
-	Output       []Item       `json:"output"`
-	Usage        *Usage       `json:"usage,omitempty"`
+// original *ResponsesRequest so the body matches the spec's required-field list.
+type ResponsesResponse struct {
+	ID           string                `json:"id"`
+	Object       string                `json:"object"`       // always "response"
+	CreatedAt    int64                 `json:"created_at"`   // unix seconds
+	Model        string                `json:"model"`
+	Status       ResponsesStatus       `json:"status"`
+	FinishReason ResponsesFinishReason `json:"finish_reason,omitempty"`
+	Output       []ResponsesItem       `json:"output"`
+	Usage        *ResponsesUsage       `json:"usage,omitempty"`
 
 	// Required spec fields that may be null — no omitempty so they serialize.
-	Error             *Error             `json:"error"`
-	IncompleteDetails *IncompleteDetails `json:"incomplete_details"`
-	Instructions      *string            `json:"instructions"`
-	Temperature       *float64           `json:"temperature"`
-	TopP              *float64           `json:"top_p"`
+	Error             *ResponsesError             `json:"error"`
+	IncompleteDetails *ResponsesIncompleteDetails `json:"incomplete_details"`
+	Instructions      *string                     `json:"instructions"`
+	Temperature       *float64                    `json:"temperature"`
+	TopP              *float64                    `json:"top_p"`
 
 	// Required spec fields that must never serialize as null.
 	// Tools serializes as [] when nil; Metadata as {}; ToolChoice as "auto".
 	// ParallelToolCalls is a plain bool — default true.
 	ParallelToolCalls bool              `json:"parallel_tool_calls"`
-	Tools             Tools             `json:"-"`             // handled in MarshalJSON
+	Tools             ResponsesTools    `json:"-"`             // handled in MarshalJSON
 	Metadata          map[string]string `json:"-"`             // handled in MarshalJSON
 	ToolChoiceRaw     json.RawMessage   `json:"-"`             // handled in MarshalJSON
 }
 
-// MarshalJSON emits the Response ensuring Tools→[], Metadata→{}, and
+// MarshalJSON emits the ResponsesResponse ensuring Tools→[], Metadata→{}, and
 // ToolChoice defaults to "auto". Using an alias breaks the MarshalJSON cycle.
-func (r Response) MarshalJSON() ([]byte, error) {
-	type Alias Response // avoids infinite recursion
+func (r ResponsesResponse) MarshalJSON() ([]byte, error) {
+	type Alias ResponsesResponse // avoids infinite recursion
 
 	toolsJSON := json.RawMessage("[]")
 	if len(r.Tools) > 0 {
@@ -61,8 +61,6 @@ func (r Response) MarshalJSON() ([]byte, error) {
 		tcJSON = json.RawMessage(`"auto"`)
 	}
 
-	// Embed the alias (all fields except the overridden ones), then inject
-	// tools, metadata, tool_choice via a wrapper struct.
 	type wire struct {
 		Alias
 		Tools      json.RawMessage `json:"tools"`
@@ -77,41 +75,41 @@ func (r Response) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// Usage carries token counts for the response.
+// ResponsesUsage carries token counts for the Responses API response.
 // InputTokensDetails and OutputTokensDetails are always serialized per spec.
-type Usage struct {
-	InputTokens         int         `json:"input_tokens"`
-	OutputTokens        int         `json:"output_tokens"`
-	TotalTokens         int         `json:"total_tokens"`
-	InputTokensDetails  InputDeets  `json:"input_tokens_details"`
-	OutputTokensDetails OutputDeets `json:"output_tokens_details"`
+type ResponsesUsage struct {
+	InputTokens         int                 `json:"input_tokens"`
+	OutputTokens        int                 `json:"output_tokens"`
+	TotalTokens         int                 `json:"total_tokens"`
+	InputTokensDetails  ResponsesInputDeets `json:"input_tokens_details"`
+	OutputTokensDetails ResponsesOutputDeets `json:"output_tokens_details"`
 }
 
-// InputDeets holds per-category input token counts.
-type InputDeets struct {
+// ResponsesInputDeets holds per-category input token counts.
+type ResponsesInputDeets struct {
 	CachedTokens int `json:"cached_tokens"`
 }
 
-// OutputDeets holds per-category output token counts.
-type OutputDeets struct {
+// ResponsesOutputDeets holds per-category output token counts.
+type ResponsesOutputDeets struct {
 	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
-// Error is an API-level error embedded in a response object.
-type Error struct {
+// ResponsesError is an API-level error embedded in a response object.
+type ResponsesError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// IncompleteDetails explains why a response was not completed.
-type IncompleteDetails struct {
+// ResponsesIncompleteDetails explains why a response was not completed.
+type ResponsesIncompleteDetails struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// EchoRequest copies the request-echo fields from req into resp so the
+// ResponsesEchoRequest copies the request-echo fields from req into resp so the
 // response body satisfies the OpenAI spec's required-field list. Call this
 // after building the core response fields (id, status, output, usage).
-func EchoRequest(resp *Response, req *Request) {
+func ResponsesEchoRequest(resp *ResponsesResponse, req *ResponsesRequest) {
 	if req == nil {
 		return
 	}

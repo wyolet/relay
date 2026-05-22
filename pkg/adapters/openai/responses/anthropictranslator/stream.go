@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 // emittedItem tracks state for one output item opened during streaming.
@@ -35,7 +35,7 @@ type emittedItem struct {
 // server_tool_use blocks are dropped (not modeled in v1 canonical output).
 // redacted_thinking blocks are dropped.
 type Stream struct {
-	req *responses.Request // original request, echoed into completed event
+	req *pkgopenai.ResponsesRequest // original request, echoed into completed event
 
 	// response-level state set from message_start
 	responseID  string
@@ -60,15 +60,15 @@ type Stream struct {
 // NewStream returns a new stateful Anthropic → Responses SSE translator.
 // req is the original Responses API request; it is echoed into the
 // response.completed event. Pass nil to omit echo fields (tests).
-func NewStream(req *responses.Request) *Stream {
+func NewStream(req *pkgopenai.ResponsesRequest) *Stream {
 	return &Stream{req: req}
 }
 
 // Translate converts one Anthropic SSE chunk (raw bytes of one SSE frame,
 // including optional "event:" line and "data:" line) to zero or more Responses
 // SSE frames.
-func (s *Stream) Translate(chunk []byte) ([]responses.SSEFrame, error) {
-	event, data, ok := responses.ParseSSEChunk(chunk)
+func (s *Stream) Translate(chunk []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
+	event, data, ok := pkgopenai.ParseResponsesSSEChunk(chunk)
 	if !ok || len(data) == 0 {
 		return nil, nil
 	}
@@ -97,7 +97,7 @@ func (s *Stream) Translate(chunk []byte) ([]responses.SSEFrame, error) {
 
 // ---- event handlers ----
 
-func (s *Stream) handleMessageStart(data []byte) ([]responses.SSEFrame, error) {
+func (s *Stream) handleMessageStart(data []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
 	var ms struct {
 		Message struct {
 			ID    string `json:"id"`
@@ -118,19 +118,19 @@ func (s *Stream) handleMessageStart(data []byte) ([]responses.SSEFrame, error) {
 	s.cachedTokens = ms.Message.Usage.CacheRead
 
 	// Emit response.created + response.in_progress
-	snap := s.buildResponseSnapshot(responses.StatusInProgress, "", "")
-	createdFrame, err := marshalFrame(responses.EventCreated, responses.CreatedEvent{Response: snap})
+	snap := s.buildResponseSnapshot(pkgopenai.ResponsesStatusInProgress, "", "")
+	createdFrame, err := marshalFrame(pkgopenai.ResponsesEventCreated, pkgopenai.ResponsesCreatedEvent{Response: snap})
 	if err != nil {
 		return nil, err
 	}
-	inProgFrame, err := marshalFrame(responses.EventInProgress, responses.InProgressEvent{Response: snap})
+	inProgFrame, err := marshalFrame(pkgopenai.ResponsesEventInProgress, pkgopenai.ResponsesInProgressEvent{Response: snap})
 	if err != nil {
 		return nil, err
 	}
-	return []responses.SSEFrame{createdFrame, inProgFrame}, nil
+	return []pkgopenai.ResponsesSSEFrame{createdFrame, inProgFrame}, nil
 }
 
-func (s *Stream) handleContentBlockStart(data []byte) ([]responses.SSEFrame, error) {
+func (s *Stream) handleContentBlockStart(data []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
 	var cbs struct {
 		Index        int `json:"index"`
 		ContentBlock struct {
@@ -166,55 +166,55 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]responses.SSEFrame, err
 	case "text":
 		s.currentBlock = item
 		// Emit output_item.added for a new message item, then content_part.added.
-		msgItem := &responses.Message{
+		msgItem := &pkgopenai.ResponsesMessage{
 			ID:     item.itemID,
-			Status: responses.StatusInProgress,
-			Role:   responses.RoleAssistant,
+			Status: pkgopenai.ResponsesStatusInProgress,
+			Role:   pkgopenai.ResponsesRoleAssistant,
 		}
-		itemAddedFrame, err := marshalFrame(responses.EventOutputItemAdded, responses.ItemAddedEvent{
+		itemAddedFrame, err := marshalFrame(pkgopenai.ResponsesEventOutputItemAdded, pkgopenai.ResponsesItemAddedEvent{
 			OutputIndex: outputIndex,
 			Item:        msgItem,
 		})
 		if err != nil {
 			return nil, err
 		}
-		partAddedFrame, err := marshalFrame(responses.EventContentPartAdded, responses.ContentPartAddedEvent{
+		partAddedFrame, err := marshalFrame(pkgopenai.ResponsesEventContentPartAdded, pkgopenai.ResponsesContentPartAddedEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  outputIndex,
 			ContentIndex: 0,
-			Part:         &responses.OutputTextPart{Text: ""},
+			Part:         &pkgopenai.ResponsesOutputTextPart{Text: ""},
 		})
 		if err != nil {
 			return nil, err
 		}
-		return []responses.SSEFrame{itemAddedFrame, partAddedFrame}, nil
+		return []pkgopenai.ResponsesSSEFrame{itemAddedFrame, partAddedFrame}, nil
 
 	case "tool_use":
 		item.callID = cbs.ContentBlock.ID
 		item.toolName = cbs.ContentBlock.Name
 		s.currentBlock = item
-		fcItem := &responses.FunctionCall{
+		fcItem := &pkgopenai.ResponsesFunctionCall{
 			ID:     item.itemID,
 			CallID: item.callID,
 			Name:   item.toolName,
-			Status: responses.StatusInProgress,
+			Status: pkgopenai.ResponsesStatusInProgress,
 		}
-		f, err := marshalFrame(responses.EventOutputItemAdded, responses.ItemAddedEvent{
+		f, err := marshalFrame(pkgopenai.ResponsesEventOutputItemAdded, pkgopenai.ResponsesItemAddedEvent{
 			OutputIndex: outputIndex,
 			Item:        fcItem,
 		})
 		if err != nil {
 			return nil, err
 		}
-		return []responses.SSEFrame{f}, nil
+		return []pkgopenai.ResponsesSSEFrame{f}, nil
 
 	case "thinking":
 		s.currentBlock = item
-		rItem := &responses.Reasoning{
+		rItem := &pkgopenai.ResponsesReasoning{
 			ID:     item.itemID,
-			Status: responses.StatusInProgress,
+			Status: pkgopenai.ResponsesStatusInProgress,
 		}
-		itemAddedFrame, err := marshalFrame(responses.EventOutputItemAdded, responses.ItemAddedEvent{
+		itemAddedFrame, err := marshalFrame(pkgopenai.ResponsesEventOutputItemAdded, pkgopenai.ResponsesItemAddedEvent{
 			OutputIndex: outputIndex,
 			Item:        rItem,
 		})
@@ -222,16 +222,16 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]responses.SSEFrame, err
 			return nil, err
 		}
 		// Reasoning text uses content_index 0.
-		partAddedFrame, err := marshalFrame(responses.EventContentPartAdded, responses.ContentPartAddedEvent{
+		partAddedFrame, err := marshalFrame(pkgopenai.ResponsesEventContentPartAdded, pkgopenai.ResponsesContentPartAddedEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  outputIndex,
 			ContentIndex: 0,
-			Part:         &responses.OutputTextPart{Text: ""},
+			Part:         &pkgopenai.ResponsesOutputTextPart{Text: ""},
 		})
 		if err != nil {
 			return nil, err
 		}
-		return []responses.SSEFrame{itemAddedFrame, partAddedFrame}, nil
+		return []pkgopenai.ResponsesSSEFrame{itemAddedFrame, partAddedFrame}, nil
 
 	default:
 		// Unknown block type — skip silently.
@@ -239,7 +239,7 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]responses.SSEFrame, err
 	}
 }
 
-func (s *Stream) handleContentBlockDelta(data []byte) ([]responses.SSEFrame, error) {
+func (s *Stream) handleContentBlockDelta(data []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
 	if s.currentBlock == nil {
 		return nil, nil
 	}
@@ -262,7 +262,7 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]responses.SSEFrame, err
 	switch cbd.Delta.Type {
 	case "text_delta":
 		item.textBuf.WriteString(cbd.Delta.Text)
-		f, err := marshalFrame(responses.EventOutputTextDelta, responses.OutputTextDeltaEvent{
+		f, err := marshalFrame(pkgopenai.ResponsesEventOutputTextDelta, pkgopenai.ResponsesOutputTextDeltaEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  item.outputIndex,
 			ContentIndex: 0,
@@ -271,11 +271,11 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]responses.SSEFrame, err
 		if err != nil {
 			return nil, err
 		}
-		return []responses.SSEFrame{f}, nil
+		return []pkgopenai.ResponsesSSEFrame{f}, nil
 
 	case "input_json_delta":
 		item.argsBuf.WriteString(cbd.Delta.PartialJSON)
-		f, err := marshalFrame(responses.EventFunctionCallArgumentsDelta, responses.FunctionCallArgumentsDeltaEvent{
+		f, err := marshalFrame(pkgopenai.ResponsesEventFunctionCallArgumentsDelta, pkgopenai.ResponsesFunctionCallArgumentsDeltaEvent{
 			ItemID:      item.itemID,
 			OutputIndex: item.outputIndex,
 			CallID:      item.callID,
@@ -284,11 +284,11 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]responses.SSEFrame, err
 		if err != nil {
 			return nil, err
 		}
-		return []responses.SSEFrame{f}, nil
+		return []pkgopenai.ResponsesSSEFrame{f}, nil
 
 	case "thinking_delta":
 		item.thinkingBuf.WriteString(cbd.Delta.Thinking)
-		f, err := marshalFrame(responses.EventReasoningTextDelta, responses.ReasoningTextDeltaEvent{
+		f, err := marshalFrame(pkgopenai.ResponsesEventReasoningTextDelta, pkgopenai.ResponsesReasoningTextDeltaEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  item.outputIndex,
 			ContentIndex: 0,
@@ -297,13 +297,13 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]responses.SSEFrame, err
 		if err != nil {
 			return nil, err
 		}
-		return []responses.SSEFrame{f}, nil
+		return []pkgopenai.ResponsesSSEFrame{f}, nil
 	}
 
 	return nil, nil
 }
 
-func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) {
+func (s *Stream) handleContentBlockStop(_ []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
 	if s.currentBlock == nil {
 		return nil, nil
 	}
@@ -312,11 +312,11 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 	s.currentBlock = nil
 	s.done = append(s.done, item)
 
-	var frames []responses.SSEFrame
+	var frames []pkgopenai.ResponsesSSEFrame
 
 	switch item.itemType {
 	case "text":
-		textDone, err := marshalFrame(responses.EventOutputTextDone, responses.OutputTextDoneEvent{
+		textDone, err := marshalFrame(pkgopenai.ResponsesEventOutputTextDone, pkgopenai.ResponsesOutputTextDoneEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  item.outputIndex,
 			ContentIndex: 0,
@@ -327,24 +327,24 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 		}
 		frames = append(frames, textDone)
 
-		partDone, err := marshalFrame(responses.EventContentPartDone, responses.ContentPartDoneEvent{
+		partDone, err := marshalFrame(pkgopenai.ResponsesEventContentPartDone, pkgopenai.ResponsesContentPartDoneEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  item.outputIndex,
 			ContentIndex: 0,
-			Part:         &responses.OutputTextPart{Text: item.textBuf.String()},
+			Part:         &pkgopenai.ResponsesOutputTextPart{Text: item.textBuf.String()},
 		})
 		if err != nil {
 			return nil, err
 		}
 		frames = append(frames, partDone)
 
-		msgDone := &responses.Message{
+		msgDone := &pkgopenai.ResponsesMessage{
 			ID:      item.itemID,
-			Status:  responses.StatusCompleted,
-			Role:    responses.RoleAssistant,
-			Content: []responses.Part{&responses.OutputTextPart{Text: item.textBuf.String()}},
+			Status:  pkgopenai.ResponsesStatusCompleted,
+			Role:    pkgopenai.ResponsesRoleAssistant,
+			Content: []pkgopenai.ResponsesPart{&pkgopenai.ResponsesOutputTextPart{Text: item.textBuf.String()}},
 		}
-		itemDone, err := marshalFrame(responses.EventOutputItemDone, responses.OutputItemDoneEvent{
+		itemDone, err := marshalFrame(pkgopenai.ResponsesEventOutputItemDone, pkgopenai.ResponsesOutputItemDoneEvent{
 			OutputIndex: item.outputIndex,
 			Item:        msgDone,
 		})
@@ -354,7 +354,7 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 		frames = append(frames, itemDone)
 
 	case "tool_use":
-		argsDone, err := marshalFrame(responses.EventFunctionCallArgumentsDone, responses.FunctionCallArgumentsDoneEvent{
+		argsDone, err := marshalFrame(pkgopenai.ResponsesEventFunctionCallArgumentsDone, pkgopenai.ResponsesFunctionCallArgumentsDoneEvent{
 			ItemID:      item.itemID,
 			OutputIndex: item.outputIndex,
 			CallID:      item.callID,
@@ -365,14 +365,14 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 		}
 		frames = append(frames, argsDone)
 
-		fcDone := &responses.FunctionCall{
+		fcDone := &pkgopenai.ResponsesFunctionCall{
 			ID:        item.itemID,
 			CallID:    item.callID,
 			Name:      item.toolName,
 			Arguments: item.argsBuf.String(),
-			Status:    responses.StatusCompleted,
+			Status:    pkgopenai.ResponsesStatusCompleted,
 		}
-		itemDone, err := marshalFrame(responses.EventOutputItemDone, responses.OutputItemDoneEvent{
+		itemDone, err := marshalFrame(pkgopenai.ResponsesEventOutputItemDone, pkgopenai.ResponsesOutputItemDoneEvent{
 			OutputIndex: item.outputIndex,
 			Item:        fcDone,
 		})
@@ -382,7 +382,7 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 		frames = append(frames, itemDone)
 
 	case "thinking":
-		thinkingDone, err := marshalFrame(responses.EventReasoningTextDone, responses.ReasoningTextDoneEvent{
+		thinkingDone, err := marshalFrame(pkgopenai.ResponsesEventReasoningTextDone, pkgopenai.ResponsesReasoningTextDoneEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  item.outputIndex,
 			ContentIndex: 0,
@@ -393,25 +393,25 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 		}
 		frames = append(frames, thinkingDone)
 
-		partDone, err := marshalFrame(responses.EventContentPartDone, responses.ContentPartDoneEvent{
+		partDone, err := marshalFrame(pkgopenai.ResponsesEventContentPartDone, pkgopenai.ResponsesContentPartDoneEvent{
 			ItemID:       item.itemID,
 			OutputIndex:  item.outputIndex,
 			ContentIndex: 0,
-			Part:         &responses.OutputTextPart{Text: item.thinkingBuf.String()},
+			Part:         &pkgopenai.ResponsesOutputTextPart{Text: item.thinkingBuf.String()},
 		})
 		if err != nil {
 			return nil, err
 		}
 		frames = append(frames, partDone)
 
-		rDone := &responses.Reasoning{
+		rDone := &pkgopenai.ResponsesReasoning{
 			ID:     item.itemID,
-			Status: responses.StatusCompleted,
-			Summary: []responses.SummaryText{
+			Status: pkgopenai.ResponsesStatusCompleted,
+			Summary: []pkgopenai.ResponsesSummaryText{
 				{Text: item.thinkingBuf.String()},
 			},
 		}
-		itemDone, err := marshalFrame(responses.EventOutputItemDone, responses.OutputItemDoneEvent{
+		itemDone, err := marshalFrame(pkgopenai.ResponsesEventOutputItemDone, pkgopenai.ResponsesOutputItemDoneEvent{
 			OutputIndex: item.outputIndex,
 			Item:        rDone,
 		})
@@ -424,7 +424,7 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) 
 	return frames, nil
 }
 
-func (s *Stream) handleMessageDelta(data []byte) ([]responses.SSEFrame, error) {
+func (s *Stream) handleMessageDelta(data []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
 	var md struct {
 		Delta struct {
 			StopReason string `json:"stop_reason"`
@@ -442,7 +442,7 @@ func (s *Stream) handleMessageDelta(data []byte) ([]responses.SSEFrame, error) {
 	return nil, nil
 }
 
-func (s *Stream) handleMessageStop() ([]responses.SSEFrame, error) {
+func (s *Stream) handleMessageStop() ([]pkgopenai.ResponsesSSEFrame, error) {
 	status, finish, incomplete := mapStopReason(s.stopReason)
 
 	// Reconstruct final output from done items.
@@ -450,15 +450,15 @@ func (s *Stream) handleMessageStop() ([]responses.SSEFrame, error) {
 
 	// input_tokens_details and output_tokens_details are always set (spec required).
 	total := s.inputTokens + s.outputTokens
-	u := &responses.Usage{
+	u := &pkgopenai.ResponsesUsage{
 		InputTokens:         s.inputTokens,
 		OutputTokens:        s.outputTokens,
 		TotalTokens:         total,
-		InputTokensDetails:  responses.InputDeets{CachedTokens: s.cachedTokens},
-		OutputTokensDetails: responses.OutputDeets{},
+		InputTokensDetails:  pkgopenai.ResponsesInputDeets{CachedTokens: s.cachedTokens},
+		OutputTokensDetails: pkgopenai.ResponsesOutputDeets{},
 	}
 
-	finalResp := &responses.Response{
+	finalResp := &pkgopenai.ResponsesResponse{
 		ID:           s.responseID,
 		Object:       "response",
 		CreatedAt:    s.created,
@@ -469,29 +469,29 @@ func (s *Stream) handleMessageStop() ([]responses.SSEFrame, error) {
 		Usage:        u,
 	}
 	if incomplete != "" {
-		finalResp.IncompleteDetails = &responses.IncompleteDetails{Reason: incomplete}
+		finalResp.IncompleteDetails = &pkgopenai.ResponsesIncompleteDetails{Reason: incomplete}
 	}
 
-	responses.EchoRequest(finalResp, s.req)
+	pkgopenai.ResponsesEchoRequest(finalResp, s.req)
 
 	var eventName string
 	switch status {
-	case responses.StatusCompleted:
-		eventName = responses.EventCompleted
-	case responses.StatusIncomplete:
-		eventName = responses.EventIncomplete
+	case pkgopenai.ResponsesStatusCompleted:
+		eventName = pkgopenai.ResponsesEventCompleted
+	case pkgopenai.ResponsesStatusIncomplete:
+		eventName = pkgopenai.ResponsesEventIncomplete
 	default:
-		eventName = responses.EventCompleted
+		eventName = pkgopenai.ResponsesEventCompleted
 	}
 
-	f, err := marshalFrame(eventName, responses.CompletedEvent{Response: finalResp})
+	f, err := marshalFrame(eventName, pkgopenai.ResponsesCompletedEvent{Response: finalResp})
 	if err != nil {
 		return nil, err
 	}
-	return []responses.SSEFrame{f}, nil
+	return []pkgopenai.ResponsesSSEFrame{f}, nil
 }
 
-func (s *Stream) handleError(data []byte) ([]responses.SSEFrame, error) {
+func (s *Stream) handleError(data []byte) ([]pkgopenai.ResponsesSSEFrame, error) {
 	var e struct {
 		Error struct {
 			Type    string `json:"type"`
@@ -503,63 +503,63 @@ func (s *Stream) handleError(data []byte) ([]responses.SSEFrame, error) {
 	if msg == "" {
 		msg = string(data)
 	}
-	f, err := marshalFrame(responses.EventError, responses.ErrorEvent{
+	f, err := marshalFrame(pkgopenai.ResponsesEventError, pkgopenai.ResponsesErrorEvent{
 		Code:    e.Error.Type,
 		Message: msg,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return []responses.SSEFrame{f}, nil
+	return []pkgopenai.ResponsesSSEFrame{f}, nil
 }
 
 // ---- helpers ----
 
 // buildResponseSnapshot builds a minimal Response for in-progress events.
-func (s *Stream) buildResponseSnapshot(status responses.Status, finish responses.FinishReason, incomplete string) *responses.Response {
-	r := &responses.Response{
+func (s *Stream) buildResponseSnapshot(status pkgopenai.ResponsesStatus, finish pkgopenai.ResponsesFinishReason, incomplete string) *pkgopenai.ResponsesResponse {
+	r := &pkgopenai.ResponsesResponse{
 		ID:           s.responseID,
 		Object:       "response",
 		CreatedAt:    s.created,
 		Model:        s.model,
 		Status:       status,
 		FinishReason: finish,
-		Output:       []responses.Item{},
+		Output:       []pkgopenai.ResponsesItem{},
 	}
 	if incomplete != "" {
-		r.IncompleteDetails = &responses.IncompleteDetails{Reason: incomplete}
+		r.IncompleteDetails = &pkgopenai.ResponsesIncompleteDetails{Reason: incomplete}
 	}
 	return r
 }
 
 // buildOutputItems reconstructs the final []Item from finalised emittedItems.
-func (s *Stream) buildOutputItems() []responses.Item {
-	items := make([]responses.Item, 0, len(s.done))
+func (s *Stream) buildOutputItems() []pkgopenai.ResponsesItem {
+	items := make([]pkgopenai.ResponsesItem, 0, len(s.done))
 	for _, d := range s.done {
 		switch d.itemType {
 		case "text":
-			msg := &responses.Message{
+			msg := &pkgopenai.ResponsesMessage{
 				ID:     d.itemID,
-				Status: responses.StatusCompleted,
-				Role:   responses.RoleAssistant,
-				Content: []responses.Part{
-					&responses.OutputTextPart{Text: d.textBuf.String()},
+				Status: pkgopenai.ResponsesStatusCompleted,
+				Role:   pkgopenai.ResponsesRoleAssistant,
+				Content: []pkgopenai.ResponsesPart{
+					&pkgopenai.ResponsesOutputTextPart{Text: d.textBuf.String()},
 				},
 			}
 			items = append(items, msg)
 		case "tool_use":
-			items = append(items, &responses.FunctionCall{
+			items = append(items, &pkgopenai.ResponsesFunctionCall{
 				ID:        d.itemID,
 				CallID:    d.callID,
 				Name:      d.toolName,
 				Arguments: d.argsBuf.String(),
-				Status:    responses.StatusCompleted,
+				Status:    pkgopenai.ResponsesStatusCompleted,
 			})
 		case "thinking":
-			items = append(items, &responses.Reasoning{
+			items = append(items, &pkgopenai.ResponsesReasoning{
 				ID:     d.itemID,
-				Status: responses.StatusCompleted,
-				Summary: []responses.SummaryText{
+				Status: pkgopenai.ResponsesStatusCompleted,
+				Summary: []pkgopenai.ResponsesSummaryText{
 					{Text: d.thinkingBuf.String()},
 				},
 			})
@@ -569,11 +569,11 @@ func (s *Stream) buildOutputItems() []responses.Item {
 }
 
 // marshalFrame builds a Responses responses.SSEFrame by marshaling the data payload.
-func marshalFrame(event string, data any) (responses.SSEFrame, error) {
+func marshalFrame(event string, data any) (pkgopenai.ResponsesSSEFrame, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
-		return responses.SSEFrame{}, fmt.Errorf("marshalFrame %s: %w", event, err)
+		return pkgopenai.ResponsesSSEFrame{}, fmt.Errorf("marshalFrame %s: %w", event, err)
 	}
-	return responses.SSEFrame{Event: event, Data: b}, nil
+	return pkgopenai.ResponsesSSEFrame{Event: event, Data: b}, nil
 }
 

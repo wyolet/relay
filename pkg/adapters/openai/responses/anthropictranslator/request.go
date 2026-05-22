@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/wyolet/relay/pkg/adapters/openai/responses"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 )
 
 const defaultMaxTokens = 4096
@@ -70,7 +70,7 @@ type anthropicOutputFormat struct {
 // RequestToAnthropic translates a Responses API request to an Anthropic
 // Messages request body (JSON bytes). Fields that have no Anthropic equivalent
 // are rejected with an explicit error so the caller can map to HTTP 400.
-func RequestToAnthropic(req *responses.Request) ([]byte, error) {
+func RequestToAnthropic(req *pkgopenai.ResponsesRequest) ([]byte, error) {
 	if err := rejectUnsupportedFields(req); err != nil {
 		return nil, err
 	}
@@ -115,9 +115,9 @@ func RequestToAnthropic(req *responses.Request) ([]byte, error) {
 
 	// tools
 	for _, t := range req.Tools {
-		ft, ok := t.(*responses.FunctionTool)
+		ft, ok := t.(*pkgopenai.ResponsesFunctionTool)
 		if !ok {
-			return nil, fmt.Errorf("responses_unsupported_for_anthropic: tool type %q has no Anthropic equivalent", t.ToolType())
+			return nil, fmt.Errorf("responses_unsupported_for_anthropic: tool type %q has no Anthropic equivalent", t.ResponsesToolType())
 		}
 		schema := ft.Parameters
 		if schema == nil {
@@ -182,7 +182,7 @@ func RequestToAnthropic(req *responses.Request) ([]byte, error) {
 
 // rejectUnsupportedFields returns an error for fields that have no Anthropic
 // equivalent and would silently change semantics if dropped.
-func rejectUnsupportedFields(req *responses.Request) error {
+func rejectUnsupportedFields(req *pkgopenai.ResponsesRequest) error {
 	if req.PreviousResponseID != "" {
 		return fmt.Errorf("responses_unsupported_for_anthropic: field %q has no Anthropic Messages equivalent", "previous_response_id")
 	}
@@ -227,7 +227,7 @@ func rejectUnsupportedFields(req *responses.Request) error {
 
 // translateFormat maps responses.Format → anthropicOutputFormat.
 // Returns nil for the "text" default (no output_config needed).
-func translateFormat(f *responses.Format) (*anthropicOutputFormat, error) {
+func translateFormat(f *pkgopenai.ResponsesFormat) (*anthropicOutputFormat, error) {
 	switch f.Type {
 	case "text", "":
 		return nil, nil
@@ -243,7 +243,7 @@ func translateFormat(f *responses.Format) (*anthropicOutputFormat, error) {
 
 // translateToolChoice maps responses.ToolChoice → Anthropic tool_choice value.
 // parallelToolCalls applies disable_parallel_tool_use when false.
-func translateToolChoice(tc *responses.ToolChoice, parallelToolCalls *bool) (map[string]any, error) {
+func translateToolChoice(tc *pkgopenai.ResponsesToolChoice, parallelToolCalls *bool) (map[string]any, error) {
 	disableParallel := parallelToolCalls != nil && !*parallelToolCalls
 
 	switch tc.Mode {
@@ -282,16 +282,16 @@ func translateToolChoice(tc *responses.ToolChoice, parallelToolCalls *bool) (map
 //     then accumulate as pending user tool_result blocks.
 //   - Reasoning items (echoed prior reasoning) are silently dropped.
 //   - Buffers are flushed at the end.
-func itemsToMessages(items []responses.Item) ([]anthropicMessage, string, error) {
+func itemsToMessages(items []pkgopenai.ResponsesItem) ([]anthropicMessage, string, error) {
 	var msgs []anthropicMessage
 	var systemParts []string
 
 	// pendingToolUses collects FunctionCall items before they're flushed as
 	// an assistant message with tool_use content blocks.
-	var pendingToolUses []responses.FunctionCall
+	var pendingToolUses []pkgopenai.ResponsesFunctionCall
 	// pendingToolResults collects FunctionCallOutput items before they're
 	// flushed as a user message with tool_result content blocks.
-	var pendingToolResults []responses.FunctionCallOutput
+	var pendingToolResults []pkgopenai.ResponsesFunctionCallOutput
 
 	flushToolUses := func() {
 		if len(pendingToolUses) == 0 {
@@ -341,21 +341,21 @@ func itemsToMessages(items []responses.Item) ([]anthropicMessage, string, error)
 
 	for _, item := range items {
 		switch v := item.(type) {
-		case *responses.Message:
+		case *pkgopenai.ResponsesMessage:
 			// Flush any accumulated tool turns before emitting a message.
 			flushToolUses()
 			flushToolResults()
 
 			role := string(v.Role)
 			switch v.Role {
-			case responses.RoleDeveloper:
+			case pkgopenai.ResponsesRoleDeveloper:
 				// Anthropic has no developer role; collect as system text.
 				text := extractTextFromParts(v.Content)
 				if text != "" {
 					systemParts = append(systemParts, text)
 				}
 				continue
-			case responses.RoleSystem:
+			case pkgopenai.ResponsesRoleSystem:
 				// System messages from items become system text too.
 				text := extractTextFromParts(v.Content)
 				if text != "" {
@@ -370,17 +370,17 @@ func itemsToMessages(items []responses.Item) ([]anthropicMessage, string, error)
 			}
 			msgs = append(msgs, anthropicMessage{Role: role, Content: blocks})
 
-		case *responses.FunctionCall:
+		case *pkgopenai.ResponsesFunctionCall:
 			// Flush any pending tool_results before accumulating a tool_use.
 			flushToolResults()
 			pendingToolUses = append(pendingToolUses, *v)
 
-		case *responses.FunctionCallOutput:
+		case *pkgopenai.ResponsesFunctionCallOutput:
 			// Flush pending tool_uses as an assistant message first.
 			flushToolUses()
 			pendingToolResults = append(pendingToolResults, *v)
 
-		case *responses.Reasoning:
+		case *pkgopenai.ResponsesReasoning:
 			// Prior reasoning is not echoed to Anthropic upstreams; silently drop.
 
 		default:
@@ -396,7 +396,7 @@ func itemsToMessages(items []responses.Item) ([]anthropicMessage, string, error)
 }
 
 // partsToContentBlocks converts Responses []Part to Anthropic content blocks.
-func partsToContentBlocks(parts []responses.Part) (any, error) {
+func partsToContentBlocks(parts []pkgopenai.ResponsesPart) (any, error) {
 	if len(parts) == 0 {
 		return "", nil
 	}
@@ -404,8 +404,8 @@ func partsToContentBlocks(parts []responses.Part) (any, error) {
 	// All-text fast path: return a plain string.
 	allText := true
 	for _, p := range parts {
-		switch p.PartType() {
-		case responses.PartTypeInputText, responses.PartTypeOutputText:
+		switch p.ResponsesPartType() {
+		case pkgopenai.ResponsesPartTypeInputText, pkgopenai.ResponsesPartTypeOutputText:
 		default:
 			allText = false
 		}
@@ -414,9 +414,9 @@ func partsToContentBlocks(parts []responses.Part) (any, error) {
 		var sb strings.Builder
 		for _, p := range parts {
 			switch v := p.(type) {
-			case *responses.TextPart:
+			case *pkgopenai.ResponsesTextPart:
 				sb.WriteString(v.Text)
-			case *responses.OutputTextPart:
+			case *pkgopenai.ResponsesOutputTextPart:
 				sb.WriteString(v.Text)
 			}
 		}
@@ -438,23 +438,23 @@ func partsToContentBlocks(parts []responses.Part) (any, error) {
 }
 
 // partToContentBlock converts one responses.Part to an Anthropic content block.
-func partToContentBlock(p responses.Part) (map[string]any, error) {
+func partToContentBlock(p pkgopenai.ResponsesPart) (map[string]any, error) {
 	switch v := p.(type) {
-	case *responses.TextPart:
+	case *pkgopenai.ResponsesTextPart:
 		return map[string]any{"type": "text", "text": v.Text}, nil
 
-	case *responses.OutputTextPart:
+	case *pkgopenai.ResponsesOutputTextPart:
 		// OutputTextPart in echoed-back assistant messages: emit as text block.
 		// Annotations are response-side artifacts; drop them on the way to Anthropic.
 		return map[string]any{"type": "text", "text": v.Text}, nil
 
-	case *responses.ImagePart:
+	case *pkgopenai.ResponsesImagePart:
 		return imagePartToBlock(v.ImageURL)
 
-	case *responses.FilePart:
+	case *pkgopenai.ResponsesFilePart:
 		return filePartToBlock(v)
 
-	case *responses.RefusalPart:
+	case *pkgopenai.ResponsesRefusalPart:
 		// Refusal parts in echoed-back content: emit as text.
 		return map[string]any{"type": "text", "text": v.Refusal}, nil
 
@@ -499,7 +499,7 @@ func imagePartToBlock(url string) (map[string]any, error) {
 
 // filePartToBlock converts a FilePart to an Anthropic document content block.
 // FileID refs are rejected; Anthropic does not accept OpenAI storage IDs.
-func filePartToBlock(v *responses.FilePart) (map[string]any, error) {
+func filePartToBlock(v *pkgopenai.ResponsesFilePart) (map[string]any, error) {
 	if v.FileID != "" {
 		return nil, fmt.Errorf("responses_unsupported_for_anthropic: input_file with file_id has no Anthropic equivalent; upload the file content directly")
 	}
@@ -553,13 +553,13 @@ func guessMIMEType(filename string) string {
 }
 
 // extractTextFromParts joins all text parts in a content slice.
-func extractTextFromParts(parts []responses.Part) string {
+func extractTextFromParts(parts []pkgopenai.ResponsesPart) string {
 	var sb strings.Builder
 	for _, p := range parts {
 		switch v := p.(type) {
-		case *responses.TextPart:
+		case *pkgopenai.ResponsesTextPart:
 			sb.WriteString(v.Text)
-		case *responses.OutputTextPart:
+		case *pkgopenai.ResponsesOutputTextPart:
 			sb.WriteString(v.Text)
 		}
 	}
@@ -568,7 +568,7 @@ func extractTextFromParts(parts []responses.Part) string {
 
 // toolResultContent extracts the tool result content for a tool_result block.
 // Returns a string for simple outputs or an array of blocks for rich content.
-func toolResultContent(f *responses.FunctionCallOutput) any {
+func toolResultContent(f *pkgopenai.ResponsesFunctionCallOutput) any {
 	if f.Output != "" {
 		return f.Output
 	}
@@ -576,7 +576,7 @@ func toolResultContent(f *responses.FunctionCallOutput) any {
 		// Flatten to string (Anthropic tool_result content can be string or block array).
 		var sb strings.Builder
 		for _, p := range f.Content {
-			if tp, ok := p.(*responses.TextPart); ok {
+			if tp, ok := p.(*pkgopenai.ResponsesTextPart); ok {
 				sb.WriteString(tp.Text)
 			}
 		}
