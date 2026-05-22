@@ -1,12 +1,11 @@
 // Package inference's Dispatch is the shape-agnostic per-request flow.
 // It owns: classification branching (proxy vs normal), routing resolution,
-// translator chaining (inbound ↔ openai ↔ upstream), pipeline invocation,
+// translator chaining (inbound ↔ canonical ↔ upstream), pipeline invocation,
 // and response wrapping.
 //
-// Per-shape routes (under app/adapters/<name>/routes.go) own only:
-//   1. Minimal parse to extract the model name + stream flag.
-//   2. Translator selection (the route knows its own inbound Name).
-//   3. The Dispatch call.
+// Per-shape routes (registered via app/adapter.MountRoutes) own only:
+//  1. Minimal parse to extract the model name + stream flag.
+//  2. The Dispatch call with the inbound shape Name.
 //
 // This keeps shape-specific files out of app/httpapi/inference/.
 package inference
@@ -20,8 +19,6 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
-	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
-	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
 )
 
@@ -44,17 +41,14 @@ type DispatchInput struct {
 	Stream bool
 }
 
-// Dispatch runs the shape-agnostic flow. Called from per-shape route
-// handlers (e.g. app/adapters/openai/routes.go) after they've done a
+// Dispatch runs the shape-agnostic flow. Called from route handlers after a
 // minimal parse to extract ModelName + Stream.
 func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) {
 	ctx := r.Context()
 
-	// Proxy mode short-circuits cross-shape translation: BYO upstream
-	// key paths through Proxy.Run with no body rewrite.
+	// Proxy mode short-circuits cross-shape translation.
 	cls := ClassificationFrom(ctx)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
-		// Reset r.Body so handleProxy can re-read it.
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
 		handleProxy(d, w, r, in.Inbound)
 		return
@@ -75,87 +69,91 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 
-	// Responses inbound:
-	//   - OpenAI proper (Adapter=OpenAI, host="openai") → fall through to
-	//     the byte-pass path below (upstreamKey override → /v1/responses).
-	//   - Any other host → look up the registered cross-shape handler
-	//     (lives in the inbound-shape's adapter package — keeps inference
-	//     shape-agnostic).
-	if in.Inbound == adapters.OpenAIResponses {
-		if !(plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai") {
-			handler, ok := d.CrossShapeHandlers[adapters.OpenAIResponses]
-			if !ok {
-				writeAPIError(w, http.StatusInternalServerError, "server_error",
-					"no_cross_shape_handler",
-					"no cross-shape handler registered for "+string(in.Inbound))
-				return
-			}
-			handler(d, w, r, in, plan)
-			return
-		}
+	inboundSpec := d.Specs.Spec(in.Inbound)
+	if inboundSpec == nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_spec",
+			"no adapter spec registered for "+string(in.Inbound))
+		return
 	}
 
-	// Phase 1: Embeddings inbound requires an OpenAI-compatible upstream.
-	// Anthropic hosts don't expose /v1/embeddings; any other OpenAI-shape
-	// host (Voyage, Together, Fireworks, Cohere compat, Ollama, etc.) is
-	// accepted. Phase 2 is N/A — Anthropic has no embeddings API to translate
-	// to, so this guard is permanent.
-	if in.Inbound == adapters.OpenAIEmbeddings {
+	// Byte-pass shapes (e.g. Embeddings) skip all translation and use the
+	// inbound spec's own adapter regardless of upstream binding.
+	if inboundSpec.BytePass {
+		upstreamAdapter := d.Specs.PipelineAdapter(in.Inbound)
+		if upstreamAdapter == nil {
+			writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
+				"no adapter registered for "+string(in.Inbound))
+			return
+		}
+		// Embeddings inbound requires an OpenAI-compatible upstream adapter.
+		// Anthropic hosts don't expose /v1/embeddings. This guard is permanent
+		// (Anthropic has no embeddings API to translate to).
 		if plan.HostBinding.Adapter != adapters.OpenAI {
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "embeddings_unsupported_host",
 				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
 					" (adapter="+string(plan.HostBinding.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-	}
-
-	// When the inbound shape is one of the alt-path OpenAI variants, use the
-	// dedicated upstream adapter (POSTs to /v1/responses or /v1/embeddings)
-	// and matching translator key. sameShape=true → byte-passthrough.
-	upstreamKey := plan.HostBinding.Adapter
-	if in.Inbound == adapters.OpenAIResponses {
-		upstreamKey = adapters.OpenAIResponses
-	}
-	if in.Inbound == adapters.OpenAIEmbeddings {
-		upstreamKey = adapters.OpenAIEmbeddings
-	}
-
-	upstreamAdapter, ok := d.Adapters[upstreamKey]
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
-			"no adapter registered for "+string(upstreamKey))
+		runBytePass(d, w, r, in, plan, upstreamAdapter)
 		return
 	}
 
-	inboundT := d.Translators.Get(in.Inbound)
-	upstreamT := d.Translators.Get(upstreamKey)
-	if inboundT == nil || upstreamT == nil {
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_translator",
-			"missing translator for "+string(in.Inbound)+" or "+string(upstreamKey))
-		return
-	}
-
-	sameShape := in.Inbound == upstreamKey
-
-	// Canonical cross-shape: when Anthropic is one side of the exchange,
-	// route through the canonical chain (v1.Translator) instead of the
-	// OpenAI-as-hub path. Covers two pairs:
-	//   inbound=CC + upstream=Anthropic  (CC → canonical → Anthropic)
-	//   inbound=Anthropic + upstream=OpenAI (Anthropic → canonical → CC)
-	if !sameShape {
-		if (in.Inbound == adapters.OpenAI && upstreamKey == adapters.Anthropic) ||
-			(in.Inbound == adapters.Anthropic && upstreamKey == adapters.OpenAI) {
-			dispatchCanonical(d, w, r, in, plan, upstreamAdapter)
+	// Native-path check: does the resolved host natively speak this inbound
+	// shape? If so, byte-pass using the inbound spec's own adapter (which
+	// posts to the correct upstream path, e.g. /v1/responses).
+	if inboundSpec.IsNativePath != nil && inboundSpec.IsNativePath(plan) {
+		upstreamAdapter := d.Specs.PipelineAdapter(in.Inbound)
+		if upstreamAdapter == nil {
+			writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
+				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-	}
-
-	// Build the wire body for the upstream call.
-	wireBody, err := buildWireBody(in.Body, plan.Snapshot.Upstream(), sameShape, inboundT, upstreamT)
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
+		runBytePass(d, w, r, in, plan, upstreamAdapter)
 		return
 	}
+
+	// Standard dispatch: look up the upstream spec and determine whether
+	// this is a same-shape pass (inbound == upstream adapter) or a cross-
+	// shape canonical translation.
+	upstreamSpec := d.Specs.Spec(plan.HostBinding.Adapter)
+	if upstreamSpec == nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_spec",
+			"no adapter spec registered for upstream "+string(plan.HostBinding.Adapter))
+		return
+	}
+	upstreamAdapter := d.Specs.PipelineAdapter(plan.HostBinding.Adapter)
+	if upstreamAdapter == nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
+			"no adapter registered for "+string(plan.HostBinding.Adapter))
+		return
+	}
+
+	sameShape := in.Inbound == plan.HostBinding.Adapter
+
+	if sameShape {
+		runBytePass(d, w, r, in, plan, upstreamAdapter)
+		return
+	}
+
+	// Cross-shape: both sides must have canonical translators.
+	inboundV1 := inboundSpec.Translator
+	upstreamV1 := upstreamSpec.Translator
+	if inboundV1 == nil || upstreamV1 == nil {
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_translator",
+			"missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Adapter))
+		return
+	}
+
+	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
+}
+
+// runBytePass handles same-shape or byte-pass dispatch: forward the body
+// (with model field rewritten to the upstream model name) to the upstream
+// and stream or buffer the response back.
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter) {
+	ctx := r.Context()
+
+	wireBody := rewriteModelField(in.Body, plan.Snapshot.Upstream())
 
 	preq := &pipeline.Request{
 		Body:        wireBody,
@@ -179,128 +177,15 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
-
-	if sameShape {
-		_, _ = io.Copy(w, result.Body)
-		return
-	}
-
-	if in.Stream {
-		streamTranslated(w, result.Body, upstreamT, inboundT)
-		return
-	}
-	bufferTranslated(w, result.Body, upstreamT, inboundT)
+	_, _ = io.Copy(w, result.Body)
 }
 
-// buildWireBody produces the request body that hits the upstream.
-//
-//   - same-shape: byte-equivalent passthrough; just rewrite the model
-//     field to the snapshot's upstream name.
-//   - cross-shape: parse inbound → openai → serialize upstream. The
-//     model field on the canonical request is set to the snapshot's
-//     upstream name before serialization.
-func buildWireBody(body []byte, upstreamModel string, sameShape bool, inboundT, upstreamT adapters.Translator) ([]byte, error) {
-	if sameShape {
-		return rewriteModelField(body, upstreamModel), nil
-	}
-	canon, err := inboundT.ParseRequest(body)
-	if err != nil {
-		return nil, err
-	}
-	canon.Model = upstreamModel
-	return upstreamT.SerializeRequest(canon)
-}
-
-// streamTranslated chains upstream→openai→inbound chunk transformers on
-// an SSE response. Each chunk is parsed at SSE boundary, transformed,
-// flushed to the client.
-//
-// Either transformer can be nil (identity from openai's side); we skip
-// the corresponding stage in that case.
-func streamTranslated(w http.ResponseWriter, body io.ReadCloser, upstreamT, inboundT adapters.Translator) {
-	upstreamToOpenAI := upstreamT.NewToOpenAIStream()
-	openAIToInbound := inboundT.NewFromOpenAIStream()
-
-	flusher, _ := w.(http.Flusher)
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	scanner.Split(splitSSEChunks)
-
-	for scanner.Scan() {
-		chunk := scanner.Bytes()
-		out := chunk
-		if upstreamToOpenAI != nil {
-			translated, err := upstreamToOpenAI(out)
-			if err != nil {
-				return
-			}
-			out = translated
-		}
-		if openAIToInbound != nil {
-			translated, err := openAIToInbound(out)
-			if err != nil {
-				return
-			}
-			out = translated
-		}
-		if len(out) == 0 {
-			continue
-		}
-		// Translator outputs (anthropic.sseBytes) already terminate with
-		// \n\n. Identity passthrough strips terminators via the scanner.
-		// Trim then re-add exactly one \n\n so we don't double up and
-		// confuse strict SSE clients (cc, Anthropic SDK).
-		out = bytes.TrimRight(out, "\n")
-		_, _ = w.Write(out)
-		_, _ = w.Write([]byte("\n\n"))
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-}
-
-// bufferTranslated handles the sync (non-streaming) response path:
-// collect, upstream→openai parse, openai→inbound serialize, write.
-func bufferTranslated(w http.ResponseWriter, body io.ReadCloser, upstreamT, inboundT adapters.Translator) {
-	raw, err := io.ReadAll(body)
-	if err != nil {
-		return
-	}
-	canon, err := upstreamT.ParseResponse(raw)
-	if err != nil {
-		_, _ = w.Write(raw)
-		return
-	}
-	out, err := inboundT.SerializeResponse(canon)
-	if err != nil {
-		_, _ = w.Write(raw)
-		return
-	}
-	_, _ = w.Write(out)
-}
-
-// dispatchCanonical handles cross-shape dispatch when Anthropic is one side
-// of the exchange. Uses v1.Translator canonical chain instead of the OpenAI-hub path.
-// Supported pairs:
-//
-//	inbound=CC + upstream=Anthropic: CCTranslator → canonical → AnthropicTranslator
-//	inbound=Anthropic + upstream=OpenAI: AnthropicTranslator → canonical → CCTranslator
-func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter) {
+// dispatchCanonical handles cross-shape dispatch via the canonical v1 chain.
+// inboundV1 parses the inbound body and serializes the response back to the
+// inbound wire shape. upstreamV1 serializes the canonical request and parses
+// the upstream response.
+func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, inboundV1, upstreamV1 v1.Translator) {
 	ctx := r.Context()
-
-	var inboundV1, upstreamV1 v1.Translator
-	switch {
-	case in.Inbound == adapters.OpenAI && plan.HostBinding.Adapter == adapters.Anthropic:
-		inboundV1 = pkgopenai.CCTranslator{}
-		upstreamV1 = pkganthropic.AnthropicTranslator{}
-	case in.Inbound == adapters.Anthropic && plan.HostBinding.Adapter == adapters.OpenAI:
-		inboundV1 = pkganthropic.AnthropicTranslator{}
-		upstreamV1 = pkgopenai.CCTranslator{}
-	default:
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "canonical_dispatch_unsupported",
-			"no canonical translator pair for "+string(in.Inbound)+"→"+string(plan.HostBinding.Adapter))
-		return
-	}
 
 	canonReq, err := inboundV1.ParseRequest(in.Body)
 	if err != nil {
@@ -370,7 +255,6 @@ func streamCanonical(w http.ResponseWriter, body io.ReadCloser, toCanon, fromCan
 		}
 
 		if fromCanon != nil && len(out) > 0 {
-			// Split canonical output into individual frames for the inbound translator.
 			frames := splitCanonFrames(out)
 			out = nil
 			for _, f := range frames {
@@ -448,4 +332,3 @@ func splitSSEChunks(data []byte, atEOF bool) (advance int, token []byte, err err
 	}
 	return 0, nil, nil
 }
-

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
@@ -26,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	pkgrelay "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/slug"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
@@ -107,8 +109,7 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 	return cat, rk
 }
 
-// stubAdapter is a minimal pipeline.Adapter for tests. It always returns
-// a connection error so the pipeline fails fast without a real upstream.
+// stubAdapter is a minimal pipeline.Adapter for tests.
 type stubAdapter struct{}
 
 func (stubAdapter) Call(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
@@ -119,9 +120,63 @@ func (stubAdapter) Retryable(_ *http.Response) (bool, keypool.FailureKind, time.
 	return false, 0, 0
 }
 
-// stubTranslator satisfies adapters.Translator using the Identity base.
-// Avoids importing app/adapters/openai to prevent import cycles.
-type stubTranslator struct{ adapters.Identity }
+// stubV1Translator is a no-op v1.Translator for test specs.
+type stubV1Translator struct{}
+
+func (stubV1Translator) ParseRequest(body []byte) (*pkgrelay.Request, error) {
+	return nil, fmt.Errorf("stub: not implemented")
+}
+func (stubV1Translator) SerializeRequest(req *pkgrelay.Request) ([]byte, error) {
+	return nil, fmt.Errorf("stub: not implemented")
+}
+func (stubV1Translator) ParseResponse(body []byte) (*pkgrelay.Response, error) {
+	return nil, fmt.Errorf("stub: not implemented")
+}
+func (stubV1Translator) SerializeResponse(resp *pkgrelay.Response, req *pkgrelay.Request) ([]byte, error) {
+	return nil, fmt.Errorf("stub: not implemented")
+}
+func (stubV1Translator) NewToCanonicalStream() func([]byte) ([]byte, error)   { return nil }
+func (stubV1Translator) NewFromCanonicalStream() func([]byte) ([]byte, error) { return nil }
+
+// buildTestRegistry constructs a minimal adapter.Registry for tests.
+// Registers specs for openai, openai_responses, openai_embeddings, and
+// anthropic — each with a stubAdapter so tests exercise dispatch routing
+// without a live upstream.
+func buildTestRegistry() *adapter.Registry {
+	openaiSpec := (&adapter.Spec{
+		Name:         adapters.OpenAI,
+		UpstreamPath: "/v1/chat/completions",
+		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:   stubV1Translator{},
+	}).Build()
+
+	// Responses: IsNativePath returns true only when host name == "openai".
+	responsesSpec := (&adapter.Spec{
+		Name:         adapters.OpenAIResponses,
+		UpstreamPath: "/v1/responses",
+		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:   stubV1Translator{},
+		IsNativePath: func(plan *routing.Plan) bool {
+			return plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+		},
+	}).Build()
+
+	embeddingsSpec := (&adapter.Spec{
+		Name:         adapters.OpenAIEmbeddings,
+		UpstreamPath: "/v1/embeddings",
+		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		BytePass:     true,
+	}).Build()
+
+	anthropicSpec := (&adapter.Spec{
+		Name:         adapters.Anthropic,
+		UpstreamPath: "/v1/messages",
+		Auth:         adapter.AuthStrategy{Header: "x-api-key"},
+		Translator:   stubV1Translator{},
+	}).Build()
+
+	return adapter.NewRegistry(openaiSpec, responsesSpec, embeddingsSpec, anthropicSpec)
+}
 
 func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	t.Helper()
@@ -131,38 +186,16 @@ func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	limiter := pkgratelimit.New(kvStore, nil, nil)
 	pl := &pipeline.Pipeline{Logger: nil}
 
+	reg := buildTestRegistry()
+
 	return Deps{
 		Catalog:  cat,
 		Resolver: routing.New(cat),
 		Pipeline: pl,
 		Proxy:    proxy.New(limiter, nil),
-		Adapters: map[adapters.Name]pipeline.Adapter{
-			adapters.OpenAI:           stubAdapter{},
-			adapters.OpenAIResponses:  stubAdapter{},
-			adapters.OpenAIEmbeddings: stubAdapter{},
-			adapters.Anthropic:        stubAdapter{},
-		},
-		Translators: adapters.Registry{
-			adapters.OpenAI:           stubTranslator{},
-			adapters.OpenAIResponses:  stubTranslator{},
-			adapters.OpenAIEmbeddings: stubTranslator{},
-			adapters.Anthropic:        stubTranslator{},
-		},
-		// Stub cross-shape handler — these tests verify inference's
-		// routing decision (byte-pass vs hook), not the real handler's
-		// internal behavior. The real openai handler is exercised in
-		// app/adapters/openai/responses_cross_shape_test.go.
-		CrossShapeHandlers: map[adapters.Name]CrossShapeHandler{
-			adapters.OpenAIResponses: stubCrossShapeHandler,
-		},
+		Adapters: reg.AdapterMap(),
+		Specs:    reg,
 	}
-}
-
-// stubCrossShapeHandler writes a sentinel response so tests can detect
-// that the dispatch routed to a cross-shape handler (rather than
-// byte-passing).
-func stubCrossShapeHandler(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan) {
-	writeAPIError(w, http.StatusTeapot, "stub", "cross_shape_invoked", "stub cross-shape handler")
 }
 
 // withNormalContext injects a ModeNormal classification and relay key into
@@ -192,9 +225,8 @@ func parseDispatchErr(t *testing.T, body []byte) errBody {
 
 // TestDispatch_Responses_OpenAIProperHost_BytePass verifies that
 // Inbound=OpenAIResponses on host "openai" (Adapter=OpenAI) takes the
-// byte-pass path. The pipeline fails on the stub adapter, but neither
-// the cross-shape "responses_unsupported_host" nor "translate_request"
-// codes fire — those only show up on the cross-shape paths.
+// byte-pass path (IsNativePath returns true). The pipeline fails on the stub
+// adapter, but the cross-shape "translate_request" error does NOT fire.
 func TestDispatch_Responses_OpenAIProperHost_BytePass(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	d := buildDeps(t, cat)
@@ -213,17 +245,18 @@ func TestDispatch_Responses_OpenAIProperHost_BytePass(t *testing.T) {
 	if w.Code == http.StatusBadRequest {
 		e := parseDispatchErr(t, w.Body.Bytes())
 		switch e.Error.Code {
-		case "responses_unsupported_host", "translate_request", "invalid_responses_request":
+		case "translate_request", "invalid_responses_request":
 			t.Fatalf("byte-pass path should not have hit a cross-shape error: %q (%s)", e.Error.Code, e.Error.Message)
 		}
 	}
 }
 
-// TestDispatch_Responses_OpenAICompatHost_RoutesToHook verifies that a host
-// with Adapter=OpenAI but Meta.Name != "openai" (Ollama, Groq, Together,
-// Fireworks, etc.) hits the registered CrossShapeHandler instead of the
-// byte-pass path. The stub handler returns 418 so we know it ran.
-func TestDispatch_Responses_OpenAICompatHost_RoutesToHook(t *testing.T) {
+// TestDispatch_Responses_OpenAICompatHost_CrossShape verifies that a host
+// with Adapter=OpenAI but Meta.Name != "openai" (Ollama, Groq, Together, etc.)
+// falls through to the cross-shape canonical chain. With stubV1Translator
+// returning an error on ParseRequest, we get a 400 translate_request error —
+// which proves dispatch tried to translate (not byte-pass).
+func TestDispatch_Responses_OpenAICompatHost_CrossShape(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
@@ -238,14 +271,18 @@ func TestDispatch_Responses_OpenAICompatHost_RoutesToHook(t *testing.T) {
 		Stream:    false,
 	})
 
-	if w.Code != http.StatusTeapot {
-		t.Fatalf("want 418 (stub hook), got %d; body: %s", w.Code, w.Body.String())
+	// stubV1Translator.ParseRequest always errors → translate_request 400.
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 (translate_request), got %d; body: %s", w.Code, w.Body.String())
+	}
+	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "translate_request" {
+		t.Errorf("error code: want translate_request, got %q", e.Error.Code)
 	}
 }
 
-// TestDispatch_Responses_AnthropicHost_RoutesToHook verifies that a host
-// with Adapter=Anthropic also routes to the registered CrossShapeHandler.
-func TestDispatch_Responses_AnthropicHost_RoutesToHook(t *testing.T) {
+// TestDispatch_Responses_AnthropicHost_CrossShape verifies that a host with
+// Adapter=Anthropic also routes to the cross-shape canonical chain.
+func TestDispatch_Responses_AnthropicHost_CrossShape(t *testing.T) {
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 
@@ -260,35 +297,11 @@ func TestDispatch_Responses_AnthropicHost_RoutesToHook(t *testing.T) {
 		Stream:    false,
 	})
 
-	if w.Code != http.StatusTeapot {
-		t.Fatalf("want 418 (stub hook), got %d; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 (translate_request), got %d; body: %s", w.Code, w.Body.String())
 	}
-}
-
-// TestDispatch_Responses_NoHookRegistered verifies that when an
-// inbound shape needs cross-shape dispatch but no handler is registered,
-// dispatch returns 500 no_cross_shape_handler.
-func TestDispatch_Responses_NoHookRegistered(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
-	d := buildDeps(t, cat)
-	d.CrossShapeHandlers = nil
-
-	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	r = withNormalContext(r, rk)
-	w := httptest.NewRecorder()
-
-	Dispatch(d, w, r, DispatchInput{
-		Inbound:   adapters.OpenAIResponses,
-		Body:      []byte(`{"model":"test-model","input":"hi"}`),
-		ModelName: "test-model",
-		Stream:    false,
-	})
-
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("want 500, got %d; body: %s", w.Code, w.Body.String())
-	}
-	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "no_cross_shape_handler" {
-		t.Errorf("error code: want no_cross_shape_handler, got %q", e.Error.Code)
+	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "translate_request" {
+		t.Errorf("error code: want translate_request, got %q", e.Error.Code)
 	}
 }
 
@@ -391,7 +404,7 @@ func TestDispatch_NormalOpenAI_UnaffectedByGuards(t *testing.T) {
 	if w.Code == http.StatusBadRequest {
 		e := parseDispatchErr(t, w.Body.Bytes())
 		if e.Error.Code == "responses_unsupported_host" || e.Error.Code == "embeddings_unsupported_host" {
-			t.Fatalf("guard fired on standard OpenAI request — guards are shape-conditional (got %q)", e.Error.Code)
+			t.Fatalf("guard fired on standard OpenAI request (got %q)", e.Error.Code)
 		}
 	}
 }

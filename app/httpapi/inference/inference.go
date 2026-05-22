@@ -7,13 +7,13 @@ package inference
 
 import (
 	"context"
-	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/adapter"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
@@ -25,15 +25,6 @@ import (
 // inbound HTTP surface. Each adapter (openai, anthropic, ...) provides
 // a MountRoutes(api, deps, mw) function matching this signature.
 type RouteMounter = func(api huma.API, d Deps, mw huma.Middlewares)
-
-// CrossShapeHandler handles dispatch when the inbound shape needs
-// non-trivial translation to the upstream wire format. Each adapter that
-// owns an inbound shape with cross-shape semantics (e.g. openai_responses
-// against non-OpenAI hosts) registers one. Dispatch routes to it instead
-// of the byte-pass path. Keeps inference shape-agnostic — it only knows
-// "is there a handler for this inbound shape" without importing the
-// adapter packages.
-type CrossShapeHandler = func(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan)
 
 // Deps is the typed dependency bundle for the data plane.
 type Deps struct {
@@ -60,23 +51,16 @@ type Deps struct {
 	// proxy mode looks up the extractor by inbound endpoint shape.
 	Adapters map[adapters.Name]pipeline.Adapter
 
-	// Translators keys the shape Translator by adapters.Name. Each route
-	// handler picks its own inbound translator (by route) and the
-	// upstream translator (from plan.HostBinding.Adapter) and chains
-	// them. Identity (OpenAI) is no-op so passthrough stays cheap.
-	Translators adapters.Registry
+	// Specs is the generic adapter registry. Dispatch uses it to look up
+	// inbound and upstream translators and to determine routing strategy
+	// (byte-pass vs canonical cross-shape). Built once at boot and
+	// populated from cmd/relay/main.go.
+	Specs *adapter.Registry
 
 	// RouteMounters are per-adapter route registration functions. Each
-	// adapter package exposes a MountRoutes that satisfies RouteMounter;
-	// cmd/relay/main.go wires them in. Order is iteration order over the
-	// slice; should not matter in practice (paths are distinct).
+	// adapter (or the generic framework) exposes a MountRoutes function
+	// that satisfies RouteMounter; cmd/relay/main.go wires them in.
 	RouteMounters []RouteMounter
-
-	// CrossShapeHandlers keys per-inbound-shape cross-shape dispatch by
-	// adapters.Name. Populated by the composition root from each adapter
-	// package that owns one. Dispatch consults this when the inbound shape
-	// can't byte-pass to the resolved upstream.
-	CrossShapeHandlers map[adapters.Name]CrossShapeHandler
 }
 
 // Pinger reports backend health for /healthz. Storage satisfies this
