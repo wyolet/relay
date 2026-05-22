@@ -75,12 +75,19 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Responses inbound:
 	//   - OpenAI proper (Adapter=OpenAI, host="openai") → fall through to
 	//     the byte-pass path below (upstreamKey override → /v1/responses).
-	//   - Any other Adapter=OpenAI (Ollama, Groq, Together…) or
-	//     Adapter=Anthropic → cross-shape translation via dispatchResponsesCrossShape.
-	//   - Other adapters → cross-shape handler returns 400.
+	//   - Any other host → look up the registered cross-shape handler
+	//     (lives in the inbound-shape's adapter package — keeps inference
+	//     shape-agnostic).
 	if in.Inbound == adapters.OpenAIResponses {
 		if !(plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai") {
-			dispatchResponsesCrossShape(d, w, r, in, plan)
+			handler, ok := d.CrossShapeHandlers[adapters.OpenAIResponses]
+			if !ok {
+				writeAPIError(w, http.StatusInternalServerError, "server_error",
+					"no_cross_shape_handler",
+					"no cross-shape handler registered for "+string(in.Inbound))
+				return
+			}
+			handler(d, w, r, in, plan)
 			return
 		}
 	}
@@ -154,14 +161,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 	defer result.Body.Close()
 
-	for k, vs := range result.Headers {
-		if isHopByHop(k) {
-			continue
-		}
-		for _, v := range vs {
-			w.Header().Add(k, v)
-		}
-	}
+	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
 
 	if sameShape {

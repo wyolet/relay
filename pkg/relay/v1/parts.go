@@ -1,4 +1,4 @@
-package responses
+package v1
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ type TextPart struct {
 	Text string `json:"text"`
 }
 
-func (*TextPart) isPart()           {}
+func (*TextPart) isPart()            {}
 func (*TextPart) PartType() PartType { return PartTypeInputText }
 
 func (p *TextPart) MarshalJSON() ([]byte, error) {
@@ -30,7 +30,7 @@ type ImagePart struct {
 	Detail   string `json:"detail,omitempty"` // "low" | "high" | "auto"
 }
 
-func (*ImagePart) isPart()           {}
+func (*ImagePart) isPart()            {}
 func (*ImagePart) PartType() PartType { return PartTypeInputImage }
 
 func (p *ImagePart) MarshalJSON() ([]byte, error) {
@@ -45,57 +45,44 @@ func (p *ImagePart) MarshalJSON() ([]byte, error) {
 // FilePart is an input_file content part.
 // Exactly one of FileURL, FileID, or FileData is set on a valid part.
 type FilePart struct {
-	FileURL  string `json:"file_url,omitempty"`
-	FileID   string `json:"file_id,omitempty"`
-	FileData string `json:"file_data,omitempty"` // base64-encoded
-	Filename string `json:"filename,omitempty"`
+	FileURL   string `json:"file_url,omitempty"`
+	FileID    string `json:"file_id,omitempty"`
+	FileData  string `json:"file_data,omitempty"` // base64-encoded
+	Filename  string `json:"filename,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
 }
 
-func (*FilePart) isPart()           {}
+func (*FilePart) isPart()            {}
 func (*FilePart) PartType() PartType { return PartTypeInputFile }
 
 func (p *FilePart) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type     PartType `json:"type"`
-		FileURL  string   `json:"file_url,omitempty"`
-		FileID   string   `json:"file_id,omitempty"`
-		FileData string   `json:"file_data,omitempty"`
-		Filename string   `json:"filename,omitempty"`
+		Type      PartType `json:"type"`
+		FileURL   string   `json:"file_url,omitempty"`
+		FileID    string   `json:"file_id,omitempty"`
+		FileData  string   `json:"file_data,omitempty"`
+		Filename  string   `json:"filename,omitempty"`
+		MediaType string   `json:"media_type,omitempty"`
 	}
 	return json.Marshal(wire{
-		Type:     PartTypeInputFile,
-		FileURL:  p.FileURL,
-		FileID:   p.FileID,
-		FileData: p.FileData,
-		Filename: p.Filename,
+		Type:      PartTypeInputFile,
+		FileURL:   p.FileURL,
+		FileID:    p.FileID,
+		FileData:  p.FileData,
+		Filename:  p.Filename,
+		MediaType: p.MediaType,
 	})
 }
 
 // --- Output parts ---
 
-// TokenLogprob is one token's log-probability in an output.
-type TokenLogprob struct {
-	Token       string        `json:"token"`
-	Logprob     float64       `json:"logprob"`
-	Bytes       []int         `json:"bytes,omitempty"`
-	TopLogprobs []TopLogprob  `json:"top_logprobs,omitempty"`
-}
-
-// TopLogprob is one candidate token's log-probability.
-type TopLogprob struct {
-	Token   string  `json:"token"`
-	Logprob float64 `json:"logprob"`
-	Bytes   []int   `json:"bytes,omitempty"`
-}
-
-// OutputTextPart is an output_text content part with optional annotations and logprobs.
+// OutputTextPart is an output_text content part with optional annotations.
 type OutputTextPart struct {
-	Text        string         `json:"text"`
-	Annotations []Annotation   `json:"-"` // polymorphic; see MarshalJSON
-	Logprobs    []TokenLogprob `json:"-"` // spec requires []; see MarshalJSON
+	Text        string       `json:"text"`
+	Annotations []Annotation `json:"-"` // polymorphic; see MarshalJSON
 }
 
-func (*OutputTextPart) isPart()           {}
+func (*OutputTextPart) isPart()            {}
 func (*OutputTextPart) PartType() PartType { return PartTypeOutputText }
 
 func (p *OutputTextPart) MarshalJSON() ([]byte, error) {
@@ -107,23 +94,15 @@ func (p *OutputTextPart) MarshalJSON() ([]byte, error) {
 		}
 		annRaws[i] = b
 	}
-	// OpenAI spec requires both annotations and logprobs on every output_text
-	// part; emit empty arrays (not null, not omitted) when we have none.
-	logprobs := p.Logprobs
-	if logprobs == nil {
-		logprobs = []TokenLogprob{}
-	}
 	type wire struct {
 		Type        PartType          `json:"type"`
 		Text        string            `json:"text"`
-		Annotations []json.RawMessage `json:"annotations"`
-		Logprobs    []TokenLogprob    `json:"logprobs"`
+		Annotations []json.RawMessage `json:"annotations,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:        PartTypeOutputText,
 		Text:        p.Text,
 		Annotations: annRaws,
-		Logprobs:    logprobs,
 	})
 }
 
@@ -131,13 +110,11 @@ func (p *OutputTextPart) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Text        string            `json:"text"`
 		Annotations []json.RawMessage `json:"annotations"`
-		Logprobs    []TokenLogprob    `json:"logprobs"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	p.Text = raw.Text
-	p.Logprobs = raw.Logprobs
 	if len(raw.Annotations) > 0 {
 		anns := make([]Annotation, 0, len(raw.Annotations))
 		for _, ab := range raw.Annotations {
@@ -152,22 +129,6 @@ func (p *OutputTextPart) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// RefusalPart is a refusal content part in an assistant message.
-type RefusalPart struct {
-	Refusal string `json:"refusal"`
-}
-
-func (*RefusalPart) isPart()           {}
-func (*RefusalPart) PartType() PartType { return PartTypeRefusal }
-
-func (p *RefusalPart) MarshalJSON() ([]byte, error) {
-	type wire struct {
-		Type    PartType `json:"type"`
-		Refusal string   `json:"refusal"`
-	}
-	return json.Marshal(wire{Type: PartTypeRefusal, Refusal: p.Refusal})
-}
-
 // --- Annotations ---
 
 // URLCitationAnnotation is a url_citation annotation on output text.
@@ -178,8 +139,8 @@ type URLCitationAnnotation struct {
 	Title      string `json:"title,omitempty"`
 }
 
-func (*URLCitationAnnotation) isAnnotation()               {}
-func (*URLCitationAnnotation) AnnotationType() string      { return "url_citation" }
+func (*URLCitationAnnotation) isAnnotation()          {}
+func (*URLCitationAnnotation) AnnotationType() string { return "url_citation" }
 
 func (a *URLCitationAnnotation) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -198,22 +159,28 @@ func (a *URLCitationAnnotation) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// FileCitationAnnotation is a file_citation annotation on output text.
-type FileCitationAnnotation struct {
-	FileID string `json:"file_id"`
-	Index  int    `json:"index,omitempty"`
+// TextCitationAnnotation is a text_citation annotation referencing a span in
+// an upstream document. StartIndex and EndIndex are byte offsets into the
+// cited source text.
+type TextCitationAnnotation struct {
+	StartIndex int `json:"start_index"`
+	EndIndex   int `json:"end_index"`
 }
 
-func (*FileCitationAnnotation) isAnnotation()           {}
-func (*FileCitationAnnotation) AnnotationType() string  { return "file_citation" }
+func (*TextCitationAnnotation) isAnnotation()          {}
+func (*TextCitationAnnotation) AnnotationType() string { return "text_citation" }
 
-func (a *FileCitationAnnotation) MarshalJSON() ([]byte, error) {
+func (a *TextCitationAnnotation) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type   string `json:"type"`
-		FileID string `json:"file_id"`
-		Index  int    `json:"index,omitempty"`
+		Type       string `json:"type"`
+		StartIndex int    `json:"start_index"`
+		EndIndex   int    `json:"end_index"`
 	}
-	return json.Marshal(wire{Type: "file_citation", FileID: a.FileID, Index: a.Index})
+	return json.Marshal(wire{
+		Type:       "text_citation",
+		StartIndex: a.StartIndex,
+		EndIndex:   a.EndIndex,
+	})
 }
 
 // RawAnnotation preserves unknown annotation types for forward compatibility.
@@ -247,10 +214,10 @@ func unmarshalAnnotation(data []byte) (Annotation, error) {
 			return nil, fmt.Errorf("url_citation annotation: %w", err)
 		}
 		return &v, nil
-	case "file_citation":
-		var v FileCitationAnnotation
+	case "text_citation":
+		var v TextCitationAnnotation
 		if err := json.Unmarshal(data, &v); err != nil {
-			return nil, fmt.Errorf("file_citation annotation: %w", err)
+			return nil, fmt.Errorf("text_citation annotation: %w", err)
 		}
 		return &v, nil
 	default:
@@ -264,7 +231,6 @@ func unmarshalContent(raw json.RawMessage) ([]Part, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	// String form: normalize to a single TextPart.
 	if raw[0] == '"' {
 		var s string
 		if err := json.Unmarshal(raw, &s); err != nil {
@@ -272,7 +238,6 @@ func unmarshalContent(raw json.RawMessage) ([]Part, error) {
 		}
 		return []Part{&TextPart{Text: s}}, nil
 	}
-	// Array form.
 	var raws []json.RawMessage
 	if err := json.Unmarshal(raw, &raws); err != nil {
 		return nil, fmt.Errorf("content array: %w", err)
@@ -319,12 +284,6 @@ func unmarshalPart(data []byte) (Part, error) {
 		var v OutputTextPart
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("output_text part: %w", err)
-		}
-		return &v, nil
-	case PartTypeRefusal:
-		var v RefusalPart
-		if err := json.Unmarshal(data, &v); err != nil {
-			return nil, fmt.Errorf("refusal part: %w", err)
 		}
 		return &v, nil
 	default:

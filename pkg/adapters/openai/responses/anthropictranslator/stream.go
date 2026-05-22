@@ -1,7 +1,6 @@
 package anthropictranslator
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,12 +8,6 @@ import (
 
 	"github.com/wyolet/relay/pkg/adapters/openai/responses"
 )
-
-// SSEFrame is one server-sent event frame (event name + JSON data bytes).
-type SSEFrame struct {
-	Event string
-	Data  []byte
-}
 
 // emittedItem tracks state for one output item opened during streaming.
 type emittedItem struct {
@@ -74,8 +67,8 @@ func NewStream(req *responses.Request) *Stream {
 // Translate converts one Anthropic SSE chunk (raw bytes of one SSE frame,
 // including optional "event:" line and "data:" line) to zero or more Responses
 // SSE frames.
-func (s *Stream) Translate(chunk []byte) ([]SSEFrame, error) {
-	event, data, ok := parseSSEChunk(chunk)
+func (s *Stream) Translate(chunk []byte) ([]responses.SSEFrame, error) {
+	event, data, ok := responses.ParseSSEChunk(chunk)
 	if !ok || len(data) == 0 {
 		return nil, nil
 	}
@@ -104,7 +97,7 @@ func (s *Stream) Translate(chunk []byte) ([]SSEFrame, error) {
 
 // ---- event handlers ----
 
-func (s *Stream) handleMessageStart(data []byte) ([]SSEFrame, error) {
+func (s *Stream) handleMessageStart(data []byte) ([]responses.SSEFrame, error) {
 	var ms struct {
 		Message struct {
 			ID    string `json:"id"`
@@ -134,10 +127,10 @@ func (s *Stream) handleMessageStart(data []byte) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []SSEFrame{createdFrame, inProgFrame}, nil
+	return []responses.SSEFrame{createdFrame, inProgFrame}, nil
 }
 
-func (s *Stream) handleContentBlockStart(data []byte) ([]SSEFrame, error) {
+func (s *Stream) handleContentBlockStart(data []byte) ([]responses.SSEFrame, error) {
 	var cbs struct {
 		Index        int `json:"index"`
 		ContentBlock struct {
@@ -194,7 +187,7 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []SSEFrame{itemAddedFrame, partAddedFrame}, nil
+		return []responses.SSEFrame{itemAddedFrame, partAddedFrame}, nil
 
 	case "tool_use":
 		item.callID = cbs.ContentBlock.ID
@@ -213,7 +206,7 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []SSEFrame{f}, nil
+		return []responses.SSEFrame{f}, nil
 
 	case "thinking":
 		s.currentBlock = item
@@ -238,7 +231,7 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []SSEFrame{itemAddedFrame, partAddedFrame}, nil
+		return []responses.SSEFrame{itemAddedFrame, partAddedFrame}, nil
 
 	default:
 		// Unknown block type — skip silently.
@@ -246,7 +239,7 @@ func (s *Stream) handleContentBlockStart(data []byte) ([]SSEFrame, error) {
 	}
 }
 
-func (s *Stream) handleContentBlockDelta(data []byte) ([]SSEFrame, error) {
+func (s *Stream) handleContentBlockDelta(data []byte) ([]responses.SSEFrame, error) {
 	if s.currentBlock == nil {
 		return nil, nil
 	}
@@ -278,7 +271,7 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []SSEFrame{f}, nil
+		return []responses.SSEFrame{f}, nil
 
 	case "input_json_delta":
 		item.argsBuf.WriteString(cbd.Delta.PartialJSON)
@@ -291,7 +284,7 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []SSEFrame{f}, nil
+		return []responses.SSEFrame{f}, nil
 
 	case "thinking_delta":
 		item.thinkingBuf.WriteString(cbd.Delta.Thinking)
@@ -304,13 +297,13 @@ func (s *Stream) handleContentBlockDelta(data []byte) ([]SSEFrame, error) {
 		if err != nil {
 			return nil, err
 		}
-		return []SSEFrame{f}, nil
+		return []responses.SSEFrame{f}, nil
 	}
 
 	return nil, nil
 }
 
-func (s *Stream) handleContentBlockStop(_ []byte) ([]SSEFrame, error) {
+func (s *Stream) handleContentBlockStop(_ []byte) ([]responses.SSEFrame, error) {
 	if s.currentBlock == nil {
 		return nil, nil
 	}
@@ -319,7 +312,7 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]SSEFrame, error) {
 	s.currentBlock = nil
 	s.done = append(s.done, item)
 
-	var frames []SSEFrame
+	var frames []responses.SSEFrame
 
 	switch item.itemType {
 	case "text":
@@ -431,7 +424,7 @@ func (s *Stream) handleContentBlockStop(_ []byte) ([]SSEFrame, error) {
 	return frames, nil
 }
 
-func (s *Stream) handleMessageDelta(data []byte) ([]SSEFrame, error) {
+func (s *Stream) handleMessageDelta(data []byte) ([]responses.SSEFrame, error) {
 	var md struct {
 		Delta struct {
 			StopReason string `json:"stop_reason"`
@@ -449,7 +442,7 @@ func (s *Stream) handleMessageDelta(data []byte) ([]SSEFrame, error) {
 	return nil, nil
 }
 
-func (s *Stream) handleMessageStop() ([]SSEFrame, error) {
+func (s *Stream) handleMessageStop() ([]responses.SSEFrame, error) {
 	status, finish, incomplete := mapStopReason(s.stopReason)
 
 	// Reconstruct final output from done items.
@@ -495,10 +488,10 @@ func (s *Stream) handleMessageStop() ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []SSEFrame{f}, nil
+	return []responses.SSEFrame{f}, nil
 }
 
-func (s *Stream) handleError(data []byte) ([]SSEFrame, error) {
+func (s *Stream) handleError(data []byte) ([]responses.SSEFrame, error) {
 	var e struct {
 		Error struct {
 			Type    string `json:"type"`
@@ -517,7 +510,7 @@ func (s *Stream) handleError(data []byte) ([]SSEFrame, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []SSEFrame{f}, nil
+	return []responses.SSEFrame{f}, nil
 }
 
 // ---- helpers ----
@@ -575,38 +568,12 @@ func (s *Stream) buildOutputItems() []responses.Item {
 	return items
 }
 
-// marshalFrame builds a Responses SSEFrame by marshaling the data payload.
-func marshalFrame(event string, data any) (SSEFrame, error) {
+// marshalFrame builds a Responses responses.SSEFrame by marshaling the data payload.
+func marshalFrame(event string, data any) (responses.SSEFrame, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
-		return SSEFrame{}, fmt.Errorf("marshalFrame %s: %w", event, err)
+		return responses.SSEFrame{}, fmt.Errorf("marshalFrame %s: %w", event, err)
 	}
-	return SSEFrame{Event: event, Data: b}, nil
+	return responses.SSEFrame{Event: event, Data: b}, nil
 }
 
-// Bytes serializes an SSEFrame to the wire SSE format.
-func (f SSEFrame) Bytes() []byte {
-	var b bytes.Buffer
-	if f.Event != "" {
-		b.WriteString("event: ")
-		b.WriteString(f.Event)
-		b.WriteByte('\n')
-	}
-	b.WriteString("data: ")
-	b.Write(f.Data)
-	b.WriteString("\n\n")
-	return b.Bytes()
-}
-
-// parseSSEChunk extracts event and data from a raw SSE chunk.
-func parseSSEChunk(chunk []byte) (event string, data []byte, ok bool) {
-	lines := bytes.Split(bytes.TrimRight(chunk, "\n"), []byte("\n"))
-	for _, line := range lines {
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event = string(bytes.TrimSpace(line[6:]))
-		} else if bytes.HasPrefix(line, []byte("data:")) {
-			data = bytes.TrimSpace(line[5:])
-		}
-	}
-	return event, data, len(data) > 0
-}

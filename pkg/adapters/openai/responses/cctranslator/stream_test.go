@@ -8,10 +8,10 @@ import (
 	"github.com/wyolet/relay/pkg/adapters/openai/responses"
 )
 
-// decodeCompletedEvent decodes the JSON of a response.completed SSEFrame into
+// decodeCompletedEvent decodes the JSON of a response.completed responses.SSEFrame into
 // a *responses.Response using the package's canonical UnmarshalResponse so that
 // the polymorphic Output []Item is decoded correctly.
-func decodeCompletedEvent(t *testing.T, frame SSEFrame) *responses.Response {
+func decodeCompletedEvent(t *testing.T, frame responses.SSEFrame) *responses.Response {
 	t.Helper()
 	var wrapper struct {
 		Response json.RawMessage `json:"response"`
@@ -28,7 +28,7 @@ func decodeCompletedEvent(t *testing.T, frame SSEFrame) *responses.Response {
 
 // decodeOutputItemDone decodes an output_item.done frame and returns the raw
 // item JSON so callers can probe it with a type probe.
-func decodeOutputItemDone(t *testing.T, frame SSEFrame) (outputIndex int, itemType string, itemJSON json.RawMessage) {
+func decodeOutputItemDone(t *testing.T, frame responses.SSEFrame) (outputIndex int, itemType string, itemJSON json.RawMessage) {
 	t.Helper()
 	var raw struct {
 		OutputIndex int             `json:"output_index"`
@@ -45,7 +45,7 @@ func decodeOutputItemDone(t *testing.T, frame SSEFrame) (outputIndex int, itemTy
 }
 
 // decodeItemAdded decodes an output_item.added frame and returns the item type string.
-func decodeItemAdded(t *testing.T, frame SSEFrame) (outputIndex int, itemType string) {
+func decodeItemAdded(t *testing.T, frame responses.SSEFrame) (outputIndex int, itemType string) {
 	t.Helper()
 	var raw struct {
 		OutputIndex int             `json:"output_index"`
@@ -98,10 +98,10 @@ func makeDoneChunk() []byte {
 	return []byte("data: [DONE]\n\n")
 }
 
-// collectEvents calls s.Translate for each chunk and returns all SSEFrames.
-func collectEvents(t *testing.T, s *Stream, chunks [][]byte) []SSEFrame {
+// collectEvents calls s.Translate for each chunk and returns all responses.SSEFrames.
+func collectEvents(t *testing.T, s *Stream, chunks [][]byte) []responses.SSEFrame {
 	t.Helper()
-	var all []SSEFrame
+	var all []responses.SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -113,7 +113,7 @@ func collectEvents(t *testing.T, s *Stream, chunks [][]byte) []SSEFrame {
 }
 
 // eventNames returns the Event field for each frame.
-func eventNames(frames []SSEFrame) []string {
+func eventNames(frames []responses.SSEFrame) []string {
 	names := make([]string, len(frames))
 	for i, f := range frames {
 		names[i] = f.Event
@@ -437,7 +437,7 @@ func TestStream_UsageInFinalResponse(t *testing.T) {
 	frames := collectEvents(t, s, chunks)
 
 	// Find completed event.
-	var completedFrame *SSEFrame
+	var completedFrame *responses.SSEFrame
 	for i := range frames {
 		if frames[i].Event == responses.EventCompleted {
 			completedFrame = &frames[i]
@@ -505,7 +505,7 @@ func TestStream_MultipleToolCalls(t *testing.T) {
 	}
 
 	// Completed response should contain two function_call items.
-	var completedFrame *SSEFrame
+	var completedFrame *responses.SSEFrame
 	for i := range frames {
 		if frames[i].Event == responses.EventCompleted {
 			completedFrame = &frames[i]

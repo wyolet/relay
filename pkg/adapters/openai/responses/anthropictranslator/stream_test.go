@@ -32,8 +32,8 @@ func collectEvents(t *testing.T, chunks [][]byte) []string {
 	return names
 }
 
-// decodeFrame decodes the Data field of an SSEFrame into a map.
-func decodeFrame(t *testing.T, f SSEFrame) map[string]any {
+// decodeFrame decodes the Data field of an responses.SSEFrame into a map.
+func decodeFrame(t *testing.T, f responses.SSEFrame) map[string]any {
 	t.Helper()
 	var m map[string]any
 	if err := json.Unmarshal(f.Data, &m); err != nil {
@@ -165,7 +165,7 @@ func TestStream_SimpleText(t *testing.T) {
 	}
 
 	s := NewStream(nil)
-	var allFrames []SSEFrame
+	var allFrames []responses.SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -223,7 +223,7 @@ func TestStream_ToolUse(t *testing.T) {
 	}
 
 	s := NewStream(nil)
-	var allFrames []SSEFrame
+	var allFrames []responses.SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -279,7 +279,7 @@ func TestStream_ThinkingThenText(t *testing.T) {
 	}
 
 	s := NewStream(nil)
-	var allFrames []SSEFrame
+	var allFrames []responses.SSEFrame
 	for _, c := range chunks {
 		frames, err := s.Translate(c)
 		if err != nil {
@@ -371,7 +371,7 @@ func TestStream_ErrorChunk(t *testing.T) {
 }
 
 func TestStream_Bytes(t *testing.T) {
-	f := SSEFrame{Event: "response.created", Data: []byte(`{"response":{}}`)}
+	f := responses.SSEFrame{Event: "response.created", Data: []byte(`{"response":{}}`)}
 	b := f.Bytes()
 	got := string(b)
 	want := "event: response.created\ndata: {\"response\":{}}\n\n"

@@ -83,6 +83,46 @@ func TestOutputTextPartRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOutputTextPartMarshalAlwaysEmitsArrays guards the spec-required
+// invariant: every output_text part must emit `annotations` and `logprobs`,
+// as `[]` when empty (never null, never omitted). Caca919 introduced this
+// invariant — keep it covered.
+func TestOutputTextPartMarshalAlwaysEmitsArrays(t *testing.T) {
+	otp := &OutputTextPart{Text: "hi"} // Annotations nil, Logprobs nil
+
+	got, err := json.Marshal(otp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	gotStr := string(got)
+	for _, want := range []string{
+		`"annotations":[]`,
+		`"logprobs":[]`,
+	} {
+		if !contains(gotStr, want) {
+			t.Errorf("marshal output missing %s\n got: %s", want, gotStr)
+		}
+	}
+	for _, forbidden := range []string{
+		`"annotations":null`,
+		`"logprobs":null`,
+	} {
+		if contains(gotStr, forbidden) {
+			t.Errorf("marshal output should not contain %s\n got: %s", forbidden, gotStr)
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRefusalPartRoundTrip(t *testing.T) {
 	wire := `{"type":"refusal","refusal":"I cannot do that"}`
 	p, err := unmarshalPart([]byte(wire))

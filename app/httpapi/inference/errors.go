@@ -79,3 +79,28 @@ func isHopByHop(k string) bool {
 	}
 	return false
 }
+
+// ForwardUpstreamHeaders copies src → dst, dropping hop-by-hop. The caller
+// is responsible for any further adjustments (e.g. clearing Content-Length
+// when the body size will change between upstream and client). Exported so
+// adapter packages can use it from their own cross-shape handlers.
+func ForwardUpstreamHeaders(dst, src http.Header) {
+	for k, vs := range src {
+		if isHopByHop(k) {
+			continue
+		}
+		for _, v := range vs {
+			dst.Add(k, v)
+		}
+	}
+}
+
+// MapPipelineErr is the exported form for adapter-side cross-shape handlers
+// that drive pipeline.Pipeline.Run directly.
+func MapPipelineErr(w http.ResponseWriter, err error) { mapPipelineErr(w, err) }
+
+// SplitSSEChunks is exported so adapter packages can use the same SSE
+// chunking logic in their cross-shape stream handlers.
+func SplitSSEChunks(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	return splitSSEChunks(data, atEOF)
+}
