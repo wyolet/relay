@@ -12,36 +12,49 @@ import (
 //   - string content inside messages → []Part{&TextPart{...}}
 //   - unsupported item types return an explicit error (caller maps to 400)
 //   - unsupported tool types return an explicit error (caller maps to 400)
+//   - model string → []string{model}; array accepted but multiplex rejected at runtime
 func Parse(body []byte) (*Request, error) {
 	var wire struct {
-		Model  string          `json:"model"`
-		Input  json.RawMessage `json:"input"`
-
-		Instructions string          `json:"instructions"`
-		Tools        json.RawMessage `json:"tools"`
-		ToolChoice   json.RawMessage `json:"tool_choice"`
-
-		Temperature     *float64 `json:"temperature"`
-		TopP            *float64 `json:"top_p"`
-		TopK            *int     `json:"top_k"`
-		MaxOutputTokens *int     `json:"max_output_tokens"`
-
-		Text      *TextConfig      `json:"text"`
-		Reasoning *ReasoningConfig `json:"reasoning"`
-
-		ParallelToolCalls *bool             `json:"parallel_tool_calls"`
-		User              string            `json:"user"`
-		Stream            *bool             `json:"stream"`
-		StopSequences     []string          `json:"stop_sequences"`
-
-		Extensions map[string]json.RawMessage `json:"extensions"`
+		Model       ModelRefs                  `json:"model"`
+		Input       json.RawMessage            `json:"input"`
+		Instructions string                    `json:"instructions"`
+		ModelConfig map[string]*ModelOpts      `json:"model_config"`
+		OutputMode  string                     `json:"output_mode"`
+		User        string                     `json:"user"`
+		Metadata    map[string]string          `json:"metadata"`
+		Extensions  map[string]json.RawMessage `json:"extensions"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
-	if wire.Model == "" {
-		return nil, fmt.Errorf("model is required")
+
+	// Validate model.
+	if len(wire.Model) == 0 {
+		return nil, fmt.Errorf("model required")
 	}
+	for _, m := range wire.Model {
+		if m == "" {
+			return nil, fmt.Errorf("model: empty model name")
+		}
+	}
+	if len(wire.Model) > 1 {
+		return nil, ErrMultiplexNotImplemented
+	}
+
+	// model_config keys must be a subset of model list.
+	for k := range wire.ModelConfig {
+		found := false
+		for _, m := range wire.Model {
+			if m == k {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("model_config has key %q not in model list", k)
+		}
+	}
+
 	if len(wire.Input) == 0 {
 		return nil, fmt.Errorf("input is required")
 	}
@@ -51,43 +64,15 @@ func Parse(body []byte) (*Request, error) {
 		return nil, fmt.Errorf("input: %w", err)
 	}
 
-	var tools Tools
-	if len(wire.Tools) > 0 && string(wire.Tools) != "null" {
-		if err := json.Unmarshal(wire.Tools, &tools); err != nil {
-			return nil, fmt.Errorf("tools: %w", err)
-		}
-	}
-
-	var toolChoice *ToolChoice
-	if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
-		var tc ToolChoice
-		if err := json.Unmarshal(wire.ToolChoice, &tc); err != nil {
-			return nil, fmt.Errorf("tool_choice: %w", err)
-		}
-		toolChoice = &tc
-	}
-
 	return &Request{
-		Model:        wire.Model,
 		Input:        input,
 		Instructions: wire.Instructions,
-		Tools:        tools,
-		ToolChoice:   toolChoice,
-
-		Temperature:     wire.Temperature,
-		TopP:            wire.TopP,
-		TopK:            wire.TopK,
-		MaxOutputTokens: wire.MaxOutputTokens,
-
-		Text:      wire.Text,
-		Reasoning: wire.Reasoning,
-
-		ParallelToolCalls: wire.ParallelToolCalls,
-		User:              wire.User,
-		Stream:            wire.Stream,
-		StopSequences:     wire.StopSequences,
-
-		Extensions: wire.Extensions,
+		Model:        wire.Model,
+		ModelConfig:  wire.ModelConfig,
+		OutputMode:   wire.OutputMode,
+		User:         wire.User,
+		Metadata:     wire.Metadata,
+		Extensions:   wire.Extensions,
 	}, nil
 }
 
