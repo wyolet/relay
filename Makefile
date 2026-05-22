@@ -1,7 +1,7 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
         version release release-minor release-major \
-        sqlc-generate test test-integration \
+        sqlc-generate test test-integration smoke-mock \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean schemas catalog-validate
 
@@ -87,6 +87,7 @@ help: ## Show this help
 	@echo '  make sqlc-generate     regenerate sqlc code'
 	@echo '  make test              go test ./...'
 	@echo '  make test-integration  integration tag, race'
+	@echo '  make smoke-mock        replay recorded fixtures through relay → openai-mock.wyolet.dev'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
 	@echo '  make build             ui-fetch + go build → ./relay'
 	@echo '  make clean             drop UI dist + binary'
@@ -320,6 +321,39 @@ TEST_PG_DSN  := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
 test-integration: ## spin up ephemeral pg, run integration-tagged tests with -race, tear down
 	docker compose -f $(COMPOSE_TEST) up -d --wait
 	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race ./... ; \
+		status=$$?; \
+		docker compose -f $(COMPOSE_TEST) down -v; \
+		exit $$status
+
+# Smoke: relay → openai-mock.wyolet.dev (via Caddy on dev-stack, mock on Mac:5180).
+# Sister repo: ../../spec-mock-openai/ provides the mock binary + fixture corpus.
+# Extracts two fixture bodies (sync + streaming+parallel-tool-calls) into /tmp,
+# starts the mock if not running, brings up test PG, runs the replay tests.
+# Idempotent — re-running uses cached artifacts.
+SPEC_MOCK_DIR ?= $(HOME)/projects/wyolet/spec-mock-openai
+MOCK_BIN      := /tmp/spec-mock-openai
+MOCK_FIXTURES := /tmp/mock-fixtures
+MOCK_CORPUS   := $(SPEC_MOCK_DIR)/fixtures-corpus/openai-mini-2026-05-19.tar.zst
+
+smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-mock.wyolet.dev
+	@command -v zstd >/dev/null || { echo "zstd required (brew install zstd)"; exit 1; }
+	@test -d $(SPEC_MOCK_DIR) || { echo "missing $(SPEC_MOCK_DIR) — clone wyolet/spec-mock-openai"; exit 1; }
+	@test -x $(MOCK_BIN) || (cd $(SPEC_MOCK_DIR) && go build -o $(MOCK_BIN) .)
+	@test -d $(MOCK_FIXTURES) || (mkdir -p $(MOCK_FIXTURES) && cd $(MOCK_FIXTURES) && \
+		zstd -d --stdout $(MOCK_CORPUS) | tar -xf - && rm -f gemma4.tar)
+	@test -f /tmp/fixbody.json || python3 -c "import json,glob; \
+		obj=json.loads(open(sorted(glob.glob('$(MOCK_FIXTURES)/session-*.jsonl'))[0]).readline()); \
+		open('/tmp/fixbody.json','w').write(json.dumps(obj['match']['body_json_equals']))"
+	@test -f /tmp/fixbody-parallel.json || python3 -c "import json; \
+		obj=json.loads(open('$(MOCK_FIXTURES)/session-1779156057-87325-4.jsonl').readlines()[9]); \
+		open('/tmp/fixbody-parallel.json','w').write(json.dumps(obj['match']['body_json_equals']))"
+	@pgrep -f 'spec-mock-openai.*-addr.*5180' >/dev/null || \
+		( $(MOCK_BIN) -addr ":5180" \
+			-spec $(SPEC_MOCK_DIR)/spec/openapi.yaml \
+			-fixtures-dir $(MOCK_FIXTURES) >/tmp/spec-mock-openai.log 2>&1 & \
+		  sleep 2 && echo "mock started on :5180 (log: /tmp/spec-mock-openai.log)" )
+	docker compose -f $(COMPOSE_TEST) up -d --wait
+	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race -run TestMockReplay -v ./integration/ ; \
 		status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status
