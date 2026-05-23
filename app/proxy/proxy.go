@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
@@ -90,6 +91,11 @@ type Request struct {
 	// OnSuccess fires from the detached post-flight goroutine once the
 	// body has been fully streamed and tokens extracted. Optional.
 	OnSuccess func(tokens pkgusage.Tokens)
+
+	// Lifecycle is the per-request shared context, constructed by the
+	// handler before Run. Post-flight observers see it via the registered
+	// PostFlightHook chain. Optional — nil skips hook dispatch.
+	Lifecycle *lifecycle.Context
 }
 
 // Result is what the handler streams back to the caller.
@@ -104,19 +110,24 @@ type Result struct {
 // Pipeline is the orchestrator. Constructed once at boot; Run() is
 // goroutine-safe.
 type Pipeline struct {
-	Limiter *pkgratelimit.Limiter
-	Client  *http.Client
-	Logger  *slog.Logger
+	Limiter   *pkgratelimit.Limiter
+	Lifecycle *lifecycle.Registry
+	Client    *http.Client
+	Logger    *slog.Logger
 }
 
 // New constructs a Pipeline with a sensible http.Client default. The
 // client has no overall timeout — streaming responses can take minutes.
 // Use net/http transport timeouts for hop-level safety instead.
-func New(limiter *pkgratelimit.Limiter, logger *slog.Logger) *Pipeline {
+//
+// lifecycle is optional; pass nil if post-flight observers aren't wired
+// in this deployment (tests, minimal smoke).
+func New(limiter *pkgratelimit.Limiter, registry *lifecycle.Registry, logger *slog.Logger) *Pipeline {
 	return &Pipeline{
-		Limiter: limiter,
-		Client:  &http.Client{},
-		Logger:  logger,
+		Limiter:   limiter,
+		Lifecycle: registry,
+		Client:    &http.Client{},
+		Logger:    logger,
 	}
 }
 
@@ -165,12 +176,13 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 	var collected bytes.Buffer
 	tee := io.TeeReader(resp.Body, &collected)
 	pfTriggered := &sync.Once{}
+	status := resp.StatusCode
 
 	body := &postFlightReadCloser{
 		Reader: tee,
 		closer: func() error {
 			pfTriggered.Do(func() {
-				go p.runPostFlight(req, reservation, collected.Bytes())
+				go p.runPostFlight(req, reservation, collected.Bytes(), status)
 			})
 			return resp.Body.Close()
 		},
@@ -183,9 +195,21 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 	}, nil
 }
 
-func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte) {
+func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	if p.Logger != nil {
+		reqID := ""
+		if req.Lifecycle != nil {
+			reqID = req.Lifecycle.RequestID
+		}
+		p.Logger.Info("proxy: post-flight enter",
+			"request_id", reqID,
+			"status", status,
+			"body_bytes", len(body),
+		)
+	}
 
 	var tokens pkgusage.Tokens
 	if req.Extractor != nil {
@@ -202,6 +226,17 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 
 	if req.OnSuccess != nil {
 		req.OnSuccess(tokens)
+	}
+
+	// Fan out to lifecycle observers. lc carries persistent identity;
+	// the event carries this-request's outcome.
+	if p.Lifecycle != nil && req.Lifecycle != nil {
+		ev := &lifecycle.PostFlightEvent{
+			Status:       status,
+			Duration:     time.Since(req.Lifecycle.StartTime),
+			ResponseBody: body,
+		}
+		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)
 	}
 }
 

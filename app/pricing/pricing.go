@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // Pricing is a rate sheet. Owner.Kind must be OwnerHost; Owner.ID is the
@@ -152,4 +153,34 @@ func (p *Pricing) RateFor(meter Meter, tokens int) (*Rate, bool) {
 		}
 	}
 	return best, best != nil
+}
+
+// Cost computes the total cost (in Spec.Currency units, typically USD)
+// for the given Tokens map. Tier selection uses the input token count —
+// the conventional axis for context-length tiers across major providers.
+// Keys not mapped by MeterForUsageKey are silently skipped (unpriced
+// dimension). Returns 0 when Pricing is disabled or carries no rates.
+func (p *Pricing) Cost(tokens usage.Tokens) float64 {
+	if p == nil || !p.IsEnabled() || len(tokens) == 0 {
+		return 0
+	}
+	tier := int(tokens["input"])
+	var total float64
+	for key, count := range tokens {
+		meter, ok := MeterForUsageKey(key)
+		if !ok {
+			continue
+		}
+		rate, ok := p.RateFor(meter, tier)
+		if !ok {
+			continue
+		}
+		switch rate.Unit {
+		case UnitPerMillion:
+			total += float64(count) / 1_000_000 * rate.Amount
+		case UnitPerUnit:
+			total += float64(count) * rate.Amount
+		}
+	}
+	return total
 }

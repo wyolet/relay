@@ -37,7 +37,9 @@ import (
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -137,8 +139,13 @@ func main() {
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
-	pl := &pipeline.Pipeline{Policy: policySvc, Logger: slog.Default()}
-	proxyPipeline := proxy.New(limiter, slog.Default())
+
+	// Lifecycle registry — the single point where observer/middleware hooks
+	// attach. Hooks register below before pipeline+proxy start serving.
+	lifecycleReg := lifecycle.New()
+
+	pl := &pipeline.Pipeline{Policy: policySvc, Lifecycle: lifecycleReg, Logger: slog.Default()}
+	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
 
 	// Adapter specs — one Spec per supported wire shape. The composition
 	// root is the only place vendor names appear; everything else looks
@@ -201,6 +208,27 @@ func main() {
 	}
 	specRegistry := adapter.NewRegistry(specs...)
 
+	// Usage emit: one PostFlight observer that writes JSONL per request.
+	// Path defaults to RELAY_USAGE_LOG (or /tmp fallback) — file sink only
+	// at this stage; ClickHouse / OTel sinks layer on later by registering
+	// alongside.
+	usagePath := os.Getenv("RELAY_USAGE_LOG")
+	if usagePath == "" {
+		usagePath = "relay-usage.jsonl"
+	}
+	usageSink, err := usagelog.NewFileSink(usagePath)
+	if err != nil {
+		slog.Error("usagelog: file sink failed; using stdout", "err", err, "path", usagePath)
+		usageSink = usagelog.StdoutSink()
+	}
+	usageEmitter := usagelog.NewEmitter(usagelog.EmitterOptions{}, usageSink)
+	defer usageEmitter.Close()
+	usageHook := usagelog.NewHook(usagelog.HookOptions{
+		Adapters: &snapshotAdapterResolver{cat: cat, registry: specRegistry},
+	}, usageEmitter)
+	lifecycleReg.RegisterPostFlight(usageHook.PostFlight)
+	slog.Info("usagelog: wired", "path", usagePath, "hooks", lifecycleReg.PostFlightCount())
+
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inference.Mount(inferRouter, inference.Deps{
@@ -239,6 +267,7 @@ func main() {
 			Catalog:      cat,
 			Stores:       stores,
 			CookieSecure: cookieSecure,
+			UsageReader:  usagelog.NewFileReader(usagePath),
 		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
@@ -339,4 +368,31 @@ func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
 
 func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
+}
+
+// snapshotAdapterResolver implements usagelog.AdapterResolver by walking
+// the Model's HostBindings to find the adapter name for the requested
+// (modelID, hostID) binding, then looking up the corresponding adapter
+// in the Spec registry. Returns the adapter as a usagelog.TokenExtractor.
+type snapshotAdapterResolver struct {
+	cat      *appcatalog.Catalog
+	registry *adapter.Registry
+}
+
+func (r *snapshotAdapterResolver) ExtractorForBinding(modelID, hostID string) (usagelog.TokenExtractor, bool) {
+	m, ok := r.cat.Current().Model(modelID)
+	if !ok {
+		return nil, false
+	}
+	for _, hb := range m.Spec.Hosts {
+		if hb.HostID != hostID {
+			continue
+		}
+		ad := r.registry.PipelineAdapter(hb.Adapter)
+		if ad == nil {
+			return nil, false
+		}
+		return ad, true
+	}
+	return nil, false
 }

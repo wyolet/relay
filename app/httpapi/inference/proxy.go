@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/wyolet/relay/app/adapters"
@@ -20,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/httpheader"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 // System rate-limit slugs from config/ratelimits/system.yaml. Proxy mode
@@ -36,6 +38,12 @@ const (
 func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
+	slog.Info("proxy: handle entry",
+		"request_id", reqid.From(ctx),
+		"adapter", string(adapterKind),
+		"mode", cls.Mode,
+		"upstream_host_hdr", cls.UpstreamHost,
+	)
 
 	pm, ok := proxyModeSettings(d.Catalog)
 	if !ok || !pm.Enabled {
@@ -55,7 +63,10 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	//      Policy + HostBinding (proxy-authed only — anonymous traffic
 	//      has no policy and must still pin a host).
 	snap := d.Catalog.Current()
-	var host *apphost.Host
+	var (
+		host        *apphost.Host
+		resolvedPlan *routing.Plan
+	)
 	if cls.UpstreamHost != "" {
 		h, ok := snap.HostByName(cls.UpstreamHost)
 		if !ok {
@@ -70,12 +81,13 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
-		h, body, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx))
+		plan, body, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx))
 		if err != nil {
 			mapProxyResolveErr(w, err)
 			return
 		}
-		host = h
+		host = plan.Host
+		resolvedPlan = plan
 		// Replace the consumed body with a re-readable copy so the
 		// forwarder sees the same bytes the customer sent.
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -106,18 +118,35 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		RateScope:    subject,
 		Rules:        rules,
 		Extractor:    extractorFor(d, adapterKind),
+		Lifecycle:    buildProxyLifecycleContext(ctx, cls.RelayKey, host, RelayKeyFromContext(ctx), cls.ClientIP, resolvedPlan),
 	}
 
+	slog.Info("proxy: calling upstream",
+		"request_id", reqid.From(ctx),
+		"host", host.Meta.Name,
+		"base_url", host.Spec.BaseURL,
+		"path", r.URL.Path,
+	)
 	result, err := d.Proxy.Run(ctx, preq)
 	if err != nil {
+		slog.Warn("proxy: upstream call returned error", "request_id", reqid.From(ctx), "err", err)
 		mapProxyErr(w, err)
 		return
 	}
+	slog.Info("proxy: upstream responded; streaming back",
+		"request_id", reqid.From(ctx),
+		"status", result.Status,
+	)
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
-	_, _ = io.Copy(w, result.Body)
+	n, copyErr := streamCopy(w, result.Body)
+	slog.Info("proxy: stream complete",
+		"request_id", reqid.From(ctx),
+		"bytes", n,
+		"copy_err", copyErr,
+	)
 }
 
 // extractorFor returns the per-shape token extractor used by proxy
@@ -218,9 +247,10 @@ func (e *errProxyHostResolve) Error() string {
 // proxyMaxBodyPeek), extracts the `model` field, and runs the catalog
 // routing resolver with SkipKeyCheck so proxy mode can reuse the same
 // policy + binding logic as normal mode without requiring keypool
-// coverage. Returns the chosen host AND the buffered body so the
-// caller can re-attach it to r.Body before forwarding.
-func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey) (*apphost.Host, []byte, error) {
+// coverage. Returns the resolved Plan AND the buffered body so the
+// caller can re-attach it to r.Body before forwarding and seed the
+// lifecycle context with model/host/policy attribution.
+func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, []byte, error) {
 	if rk == nil {
 		return nil, nil, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
@@ -251,7 +281,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *r
 	if err != nil {
 		return nil, body, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Inner: err}
 	}
-	return plan.Host, body, nil
+	return plan, body, nil
 }
 
 func mapProxyResolveErr(w http.ResponseWriter, err error) {

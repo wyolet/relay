@@ -25,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
@@ -60,6 +61,12 @@ type Request struct {
 	// OnSuccess fires from the post-flight goroutine after tokens are
 	// extracted. Optional.
 	OnSuccess func(tokens pkgusage.Tokens, keyHash string)
+
+	// Lifecycle is the per-request shared context, constructed by the
+	// handler before Run. Post-flight observers see it via the registered
+	// PostFlightHook chain. Optional — when nil, post-flight skips hook
+	// dispatch (legacy callers / tests).
+	Lifecycle *lifecycle.Context
 }
 
 // Result is what the handler streams back. Caller MUST Close Body —
@@ -74,8 +81,9 @@ type Result struct {
 // Pipeline orchestrates requests. All policy-shaped work is delegated
 // to Policy (the Service). Construct once at boot.
 type Pipeline struct {
-	Policy *policy.Service
-	Logger *slog.Logger
+	Policy    *policy.Service
+	Lifecycle *lifecycle.Registry
+	Logger    *slog.Logger
 }
 
 const defaultMaxAttempts = 3
@@ -249,9 +257,10 @@ func (p *Pipeline) makeResult(
 	tee := io.TeeReader(resp.Body, &collected)
 
 	pfTriggered := &sync.Once{}
+	status := resp.StatusCode
 	postFlight := func() {
 		pfTriggered.Do(func() {
-			go p.runPostFlight(req, inbound, acq, collected.Bytes())
+			go p.runPostFlight(req, inbound, acq, collected.Bytes(), status)
 		})
 	}
 
@@ -276,6 +285,7 @@ func (p *Pipeline) runPostFlight(
 	inbound *pkgratelimit.Reservation,
 	acq *policy.Acquisition,
 	body []byte,
+	status int,
 ) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -293,6 +303,18 @@ func (p *Pipeline) runPostFlight(
 
 	if req.OnSuccess != nil {
 		req.OnSuccess(tokens, acq.KeyHash())
+	}
+
+	// Fan out to lifecycle observers. lc carries persistent identity;
+	// the event carries this-request's outcome. Observers see both.
+	if p.Lifecycle != nil && req.Lifecycle != nil {
+		req.Lifecycle.HostKeyID = acq.KeyHash()
+		ev := &lifecycle.PostFlightEvent{
+			Status:       status,
+			Duration:     time.Since(req.Lifecycle.StartTime),
+			ResponseBody: body,
+		}
+		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)
 	}
 }
 
