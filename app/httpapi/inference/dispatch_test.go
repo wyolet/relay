@@ -192,7 +192,7 @@ func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 		Catalog:  cat,
 		Resolver: routing.New(cat),
 		Pipeline: pl,
-		Proxy:    proxy.New(limiter, nil),
+		Proxy:    proxy.New(limiter, nil, nil),
 		Adapters: reg.AdapterMap(),
 		Specs:    reg,
 	}

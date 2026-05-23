@@ -155,6 +155,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 
 	wireBody := rewriteModelField(in.Body, plan.Snapshot.Upstream())
 
+	cls := ClassificationFrom(ctx)
 	preq := &pipeline.Request{
 		Body:        wireBody,
 		Headers:     r.Header,
@@ -166,6 +167,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		Provider:    plan.Provider,
 		Keys:        plan.Keys,
 		ModelName:   plan.Model.Meta.Name,
+		Lifecycle:   buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan),
 	}
 
 	result, err := d.Pipeline.Run(ctx, preq)
@@ -200,6 +202,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		return
 	}
 
+	cls := ClassificationFrom(ctx)
 	preq := &pipeline.Request{
 		Body:        wireBody,
 		Headers:     r.Header,
@@ -211,6 +214,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		Provider:    plan.Provider,
 		Keys:        plan.Keys,
 		ModelName:   plan.Model.Meta.Name,
+		Lifecycle:   buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan),
 	}
 
 	result, pErr := d.Pipeline.Run(ctx, preq)

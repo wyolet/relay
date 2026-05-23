@@ -106,6 +106,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		RateScope:    subject,
 		Rules:        rules,
 		Extractor:    extractorFor(d, adapterKind),
+		Lifecycle:    buildProxyLifecycleContext(ctx, cls.RelayKey, host, RelayKeyFromContext(ctx), cls.ClientIP),
 	}
 
 	result, err := d.Proxy.Run(ctx, preq)
