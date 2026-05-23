@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // ---- test helpers ----
@@ -603,7 +604,7 @@ func TestAnthropicParseResponse_SimpleText(t *testing.T) {
 	if tp.Text != "Hello!" {
 		t.Errorf("text: %q", tp.Text)
 	}
-	if resp.Usage == nil || resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+	if resp.Usage["input"] != 10 || resp.Usage["output"] != 5 {
 		t.Errorf("usage: %+v", resp.Usage)
 	}
 }
@@ -770,11 +771,11 @@ func TestAnthropicParseResponse_CachedTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage == nil {
+	if len(resp.Usage) == 0 {
 		t.Fatal("no usage")
 	}
-	if resp.Usage.InputTokensDetails.CachedTokens != 30 {
-		t.Errorf("cached_tokens: %d", resp.Usage.InputTokensDetails.CachedTokens)
+	if resp.Usage["cache_read"] != 30 {
+		t.Errorf("cache_read: %d", resp.Usage["cache_read"])
 	}
 }
 
@@ -794,7 +795,7 @@ func TestAnthropicSerializeResponse_SimpleText(t *testing.T) {
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
 			},
 		},
-		Usage: &v1.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		Usage: usage.Tokens{"input": 10, "output": 5},
 	}
 	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
 	if err != nil {
@@ -832,7 +833,7 @@ func TestAnthropicSerializeResponse_ToolUse(t *testing.T) {
 				Status:    v1.StatusCompleted,
 			},
 		},
-		Usage: &v1.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8},
+		Usage: usage.Tokens{"input": 5, "output": 3},
 	}
 	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
 	if err != nil {
@@ -877,7 +878,7 @@ func TestAnthropicSerializeResponse_ThinkingBlock(t *testing.T) {
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Answer."}},
 			},
 		},
-		Usage: &v1.Usage{InputTokens: 5, OutputTokens: 20, TotalTokens: 25},
+		Usage: usage.Tokens{"input": 5, "output": 20},
 	}
 	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
 	if err != nil {
@@ -936,7 +937,7 @@ func TestAnthropicSerializeResponse_MaxTokens(t *testing.T) {
 				Content: []v1.Part{&v1.OutputTextPart{Text: "truncated"}},
 			},
 		},
-		Usage: &v1.Usage{InputTokens: 10, OutputTokens: 100, TotalTokens: 110},
+		Usage: usage.Tokens{"input": 10, "output": 100},
 	}
 	out, err := (AnthropicTranslator{}).SerializeResponse(resp, nil)
 	if err != nil {
@@ -1241,7 +1242,7 @@ func TestCanonicalToAnthropic_TextStream(t *testing.T) {
 			ID:           "msg_001",
 			Status:       v1.StatusCompleted,
 			FinishReason: v1.FinishReasonStop,
-			Usage:        &v1.Usage{InputTokens: 5, OutputTokens: 5, TotalTokens: 10},
+			Usage:        usage.Tokens{"input": 5, "output": 5},
 		}),
 	}
 

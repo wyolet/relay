@@ -3,6 +3,8 @@ package v1
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 func TestResponseMarshalRoundTrip(t *testing.T) {
@@ -23,10 +25,9 @@ func TestResponseMarshalRoundTrip(t *testing.T) {
 				},
 			},
 		},
-		Usage: &Usage{
-			InputTokens:  10,
-			OutputTokens: 5,
-			TotalTokens:  15,
+		Usage: usage.Tokens{
+			"input":  10,
+			"output": 5,
 		},
 	}
 
@@ -62,11 +63,11 @@ func TestResponseMarshalRoundTrip(t *testing.T) {
 	if msg.Role != RoleAssistant {
 		t.Errorf("output[0] role: %q", msg.Role)
 	}
-	if resp2.Usage == nil {
+	if len(resp2.Usage) == 0 {
 		t.Fatal("expected usage")
 	}
-	if resp2.Usage.TotalTokens != 15 {
-		t.Errorf("total_tokens: %d", resp2.Usage.TotalTokens)
+	if got := resp2.Usage.Sum(); got != 15 {
+		t.Errorf("sum: %d (input+output should be 15)", got)
 	}
 }
 

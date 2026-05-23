@@ -108,6 +108,10 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	forwardHdr := r.Header.Clone()
 	httpheader.Strip(forwardHdr)
 
+	lc := buildProxyLifecycleContext(ctx, cls.RelayKey, host, RelayKeyFromContext(ctx), cls.ClientIP, resolvedPlan)
+	if spec := d.Specs.Spec(adapterKind); spec != nil {
+		lc.Translator = spec.Translator
+	}
 	preq := &proxy.Request{
 		Method:       r.Method,
 		Path:         r.URL.Path,
@@ -118,7 +122,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		RateScope:    subject,
 		Rules:        rules,
 		Extractor:    extractorFor(d, adapterKind),
-		Lifecycle:    buildProxyLifecycleContext(ctx, cls.RelayKey, host, RelayKeyFromContext(ctx), cls.ClientIP, resolvedPlan),
+		Lifecycle:    lc,
 	}
 
 	slog.Info("proxy: calling upstream",

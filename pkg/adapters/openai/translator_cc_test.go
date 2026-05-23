@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // mustJSON encodes v to JSON, panicking on error. Used for test fixture construction.
@@ -551,7 +552,7 @@ func TestCCParseResponse_SimpleText(t *testing.T) {
 	if len(msg.Content) != 1 {
 		t.Fatalf("content len: %d", len(msg.Content))
 	}
-	if resp.Usage == nil || resp.Usage.InputTokens != 10 {
+	if resp.Usage["input"] != 10 {
 		t.Errorf("usage: %v", resp.Usage)
 	}
 }
@@ -709,17 +710,19 @@ func TestCCParseResponse_UsageDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage == nil {
+	if len(resp.Usage) == 0 {
 		t.Fatal("usage is nil")
 	}
-	if resp.Usage.InputTokens != 100 {
-		t.Errorf("input_tokens: %d", resp.Usage.InputTokens)
+	// OpenAI prompt_tokens=100 includes cached=80; canonical "input" is
+	// non-cached only (orthogonal-meter semantics). Sum gives 100 back.
+	if resp.Usage["input"] != 20 {
+		t.Errorf("non-cached input: %d", resp.Usage["input"])
 	}
-	if resp.Usage.InputTokensDetails.CachedTokens != 80 {
-		t.Errorf("cached_tokens: %d", resp.Usage.InputTokensDetails.CachedTokens)
+	if resp.Usage["cache_read"] != 80 {
+		t.Errorf("cache_read: %d", resp.Usage["cache_read"])
 	}
-	if resp.Usage.OutputTokensDetails.ReasoningTokens != 20 {
-		t.Errorf("reasoning_tokens: %d", resp.Usage.OutputTokensDetails.ReasoningTokens)
+	if resp.Usage["reasoning"] != 20 {
+		t.Errorf("reasoning: %d", resp.Usage["reasoning"])
 	}
 }
 
@@ -737,7 +740,7 @@ func TestCCSerializeResponse_SimpleText(t *testing.T) {
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
 			},
 		},
-		Usage: &v1.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		Usage: usage.Tokens{"input": 10, "output": 5},
 	}
 	b, err := (CCTranslator{}).SerializeResponse(resp, nil)
 	if err != nil {

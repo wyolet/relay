@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // ResponsesTranslator implements v1.Translator for the OpenAI Responses API wire shape.
@@ -617,17 +618,7 @@ func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 	}
 
 	if resp.Usage != nil {
-		cr.Usage = &v1.Usage{
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-			TotalTokens:  resp.Usage.TotalTokens,
-			InputTokensDetails: v1.InputDeets{
-				CachedTokens: resp.Usage.InputTokensDetails.CachedTokens,
-			},
-			OutputTokensDetails: v1.OutputDeets{
-				ReasoningTokens: resp.Usage.OutputTokensDetails.ReasoningTokens,
-			},
-		}
+		cr.Usage = responsesUsageToCanonical(resp.Usage)
 	}
 	if resp.Error != nil {
 		cr.Error = &v1.Error{Code: resp.Error.Code, Message: resp.Error.Message}
@@ -675,15 +666,53 @@ func canonicalFinishReasonToResponses(fr v1.FinishReason) ResponsesFinishReason 
 	}
 }
 
-// canonicalUsageToResponses converts canonical v1.Usage to ResponsesUsage.
-func canonicalUsageToResponses(u *v1.Usage) *ResponsesUsage {
-	return &ResponsesUsage{
-		InputTokens:         u.InputTokens,
-		OutputTokens:        u.OutputTokens,
-		TotalTokens:         u.TotalTokens,
-		InputTokensDetails:  ResponsesInputDeets{CachedTokens: u.InputTokensDetails.CachedTokens},
-		OutputTokensDetails: ResponsesOutputDeets{ReasoningTokens: u.OutputTokensDetails.ReasoningTokens},
+// responsesUsageToCanonical maps Responses' Usage block to the
+// canonical orthogonal-meter Tokens map. Same semantics as
+// ccUsageToCanonical — Responses' input_tokens INCLUDES cached, so
+// we subtract cached out to keep dimensions non-overlapping.
+func responsesUsageToCanonical(u *ResponsesUsage) usage.Tokens {
+	if u == nil {
+		return nil
 	}
+	t := usage.Tokens{}
+	cached := int64(u.InputTokensDetails.CachedTokens)
+	if v := int64(u.InputTokens) - cached; v > 0 {
+		t["input"] = v
+	}
+	if u.OutputTokens > 0 {
+		t["output"] = int64(u.OutputTokens)
+	}
+	if cached > 0 {
+		t["cache_read"] = cached
+	}
+	if u.OutputTokensDetails.ReasoningTokens > 0 {
+		t["reasoning"] = int64(u.OutputTokensDetails.ReasoningTokens)
+	}
+	if len(t) == 0 {
+		return nil
+	}
+	return t
+}
+
+// canonicalUsageToResponses maps a canonical orthogonal-meter map to
+// ResponsesUsage. Mirrors canonicalUsageToCC but in Responses shape.
+func canonicalUsageToResponses(t usage.Tokens) *ResponsesUsage {
+	if len(t) == 0 {
+		return nil
+	}
+	cached := int(t["cache_read"])
+	input := int(t["input"]) + cached
+	output := int(t["output"])
+	r := &ResponsesUsage{
+		InputTokens:        input,
+		OutputTokens:       output,
+		TotalTokens:        int(t.Sum()),
+		InputTokensDetails: ResponsesInputDeets{CachedTokens: cached},
+	}
+	if reasoning := int(t["reasoning"]); reasoning > 0 {
+		r.OutputTokensDetails = ResponsesOutputDeets{ReasoningTokens: reasoning}
+	}
+	return r
 }
 
 // --- Responses → canonical stream ---

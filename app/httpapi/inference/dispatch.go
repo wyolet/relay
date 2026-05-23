@@ -104,7 +104,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 					" (adapter="+string(plan.HostBinding.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator)
 		return
 	}
 
@@ -118,7 +118,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator)
 		return
 	}
 
@@ -141,7 +141,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	sameShape := in.Inbound == plan.HostBinding.Adapter
 
 	if sameShape {
-		runBytePass(d, w, r, in, plan, upstreamAdapter)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator)
 		return
 	}
 
@@ -160,12 +160,14 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 // runBytePass handles same-shape or byte-pass dispatch: forward the body
 // (with model field rewritten to the upstream model name) to the upstream
 // and stream or buffer the response back.
-func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter) {
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator) {
 	ctx := r.Context()
 
 	wireBody := rewriteModelField(in.Body, plan.Snapshot.Upstream())
 
 	cls := ClassificationFrom(ctx)
+	lc := buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan)
+	lc.Translator = upstreamV1
 	preq := &pipeline.Request{
 		Body:        wireBody,
 		Headers:     r.Header,
@@ -177,7 +179,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		Provider:    plan.Provider,
 		Keys:        plan.Keys,
 		ModelName:   plan.Model.Meta.Name,
-		Lifecycle:   buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan),
+		Lifecycle:   lc,
 	}
 
 	result, err := d.Pipeline.Run(ctx, preq)
@@ -213,6 +215,8 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	}
 
 	cls := ClassificationFrom(ctx)
+	lc := buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan)
+	lc.Translator = upstreamV1
 	preq := &pipeline.Request{
 		Body:        wireBody,
 		Headers:     r.Header,
@@ -224,7 +228,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		Provider:    plan.Provider,
 		Keys:        plan.Keys,
 		ModelName:   plan.Model.Meta.Name,
-		Lifecycle:   buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan),
+		Lifecycle:   lc,
 	}
 
 	result, pErr := d.Pipeline.Run(ctx, preq)
