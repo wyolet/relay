@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // --- ParseRequest ---
@@ -422,7 +423,7 @@ func TestResponsesParseResponse_SimpleText(t *testing.T) {
 	if len(msg.Content) != 1 {
 		t.Fatalf("content len: %d", len(msg.Content))
 	}
-	if resp.Usage == nil || resp.Usage.InputTokens != 10 {
+	if resp.Usage["input"] != 10 {
 		t.Errorf("usage: %v", resp.Usage)
 	}
 }
@@ -573,17 +574,19 @@ func TestResponsesParseResponse_UsageDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage == nil {
+	if len(resp.Usage) == 0 {
 		t.Fatal("usage is nil")
 	}
-	if resp.Usage.InputTokens != 200 {
-		t.Errorf("input_tokens: %d", resp.Usage.InputTokens)
+	// Responses input_tokens=200 includes cached=150; canonical "input"
+	// is non-cached only. Sum gives 200 back.
+	if resp.Usage["input"] != 50 {
+		t.Errorf("non-cached input: %d", resp.Usage["input"])
 	}
-	if resp.Usage.InputTokensDetails.CachedTokens != 150 {
-		t.Errorf("cached_tokens: %d", resp.Usage.InputTokensDetails.CachedTokens)
+	if resp.Usage["cache_read"] != 150 {
+		t.Errorf("cache_read: %d", resp.Usage["cache_read"])
 	}
-	if resp.Usage.OutputTokensDetails.ReasoningTokens != 40 {
-		t.Errorf("reasoning_tokens: %d", resp.Usage.OutputTokensDetails.ReasoningTokens)
+	if resp.Usage["reasoning"] != 40 {
+		t.Errorf("reasoning: %d", resp.Usage["reasoning"])
 	}
 }
 
@@ -603,7 +606,7 @@ func TestResponsesSerializeResponse_SimpleText(t *testing.T) {
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
 			},
 		},
-		Usage: &v1.Usage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		Usage: usage.Tokens{"input": 10, "output": 5},
 	}
 	req := &v1.Request{Model: v1.ModelRefs{"gpt-5"}}
 	b, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
@@ -948,7 +951,7 @@ func TestResponsesNewFromCanonicalStream_TextSequence(t *testing.T) {
 			ID:           "resp_s1",
 			Status:       v1.StatusCompleted,
 			FinishReason: v1.FinishReasonStop,
-			Usage:        &v1.Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8},
+			Usage:        usage.Tokens{"input": 5, "output": 3},
 		}),
 	}
 

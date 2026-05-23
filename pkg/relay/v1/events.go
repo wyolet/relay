@@ -1,5 +1,7 @@
 package v1
 
+import "github.com/wyolet/relay/pkg/usage"
+
 // Canonical stream event name constants.
 // These six events collapse OpenAI Responses' ~50 event types.
 const (
@@ -66,7 +68,7 @@ type GenerationCompletedEvent struct {
 	ID           string       `json:"id"`
 	Status       Status       `json:"status"`
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
-	Usage        *Usage       `json:"usage,omitempty"`
+	Usage        usage.Tokens `json:"usage,omitempty"`
 }
 
 // ErrorEvent carries a stream-level failure. After this event no further

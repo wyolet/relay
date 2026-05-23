@@ -41,6 +41,7 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 func main() {
@@ -223,14 +224,13 @@ func main() {
 	}
 	usageEmitter := usagelog.NewEmitter(usagelog.EmitterOptions{}, usageSink)
 	defer usageEmitter.Close()
-	usageHook := usagelog.NewHook(usagelog.HookOptions{
-		Adapters: &snapshotAdapterResolver{cat: cat, registry: specRegistry},
-	}, usageEmitter)
+	usageHook := usagelog.NewHook(usagelog.HookOptions{}, usageEmitter)
 	lifecycleReg.RegisterPostFlight(usageHook.PostFlight)
 	slog.Info("usagelog: wired", "path", usagePath, "hooks", lifecycleReg.PostFlightCount())
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
+	inferRouter.Use(reqid.Middleware(slog.Default()))
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:        st,
 		Catalog:       cat,
@@ -370,29 +370,3 @@ func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
 }
 
-// snapshotAdapterResolver implements usagelog.AdapterResolver by walking
-// the Model's HostBindings to find the adapter name for the requested
-// (modelID, hostID) binding, then looking up the corresponding adapter
-// in the Spec registry. Returns the adapter as a usagelog.TokenExtractor.
-type snapshotAdapterResolver struct {
-	cat      *appcatalog.Catalog
-	registry *adapter.Registry
-}
-
-func (r *snapshotAdapterResolver) ExtractorForBinding(modelID, hostID string) (usagelog.TokenExtractor, bool) {
-	m, ok := r.cat.Current().Model(modelID)
-	if !ok {
-		return nil, false
-	}
-	for _, hb := range m.Spec.Hosts {
-		if hb.HostID != hostID {
-			continue
-		}
-		ad := r.registry.PipelineAdapter(hb.Adapter)
-		if ad == nil {
-			return nil, false
-		}
-		return ad, true
-	}
-	return nil, false
-}

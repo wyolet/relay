@@ -24,6 +24,7 @@ import (
 	"time"
 
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 const defaultMaxTokensCanonical = 4096
@@ -426,18 +427,40 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 		}
 	}
 
-	// Usage
-	total := ar.Usage.InputTokens + ar.Usage.OutputTokens
-	resp.Usage = &v1.Usage{
-		InputTokens:  ar.Usage.InputTokens,
-		OutputTokens: ar.Usage.OutputTokens,
-		TotalTokens:  total,
-		InputTokensDetails: v1.InputDeets{
-			CachedTokens: ar.Usage.CacheReadInputTokens,
-		},
-	}
+	// Usage: orthogonal-meter map. Each dimension Anthropic prices
+	// distinctly (input vs cache_read vs cache_creation) gets its own
+	// key. Tokens.Sum() over the map gives the honest "all tokens
+	// processed" count without double-counting.
+	resp.Usage = anthropicUsageToCanonical(&ar.Usage)
 
 	return resp, nil
+}
+
+// anthropicUsageToCanonical maps Anthropic's response usage block to
+// the canonical orthogonal-meter Tokens map. Keys match
+// pricing.MeterForUsageKey so the same vocabulary flows from this
+// adapter through every downstream observer + pricing computation.
+func anthropicUsageToCanonical(u *anthropicFullUsage) usage.Tokens {
+	if u == nil {
+		return nil
+	}
+	t := usage.Tokens{}
+	if u.InputTokens > 0 {
+		t["input"] = int64(u.InputTokens)
+	}
+	if u.OutputTokens > 0 {
+		t["output"] = int64(u.OutputTokens)
+	}
+	if u.CacheReadInputTokens > 0 {
+		t["cache_read"] = int64(u.CacheReadInputTokens)
+	}
+	if u.CacheCreationInputTokens > 0 {
+		t["cache_creation"] = int64(u.CacheCreationInputTokens)
+	}
+	if len(t) == 0 {
+		return nil
+	}
+	return t
 }
 
 // ---- SerializeResponse ----
@@ -531,14 +554,17 @@ func (AnthropicTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) (
 	}
 	out["content"] = content
 
-	// Usage
-	if resp.Usage != nil {
-		u := map[string]int{
-			"input_tokens":  resp.Usage.InputTokens,
-			"output_tokens": resp.Usage.OutputTokens,
+	// Usage: canonical orthogonal-meter map → Anthropic's named fields.
+	if len(resp.Usage) > 0 {
+		u := map[string]int64{
+			"input_tokens":  resp.Usage["input"],
+			"output_tokens": resp.Usage["output"],
 		}
-		if resp.Usage.InputTokensDetails.CachedTokens > 0 {
-			u["cache_read_input_tokens"] = resp.Usage.InputTokensDetails.CachedTokens
+		if v := resp.Usage["cache_read"]; v > 0 {
+			u["cache_read_input_tokens"] = v
+		}
+		if v := resp.Usage["cache_creation"]; v > 0 {
+			u["cache_creation_input_tokens"] = v
 		}
 		out["usage"] = u
 	}
@@ -573,11 +599,12 @@ type anthropicToCanonicalStream struct {
 	nextIndex        int
 	lifecycleEmitted bool
 	currentBlock     *anthropicStreamBlock
-	// accumulated usage from message_delta
-	inputTokens  int
-	outputTokens int
-	cachedTokens int
-	stopReason   string
+	// accumulated usage from message_start + message_delta
+	inputTokens         int
+	outputTokens        int
+	cachedTokens        int
+	cacheCreationTokens int
+	stopReason          string
 }
 
 type anthropicStreamBlock struct {
@@ -625,8 +652,9 @@ func (s *anthropicToCanonicalStream) handleMessageStart(data []byte) ([]byte, er
 			ID    string `json:"id"`
 			Model string `json:"model"`
 			Usage struct {
-				InputTokens int `json:"input_tokens"`
-				CacheRead   int `json:"cache_read_input_tokens"`
+				InputTokens   int `json:"input_tokens"`
+				CacheRead     int `json:"cache_read_input_tokens"`
+				CacheCreation int `json:"cache_creation_input_tokens"`
 			} `json:"usage"`
 		} `json:"message"`
 	}
@@ -638,6 +666,7 @@ func (s *anthropicToCanonicalStream) handleMessageStart(data []byte) ([]byte, er
 	s.created = time.Now().Unix()
 	s.inputTokens = ms.Message.Usage.InputTokens
 	s.cachedTokens = ms.Message.Usage.CacheRead
+	s.cacheCreationTokens = ms.Message.Usage.CacheCreation
 
 	if s.responseID == "" {
 		s.responseID = fmt.Sprintf("resp_%d", s.created)
@@ -819,14 +848,21 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 func (s *anthropicToCanonicalStream) handleMessageStop() ([]byte, error) {
 	status, finish, incomplete := anthropicStopReasonToCanonical(s.stopReason)
 
-	total := s.inputTokens + s.outputTokens
-	u := &v1.Usage{
-		InputTokens:  s.inputTokens,
-		OutputTokens: s.outputTokens,
-		TotalTokens:  total,
-		InputTokensDetails: v1.InputDeets{
-			CachedTokens: s.cachedTokens,
-		},
+	u := usage.Tokens{}
+	if s.inputTokens > 0 {
+		u["input"] = int64(s.inputTokens)
+	}
+	if s.outputTokens > 0 {
+		u["output"] = int64(s.outputTokens)
+	}
+	if s.cachedTokens > 0 {
+		u["cache_read"] = int64(s.cachedTokens)
+	}
+	if s.cacheCreationTokens > 0 {
+		u["cache_creation"] = int64(s.cacheCreationTokens)
+	}
+	if len(u) == 0 {
+		u = nil
 	}
 
 	gen := v1.GenerationCompletedEvent{
@@ -1032,9 +1068,9 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 		stopReason = "pause_turn"
 	}
 
-	outTokens := 0
-	if e.Usage != nil {
-		outTokens = e.Usage.OutputTokens
+	outTokens := int64(0)
+	if len(e.Usage) > 0 {
+		outTokens = e.Usage["output"]
 	}
 
 	md, _ := json.Marshal(map[string]any{
@@ -1043,7 +1079,7 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 			"stop_reason":   stopReason,
 			"stop_sequence": "",
 		},
-		"usage": map[string]int{"output_tokens": outTokens},
+		"usage": map[string]int64{"output_tokens": outTokens},
 	})
 	ms, _ := json.Marshal(map[string]string{"type": "message_stop"})
 

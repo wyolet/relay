@@ -1,6 +1,10 @@
 package lifecycle
 
-import "time"
+import (
+	"time"
+
+	v1 "github.com/wyolet/relay/pkg/relay/v1"
+)
 
 // Context is the persistent lifecycle state for one request. Created
 // once at request entry, threaded through every phase, mutable by
@@ -39,6 +43,14 @@ type Context struct {
 	// writes to the pre-flight phase only, or wrap with your own lock
 	// if you really must.
 	Metadata map[string]any
+
+	// Translator is the per-request vendor adapter, set by the runner
+	// when routing decides the upstream. Observers that want a
+	// canonical view of the response (usage, finish reason, output
+	// items) call v1.ExtractUsage / Translator.ParseResponse on
+	// ev.ResponseBody. nil for runners that can't expose one (e.g.
+	// anonymous proxy without resolved binding).
+	Translator v1.Translator
 }
 
 // NewContext returns a Context with required identity fields set and a

@@ -3,6 +3,8 @@ package v1
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // Marshal encodes a Response to wire JSON.
@@ -22,7 +24,7 @@ func UnmarshalResponse(data []byte) (*Response, error) {
 		Status            Status                     `json:"status"`
 		FinishReason      FinishReason               `json:"finish_reason"`
 		Output            []json.RawMessage          `json:"output"`
-		Usage             *Usage                     `json:"usage"`
+		Usage             usage.Tokens               `json:"usage"`
 		Error             *Error                     `json:"error"`
 		IncompleteDetails *IncompleteDetails          `json:"incomplete_details"`
 		Extensions        map[string]json.RawMessage `json:"extensions"`

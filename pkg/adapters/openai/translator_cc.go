@@ -7,6 +7,7 @@ import (
 	"time"
 
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // CCTranslator implements v1.Translator for the OpenAI Chat Completions wire shape.
@@ -343,7 +344,7 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 		Created:   resp.CreatedAt,
 		Model:     resp.Model,
 	}
-	if resp.Usage != nil {
+	if len(resp.Usage) > 0 {
 		cc.Usage = canonicalUsageToCC(resp.Usage)
 	}
 
@@ -783,34 +784,60 @@ func ccChoiceToCanonicalOutput(ccID string, ch *Choice) []v1.Item {
 	return items
 }
 
-// ccUsageToCanonical converts CC Usage to canonical v1.Usage.
-func ccUsageToCanonical(u *Usage) *v1.Usage {
-	cu := &v1.Usage{
-		InputTokens:  u.PromptTokens,
-		OutputTokens: u.CompletionTokens,
-		TotalTokens:  u.TotalTokens,
+// ccUsageToCanonical maps CC's Usage block to the canonical
+// orthogonal-meter Tokens map.
+//
+// OpenAI's prompt_tokens INCLUDES cached tokens; canonical "input"
+// means non-cached input only (consistent with Anthropic semantics).
+// We subtract cached_tokens from prompt_tokens so the meter
+// dimensions stay non-overlapping under Tokens.Sum().
+func ccUsageToCanonical(u *Usage) usage.Tokens {
+	if u == nil {
+		return nil
 	}
+	t := usage.Tokens{}
+	cached := int64(0)
 	if u.PromptDetails != nil {
-		cu.InputTokensDetails = v1.InputDeets{CachedTokens: u.PromptDetails.CachedTokens}
+		cached = int64(u.PromptDetails.CachedTokens)
 	}
-	if u.CompletionDetails != nil {
-		cu.OutputTokensDetails = v1.OutputDeets{ReasoningTokens: u.CompletionDetails.ReasoningTokens}
+	if v := int64(u.PromptTokens) - cached; v > 0 {
+		t["input"] = v
 	}
-	return cu
+	if u.CompletionTokens > 0 {
+		t["output"] = int64(u.CompletionTokens)
+	}
+	if cached > 0 {
+		t["cache_read"] = cached
+	}
+	if u.CompletionDetails != nil && u.CompletionDetails.ReasoningTokens > 0 {
+		t["reasoning"] = int64(u.CompletionDetails.ReasoningTokens)
+	}
+	if len(t) == 0 {
+		return nil
+	}
+	return t
 }
 
-// canonicalUsageToCC converts canonical v1.Usage to CC Usage.
-func canonicalUsageToCC(u *v1.Usage) *Usage {
+// canonicalUsageToCC maps a canonical orthogonal-meter map back to
+// CC's Usage block. prompt_tokens is reconstructed as input +
+// cache_read (CC's convention); total is the honest sum.
+func canonicalUsageToCC(t usage.Tokens) *Usage {
+	if len(t) == 0 {
+		return nil
+	}
+	cached := int(t["cache_read"])
+	prompt := int(t["input"]) + cached
+	completion := int(t["output"])
 	cu := &Usage{
-		PromptTokens:     u.InputTokens,
-		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.TotalTokens,
+		PromptTokens:     prompt,
+		CompletionTokens: completion,
+		TotalTokens:      int(t.Sum()),
 	}
-	if u.InputTokensDetails.CachedTokens > 0 {
-		cu.PromptDetails = &PromptTokenDetails{CachedTokens: u.InputTokensDetails.CachedTokens}
+	if cached > 0 {
+		cu.PromptDetails = &PromptTokenDetails{CachedTokens: cached}
 	}
-	if u.OutputTokensDetails.ReasoningTokens > 0 {
-		cu.CompletionDetails = &CompletionTokenDetails{ReasoningTokens: u.OutputTokensDetails.ReasoningTokens}
+	if r := int(t["reasoning"]); r > 0 {
+		cu.CompletionDetails = &CompletionTokenDetails{ReasoningTokens: r}
 	}
 	return cu
 }
@@ -990,7 +1017,7 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 	}
 
 	// generation.completed
-	var u *v1.Usage
+	var u usage.Tokens
 	if s.lastUsage != nil {
 		u = ccUsageToCanonical(s.lastUsage)
 	}
