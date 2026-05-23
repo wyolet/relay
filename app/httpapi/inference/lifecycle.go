@@ -44,7 +44,11 @@ func buildLifecycleContext(ctx context.Context, source, relayKeyToken string, pl
 // always have a fully-resolved Plan (anonymous mode, header-pinned host
 // without policy lookup), so we accept the partial inputs the handler
 // has and leave unknowns empty.
-func buildProxyLifecycleContext(ctx context.Context, relayKeyToken string, host *apphost.Host, rk *relaykey.RelayKey, clientIP string) *lifecycle.Context {
+//
+// plan, when non-nil (policy-driven resolution path), supplies model
+// + policy IDs so observers can attribute usage to the right binding
+// and look up the right adapter for token extraction.
+func buildProxyLifecycleContext(ctx context.Context, relayKeyToken string, host *apphost.Host, rk *relaykey.RelayKey, clientIP string, plan *routing.Plan) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), "proxy", time.Now())
 	if relayKeyToken != "" {
 		sum := sha256.Sum256([]byte(relayKeyToken))
@@ -55,6 +59,16 @@ func buildProxyLifecycleContext(ctx context.Context, relayKeyToken string, host 
 	}
 	if rk != nil {
 		lc.PolicyID = rk.Spec.PolicyID
+	}
+	if plan != nil {
+		if plan.Model != nil {
+			lc.ModelID = plan.Model.Meta.ID
+		}
+		// plan.Policy may differ from rk.Spec.PolicyID under future
+		// override flows; trust the Plan when present.
+		if plan.Policy != nil {
+			lc.PolicyID = plan.Policy.Meta.ID
+		}
 	}
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP

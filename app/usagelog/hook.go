@@ -1,6 +1,8 @@
 package usagelog
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"time"
 
@@ -72,7 +74,7 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 
 	if h.opts.Adapters != nil && len(ev.ResponseBody) > 0 && lc.ModelID != "" && lc.HostID != "" {
 		if ext, ok := h.opts.Adapters.ExtractorForBinding(lc.ModelID, lc.HostID); ok && ext != nil {
-			out.Tokens = ext.ExtractTokens(ev.ResponseBody)
+			out.Tokens = extractTokensFromBody(ext, ev.ResponseBody)
 		}
 	}
 
@@ -89,4 +91,60 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 	}
 
 	h.emitter.Emit(out)
+}
+
+// extractTokensFromBody wraps the per-adapter ExtractTokens with SSE
+// awareness. Vendor ExtractTokens implementations expect a single JSON
+// document — they parse the body with json.Unmarshal and return nil on
+// failure. That's the right shape for sync responses but wrong for
+// streaming, where the buffered body is many JSON events concatenated
+// with SSE framing.
+//
+// The fix: sniff for SSE framing, walk each `data:` payload, call
+// ExtractTokens per payload, accumulate. For sync responses (no SSE
+// framing) we pass through unchanged.
+func extractTokensFromBody(ext TokenExtractor, body []byte) usage.Tokens {
+	if !looksLikeSSE(body) {
+		return ext.ExtractTokens(body)
+	}
+	var acc usage.Tokens
+	sc := bufio.NewScanner(bytes.NewReader(body))
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		// SSE data lines: "data: <json>" — strip the prefix and feed
+		// the JSON to the adapter. Other lines (event:, id:, retry:,
+		// blank separators, comments) are skipped.
+		if !bytes.HasPrefix(line, []byte("data: ")) {
+			continue
+		}
+		data := line[len("data: "):]
+		if len(data) == 0 {
+			continue
+		}
+		t := ext.ExtractTokens(data)
+		if len(t) == 0 {
+			continue
+		}
+		if acc == nil {
+			acc = usage.Tokens{}
+		}
+		acc.Add(t)
+	}
+	return acc
+}
+
+// looksLikeSSE sniffs the leading bytes for an SSE event/data line. Cheap
+// substring check — we don't try to validate the full stream, just
+// distinguish "this is JSON" from "this is event-stream framing."
+func looksLikeSSE(body []byte) bool {
+	head := body
+	if len(head) > 256 {
+		head = head[:256]
+	}
+	head = bytes.TrimLeft(head, " \t\r\n\xef\xbb\xbf") // skip whitespace + UTF-8 BOM
+	return bytes.HasPrefix(head, []byte("event:")) ||
+		bytes.HasPrefix(head, []byte("event ")) ||
+		bytes.HasPrefix(head, []byte("data:")) ||
+		bytes.HasPrefix(head, []byte("data "))
 }

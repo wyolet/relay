@@ -14,12 +14,14 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 // DispatchInput is what a per-shape route passes to Dispatch after its
@@ -48,6 +50,14 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 
 	// Proxy mode short-circuits cross-shape translation.
 	cls := ClassificationFrom(ctx)
+	slog.Info("inference: dispatch entry",
+		"request_id", reqid.From(ctx),
+		"inbound", string(in.Inbound),
+		"model", in.ModelName,
+		"stream", in.Stream,
+		"mode", cls.Mode,
+		"body_bytes", len(in.Body),
+	)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
 		handleProxy(d, w, r, in.Inbound)
@@ -179,7 +189,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
-	_, _ = io.Copy(w, result.Body)
+	_, _ = streamCopy(w, result.Body)
 }
 
 // dispatchCanonical handles cross-shape dispatch via the canonical v1 chain.
