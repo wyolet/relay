@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/session"
+	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/internal/identity"
 )
 
@@ -46,6 +47,11 @@ type Deps struct {
 	// CookieSecure controls the Secure attribute on the session cookie.
 	// Surfaced here so the OpenAPI doc can reflect deployment posture.
 	CookieSecure bool
+
+	// UsageReader serves /usage/* read-side endpoints. nil disables
+	// them — useful for deployments where usage events are consumed
+	// from a separate store.
+	UsageReader usagelog.Reader
 }
 
 // Mount installs the control-plane huma API on r and registers all
@@ -92,6 +98,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerDebug(api, d, protect)
+	registerUsage(api, d, protect)
 
 	return api
 }

@@ -267,6 +267,7 @@ func main() {
 			Catalog:      cat,
 			Stores:       stores,
 			CookieSecure: cookieSecure,
+			UsageReader:  usagelog.NewFileReader(usagePath),
 		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
