@@ -103,5 +103,16 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerModels(api, d, mw)
 	registerProxyHosts(api, d, mw)
 
+	// /v1/ws is a raw upgrade, not a huma POST operation, so it mounts
+	// directly on the chi router. It reuses the identical net/http
+	// middleware chain (readiness → classify → relay-key auth), so the
+	// upgrade request is authed exactly like an HTTP /v1/* request and
+	// every multiplexed frame inherits the authed context.
+	r.With(
+		ReadinessMiddleware(d.Catalog),
+		ClassifyMiddleware(),
+		RelayKeyAuthMiddleware(d.Catalog),
+	).Get("/v1/ws", wsHandler(d))
+
 	return api
 }
