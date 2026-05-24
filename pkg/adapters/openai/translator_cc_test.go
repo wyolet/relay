@@ -402,6 +402,35 @@ func TestCCSerializeRequest_SimpleMessage(t *testing.T) {
 	}
 }
 
+func TestCCSerializeRequest_CacheConfigIsNoOp(t *testing.T) {
+	// OpenAI prefix-caches automatically and exposes no breakpoint API, so a
+	// neutral CacheConfig must be ignored — never emit cache_control / cache_config.
+	req := &v1.Request{
+		Model:        v1.ModelRefs{"gpt-4o"},
+		Instructions: "be concise",
+		CacheConfig:  &v1.CacheConfig{Instructions: true, Tools: true},
+		ModelConfig: map[string]*v1.ModelOpts{
+			"gpt-4o": {Tools: &v1.ToolsConfig{Definitions: v1.Tools{
+				&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)},
+			}}},
+		},
+		Input: []v1.Item{
+			&v1.Message{
+				Role:        v1.RoleUser,
+				Content:     []v1.Part{&v1.TextPart{Text: "hi"}},
+				CacheConfig: &v1.ItemCacheConfig{Anchor: true},
+			},
+		},
+	}
+	b, err := (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := string(b); strings.Contains(s, "cache_control") || strings.Contains(s, "cache_config") {
+		t.Errorf("cache vocabulary leaked into OpenAI CC output: %s", s)
+	}
+}
+
 func TestCCSerializeRequest_WithInstructions(t *testing.T) {
 	req := &v1.Request{
 		Model:        v1.ModelRefs{"gpt-4o"},

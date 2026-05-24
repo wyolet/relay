@@ -487,6 +487,98 @@ func TestAnthropicSerializeRequest_ToolChoice_Required(t *testing.T) {
 	}
 }
 
+func TestAnthropicSerializeRequest_CacheConfig(t *testing.T) {
+	model := "claude-3-5-sonnet-20241022"
+	req := &v1.Request{
+		Model:        v1.ModelRefs{model},
+		Instructions: "You are Scarlet.",
+		OutputMode:   v1.OutputModeSync,
+		CacheConfig:  &v1.CacheConfig{Instructions: true, Tools: true},
+		ModelConfig: map[string]*v1.ModelOpts{
+			model: {
+				Tools: &v1.ToolsConfig{
+					Definitions: v1.Tools{
+						&v1.FunctionTool{Name: "a", Parameters: json.RawMessage(`{}`)},
+						&v1.FunctionTool{Name: "b", Parameters: json.RawMessage(`{}`)},
+					},
+				},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{
+				Role:        v1.RoleUser,
+				Content:     []v1.Part{&v1.TextPart{Text: "stable history"}},
+				CacheConfig: &v1.ItemCacheConfig{Anchor: true},
+			},
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "latest turn"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+
+	// Instructions anchor: system coerced to block array, breakpoint on last block.
+	sysBlocks, ok := m["system"].([]any)
+	if !ok {
+		t.Fatalf("system: want []block, got %T (%v)", m["system"], m["system"])
+	}
+	lastSys := sysBlocks[len(sysBlocks)-1].(map[string]any)
+	if lastSys["cache_control"] == nil {
+		t.Errorf("no cache_control on system block: %v", lastSys)
+	}
+	if lastSys["text"] != "You are Scarlet." {
+		t.Errorf("system text: %v", lastSys["text"])
+	}
+
+	// Tools anchor: breakpoint on the LAST tool only.
+	tools := m["tools"].([]any)
+	if cc := tools[0].(map[string]any)["cache_control"]; cc != nil {
+		t.Errorf("unexpected cache_control on first tool: %v", cc)
+	}
+	if cc := tools[len(tools)-1].(map[string]any)["cache_control"]; cc == nil {
+		t.Error("no cache_control on last tool")
+	}
+
+	// Per-message anchor: anchored message's content coerced to a block with a
+	// breakpoint; the non-anchored trailing message stays a plain string.
+	msgs := m["messages"].([]any)
+	anchored := msgs[0].(map[string]any)
+	blocks, ok := anchored["content"].([]any)
+	if !ok {
+		t.Fatalf("anchored message content: want []block, got %T", anchored["content"])
+	}
+	if blocks[len(blocks)-1].(map[string]any)["cache_control"] == nil {
+		t.Error("no cache_control on anchored message block")
+	}
+	if _, isString := msgs[1].(map[string]any)["content"].(string); !isString {
+		t.Errorf("non-anchored message content should stay a string, got %T", msgs[1].(map[string]any)["content"])
+	}
+}
+
+func TestAnthropicSerializeRequest_NoCacheConfig_NoBreakpoints(t *testing.T) {
+	req := &v1.Request{
+		Model:        v1.ModelRefs{"claude-3-5-sonnet-20241022"},
+		Instructions: "You are helpful.",
+		OutputMode:   v1.OutputModeSync,
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "cache_control") {
+		t.Errorf("cache_control leaked without CacheConfig: %s", out)
+	}
+	// system stays a plain string.
+	if s, _ := decodeMap(t, out)["system"].(string); s != "You are helpful." {
+		t.Errorf("system: want plain string, got %v", decodeMap(t, out)["system"])
+	}
+}
+
 func TestAnthropicSerializeRequest_ThinkingConfig(t *testing.T) {
 	budget := 3000
 	req := &v1.Request{

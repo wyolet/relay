@@ -9,11 +9,12 @@ import (
 // ProviderData carries vendor-specific opaque payloads for same-vendor
 // round-trip fidelity. Customers never construct it.
 type Message struct {
-	ID           string          `json:"id,omitempty"`
-	Status       Status          `json:"status,omitempty"`
-	Role         Role            `json:"role"`
-	Content      []Part          `json:"-"` // normalized; use MarshalJSON/UnmarshalJSON
-	ProviderData json.RawMessage `json:"provider_data,omitempty"`
+	ID           string           `json:"id,omitempty"`
+	Status       Status           `json:"status,omitempty"`
+	Role         Role             `json:"role"`
+	Content      []Part           `json:"-"` // normalized; use MarshalJSON/UnmarshalJSON
+	CacheConfig  *ItemCacheConfig `json:"cache_config,omitempty"`
+	ProviderData json.RawMessage  `json:"provider_data,omitempty"`
 }
 
 func (*Message) isItem()            {}
@@ -21,12 +22,13 @@ func (*Message) ItemType() ItemType { return ItemTypeMessage }
 
 func (m *Message) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type         ItemType        `json:"type"`
-		ID           string          `json:"id,omitempty"`
-		Status       Status          `json:"status,omitempty"`
-		Role         Role            `json:"role"`
-		Content      []Part          `json:"content"`
-		ProviderData json.RawMessage `json:"provider_data,omitempty"`
+		Type         ItemType         `json:"type"`
+		ID           string           `json:"id,omitempty"`
+		Status       Status           `json:"status,omitempty"`
+		Role         Role             `json:"role"`
+		Content      []Part           `json:"content"`
+		CacheConfig  *ItemCacheConfig `json:"cache_config,omitempty"`
+		ProviderData json.RawMessage  `json:"provider_data,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:         ItemTypeMessage,
@@ -34,17 +36,19 @@ func (m *Message) MarshalJSON() ([]byte, error) {
 		Status:       m.Status,
 		Role:         m.Role,
 		Content:      m.Content,
+		CacheConfig:  m.CacheConfig,
 		ProviderData: m.ProviderData,
 	})
 }
 
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		ID           string          `json:"id"`
-		Status       Status          `json:"status"`
-		Role         Role            `json:"role"`
-		Content      json.RawMessage `json:"content"`
-		ProviderData json.RawMessage `json:"provider_data"`
+		ID           string           `json:"id"`
+		Status       Status           `json:"status"`
+		Role         Role             `json:"role"`
+		Content      json.RawMessage  `json:"content"`
+		CacheConfig  *ItemCacheConfig `json:"cache_config"`
+		ProviderData json.RawMessage  `json:"provider_data"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -52,6 +56,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	m.ID = raw.ID
 	m.Status = raw.Status
 	m.Role = raw.Role
+	m.CacheConfig = raw.CacheConfig
 	m.ProviderData = raw.ProviderData
 	parts, err := unmarshalContent(raw.Content)
 	if err != nil {

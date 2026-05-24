@@ -26,6 +26,10 @@ type Request struct {
 	Model       ModelRefs             `json:"model"`
 	ModelConfig map[string]*ModelOpts `json:"model_config,omitempty"`
 
+	// CacheConfig is the vendor-neutral prompt-cache configuration. Supporting
+	// adapters emit breakpoints; others ignore it. See CacheConfig type.
+	CacheConfig *CacheConfig `json:"cache_config,omitempty"`
+
 	OutputMode string `json:"output_mode,omitempty"` // "sync" | "stream"
 
 	User       string                     `json:"user,omitempty"`
