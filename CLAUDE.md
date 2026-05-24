@@ -221,11 +221,19 @@ here because new sessions must inherit them.
    factories). No per-request state on the `Translator` value — per-
    stream state lives in the closures the stream factories return.
 7. **`extensions` envelope for cross-cutting concerns.** Anything that
-   doesn't map cleanly across vendors (cache hints, safety settings,
-   RAG documents) lives in `Request.Extensions` / `Response.Extensions`
+   doesn't map cleanly across vendors (safety settings, RAG documents)
+   lives in `Request.Extensions` / `Response.Extensions`
    (`map[string]json.RawMessage`). Vendor adapters that understand a key
    emit the corresponding wire field; adapters that don't, ignore it.
-   No new top-level canonical field for vendor-specific features.
+   No new top-level canonical field for *vendor-specific* features.
+   **Exception — prompt caching is first-class.** It's a clean
+   cross-vendor intent ("this prefix is stable"), not a vendor quirk,
+   so it lives in `Request.CacheConfig` (`cache_config`: object with
+   `instructions`/`tools`, mirroring `model_config`) + a per-item
+   `cache_config` (`ItemCacheConfig{anchor}`). No vendor cache vocab
+   (`cache_control`, `prompt_cache_key`) reaches canonical; Anthropic
+   emits breakpoints, OpenAI no-ops, hit-rate reads back via
+   `Usage["cache_read"]`. See `docs/canonical-protocol.md` rule 7.
 8. **`provider_data` for same-vendor opaque blobs.** Signed/encrypted
    vendor payloads (Anthropic thinking signatures, OpenAI
    `encrypted_content`) carry on the relevant item (`reasoning`,

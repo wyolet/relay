@@ -89,6 +89,26 @@ func TestParseModelConfigMatchingKey(t *testing.T) {
 	}
 }
 
+func TestParseCacheConfig(t *testing.T) {
+	body := `{"model":"x","cache_config":{"instructions":true,"tools":true},"input":[` +
+		`{"type":"message","role":"user","content":"stable","cache_config":{"anchor":true}},` +
+		`{"type":"message","role":"user","content":"latest"}]}`
+	req, err := Parse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.CacheConfig == nil || !req.CacheConfig.Instructions || !req.CacheConfig.Tools {
+		t.Fatalf("request cache_config: %+v", req.CacheConfig)
+	}
+	anchored, ok := req.Input[0].(*Message)
+	if !ok || anchored.CacheConfig == nil || !anchored.CacheConfig.Anchor {
+		t.Errorf("item[0] cache_config anchor: %+v", req.Input[0])
+	}
+	if m, ok := req.Input[1].(*Message); !ok || m.CacheConfig != nil {
+		t.Errorf("item[1] should have no cache_config: %+v", req.Input[1])
+	}
+}
+
 func TestParseModelConfigNullValue(t *testing.T) {
 	body := `{"model":"x","input":"hi","model_config":{"x":null}}`
 	req, err := Parse([]byte(body))

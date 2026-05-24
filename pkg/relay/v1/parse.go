@@ -19,6 +19,7 @@ func Parse(body []byte) (*Request, error) {
 		Input       json.RawMessage            `json:"input"`
 		Instructions string                    `json:"instructions"`
 		ModelConfig map[string]*ModelOpts      `json:"model_config"`
+		CacheConfig *CacheConfig               `json:"cache_config"`
 		OutputMode  string                     `json:"output_mode"`
 		User        string                     `json:"user"`
 		Metadata    map[string]string          `json:"metadata"`
@@ -69,6 +70,7 @@ func Parse(body []byte) (*Request, error) {
 		Instructions: wire.Instructions,
 		Model:        wire.Model,
 		ModelConfig:  wire.ModelConfig,
+		CacheConfig:  wire.CacheConfig,
 		OutputMode:   wire.OutputMode,
 		User:         wire.User,
 		Metadata:     wire.Metadata,

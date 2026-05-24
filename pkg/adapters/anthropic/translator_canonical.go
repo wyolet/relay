@@ -3,9 +3,11 @@
 // bodies and the canonical v1.Request/v1.Response types.
 //
 // Design decisions and known lossy mappings:
-//   - cache_control on content blocks: dropped on canonical round-trip.
-//     Anthropic prompt-caching is a same-vendor optimization; it survives
-//     byte-pass but not cross-shape translate.
+//   - cache_control: outbound (SerializeRequest) emits breakpoints from the
+//     neutral v1.Request.CacheConfig (instructions/tools) and per-message
+//     ItemCacheConfig anchors. Inbound (ParseRequest) still drops any wire
+//     cache_control — we don't reverse-map vendor cache markers into canonical;
+//     callers express cache intent via cache_config, not vendor fields.
 //   - server_tool_use blocks (web_search, code_execution): dropped. Not
 //     modeled in canonical v1 output; per spec comment server tools land in v2.
 //   - thinking signature: carried in Reasoning.ProviderData for same-vendor
@@ -36,7 +38,7 @@ type AnthropicTranslator struct{}
 
 type anthropicCanonReq struct {
 	Model         string                  `json:"model"`
-	System        string                  `json:"system,omitempty"`
+	System        any                     `json:"system,omitempty"` // string, or []block when cache-anchored
 	Messages      []anthropicCanonMsg     `json:"messages"`
 	Tools         []anthropicCanonTool    `json:"tools,omitempty"`
 	ToolChoice    any                     `json:"tool_choice,omitempty"`
@@ -56,9 +58,38 @@ type anthropicCanonMsg struct {
 }
 
 type anthropicCanonTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	CacheControl map[string]any  `json:"cache_control,omitempty"`
+}
+
+// anthropicEphemeralCacheControl is the breakpoint marker placed on the last
+// block of a cache-anchored section. Anthropic caches everything from the
+// start of the prompt up to and including the marked block.
+func anthropicEphemeralCacheControl() map[string]any {
+	return map[string]any{"type": "ephemeral"}
+}
+
+// withCacheBreakpoint attaches an ephemeral cache_control marker to the last
+// content block, coercing string content into a single text block when needed
+// (cache_control can only ride on a block, not a bare string).
+func withCacheBreakpoint(content any) any {
+	switch c := content.(type) {
+	case string:
+		if c == "" {
+			return c
+		}
+		return []map[string]any{{"type": "text", "text": c, "cache_control": anthropicEphemeralCacheControl()}}
+	case []map[string]any:
+		if len(c) == 0 {
+			return c
+		}
+		c[len(c)-1]["cache_control"] = anthropicEphemeralCacheControl()
+		return c
+	default:
+		return content
+	}
 }
 
 type anthropicCanonMetadata struct {
@@ -260,9 +291,9 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	model := req.Model[0]
 
 	out := &anthropicCanonReq{
-		Model:  model,
-		System: req.Instructions,
+		Model: model,
 	}
+	systemText := req.Instructions
 
 	if req.OutputMode == v1.OutputModeStream {
 		out.Stream = true
@@ -322,17 +353,33 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	}
 	out.MaxTokens = maxTokens
 
-	// Build messages from canonical Input.
-	msgs, system, err := canonicalItemsToAnthropic(req.Input)
+	// cache_config.tools → breakpoint on the last tool (caches the tools block).
+	if req.CacheConfig != nil && req.CacheConfig.Tools && len(out.Tools) > 0 {
+		out.Tools[len(out.Tools)-1].CacheControl = anthropicEphemeralCacheControl()
+	}
+
+	// Build messages from canonical Input. Per-message cache anchors are applied
+	// inside (each Message carries its own ItemCacheConfig).
+	msgs, sysFromItems, err := canonicalItemsToAnthropic(req.Input)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic serialize_request: %w", err)
 	}
 	out.Messages = msgs
-	if system != "" {
-		if out.System != "" {
-			out.System = out.System + "\n" + system
+	if sysFromItems != "" {
+		if systemText != "" {
+			systemText = systemText + "\n" + sysFromItems
 		} else {
-			out.System = system
+			systemText = sysFromItems
+		}
+	}
+
+	// cache_config.instructions → breakpoint on the system prefix. Coerces the
+	// system string to a single text block so cache_control can ride on it.
+	if systemText != "" {
+		if req.CacheConfig != nil && req.CacheConfig.Instructions {
+			out.System = withCacheBreakpoint(systemText)
+		} else {
+			out.System = systemText
 		}
 	}
 
@@ -1574,11 +1621,17 @@ func canonicalItemsToAnthropic(items []v1.Item) ([]anthropicCanonMsg, string, er
 				if err != nil {
 					return nil, "", err
 				}
+				if v.CacheConfig != nil && v.CacheConfig.Anchor {
+					content = withCacheBreakpoint(content)
+				}
 				msgs = append(msgs, anthropicCanonMsg{Role: "user", Content: content})
 			case v1.RoleAssistant:
 				content, err := canonicalPartsToAnthropicContent(v.Content)
 				if err != nil {
 					return nil, "", err
+				}
+				if v.CacheConfig != nil && v.CacheConfig.Anchor {
+					content = withCacheBreakpoint(content)
 				}
 				msgs = append(msgs, anthropicCanonMsg{Role: "assistant", Content: content})
 			}
