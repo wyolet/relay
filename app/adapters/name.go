@@ -36,6 +36,12 @@ const (
 	// Supported by any OpenAI-compatible host (Voyage, Together, Fireworks,
 	// Cohere compat, etc.). Phase 1: byte-passthrough only.
 	OpenAIEmbeddings Name = "openai_embeddings"
+
+	// Canonical is relay's own wire shape (pkg/relay/v1), served at /v1/*.
+	// It is an inbound-only shape: callers POST canonical and relay routes,
+	// translates canonical→upstream-vendor, and returns canonical. There is
+	// no canonical upstream, so it never appears as a HostBinding.Adapter.
+	Canonical Name = "canonical"
 )
 
 // Valid reports whether n is one of the supported adapter names.

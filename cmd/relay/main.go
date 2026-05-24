@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
 	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
+	relayv1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -161,8 +162,7 @@ func main() {
 		(&adapter.Spec{
 			Name: adapters.OpenAI,
 			InboundPaths: []adapter.InboundPath{
-				{Path: "/v1/chat/completions", OperationID: "chat_completions", Summary: "Create a chat completion (OpenAI-compatible)"},
-				{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion via the explicit /openai namespace"},
+				{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion (OpenAI Chat Completions shape)"},
 			},
 			UpstreamPath:  "/v1/chat/completions",
 			Auth:          openaiAuth,
@@ -172,8 +172,7 @@ func main() {
 		(&adapter.Spec{
 			Name: adapters.OpenAIResponses,
 			InboundPaths: []adapter.InboundPath{
-				{Path: "/v1/responses", OperationID: "responses_create", Summary: "Create a response (OpenAI Responses API)"},
-				{Path: "/openai/v1/responses", OperationID: "openai_responses_create", Summary: "Create a response via the explicit /openai namespace"},
+				{Path: "/openai/v1/responses", OperationID: "openai_responses_create", Summary: "Create a response (OpenAI Responses API)"},
 			},
 			UpstreamPath:  "/v1/responses",
 			Auth:          openaiAuth,
@@ -187,8 +186,7 @@ func main() {
 		(&adapter.Spec{
 			Name: adapters.OpenAIEmbeddings,
 			InboundPaths: []adapter.InboundPath{
-				{Path: "/v1/embeddings", OperationID: "embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"},
-				{Path: "/openai/v1/embeddings", OperationID: "openai_embeddings_create", Summary: "Create embeddings via the explicit /openai namespace"},
+				{Path: "/openai/v1/embeddings", OperationID: "openai_embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"},
 			},
 			UpstreamPath:  "/v1/embeddings",
 			Auth:          openaiAuth,
@@ -198,13 +196,24 @@ func main() {
 		(&adapter.Spec{
 			Name: adapters.Anthropic,
 			InboundPaths: []adapter.InboundPath{
-				{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"},
-				{Path: "/anthropic/v1/messages", OperationID: "anthropic_messages", Summary: "Create a message via the explicit /anthropic namespace"},
+				{Path: "/anthropic/v1/messages", OperationID: "anthropic_messages", Summary: "Create a message (Anthropic Messages shape)"},
 			},
 			UpstreamPath:  "/v1/messages",
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
+		}).Build(),
+		// Canonical shape — relay's own protocol (pkg/relay/v1), served at /v1.
+		// Inbound-only: callers POST canonical, relay routes + translates
+		// canonical→upstream-vendor via the upstream's translator, returns
+		// canonical. The identity translator makes the generic cross-shape
+		// dispatch chain handle it with no special-casing.
+		(&adapter.Spec{
+			Name: adapters.Canonical,
+			InboundPaths: []adapter.InboundPath{
+				{Path: "/v1/generate", OperationID: "generate", Summary: "Generate (relay canonical shape)"},
+			},
+			Translator: relayv1.IdentityTranslator{},
 		}).Build(),
 	}
 	specRegistry := adapter.NewRegistry(specs...)

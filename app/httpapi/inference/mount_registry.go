@@ -46,18 +46,23 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 	}
 }
 
-// extractModelStream extracts the top-level "model" string and "stream" bool
-// from a raw JSON request body. Returns an error if the body is not valid JSON.
-// The model field may be absent (empty string returned); callers check.
+// extractModelStream extracts the model name and stream flag from a raw JSON
+// request body, spanning every inbound shape. Vendor shapes signal streaming
+// with a top-level "stream" bool; the canonical shape uses
+// "output_mode":"stream". The model field is read as a JSON string (the
+// single-model case); canonical's array form is rejected upstream as multiplex
+// and isn't used by streaming clients. Model may be absent (empty string
+// returned); callers check.
 func extractModelStream(body []byte) (model string, stream bool, err error) {
 	var probe struct {
-		Model  string `json:"model"`
-		Stream *bool  `json:"stream"`
+		Model      string `json:"model"`
+		Stream     *bool  `json:"stream"`
+		OutputMode string `json:"output_mode"`
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return "", false, fmt.Errorf("invalid JSON: %w", err)
 	}
-	s := false
+	s := probe.OutputMode == "stream"
 	if probe.Stream != nil {
 		s = *probe.Stream
 	}

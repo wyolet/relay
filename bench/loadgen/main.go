@@ -54,7 +54,7 @@ func main() {
 		},
 	})
 
-	url := *target + "/v1/messages"
+	url := *target + "/anthropic/v1/messages"
 	client := &http.Client{Timeout: *timeout}
 
 	var (
