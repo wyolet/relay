@@ -41,12 +41,41 @@ func TestIdentityTranslator_StreamFactoriesAreIdentity(t *testing.T) {
 	}
 }
 
-func TestIdentityTranslator_UpstreamSideMethodsError(t *testing.T) {
-	// Canonical is inbound-only; the upstream-side methods must not pretend.
-	if _, err := (IdentityTranslator{}).SerializeRequest(&Request{}); err == nil {
-		t.Error("SerializeRequest should error (canonical is inbound-only)")
+func TestIdentityTranslator_RequestRoundTrip(t *testing.T) {
+	// Client-side use: SerializeRequest then ParseRequest must round-trip.
+	req := &Request{
+		Model:       ModelRefs{"m"},
+		CacheConfig: &CacheConfig{Tools: true},
+		Input:       []Item{&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "hi"}}}},
 	}
-	if _, err := (IdentityTranslator{}).ParseResponse([]byte(`{}`)); err == nil {
-		t.Error("ParseResponse should error (canonical is inbound-only)")
+	wire, err := IdentityTranslator{}.SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := IdentityTranslator{}.ParseRequest(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CacheConfig == nil || !got.CacheConfig.Tools {
+		t.Errorf("cache_config lost in round-trip: %+v", got.CacheConfig)
+	}
+	if len(got.Input) != 1 {
+		t.Errorf("input lost: %+v", got.Input)
+	}
+}
+
+func TestIdentityTranslator_ParseResponseRoundTrip(t *testing.T) {
+	resp := &Response{ID: "r1", Object: "response", Status: StatusCompleted,
+		Output: []Item{&Message{Role: RoleAssistant, Content: []Part{&OutputTextPart{Text: "hi"}}}}}
+	wire, err := IdentityTranslator{}.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := IdentityTranslator{}.ParseResponse(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "r1" || len(got.Output) != 1 {
+		t.Errorf("response round-trip lost data: %+v", got)
 	}
 }
