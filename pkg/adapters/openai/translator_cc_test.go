@@ -1105,6 +1105,88 @@ func TestCCNewToCanonicalStream_ToolCallSequence(t *testing.T) {
 	}
 }
 
+func TestCCNewToCanonicalStream_FinishReasonThreaded(t *testing.T) {
+	tr := CCTranslator{}
+
+	cases := []struct {
+		name       string
+		ccReason   string
+		wantFinish v1.FinishReason
+		wantStatus v1.Status
+	}{
+		{"tool_calls", "tool_calls", v1.FinishReasonToolCalls, v1.StatusCompleted},
+		{"length", "length", v1.FinishReasonLength, v1.StatusIncomplete},
+		{"content_filter", "content_filter", v1.FinishReasonContentFilter, v1.StatusCompleted},
+		{"stop", "stop", v1.FinishReasonStop, v1.StatusCompleted},
+		// No finish_reason chunk at all -> default stop/completed.
+		{"absent_defaults_stop", "", v1.FinishReasonStop, v1.StatusCompleted},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := tr.NewToCanonicalStream()
+
+			chunks := [][]byte{
+				ccSSEChunk(map[string]any{
+					"id":      "chatcmpl-fr",
+					"object":  "chat.completion.chunk",
+					"created": int64(1700000000),
+					"model":   "gpt-4o",
+					"choices": []any{map[string]any{
+						"index": 0,
+						"delta": map[string]any{"role": "assistant", "content": "hi"},
+					}},
+				}),
+			}
+			if tc.ccReason != "" {
+				chunks = append(chunks, ccSSEChunk(map[string]any{
+					"id":      "chatcmpl-fr",
+					"object":  "chat.completion.chunk",
+					"created": int64(1700000000),
+					"model":   "gpt-4o",
+					"choices": []any{map[string]any{
+						"index":         0,
+						"delta":         map[string]any{},
+						"finish_reason": tc.ccReason,
+					}},
+				}))
+			}
+			chunks = append(chunks, ccDoneChunk())
+
+			var out []byte
+			for _, c := range chunks {
+				b, err := fn(c)
+				if err != nil {
+					t.Fatalf("translate: %v", err)
+				}
+				out = append(out, b...)
+			}
+
+			var completed *v1.GenerationCompletedEvent
+			for _, frame := range splitCanonicalFrames(out) {
+				event, data, ok := v1.ParseSSEChunk(frame)
+				if !ok || event != v1.EventGenerationCompleted {
+					continue
+				}
+				var ev v1.GenerationCompletedEvent
+				if err := json.Unmarshal(data, &ev); err != nil {
+					t.Fatalf("unmarshal completed: %v", err)
+				}
+				completed = &ev
+			}
+			if completed == nil {
+				t.Fatal("no generation.completed event emitted")
+			}
+			if completed.FinishReason != tc.wantFinish {
+				t.Errorf("finish_reason = %q, want %q", completed.FinishReason, tc.wantFinish)
+			}
+			if completed.Status != tc.wantStatus {
+				t.Errorf("status = %q, want %q", completed.Status, tc.wantStatus)
+			}
+		})
+	}
+}
+
 func TestCCNewToCanonicalStream_ReasoningContent(t *testing.T) {
 	tr := CCTranslator{}
 	fn := tr.NewToCanonicalStream()

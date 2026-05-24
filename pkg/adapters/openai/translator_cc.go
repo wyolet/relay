@@ -898,6 +898,8 @@ type ccToCanonicalStream struct {
 	toolItems        map[int]*ccStreamItem
 	lastUsage        *Usage
 	lifecycleEmitted bool
+	status           v1.Status
+	finishReason     v1.FinishReason
 }
 
 func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -950,6 +952,12 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 
 	ch := ccChunk.Choices[0]
 	delta := ch.Delta
+
+	// finish_reason arrives on the terminal chunk (separate from deltas); capture
+	// it so handleDone emits the real reason instead of a hardcoded "stop".
+	if ch.FinishReason != nil && *ch.FinishReason != "" {
+		s.status, s.finishReason, _ = ccFinishReasonToCanonical(*ch.FinishReason)
+	}
 
 	// Reasoning content (non-standard field from some o-series upstreams).
 	if rc := ccExtractReasoningContent(data); rc != "" {
@@ -1021,10 +1029,14 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 	if s.lastUsage != nil {
 		u = ccUsageToCanonical(s.lastUsage)
 	}
+	status, finish := s.status, s.finishReason
+	if finish == "" {
+		status, finish = v1.StatusCompleted, v1.FinishReasonStop
+	}
 	completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 		ID:           s.responseID,
-		Status:       v1.StatusCompleted,
-		FinishReason: v1.FinishReasonStop,
+		Status:       status,
+		FinishReason: finish,
 		Usage:        u,
 	})
 	frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
