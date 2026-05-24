@@ -194,7 +194,7 @@ func main() {
 		}
 		bodyBytes, _ := json.Marshal(body)
 
-		req, _ := http.NewRequest("POST", *relay+"/v1/messages", strings.NewReader(string(bodyBytes)))
+		req, _ := http.NewRequest("POST", *relay+"/anthropic/v1/messages", strings.NewReader(string(bodyBytes)))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("x-api-key", *key)
 

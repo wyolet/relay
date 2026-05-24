@@ -175,7 +175,13 @@ func buildTestRegistry() *adapter.Registry {
 		Translator:   stubV1Translator{},
 	}).Build()
 
-	return adapter.NewRegistry(openaiSpec, responsesSpec, embeddingsSpec, anthropicSpec)
+	// Canonical inbound shape — real identity translator (not a stub).
+	canonicalSpec := (&adapter.Spec{
+		Name:       adapters.Canonical,
+		Translator: pkgrelay.IdentityTranslator{},
+	}).Build()
+
+	return adapter.NewRegistry(openaiSpec, responsesSpec, embeddingsSpec, anthropicSpec, canonicalSpec)
 }
 
 func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
@@ -380,6 +386,87 @@ func TestDispatch_EmbeddingsGuard_OpenAINamedHost(t *testing.T) {
 		if e.Error.Code == "embeddings_unsupported_host" {
 			t.Fatalf("guard fired for host 'openai' but should not have")
 		}
+	}
+}
+
+// TestDispatch_CanonicalInbound_ReachesUpstream verifies canonical inbound
+// (identity translator) takes the cross-shape chain: v1.Parse succeeds on a
+// valid canonical body (no translate_request), then the upstream leg is
+// reached. The stub upstream translator errors on SerializeRequest, surfacing
+// marshal_request — which proves the canonical request flowed into the upstream
+// serialize step (where the real Anthropic translator would emit cache_control).
+func TestDispatch_CanonicalInbound_ReachesUpstream(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.Canonical,
+		Body:      []byte(`{"model":"test-model","input":"hi","cache_config":{"instructions":true}}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	e := parseDispatchErr(t, w.Body.Bytes())
+	if e.Error.Code == "translate_request" {
+		t.Fatalf("canonical identity ParseRequest should succeed, got translate_request: %s", e.Error.Message)
+	}
+	if e.Error.Code != "marshal_request" {
+		t.Errorf("want marshal_request (reached upstream serialize), got %q (status %d)", e.Error.Code, w.Code)
+	}
+}
+
+// TestDispatch_CanonicalInbound_InvalidBody surfaces v1.Parse errors as
+// translate_request — proving the identity translator's parse path is wired.
+func TestDispatch_CanonicalInbound_InvalidBody(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	d := buildDeps(t, cat)
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	// Valid JSON but no input → v1.Parse rejects it.
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.Canonical,
+		Body:      []byte(`{"model":"test-model"}`),
+		ModelName: "test-model",
+		Stream:    false,
+	})
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d; body: %s", w.Code, w.Body.String())
+	}
+	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "translate_request" {
+		t.Errorf("error code: want translate_request, got %q", e.Error.Code)
+	}
+}
+
+func TestExtractModelStream_StreamSignals(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"canonical output_mode stream", `{"model":"m","output_mode":"stream"}`, true},
+		{"canonical output_mode sync", `{"model":"m","output_mode":"sync"}`, false},
+		{"vendor stream true", `{"model":"m","stream":true}`, true},
+		{"vendor stream false", `{"model":"m","stream":false}`, false},
+		{"neither", `{"model":"m"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stream, err := extractModelStream([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stream != tc.want {
+				t.Errorf("stream = %v, want %v", stream, tc.want)
+			}
+		})
 	}
 }
 

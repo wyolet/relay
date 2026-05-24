@@ -149,20 +149,25 @@ snapshot:
 ### Inference plane (data plane)
 
 ```
-POST   /v1/chat/completions      OpenAI-shape upstream call (also Ollama)
-POST   /v1/messages              Anthropic-shape upstream call
-GET    /v1/models                list models accessible to the relay key
-GET    /healthz                  liveness + PG ping (public)
-GET    /openapi.json             generated typed spec
+POST   /v1/generate                  relay canonical shape (provider-neutral)
+POST   /openai/v1/chat/completions   OpenAI Chat Completions shape
+POST   /openai/v1/responses          OpenAI Responses shape
+POST   /openai/v1/embeddings         OpenAI Embeddings (byte-pass)
+POST   /anthropic/v1/messages        Anthropic Messages shape
+GET    /v1/models                    list models accessible to the relay key
+GET    /healthz                      liveness + PG ping (public)
+GET    /openapi.json                 generated typed spec
 ```
 
 Auth: `Authorization: Bearer <relay-key>`. Relay keys are managed via
 the control plane.
 
-The adapter on the model's `HostBinding` determines which endpoint the
-caller can use. Calling `/v1/chat/completions` for a model whose
-binding declares `adapter: anthropic` returns a 400 — cross-shape
-translation is deliberately disabled in v1.
+Namespace convention: each vendor shape is served under its own prefix
+(`/openai/...`, `/anthropic/...`); the bare `/v1` namespace belongs to
+relay's own canonical shape. `POST /v1/generate` accepts a canonical
+`v1.Request` and returns canonical — the provider-neutral surface that
+carries cross-cutting features like `cache_config` to any upstream
+regardless of the model's `HostBinding` adapter.
 
 ### Control plane (admin)
 
