@@ -23,14 +23,26 @@ waiting to be written; the path under `docs/` is the placeholder.
     agnostic. `Deps.CrossShapeHandlers` deleted.
   - Verified via `make smoke-mock` + live Claude Code →
     ollama-self/gpt-oss-120b tool-use round-trip.
+- **Canonical client + `/v1/generate`** (PR #195) — transport-agnostic
+  client (`pkg/relay/client`), canonical served at `/v1/generate`,
+  vendor-neutral `cache_config` anchors.
+- **WebSocket transport** (PR #TBD) — `/v1/ws` serves the canonical
+  shape over one long-lived connection, multiplexing requests by
+  caller-chosen id. Auth + classification happen once on the upgrade
+  request (reuses the HTTP middleware chain); each frame dispatches
+  through the unchanged `handleShape`/`Dispatch` via a synthetic
+  `http.ResponseWriter` (`app/transport/ws`), so pipeline + dispatch
+  are untouched. Library: `coder/websocket`. Follow-ups: anthropic/
+  openai WS endpoints, client-side WS transport in `pkg/relay/client`,
+  per-frame request-id + OTel span, browser subprotocol auth, in-flight
+  cap as env config.
 
 ## Now — priority queue
 
-Five items, in this order. Order is intentional: secrets unblocks every
+Four items, in this order. Order is intentional: secrets unblocks every
 deployment that mandates a non-env secret store; batch is the heaviest
 build and the headline differentiator; webhooks unlock async UX once
-batch lands; new transports broaden the wire surface; new adapters
-broaden the upstream surface.
+batch lands; new adapters broaden the upstream surface.
 
 ### 1. Pluggable secret backends
 
@@ -109,27 +121,7 @@ migration. Delivery worker likely reuses the batch worker pool.
 Dependencies: write the design doc first (`docs/webhooks.md`) to
 resolve the owner-kind question.
 
-### 4. WebSocket transport
-
-What: second customer-facing transport after HTTP. `/v1/ws` (and a
-shape-matching anthropic endpoint) accepting framed requests over a
-single long-lived connection; multiplexed responses streamed back on
-the same socket. Same pipeline underneath; the transport layer
-translates frame ↔ `pipeline.Request` / `pipeline.Result`.
-
-Why: meaningful latency win for chatty clients (IDE / agent loops)
-that pay TLS handshake + HTTP overhead per turn. Also matches what
-some upstreams (OpenAI Realtime, Anthropic streaming) increasingly
-expose.
-
-Size: ~1 week. Frame protocol + handler + reuse of the existing
-adapter/pipeline stack.
-
-Where: `app/httpapi/inference/ws.go` + `app/transport/ws/` (or
-similar). `app/pipeline` stays untouched — transport is a thin
-shell around it.
-
-### 5. Expanded adapter support
+### 4. Expanded adapter support
 
 What: add new wire-shape adapters beyond `openai` and `anthropic`.
 Concrete candidates (rough order of demand): Google Gemini native,
