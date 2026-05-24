@@ -37,10 +37,46 @@ type Request struct {
 	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
+// MarshalJSON emits a single model as a bare JSON string and multiple as an
+// array — symmetric with UnmarshalJSON. The single-string form keeps the wire
+// compatible with minimal `{"model": string}` probes on the receiving side.
+func (r *Request) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Model        ModelRefs                  `json:"model"`
+		Instructions string                     `json:"instructions,omitempty"`
+		Input        []Item                     `json:"input"`
+		ModelConfig  map[string]*ModelOpts      `json:"model_config,omitempty"`
+		CacheConfig  *CacheConfig               `json:"cache_config,omitempty"`
+		OutputMode   string                     `json:"output_mode,omitempty"`
+		User         string                     `json:"user,omitempty"`
+		Metadata     map[string]string          `json:"metadata,omitempty"`
+		Extensions   map[string]json.RawMessage `json:"extensions,omitempty"`
+	}
+	return json.Marshal(wire{
+		Model:        r.Model,
+		Instructions: r.Instructions,
+		Input:        r.Input,
+		ModelConfig:  r.ModelConfig,
+		CacheConfig:  r.CacheConfig,
+		OutputMode:   r.OutputMode,
+		User:         r.User,
+		Metadata:     r.Metadata,
+		Extensions:   r.Extensions,
+	})
+}
+
 // ModelRefs is the string-or-array union for the model field.
 // Unmarshal accepts a JSON string OR a JSON array of strings.
 // Always normalized to []string internally.
 type ModelRefs []string
+
+// MarshalJSON emits a single ref as a bare string, multiple as an array.
+func (m ModelRefs) MarshalJSON() ([]byte, error) {
+	if len(m) == 1 {
+		return json.Marshal(m[0])
+	}
+	return json.Marshal([]string(m))
+}
 
 func (m *ModelRefs) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 || string(data) == "null" {
