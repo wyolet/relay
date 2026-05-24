@@ -26,16 +26,20 @@ waiting to be written; the path under `docs/` is the placeholder.
 - **Canonical client + `/v1/generate`** (PR #195) — transport-agnostic
   client (`pkg/relay/client`), canonical served at `/v1/generate`,
   vendor-neutral `cache_config` anchors.
-- **WebSocket transport** (PR #TBD) — `/v1/ws` serves the canonical
-  shape over one long-lived connection, multiplexing requests by
-  caller-chosen id. Auth + classification happen once on the upgrade
-  request (reuses the HTTP middleware chain); each frame dispatches
-  through the unchanged `handleShape`/`Dispatch` via a synthetic
-  `http.ResponseWriter` (`app/transport/ws`), so pipeline + dispatch
-  are untouched. Library: `coder/websocket`. Follow-ups: anthropic/
-  openai WS endpoints, client-side WS transport in `pkg/relay/client`,
-  per-frame request-id + OTel span, browser subprotocol auth, in-flight
-  cap as env config.
+- **WebSocket transport** (PR #196 server, #TBD client) — `/v1/ws`
+  serves the canonical shape over one long-lived connection,
+  multiplexing requests by caller-chosen id. Auth + classification
+  happen once on the upgrade request (reuses the HTTP middleware chain);
+  each frame dispatches through the unchanged `handleShape`/`Dispatch`
+  via a synthetic `http.ResponseWriter` (`app/transport/ws`), so
+  pipeline + dispatch are untouched. The canonical client
+  (`pkg/relay/client`) speaks it via `RelayWS(...)` — a pluggable
+  `transport` seam (HTTP default, WS new) under the translator;
+  sequential per connection (one in-flight request, conn reused across
+  turns). Library: `coder/websocket`. Follow-ups: anthropic/openai WS
+  endpoints, concurrent multiplexing from a single client, per-frame
+  request-id + OTel span, browser subprotocol auth, in-flight cap as
+  env config.
 
 ## Now — priority queue
 

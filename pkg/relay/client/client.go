@@ -47,6 +47,7 @@ type Client struct {
 	auth       Auth
 	headers    map[string]string
 	http       *http.Client
+	transport  transport
 }
 
 // Option configures a Client. Options apply over the preset defaults.
@@ -83,12 +84,18 @@ func New(translator v1.Translator, baseURL, path, apiKey string, opts ...Option)
 		apiKey:     apiKey,
 		auth:       Auth{Header: "Authorization", Scheme: "Bearer"},
 		http:       http.DefaultClient,
+		transport:  httpTransport{},
 	}
 	for _, o := range opts {
 		o(c)
 	}
 	return c
 }
+
+// Close releases the client's transport. For the default HTTP transport
+// it is a no-op; for a WebSocket client (RelayWS) it closes the
+// connection. Safe to call once when done with the client.
+func (c *Client) Close() error { return c.transport.Close() }
 
 // Relay targets a relay server's canonical endpoint (POST /v1/generate). The
 // primary use: full key pooling, routing, limits, and observability.
@@ -114,18 +121,18 @@ func Anthropic(baseURL, apiKey string, opts ...Option) *Client {
 // Generate runs a non-streaming generation. OutputMode is forced to sync; the
 // caller's request is not mutated.
 func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, error) {
-	httpResp, err := c.post(ctx, req, v1.OutputModeSync)
+	resp, err := c.roundTrip(ctx, req, v1.OutputModeSync)
 	if err != nil {
 		return nil, err
 	}
-	defer httpResp.Body.Close()
+	defer resp.body.Close()
 
-	body, err := io.ReadAll(httpResp.Body)
+	body, err := io.ReadAll(resp.body)
 	if err != nil {
 		return nil, fmt.Errorf("relay client: read body: %w", err)
 	}
-	if httpResp.StatusCode/100 != 2 {
-		return nil, parseAPIError(httpResp.StatusCode, body)
+	if resp.status/100 != 2 {
+		return nil, parseAPIError(resp.status, body)
 	}
 	return c.translator.ParseResponse(body)
 }
@@ -134,44 +141,31 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, e
 // canonical events until io.EOF; the caller must Close it. OutputMode is forced
 // to stream.
 func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, error) {
-	httpResp, err := c.post(ctx, req, v1.OutputModeStream)
+	resp, err := c.roundTrip(ctx, req, v1.OutputModeStream)
 	if err != nil {
 		return nil, err
 	}
-	if httpResp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(httpResp.Body)
-		_ = httpResp.Body.Close()
-		return nil, parseAPIError(httpResp.StatusCode, body)
+	if resp.status/100 != 2 {
+		body, _ := io.ReadAll(resp.body)
+		_ = resp.body.Close()
+		return nil, parseAPIError(resp.status, body)
 	}
-	sc := bufio.NewScanner(httpResp.Body)
+	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	sc.Split(splitSSEFrames)
-	return &Stream{body: httpResp.Body, sc: sc, toCanon: c.translator.NewToCanonicalStream()}, nil
+	return &Stream{body: resp.body, sc: sc, toCanon: c.translator.NewToCanonicalStream()}, nil
 }
 
-func (c *Client) post(ctx context.Context, req *v1.Request, mode string) (*http.Response, error) {
+// roundTrip serializes the request (translator-owned) and hands the bytes
+// to the transport. The caller's request is not mutated.
+func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*rtResponse, error) {
 	r := *req // shallow copy: don't mutate the caller's request
 	r.OutputMode = mode
 	body, err := c.translator.SerializeRequest(&r)
 	if err != nil {
 		return nil, fmt.Errorf("relay client: serialize request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+c.path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	for k, v := range c.headers {
-		httpReq.Header.Set(k, v)
-	}
-	if c.apiKey != "" && c.auth.Header != "" {
-		val := c.apiKey
-		if c.auth.Scheme != "" {
-			val = c.auth.Scheme + " " + c.apiKey
-		}
-		httpReq.Header.Set(c.auth.Header, val)
-	}
-	return c.http.Do(httpReq)
+	return c.transport.roundTrip(ctx, c, body)
 }
 
 // Event is one canonical stream event: its name (a v1.Event* constant) and the
