@@ -162,20 +162,26 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 	}
 	upstream.Header.Set("Authorization", req.UpstreamAuth)
 
+	req.Lifecycle.MarkUpstreamStart()
 	resp, err := p.Client.Do(upstream)
 	if err != nil {
 		return nil, fmt.Errorf("proxy: upstream call: %w", err)
 	}
 
 	// Tee for post-flight token extraction. Same pattern as pipeline:
-	// io.TeeReader copies bytes to a collector as the caller reads.
+	// io.TeeReader copies bytes to a collector as the caller reads. The
+	// first-byte reader stamps the upstream TTFT + response-end marks.
 	var collected bytes.Buffer
 	tee := io.TeeReader(resp.Body, &collected)
+	if req.Lifecycle != nil {
+		req.Lifecycle.Streamed = strings.Contains(
+			strings.ToLower(resp.Header.Get("Content-Type")), "event-stream")
+	}
 	pfTriggered := &sync.Once{}
 	status := resp.StatusCode
 
 	body := &postFlightReadCloser{
-		Reader: tee,
+		Reader: req.Lifecycle.FirstByteReader(tee),
 		closer: func() error {
 			pfTriggered.Do(func() {
 				go p.runPostFlight(req, reservation, collected.Bytes(), status)
@@ -223,9 +229,9 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 	// Fan out to lifecycle observers. lc carries persistent identity;
 	// the event carries this-request's outcome.
 	if p.Lifecycle != nil && req.Lifecycle != nil {
+		req.Lifecycle.MarkEnd()
 		ev := &lifecycle.PostFlightEvent{
 			Status:       status,
-			Duration:     time.Since(req.Lifecycle.StartTime),
 			ResponseBody: body,
 		}
 		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)

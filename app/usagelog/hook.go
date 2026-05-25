@@ -38,9 +38,10 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 	out := Event{
 		RequestID:    lc.RequestID,
 		Source:       lc.Source,
-		Timestamp:    lc.StartTime.Add(ev.Duration),
+		Timestamp:    lc.Timing.Start,
 		Status:       ev.Status,
-		DurationMs:   ev.Duration.Milliseconds(),
+		DurationMs:   lc.Timing.End.Milliseconds(),
+		Streamed:     lc.Streamed,
 		ErrorKind:    ev.ErrorKind,
 		ErrorMessage: ev.ErrorMessage,
 		RelayKeyHash: lc.RelayKeyHash,
@@ -49,8 +50,18 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 		HostID:       lc.HostID,
 		HostKeyID:    lc.HostKeyID,
 	}
-	if ev.Duration == 0 {
+	if out.Timestamp.IsZero() {
 		out.Timestamp = time.Now()
+	}
+
+	// Upstream-leg breakdown, microseconds from start. Present only when
+	// the request actually reached upstream (Start mark stamped).
+	if up := lc.Timing.Upstream; up.Start > 0 {
+		out.Upstream = &UpstreamTiming{
+			Start:         up.Start.Microseconds(),
+			ResponseStart: up.ResponseStart.Microseconds(),
+			ResponseEnd:   up.ResponseEnd.Microseconds(),
+		}
 	}
 
 	if lc.Translator != nil && len(ev.ResponseBody) > 0 {

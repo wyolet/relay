@@ -28,7 +28,16 @@ type Context struct {
 
 	RequestID string
 	Source    string // runner label: "pipeline" | "proxy" | "ws" | "batch"
-	StartTime time.Time
+
+	// Timing carries the per-request checkpoints. Timing.Start is the
+	// absolute anchor (set at construction); the runner stamps the
+	// upstream + end marks as the request progresses. See timing.go.
+	Timing Timing
+
+	// Streamed reports whether the response was streamed back to the
+	// caller. Set by the runner once known (request flag in pipeline,
+	// upstream Content-Type in proxy).
+	Streamed bool
 
 	// Routing identity (filled during routing / pre-flight).
 
@@ -53,14 +62,15 @@ type Context struct {
 	Translator v1.Translator
 }
 
-// NewContext returns a Context with required identity fields set and a
-// fresh Metadata map. The runner fills routing identity later, as
-// routing progresses.
+// NewContext returns a Context with required identity fields set, the
+// timing anchor stamped, and a fresh Metadata map. The runner fills
+// routing identity and the remaining timing marks later, as the request
+// progresses.
 func NewContext(requestID, source string, startTime time.Time) *Context {
 	return &Context{
 		RequestID: requestID,
 		Source:    source,
-		StartTime: startTime,
+		Timing:    Timing{Start: startTime},
 		Metadata:  map[string]any{},
 	}
 }

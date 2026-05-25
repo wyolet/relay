@@ -184,6 +184,54 @@ func TestHappyPath_SinglePass(t *testing.T) {
 	}
 }
 
+func TestPostFlight_TimingMarks(t *testing.T) {
+	t.Parallel()
+
+	var got lifecycle.Timing
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	key := makeKey("hash1", "sk-abc")
+	adp := &fakeAdapter{tokens: pkgusage.Tokens{"input": 1}}
+
+	reg := lifecycle.New()
+	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, _ *lifecycle.PostFlightEvent) {
+		got = lc.Timing
+		wg.Done()
+	})
+	p := newPipeline()
+	p.Lifecycle = reg
+
+	req := &pipeline.Request{
+		Adapter:   adp,
+		Keys:      []*hostkey.HostKey{key},
+		Policy:    makePolicy(),
+		Stream:    true,
+		Lifecycle: lifecycle.NewContext("req-timing", "pipeline", time.Now()),
+	}
+
+	res, err := p.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	drainResult(t, res)
+	wg.Wait()
+
+	// Every mark anchored to Start, monotonic non-decreasing, all set.
+	if got.Upstream.Start <= 0 {
+		t.Errorf("Upstream.Start not stamped: %v", got.Upstream.Start)
+	}
+	if got.Upstream.ResponseStart < got.Upstream.Start {
+		t.Errorf("ResponseStart %v < Start %v", got.Upstream.ResponseStart, got.Upstream.Start)
+	}
+	if got.Upstream.ResponseEnd < got.Upstream.ResponseStart {
+		t.Errorf("ResponseEnd %v < ResponseStart %v", got.Upstream.ResponseEnd, got.Upstream.ResponseStart)
+	}
+	if got.End < got.Upstream.ResponseEnd {
+		t.Errorf("End %v < ResponseEnd %v", got.End, got.Upstream.ResponseEnd)
+	}
+}
+
 func TestRetryOnTransient_RotatesKey(t *testing.T) {
 	t.Parallel()
 

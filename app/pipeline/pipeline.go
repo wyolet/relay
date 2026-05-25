@@ -168,6 +168,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 			break
 		}
 
+		req.Lifecycle.MarkUpstreamStart()
 		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, acq.Key.Resolved, req.Body, req.Headers, req.UpstreamModel, req.Stream)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			return p.makeResult(req, inbound, acq, resp), nil
@@ -262,9 +263,14 @@ func (p *Pipeline) makeResult(
 	acq *policy.Acquisition,
 	resp *http.Response,
 ) *Result {
-	// Tee the body so post-flight can read what the caller read.
+	// Tee the body so post-flight can read what the caller read. The
+	// first-byte reader stamps the upstream TTFT + response-end marks as
+	// the caller drains the tee.
 	var collected bytes.Buffer
 	tee := io.TeeReader(resp.Body, &collected)
+	if req.Lifecycle != nil {
+		req.Lifecycle.Streamed = req.Stream
+	}
 
 	pfTriggered := &sync.Once{}
 	status := resp.StatusCode
@@ -275,7 +281,7 @@ func (p *Pipeline) makeResult(
 	}
 
 	body := &postFlightReadCloser{
-		Reader: tee,
+		Reader: req.Lifecycle.FirstByteReader(tee),
 		closer: func() error {
 			postFlight()
 			return resp.Body.Close()
@@ -315,9 +321,9 @@ func (p *Pipeline) runPostFlight(
 	// the event carries this-request's outcome. Observers see both.
 	if p.Lifecycle != nil && req.Lifecycle != nil {
 		req.Lifecycle.HostKeyID = acq.KeyHash()
+		req.Lifecycle.MarkEnd()
 		ev := &lifecycle.PostFlightEvent{
 			Status:       status,
-			Duration:     time.Since(req.Lifecycle.StartTime),
 			ResponseBody: body,
 		}
 		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)

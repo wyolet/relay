@@ -234,6 +234,23 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   `relay_pipeline_post_flight_duration_seconds` onto the post-flight
   hook. Each is additive — register at boot, no pipeline change. ~1-2
   days each.
+- **A2b — Per-request capture gaps**. The capture *fields* on the
+  lifecycle event, researched against OpenRouter + LiteLLM. **Done:**
+  timing breakdown (`lifecycle.Timing` — anchor + upstream
+  handoff/first-byte/done marks, µs offsets all anchored to start, never
+  chained) giving TTFT + relay-overhead split, plus a `streamed` flag.
+  **Remaining:** (a) **failure events** — routing / all-keys-exhausted /
+  pre-flight failures return before post-flight fires, so failed requests
+  emit no usage event at all, and `PostFlightEvent.ErrorKind/ErrorMessage`
+  are never populated; fix is to fire a post-flight on the error path
+  with a classified kind (this is the highest-value gap — telemetry is
+  blind exactly during 429-storms / no-healthy-keys); (b) cheap fields
+  the data's already on hand for — requested-model string,
+  `finish_reason` (needs `v1.ExtractUsage` to also surface it), upstream
+  attempt count, client-IP parity in pipeline mode. (c) **deliberately
+  out of scope**: cost (derive in the sink from tokens × pricing, keep
+  the event pricing-free), request/response content (S3 payload path),
+  SaaS attribution (session/app/end-user — B-track).
 - **A3 — Perf bench harness**. A `bench/pipeline/` harness against
   `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
   Remaining: wire it into CI as a regression gate and document the

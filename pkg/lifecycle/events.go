@@ -1,7 +1,5 @@
 package lifecycle
 
-import "time"
-
 // PreFlightEvent is the snapshot middleware sees before the upstream
 // call. Today this is a placeholder — no fields are loadbearing because
 // no middleware consumer has materialized yet. As consumers land,
@@ -23,10 +21,6 @@ type PostFlightEvent struct {
 	// Status is the upstream HTTP status (or 0 if the request never
 	// reached upstream — e.g. pre-flight aborted, routing failed).
 	Status int
-
-	// Duration is wall-clock time from request entry to post-flight
-	// dispatch. Includes upstream latency + relay overhead.
-	Duration time.Duration
 
 	// ErrorKind is a short machine-readable category for failures.
 	// Empty on success. Examples: "upstream_429", "no_keys",
