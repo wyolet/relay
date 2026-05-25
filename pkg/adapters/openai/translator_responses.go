@@ -62,12 +62,12 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	}
 
 	type wireReq struct {
-		Model  string          `json:"model"`
-		Input  json.RawMessage `json:"input"`
+		Model string          `json:"model"`
+		Input json.RawMessage `json:"input"`
 
-		Instructions string                   `json:"instructions,omitempty"`
-		Tools        ResponsesTools           `json:"tools,omitempty"`
-		ToolChoice   *ResponsesToolChoice     `json:"tool_choice,omitempty"`
+		Instructions string               `json:"instructions,omitempty"`
+		Tools        ResponsesTools       `json:"tools,omitempty"`
+		ToolChoice   *ResponsesToolChoice `json:"tool_choice,omitempty"`
 
 		Temperature     *float64 `json:"temperature,omitempty"`
 		TopP            *float64 `json:"top_p,omitempty"`
@@ -323,6 +323,8 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 
 // canonicalToResponsesRequest maps a canonical *v1.Request back to a *ResponsesRequest.
 // Used for SerializeRequest and for echo fields in SerializeResponse.
+// canonicalToResponsesRequest maps a canonical *v1.Request back to a *ResponsesRequest.
+// Used for SerializeRequest and for echo fields in SerializeResponse.
 func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	if len(req.Model) == 0 {
 		return nil, fmt.Errorf("canonical request has no model")
@@ -349,10 +351,19 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 			rreq.TopP = s.TopP
 			rreq.MaxOutputTokens = s.MaxTokens
 			rreq.StopSequences = s.Stop
+			// canonical: Seed has no Responses wire equivalent — dropped
+			// canonical: FrequencyPenalty has no Responses wire equivalent — dropped
+			// canonical: PresencePenalty has no Responses wire equivalent — dropped
 			// TopK not in v1 canonical sampling params — omit
 		}
 		if opts.Reasoning != nil {
-			rreq.Reasoning = &ResponsesReasoningConfig{Effort: opts.Reasoning.Effort}
+			rc := &ResponsesReasoningConfig{Effort: opts.Reasoning.Effort}
+			// R-5: map canonical Summary to Responses reasoning.summary field.
+			if opts.Reasoning.Summary != "" {
+				rc.Summary = opts.Reasoning.Summary
+			}
+			// canonical: BudgetTokens has no Responses wire equivalent — dropped
+			rreq.Reasoning = rc
 		}
 		if opts.Output != nil && opts.Output.Format != nil {
 			rreq.Text = &ResponsesTextConfig{Format: &ResponsesFormat{
@@ -394,6 +405,7 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 }
 
 // responsesItemToCanonical converts a ResponsesItem to a canonical v1.Item.
+// responsesItemToCanonical converts a ResponsesItem to a canonical v1.Item.
 func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 	switch v := item.(type) {
 	case *ResponsesMessage:
@@ -408,9 +420,9 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 			}
 		}
 		return &v1.Message{
-			ID:     v.ID,
-			Status: v1.Status(v.Status),
-			Role:   v1.Role(v.Role),
+			ID:      v.ID,
+			Status:  v1.Status(v.Status),
+			Role:    v1.Role(v.Role),
 			Content: parts,
 		}, nil
 
@@ -444,8 +456,19 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 		for _, s := range v.Summary {
 			r.Summary = append(r.Summary, v1.SummaryText{Text: s.Text})
 		}
-		// EncryptedContent has no canonical equivalent; stored in ProviderData for
-		// same-vendor round-trip if needed (not modeled here in v1).
+		// R-1: store encrypted_content + item id in ProviderData for same-vendor round-trip.
+		if v.EncryptedContent != "" {
+			type reasoningProviderData struct {
+				EncryptedContent string `json:"encrypted_content"`
+				ID               string `json:"id,omitempty"`
+			}
+			if b, err := json.Marshal(reasoningProviderData{
+				EncryptedContent: v.EncryptedContent,
+				ID:               v.ID,
+			}); err == nil {
+				r.ProviderData = b
+			}
+		}
 		return r, nil
 
 	default:
@@ -487,6 +510,8 @@ func responsesPartToCanonical(p ResponsesPart) (v1.Part, error) {
 }
 
 // responsesAnnotationToCanonical converts a ResponsesAnnotation to a canonical v1.Annotation.
+// responsesAnnotationToCanonical converts a ResponsesAnnotation to a canonical v1.Annotation.
+// R-4: file_citation is preserved as *v1.RawAnnotation for forward compatibility.
 func responsesAnnotationToCanonical(a ResponsesAnnotation) v1.Annotation {
 	switch v := a.(type) {
 	case *ResponsesURLCitationAnnotation:
@@ -496,11 +521,20 @@ func responsesAnnotationToCanonical(a ResponsesAnnotation) v1.Annotation {
 			URL:        v.URL,
 			Title:      v.Title,
 		}
+	case *ResponsesFileCitationAnnotation:
+		// file_citation has no dedicated canonical field; preserve as RawAnnotation
+		// so it survives same-vendor round-trips without data loss.
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		return &v1.RawAnnotation{Type: "file_citation", JSON: b}
 	default:
 		return nil
 	}
 }
 
+// responsesItemFromCanonical converts a canonical v1.Item to a ResponsesItem.
 // responsesItemFromCanonical converts a canonical v1.Item to a ResponsesItem.
 func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 	switch v := item.(type) {
@@ -549,6 +583,15 @@ func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 		for _, s := range v.Summary {
 			r.Summary = append(r.Summary, ResponsesSummaryText{Text: s.Text})
 		}
+		// R-1: restore encrypted_content from ProviderData for same-vendor round-trip.
+		if len(v.ProviderData) > 0 {
+			var pd struct {
+				EncryptedContent string `json:"encrypted_content"`
+			}
+			if json.Unmarshal(v.ProviderData, &pd) == nil {
+				r.EncryptedContent = pd.EncryptedContent
+			}
+		}
 		return r
 
 	default:
@@ -585,6 +628,7 @@ func responsesPartFromCanonical(p v1.Part) ResponsesPart {
 }
 
 // responsesAnnotationFromCanonical converts a canonical v1.Annotation to a ResponsesAnnotation.
+// responsesAnnotationFromCanonical converts a canonical v1.Annotation to a ResponsesAnnotation.
 func responsesAnnotationFromCanonical(a v1.Annotation) ResponsesAnnotation {
 	switch v := a.(type) {
 	case *v1.URLCitationAnnotation:
@@ -594,6 +638,15 @@ func responsesAnnotationFromCanonical(a v1.Annotation) ResponsesAnnotation {
 			URL:        v.URL,
 			Title:      v.Title,
 		}
+	case *v1.RawAnnotation:
+		// Round-trip opaque annotation types (e.g. file_citation) verbatim.
+		if v.Type == "file_citation" && len(v.JSON) > 0 {
+			var fc ResponsesFileCitationAnnotation
+			if json.Unmarshal(v.JSON, &fc) == nil {
+				return &fc
+			}
+		}
+		return &ResponsesRawAnnotation{Type: v.Type, JSON: v.JSON}
 	default:
 		return nil
 	}
@@ -828,6 +881,26 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
 
+	// R-2: refusal deltas map to text deltas (canonical rule 9: refusal is text +
+	// finish_reason, not a separate item type).
+	case ResponsesEventRefusalDelta:
+		var ev ResponsesRefusalDeltaEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
+			ItemID: ev.ItemID,
+			Index:  ev.OutputIndex,
+			Kind:   v1.DeltaKindText,
+			Delta:  ev.Delta,
+		})
+		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
+
+	case ResponsesEventRefusalDone:
+		// The done event carries no new content — the refusal text was streamed
+		// via refusal.delta events above. The terminal finish_reason=refusal is
+		// emitted by the response.completed/incomplete handler below.
+
 	case ResponsesEventOutputItemDone:
 		// Two-phase parse: extract output_index and the raw item bytes.
 		// ResponsesOutputItemDoneEvent.Item is a ResponsesItem interface that
@@ -870,6 +943,27 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 			ID:           cr.ID,
 			Status:       cr.Status,
+			FinishReason: cr.FinishReason,
+			Usage:        cr.Usage,
+		})
+		frames = append(frames, v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: completedData})
+
+	// R-2: response.failed means the generation terminated with an error; emit
+	// generation.completed with StatusFailed so the consumer isn't left hanging.
+	case ResponsesEventFailed:
+		var ev ResponsesFailedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		if ev.Response == nil {
+			errData, _ := json.Marshal(v1.ErrorEvent{Code: "response_failed", Message: "response failed"})
+			frames = append(frames, v1.SSEFrame{Event: v1.EventError, Data: errData})
+			return marshalCanonicalFrames(frames), nil
+		}
+		cr := responsesResponseToCanonical(ev.Response)
+		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
+			ID:           cr.ID,
+			Status:       v1.StatusFailed,
 			FinishReason: cr.FinishReason,
 			Usage:        cr.Usage,
 		})
@@ -973,12 +1067,15 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return nil, nil
 		}
+		// R-3: capture name from item.started so function call events carry it.
+		// Use itemID as provisional callID — the real callID arrives on item.completed.
 		s.outputItems[ev.ItemID] = responsesStreamItem{
 			itemType:    ev.ItemType,
 			outputIndex: ev.Index,
+			name:        ev.Name,
+			callID:      ev.ItemID, // provisional; overwritten from item.completed payload
 		}
 		s.outputIndex[ev.ItemID] = ev.Index
-
 		switch ev.ItemType {
 		case v1.ItemTypeMessage:
 			msgItem := &ResponsesMessage{
@@ -999,6 +1096,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		case v1.ItemTypeFunctionCall:
 			fcItem := &ResponsesFunctionCall{
 				ID:     ev.ItemID,
+				Name:   ev.Name,
 				Status: ResponsesStatusInProgress,
 			}
 			addedData, _ := json.Marshal(ResponsesItemAddedEvent{OutputIndex: ev.Index, Item: fcItem})
@@ -1037,6 +1135,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		case v1.DeltaKindArguments:
 			st.argsBuf += ev.Delta
 			s.outputItems[ev.ItemID] = st
+			// R-3: emit callID and name from stored per-item state.
 			deltaData, _ := json.Marshal(ResponsesFunctionCallArgumentsDeltaEvent{
 				ItemID:      ev.ItemID,
 				OutputIndex: st.outputIndex,
@@ -1106,22 +1205,10 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			s.closedItems = append(s.closedItems, finalMsg)
 
 		case v1.ItemTypeFunctionCall:
-			argsDoneData, _ := json.Marshal(ResponsesFunctionCallArgumentsDoneEvent{
-				ItemID:      itemID,
-				OutputIndex: st.outputIndex,
-				CallID:      st.callID,
-				Arguments:   st.argsBuf,
-			})
-			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventFunctionCallArgumentsDone, Data: argsDoneData})
-			finalFC := &ResponsesFunctionCall{
-				ID:        itemID,
-				CallID:    st.callID,
-				Name:      st.name,
-				Arguments: st.argsBuf,
-				Status:    ResponsesStatusCompleted,
-			}
-			// Attempt to enrich from the marshaled item bytes if the function call
-			// fields are available. This is best-effort; stored state suffices.
+			// R-3: patch callID and name from the completed item payload if available,
+			// falling back to per-stream state populated from item.started.
+			callID := st.callID
+			name := st.name
 			var fcProbe struct {
 				CallID    string `json:"call_id"`
 				Name      string `json:"name"`
@@ -1133,15 +1220,29 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			if json.Unmarshal(data, &evItemRaw) == nil && len(evItemRaw.Item) > 0 {
 				if json.Unmarshal(evItemRaw.Item, &fcProbe) == nil {
 					if fcProbe.CallID != "" {
-						finalFC.CallID = fcProbe.CallID
+						callID = fcProbe.CallID
 					}
 					if fcProbe.Name != "" {
-						finalFC.Name = fcProbe.Name
+						name = fcProbe.Name
 					}
 					if fcProbe.Arguments != "" {
-						finalFC.Arguments = fcProbe.Arguments
+						st.argsBuf = fcProbe.Arguments
 					}
 				}
+			}
+			argsDoneData, _ := json.Marshal(ResponsesFunctionCallArgumentsDoneEvent{
+				ItemID:      itemID,
+				OutputIndex: st.outputIndex,
+				CallID:      callID,
+				Arguments:   st.argsBuf,
+			})
+			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventFunctionCallArgumentsDone, Data: argsDoneData})
+			finalFC := &ResponsesFunctionCall{
+				ID:        itemID,
+				CallID:    callID,
+				Name:      name,
+				Arguments: st.argsBuf,
+				Status:    ResponsesStatusCompleted,
 			}
 			itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
 				OutputIndex: st.outputIndex,
@@ -1159,8 +1260,8 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			})
 			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventReasoningTextDone, Data: textDoneData})
 			finalR := &ResponsesReasoning{
-				ID:     itemID,
-				Status: ResponsesStatusCompleted,
+				ID:      itemID,
+				Status:  ResponsesStatusCompleted,
 				Summary: []ResponsesSummaryText{{Text: st.textBuf}},
 			}
 			itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{

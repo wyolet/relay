@@ -658,11 +658,11 @@ func TestAnthropicSerializeRequest_DeveloperRoleBecomesSystem(t *testing.T) {
 
 func TestAnthropicParseResponse_SimpleText(t *testing.T) {
 	body := mustJSON(map[string]any{
-		"id":         "msg_abc",
-		"type":       "message",
-		"role":       "assistant",
-		"model":      "claude-3-5-sonnet-20241022",
-		"content":    []any{map[string]any{"type": "text", "text": "Hello!"}},
+		"id":          "msg_abc",
+		"type":        "message",
+		"role":        "assistant",
+		"model":       "claude-3-5-sonnet-20241022",
+		"content":     []any{map[string]any{"type": "text", "text": "Hello!"}},
 		"stop_reason": "end_turn",
 		"usage": map[string]any{
 			"input_tokens":  10,
@@ -716,7 +716,7 @@ func TestAnthropicParseResponse_ToolUse(t *testing.T) {
 			},
 		},
 		"stop_reason": "tool_use",
-		"usage": map[string]any{"input_tokens": 5, "output_tokens": 3},
+		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 3},
 	})
 	resp, err := (AnthropicTranslator{}).ParseResponse(body)
 	if err != nil {
@@ -854,9 +854,9 @@ func TestAnthropicParseResponse_CachedTokens(t *testing.T) {
 		"content":     []any{map[string]any{"type": "text", "text": "ok"}},
 		"stop_reason": "end_turn",
 		"usage": map[string]any{
-			"input_tokens":             50,
-			"output_tokens":            10,
-			"cache_read_input_tokens":  30,
+			"input_tokens":            50,
+			"output_tokens":           10,
+			"cache_read_input_tokens": 30,
 		},
 	})
 	resp, err := (AnthropicTranslator{}).ParseResponse(body)
@@ -881,9 +881,9 @@ func TestAnthropicSerializeResponse_SimpleText(t *testing.T) {
 		FinishReason: v1.FinishReasonStop,
 		Output: []v1.Item{
 			&v1.Message{
-				ID:     "msg_0",
-				Role:   v1.RoleAssistant,
-				Status: v1.StatusCompleted,
+				ID:      "msg_0",
+				Role:    v1.RoleAssistant,
+				Status:  v1.StatusCompleted,
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
 			},
 		},
@@ -964,9 +964,9 @@ func TestAnthropicSerializeResponse_ThinkingBlock(t *testing.T) {
 				Status:       v1.StatusCompleted,
 			},
 			&v1.Message{
-				ID:     "msg_0",
-				Role:   v1.RoleAssistant,
-				Status: v1.StatusCompleted,
+				ID:      "msg_0",
+				Role:    v1.RoleAssistant,
+				Status:  v1.StatusCompleted,
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Answer."}},
 			},
 		},
@@ -1018,10 +1018,10 @@ func TestAnthropicSerializeResponse_ReqParamIsNilSafe(t *testing.T) {
 
 func TestAnthropicSerializeResponse_MaxTokens(t *testing.T) {
 	resp := &v1.Response{
-		ID:           "msg_len",
-		Model:        "claude-3-5-sonnet-20241022",
-		Status:       v1.StatusIncomplete,
-		FinishReason: v1.FinishReasonLength,
+		ID:                "msg_len",
+		Model:             "claude-3-5-sonnet-20241022",
+		Status:            v1.StatusIncomplete,
+		FinishReason:      v1.FinishReasonLength,
 		IncompleteDetails: &v1.IncompleteDetails{Reason: "max_output_tokens"},
 		Output: []v1.Item{
 			&v1.Message{
@@ -1190,8 +1190,8 @@ func TestAnthropicToCanonical_ThinkingStream(t *testing.T) {
 	chunks := [][]byte{
 		messageStartChunk("msg_think", "claude-3-7-sonnet-20250219"),
 		sseChunk("content_block_start", map[string]any{
-			"type":  "content_block_start",
-			"index": 0,
+			"type":          "content_block_start",
+			"index":         0,
 			"content_block": map[string]any{"type": "thinking"},
 		}),
 		sseChunk("content_block_delta", map[string]any{
@@ -1472,4 +1472,283 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ---- A-1 regression: streaming thinking signature (fix: signature_delta accumulation) ----
+
+// thinkingStreamChunks builds a minimal Anthropic stream with thinking_delta +
+// signature_delta so we can verify the completed Reasoning.ProviderData.
+func thinkingStreamChunks(id, model, thinkText, sig string) [][]byte {
+	return [][]byte{
+		sseChunk("message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id": id, "type": "message", "role": "assistant", "model": model,
+				"usage": map[string]any{"input_tokens": 5, "output_tokens": 0},
+			},
+		}),
+		sseChunk("content_block_start", map[string]any{
+			"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "thinking"},
+		}),
+		sseChunk("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "thinking_delta", "thinking": thinkText},
+		}),
+		sseChunk("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "signature_delta", "signature": sig},
+		}),
+		sseChunk("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0}),
+		sseChunk("message_delta", map[string]any{
+			"type":  "message_delta",
+			"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+			"usage": map[string]any{"output_tokens": 10},
+		}),
+		sseChunk("message_stop", map[string]any{"type": "message_stop"}),
+	}
+}
+
+// TestStreamThinkingSignaturePreserved verifies that signature_delta is accumulated
+// and surfaced in Reasoning.ProviderData with the same JSON shape as ParseResponse
+// (required for multi-turn extended thinking round-trips).
+// TestStreamThinkingSignaturePreserved verifies that signature_delta is accumulated
+// and surfaced in Reasoning.ProviderData with the same JSON shape as ParseResponse
+// (required for multi-turn extended thinking round-trips).
+func TestStreamThinkingSignaturePreserved(t *testing.T) {
+	const thinkText = "let me think carefully"
+	const sig = "sig_streamed_abc123"
+
+	fn := (AnthropicTranslator{}).NewToCanonicalStream()
+	var completedData []byte
+	for _, c := range thinkingStreamChunks("msg_sig", "claude-3-7-sonnet-20250219", thinkText, sig) {
+		out, err := fn(c)
+		if err != nil {
+			t.Fatalf("stream translate: %v", err)
+		}
+		for _, frame := range splitFrames(out) {
+			ev, data, ok := v1.ParseSSEChunk(frame)
+			if ok && ev == v1.EventItemCompleted {
+				completedData = data
+			}
+		}
+	}
+	if completedData == nil {
+		t.Fatal("no item.completed event emitted")
+	}
+
+	// ItemCompletedEvent.Item is a v1.Item interface; decode it as raw JSON so we
+	// can inspect the nested provider_data without a registered type-switch unmarshaler.
+	var raw struct {
+		Item json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal(completedData, &raw); err != nil {
+		t.Fatalf("unmarshal item.completed: %v", err)
+	}
+	var itemFields struct {
+		Content      string          `json:"content"`
+		ProviderData json.RawMessage `json:"provider_data"`
+	}
+	if err := json.Unmarshal(raw.Item, &itemFields); err != nil {
+		t.Fatalf("unmarshal item fields: %v", err)
+	}
+	if itemFields.Content != thinkText {
+		t.Errorf("content: got %q want %q", itemFields.Content, thinkText)
+	}
+	if len(itemFields.ProviderData) == 0 {
+		t.Fatal("provider_data is nil; signature was not preserved")
+	}
+
+	var pd map[string]string
+	if err := json.Unmarshal(itemFields.ProviderData, &pd); err != nil {
+		t.Fatalf("unmarshal provider_data: %v", err)
+	}
+	if pd["type"] != "thinking" {
+		t.Errorf("provider_data.type: got %q want thinking", pd["type"])
+	}
+	if pd["thinking"] != thinkText {
+		t.Errorf("provider_data.thinking: got %q want %q", pd["thinking"], thinkText)
+	}
+	if pd["signature"] != sig {
+		t.Errorf("provider_data.signature: got %q want %q", pd["signature"], sig)
+	}
+
+	// Cross-check: non-streaming ParseResponse must produce the same ProviderData shape.
+	syncBody := mustJSON(map[string]any{
+		"id": "msg_sig_sync", "type": "message", "role": "assistant",
+		"model": "claude-3-7-sonnet-20250219",
+		"content": []any{map[string]any{
+			"type": "thinking", "thinking": thinkText, "signature": sig,
+		}},
+		"stop_reason": "end_turn",
+		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 10},
+	})
+	syncResp, err := (AnthropicTranslator{}).ParseResponse(syncBody)
+	if err != nil {
+		t.Fatalf("ParseResponse: %v", err)
+	}
+	syncR, ok := syncResp.Output[0].(*v1.Reasoning)
+	if !ok {
+		t.Fatalf("sync output[0] is %T", syncResp.Output[0])
+	}
+	if string(syncR.ProviderData) != string(itemFields.ProviderData) {
+		t.Errorf("stream provider_data %s != sync ProviderData %s", itemFields.ProviderData, syncR.ProviderData)
+	}
+}
+
+// TestStreamSignatureDeltaNoCanonicalDelta verifies that a signature_delta chunk
+// does NOT produce an item.delta event (signature is opaque, not streamed content).
+func TestStreamSignatureDeltaNoCanonicalDelta(t *testing.T) {
+	fn := (AnthropicTranslator{}).NewToCanonicalStream()
+	for _, c := range [][]byte{
+		sseChunk("message_start", map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"id": "msg_x", "type": "message", "role": "assistant", "model": "m",
+				"usage": map[string]any{"input_tokens": 1, "output_tokens": 0},
+			},
+		}),
+		sseChunk("content_block_start", map[string]any{
+			"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "thinking"},
+		}),
+	} {
+		if _, err := fn(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sigChunk := sseChunk("content_block_delta", map[string]any{
+		"type": "content_block_delta", "index": 0,
+		"delta": map[string]any{"type": "signature_delta", "signature": "sig_xyz"},
+	})
+	out, err := fn(sigChunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, frame := range splitFrames(out) {
+		ev, _, ok := v1.ParseSSEChunk(frame)
+		if ok && ev == v1.EventItemDelta {
+			t.Error("unexpected item.delta event for signature_delta chunk")
+		}
+	}
+}
+
+// ---- A-2 regression: disable_parallel_tool_use (fix: pass tc.Parallel not nil) ----
+
+func boolPtr(v bool) *bool { return &v }
+
+// TestSerializeRequest_ParallelFalse_DisablesParallel verifies that
+// Parallel==false produces disable_parallel_tool_use:true on the wire.
+func TestSerializeRequest_ParallelFalse_DisablesParallel(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-3-5-sonnet-20241022"},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			"claude-3-5-sonnet-20241022": {
+				Tools: &v1.ToolsConfig{
+					Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+					Choice:      &v1.ToolChoice{Mode: "auto"},
+					Parallel:    boolPtr(false),
+				},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	tc, ok := m["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing or wrong type: %v", m["tool_choice"])
+	}
+	if tc["disable_parallel_tool_use"] != true {
+		t.Errorf("disable_parallel_tool_use: got %v want true", tc["disable_parallel_tool_use"])
+	}
+}
+
+// TestSerializeRequest_ParallelNil_NoDisable verifies that nil Parallel does NOT
+// emit disable_parallel_tool_use.
+func TestSerializeRequest_ParallelNil_NoDisable(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-3-5-sonnet-20241022"},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			"claude-3-5-sonnet-20241022": {
+				Tools: &v1.ToolsConfig{
+					Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+					Choice:      &v1.ToolChoice{Mode: "auto"},
+					Parallel:    nil,
+				},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	tc, ok := m["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing or wrong type: %v", m["tool_choice"])
+	}
+	if _, has := tc["disable_parallel_tool_use"]; has {
+		t.Errorf("disable_parallel_tool_use present with nil Parallel: %v", tc)
+	}
+}
+
+// ---- A-3 regression: stop_sequence in Extensions (fix: ParseResponse surfaces it) ----
+
+// TestParseResponse_StopSequenceInExtensions verifies that a matched stop_sequence
+// is surfaced in Response.Extensions["stop_sequence"].
+func TestParseResponse_StopSequenceInExtensions(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id": "msg_ss", "type": "message", "role": "assistant",
+		"model":         "claude-3-5-sonnet-20241022",
+		"content":       []any{map[string]any{"type": "text", "text": "done"}},
+		"stop_reason":   "stop_sequence",
+		"stop_sequence": "END",
+		"usage":         map[string]any{"input_tokens": 5, "output_tokens": 3},
+	})
+	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := resp.Extensions["stop_sequence"]
+	if !ok {
+		t.Fatal("Extensions[stop_sequence] absent")
+	}
+	var got string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal stop_sequence: %v", err)
+	}
+	if got != "END" {
+		t.Errorf("stop_sequence: got %q want END", got)
+	}
+}
+
+// TestParseResponse_NoStopSequence_NoExtensions verifies that absent stop_sequence
+// does not pollute Extensions.
+func TestParseResponse_NoStopSequence_NoExtensions(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id": "msg_noss", "type": "message", "role": "assistant",
+		"model":       "claude-3-5-sonnet-20241022",
+		"content":     []any{map[string]any{"type": "text", "text": "done"}},
+		"stop_reason": "end_turn",
+		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 3},
+	})
+	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := resp.Extensions["stop_sequence"]; ok {
+		t.Error("Extensions[stop_sequence] present but stop_sequence was absent in response")
+	}
 }

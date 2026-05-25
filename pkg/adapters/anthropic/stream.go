@@ -177,11 +177,11 @@ func (t *AnthropicToOpenAI) chunkFinish(finish *string, delta *streamDelta) []by
 
 // OpenAIToAnthropic transforms a single OpenAI SSE chunk into Anthropic SSE chunks.
 type OpenAIToAnthropic struct {
-	msgID        string
-	model        string
-	blockIndex   int
-	toolBlocks   map[int]int // openai tool index → anthropic content_block index
-	textStarted  bool
+	msgID       string
+	model       string
+	blockIndex  int
+	toolBlocks  map[int]int // openai tool index → anthropic content_block index
+	textStarted bool
 }
 
 // TransformChunk converts one OpenAI SSE chunk to zero or more Anthropic SSE chunks.
@@ -209,11 +209,11 @@ func (t *OpenAIToAnthropic) TransformChunk(chunk []byte) ([]byte, error) {
 		ms, _ := json.Marshal(map[string]any{
 			"type": "message_start",
 			"message": map[string]any{
-				"id":    t.msgID,
-				"type":  "message",
-				"role":  "assistant",
-				"model": t.model,
-				"content": []any{},
+				"id":            t.msgID,
+				"type":          "message",
+				"role":          "assistant",
+				"model":         t.model,
+				"content":       []any{},
 				"stop_reason":   nil,
 				"stop_sequence": nil,
 				"usage": map[string]int{
@@ -274,9 +274,9 @@ func (t *OpenAIToAnthropic) TransformChunk(chunk []byte) ([]byte, error) {
 				"type":  "content_block_start",
 				"index": bidx,
 				"content_block": map[string]any{
-					"type": "tool_use",
-					"id":   tc.ID,
-					"name": tc.Function.Name,
+					"type":  "tool_use",
+					"id":    tc.ID,
+					"name":  tc.Function.Name,
 					"input": map[string]any{},
 				},
 			})
@@ -389,16 +389,16 @@ type oaStreamChoice struct {
 }
 
 type streamDelta struct {
-	Role      *string          `json:"role,omitempty"`
-	Content   *string          `json:"content,omitempty"`
+	Role      *string           `json:"role,omitempty"`
+	Content   *string           `json:"content,omitempty"`
 	ToolCalls []oaToolCallChunk `json:"tool_calls,omitempty"`
 }
 
 type oaToolCallChunk struct {
-	Index    int              `json:"index"`
-	ID       string           `json:"id,omitempty"`
-	Type     string           `json:"type,omitempty"`
-	Function *oaToolFnChunk   `json:"function,omitempty"`
+	Index    int            `json:"index"`
+	ID       string         `json:"id,omitempty"`
+	Type     string         `json:"type,omitempty"`
+	Function *oaToolFnChunk `json:"function,omitempty"`
 }
 
 type oaToolFnChunk struct {

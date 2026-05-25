@@ -13,8 +13,8 @@ type ResponsesFunctionTool struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-func (*ResponsesFunctionTool) isResponsesTool()                       {}
-func (*ResponsesFunctionTool) ResponsesToolType() ResponsesToolType   { return ResponsesToolTypeFunction }
+func (*ResponsesFunctionTool) isResponsesTool()                     {}
+func (*ResponsesFunctionTool) ResponsesToolType() ResponsesToolType { return ResponsesToolTypeFunction }
 
 func (f *ResponsesFunctionTool) MarshalJSON() ([]byte, error) {
 	type wire struct {

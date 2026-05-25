@@ -7,14 +7,14 @@ import (
 
 // ResponsesMessage is an input or output message item (role + content).
 type ResponsesMessage struct {
-	ID      string         `json:"id,omitempty"`
+	ID      string          `json:"id,omitempty"`
 	Status  ResponsesStatus `json:"status,omitempty"`
 	Role    ResponsesRole   `json:"role"`
 	Content []ResponsesPart `json:"-"` // normalized; use MarshalJSON/UnmarshalJSON
 }
 
-func (*ResponsesMessage) isResponsesItem()                        {}
-func (*ResponsesMessage) ResponsesItemType() ResponsesItemType    { return ResponsesItemTypeMessage }
+func (*ResponsesMessage) isResponsesItem()                     {}
+func (*ResponsesMessage) ResponsesItemType() ResponsesItemType { return ResponsesItemTypeMessage }
 
 // MarshalJSON emits the wire shape with content as a typed array.
 func (m *ResponsesMessage) MarshalJSON() ([]byte, error) {
@@ -65,8 +65,10 @@ type ResponsesFunctionCall struct {
 	Status    ResponsesStatus `json:"status,omitempty"`
 }
 
-func (*ResponsesFunctionCall) isResponsesItem()                        {}
-func (*ResponsesFunctionCall) ResponsesItemType() ResponsesItemType    { return ResponsesItemTypeFunctionCall }
+func (*ResponsesFunctionCall) isResponsesItem() {}
+func (*ResponsesFunctionCall) ResponsesItemType() ResponsesItemType {
+	return ResponsesItemTypeFunctionCall
+}
 
 func (f *ResponsesFunctionCall) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -95,8 +97,10 @@ type ResponsesFunctionCallOutput struct {
 	Content []ResponsesPart `json:"-"` // array form; mutually exclusive with Output
 }
 
-func (*ResponsesFunctionCallOutput) isResponsesItem()                     {}
-func (*ResponsesFunctionCallOutput) ResponsesItemType() ResponsesItemType { return ResponsesItemTypeFunctionCallOutput }
+func (*ResponsesFunctionCallOutput) isResponsesItem() {}
+func (*ResponsesFunctionCallOutput) ResponsesItemType() ResponsesItemType {
+	return ResponsesItemTypeFunctionCallOutput
+}
 
 func (f *ResponsesFunctionCallOutput) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -145,10 +149,10 @@ type ResponsesSummaryText struct {
 
 // ResponsesReasoning is an output item representing the model's reasoning steps.
 type ResponsesReasoning struct {
-	ID               string              `json:"id,omitempty"`
+	ID               string                 `json:"id,omitempty"`
 	Summary          []ResponsesSummaryText `json:"summary,omitempty"`
-	EncryptedContent string              `json:"encrypted_content,omitempty"`
-	Status           ResponsesStatus     `json:"status,omitempty"`
+	EncryptedContent string                 `json:"encrypted_content,omitempty"`
+	Status           ResponsesStatus        `json:"status,omitempty"`
 }
 
 func (*ResponsesReasoning) isResponsesItem()                     {}
@@ -156,11 +160,11 @@ func (*ResponsesReasoning) ResponsesItemType() ResponsesItemType { return Respon
 
 func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type             ResponsesItemType  `json:"type"`
-		ID               string             `json:"id,omitempty"`
+		Type             ResponsesItemType      `json:"type"`
+		ID               string                 `json:"id,omitempty"`
 		Summary          []ResponsesSummaryText `json:"summary,omitempty"`
-		EncryptedContent string             `json:"encrypted_content,omitempty"`
-		Status           ResponsesStatus    `json:"status,omitempty"`
+		EncryptedContent string                 `json:"encrypted_content,omitempty"`
+		Status           ResponsesStatus        `json:"status,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:             ResponsesItemTypeReasoning,

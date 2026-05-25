@@ -12,8 +12,8 @@ type ResponsesTextPart struct {
 	Text string `json:"text"`
 }
 
-func (*ResponsesTextPart) isResponsesPart()                          {}
-func (*ResponsesTextPart) ResponsesPartType() ResponsesPartType      { return ResponsesPartTypeInputText }
+func (*ResponsesTextPart) isResponsesPart()                     {}
+func (*ResponsesTextPart) ResponsesPartType() ResponsesPartType { return ResponsesPartTypeInputText }
 
 func (p *ResponsesTextPart) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -29,8 +29,8 @@ type ResponsesImagePart struct {
 	Detail   string `json:"detail,omitempty"` // "low" | "high" | "auto"
 }
 
-func (*ResponsesImagePart) isResponsesPart()                        {}
-func (*ResponsesImagePart) ResponsesPartType() ResponsesPartType    { return ResponsesPartTypeInputImage }
+func (*ResponsesImagePart) isResponsesPart()                     {}
+func (*ResponsesImagePart) ResponsesPartType() ResponsesPartType { return ResponsesPartTypeInputImage }
 
 func (p *ResponsesImagePart) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -49,8 +49,8 @@ type ResponsesFilePart struct {
 	Filename string `json:"filename,omitempty"`
 }
 
-func (*ResponsesFilePart) isResponsesPart()                       {}
-func (*ResponsesFilePart) ResponsesPartType() ResponsesPartType   { return ResponsesPartTypeInputFile }
+func (*ResponsesFilePart) isResponsesPart()                     {}
+func (*ResponsesFilePart) ResponsesPartType() ResponsesPartType { return ResponsesPartTypeInputFile }
 
 func (p *ResponsesFilePart) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -73,10 +73,10 @@ func (p *ResponsesFilePart) MarshalJSON() ([]byte, error) {
 
 // ResponsesTokenLogprob is one token's log-probability in an output.
 type ResponsesTokenLogprob struct {
-	Token       string                 `json:"token"`
-	Logprob     float64                `json:"logprob"`
-	Bytes       []int                  `json:"bytes,omitempty"`
-	TopLogprobs []ResponsesTopLogprob  `json:"top_logprobs,omitempty"`
+	Token       string                `json:"token"`
+	Logprob     float64               `json:"logprob"`
+	Bytes       []int                 `json:"bytes,omitempty"`
+	TopLogprobs []ResponsesTopLogprob `json:"top_logprobs,omitempty"`
 }
 
 // ResponsesTopLogprob is one candidate token's log-probability.
@@ -93,8 +93,10 @@ type ResponsesOutputTextPart struct {
 	Logprobs    []ResponsesTokenLogprob `json:"-"` // spec requires []; see MarshalJSON
 }
 
-func (*ResponsesOutputTextPart) isResponsesPart()                        {}
-func (*ResponsesOutputTextPart) ResponsesPartType() ResponsesPartType    { return ResponsesPartTypeOutputText }
+func (*ResponsesOutputTextPart) isResponsesPart() {}
+func (*ResponsesOutputTextPart) ResponsesPartType() ResponsesPartType {
+	return ResponsesPartTypeOutputText
+}
 
 func (p *ResponsesOutputTextPart) MarshalJSON() ([]byte, error) {
 	annRaws := make([]json.RawMessage, len(p.Annotations))
@@ -155,8 +157,8 @@ type ResponsesRefusalPart struct {
 	Refusal string `json:"refusal"`
 }
 
-func (*ResponsesRefusalPart) isResponsesPart()                      {}
-func (*ResponsesRefusalPart) ResponsesPartType() ResponsesPartType  { return ResponsesPartTypeRefusal }
+func (*ResponsesRefusalPart) isResponsesPart()                     {}
+func (*ResponsesRefusalPart) ResponsesPartType() ResponsesPartType { return ResponsesPartTypeRefusal }
 
 func (p *ResponsesRefusalPart) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -176,8 +178,8 @@ type ResponsesURLCitationAnnotation struct {
 	Title      string `json:"title,omitempty"`
 }
 
-func (*ResponsesURLCitationAnnotation) isResponsesAnnotation()                {}
-func (*ResponsesURLCitationAnnotation) ResponsesAnnotationType() string        { return "url_citation" }
+func (*ResponsesURLCitationAnnotation) isResponsesAnnotation()          {}
+func (*ResponsesURLCitationAnnotation) ResponsesAnnotationType() string { return "url_citation" }
 
 func (a *ResponsesURLCitationAnnotation) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -202,7 +204,7 @@ type ResponsesFileCitationAnnotation struct {
 	Index  int    `json:"index,omitempty"`
 }
 
-func (*ResponsesFileCitationAnnotation) isResponsesAnnotation()         {}
+func (*ResponsesFileCitationAnnotation) isResponsesAnnotation()          {}
 func (*ResponsesFileCitationAnnotation) ResponsesAnnotationType() string { return "file_citation" }
 
 func (a *ResponsesFileCitationAnnotation) MarshalJSON() ([]byte, error) {
@@ -220,7 +222,7 @@ type ResponsesRawAnnotation struct {
 	JSON json.RawMessage `json:"-"`
 }
 
-func (*ResponsesRawAnnotation) isResponsesAnnotation()           {}
+func (*ResponsesRawAnnotation) isResponsesAnnotation()            {}
 func (a *ResponsesRawAnnotation) ResponsesAnnotationType() string { return a.Type }
 
 func (a *ResponsesRawAnnotation) MarshalJSON() ([]byte, error) {

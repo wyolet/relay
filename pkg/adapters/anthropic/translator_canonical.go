@@ -103,14 +103,14 @@ type anthropicCanonThinking struct {
 
 // anthropicFullResp is the full Anthropic response shape used by ParseResponse.
 type anthropicFullResp struct {
-	ID         string                `json:"id"`
-	Type       string                `json:"type"`
-	Role       string                `json:"role"`
-	Model      string                `json:"model"`
-	Content    []anthropicRespBlock  `json:"content"`
-	StopReason string                `json:"stop_reason"`
-	StopSeq    *string               `json:"stop_sequence,omitempty"`
-	Usage      anthropicFullUsage    `json:"usage"`
+	ID         string               `json:"id"`
+	Type       string               `json:"type"`
+	Role       string               `json:"role"`
+	Model      string               `json:"model"`
+	Content    []anthropicRespBlock `json:"content"`
+	StopReason string               `json:"stop_reason"`
+	StopSeq    *string              `json:"stop_sequence,omitempty"`
+	Usage      anthropicFullUsage   `json:"usage"`
 }
 
 type anthropicRespBlock struct {
@@ -129,8 +129,8 @@ type anthropicRespBlock struct {
 }
 
 type anthropicFullUsage struct {
-	InputTokens          int `json:"input_tokens"`
-	OutputTokens         int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
@@ -347,7 +347,7 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				})
 			}
 			if tc.Choice != nil {
-				out.ToolChoice = canonicalToolChoiceToAnthropic(tc.Choice, nil)
+				out.ToolChoice = canonicalToolChoiceToAnthropic(tc.Choice, tc.Parallel)
 			}
 		}
 	}
@@ -389,6 +389,7 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 // ---- ParseResponse ----
 
 // ParseResponse decodes an Anthropic /v1/messages response body into canonical *v1.Response.
+// ParseResponse decodes an Anthropic /v1/messages response body into canonical *v1.Response.
 func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 	var ar anthropicFullResp
 	if err := json.Unmarshal(body, &ar); err != nil {
@@ -404,6 +405,13 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 
 	// Map stop_reason.
 	resp.Status, resp.FinishReason, resp.IncompleteDetails = anthropicStopReasonToCanonical(ar.StopReason)
+
+	// Surface the matched stop_sequence string (rule 7: cross-cutting field that
+	// doesn't map cleanly across vendors goes in Extensions).
+	if ar.StopSeq != nil && *ar.StopSeq != "" {
+		raw, _ := json.Marshal(*ar.StopSeq)
+		resp.Extensions = map[string]json.RawMessage{"stop_sequence": raw}
+	}
 
 	// Build output items from content blocks.
 	outputIndex := 0
@@ -454,10 +462,10 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 				providerData, _ = json.Marshal(pd)
 			}
 			r := &v1.Reasoning{
-				ID:      fmt.Sprintf("rs_%d", outputIndex),
-				Content: block.Thinking,
-				Summary: []v1.SummaryText{{Text: block.Thinking}},
-				Status:  v1.StatusCompleted,
+				ID:           fmt.Sprintf("rs_%d", outputIndex),
+				Content:      block.Thinking,
+				Summary:      []v1.SummaryText{{Text: block.Thinking}},
+				Status:       v1.StatusCompleted,
 				ProviderData: providerData,
 			}
 			resp.Output = append(resp.Output, r)
@@ -661,8 +669,11 @@ type anthropicStreamBlock struct {
 	textBuf     strings.Builder
 	argsBuf     strings.Builder
 	thinkBuf    strings.Builder
-	callID      string
-	toolName    string
+	// sigBuf accumulates signature_delta chunks for thinking blocks. Anthropic
+	// requires the signature to round-trip in multi-turn extended thinking.
+	sigBuf   strings.Builder
+	callID   string
+	toolName string
 }
 
 func (s *anthropicToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -796,6 +807,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockDelta(data []byte) ([]byt
 			Text        string `json:"text,omitempty"`
 			PartialJSON string `json:"partial_json,omitempty"`
 			Thinking    string `json:"thinking,omitempty"`
+			Signature   string `json:"signature,omitempty"`
 		} `json:"delta"`
 	}
 	if err := json.Unmarshal(data, &cbd); err != nil {
@@ -819,6 +831,12 @@ func (s *anthropicToCanonicalStream) handleContentBlockDelta(data []byte) ([]byt
 		b.thinkBuf.WriteString(cbd.Delta.Thinking)
 		kind = v1.DeltaKindReasoning
 		deltaText = cbd.Delta.Thinking
+	case "signature_delta":
+		// Accumulate the thinking signature; Anthropic requires it to round-trip
+		// for multi-turn extended thinking. No canonical delta is emitted — the
+		// signature surfaces only in the completed Reasoning.ProviderData.
+		b.sigBuf.WriteString(cbd.Delta.Signature)
+		return nil, nil
 	default:
 		return nil, nil
 	}
@@ -857,11 +875,24 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 			Status:    v1.StatusCompleted,
 		}
 	case "thinking":
+		thinkText := b.thinkBuf.String()
+		// Build ProviderData in the same shape as ParseResponse so that
+		// multi-turn round-trips are consistent regardless of sync vs stream path.
+		var providerData json.RawMessage
+		if sig := b.sigBuf.String(); sig != "" {
+			pd := map[string]string{
+				"type":      "thinking",
+				"thinking":  thinkText,
+				"signature": sig,
+			}
+			providerData, _ = json.Marshal(pd)
+		}
 		completedItem = &v1.Reasoning{
-			ID:      b.itemID,
-			Content: b.thinkBuf.String(),
-			Summary: []v1.SummaryText{{Text: b.thinkBuf.String()}},
-			Status:  v1.StatusCompleted,
+			ID:           b.itemID,
+			Content:      thinkText,
+			Summary:      []v1.SummaryText{{Text: thinkText}},
+			Status:       v1.StatusCompleted,
+			ProviderData: providerData,
 		}
 	default:
 		return nil, nil
@@ -995,11 +1026,11 @@ func (s *canonicalToAnthropicStream) handleGenerationCreated(data []byte) ([]byt
 	ms, _ := json.Marshal(map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
-			"id":    s.responseID,
-			"type":  "message",
-			"role":  "assistant",
-			"model": s.model,
-			"content": []any{},
+			"id":            s.responseID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         s.model,
+			"content":       []any{},
 			"stop_reason":   nil,
 			"stop_sequence": nil,
 			"usage": map[string]int{
@@ -1081,7 +1112,7 @@ func (s *canonicalToAnthropicStream) handleItemDelta(data []byte) ([]byte, error
 		"type":  "content_block_delta",
 		"index": e.Index,
 		"delta": map[string]string{
-			"type":  deltaType,
+			"type":   deltaType,
 			deltaKey: e.Delta,
 		},
 	})
