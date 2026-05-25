@@ -246,6 +246,15 @@ here because new sessions must inherit them.
 10. **`pkg/` purity preserved.** No `pkg/` package imports anything from
     `app/` or `internal/`. `pkg/relay/v1/` and `pkg/adapters/<vendor>/`
     together form a vendorable translation library.
+11. **No silent drops.** An adapter must never accept canonical input (or
+    upstream output) it can't express and discard it silently. Either emit
+    it, carry it in `provider_data`/`extensions` (rules 7–8), annotate an
+    irreducible drop with a greppable `// canonical: <field> dropped — <why>`
+    comment, or — for safety-relevant signals (unmapped finish/stop reason,
+    content filter, refusal) — surface it rather than masquerade as success.
+    Silent accept-and-discard is the bug class the `docs/adapters/` fidelity
+    audits found across every adapter. (Automated `adapter_drop` warning
+    emission is deferred; translators are pure with no logger.)
 
 The grep tests for rules 1, 2, 4, 10 must hold on every commit.
 
