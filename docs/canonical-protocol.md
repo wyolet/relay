@@ -106,6 +106,8 @@ These rules govern how the canonical protocol relates to the rest of the repo. P
 
 10. **`pkg/` purity preserved.** No `pkg/` package imports anything from `app/` or `internal/`. `pkg/relay/v1/` and `pkg/adapters/<vendor>/` together form a vendorable translation library: someone external can `go get` them and use them without pulling the Relay app.
 
+11. **No silent drops.** An adapter that receives canonical input (or upstream output) it cannot express on the other side must never accept-and-discard it silently. It must do one of: (a) **emit** it on the wire where a mapping exists; (b) **carry** it in `provider_data` (same-vendor opaque) or `extensions` (cross-cutting) per rules 7–8; (c) **annotate** an intentional, irreducible drop with a `// canonical: <field> dropped — <why>` comment at the drop site (greppable, so the remaining intentional drops stay auditable); or (d) for **safety-relevant** signals — an unmapped finish/stop reason, a content-filter block, a refusal — surface it (distinct `finish_reason`/`status`/`incomplete_details`) rather than let it masquerade as a clean success. Silent accept-and-discard is the exact bug class the fidelity audits (`docs/adapters/`) found across every adapter. Note: fully *automated* runtime warning emission (a structured `adapter_drop` event) is deferred — translators are pure functions with no logger, so it needs a drop-sink threaded through the call signature; until then this rule is enforced by the comment convention + code review + the per-adapter audits.
+
 ---
 
 ## Item taxonomy — v1

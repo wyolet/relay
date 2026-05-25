@@ -222,12 +222,14 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
 - **A4 — Security leakage test**. Re-point the deleted
   `pkg/httpheader/leakage_test.go` at the current `pkg/adapters/*`
   translators. ~half day.
-- **No-silent-drops adapter contract**. Adopt the rule from
-  `docs/adapters/README.md`: an adapter that can't express canonical
-  input must emit it, log a structured `adapter_drop` warning, or error
-  (for safety-relevant fields) — never accept-and-discard. Add the rule
-  to `docs/canonical-protocol.md` + a lint/grep gate. The fidelity
-  audits found this pattern repeatedly. ~1 day.
+- **No-silent-drops adapter contract**. Codified as canonical-protocol
+  **rule 11** (+ mirrored in CLAUDE.md): emit / carry in
+  `provider_data`/`extensions` / annotate with a greppable
+  `// canonical:` comment / surface safety-relevant signals — never
+  accept-and-discard. **Remaining:** automated runtime `adapter_drop`
+  warning emission, which needs a drop-sink threaded through the
+  translator call signature (translators are pure, no logger today).
+  ~1 day when picked up.
 
 ### Misc product features
 
