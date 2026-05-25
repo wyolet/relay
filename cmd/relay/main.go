@@ -19,11 +19,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/adapter"
-	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
-	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
-	relayv1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -35,13 +32,17 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
+	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
-	"github.com/wyolet/relay/app/usagelog"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
+	pkggemini "github.com/wyolet/relay/pkg/adapters/gemini"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	relayv1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -157,6 +158,15 @@ func main() {
 		Header:       "x-api-key",
 		ExtraHeaders: map[string]string{"anthropic-version": "2023-06-01"},
 	}
+	geminiAuth := adapter.AuthStrategy{Header: "x-goog-api-key"}
+	// Gemini encodes the model and the sync/stream choice in the URL path
+	// rather than the request body, so its upstream path is resolved per call.
+	geminiUpstreamPath := func(model string, stream bool) string {
+		if stream {
+			return "/v1beta/models/" + model + ":streamGenerateContent?alt=sse"
+		}
+		return "/v1beta/models/" + model + ":generateContent"
+	}
 
 	specs := []*adapter.Spec{
 		(&adapter.Spec{
@@ -202,6 +212,18 @@ func main() {
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
+		}).Build(),
+		// Gemini native shape — upstream-only for now (HostBinding.Adapter:
+		// gemini), reachable via the canonical / OpenAI / Anthropic inbound
+		// shapes through the cross-shape chain. No InboundPaths yet: native
+		// inbound Gemini puts the model in the URL path, which the body-based
+		// minimal parse doesn't extract — a separate follow-up.
+		(&adapter.Spec{
+			Name:           adapters.Gemini,
+			UpstreamPathFn: geminiUpstreamPath,
+			Auth:           geminiAuth,
+			Translator:     pkggemini.GeminiTranslator{},
+			ExtractTokens:  pkggemini.ExtractTokens,
 		}).Build(),
 		// Canonical shape — relay's own protocol (pkg/relay/v1), served at /v1.
 		// Inbound-only: callers POST canonical, relay routes + translates
@@ -378,4 +400,3 @@ func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
 func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
 }
-

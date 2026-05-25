@@ -26,6 +26,13 @@ const (
 	// GCP Vertex.
 	Anthropic Name = "anthropic"
 
+	// Gemini: the Google Gemini native shape (POST /v1beta/models/{model}:
+	// generateContent). Unique among registered shapes: the upstream model
+	// name and the sync/stream choice live in the URL path, not the request
+	// body, so the Spec resolves its upstream path per request via
+	// UpstreamPathFn. Also used for Gemini via GCP Vertex.
+	Gemini Name = "gemini"
+
 	// OpenAIResponses is the OpenAI Responses API shape (POST /v1/responses).
 	// Distinct from OpenAI (Chat Completions) because the upstream path differs.
 	// Phase 1: byte-passthrough only; no cross-shape translation.
@@ -47,7 +54,7 @@ const (
 // Valid reports whether n is one of the supported adapter names.
 func (n Name) Valid() bool {
 	switch n {
-	case OpenAI, Anthropic, OpenAIResponses, OpenAIEmbeddings:
+	case OpenAI, Anthropic, Gemini, OpenAIResponses, OpenAIEmbeddings:
 		return true
 	}
 	return false
@@ -55,4 +62,6 @@ func (n Name) Valid() bool {
 
 // All returns every supported Name. Stable order: useful for tests and
 // CLI flag help text. Order does not imply preference.
-func All() []Name { return []Name{OpenAI, Anthropic, OpenAIResponses, OpenAIEmbeddings} }
+func All() []Name {
+	return []Name{OpenAI, Anthropic, Gemini, OpenAIResponses, OpenAIEmbeddings}
+}

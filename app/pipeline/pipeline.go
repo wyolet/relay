@@ -30,9 +30,15 @@ import (
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
 
-// Adapter is the wire-shape seam: app/api/openai, app/api/anthropic.
+// Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
+//
+// upstreamModel is the resolved upstream model name (snapshot.Upstream());
+// stream reports whether the caller requested a streamed response. Most
+// shapes ignore both (model + stream live in the request body), but shapes
+// that encode them in the URL path — Gemini's generateContent vs
+// streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header) (*http.Response, error)
+	Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream bool) (*http.Response, error)
 	ExtractTokens(body []byte) pkgusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
 }
@@ -54,6 +60,14 @@ type Request struct {
 	Keys []*hostkey.HostKey
 
 	ModelName string
+
+	// UpstreamModel is the resolved upstream model name (snapshot.Upstream()),
+	// passed to Adapter.Call for shapes that put the model in the URL path.
+	UpstreamModel string
+
+	// Stream reports whether the caller requested a streamed response, passed
+	// to Adapter.Call for shapes that select a distinct stream URL.
+	Stream bool
 
 	// MaxAttempts caps retries (0 → defaultMaxAttempts).
 	MaxAttempts int
@@ -158,7 +172,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
 			break
 		}
 
-		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, acq.Key.Resolved, req.Body, req.Headers)
+		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, acq.Key.Resolved, req.Body, req.Headers, req.UpstreamModel, req.Stream)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			return p.makeResult(req, inbound, acq, resp), nil
 		}

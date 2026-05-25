@@ -47,7 +47,7 @@ func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "sk-test", []byte(`{}`), nil)
+	resp, err := a.Call(context.Background(), srv.URL, "sk-test", []byte(`{}`), nil, "", false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	hdr := http.Header{"X-Relay-Test": []string{"hello"}}
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr)
+	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
 	s.Build()
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), nil)
+	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), nil, "", false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	hdr := http.Header{"Anthropic-Version": []string{"2024-12-01"}}
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr)
+	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSpecAdapter_Call_EmptyAPIKey(t *testing.T) {
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "", []byte(`{}`), nil)
+	resp, err := a.Call(context.Background(), srv.URL, "", []byte(`{}`), nil, "", false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSpecAdapter_Call_BodyForwarded(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	want := []byte(`{"model":"gpt-4o","messages":[]}`)
-	resp, err := a.Call(context.Background(), srv.URL, "key", want, nil)
+	resp, err := a.Call(context.Background(), srv.URL, "key", want, nil, "", false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
