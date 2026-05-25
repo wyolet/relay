@@ -38,3 +38,6 @@ bench/*.json
 error.log
 /litellm-import
 /ollama-models-dump.json
+
+# symbol MCP plugin local index cache
+.symbol/
