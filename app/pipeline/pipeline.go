@@ -370,7 +370,9 @@ func classifyFailure(err error) (kind string, status int) {
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
 	case errors.As(err, &exceeded):
-		return "rate_limited", http.StatusTooManyRequests
+		// Reservation rejected before any upstream call → status 0
+		// (the kind carries the 429 meaning; Status is the upstream status).
+		return "rate_limited", 0
 	case errors.Is(err, ErrNoKeys):
 		return "no_keys", 0
 	case errors.Is(err, ErrAllKeysExhausted):

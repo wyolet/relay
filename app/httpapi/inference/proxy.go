@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/httpheader"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -47,11 +48,13 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 
 	pm, ok := proxyModeSettings(d.Catalog)
 	if !ok || !pm.Enabled {
+		d.fireUsageFailure(ctx, "proxy_disabled", "proxy mode is not enabled on this relay")
 		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "proxy_disabled",
 			"proxy mode is not enabled on this relay")
 		return
 	}
 	if cls.Mode == ModeProxyAnonymous && !pm.AllowUnauthenticated {
+		d.fireUsageFailure(ctx, "unauthenticated", "anonymous proxy traffic is not enabled on this relay")
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated",
 			"anonymous proxy traffic is not enabled on this relay")
 		return
@@ -64,12 +67,13 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	//      has no policy and must still pin a host).
 	snap := d.Catalog.Current()
 	var (
-		host        *apphost.Host
+		host         *apphost.Host
 		resolvedPlan *routing.Plan
 	)
 	if cls.UpstreamHost != "" {
 		h, ok := snap.HostByName(cls.UpstreamHost)
 		if !ok {
+			d.fireUsageFailure(ctx, "unknown_upstream_host", "unknown upstream host "+cls.UpstreamHost)
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "unknown_upstream_host",
 				"unknown upstream host "+strconvQuote(cls.UpstreamHost)+"; see GET /v1/proxy/hosts")
 			return
@@ -77,12 +81,14 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		host = h
 	} else {
 		if cls.Mode != ModeProxyAuthed {
+			d.fireUsageFailure(ctx, "missing_upstream_host", "anonymous proxy traffic requires an upstream-host header")
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_upstream_host",
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
 		plan, body, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx))
 		if err != nil {
+			d.fireUsageFailure(ctx, "proxy_resolve_error", err.Error())
 			mapProxyResolveErr(w, err)
 			return
 		}
@@ -107,9 +113,18 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	forwardHdr := r.Header.Clone()
 	httpheader.Strip(forwardHdr)
 
-	lc := buildProxyLifecycleContext(ctx, cls.RelayKey, host, RelayKeyFromContext(ctx), cls.ClientIP, resolvedPlan)
-	if spec := d.Specs.Spec(adapterKind); spec != nil {
-		lc.Translator = spec.Translator
+	lc := lifecycle.FromContext(ctx)
+	if lc != nil {
+		if host != nil {
+			lc.HostID = host.Meta.ID
+		}
+		if rk := RelayKeyFromContext(ctx); rk != nil {
+			lc.PolicyID = rk.Spec.PolicyID
+		}
+		applyPlanIdentity(lc, resolvedPlan) // Plan overrides when present
+		if spec := d.Specs.Spec(adapterKind); spec != nil {
+			lc.Translator = spec.Translator
+		}
 	}
 	preq := &proxy.Request{
 		Method:       r.Method,

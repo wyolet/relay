@@ -63,6 +63,35 @@ func mapRoutingErr(w http.ResponseWriter, err error) {
 	}
 }
 
+// routingErrKind maps a routing sentinel to a machine-readable usage
+// ErrorKind. Mirrors mapRoutingErr's switch so the usage log and the HTTP
+// response agree on what was rejected. The event Status stays 0 (upstream
+// never reached); the kind carries the reason.
+func routingErrKind(err error) string {
+	switch {
+	case errors.Is(err, routing.ErrModelNotFound):
+		return "model_not_found"
+	case errors.Is(err, routing.ErrModelDisabled):
+		return "model_disabled"
+	case errors.Is(err, routing.ErrPolicyNotFound):
+		return "policy_not_found"
+	case errors.Is(err, routing.ErrPolicyDisabled):
+		return "policy_disabled"
+	case errors.Is(err, routing.ErrPolicyless):
+		return "policyless"
+	case errors.Is(err, routing.ErrModelNotInPolicy):
+		return "model_not_allowed"
+	case errors.Is(err, routing.ErrNoHostBinding):
+		return "no_host_binding"
+	case errors.Is(err, routing.ErrHostNotFound):
+		return "host_not_found"
+	case errors.Is(err, routing.ErrNoKeys):
+		return "no_keys"
+	default:
+		return "routing_error"
+	}
+}
+
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
 	var upstream *pipeline.UpstreamFailureError

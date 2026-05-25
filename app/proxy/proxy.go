@@ -272,7 +272,8 @@ func classifyFailure(err error) (kind string, status int) {
 	case errors.Is(err, ErrNoUpstreamAuth):
 		return "no_upstream_auth", 0
 	case errors.As(err, &exceeded):
-		return "rate_limited", http.StatusTooManyRequests
+		// Reservation rejected before the upstream call → status 0.
+		return "rate_limited", 0
 	case errors.Is(err, context.Canceled):
 		return "client_canceled", 0
 	case errors.Is(err, context.DeadlineExceeded):

@@ -244,18 +244,24 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   classified `ErrorKind` (`no_keys`, `keys_exhausted`, `upstream_error`
   +surfaced status, `rate_limited`, `client_canceled`, `timeout`, …) and
   `ErrorMessage`, so failed requests are no longer invisible to usage
-  tracking. **Remaining:** (a) **routing-failure capture** — failures
-  *before* `pipeline.Run` (model-not-found, no-host-binding, disabled
-  policy) still emit nothing because the lifecycle Context is built at
-  dispatch right before the runner; capturing them needs an earlier
-  Context + a fire on the `mapRoutingErr` path. Lower volume than runner
-  failures. (b) cheap fields the data's already on hand for —
+  tracking; (3) **unified Context at entry + routing-failure capture** —
+  the lifecycle `Context` is now minted once at the inference entry
+  (`Dispatch`), stashed on ctx (`lifecycle.ContextWith`/`FromContext`),
+  and every downstream phase (routing, runner, proxy, observers) enriches
+  that one object. Routing rejections (`model_not_found`,
+  `no_host_binding`, disabled policy, …) and proxy gating
+  (`proxy_disabled`, `unknown_upstream_host`, …) now fire a failure event
+  via `Deps.fireUsageFailure` — every failure stage is covered.
+  **Remaining:** (a) cheap fields the data's already on hand for —
   requested-model string, `finish_reason` (needs `v1.ExtractUsage` to
-  also surface it), upstream attempt count, client-IP parity in pipeline
-  mode. (c) **deliberately out of scope**: cost (derive in the sink from
-  tokens × pricing, keep the event pricing-free), request/response
-  content (S3 payload path), SaaS attribution (session/app/end-user —
-  B-track).
+  also surface it), upstream attempt count; (b) the pure server-misconfig
+  500 guards (no spec/adapter/translator registered) are not fired — they
+  signal a boot-config bug, not request telemetry; (c) per-shape parse
+  failures *before* `Dispatch` (malformed body that can't yield a model
+  name) are at the route edge, before the Context is minted. **Out of
+  scope by design**: cost (derive in the sink from tokens × pricing, keep
+  the event pricing-free), request/response content (S3 payload path),
+  SaaS attribution (session/app/end-user — B-track).
 - **A3 — Perf bench harness**. A `bench/pipeline/` harness against
   `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
   Remaining: wire it into CI as a regression gate and document the

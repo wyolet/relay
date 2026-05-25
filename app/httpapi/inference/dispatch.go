@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/httpheader"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -59,8 +60,16 @@ type DispatchInput struct {
 func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) {
 	ctx := r.Context()
 
-	// Proxy mode short-circuits cross-shape translation.
+	// Mint the per-request lifecycle Context here, at the inference entry,
+	// before routing — so routing failures (and proxy gating) can still
+	// fire a usage event, and every downstream phase enriches this one
+	// Context rather than minting its own. Routing fills the identity ids
+	// later via applyPlanIdentity.
 	cls := ClassificationFrom(ctx)
+	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
+	ctx = lifecycle.ContextWith(ctx, lc)
+	r = r.WithContext(ctx)
+
 	slog.Info("inference: dispatch entry",
 		"request_id", reqid.From(ctx),
 		"inbound", string(in.Inbound),
@@ -77,6 +86,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 
 	rk := RelayKeyFromContext(ctx)
 	if rk == nil {
+		d.fireUsageFailure(ctx, "unauthenticated", "missing relay key")
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated", "missing relay key")
 		return
 	}
@@ -86,6 +96,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		RelayKey:  rk,
 	})
 	if err != nil {
+		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
 		mapRoutingErr(w, err)
 		return
 	}
@@ -110,6 +121,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// Anthropic hosts don't expose /v1/embeddings. This guard is permanent
 		// (Anthropic has no embeddings API to translate to).
 		if plan.HostBinding.Adapter != adapters.OpenAI {
+			d.fireUsageFailure(ctx, "embeddings_unsupported_host", "host does not support OpenAI-compatible embeddings")
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "embeddings_unsupported_host",
 				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
 					" (adapter="+string(plan.HostBinding.Adapter)+") which does not support OpenAI-compatible embeddings")
@@ -176,9 +188,11 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 
 	wireBody := rewriteModelField(in.Body, plan.Snapshot.Upstream())
 
-	cls := ClassificationFrom(ctx)
-	lc := buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan)
-	lc.Translator = upstreamV1
+	lc := lifecycle.FromContext(ctx)
+	applyPlanIdentity(lc, plan)
+	if lc != nil {
+		lc.Translator = upstreamV1
+	}
 	preq := &pipeline.Request{
 		Body:          wireBody,
 		Headers:       forwardHeaders(r.Header),
@@ -259,6 +273,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 
 	canonReq, err := inboundV1.ParseRequest(in.Body)
 	if err != nil {
+		d.fireUsageFailure(ctx, "translate_request", err.Error())
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 		return
 	}
@@ -267,13 +282,16 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
 	if err != nil {
+		d.fireUsageFailure(ctx, "marshal_request", err.Error())
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "marshal_request", err.Error())
 		return
 	}
 
-	cls := ClassificationFrom(ctx)
-	lc := buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan)
-	lc.Translator = upstreamV1
+	lc := lifecycle.FromContext(ctx)
+	applyPlanIdentity(lc, plan)
+	if lc != nil {
+		lc.Translator = upstreamV1
+	}
 	preq := &pipeline.Request{
 		Body:          wireBody,
 		Headers:       forwardHeaders(r.Header),

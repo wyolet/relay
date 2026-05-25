@@ -53,40 +53,40 @@ func TestSnapshotCreated(t *testing.T) {
 
 func TestModelHasAdapter(t *testing.T) {
 	cases := []struct {
-		name   string
-		m      *model.Model
+		name        string
+		m           *model.Model
 		adapterName adapters.Name
-		expect bool
+		expect      bool
 	}{
 		{
-			name:   "no bindings",
-			m:      makeModel(),
+			name:        "no bindings",
+			m:           makeModel(),
 			adapterName: adapters.OpenAI,
-			expect: false,
+			expect:      false,
 		},
 		{
-			name:   "single enabled openai binding",
-			m:      makeModel(bind{true, adapters.OpenAI}),
+			name:        "single enabled openai binding",
+			m:           makeModel(bind{true, adapters.OpenAI}),
 			adapterName: adapters.OpenAI,
-			expect: true,
+			expect:      true,
 		},
 		{
-			name:   "openai binding disabled",
-			m:      makeModel(bind{false, adapters.OpenAI}),
+			name:        "openai binding disabled",
+			m:           makeModel(bind{false, adapters.OpenAI}),
 			adapterName: adapters.OpenAI,
-			expect: false,
+			expect:      false,
 		},
 		{
-			name:   "openai disabled, anthropic enabled — looking for openai",
-			m:      makeModel(bind{false, adapters.OpenAI}, bind{true, adapters.Anthropic}),
+			name:        "openai disabled, anthropic enabled — looking for openai",
+			m:           makeModel(bind{false, adapters.OpenAI}, bind{true, adapters.Anthropic}),
 			adapterName: adapters.OpenAI,
-			expect: false,
+			expect:      false,
 		},
 		{
-			name:   "mixed adapters — finds anthropic when asked",
-			m:      makeModel(bind{true, adapters.OpenAI}, bind{true, adapters.Anthropic}),
+			name:        "mixed adapters — finds anthropic when asked",
+			m:           makeModel(bind{true, adapters.OpenAI}, bind{true, adapters.Anthropic}),
 			adapterName: adapters.Anthropic,
-			expect: true,
+			expect:      true,
 		},
 	}
 	for _, tc := range cases {
