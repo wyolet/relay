@@ -196,10 +196,6 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
 
 ### Cutover tech debt
 
-- **A2 — Observability emit rebuild**. Wire `pipeline.OnSuccess` to
-  OTel + eventlog + pricing-cost stamping. Currently the callback
-  fires but nothing emits. ~3 days. **Explicitly deferred** for now;
-  pick up once feature work stabilises.
 - **A3 — Perf bench harness**. New `bench/` against
   `app/pipeline.Pipeline.Run`. We're flying blind on regressions
   until this lands. ~1 day.
