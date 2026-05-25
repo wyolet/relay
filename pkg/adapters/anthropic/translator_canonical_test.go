@@ -1752,3 +1752,294 @@ func TestParseResponse_NoStopSequence_NoExtensions(t *testing.T) {
 		t.Error("Extensions[stop_sequence] present but stop_sequence was absent in response")
 	}
 }
+
+// ---- Structured output (forced-tool trick) tests ----
+
+func makeStructuredOutputReq(model, formatType string, schema []byte) *v1.Request {
+	f := &v1.Format{Type: formatType}
+	if schema != nil {
+		f.Schema = json.RawMessage(schema)
+	}
+	return &v1.Request{
+		Model:      v1.ModelRefs{model},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			model: {
+				Output: &v1.OutputConfig{Format: f},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "answer"}}},
+		},
+	}
+}
+
+func TestSerializeRequest_StructuredOutput_JSONSchema(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"answer":{"type":"string"}}}`)
+	req := makeStructuredOutputReq("claude-3-5-sonnet-20241022", "json_schema", schema)
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+
+	tools, ok := m["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		t.Fatalf("tools absent or empty: %v", m["tools"])
+	}
+	var synth map[string]any
+	for _, tt := range tools {
+		tm := tt.(map[string]any)
+		if tm["name"] == structuredOutputToolName {
+			synth = tm
+		}
+	}
+	if synth == nil {
+		t.Fatalf("synthetic tool %q not found in tools: %v", structuredOutputToolName, tools)
+	}
+	schemaJSON, _ := json.Marshal(synth["input_schema"])
+	var got, want map[string]any
+	_ = json.Unmarshal(schemaJSON, &got)
+	_ = json.Unmarshal(schema, &want)
+	if got["type"] != want["type"] {
+		t.Errorf("input_schema type: got %v want %v", got["type"], want["type"])
+	}
+
+	tc, ok := m["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing: %v", m["tool_choice"])
+	}
+	if tc["type"] != "tool" || tc["name"] != structuredOutputToolName {
+		t.Errorf("tool_choice: %v", tc)
+	}
+}
+
+func TestSerializeRequest_StructuredOutput_JSONObject(t *testing.T) {
+	req := makeStructuredOutputReq("claude-3-5-sonnet-20241022", "json_object", nil)
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+
+	tools := m["tools"].([]any)
+	var synth map[string]any
+	for _, tt := range tools {
+		tm := tt.(map[string]any)
+		if tm["name"] == structuredOutputToolName {
+			synth = tm
+		}
+	}
+	if synth == nil {
+		t.Fatalf("synthetic tool not found")
+	}
+	schemaJSON, _ := json.Marshal(synth["input_schema"])
+	var got map[string]any
+	_ = json.Unmarshal(schemaJSON, &got)
+	if got["type"] != "object" {
+		t.Errorf("json_object schema: want {type:object}, got %v", got)
+	}
+}
+
+func TestSerializeRequest_StructuredOutput_CallerForcesToolWins(t *testing.T) {
+	schema := []byte(`{"type":"object"}`)
+	model := "claude-3-5-sonnet-20241022"
+	req := &v1.Request{
+		Model:      v1.ModelRefs{model},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			model: {
+				Tools: &v1.ToolsConfig{
+					Definitions: v1.Tools{&v1.FunctionTool{Name: "my_tool", Parameters: json.RawMessage(`{}`)}},
+					Choice:      &v1.ToolChoice{Mode: "function", FunctionName: "my_tool"},
+				},
+				Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: schema}},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+
+	if tools, ok := m["tools"].([]any); ok {
+		for _, tt := range tools {
+			if tt.(map[string]any)["name"] == structuredOutputToolName {
+				t.Errorf("synthetic tool injected despite caller forcing their own tool")
+			}
+		}
+	}
+	tc := m["tool_choice"].(map[string]any)
+	if tc["name"] == structuredOutputToolName {
+		t.Errorf("tool_choice points to synthetic tool; should point to caller's tool")
+	}
+	if tc["name"] != "my_tool" {
+		t.Errorf("tool_choice.name: got %v want my_tool", tc["name"])
+	}
+}
+
+func TestParseResponse_StructuredOutputTool_BecomesTextMessage(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":    "msg_so",
+		"type":  "message",
+		"role":  "assistant",
+		"model": "claude-3-5-sonnet-20241022",
+		"content": []any{
+			map[string]any{
+				"type":  "tool_use",
+				"id":    "toolu_so",
+				"name":  structuredOutputToolName,
+				"input": map[string]any{"answer": "Paris"},
+			},
+		},
+		"stop_reason": "tool_use",
+		"usage":       map[string]any{"input_tokens": 10, "output_tokens": 5},
+	})
+	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(resp.Output) != 1 {
+		t.Fatalf("output len: %d want 1", len(resp.Output))
+	}
+	msg, ok := resp.Output[0].(*v1.Message)
+	if !ok {
+		t.Fatalf("output[0] is %T, want *v1.Message", resp.Output[0])
+	}
+	tp, ok := msg.Content[0].(*v1.OutputTextPart)
+	if !ok {
+		t.Fatalf("msg.Content[0] is %T, want *v1.OutputTextPart", msg.Content[0])
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(tp.Text), &parsed); err != nil {
+		t.Fatalf("OutputTextPart.Text is not valid JSON: %v (text: %q)", err, tp.Text)
+	}
+	if parsed["answer"] != "Paris" {
+		t.Errorf("parsed answer: %v", parsed["answer"])
+	}
+	if resp.FinishReason != v1.FinishReasonStop {
+		t.Errorf("finish_reason: got %q want stop", resp.FinishReason)
+	}
+	if resp.Status != v1.StatusCompleted {
+		t.Errorf("status: got %q want completed", resp.Status)
+	}
+}
+
+func TestParseResponse_NormalToolUse_Unchanged(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":    "msg_real",
+		"type":  "message",
+		"role":  "assistant",
+		"model": "claude-3-5-sonnet-20241022",
+		"content": []any{
+			map[string]any{
+				"type":  "tool_use",
+				"id":    "toolu_real",
+				"name":  "lookup",
+				"input": map[string]any{"q": "foo"},
+			},
+		},
+		"stop_reason": "tool_use",
+		"usage":       map[string]any{"input_tokens": 5, "output_tokens": 3},
+	})
+	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 1 {
+		t.Fatalf("output len: %d", len(resp.Output))
+	}
+	fc, ok := resp.Output[0].(*v1.FunctionCall)
+	if !ok {
+		t.Fatalf("output[0] is %T, want *v1.FunctionCall", resp.Output[0])
+	}
+	if fc.Name != "lookup" {
+		t.Errorf("fc.Name: %q", fc.Name)
+	}
+	if resp.FinishReason != v1.FinishReasonToolCalls {
+		t.Errorf("finish_reason: %q", resp.FinishReason)
+	}
+}
+
+func TestStream_StructuredOutputTool_TextDeltas(t *testing.T) {
+	chunks := [][]byte{
+		messageStartChunk("msg_so", "claude-3-5-sonnet-20241022"),
+		sseChunk("content_block_start", map[string]any{
+			"type":  "content_block_start",
+			"index": 0,
+			"content_block": map[string]any{
+				"type": "tool_use",
+				"id":   "toolu_so",
+				"name": structuredOutputToolName,
+			},
+		}),
+		sseChunk("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": `{"ans`},
+		}),
+		sseChunk("content_block_delta", map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": `wer":"ok"}`},
+		}),
+		contentBlockStopChunk(0),
+		messageDeltaChunk("tool_use", 10),
+		messageStopChunk(),
+	}
+
+	fn := (AnthropicTranslator{}).NewToCanonicalStream()
+	var allFrames [][]byte
+	for _, c := range chunks {
+		out, err := fn(c)
+		if err != nil {
+			t.Fatalf("stream translate: %v", err)
+		}
+		allFrames = append(allFrames, splitFrames(out)...)
+	}
+
+	for _, f := range allFrames {
+		ev, data, ok := v1.ParseSSEChunk(f)
+		if !ok {
+			continue
+		}
+		switch ev {
+		case v1.EventItemStarted:
+			var e v1.ItemStartedEvent
+			_ = json.Unmarshal(data, &e)
+			if e.ItemType != v1.ItemTypeMessage {
+				t.Errorf("item.started ItemType: got %q want %q", e.ItemType, v1.ItemTypeMessage)
+			}
+		case v1.EventItemDelta:
+			var e v1.ItemDeltaEvent
+			_ = json.Unmarshal(data, &e)
+			if e.Kind != v1.DeltaKindText {
+				t.Errorf("item.delta Kind: got %q want text", e.Kind)
+			}
+		case v1.EventItemCompleted:
+			var raw struct {
+				Item json.RawMessage `json:"item"`
+			}
+			_ = json.Unmarshal(data, &raw)
+			var fields struct {
+				CallID  string `json:"call_id"`
+				Content []any  `json:"content"`
+			}
+			_ = json.Unmarshal(raw.Item, &fields)
+			if fields.CallID != "" {
+				t.Errorf("item.completed has call_id — should be a Message, not FunctionCall")
+			}
+		case v1.EventGenerationCompleted:
+			var ge v1.GenerationCompletedEvent
+			_ = json.Unmarshal(data, &ge)
+			if ge.FinishReason != v1.FinishReasonStop {
+				t.Errorf("generation.completed finish_reason: got %q want stop", ge.FinishReason)
+			}
+		}
+	}
+}

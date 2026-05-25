@@ -16,7 +16,7 @@ callers:
 1. **`ToolsConfig.Parallel` is never wired into `canonicalToolChoiceToAnthropic`** — `disable_parallel_tool_use` is only set when the caller passes an explicit `*bool` argument, but `SerializeRequest` always passes `nil`. Callers cannot disable parallel tool use.
 2. **`stop_sequence` value is silently lost** on the Anthropic→canonical→Anthropic round-trip: `stop_sequence` string from `message_delta` is captured in `handleMessageDelta` but never stored and never emitted in `handleGenerationCompleted`.
 3. **`redacted_thinking` blocks are silently dropped** in both `ParseResponse` (line 467) and the stream `handleContentBlockStart` (line 746) with no error or log.
-4. **`Output.Format` (structured output / JSON mode) is entirely unimplemented** — the `ModelOpts.Output` field is never read in `SerializeRequest`.
+4. **`Output.Format` (structured output / JSON mode) is implemented** via the forced-tool trick — `translator_canonical.go:379–402` (serialize), `translator_canonical.go:489–508` (parse), streaming `handleContentBlockStart/Delta/Stop`.
 5. **`FunctionTool.Strict`** is never forwarded to the Anthropic wire.
 6. **`Seed`, `FrequencyPenalty`, `PresencePenalty`** are accepted by canonical but silently discarded — Anthropic does not support them, but there is no error or warning.
 
@@ -47,7 +47,7 @@ callers:
 | `FunctionTool.Strict` | ⚠️ | Never forwarded to Anthropic tool block. `translator_canonical.go:341–350` |
 | `ToolsConfig.Choice` → `tool_choice` | ✅ | `translator_canonical.go:349–352` |
 | `ToolsConfig.Parallel` → `disable_parallel_tool_use` | ⛔ | `canonicalToolChoiceToAnthropic` accepts a `*bool` arg but `SerializeRequest` always passes `nil` at line `350`: `canonicalToolChoiceToAnthropic(tc.Choice, nil)`. The param is dead. |
-| `OutputConfig.Format` (JSON mode / json_schema) | ⛔ | `ModelOpts.Output` is never read in `SerializeRequest`. Structured output entirely unimplemented. |
+| `OutputConfig.Format` (JSON mode / json_schema) | ✅ | Implemented via forced-tool trick — `translator_canonical.go:379–402`. `json_schema` uses caller schema; `json_object` uses `{"type":"object"}`. Caller forcing own tool overrides. |
 | `CacheConfig.Instructions` | ✅ | `translator_canonical.go:379–383` |
 | `CacheConfig.Tools` | ✅ | Breakpoint on last tool — `translator_canonical.go:357–359` |
 | `ItemCacheConfig.Anchor` (per-Message) | ✅ | `translator_canonical.go:1624–1636` |
@@ -275,7 +275,7 @@ Non-streaming same-vendor round-trip is **correct** as long as `ProviderData` is
 | `SamplingParams.PresencePenalty` | `SerializeRequest` | Never read |
 | `ReasoningConfig.Effort` | `SerializeRequest` | Set on struct but Anthropic wire has no `effort` field — `translator_canonical.go:327–332` |
 | `ReasoningConfig.Summary` | `SerializeRequest` | Never read |
-| `OutputConfig.Format` (structured output) | `SerializeRequest` | `ModelOpts.Output` never read — `translator_canonical.go:287–387` |
+| `OutputConfig.Format` (structured output) | ~~`SerializeRequest`~~ | **Fixed** — implemented via forced-tool trick at `translator_canonical.go:379–402` |
 | `FunctionTool.Strict` | `SerializeRequest` | `translator_canonical.go:341–350` |
 | `FilePart.Filename` | `canonicalPartToAnthropicBlock` | `translator_canonical.go:1709–1731` |
 | `ImagePart.Detail` | `canonicalImageURLToAnthropicBlock` | Anthropic has no detail field |
@@ -339,7 +339,7 @@ Note: `ServerTool` and `MCPTool` in `ToolsConfig.Definitions` will hit the "unsu
 | `redacted_thinking` | ⛔ | Dropped both ways |
 | `stop_sequence` matched string | ⛔ | Dropped |
 | `disable_parallel_tool_use` | ⛔ | Not parsed inbound, not emitted outbound |
-| `OutputConfig.Format` | ⛔ | Not emitted |
+| `OutputConfig.Format` | ✅ | Forced-tool trick; unwrapped to text on response |
 | Sampling (temp/topP/topK/stop) | ✅ | |
 | Seed / FrequencyPenalty / PresencePenalty | ⛔ | Dropped outbound |
 | Cache breakpoints | ⚠️ | Emitted outbound; inbound markers dropped by design |
@@ -389,8 +389,7 @@ Note: `ServerTool` and `MCPTool` in `ToolsConfig.Definitions` will hit the "unsu
 
 ### P2 — Missing features
 
-6. **Implement `OutputConfig.Format`** (structured output / JSON mode).
-   Anthropic supports `{"type": "json_object"}` via the `response_format` extension or, for Claude 3 models, it is triggered via a system prompt workaround. At minimum, return an explicit error when `Output.Format` is set rather than silently ignoring it.
+6. ~~**Implement `OutputConfig.Format`**~~ — **Done.** Implemented via forced-tool trick at `translator_canonical.go:379–402`. Sync and streaming both unwrap the synthetic tool to plain text with `finish_reason: stop`.
 
 7. **Parse and forward `tool_choice.disable_parallel_tool_use` in `ParseRequest`**.
    `anthropicParseToolChoice` at `translator_canonical.go:1228` only reads `type`/`name`. Add reading of `disable_parallel_tool_use` and populate `ToolsConfig.Parallel`.

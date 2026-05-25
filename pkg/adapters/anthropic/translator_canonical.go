@@ -34,6 +34,16 @@ import (
 
 const defaultMaxTokensCanonical = 4096
 
+// structuredOutputToolName is the synthetic tool injected to implement
+// Output.Format (json_schema / json_object) via the forced-tool trick.
+// The double-underscore prefix and "relay" namespace make collisions with
+// real caller tools practically impossible.
+const structuredOutputToolName = "__relay_structured_output"
+
+// defaultJSONObjectSchema is used for json_object format (and json_schema with
+// no schema provided) — the model must return any valid JSON object.
+var defaultJSONObjectSchema = json.RawMessage(`{"type":"object"}`)
+
 // AnthropicTranslator implements v1.Translator for the Anthropic Messages API.
 type AnthropicTranslator struct{}
 
@@ -309,6 +319,12 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 	// max_tokens: always required by Anthropic wire.
 	maxTokens := defaultMaxTokensCanonical
+
+	// Track the caller's tool choice separately so we can decide whether to
+	// override it with the structured-output forced-tool choice below.
+	var callerToolChoice *v1.ToolChoice
+	var callerParallel *bool
+
 	if opts, ok := req.ModelConfig[model]; ok && opts != nil {
 		if opts.Sampling != nil {
 			s := opts.Sampling
@@ -350,10 +366,46 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				})
 			}
 			if tc.Choice != nil {
-				out.ToolChoice = canonicalToolChoiceToAnthropic(tc.Choice, tc.Parallel)
+				callerToolChoice = tc.Choice
+				callerParallel = tc.Parallel
+			}
+		}
+
+		// Structured output via forced-tool trick. Anthropic has no native
+		// response_format/json_schema param, so we inject a synthetic tool and
+		// force the model to call it. ParseResponse/stream unwrap it back to
+		// plain text so the caller sees a normal completed text response.
+		if opts.Output != nil && opts.Output.Format != nil {
+			f := opts.Output.Format
+			if f.Type == "json_schema" || f.Type == "json_object" {
+				// canonical: Output.Format ignored when caller forces their own
+				// tool choice — their explicit intent wins over structured output.
+				callerForces := callerToolChoice != nil &&
+					(callerToolChoice.Mode == "required" || callerToolChoice.Mode == "function")
+				if !callerForces {
+					schema := f.Schema
+					if len(schema) == 0 || f.Type == "json_object" {
+						schema = defaultJSONObjectSchema
+					}
+					out.Tools = append(out.Tools, anthropicCanonTool{
+						Name:        structuredOutputToolName,
+						Description: "Return the response as JSON.",
+						InputSchema: schema,
+					})
+					out.ToolChoice = map[string]any{
+						"type": "tool",
+						"name": structuredOutputToolName,
+					}
+				}
 			}
 		}
 	}
+
+	// Apply the caller's tool choice only when structured-output didn't override it.
+	if out.ToolChoice == nil && callerToolChoice != nil {
+		out.ToolChoice = canonicalToolChoiceToAnthropic(callerToolChoice, callerParallel)
+	}
+
 	out.MaxTokens = maxTokens
 
 	// cache_config.tools → breakpoint on the last tool (caches the tools block).
@@ -435,6 +487,26 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			outputIndex++
 
 		case "tool_use":
+			if block.Name == structuredOutputToolName {
+				// Unwrap the forced-tool trick: emit the tool input as plain text
+				// so the caller sees a normal completed text response (rule 9 semantics).
+				text := "{}"
+				if len(block.Input) > 0 {
+					text = string(block.Input)
+				}
+				msg := &v1.Message{
+					ID:      fmt.Sprintf("msg_%d", outputIndex),
+					Status:  v1.StatusCompleted,
+					Role:    v1.RoleAssistant,
+					Content: []v1.Part{&v1.OutputTextPart{Text: text}},
+				}
+				resp.Output = append(resp.Output, msg)
+				resp.Status = v1.StatusCompleted
+				resp.FinishReason = v1.FinishReasonStop
+				resp.IncompleteDetails = nil
+				outputIndex++
+				continue
+			}
 			args := "{}"
 			if len(block.Input) > 0 {
 				args = string(block.Input)
@@ -663,6 +735,10 @@ type anthropicToCanonicalStream struct {
 	cachedTokens        int
 	cacheCreationTokens int
 	stopReason          string
+	// structuredOutputSeen is set when a __relay_structured_output tool block
+	// is completed. It prevents handleMessageDelta from overwriting the
+	// already-corrected stop reason with "tool_use".
+	structuredOutputSeen bool
 }
 
 type anthropicStreamBlock struct {
@@ -677,6 +753,11 @@ type anthropicStreamBlock struct {
 	sigBuf   strings.Builder
 	callID   string
 	toolName string
+	// structuredOutput marks a tool_use block that is the synthetic
+	// __relay_structured_output tool. Its input_json_delta chunks are
+	// accumulated in argsBuf but emitted as canonical text deltas so the
+	// caller sees a normal message, not a function-call stream.
+	structuredOutput bool
 }
 
 func (s *anthropicToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -774,6 +855,10 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "tool_use":
 		b.callID = cbs.ContentBlock.ID
 		b.toolName = cbs.ContentBlock.Name
+		if b.toolName == structuredOutputToolName {
+			// Treat as a text block — input_json_delta becomes canonical text deltas.
+			b.structuredOutput = true
+		}
 	}
 
 	s.currentBlock = b
@@ -783,7 +868,11 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "text":
 		itemType = v1.ItemTypeMessage
 	case "tool_use":
-		itemType = v1.ItemTypeFunctionCall
+		if b.structuredOutput {
+			itemType = v1.ItemTypeMessage
+		} else {
+			itemType = v1.ItemTypeFunctionCall
+		}
 	case "thinking":
 		itemType = v1.ItemTypeReasoning
 	default:
@@ -828,7 +917,12 @@ func (s *anthropicToCanonicalStream) handleContentBlockDelta(data []byte) ([]byt
 		deltaText = cbd.Delta.Text
 	case "input_json_delta":
 		b.argsBuf.WriteString(cbd.Delta.PartialJSON)
-		kind = v1.DeltaKindArguments
+		if b.structuredOutput {
+			// Emit as text delta — caller sees streaming JSON text, not function args.
+			kind = v1.DeltaKindText
+		} else {
+			kind = v1.DeltaKindArguments
+		}
 		deltaText = cbd.Delta.PartialJSON
 	case "thinking_delta":
 		b.thinkBuf.WriteString(cbd.Delta.Thinking)
@@ -870,12 +964,23 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 			Content: []v1.Part{&v1.OutputTextPart{Text: b.textBuf.String()}},
 		}
 	case "tool_use":
-		completedItem = &v1.FunctionCall{
-			ID:        b.itemID,
-			CallID:    b.callID,
-			Name:      b.toolName,
-			Arguments: b.argsBuf.String(),
-			Status:    v1.StatusCompleted,
+		if b.structuredOutput {
+			// Unwrap: emit as a completed Message with text content, finish_reason stop.
+			completedItem = &v1.Message{
+				ID:      b.itemID,
+				Role:    v1.RoleAssistant,
+				Status:  v1.StatusCompleted,
+				Content: []v1.Part{&v1.OutputTextPart{Text: b.argsBuf.String()}},
+			}
+			s.structuredOutputSeen = true
+		} else {
+			completedItem = &v1.FunctionCall{
+				ID:        b.itemID,
+				CallID:    b.callID,
+				Name:      b.toolName,
+				Arguments: b.argsBuf.String(),
+				Status:    v1.StatusCompleted,
+			}
 		}
 	case "thinking":
 		thinkText := b.thinkBuf.String()
@@ -921,7 +1026,11 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 	if err := json.Unmarshal(data, &md); err != nil {
 		return nil, fmt.Errorf("anthropic stream: message_delta: %w", err)
 	}
-	s.stopReason = md.Delta.StopReason
+	// Don't let the wire "tool_use" stop_reason clobber the "end_turn" we
+	// already committed when the structured-output tool block completed.
+	if !s.structuredOutputSeen {
+		s.stopReason = md.Delta.StopReason
+	}
 	s.outputTokens = md.Usage.OutputTokens
 	return nil, nil
 }
