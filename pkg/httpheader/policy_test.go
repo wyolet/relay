@@ -46,20 +46,6 @@ func TestStrip_RemovesXWRHeaders(t *testing.T) {
 	}
 }
 
-func TestStrip_RemovesXRelayMetadata(t *testing.T) {
-	h := http.Header{
-		"X-Relay-Metadata": {"env=prod,team=backend"},
-		"Content-Type":     {"application/json"},
-	}
-	Strip(h)
-	if h.Get("X-Relay-Metadata") != "" {
-		t.Error("X-Relay-Metadata must never reach upstream")
-	}
-	if h.Get("Content-Type") == "" {
-		t.Error("Content-Type should be preserved")
-	}
-}
-
 func TestStrip_RemovesCookie(t *testing.T) {
 	h := http.Header{"Cookie": {"sid=abc"}, "Content-Type": {"application/json"}}
 	Strip(h)

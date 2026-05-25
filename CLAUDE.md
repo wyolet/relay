@@ -79,6 +79,9 @@ app/                       — the application: domain + composition + handlers
   session/                 — scs wrapper, kv-backed
   authz/                   — Authorizer interface (v1: AlwaysAllow)
   actor/                   — Actor in context (user/admin-token)
+  usagelog/                — lifecycle PostFlight observer → bounded
+                             Emitter (drop-on-full) → Sink (JSONL today).
+                             The live usage-emit path.
 
 pkg/                       — shared, vendorable, ZERO relay-app imports
   relay/v1/                — CANONICAL protocol: types, Translator
@@ -98,20 +101,21 @@ pkg/                       — shared, vendorable, ZERO relay-app imports
                              • translator_canonical.go — v1.Translator
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
-  eventlog/                — file + ClickHouse usage event sinks
+  lifecycle/               — per-request Context + PreFlightMiddleware +
+                             PostFlightHook + Registry. The observability
+                             spine: runners build a Context, observers
+                             register hooks, FirePostFlight fans out.
   crypto/                  — AES-GCM helpers (master-key)
   httpmw/, httpheader/     — net/http middleware + header helpers
   ids/, slug/              — UUIDv7, slug minting + collision suffixes
   metrics/                 — Prometheus registry + counters
-  reqid/                   — request-id middleware (+ OTel span)
+  reqid/                   — request-id middleware
   usage/                   — Tokens type alias
 
 internal/                  — composition root / boundary
   config/                  — RELAY_* env parsing
   identity/                — YAML-loaded users (Verify with bcrypt-or-plain)
   storage/                 — pgx pool + migrations; exposes Pool() only
-  usage/                   — observability scaffolding (NOT wired post-cutover;
-                             see docs/roadmap.md A2)
 
 cmd/relay/                 — the binary entrypoint AND the ONLY place
                              where vendor names appear in code form
@@ -437,9 +441,14 @@ Future-proof seams (already wired; do not bypass):
 ### Post-flight contract
 
 Per-request post-flight work (`Limiter.Commit`,
-`Selector.RecordSuccess`, `OnSuccess(tokens, keyHash)`) runs in a
+`Selector.RecordSuccess`, then `Lifecycle.FirePostFlight`) runs in a
 **detached goroutine** triggered when the caller `Close()`s
-`Result.Body`. It MUST NOT block the response. Track via
+`Result.Body`. It MUST NOT block the response. Observers are
+`lifecycle.PostFlightHook`s registered on the shared `lifecycle.Registry`;
+each hook runs in its own sub-goroutine with per-hook panic recovery.
+Hooks read the per-request `lifecycle.Context` (identity + routing +
+`Metadata`) and the `PostFlightEvent` (status, duration, error, response
+body); they never mutate. Track via
 `relay_pipeline_post_flight_duration_seconds` once metrics land.
 
 ### `pkg/kv` consumer conventions
@@ -525,15 +534,33 @@ Full guide: `docs/cluster.md`.
 
 ### Observability
 
-- OTel for traces (one span per request, rich attributes including
-  decision trace).
-- Prometheus for pod metrics.
-- ClickHouse internal for analytics.
+The lifecycle hook system (`pkg/lifecycle`) is the spine: a per-request
+`Context` is built at request entry by every runner (pipeline / proxy /
+ws / batch), threaded through, and handed to registered observers in the
+detached post-flight goroutine via `Registry.FirePostFlight`. New
+observers are additive — register a `PostFlightHook` at boot, no
+pipeline changes.
+
+- **Usage**: `app/usagelog` is the live observer — PostFlight hook →
+  bounded `Emitter` (drop-on-full + atomic drop counter) → `Sink`.
+  Today's sink is JSONL (`FileSink`/`StdoutSink`); a ClickHouse sink is
+  the next observer to add.
+- **OTel traces**: not wired yet — the span belongs on the lifecycle
+  `Context`, started at entry, ended in post-flight. (The old no-op span
+  in `reqid` + the `internal/usage` OTel provider were deleted.)
+- **Prometheus**: `pkg/metrics` declares request counters/histograms;
+  wiring them onto the lifecycle hook (incl.
+  `relay_pipeline_post_flight_duration_seconds`) is pending.
 - Structured JSON logs to stdout.
 
-**Status**: scaffolding (`internal/usage`, `pkg/eventlog`) exists but
-is no longer wired into the hot path after the cutover. Rebuild is
-roadmap A2 — `app/pipeline.OnSuccess` fires; nothing emits yet.
+**Deleted (pre-cutover generation, do not recreate):** `internal/usage`
+(`Record`/`Init`/OTel provider + token/cost counters), `pkg/eventlog`
+(file + ClickHouse `Logger`), `Request.OnSuccess` on pipeline + proxy,
+and the `X-Relay-Metadata` attribution header (superseded by the
+`X-WR-*` header convention). When the ClickHouse usage sink is rebuilt,
+it lands as a `lifecycle` observer behind `app/usagelog`'s `Sink`
+interface — the deleted `pkg/eventlog/clickhouse.go` insert logic is
+recoverable from git history as a reference.
 
 ## Performance contract
 

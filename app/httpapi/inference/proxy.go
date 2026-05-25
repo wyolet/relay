@@ -103,8 +103,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	rules := resolveSystemRules(snap, bucketName, subject)
 
 	// Strip relay-internal headers before forward — Authorization, X-WR-*,
-	// X-Relay-Metadata, hop-by-hop. Proxy.Run re-attaches the caller's
-	// UpstreamAuth.
+	// hop-by-hop. Proxy.Run re-attaches the caller's UpstreamAuth.
 	forwardHdr := r.Header.Clone()
 	httpheader.Strip(forwardHdr)
 

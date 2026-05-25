@@ -63,7 +63,6 @@ var StripDenylist = []string{
 	"X-Api-Key", // Anthropic-SDK convention also carries the relay key here
 	"Cookie",
 	"X-WR-*",
-	"X-Relay-Metadata",
 }
 
 // Strip removes relay-internal control headers and hop-by-hop headers

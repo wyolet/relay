@@ -373,8 +373,9 @@ func TestE2E_ChatCompletions(t *testing.T) {
 	// What we CAN assert: the read completed cleanly + tokens were
 	// available to extract. Indirect: the upstream's usage block was
 	// in the response body; the adapter would have surfaced it on the
-	// post-flight Tokens map. A focused test of OnSuccess wiring lives
-	// in app/pipeline/pipeline_test.go (PostFlight_CommitsOnBodyClose).
+	// post-flight Tokens map. A focused test of post-flight lifecycle
+	// firing lives in app/pipeline/pipeline_test.go
+	// (PostFlight_CommitsOnBodyClose).
 	//
 	// Sleep gives any racing goroutines a moment to settle so -race
 	// catches latent issues. 100ms is generous.
