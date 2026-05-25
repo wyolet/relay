@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgusage "github.com/wyolet/relay/pkg/usage"
 )
@@ -141,17 +142,21 @@ func TestHappyPath_SinglePass(t *testing.T) {
 
 	key := makeKey("hash1", "sk-abc")
 	adp := &fakeAdapter{tokens: pkgusage.Tokens{"input": 5, "output": 10}}
+
+	reg := lifecycle.New()
+	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+		successTokens = adp.ExtractTokens(ev.ResponseBody)
+		successHash = lc.HostKeyID
+		wg.Done()
+	})
 	p := newPipeline()
+	p.Lifecycle = reg
 
 	req := &pipeline.Request{
-		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key},
-		Policy:  makePolicy(),
-		OnSuccess: func(tok pkgusage.Tokens, kh string) {
-			successTokens = tok
-			successHash = kh
-			wg.Done()
-		},
+		Adapter:   adp,
+		Keys:      []*hostkey.HostKey{key},
+		Policy:    makePolicy(),
+		Lifecycle: lifecycle.NewContext("req-happy", "pipeline", time.Now()),
 	}
 
 	res, err := p.Run(context.Background(), req)
@@ -169,10 +174,10 @@ func TestHappyPath_SinglePass(t *testing.T) {
 	wg.Wait()
 
 	if successHash != "hash1" {
-		t.Errorf("OnSuccess keyHash = %q, want hash1", successHash)
+		t.Errorf("post-flight keyHash = %q, want hash1", successHash)
 	}
 	if successTokens["input"] != 5 || successTokens["output"] != 10 {
-		t.Errorf("OnSuccess tokens = %v, want input=5 output=10", successTokens)
+		t.Errorf("post-flight tokens = %v, want input=5 output=10", successTokens)
 	}
 	if adp.callCount.Load() != 1 {
 		t.Errorf("callCount = %d, want 1", adp.callCount.Load())
@@ -518,16 +523,19 @@ func TestPostFlight_CommitsOnBodyClose(t *testing.T) {
 		tokens: pkgusage.Tokens{"input": 100, "output": 200},
 	}
 
+	reg := lifecycle.New()
+	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+		gotTokens = adp.ExtractTokens(ev.ResponseBody)
+		gotHash = lc.HostKeyID
+		wg.Done()
+	})
 	p := newPipeline()
+	p.Lifecycle = reg
 	req := &pipeline.Request{
-		Adapter: adp,
-		Keys:    []*hostkey.HostKey{key},
-		Policy:  makePolicy(),
-		OnSuccess: func(tok pkgusage.Tokens, kh string) {
-			gotTokens = tok
-			gotHash = kh
-			wg.Done()
-		},
+		Adapter:   adp,
+		Keys:      []*hostkey.HostKey{key},
+		Policy:    makePolicy(),
+		Lifecycle: lifecycle.NewContext("req-pf", "pipeline", time.Now()),
 	}
 
 	res, err := p.Run(context.Background(), req)
@@ -535,10 +543,10 @@ func TestPostFlight_CommitsOnBodyClose(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// OnSuccess must NOT fire before Body is closed.
+	// Post-flight must NOT fire before Body is closed.
 	select {
 	case <-channelFromWG(&wg):
-		t.Fatal("OnSuccess fired before Body.Close")
+		t.Fatal("post-flight fired before Body.Close")
 	default:
 	}
 
@@ -546,10 +554,10 @@ func TestPostFlight_CommitsOnBodyClose(t *testing.T) {
 	wg.Wait()
 
 	if gotHash != "hpf" {
-		t.Errorf("OnSuccess keyHash = %q, want hpf", gotHash)
+		t.Errorf("post-flight keyHash = %q, want hpf", gotHash)
 	}
 	if gotTokens["input"] != 100 || gotTokens["output"] != 200 {
-		t.Errorf("OnSuccess tokens = %v", gotTokens)
+		t.Errorf("post-flight tokens = %v", gotTokens)
 	}
 }
 

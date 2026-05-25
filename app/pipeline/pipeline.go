@@ -72,10 +72,6 @@ type Request struct {
 	// MaxAttempts caps retries (0 → defaultMaxAttempts).
 	MaxAttempts int
 
-	// OnSuccess fires from the post-flight goroutine after tokens are
-	// extracted. Optional.
-	OnSuccess func(tokens pkgusage.Tokens, keyHash string)
-
 	// Lifecycle is the per-request shared context, constructed by the
 	// handler before Run. Post-flight observers see it via the registered
 	// PostFlightHook chain. Optional — when nil, post-flight skips hook
@@ -314,10 +310,6 @@ func (p *Pipeline) runPostFlight(
 		p.Logger.Warn("pipeline: upstream commit failed", "err", err)
 	}
 	p.Policy.RecordSuccess(ctx, acq)
-
-	if req.OnSuccess != nil {
-		req.OnSuccess(tokens, acq.KeyHash())
-	}
 
 	// Fan out to lifecycle observers. lc carries persistent identity;
 	// the event carries this-request's outcome. Observers see both.

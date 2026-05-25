@@ -62,7 +62,7 @@ type Request struct {
 	Body io.Reader
 
 	// Headers is the inbound header set with relay-internal headers
-	// already stripped (X-WR-*, Cookie, X-Relay-Metadata, hop-by-hop).
+	// already stripped (X-WR-*, Cookie, hop-by-hop).
 	// Authorization is set separately via UpstreamAuth — do not include
 	// it here.
 	Headers http.Header
@@ -87,10 +87,6 @@ type Request struct {
 	// ModelName is for logging only — proxy mode does not consult the
 	// catalog Model row.
 	ModelName string
-
-	// OnSuccess fires from the detached post-flight goroutine once the
-	// body has been fully streamed and tokens extracted. Optional.
-	OnSuccess func(tokens pkgusage.Tokens)
 
 	// Lifecycle is the per-request shared context, constructed by the
 	// handler before Run. Post-flight observers see it via the registered
@@ -222,10 +218,6 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 			p.Logger.Warn("proxy: limiter commit failed",
 				"err", err, "scope", req.RateScope)
 		}
-	}
-
-	if req.OnSuccess != nil {
-		req.OnSuccess(tokens)
 	}
 
 	// Fan out to lifecycle observers. lc carries persistent identity;

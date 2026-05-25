@@ -59,6 +59,14 @@ waiting to be written; the path under `docs/` is the placeholder.
   endpoints, concurrent multiplexing from a single client, per-frame
   request-id + OTel span, browser subprotocol auth, in-flight cap as
   env config.
+- **Lifecycle hook system + usage emit** — `pkg/lifecycle` (per-request
+  `Context`, `PreFlightMiddleware`, `PostFlightHook`, `Registry`) is the
+  observability spine, wired into both the pipeline and proxy post-flight
+  goroutines. `app/usagelog` is the first live observer (PostFlight hook
+  → bounded drop-on-full `Emitter` → JSONL `Sink`). The pre-cutover
+  generation it replaced — `internal/usage`, `pkg/eventlog`,
+  `Request.OnSuccess`, the no-op `reqid` OTel span, and the
+  `X-Relay-Metadata` header — was deleted (PR purge-precutover-observability).
 
 ## Now — priority queue
 
@@ -215,6 +223,17 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
 
 ### Cutover tech debt
 
+- **A2 — Observability observers**. The lifecycle spine + usage emit
+  shipped (see Recently shipped); remaining is adding observers on it:
+  (a) a **ClickHouse usage sink** behind `app/usagelog`'s `Sink`
+  interface — reference the deleted `pkg/eventlog/clickhouse.go` from git
+  history; (b) **OTel tracing** — a span on the lifecycle `Context`,
+  started at entry, ended in post-flight with routing attributes
+  (replaces the deleted no-op `reqid` span); (c) **Prometheus** — wire
+  `pkg/metrics` request counters/histograms +
+  `relay_pipeline_post_flight_duration_seconds` onto the post-flight
+  hook. Each is additive — register at boot, no pipeline change. ~1-2
+  days each.
 - **A3 — Perf bench harness**. A `bench/pipeline/` harness against
   `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
   Remaining: wire it into CI as a regression gate and document the
