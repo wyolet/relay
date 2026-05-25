@@ -288,6 +288,23 @@ in seeded config is text-only.
 
 ---
 
+## V2 — beyond the wedge
+
+Bigger than a feature; its own product line. Off the v1 critical path —
+finish the infra story (Now #1–4) before this competes for priority.
+
+### Tool Gateway (capability parity layer)
+
+A separate service that canonicalizes *tool* I/O the way Relay
+canonicalizes *LLM wire* I/O — one tool contract, many backends (Brave /
+Serper / SearXNG for search, a sandbox for code-exec, a guarded fetcher
+for `web_fetch`), hosted or self-hosted, **in its own pods, never on the
+hot path**. Goal: give Ollama and other non-frontier models the
+server-side tools only frontier closed models ship today. Out-positions
+OpenRouter on an axis they don't compete on. Full proposal — subsystem
+boundary, canonical surface, SSRF threat model, open questions — in
+`docs/v2-tool-gateway.md`.
+
 ## Icebox — deferred indefinitely
 
 These were considered, found not to clear the bar, and parked. Touch
