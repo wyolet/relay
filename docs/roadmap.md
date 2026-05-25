@@ -219,9 +219,13 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
   Remaining: wire it into CI as a regression gate and document the
   baseline numbers. ~half day. (The "flying blind" framing was stale.)
-- **A4 — Security leakage test**. Re-point the deleted
-  `pkg/httpheader/leakage_test.go` at the current `pkg/adapters/*`
-  translators. ~half day.
+- **A4 — Security leakage test** — DONE, and it found a real leak: normal
+  -mode dispatch forwarded raw inbound headers to the upstream, so the
+  relay key (`Authorization`/`X-Api-Key`) and `X-WR-*` control headers
+  leaked to providers whose auth header isn't `Authorization`
+  (Anthropic/Gemini). Fixed by stripping the denylist on a cloned header
+  set in dispatch (mirrors the proxy path) + adding `X-Api-Key` to
+  `StripDenylist`; regression test in `header_leakage_test.go`.
 - **No-silent-drops adapter contract**. Codified as canonical-protocol
   **rule 11** (+ mirrored in CLAUDE.md): emit / carry in
   `provider_data`/`extensions` / annotate with a greppable

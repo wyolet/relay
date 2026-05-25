@@ -20,9 +20,20 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/pkg/httpheader"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
 )
+
+// forwardHeaders returns a copy of the inbound headers safe to send to the
+// upstream provider: relay-internal control headers and the relay credential
+// (Authorization / X-Api-Key / X-WR-* / Cookie, per httpheader.StripDenylist)
+// are removed so they never leak to the provider — the adapter injects the
+// real upstream credential afterward. Cloned so the original request headers
+// stay intact for logging / post-flight. Mirrors the proxy path's strip.
+func forwardHeaders(h http.Header) http.Header {
+	return httpheader.Strip(h.Clone())
+}
 
 // DispatchInput is what a per-shape route passes to Dispatch after its
 // own minimal parse. The route knows the inbound shape Name (because it
@@ -170,7 +181,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	lc.Translator = upstreamV1
 	preq := &pipeline.Request{
 		Body:          wireBody,
-		Headers:       r.Header,
+		Headers:       forwardHeaders(r.Header),
 		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       upstreamAdapter,
 		Policy:        plan.Policy,
@@ -265,7 +276,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	lc.Translator = upstreamV1
 	preq := &pipeline.Request{
 		Body:          wireBody,
-		Headers:       r.Header,
+		Headers:       forwardHeaders(r.Header),
 		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       upstreamAdapter,
 		Policy:        plan.Policy,
