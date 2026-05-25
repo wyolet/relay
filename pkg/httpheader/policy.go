@@ -60,6 +60,7 @@ var HopByHop = []string{
 // Matching is case-insensitive. Trailing "*" is a prefix match.
 var StripDenylist = []string{
 	"Authorization",
+	"X-Api-Key", // Anthropic-SDK convention also carries the relay key here
 	"Cookie",
 	"X-WR-*",
 	"X-Relay-Metadata",
