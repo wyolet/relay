@@ -21,9 +21,16 @@ type Event struct {
 
 	// Outcome
 	Status       int    `json:"status"`
-	DurationMs   int64  `json:"duration_ms"`
+	DurationMs   int64  `json:"duration_ms"` // total: start → response closed
+	Streamed     bool   `json:"streamed,omitempty"`
 	ErrorKind    string `json:"error_kind,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
+
+	// Upstream is the upstream-leg timing breakdown. Nil when the request
+	// never reached upstream (routing/pre-flight failure). The total
+	// (start → close) is DurationMs; this adds the finer marks DurationMs
+	// can't express. See UpstreamTiming for unit + how to derive TTFT.
+	Upstream *UpstreamTiming `json:"upstream,omitempty"`
 
 	// Attribution — UUIDs (stable, snapshot-resolvable to slugs at
 	// query time). Hash of the inbound bearer is included so the
@@ -40,4 +47,17 @@ type Event struct {
 
 	// Free-form per-runner tags (client_ip for anonymous proxy, etc.)
 	Extras map[string]string `json:"extras,omitempty"`
+}
+
+// UpstreamTiming is the upstream-leg breakdown. All values are
+// microseconds elapsed from the request start (Event.Timestamp) — the
+// unit lives here, not in the field names. Every mark is anchored to the
+// start, never chained, so derive intervals at query time:
+//
+//	upstream TTFT    = ResponseStart - Start
+//	stream body time = ResponseEnd   - ResponseStart
+type UpstreamTiming struct {
+	Start         int64 `json:"start"`          // start → handed to upstream
+	ResponseStart int64 `json:"response_start"` // start → first byte (TTFT)
+	ResponseEnd   int64 `json:"response_end"`   // start → upstream done
 }
