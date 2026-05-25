@@ -169,17 +169,19 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	lc := buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan)
 	lc.Translator = upstreamV1
 	preq := &pipeline.Request{
-		Body:        wireBody,
-		Headers:     r.Header,
-		HostBaseURL: plan.Host.Spec.BaseURL,
-		Adapter:     upstreamAdapter,
-		Policy:      plan.Policy,
-		Model:       plan.Model,
-		Host:        plan.Host,
-		Provider:    plan.Provider,
-		Keys:        plan.Keys,
-		ModelName:   plan.Model.Meta.Name,
-		Lifecycle:   lc,
+		Body:          wireBody,
+		Headers:       r.Header,
+		HostBaseURL:   plan.Host.Spec.BaseURL,
+		Adapter:       upstreamAdapter,
+		Policy:        plan.Policy,
+		Model:         plan.Model,
+		Host:          plan.Host,
+		Provider:      plan.Provider,
+		Keys:          plan.Keys,
+		ModelName:     plan.Model.Meta.Name,
+		UpstreamModel: plan.Snapshot.Upstream(),
+		Stream:        in.Stream,
+		Lifecycle:     lc,
 	}
 
 	result, err := d.Pipeline.Run(ctx, preq)
@@ -218,17 +220,19 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	lc := buildLifecycleContext(ctx, "pipeline", cls.RelayKey, plan)
 	lc.Translator = upstreamV1
 	preq := &pipeline.Request{
-		Body:        wireBody,
-		Headers:     r.Header,
-		HostBaseURL: plan.Host.Spec.BaseURL,
-		Adapter:     upstreamAdapter,
-		Policy:      plan.Policy,
-		Model:       plan.Model,
-		Host:        plan.Host,
-		Provider:    plan.Provider,
-		Keys:        plan.Keys,
-		ModelName:   plan.Model.Meta.Name,
-		Lifecycle:   lc,
+		Body:          wireBody,
+		Headers:       r.Header,
+		HostBaseURL:   plan.Host.Spec.BaseURL,
+		Adapter:       upstreamAdapter,
+		Policy:        plan.Policy,
+		Model:         plan.Model,
+		Host:          plan.Host,
+		Provider:      plan.Provider,
+		Keys:          plan.Keys,
+		ModelName:     plan.Model.Meta.Name,
+		UpstreamModel: plan.Snapshot.Upstream(),
+		Stream:        in.Stream,
+		Lifecycle:     lc,
 	}
 
 	result, pErr := d.Pipeline.Run(ctx, preq)

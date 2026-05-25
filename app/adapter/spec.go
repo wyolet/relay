@@ -61,7 +61,15 @@ type Spec struct {
 
 	// UpstreamPath is the path used when calling the upstream host.
 	// Example: "/v1/chat/completions", "/v1/responses", "/v1/embeddings".
+	// Ignored when UpstreamPathFn is set.
 	UpstreamPath string
+
+	// UpstreamPathFn resolves the upstream path per request from the upstream
+	// model name and the sync/stream choice. Set only for shapes that encode
+	// the model and/or stream selection in the URL rather than the body —
+	// Gemini's "/v1beta/models/{model}:generateContent" vs
+	// ":streamGenerateContent". When nil, UpstreamPath is used verbatim.
+	UpstreamPathFn func(upstreamModel string, stream bool) string
 
 	// Auth configures how the upstream is authenticated.
 	Auth AuthStrategy
@@ -158,8 +166,12 @@ var _ pipeline.Adapter = (*specAdapter)(nil)
 // Call issues POST {baseURL}{spec.UpstreamPath} with the supplied body.
 // Auth headers are set per spec.Auth; forwarded headers are applied first
 // so Relay's own headers win on conflict.
-func (a *specAdapter) Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+a.spec.UpstreamPath, bytes.NewReader(body))
+func (a *specAdapter) Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream bool) (*http.Response, error) {
+	path := a.spec.UpstreamPath
+	if a.spec.UpstreamPathFn != nil {
+		path = a.spec.UpstreamPathFn(upstreamModel, stream)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

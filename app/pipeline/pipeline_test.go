@@ -49,7 +49,7 @@ type fakeAdapter struct {
 	callCount atomic.Int32
 }
 
-func (f *fakeAdapter) Call(ctx context.Context, baseURL, key string, body []byte, hdr http.Header) (*http.Response, error) {
+func (f *fakeAdapter) Call(ctx context.Context, baseURL, key string, body []byte, hdr http.Header, _ string, _ bool) (*http.Response, error) {
 	f.callCount.Add(1)
 	if f.callFn != nil {
 		return f.callFn(ctx, baseURL, key, body, hdr)

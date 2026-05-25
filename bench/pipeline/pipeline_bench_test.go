@@ -60,7 +60,7 @@ type stubAdapter struct {
 	calls  atomic.Int64
 }
 
-func (s *stubAdapter) Call(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+func (s *stubAdapter) Call(_ context.Context, _, _ string, _ []byte, _ http.Header, _ string, _ bool) (*http.Response, error) {
 	s.calls.Add(1)
 	return &http.Response{
 		StatusCode: 200,
