@@ -26,7 +26,26 @@ waiting to be written; the path under `docs/` is the placeholder.
 - **Canonical client + `/v1/generate`** (PR #195) — transport-agnostic
   client (`pkg/relay/client`), canonical served at `/v1/generate`,
   vendor-neutral `cache_config` anchors.
-- **WebSocket transport** (PR #196 server, #TBD client) — `/v1/ws`
+- **Gemini native adapter** (PRs #201 base / #203 fixes, 2026-05-25) —
+  `pkg/adapters/gemini/` implements `v1.Translator` for the
+  `generateContent` shape. **Upstream-only** (registered as a Spec with
+  no `InboundPaths`; reachable via canonical/OpenAI/Anthropic inbound
+  through the cross-shape chain). Introduced `Spec.UpstreamPathFn` +
+  widened `pipeline.Adapter.Call(...,upstreamModel,stream)` for shapes
+  that encode model + stream in the URL path. Follow-ups: native inbound
+  Gemini route (needs URL-path `{model}` extraction), catalog host/model
+  wiring, fake-Gemini integration test.
+- **Adapter fidelity audits + fixes** (PRs #201/#202/#203, 2026-05-25) —
+  per-adapter "what maps / silently drops / hardcodes" audits in
+  `docs/adapters/`, plus a batch of real P0/P1 fixes the audits surfaced
+  (CC `NewFromCanonicalStream` nil-panic, Responses encrypted_content +
+  streaming refusal/`failed` + func-call streaming ids, Anthropic
+  streaming thinking-signature loss + `Parallel` dead code, Gemini safety
+  finishReasons + CallID collisions + structured output + stream args).
+  Documented gaps left open: Anthropic `max_tokens` default, Anthropic
+  `Output.Format`. Proposed contract: no silent drops (emit / log /
+  error) — see `docs/adapters/README.md`.
+- **WebSocket transport** (PRs #196 server, #198 client) — `/v1/ws`
   serves the canonical shape over one long-lived connection,
   multiplexing requests by caller-chosen id. Auth + classification
   happen once on the upgrade request (reuses the HTTP middleware chain);
@@ -128,21 +147,21 @@ resolve the owner-kind question.
 ### 4. Expanded adapter support
 
 What: add new wire-shape adapters beyond `openai` and `anthropic`.
-Concrete candidates (rough order of demand): Google Gemini native,
-Cohere, Mistral native (currently OpenAI-compatible so usable via
-`openai` adapter, but native unlocks features), AWS Bedrock Converse
-API.
+**Gemini native is done** (upstream-only, see Recently shipped). Remaining
+candidates (rough order of demand): native inbound Gemini (URL-path model
+extraction), AWS Bedrock Converse API, Cohere, Mistral native (currently
+OpenAI-compatible so usable via `openai` adapter, but native unlocks
+features).
 
-Why: every new adapter widens the addressable upstream set. The
-adapter seam (`app/adapter.Kind` + `app/api/<kind>` per shape) is
-already in place — adding one is a contained slice.
+Why: every new adapter widens the addressable upstream set. The adapter
+seam is already in place — adding one is a contained slice.
 
 Size: ~3-5 days per adapter (shape parser, Call, ExtractTokens,
 streaming, tests).
 
-Where: `pkg/api/<kind>/` (pure shape, vendorable) +
-`app/api/<kind>/` (relay-side glue); register new `Kind` in
-`app/adapter`.
+Where: `pkg/adapters/<vendor>/` implementing `v1.Translator` + a `Spec`
+literal in `cmd/relay/main.go` (see `pkg/adapters/gemini/` as the
+reference for a shape with a URL-path model via `Spec.UpstreamPathFn`).
 
 ---
 
@@ -196,12 +215,19 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
 
 ### Cutover tech debt
 
-- **A3 — Perf bench harness**. New `bench/` against
-  `app/pipeline.Pipeline.Run`. We're flying blind on regressions
-  until this lands. ~1 day.
+- **A3 — Perf bench harness**. A `bench/pipeline/` harness against
+  `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
+  Remaining: wire it into CI as a regression gate and document the
+  baseline numbers. ~half day. (The "flying blind" framing was stale.)
 - **A4 — Security leakage test**. Re-point the deleted
-  `pkg/httpheader/leakage_test.go` at the new `app/api/*` adapters.
-  ~half day.
+  `pkg/httpheader/leakage_test.go` at the current `pkg/adapters/*`
+  translators. ~half day.
+- **No-silent-drops adapter contract**. Adopt the rule from
+  `docs/adapters/README.md`: an adapter that can't express canonical
+  input must emit it, log a structured `adapter_drop` warning, or error
+  (for safety-relevant fields) — never accept-and-discard. Add the rule
+  to `docs/canonical-protocol.md` + a lint/grep gate. The fidelity
+  audits found this pattern repeatedly. ~1 day.
 
 ### Misc product features
 
