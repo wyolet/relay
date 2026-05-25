@@ -185,6 +185,19 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			gc.ThinkingConfig = tc
 			hasGC = true
 		}
+		if o := opts.Output; o != nil && o.Format != nil {
+			switch o.Format.Type {
+			case "json_object":
+				gc.ResponseMIMEType = "application/json"
+				hasGC = true
+			case "json_schema":
+				gc.ResponseMIMEType = "application/json"
+				if len(o.Format.Schema) > 0 {
+					gc.ResponseSchema = o.Format.Schema
+				}
+				hasGC = true
+			}
+		}
 		if hasGC {
 			out.GenerationConfig = gc
 		}
@@ -275,7 +288,7 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 					}
 					fc := &v1.FunctionCall{
 						ID:        fmt.Sprintf("fc_%d", outputIndex),
-						CallID:    p.FunctionCall.Name, // Gemini has no call ID; synthesize from name
+						CallID:    geminiCallID(p.FunctionCall.Name, outputIndex), // Gemini has no call ID; synthesize a unique one
 						Name:      p.FunctionCall.Name,
 						Arguments: args,
 						Status:    v1.StatusCompleted,
@@ -601,7 +614,7 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 	case v1.ItemTypeFunctionCall:
 		completedItem = &v1.FunctionCall{
 			ID:        s.currentItemID,
-			CallID:    s.currentFCName,
+			CallID:    geminiCallID(s.currentFCName, s.currentIndex),
 			Name:      s.currentFCName,
 			Arguments: s.argsBuf.String(),
 			Status:    v1.StatusCompleted,
@@ -648,6 +661,12 @@ type canonicalToGeminiStream struct {
 	// accumulated parts for the current candidate
 	parts        []geminiPart
 	finishReason string
+	// current function-call item being assembled. Gemini does not stream
+	// partial function args (unlike canonical's arguments deltas), so we
+	// buffer them and emit one complete functionCall frame on item.completed.
+	inFunctionCall bool
+	fcName         string
+	fcArgs         strings.Builder
 }
 
 func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
@@ -667,7 +686,17 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		return nil, nil // Gemini has no session-open frame
 
 	case v1.EventItemStarted:
-		// No Gemini equivalent; parts are emitted on delta/completed.
+		var e v1.ItemStartedEvent
+		if err := json.Unmarshal(data, &e); err != nil {
+			return nil, fmt.Errorf("canonical→gemini: item.started: %w", err)
+		}
+		if e.ItemType == v1.ItemTypeFunctionCall {
+			// Begin buffering a function call; args arrive as deltas and the
+			// complete functionCall is emitted on item.completed.
+			s.inFunctionCall = true
+			s.fcName = e.Name
+			s.fcArgs.Reset()
+		}
 		return nil, nil
 
 	case v1.EventItemDelta:
@@ -675,7 +704,9 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		if err := json.Unmarshal(data, &e); err != nil {
 			return nil, fmt.Errorf("canonical→gemini: item.delta: %w", err)
 		}
-		// Emit an incremental frame per delta.
+		// Text and reasoning stream incrementally (Gemini streams text parts).
+		// Arguments are buffered, not streamed — Gemini emits functionCall
+		// whole, so accumulate and flush on item.completed.
 		var p geminiPart
 		switch e.Kind {
 		case v1.DeltaKindText:
@@ -683,9 +714,8 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		case v1.DeltaKindReasoning:
 			p = geminiPart{Text: e.Delta, Thought: true}
 		case v1.DeltaKindArguments:
-			// Arguments stream as a functionCall part; args may be partial JSON.
-			// We emit the delta wrapped as-is; clients must accumulate.
-			p = geminiPart{FunctionCall: &geminiFC{Args: json.RawMessage(fmt.Sprintf("%q", e.Delta))}}
+			s.fcArgs.WriteString(e.Delta)
+			return nil, nil
 		default:
 			return nil, nil
 		}
@@ -699,8 +729,28 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 		return geminiSSEBytes(frame)
 
 	case v1.EventItemCompleted:
-		// Emit nothing extra; the deltas already carried the content.
-		return nil, nil
+		if !s.inFunctionCall {
+			// Text/reasoning content already streamed via deltas.
+			return nil, nil
+		}
+		// Flush the buffered function call as one complete frame. The
+		// accumulated args are a complete JSON object string; embed verbatim
+		// (fall back to {} if empty or invalid).
+		s.inFunctionCall = false
+		args := json.RawMessage("{}")
+		if a := s.fcArgs.String(); a != "" && json.Valid([]byte(a)) {
+			args = json.RawMessage(a)
+		}
+		frame := geminiResponse{
+			Candidates: []candidate{{
+				Content: &geminiContent{Role: "model", Parts: []geminiPart{{
+					FunctionCall: &geminiFC{Name: s.fcName, Args: args},
+				}}},
+				Index: 0,
+			}},
+			ModelVersion: s.model,
+		}
+		return geminiSSEBytes(frame)
 
 	case v1.EventGenerationCompleted:
 		var e v1.GenerationCompletedEvent
@@ -932,7 +982,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 				respRaw = b
 			}
 			parts = append(parts, geminiPart{FunctionResponse: &geminiFR{
-				Name:     fco.CallID,
+				Name:     geminiFuncNameFromCallID(fco.CallID),
 				Response: respRaw,
 			}})
 		}
@@ -1087,6 +1137,27 @@ func canonicalChoiceToGemini(tc *v1.ToolChoice) *toolConfig {
 	return &toolConfig{FunctionCallingConfig: cfg}
 }
 
+// Gemini has no per-call IDs — it matches tool results to calls by function
+// name. Canonical (and OpenAI/Anthropic clients downstream) require a unique
+// CallID per call, so we synthesize CallID = name + callIDSep + index and
+// strip it back to the bare name when emitting a functionResponse upstream.
+// callIDSep is chosen to never collide with a real function name.
+const callIDSep = "__relay_call_"
+
+func geminiCallID(name string, idx int) string {
+	return fmt.Sprintf("%s%s%d", name, callIDSep, idx)
+}
+
+// geminiFuncNameFromCallID recovers the bare Gemini function name from a
+// CallID we synthesized (or returns the input unchanged if it carries no
+// suffix — e.g. a CallID minted by a different inbound adapter).
+func geminiFuncNameFromCallID(callID string) string {
+	if i := strings.LastIndex(callID, callIDSep); i >= 0 {
+		return callID[:i]
+	}
+	return callID
+}
+
 // geminiFinishReasonToCanonical maps a Gemini finishReason string to canonical status/finish/incomplete.
 func geminiFinishReasonToCanonical(reason string, hasFunctionCall bool) (v1.Status, v1.FinishReason, *v1.IncompleteDetails) {
 	if hasFunctionCall {
@@ -1097,10 +1168,22 @@ func geminiFinishReasonToCanonical(reason string, hasFunctionCall bool) (v1.Stat
 		return v1.StatusCompleted, v1.FinishReasonStop, nil
 	case "MAX_TOKENS":
 		return v1.StatusIncomplete, v1.FinishReasonLength, &v1.IncompleteDetails{Reason: "max_tokens"}
-	case "SAFETY", "RECITATION":
-		return v1.StatusCompleted, v1.FinishReasonContentFilter, nil
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
+		// Content blocked by Gemini's safety/policy filters. Must NOT look like
+		// a normal STOP — safety auditing, retry, and billing classification
+		// downstream branch on content_filter.
+		return v1.StatusIncomplete, v1.FinishReasonContentFilter, &v1.IncompleteDetails{Reason: "content_filter"}
+	case "MALFORMED_FUNCTION_CALL":
+		// Gemini failed to emit a valid function call — a generation failure,
+		// not a clean stop.
+		return v1.StatusFailed, v1.FinishReasonStop, &v1.IncompleteDetails{Reason: "malformed_function_call"}
+	case "LANGUAGE":
+		// Unsupported language — treated as a content filter (output withheld).
+		return v1.StatusIncomplete, v1.FinishReasonContentFilter, &v1.IncompleteDetails{Reason: "unsupported_language"}
 	default:
-		return v1.StatusCompleted, v1.FinishReasonStop, nil
+		// Unknown/future reason: surface as incomplete with the raw reason
+		// rather than silently masquerading as a successful stop.
+		return v1.StatusIncomplete, v1.FinishReasonStop, &v1.IncompleteDetails{Reason: "gemini:" + reason}
 	}
 }
 

@@ -658,6 +658,151 @@ func TestStreamCanonicalToGemini_TextFlow(t *testing.T) {
 	}
 }
 
+// ---- regression tests for fidelity-audit fixes ----
+
+// Parallel calls to the same function must get distinct CallIDs, and the bare
+// function name must be recoverable for the functionResponse round-trip.
+func TestParseResponse_ParallelSameFunction_UniqueCallIDs(t *testing.T) {
+	body := `{"candidates":[{"content":{"role":"model","parts":[
+		{"functionCall":{"name":"search","args":{"q":"a"}}},
+		{"functionCall":{"name":"search","args":{"q":"b"}}}
+	]},"index":0}]}`
+	resp, err := tr.ParseResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, it := range resp.Output {
+		fc, ok := it.(*v1.FunctionCall)
+		if !ok {
+			t.Fatalf("item type %T", it)
+		}
+		ids = append(ids, fc.CallID)
+		if fc.Name != "search" {
+			t.Errorf("name: %s", fc.Name)
+		}
+		if got := geminiFuncNameFromCallID(fc.CallID); got != "search" {
+			t.Errorf("name not recoverable from CallID %q: got %q", fc.CallID, got)
+		}
+	}
+	if len(ids) != 2 || ids[0] == ids[1] {
+		t.Errorf("CallIDs must be unique, got %v", ids)
+	}
+}
+
+// A FunctionCallOutput whose CallID carries our synthesized suffix must
+// serialize to a Gemini functionResponse with the BARE function name.
+func TestSerializeRequest_FunctionResponse_RecoversBareName(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gemini-1.5-pro"},
+		Input: []v1.Item{
+			&v1.FunctionCallOutput{CallID: geminiCallID("search", 1), Output: `{"result":"ok"}`},
+		},
+	}
+	body, err := tr.SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), callIDSep) {
+		t.Errorf("synthesized CallID suffix leaked to wire: %s", body)
+	}
+	if !strings.Contains(string(body), `"name":"search"`) {
+		t.Errorf("functionResponse name not bare: %s", body)
+	}
+}
+
+// Safety/policy finishReasons must surface as content_filter + incomplete,
+// never as a normal stop.
+func TestParseResponse_SafetyFinishReason_NotStop(t *testing.T) {
+	for _, reason := range []string{"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"} {
+		body := `{"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"` + reason + `","index":0}]}`
+		resp, err := tr.ParseResponse([]byte(body))
+		if err != nil {
+			t.Fatalf("%s: %v", reason, err)
+		}
+		if resp.FinishReason != v1.FinishReasonContentFilter {
+			t.Errorf("%s: finish_reason = %s, want content_filter", reason, resp.FinishReason)
+		}
+		if resp.Status != v1.StatusIncomplete {
+			t.Errorf("%s: status = %s, want incomplete", reason, resp.Status)
+		}
+	}
+}
+
+// Structured-output (Output.Format) must populate Gemini responseSchema/MIME.
+func TestSerializeRequest_OutputFormat_JSONSchema(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"x":{"type":"number"}}}`)
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gemini-1.5-pro"},
+		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}}},
+		ModelConfig: map[string]*v1.ModelOpts{
+			"gemini-1.5-pro": {Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: schema}}},
+		},
+	}
+	body, err := tr.SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire geminiRequest
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.GenerationConfig == nil || wire.GenerationConfig.ResponseMIMEType != "application/json" {
+		t.Fatalf("responseMimeType not set: %s", body)
+	}
+	if wire.GenerationConfig.ResponseSchema == nil {
+		t.Errorf("responseSchema not set: %s", body)
+	}
+}
+
+// Streamed function-call arguments must accumulate into ONE functionCall frame
+// whose args are a JSON object (not a %q-quoted string) emitted on completion.
+func TestStreamCanonicalToGemini_FunctionArgsBuffered(t *testing.T) {
+	fn := tr.NewFromCanonicalStream()
+	_, _ = fn(makeCanonSSEChunk(t, v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "r", Model: "gemini-1.5-pro"}))
+	if out, _ := fn(makeCanonSSEChunk(t, v1.EventItemStarted, v1.ItemStartedEvent{
+		ItemID: "fc_0", ItemType: v1.ItemTypeFunctionCall, Index: 0, Name: "search",
+	})); out != nil {
+		t.Errorf("item.started should emit nothing, got %s", out)
+	}
+	// Arguments arrive in two partial deltas; neither should emit a frame.
+	if out, _ := fn(makeCanonSSEChunk(t, v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_0", Kind: v1.DeltaKindArguments, Delta: `{"q":`})); out != nil {
+		t.Errorf("partial args delta should emit nothing, got %s", out)
+	}
+	if out, _ := fn(makeCanonSSEChunk(t, v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_0", Kind: v1.DeltaKindArguments, Delta: `"hi"}`})); out != nil {
+		t.Errorf("partial args delta should emit nothing, got %s", out)
+	}
+	out, err := fn(makeCanonSSEChunk(t, v1.EventItemCompleted, v1.ItemCompletedEvent{
+		ItemID: "fc_0", Index: 0, Item: &v1.FunctionCall{CallID: "search__relay_call_0", Name: "search", Arguments: `{"q":"hi"}`},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Parse the emitted Gemini frame and verify args is an OBJECT, not a string.
+	_, data, ok := v1.ParseSSEChunk(out)
+	if !ok {
+		t.Fatalf("no SSE frame emitted on completion: %q", out)
+	}
+	var frame geminiResponse
+	if err := json.Unmarshal(data, &frame); err != nil {
+		t.Fatalf("frame not valid JSON: %v (%s)", err, data)
+	}
+	if len(frame.Candidates) == 0 || frame.Candidates[0].Content == nil || len(frame.Candidates[0].Content.Parts) == 0 {
+		t.Fatalf("no functionCall part: %s", data)
+	}
+	fc := frame.Candidates[0].Content.Parts[0].FunctionCall
+	if fc == nil || fc.Name != "search" {
+		t.Fatalf("functionCall name wrong: %s", data)
+	}
+	var args map[string]any
+	if err := json.Unmarshal(fc.Args, &args); err != nil {
+		t.Fatalf("args is not a JSON object (the %%q bug): %s", fc.Args)
+	}
+	if args["q"] != "hi" {
+		t.Errorf("args content wrong: %v", args)
+	}
+}
+
 // ---- helpers ----
 
 func jsonMust(v any) []byte {
