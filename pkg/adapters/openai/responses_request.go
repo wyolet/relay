@@ -6,11 +6,11 @@ import "encoding/json"
 // Input is always normalized to []ResponsesItem internally; callers never see the
 // string form.
 type ResponsesRequest struct {
-	Model  string         `json:"model"`
-	Input  []ResponsesItem `json:"-"` // normalized; string form is expanded at parse
+	Model string          `json:"model"`
+	Input []ResponsesItem `json:"-"` // normalized; string form is expanded at parse
 
-	Instructions string              `json:"instructions,omitempty"`
-	Tools        ResponsesTools      `json:"tools,omitempty"`
+	Instructions string               `json:"instructions,omitempty"`
+	Tools        ResponsesTools       `json:"tools,omitempty"`
 	ToolChoice   *ResponsesToolChoice `json:"tool_choice,omitempty"`
 
 	Temperature     *float64 `json:"temperature,omitempty"`
@@ -58,6 +58,8 @@ type ResponsesFormat struct {
 
 // ResponsesReasoningConfig controls reasoning effort.
 // Effort is one of: "none", "minimal", "low", "medium", "high", "xhigh".
+// Summary is one of: "auto", "concise", "detailed".
 type ResponsesReasoningConfig struct {
-	Effort string `json:"effort,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }

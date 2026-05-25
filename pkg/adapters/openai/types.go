@@ -20,15 +20,15 @@ type FullChatRequest struct {
 	TopP        *float64          `json:"top_p,omitempty"`
 	User        string            `json:"user,omitempty"`
 
-	FrequencyPenalty *float64       `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64       `json:"presence_penalty,omitempty"`
-	N                *int           `json:"n,omitempty"`
-	Seed             *int64         `json:"seed,omitempty"`
-	LogitBias        map[string]int `json:"logit_bias,omitempty"`
-	Logprobs         *bool          `json:"logprobs,omitempty"`
-	TopLogprobs      *int           `json:"top_logprobs,omitempty"`
-	MaxTokens        *int           `json:"max_tokens,omitempty"`            // deprecated but widely used
-	MaxCompletion    *int           `json:"max_completion_tokens,omitempty"` // includes reasoning tokens
+	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
+	N                *int            `json:"n,omitempty"`
+	Seed             *int64          `json:"seed,omitempty"`
+	LogitBias        map[string]int  `json:"logit_bias,omitempty"`
+	Logprobs         *bool           `json:"logprobs,omitempty"`
+	TopLogprobs      *int            `json:"top_logprobs,omitempty"`
+	MaxTokens        *int            `json:"max_tokens,omitempty"`            // deprecated but widely used
+	MaxCompletion    *int            `json:"max_completion_tokens,omitempty"` // includes reasoning tokens
 	Stop             json.RawMessage `json:"stop,omitempty"`                  // string | []string
 	Stream           *bool           `json:"stream,omitempty"`
 	StreamOptions    *StreamOptions  `json:"stream_options,omitempty"`
@@ -38,7 +38,7 @@ type FullChatRequest struct {
 	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
 
 	Tools             []Tool          `json:"tools,omitempty"`
-	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`        // "none" | "auto" | "required" | object
+	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"` // "none" | "auto" | "required" | object
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 }
 
@@ -124,47 +124,47 @@ func (r *FullChatRequest) Validate() error {
 // --- Response types ---
 
 type ChatResponse struct {
-	ID                string       `json:"id"`
-	Object            string       `json:"object"`
-	Created           int64        `json:"created"`
-	Model             string       `json:"model"`
-	SystemFingerprint string       `json:"system_fingerprint,omitempty"`
-	ServiceTier       string       `json:"service_tier,omitempty"`
-	Choices           []Choice     `json:"choices"`
-	Usage             *Usage       `json:"usage,omitempty"`
+	ID                string   `json:"id"`
+	Object            string   `json:"object"`
+	Created           int64    `json:"created"`
+	Model             string   `json:"model"`
+	SystemFingerprint string   `json:"system_fingerprint,omitempty"`
+	ServiceTier       string   `json:"service_tier,omitempty"`
+	Choices           []Choice `json:"choices"`
+	Usage             *Usage   `json:"usage,omitempty"`
 }
 
 type ChatStreamChunk struct {
-	ID                string          `json:"id"`
-	Object            string          `json:"object"`
-	Created           int64           `json:"created"`
-	Model             string          `json:"model"`
-	SystemFingerprint string          `json:"system_fingerprint,omitempty"`
-	ServiceTier       string          `json:"service_tier,omitempty"`
-	Choices           []StreamChoice  `json:"choices"`
-	Usage             *Usage          `json:"usage,omitempty"`
+	ID                string         `json:"id"`
+	Object            string         `json:"object"`
+	Created           int64          `json:"created"`
+	Model             string         `json:"model"`
+	SystemFingerprint string         `json:"system_fingerprint,omitempty"`
+	ServiceTier       string         `json:"service_tier,omitempty"`
+	Choices           []StreamChoice `json:"choices"`
+	Usage             *Usage         `json:"usage,omitempty"`
 }
 
 type Choice struct {
-	Index        int                  `json:"index"`
-	Message      ChatResponseMessage  `json:"message"`
-	FinishReason string               `json:"finish_reason"`
-	Logprobs     *ChoiceLogprobs      `json:"logprobs,omitempty"`
+	Index        int                 `json:"index"`
+	Message      ChatResponseMessage `json:"message"`
+	FinishReason string              `json:"finish_reason"`
+	Logprobs     *ChoiceLogprobs     `json:"logprobs,omitempty"`
 }
 
 // ChatResponseMessage is the assistant message in a non-streaming response.
 // Content is nullable per the spec (null when refusal is set).
 type ChatResponseMessage struct {
-	Role        string          `json:"role"`
-	Content     *string         `json:"content"`
-	Refusal     *string         `json:"refusal,omitempty"`
-	ToolCalls   []ToolCall      `json:"tool_calls,omitempty"`
-	Annotations []Annotation    `json:"annotations,omitempty"`
+	Role        string       `json:"role"`
+	Content     *string      `json:"content"`
+	Refusal     *string      `json:"refusal,omitempty"`
+	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
+	Annotations []Annotation `json:"annotations,omitempty"`
 }
 
 // Annotation is a URL citation attached to an assistant message (web search tool).
 type Annotation struct {
-	Type       string      `json:"type"`
+	Type        string      `json:"type"`
 	URLCitation URLCitation `json:"url_citation"`
 }
 
@@ -194,9 +194,9 @@ type StreamDelta struct {
 // ToolCallChunk is a partial tool call as delivered in a streaming chunk.
 // Index identifies which tool call this fragment belongs to.
 type ToolCallChunk struct {
-	Index    int                   `json:"index"`
-	ID       string                `json:"id,omitempty"`
-	Type     string                `json:"type,omitempty"`
+	Index    int                    `json:"index"`
+	ID       string                 `json:"id,omitempty"`
+	Type     string                 `json:"type,omitempty"`
 	Function *ToolCallFunctionChunk `json:"function,omitempty"`
 }
 
@@ -211,10 +211,10 @@ type ChoiceLogprobs struct {
 }
 
 type TokenLogprob struct {
-	Token       string         `json:"token"`
-	Logprob     float64        `json:"logprob"`
-	Bytes       []int          `json:"bytes,omitempty"`
-	TopLogprobs []TopLogprob   `json:"top_logprobs,omitempty"`
+	Token       string       `json:"token"`
+	Logprob     float64      `json:"logprob"`
+	Bytes       []int        `json:"bytes,omitempty"`
+	TopLogprobs []TopLogprob `json:"top_logprobs,omitempty"`
 }
 
 type TopLogprob struct {

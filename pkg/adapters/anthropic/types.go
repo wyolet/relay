@@ -30,14 +30,14 @@ type Tool struct {
 
 // MessagesResponse is the non-streaming response from POST /v1/messages.
 type MessagesResponse struct {
-	ID           string          `json:"id"`
-	Type         string          `json:"type"`
-	Role         string          `json:"role"`
-	Model        string          `json:"model"`
-	Content      []ContentBlock  `json:"content"`
-	StopReason   string          `json:"stop_reason"`
-	StopSequence *string         `json:"stop_sequence,omitempty"`
-	Usage        ResponseUsage   `json:"usage"`
+	ID           string         `json:"id"`
+	Type         string         `json:"type"`
+	Role         string         `json:"role"`
+	Model        string         `json:"model"`
+	Content      []ContentBlock `json:"content"`
+	StopReason   string         `json:"stop_reason"`
+	StopSequence *string        `json:"stop_sequence,omitempty"`
+	Usage        ResponseUsage  `json:"usage"`
 }
 
 // ContentBlock is one element of the Anthropic response content array.

@@ -214,6 +214,7 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 }
 
 // SerializeRequest encodes a canonical *v1.Request to a CC /v1/chat/completions body.
+// SerializeRequest encodes a canonical *v1.Request to a CC /v1/chat/completions body.
 func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if len(req.Model) == 0 {
 		return nil, fmt.Errorf("cc serialize_request: model is required")
@@ -285,10 +286,11 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 	}
 
-	// Stream flag
+	// Stream flag + include_usage so the terminal chunk carries token counts.
 	if req.OutputMode == v1.OutputModeStream {
 		t := true
 		out.Stream = &t
+		out.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
 
 	// Messages: instructions → system message; items → messages.
@@ -337,12 +339,31 @@ func (CCTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 
 // SerializeResponse encodes a canonical *v1.Response to a CC response body.
 // req is unused (CC doesn't require request-echo). May be nil.
+// SerializeResponse encodes a canonical *v1.Response to a CC response body.
+// req is unused (CC doesn't require request-echo). May be nil.
 func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte, error) {
+	// CC-5: surface errors as an OpenAI error body instead of a silent empty choices response.
+	if resp.Error != nil {
+		type ccError struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		}
+		type ccErrorBody struct {
+			Error ccError `json:"error"`
+		}
+		return json.Marshal(ccErrorBody{Error: ccError{
+			Message: resp.Error.Message,
+			Type:    resp.Error.Code,
+			Code:    resp.Error.Code,
+		}})
+	}
+
 	cc := ChatResponse{
-		ID:        resp.ID,
-		Object:    "chat.completion",
-		Created:   resp.CreatedAt,
-		Model:     resp.Model,
+		ID:      resp.ID,
+		Object:  "chat.completion",
+		Created: resp.CreatedAt,
+		Model:   resp.Model,
 	}
 	if len(resp.Usage) > 0 {
 		cc.Usage = canonicalUsageToCC(resp.Usage)
@@ -430,11 +451,13 @@ func (CCTranslator) NewToCanonicalStream() func(chunk []byte) ([]byte, error) {
 }
 
 // NewFromCanonicalStream returns a stateful per-stream function that converts
-// one canonical SSE chunk into one or more CC SSE chunks. For CCTranslator this
-// is not a real use-case (CC is upstream, not inbound), but is implemented for
-// completeness.
+// one canonical SSE chunk into one or more CC chat.completion.chunk SSE frames.
+// This path is live whenever an inbound /v1/chat/completions caller is routed to
+// a non-OpenAI upstream (e.g. Anthropic) — the pipeline composes
+// anthropic.NewToCanonicalStream → this function.
 func (CCTranslator) NewFromCanonicalStream() func(chunk []byte) ([]byte, error) {
-	return nil // identity: canonical → CC is not a production path
+	s := &canonicalToCCStream{}
+	return s.translate
 }
 
 // --- helpers ---
@@ -739,6 +762,8 @@ func ccFinishReasonToCanonical(reason string) (v1.Status, v1.FinishReason, *v1.I
 }
 
 // ccChoiceToCanonicalOutput converts a CC Choice to canonical []v1.Item.
+// ccChoiceToCanonicalOutput converts a CC Choice to canonical []v1.Item.
+// CC-2: map message-level annotations to OutputTextPart.Annotations.
 func ccChoiceToCanonicalOutput(ccID string, ch *Choice) []v1.Item {
 	var items []v1.Item
 	msg := ch.Message
@@ -760,10 +785,20 @@ func ccChoiceToCanonicalOutput(ccID string, ch *Choice) []v1.Item {
 			Status: v1.StatusCompleted,
 		}
 		if textContent != "" {
-			msgItem.Content = []v1.Part{&v1.OutputTextPart{Text: textContent}}
+			part := &v1.OutputTextPart{Text: textContent}
+			for _, ann := range msg.Annotations {
+				if ann.Type == "url_citation" {
+					part.Annotations = append(part.Annotations, &v1.URLCitationAnnotation{
+						StartIndex: ann.URLCitation.StartIndex,
+						EndIndex:   ann.URLCitation.EndIndex,
+						URL:        ann.URLCitation.URL,
+						Title:      ann.URLCitation.Title,
+					})
+				}
+			}
+			msgItem.Content = []v1.Part{part}
 		}
 		// Canonical rule 9: refusal text is in normal message content with finish_reason="refusal".
-		// The finish_reason is set separately. Here we carry the refusal text as output text.
 		if refusal != "" {
 			msgItem.Content = append(msgItem.Content, &v1.OutputTextPart{Text: refusal})
 		}
@@ -791,6 +826,13 @@ func ccChoiceToCanonicalOutput(ccID string, ch *Choice) []v1.Item {
 // means non-cached input only (consistent with Anthropic semantics).
 // We subtract cached_tokens from prompt_tokens so the meter
 // dimensions stay non-overlapping under Tokens.Sum().
+// ccUsageToCanonical maps CC's Usage block to the canonical
+// orthogonal-meter Tokens map.
+//
+// OpenAI's prompt_tokens INCLUDES cached tokens; canonical "input"
+// means non-cached input only (consistent with Anthropic semantics).
+// We subtract cached_tokens from prompt_tokens so the meter
+// dimensions stay non-overlapping under Tokens.Sum().
 func ccUsageToCanonical(u *Usage) usage.Tokens {
 	if u == nil {
 		return nil
@@ -809,8 +851,22 @@ func ccUsageToCanonical(u *Usage) usage.Tokens {
 	if cached > 0 {
 		t["cache_read"] = cached
 	}
-	if u.CompletionDetails != nil && u.CompletionDetails.ReasoningTokens > 0 {
-		t["reasoning"] = int64(u.CompletionDetails.ReasoningTokens)
+	if u.PromptDetails != nil && u.PromptDetails.AudioTokens > 0 {
+		t["audio_input"] = int64(u.PromptDetails.AudioTokens)
+	}
+	if u.CompletionDetails != nil {
+		if u.CompletionDetails.ReasoningTokens > 0 {
+			t["reasoning"] = int64(u.CompletionDetails.ReasoningTokens)
+		}
+		if u.CompletionDetails.AudioTokens > 0 {
+			t["audio_output"] = int64(u.CompletionDetails.AudioTokens)
+		}
+		if u.CompletionDetails.AcceptedPredictionTokens > 0 {
+			t["accepted_prediction"] = int64(u.CompletionDetails.AcceptedPredictionTokens)
+		}
+		if u.CompletionDetails.RejectedPredictionTokens > 0 {
+			t["rejected_prediction"] = int64(u.CompletionDetails.RejectedPredictionTokens)
+		}
 	}
 	if len(t) == 0 {
 		return nil
@@ -872,7 +928,7 @@ func ccFormatToResponseFormat(f *v1.Format) (*ResponseFormat, error) {
 type ccStreamItemKind int
 
 const (
-	ccStreamKindMessage   ccStreamItemKind = iota
+	ccStreamKindMessage ccStreamItemKind = iota
 	ccStreamKindToolCall
 	ccStreamKindReasoning
 )
@@ -1239,6 +1295,265 @@ func ccExtractReasoningContent(raw []byte) string {
 
 // marshalCanonicalFrames serializes a slice of v1.SSEFrame values to wire bytes.
 // Returns all frames concatenated.
+// canonicalToCCStream converts canonical SSE frames to OpenAI chat.completion.chunk
+// SSE frames. Used by NewFromCanonicalStream when a CC inbound caller is served by
+// a non-CC upstream (e.g. Anthropic → canonical → CC).
+type canonicalToCCStream struct {
+	responseID string
+	model      string
+	created    int64
+	toolItems  map[string]ccFromCanonicalToolItem // itemID → per-item state
+}
+
+type ccFromCanonicalToolItem struct {
+	index  int // sequential index within this response's tool_calls array
+	callID string
+	name   string
+}
+
+func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
+	event, data, ok := v1.ParseSSEChunk(chunk)
+	if !ok {
+		return nil, nil
+	}
+
+	if s.toolItems == nil {
+		s.toolItems = make(map[string]ccFromCanonicalToolItem)
+	}
+
+	var out []byte
+
+	switch event {
+	case v1.EventGenerationCreated:
+		var ev v1.GenerationCreatedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, fmt.Errorf("cc from_canonical stream: created: %w", err)
+		}
+		s.responseID = ev.ID
+		s.model = ev.Model
+		if s.created == 0 {
+			s.created = time.Now().Unix()
+		}
+		// Role-bearing first chunk; no content yet.
+		role := "assistant"
+		b, _ := json.Marshal(ChatStreamChunk{
+			ID:      s.responseID,
+			Object:  "chat.completion.chunk",
+			Created: s.created,
+			Model:   s.model,
+			Choices: []StreamChoice{{
+				Index:        0,
+				Delta:        StreamDelta{Role: role},
+				FinishReason: nil,
+			}},
+		})
+		out = append(out, ccSSEDataFrame(b)...)
+
+	case v1.EventItemStarted:
+		var ev v1.ItemStartedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		if ev.ItemType == v1.ItemTypeFunctionCall {
+			idx := len(s.toolItems)
+			// Emit the id+name header chunk for this tool call immediately:
+			// CC streaming convention is id+type+name on the first chunk, then
+			// arguments-only deltas follow.
+			callID := ev.ItemID
+			s.toolItems[ev.ItemID] = ccFromCanonicalToolItem{index: idx, callID: callID, name: ev.Name}
+			b, _ := json.Marshal(ChatStreamChunk{
+				ID:      s.responseID,
+				Object:  "chat.completion.chunk",
+				Created: s.created,
+				Model:   s.model,
+				Choices: []StreamChoice{{
+					Index: 0,
+					Delta: StreamDelta{
+						ToolCalls: []ToolCallChunk{{
+							Index: idx,
+							ID:    callID,
+							Type:  "function",
+							Function: &ToolCallFunctionChunk{
+								Name: ev.Name,
+							},
+						}},
+					},
+					FinishReason: nil,
+				}},
+			})
+			out = append(out, ccSSEDataFrame(b)...)
+		}
+
+	case v1.EventItemDelta:
+		var ev v1.ItemDeltaEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		switch ev.Kind {
+		case v1.DeltaKindText:
+			b, _ := json.Marshal(ChatStreamChunk{
+				ID:      s.responseID,
+				Object:  "chat.completion.chunk",
+				Created: s.created,
+				Model:   s.model,
+				Choices: []StreamChoice{{
+					Index:        0,
+					Delta:        StreamDelta{Content: &ev.Delta},
+					FinishReason: nil,
+				}},
+			})
+			out = append(out, ccSSEDataFrame(b)...)
+
+		case v1.DeltaKindArguments:
+			ti, ok := s.toolItems[ev.ItemID]
+			if !ok {
+				break
+			}
+			b, _ := json.Marshal(ChatStreamChunk{
+				ID:      s.responseID,
+				Object:  "chat.completion.chunk",
+				Created: s.created,
+				Model:   s.model,
+				Choices: []StreamChoice{{
+					Index: 0,
+					Delta: StreamDelta{
+						ToolCalls: []ToolCallChunk{{
+							Index:    ti.index,
+							Function: &ToolCallFunctionChunk{Arguments: ev.Delta},
+						}},
+					},
+					FinishReason: nil,
+				}},
+			})
+			out = append(out, ccSSEDataFrame(b)...)
+
+		case v1.DeltaKindReasoning:
+			// reasoning_content is a non-standard extension present on some o-series
+			// deployments; clients that don't understand it skip it safely.
+			b, _ := ccMarshalReasoningChunk(s.responseID, s.model, s.created, ev.Delta)
+			out = append(out, ccSSEDataFrame(b)...)
+		}
+
+	case v1.EventItemCompleted:
+		// item.completed carries the full assembled item; use it to patch in the
+		// real call_id for any tool call whose id we only know now.
+		var evHeader struct {
+			ItemID string `json:"item_id"`
+			Item   struct {
+				CallID string `json:"call_id"`
+				Name   string `json:"name"`
+			} `json:"item"`
+		}
+		if err := json.Unmarshal(data, &evHeader); err != nil {
+			return nil, nil
+		}
+		if ti, ok := s.toolItems[evHeader.ItemID]; ok {
+			if evHeader.Item.CallID != "" && ti.callID != evHeader.Item.CallID {
+				ti.callID = evHeader.Item.CallID
+				s.toolItems[evHeader.ItemID] = ti
+			}
+		}
+
+	case v1.EventGenerationCompleted:
+		var ev v1.GenerationCompletedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		fr := canonicalFinishReasonToCC(ev.FinishReason)
+		finalChunk := ChatStreamChunk{
+			ID:      s.responseID,
+			Object:  "chat.completion.chunk",
+			Created: s.created,
+			Model:   s.model,
+			Choices: []StreamChoice{{
+				Index:        0,
+				Delta:        StreamDelta{},
+				FinishReason: &fr,
+			}},
+		}
+		if len(ev.Usage) > 0 {
+			finalChunk.Usage = canonicalUsageToCC(ev.Usage)
+		}
+		b, _ := json.Marshal(finalChunk)
+		out = append(out, ccSSEDataFrame(b)...)
+		out = append(out, []byte("data: [DONE]\n\n")...)
+
+	case v1.EventError:
+		var ev v1.ErrorEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		errBody := map[string]any{
+			"error": map[string]string{
+				"message": ev.Message,
+				"type":    ev.Code,
+				"code":    ev.Code,
+			},
+		}
+		b, _ := json.Marshal(errBody)
+		out = append(out, ccSSEDataFrame(b)...)
+		out = append(out, []byte("data: [DONE]\n\n")...)
+	}
+
+	return out, nil
+}
+
+// ccSSEDataFrame wraps JSON bytes in a CC SSE data frame (no event: line — CC
+// uses bare data: lines, not event: lines).
+func ccSSEDataFrame(data []byte) []byte {
+	frame := make([]byte, 0, len(data)+8)
+	frame = append(frame, []byte("data: ")...)
+	frame = append(frame, data...)
+	frame = append(frame, '\n', '\n')
+	return frame
+}
+
+// canonicalFinishReasonToCC maps canonical FinishReason to CC finish_reason strings.
+func canonicalFinishReasonToCC(fr v1.FinishReason) string {
+	switch fr {
+	case v1.FinishReasonStop:
+		return "stop"
+	case v1.FinishReasonLength:
+		return "length"
+	case v1.FinishReasonToolCalls:
+		return "tool_calls"
+	case v1.FinishReasonContentFilter:
+		return "content_filter"
+	case v1.FinishReasonRefusal:
+		return "stop"
+	default:
+		return "stop"
+	}
+}
+
+// ccMarshalReasoningChunk builds a CC chunk carrying a reasoning_content delta.
+func ccMarshalReasoningChunk(id, model string, created int64, delta string) ([]byte, error) {
+	type reasoningDelta struct {
+		ReasoningContent string `json:"reasoning_content"`
+	}
+	type reasoningChoice struct {
+		Index        int            `json:"index"`
+		Delta        reasoningDelta `json:"delta"`
+		FinishReason *string        `json:"finish_reason"`
+	}
+	type reasoningChunk struct {
+		ID      string            `json:"id"`
+		Object  string            `json:"object"`
+		Created int64             `json:"created"`
+		Model   string            `json:"model"`
+		Choices []reasoningChoice `json:"choices"`
+	}
+	return json.Marshal(reasoningChunk{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   model,
+		Choices: []reasoningChoice{{
+			Index: 0,
+			Delta: reasoningDelta{ReasoningContent: delta},
+		}},
+	})
+}
 func marshalCanonicalFrames(frames []v1.SSEFrame) []byte {
 	var buf []byte
 	for _, f := range frames {

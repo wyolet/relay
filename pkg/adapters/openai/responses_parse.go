@@ -15,8 +15,8 @@ import (
 //   - metadata exceeding caps returns an explicit error (caller maps to 400)
 func ParseResponsesRequest(body []byte) (*ResponsesRequest, error) {
 	var wire struct {
-		Model  string          `json:"model"`
-		Input  json.RawMessage `json:"input"`
+		Model string          `json:"model"`
+		Input json.RawMessage `json:"input"`
 
 		Instructions string          `json:"instructions"`
 		Tools        json.RawMessage `json:"tools"`

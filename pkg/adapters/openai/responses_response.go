@@ -9,8 +9,8 @@ import "encoding/json"
 // original *ResponsesRequest so the body matches the spec's required-field list.
 type ResponsesResponse struct {
 	ID           string                `json:"id"`
-	Object       string                `json:"object"`       // always "response"
-	CreatedAt    int64                 `json:"created_at"`   // unix seconds
+	Object       string                `json:"object"`     // always "response"
+	CreatedAt    int64                 `json:"created_at"` // unix seconds
 	Model        string                `json:"model"`
 	Status       ResponsesStatus       `json:"status"`
 	FinishReason ResponsesFinishReason `json:"finish_reason,omitempty"`
@@ -28,9 +28,9 @@ type ResponsesResponse struct {
 	// Tools serializes as [] when nil; Metadata as {}; ToolChoice as "auto".
 	// ParallelToolCalls is a plain bool — default true.
 	ParallelToolCalls bool              `json:"parallel_tool_calls"`
-	Tools             ResponsesTools    `json:"-"`             // handled in MarshalJSON
-	Metadata          map[string]string `json:"-"`             // handled in MarshalJSON
-	ToolChoiceRaw     json.RawMessage   `json:"-"`             // handled in MarshalJSON
+	Tools             ResponsesTools    `json:"-"` // handled in MarshalJSON
+	Metadata          map[string]string `json:"-"` // handled in MarshalJSON
+	ToolChoiceRaw     json.RawMessage   `json:"-"` // handled in MarshalJSON
 }
 
 // MarshalJSON emits the ResponsesResponse ensuring Tools→[], Metadata→{}, and
@@ -78,10 +78,10 @@ func (r ResponsesResponse) MarshalJSON() ([]byte, error) {
 // ResponsesUsage carries token counts for the Responses API response.
 // InputTokensDetails and OutputTokensDetails are always serialized per spec.
 type ResponsesUsage struct {
-	InputTokens         int                 `json:"input_tokens"`
-	OutputTokens        int                 `json:"output_tokens"`
-	TotalTokens         int                 `json:"total_tokens"`
-	InputTokensDetails  ResponsesInputDeets `json:"input_tokens_details"`
+	InputTokens         int                  `json:"input_tokens"`
+	OutputTokens        int                  `json:"output_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
+	InputTokensDetails  ResponsesInputDeets  `json:"input_tokens_details"`
 	OutputTokensDetails ResponsesOutputDeets `json:"output_tokens_details"`
 }
 

@@ -335,11 +335,11 @@ func TestCCParseRequest_ToolMessage(t *testing.T) {
 		"messages": []any{
 			map[string]any{"role": "user", "content": "use tool"},
 			map[string]any{
-				"role": "assistant",
+				"role":    "assistant",
 				"content": nil,
 				"tool_calls": []any{map[string]any{
-					"id":   "tc_1",
-					"type": "function",
+					"id":       "tc_1",
+					"type":     "function",
 					"function": map[string]any{"name": "f", "arguments": `{"x":1}`},
 				}},
 			},
@@ -670,9 +670,9 @@ func TestCCParseResponse_Refusal(t *testing.T) {
 
 func TestCCParseResponse_FinishReasonMappings(t *testing.T) {
 	cases := []struct {
-		reason        string
-		wantStatus    v1.Status
-		wantFinish    v1.FinishReason
+		reason         string
+		wantStatus     v1.Status
+		wantFinish     v1.FinishReason
 		wantIncomplete bool
 	}{
 		{"stop", v1.StatusCompleted, v1.FinishReasonStop, false},
@@ -1250,11 +1250,252 @@ func TestCCNewToCanonicalStream_ReasoningContent(t *testing.T) {
 	}
 }
 
-func TestCCNewFromCanonicalStream_ReturnsNil(t *testing.T) {
-	// CCTranslator.NewFromCanonicalStream returns nil (not a production path).
+// CC-1: NewFromCanonicalStream must return a non-nil function (was nil → panic).
+func TestCCNewFromCanonicalStream_NotNil(t *testing.T) {
 	fn := (CCTranslator{}).NewFromCanonicalStream()
-	if fn != nil {
-		t.Error("expected NewFromCanonicalStream to return nil for CCTranslator")
+	if fn == nil {
+		t.Fatal("NewFromCanonicalStream returned nil")
+	}
+}
+
+// CC-1: canonical event sequence → valid chat.completion.chunk frames + [DONE].
+func TestCCNewFromCanonicalStream_TextSequence(t *testing.T) {
+	fn := (CCTranslator{}).NewFromCanonicalStream()
+
+	var allOut []byte
+	feed := func(event string, data any) {
+		out, err := fn(canonicalChunk(event, data))
+		if err != nil {
+			t.Fatalf("translate %s: %v", event, err)
+		}
+		allOut = append(allOut, out...)
+	}
+
+	feed(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "resp_1", Model: "gpt-4o"})
+	feed(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "msg_0", ItemType: v1.ItemTypeMessage, Index: 0})
+	feed(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "msg_0", Index: 0, Kind: v1.DeltaKindText, Delta: "Hello"})
+	feed(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "msg_0", Index: 0, Item: &v1.Message{ID: "msg_0", Role: v1.RoleAssistant, Status: v1.StatusCompleted}})
+	feed(v1.EventGenerationCompleted, v1.GenerationCompletedEvent{ID: "resp_1", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop, Usage: usage.Tokens{"input": 5, "output": 3}})
+
+	allStr := string(allOut)
+	if !strings.Contains(allStr, "chat.completion.chunk") {
+		t.Errorf("expected chat.completion.chunk, got: %s", allStr)
+	}
+	if !strings.Contains(allStr, "Hello") {
+		t.Errorf("expected delta text 'Hello'")
+	}
+	if !strings.Contains(allStr, "[DONE]") {
+		t.Errorf("expected [DONE] terminator")
+	}
+	if !strings.Contains(allStr, "prompt_tokens") {
+		t.Errorf("expected usage in final chunk")
+	}
+}
+
+// CC-1: tool call streaming emits id+name on first chunk, arguments on delta chunks.
+func TestCCNewFromCanonicalStream_ToolCallSequence(t *testing.T) {
+	fn := (CCTranslator{}).NewFromCanonicalStream()
+
+	var allOut []byte
+	feed := func(event string, data any) {
+		out, err := fn(canonicalChunk(event, data))
+		if err != nil {
+			t.Fatalf("translate %s: %v", event, err)
+		}
+		allOut = append(allOut, out...)
+	}
+
+	feed(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "resp_tc", Model: "gpt-4o"})
+	feed(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "fc_0", ItemType: v1.ItemTypeFunctionCall, Index: 0, Name: "get_weather"})
+	feed(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_0", Index: 0, Kind: v1.DeltaKindArguments, Delta: `{"loc`})
+	feed(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_0", Index: 0, Kind: v1.DeltaKindArguments, Delta: `ation":"NYC"}`})
+	feed(v1.EventItemCompleted, v1.ItemCompletedEvent{ItemID: "fc_0", Index: 0, Item: &v1.FunctionCall{ID: "fc_0", CallID: "call_abc", Name: "get_weather", Arguments: `{"location":"NYC"}`, Status: v1.StatusCompleted}})
+	feed(v1.EventGenerationCompleted, v1.GenerationCompletedEvent{ID: "resp_tc", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonToolCalls})
+
+	allStr := string(allOut)
+	if !strings.Contains(allStr, "get_weather") {
+		t.Errorf("expected tool name 'get_weather'")
+	}
+	if !strings.Contains(allStr, "tool_calls") {
+		t.Errorf("expected finish_reason tool_calls")
+	}
+	if !strings.Contains(allStr, "[DONE]") {
+		t.Errorf("expected [DONE]")
+	}
+}
+
+// CC-1: error event produces an error body + [DONE].
+func TestCCNewFromCanonicalStream_ErrorEvent(t *testing.T) {
+	fn := (CCTranslator{}).NewFromCanonicalStream()
+
+	feed := func(event string, data any) []byte {
+		out, err := fn(canonicalChunk(event, data))
+		if err != nil {
+			t.Fatalf("translate %s: %v", event, err)
+		}
+		return out
+	}
+	var allOut []byte
+	allOut = append(allOut, feed(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "r", Model: "m"})...)
+	allOut = append(allOut, feed(v1.EventError, v1.ErrorEvent{Code: "server_error", Message: "boom"})...)
+
+	allStr := string(allOut)
+	if !strings.Contains(allStr, "boom") {
+		t.Errorf("error message missing: %s", allStr)
+	}
+	if !strings.Contains(allStr, "[DONE]") {
+		t.Errorf("[DONE] missing after error")
+	}
+}
+
+// CC-2: URL-citation annotations are mapped to OutputTextPart.Annotations.
+func TestCCParseResponse_URLCitationAnnotation(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":      "chatcmpl-ann",
+		"object":  "chat.completion",
+		"created": 1000,
+		"model":   "gpt-4o",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "Paris is the capital [1].",
+				"annotations": []any{map[string]any{
+					"type": "url_citation",
+					"url_citation": map[string]any{
+						"start_index": 21,
+						"end_index":   24,
+						"url":         "https://example.com/paris",
+						"title":       "Paris",
+					},
+				}},
+			},
+			"finish_reason": "stop",
+		}},
+	})
+	resp, err := (CCTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := resp.Output[0].(*v1.Message)
+	if !ok {
+		t.Fatalf("output[0] is %T", resp.Output[0])
+	}
+	part, ok := msg.Content[0].(*v1.OutputTextPart)
+	if !ok {
+		t.Fatalf("content[0] is %T", msg.Content[0])
+	}
+	if len(part.Annotations) != 1 {
+		t.Fatalf("expected 1 annotation, got %d", len(part.Annotations))
+	}
+	ann, ok := part.Annotations[0].(*v1.URLCitationAnnotation)
+	if !ok {
+		t.Fatalf("annotation is %T", part.Annotations[0])
+	}
+	if ann.URL != "https://example.com/paris" {
+		t.Errorf("url: %q", ann.URL)
+	}
+	if ann.StartIndex != 21 || ann.EndIndex != 24 {
+		t.Errorf("indices: start=%d end=%d", ann.StartIndex, ann.EndIndex)
+	}
+}
+
+// CC-3: audio + prediction token details are mapped in ccUsageToCanonical.
+func TestCCUsageToCanonical_AllFields(t *testing.T) {
+	u := &Usage{
+		PromptTokens:     120,
+		CompletionTokens: 40,
+		PromptDetails: &PromptTokenDetails{
+			CachedTokens: 20,
+			AudioTokens:  10,
+		},
+		CompletionDetails: &CompletionTokenDetails{
+			ReasoningTokens:          5,
+			AudioTokens:              3,
+			AcceptedPredictionTokens: 7,
+			RejectedPredictionTokens: 2,
+		},
+	}
+	toks := ccUsageToCanonical(u)
+	checks := map[string]int64{
+		"input":               100, // 120 - 20 cached
+		"output":              40,
+		"cache_read":          20,
+		"audio_input":         10,
+		"reasoning":           5,
+		"audio_output":        3,
+		"accepted_prediction": 7,
+		"rejected_prediction": 2,
+	}
+	for k, want := range checks {
+		if toks[k] != want {
+			t.Errorf("toks[%q] = %d, want %d", k, toks[k], want)
+		}
+	}
+}
+
+// CC-4: SerializeRequest sets stream_options.include_usage=true for stream mode.
+func TestCCSerializeRequest_StreamIncludesUsage(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"gpt-4o"},
+		Input:      []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+		OutputMode: v1.OutputModeStream,
+	}
+	b, err := (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := decodeMap(t, b)
+	so, ok := wire["stream_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("stream_options missing or wrong type: %v", wire["stream_options"])
+	}
+	if so["include_usage"] != true {
+		t.Errorf("include_usage: %v", so["include_usage"])
+	}
+}
+
+// CC-4: non-streaming requests must NOT carry stream_options.
+func TestCCSerializeRequest_NoStreamOptions_Sync(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"gpt-4o"},
+		Input:      []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+		OutputMode: v1.OutputModeSync,
+	}
+	b, err := (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := decodeMap(t, b)
+	if _, ok := wire["stream_options"]; ok {
+		t.Errorf("stream_options must be absent for sync requests")
+	}
+}
+
+// CC-5: SerializeResponse returns an OpenAI error body when resp.Error is set.
+func TestCCSerializeResponse_ErrorBody(t *testing.T) {
+	resp := &v1.Response{
+		ID:    "resp_err",
+		Model: "gpt-4o",
+		Error: &v1.Error{Code: "model_overloaded", Message: "too many requests"},
+	}
+	b, err := (CCTranslator{}).SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := decodeMap(t, b)
+	errObj, ok := wire["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected top-level 'error' key, got: %v", wire)
+	}
+	if errObj["message"] != "too many requests" {
+		t.Errorf("message: %v", errObj["message"])
+	}
+	if errObj["code"] != "model_overloaded" {
+		t.Errorf("code: %v", errObj["code"])
+	}
+	if _, has := wire["choices"]; has {
+		t.Error("error body must not contain 'choices'")
 	}
 }
 

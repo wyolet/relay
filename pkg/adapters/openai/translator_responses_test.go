@@ -227,12 +227,12 @@ func TestResponsesParseRequest_ParallelToolCalls(t *testing.T) {
 
 func TestResponsesParseRequest_SamplingFields(t *testing.T) {
 	body := mustJSON(map[string]any{
-		"model":              "gpt-5",
-		"input":              "hi",
-		"temperature":        0.8,
-		"top_p":              0.95,
-		"max_output_tokens":  1024,
-		"stop_sequences":     []string{"END"},
+		"model":             "gpt-5",
+		"input":             "hi",
+		"temperature":       0.8,
+		"top_p":             0.95,
+		"max_output_tokens": 1024,
+		"stop_sequences":    []string{"END"},
 	})
 	req, err := (ResponsesTranslator{}).ParseRequest(body)
 	if err != nil {
@@ -563,9 +563,9 @@ func TestResponsesParseResponse_UsageDetails(t *testing.T) {
 		"status":     "completed",
 		"output":     []any{},
 		"usage": map[string]any{
-			"input_tokens":  200,
-			"output_tokens": 100,
-			"total_tokens":  300,
+			"input_tokens":          200,
+			"output_tokens":         100,
+			"total_tokens":          300,
 			"input_tokens_details":  map[string]any{"cached_tokens": 150},
 			"output_tokens_details": map[string]any{"reasoning_tokens": 40},
 		},
@@ -600,9 +600,9 @@ func TestResponsesSerializeResponse_SimpleText(t *testing.T) {
 		FinishReason: v1.FinishReasonStop,
 		Output: []v1.Item{
 			&v1.Message{
-				ID:     "msg_0",
-				Role:   v1.RoleAssistant,
-				Status: v1.StatusCompleted,
+				ID:      "msg_0",
+				Role:    v1.RoleAssistant,
+				Status:  v1.StatusCompleted,
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello!"}},
 			},
 		},
@@ -672,10 +672,10 @@ func TestResponsesSerializeResponse_NilRequestAllowed(t *testing.T) {
 
 func TestResponsesSerializeResponse_IncompleteStatus(t *testing.T) {
 	resp := &v1.Response{
-		ID:           "resp_inc",
-		Model:        "gpt-5",
-		Status:       v1.StatusIncomplete,
-		FinishReason: v1.FinishReasonLength,
+		ID:                "resp_inc",
+		Model:             "gpt-5",
+		Status:            v1.StatusIncomplete,
+		FinishReason:      v1.FinishReasonLength,
 		IncompleteDetails: &v1.IncompleteDetails{Reason: "max_output_tokens"},
 	}
 	b, err := (ResponsesTranslator{}).SerializeResponse(resp, nil)
@@ -798,9 +798,9 @@ func TestResponsesNewToCanonicalStream_TextSequence(t *testing.T) {
 		responsesSSEChunk(ResponsesEventOutputItemDone, ResponsesOutputItemDoneEvent{
 			OutputIndex: 0,
 			Item: &ResponsesMessage{
-				ID:     "msg_0",
-				Role:   ResponsesRoleAssistant,
-				Status: ResponsesStatusCompleted,
+				ID:      "msg_0",
+				Role:    ResponsesRoleAssistant,
+				Status:  ResponsesStatusCompleted,
 				Content: []ResponsesPart{&ResponsesOutputTextPart{Text: "Hello world"}},
 			},
 		}),
@@ -941,9 +941,9 @@ func TestResponsesNewFromCanonicalStream_TextSequence(t *testing.T) {
 			ItemID: "msg_0",
 			Index:  0,
 			Item: &v1.Message{
-				ID:     "msg_0",
-				Role:   v1.RoleAssistant,
-				Status: v1.StatusCompleted,
+				ID:      "msg_0",
+				Role:    v1.RoleAssistant,
+				Status:  v1.StatusCompleted,
 				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello"}},
 			},
 		}),
@@ -1204,3 +1204,301 @@ func TestE2E_StreamingCCToResponses(t *testing.T) {
 		}
 	}
 }
+
+// R-1: encrypted_content round-trips through ProviderData.
+func TestResponsesParseResponse_EncryptedContentRoundTrip(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":            "resp_enc",
+		"object":        "response",
+		"created_at":    1000,
+		"model":         "o1",
+		"status":        "completed",
+		"finish_reason": "stop",
+		"output": []any{map[string]any{
+			"type":              "reasoning",
+			"id":                "rs_abc",
+			"status":            "completed",
+			"encrypted_content": "ENCBLOB",
+			"summary":           []any{map[string]any{"text": "the answer is 42"}},
+		}},
+	})
+	resp, err := (ResponsesTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 1 {
+		t.Fatalf("output len: %d", len(resp.Output))
+	}
+	r, ok := resp.Output[0].(*v1.Reasoning)
+	if !ok {
+		t.Fatalf("output[0] is %T", resp.Output[0])
+	}
+	if len(r.ProviderData) == 0 {
+		t.Fatal("ProviderData must not be empty when encrypted_content is present")
+	}
+	var pd struct {
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(r.ProviderData, &pd); err != nil {
+		t.Fatalf("ProviderData unmarshal: %v", err)
+	}
+	if pd.EncryptedContent != "ENCBLOB" {
+		t.Errorf("encrypted_content: %q", pd.EncryptedContent)
+	}
+
+	// Serialize back and confirm encrypted_content is restored in the wire body.
+	req := &v1.Request{Model: v1.ModelRefs{"o1"}}
+	b, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wireResp struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	if err := json.Unmarshal(b, &wireResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(wireResp.Output) != 1 {
+		t.Fatalf("serialized output len: %d", len(wireResp.Output))
+	}
+	var wireItem struct {
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(wireResp.Output[0], &wireItem); err != nil {
+		t.Fatal(err)
+	}
+	if wireItem.EncryptedContent != "ENCBLOB" {
+		t.Errorf("round-tripped encrypted_content: %q", wireItem.EncryptedContent)
+	}
+}
+
+// R-2: response.refusal.delta events map to text item.delta in canonical stream.
+func TestResponsesNewToCanonicalStream_RefusalDelta(t *testing.T) {
+	fn := (ResponsesTranslator{}).NewToCanonicalStream()
+
+	var allOut []byte
+	feed := func(event string, data any) {
+		out, err := fn(responsesSSEChunk(event, data))
+		if err != nil {
+			t.Fatalf("translate %s: %v", event, err)
+		}
+		allOut = append(allOut, out...)
+	}
+
+	feed(ResponsesEventCreated, ResponsesCreatedEvent{Response: &ResponsesResponse{
+		ID: "resp_ref", Model: "gpt-4o", Status: ResponsesStatusInProgress,
+	}})
+	feed(ResponsesEventOutputItemAdded, map[string]any{
+		"output_index": 0,
+		"item":         map[string]any{"type": "message", "id": "msg_0", "role": "assistant"},
+	})
+	feed(ResponsesEventRefusalDelta, ResponsesRefusalDeltaEvent{
+		ItemID: "msg_0", OutputIndex: 0, Delta: "I cannot help with that",
+	})
+	feed(ResponsesEventRefusalDone, ResponsesRefusalDoneEvent{
+		ItemID: "msg_0", OutputIndex: 0, Refusal: "I cannot help with that",
+	})
+	feed(ResponsesEventCompleted, ResponsesCompletedEvent{Response: &ResponsesResponse{
+		ID: "resp_ref", Model: "gpt-4o", Status: ResponsesStatusCompleted,
+		FinishReason: ResponsesFinishReasonStop,
+	}})
+
+	events := extractCanonicalEvents(allOut)
+	hasDelta := false
+	for _, e := range events {
+		if e == v1.EventItemDelta {
+			hasDelta = true
+		}
+	}
+	if !hasDelta {
+		t.Errorf("expected item.delta for refusal text, got: %v", events)
+	}
+	if !strings.Contains(string(allOut), "I cannot help with that") {
+		t.Errorf("refusal text missing from output")
+	}
+}
+
+// R-2: response.failed must emit generation.completed so the consumer isn't hung.
+func TestResponsesNewToCanonicalStream_ResponseFailed(t *testing.T) {
+	fn := (ResponsesTranslator{}).NewToCanonicalStream()
+
+	feed := func(event string, data any) []byte {
+		out, err := fn(responsesSSEChunk(event, data))
+		if err != nil {
+			t.Fatalf("translate %s: %v", event, err)
+		}
+		return out
+	}
+
+	var allOut []byte
+	allOut = append(allOut, feed(ResponsesEventCreated, ResponsesCreatedEvent{Response: &ResponsesResponse{
+		ID: "resp_fail", Model: "gpt-4o", Status: ResponsesStatusInProgress,
+	}})...)
+	allOut = append(allOut, feed(ResponsesEventFailed, ResponsesFailedEvent{Response: &ResponsesResponse{
+		ID: "resp_fail", Model: "gpt-4o", Status: ResponsesStatusFailed,
+	}})...)
+
+	events := extractCanonicalEvents(allOut)
+	hasCompleted := false
+	for _, e := range events {
+		if e == v1.EventGenerationCompleted {
+			hasCompleted = true
+		}
+	}
+	if !hasCompleted {
+		t.Errorf("expected generation.completed after response.failed, got: %v", events)
+	}
+}
+
+// R-3: canonical→Responses streaming emits non-empty call_id and name on function call events.
+func TestResponsesNewFromCanonicalStream_FunctionCallHasNameAndCallID(t *testing.T) {
+	fn := (ResponsesTranslator{}).NewFromCanonicalStream()
+
+	var allOut []byte
+	feed := func(event string, data any) {
+		out, err := fn(canonicalChunk(event, data))
+		if err != nil {
+			t.Fatalf("translate %s: %v", event, err)
+		}
+		allOut = append(allOut, out...)
+	}
+
+	feed(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "resp_r3", Model: "gpt-4o"})
+	feed(v1.EventItemStarted, v1.ItemStartedEvent{ItemID: "fc_r3", ItemType: v1.ItemTypeFunctionCall, Index: 0, Name: "search"})
+	feed(v1.EventItemDelta, v1.ItemDeltaEvent{ItemID: "fc_r3", Index: 0, Kind: v1.DeltaKindArguments, Delta: `{"q":"go"}`})
+	feed(v1.EventItemCompleted, v1.ItemCompletedEvent{
+		ItemID: "fc_r3",
+		Index:  0,
+		Item: &v1.FunctionCall{
+			ID:        "fc_r3",
+			CallID:    "call_r3",
+			Name:      "search",
+			Arguments: `{"q":"go"}`,
+			Status:    v1.StatusCompleted,
+		},
+	})
+	feed(v1.EventGenerationCompleted, v1.GenerationCompletedEvent{
+		ID:           "resp_r3",
+		Status:       v1.StatusCompleted,
+		FinishReason: v1.FinishReasonToolCalls,
+	})
+
+	allStr := string(allOut)
+	if !strings.Contains(allStr, "search") {
+		t.Errorf("function name 'search' missing from output")
+	}
+	// Arguments delta events must carry a non-empty call_id.
+	var foundArgsDelta bool
+	for _, raw := range splitSSEFrames(allOut) {
+		evtName, data, ok := ParseResponsesSSEChunk(raw)
+		if !ok || evtName != ResponsesEventFunctionCallArgumentsDelta {
+			continue
+		}
+		foundArgsDelta = true
+		var delta ResponsesFunctionCallArgumentsDeltaEvent
+		if err := json.Unmarshal(data, &delta); err != nil {
+			t.Fatalf("unmarshal delta: %v", err)
+		}
+		if delta.CallID == "" {
+			t.Errorf("call_id must not be empty in function_call_arguments.delta")
+		}
+	}
+	if !foundArgsDelta {
+		t.Errorf("no function_call_arguments.delta event found")
+	}
+}
+
+// R-4: file_citation annotations are preserved as v1.RawAnnotation and round-trip.
+func TestResponsesAnnotation_FileCitationPreserved(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":         "resp_fc",
+		"object":     "response",
+		"created_at": 1000,
+		"model":      "gpt-4o",
+		"status":     "completed",
+		"output": []any{map[string]any{
+			"type": "message",
+			"id":   "msg_fc",
+			"role": "assistant",
+			"content": []any{map[string]any{
+				"type": "output_text",
+				"text": "See file [1].",
+				"annotations": []any{map[string]any{
+					"type":    "file_citation",
+					"file_id": "file_abc",
+					"index":   3,
+				}},
+				"logprobs": []any{},
+			}},
+		}},
+	})
+	resp, err := (ResponsesTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, ok := resp.Output[0].(*v1.Message)
+	if !ok {
+		t.Fatalf("output[0] is %T", resp.Output[0])
+	}
+	otp, ok := msg.Content[0].(*v1.OutputTextPart)
+	if !ok {
+		t.Fatalf("content[0] is %T", msg.Content[0])
+	}
+	if len(otp.Annotations) != 1 {
+		t.Fatalf("expected 1 annotation, got %d", len(otp.Annotations))
+	}
+	raw, ok := otp.Annotations[0].(*v1.RawAnnotation)
+	if !ok {
+		t.Fatalf("annotation is %T, want *v1.RawAnnotation", otp.Annotations[0])
+	}
+	if raw.Type != "file_citation" {
+		t.Errorf("annotation type: %q", raw.Type)
+	}
+	if !strings.Contains(string(raw.JSON), "file_abc") {
+		t.Errorf("file_id missing from RawAnnotation JSON: %s", raw.JSON)
+	}
+
+	// Round-trip: confirm file_citation survives SerializeResponse.
+	req := &v1.Request{Model: v1.ModelRefs{"gpt-4o"}}
+	b, err := (ResponsesTranslator{}).SerializeResponse(resp, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "file_citation") {
+		t.Errorf("file_citation missing after round-trip SerializeResponse")
+	}
+}
+
+// R-5: reasoning.summary is mapped to the Responses wire request field.
+func TestResponsesSerializeRequest_ReasoningSummary(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"o3"},
+		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}}},
+		ModelConfig: map[string]*v1.ModelOpts{
+			"o3": {
+				Reasoning: &v1.ReasoningConfig{Effort: "high", Summary: "detailed"},
+			},
+		},
+	}
+	b, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	reasoning, ok := wire["reasoning"].(map[string]any)
+	if !ok {
+		t.Fatalf("reasoning field missing or wrong type: %v", wire["reasoning"])
+	}
+	if reasoning["summary"] != "detailed" {
+		t.Errorf("reasoning.summary: %v", reasoning["summary"])
+	}
+	if reasoning["effort"] != "high" {
+		t.Errorf("reasoning.effort: %v", reasoning["effort"])
+	}
+}
+
+// R-3 also needs splitSSEFrames — it's already defined in translator_responses.go
+// but the test uses ParseResponsesSSEChunk which is in the same package.

@@ -55,7 +55,7 @@ func (AnthropicAdapter) ParseResponse(body []byte) (any, error) {
 // (which uses any return types to avoid import cycles).
 type Shim struct{ AnthropicAdapter }
 
-func (s Shim) ToOpenAI(req any) (any, error)         { return s.AnthropicAdapter.ToOpenAI(req) }
+func (s Shim) ToOpenAI(req any) (any, error) { return s.AnthropicAdapter.ToOpenAI(req) }
 func (s Shim) FromOpenAI(req any) (any, error) {
 	r, ok := req.(*openai.FullChatRequest)
 	if !ok {
@@ -63,7 +63,9 @@ func (s Shim) FromOpenAI(req any) (any, error) {
 	}
 	return s.AnthropicAdapter.FromOpenAI(r)
 }
-func (s Shim) ToOpenAIResponse(resp any) (any, error) { return s.AnthropicAdapter.ToOpenAIResponse(resp) }
+func (s Shim) ToOpenAIResponse(resp any) (any, error) {
+	return s.AnthropicAdapter.ToOpenAIResponse(resp)
+}
 func (s Shim) FromOpenAIResponse(resp any) (any, error) {
 	r, ok := resp.(*openai.ChatResponse)
 	if !ok {
