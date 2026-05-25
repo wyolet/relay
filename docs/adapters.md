@@ -125,15 +125,21 @@ request stateful translators.
 ## Known lossiness
 
 Cross-vendor translation loses things. Tagged in code with
-`// canonical:` near the drop site.
+`// canonical:` near the drop site. **Per-adapter fidelity is audited
+in detail under [`adapters/`](adapters/)** — that directory is the
+authoritative map of exactly what each adapter maps, drops, or
+hardcodes (and tracks the still-open gaps).
 
 - **Vendor-specific opaque blobs** preserved via `provider_data
   json.RawMessage` on `Reasoning`, `FunctionCall`, `Message` items.
   Round-tripped within a vendor; dropped cross-vendor. (Anthropic
-  thinking signatures, OpenAI `encrypted_content`.)
-- **Cache hints** (Anthropic `cache_control`) dropped on the
-  canonical round-trip. Future: live in `extensions` envelope. Doc
-  open question.
+  thinking signatures — incl. the streaming `signature_delta` path —
+  and OpenAI `encrypted_content`; both now actually wired, see the
+  fidelity audits.)
+- **Prompt caching** is first-class (not lossy): `Request.CacheConfig`
+  (`{instructions, tools}`) + per-`Message` `ItemCacheConfig{anchor}`.
+  Anthropic emits `cache_control` breakpoints; OpenAI no-ops; Gemini
+  has no inline breakpoint and ignores it. See canonical-protocol rule 7.
 - **Safety settings** (Gemini per-category thresholds): not modeled.
   Future: per-policy or in `extensions`.
 - **Server tools** (web_search, code_execution, computer-use, etc.):
