@@ -236,21 +236,26 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   days each.
 - **A2b — Per-request capture gaps**. The capture *fields* on the
   lifecycle event, researched against OpenRouter + LiteLLM. **Done:**
-  timing breakdown (`lifecycle.Timing` — anchor + upstream
+  (1) timing breakdown (`lifecycle.Timing` — anchor + upstream
   handoff/first-byte/done marks, µs offsets all anchored to start, never
-  chained) giving TTFT + relay-overhead split, plus a `streamed` flag.
-  **Remaining:** (a) **failure events** — routing / all-keys-exhausted /
-  pre-flight failures return before post-flight fires, so failed requests
-  emit no usage event at all, and `PostFlightEvent.ErrorKind/ErrorMessage`
-  are never populated; fix is to fire a post-flight on the error path
-  with a classified kind (this is the highest-value gap — telemetry is
-  blind exactly during 429-storms / no-healthy-keys); (b) cheap fields
-  the data's already on hand for — requested-model string,
-  `finish_reason` (needs `v1.ExtractUsage` to also surface it), upstream
-  attempt count, client-IP parity in pipeline mode. (c) **deliberately
-  out of scope**: cost (derive in the sink from tokens × pricing, keep
-  the event pricing-free), request/response content (S3 payload path),
-  SaaS attribution (session/app/end-user — B-track).
+  chained) giving TTFT + relay-overhead split, plus a `streamed` flag;
+  (2) **failure events** — `pipeline.Run`/`proxy.Run` now fire a
+  post-flight observer event on every error return via a defer, with a
+  classified `ErrorKind` (`no_keys`, `keys_exhausted`, `upstream_error`
+  +surfaced status, `rate_limited`, `client_canceled`, `timeout`, …) and
+  `ErrorMessage`, so failed requests are no longer invisible to usage
+  tracking. **Remaining:** (a) **routing-failure capture** — failures
+  *before* `pipeline.Run` (model-not-found, no-host-binding, disabled
+  policy) still emit nothing because the lifecycle Context is built at
+  dispatch right before the runner; capturing them needs an earlier
+  Context + a fire on the `mapRoutingErr` path. Lower volume than runner
+  failures. (b) cheap fields the data's already on hand for —
+  requested-model string, `finish_reason` (needs `v1.ExtractUsage` to
+  also surface it), upstream attempt count, client-IP parity in pipeline
+  mode. (c) **deliberately out of scope**: cost (derive in the sink from
+  tokens × pricing, keep the event pricing-free), request/response
+  content (S3 payload path), SaaS attribution (session/app/end-user —
+  B-track).
 - **A3 — Perf bench harness**. A `bench/pipeline/` harness against
   `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
   Remaining: wire it into CI as a regression gate and document the
