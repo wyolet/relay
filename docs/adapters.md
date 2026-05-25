@@ -4,7 +4,11 @@ How Relay handles multiple inbound wire-shapes and translates between
 them. Authoritative source for the codebase's adapter mechanics — when
 this disagrees with the code, fix one or the other. The protocol-level
 design (item taxonomy, streaming contract, codebase rules) lives in
-[`canonical-protocol.md`](canonical-protocol.md).
+[`canonical-protocol.md`](canonical-protocol.md). Per-adapter fidelity
+audits — exactly what each adapter maps, drops, hardcodes, or can't
+support vs canonical — live in [`adapters/`](adapters/) (start with
+[`adapters/README.md`](adapters/README.md) for the cross-adapter
+severity matrix).
 
 ## Concepts
 
