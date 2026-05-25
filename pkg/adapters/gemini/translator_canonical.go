@@ -293,6 +293,9 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 						Arguments: args,
 						Status:    v1.StatusCompleted,
 					}
+					if p.ThoughtSignature != "" {
+						fc.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
+					}
 					resp.Output = append(resp.Output, fc)
 					outputIndex++
 				} else if p.Text != "" && p.Thought {
@@ -301,6 +304,9 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 						Content: p.Text,
 						Summary: []v1.SummaryText{{Text: p.Text}},
 						Status:  v1.StatusCompleted,
+					}
+					if p.ThoughtSignature != "" {
+						r.ProviderData = thoughtSignatureJSON(p.ThoughtSignature)
 					}
 					resp.Output = append(resp.Output, r)
 					outputIndex++
@@ -424,13 +430,14 @@ type geminiToCanonicalStream struct {
 	lifecycleEmitted bool
 	nextIndex        int
 	// per-part accumulation (Gemini streams part-by-part within one candidate)
-	currentItemID   string
-	currentItemType v1.ItemType
-	currentIndex    int
-	textBuf         strings.Builder
-	argsBuf         strings.Builder
-	thinkBuf        strings.Builder
-	currentFCName   string
+	currentItemID     string
+	currentItemType   v1.ItemType
+	currentIndex      int
+	textBuf           strings.Builder
+	argsBuf           strings.Builder
+	thinkBuf          strings.Builder
+	currentFCName     string
+	currentThoughtSig string // thoughtSignature for the current item, if any
 	// sawFunctionCall records whether any function_call part appeared across
 	// the whole stream, so the terminal completion reports finish_reason
 	// tool_calls even though Gemini's per-frame finishReason is usually STOP.
@@ -503,6 +510,7 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			s.currentItemType = v1.ItemTypeFunctionCall
 			s.currentIndex = idx
 			s.currentFCName = p.FunctionCall.Name
+			s.currentThoughtSig = p.ThoughtSignature
 			s.sawFunctionCall = true
 			s.argsBuf.Reset()
 
@@ -541,6 +549,7 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 				s.currentItemID = itemID
 				s.currentItemType = v1.ItemTypeReasoning
 				s.currentIndex = idx
+				s.currentThoughtSig = p.ThoughtSignature
 				s.thinkBuf.Reset()
 
 				startData, _ := json.Marshal(v1.ItemStartedEvent{
@@ -612,23 +621,32 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 			Content: []v1.Part{&v1.OutputTextPart{Text: s.textBuf.String()}},
 		}
 	case v1.ItemTypeFunctionCall:
-		completedItem = &v1.FunctionCall{
+		fc := &v1.FunctionCall{
 			ID:        s.currentItemID,
 			CallID:    geminiCallID(s.currentFCName, s.currentIndex),
 			Name:      s.currentFCName,
 			Arguments: s.argsBuf.String(),
 			Status:    v1.StatusCompleted,
 		}
+		if s.currentThoughtSig != "" {
+			fc.ProviderData = thoughtSignatureJSON(s.currentThoughtSig)
+		}
+		completedItem = fc
 	case v1.ItemTypeReasoning:
-		completedItem = &v1.Reasoning{
+		r := &v1.Reasoning{
 			ID:      s.currentItemID,
 			Content: s.thinkBuf.String(),
 			Summary: []v1.SummaryText{{Text: s.thinkBuf.String()}},
 			Status:  v1.StatusCompleted,
 		}
+		if s.currentThoughtSig != "" {
+			r.ProviderData = thoughtSignatureJSON(s.currentThoughtSig)
+		}
+		completedItem = r
 	default:
 		return nil
 	}
+	s.currentThoughtSig = ""
 
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 		ItemID: s.currentItemID,
@@ -952,7 +970,11 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			} else {
 				argsObj = json.RawMessage(`{}`)
 			}
-			parts = append(parts, geminiPart{FunctionCall: &geminiFC{Name: fc.Name, Args: argsObj}})
+			p := geminiPart{FunctionCall: &geminiFC{Name: fc.Name, Args: argsObj}}
+			if sig := thoughtSignatureFrom(fc.ProviderData); sig != "" {
+				p.ThoughtSignature = sig
+			}
+			parts = append(parts, p)
 		}
 		contents = append(contents, geminiContent{Role: "model", Parts: parts})
 		pendingFCs = pendingFCs[:0]
@@ -1035,7 +1057,21 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			pendingFCOs = append(pendingFCOs, *v)
 
 		case *v1.Reasoning:
-			// Drop inbound reasoning; Gemini manages its own thinking.
+			// Emit as a thought part so that thoughtSignature is round-tripped.
+			// If there's no ProviderData (no signature), Gemini ignores unknown
+			// thought parts in history, so this is safe to always emit.
+			flushFCOs()
+			text := v.Content
+			if text == "" && len(v.Summary) > 0 {
+				text = v.Summary[0].Text
+			}
+			if text != "" {
+				p := geminiPart{Text: text, Thought: true}
+				if sig := thoughtSignatureFrom(v.ProviderData); sig != "" {
+					p.ThoughtSignature = sig
+				}
+				contents = append(contents, geminiContent{Role: "model", Parts: []geminiPart{p}})
+			}
 		}
 	}
 
@@ -1204,6 +1240,28 @@ func canonicalFinishReasonToGemini(reason v1.FinishReason, incomplete *v1.Incomp
 	default:
 		return "STOP"
 	}
+}
+
+// thoughtSignatureJSON encodes a thoughtSignature value into the provider_data
+// JSON shape used on v1.FunctionCall and v1.Reasoning items.
+func thoughtSignatureJSON(sig string) json.RawMessage {
+	b, _ := json.Marshal(map[string]string{"thoughtSignature": sig})
+	return b
+}
+
+// thoughtSignatureFrom extracts the thoughtSignature from a provider_data blob,
+// returning "" if absent or malformed.
+func thoughtSignatureFrom(pd json.RawMessage) string {
+	if len(pd) == 0 {
+		return ""
+	}
+	var v struct {
+		ThoughtSignature string `json:"thoughtSignature"`
+	}
+	if err := json.Unmarshal(pd, &v); err != nil {
+		return ""
+	}
+	return v.ThoughtSignature
 }
 
 // resolveModelOpts picks the ModelOpts for the given model name following the

@@ -803,6 +803,209 @@ func TestStreamCanonicalToGemini_FunctionArgsBuffered(t *testing.T) {
 	}
 }
 
+// ---- thoughtSignature round-trip tests ----
+
+// ParseResponse with a functionCall+thoughtSignature → ProviderData carries it.
+func TestParseResponse_FunctionCall_ThoughtSignature(t *testing.T) {
+	body := `{
+		"candidates":[{"content":{"role":"model","parts":[
+			{"functionCall":{"name":"lookup","args":{"x":1}},"thoughtSignature":"sig-fc-abc"}
+		]},"finishReason":"STOP","index":0}]
+	}`
+	resp, err := tr.ParseResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 1 {
+		t.Fatalf("output len: %d", len(resp.Output))
+	}
+	fc, ok := resp.Output[0].(*v1.FunctionCall)
+	if !ok {
+		t.Fatalf("output[0] type: %T", resp.Output[0])
+	}
+	if got := thoughtSignatureFrom(fc.ProviderData); got != "sig-fc-abc" {
+		t.Errorf("thoughtSignature in ProviderData: got %q, want %q", got, "sig-fc-abc")
+	}
+}
+
+// ParseResponse with a thought+thoughtSignature → ProviderData carries it.
+func TestParseResponse_Thought_ThoughtSignature(t *testing.T) {
+	body := `{
+		"candidates":[{"content":{"role":"model","parts":[
+			{"text":"thinking...","thought":true,"thoughtSignature":"sig-rs-xyz"},
+			{"text":"Answer."}
+		]},"finishReason":"STOP","index":0}]
+	}`
+	resp, err := tr.ParseResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 2 {
+		t.Fatalf("output len: %d", len(resp.Output))
+	}
+	r, ok := resp.Output[0].(*v1.Reasoning)
+	if !ok {
+		t.Fatalf("output[0] type: %T", resp.Output[0])
+	}
+	if got := thoughtSignatureFrom(r.ProviderData); got != "sig-rs-xyz" {
+		t.Errorf("thoughtSignature in ProviderData: got %q, want %q", got, "sig-rs-xyz")
+	}
+}
+
+// SerializeRequest with a FunctionCall carrying ProviderData → wire emits thoughtSignature.
+func TestSerializeRequest_FunctionCall_ThoughtSignatureRoundTrip(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gemini-2.0-flash-thinking"},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+			&v1.FunctionCall{
+				CallID:       geminiCallID("lookup", 0),
+				Name:         "lookup",
+				Arguments:    `{"x":1}`,
+				ProviderData: thoughtSignatureJSON("sig-fc-abc"),
+			},
+			&v1.FunctionCallOutput{
+				CallID: geminiCallID("lookup", 0),
+				Output: `{"result":"ok"}`,
+			},
+		},
+	}
+	body, err := tr.SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"thoughtSignature":"sig-fc-abc"`) {
+		t.Errorf("thoughtSignature not in wire body: %s", body)
+	}
+}
+
+// SerializeRequest with a Reasoning carrying ProviderData → wire emits thought part with thoughtSignature.
+func TestSerializeRequest_Reasoning_ThoughtSignatureRoundTrip(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gemini-2.0-flash-thinking"},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}},
+			&v1.Reasoning{
+				Content:      "some thoughts",
+				ProviderData: thoughtSignatureJSON("sig-rs-xyz"),
+			},
+		},
+	}
+	body, err := tr.SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"thoughtSignature":"sig-rs-xyz"`) {
+		t.Errorf("thoughtSignature not in wire body: %s", body)
+	}
+	if !strings.Contains(string(body), `"thought":true`) {
+		t.Errorf("thought flag not in wire body: %s", body)
+	}
+}
+
+// Streamed functionCall part with thoughtSignature → completed item ProviderData carries it.
+func TestStreamGeminiToCanonical_FunctionCall_ThoughtSignature(t *testing.T) {
+	fn := tr.NewToCanonicalStream()
+
+	chunk := makeGeminiSSEChunk(t, map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{
+				map[string]any{
+					"functionCall":     map[string]any{"name": "lookup", "args": map[string]any{"x": 1}},
+					"thoughtSignature": "sig-stream-fc",
+				},
+			}},
+			"finishReason": "STOP",
+			"index":        0,
+		}},
+		"modelVersion": "gemini-2.0-flash",
+	})
+
+	out, err := fn(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Find the item.completed event and decode the FunctionCall item.
+	found := false
+	for _, line := range strings.Split(string(out), "\n\n") {
+		if !strings.Contains(line, v1.EventItemCompleted) {
+			continue
+		}
+		for _, l := range strings.Split(line, "\n") {
+			if !strings.HasPrefix(l, "data: ") {
+				continue
+			}
+			// Item is an interface; decode into a raw struct to read provider_data.
+			var ev struct {
+				Item struct {
+					ProviderData json.RawMessage `json:"provider_data"`
+				} `json:"item"`
+			}
+			if err := json.Unmarshal([]byte(l[6:]), &ev); err != nil {
+				t.Fatalf("unmarshal ItemCompletedEvent: %v", err)
+			}
+			if got := thoughtSignatureFrom(ev.Item.ProviderData); got != "sig-stream-fc" {
+				t.Errorf("thoughtSignature: got %q, want %q", got, "sig-stream-fc")
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("item.completed not found in output: %s", out)
+	}
+}
+
+// Streamed thought part with thoughtSignature → completed Reasoning ProviderData carries it.
+func TestStreamGeminiToCanonical_Thought_ThoughtSignature(t *testing.T) {
+	fn := tr.NewToCanonicalStream()
+
+	chunk := makeGeminiSSEChunk(t, map[string]any{
+		"candidates": []any{map[string]any{
+			"content": map[string]any{"role": "model", "parts": []any{
+				map[string]any{
+					"text":             "reasoning...",
+					"thought":          true,
+					"thoughtSignature": "sig-stream-rs",
+				},
+			}},
+			"finishReason": "STOP",
+			"index":        0,
+		}},
+		"modelVersion": "gemini-2.0-flash",
+	})
+
+	out, err := fn(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range strings.Split(string(out), "\n\n") {
+		if !strings.Contains(line, v1.EventItemCompleted) {
+			continue
+		}
+		for _, l := range strings.Split(line, "\n") {
+			if !strings.HasPrefix(l, "data: ") {
+				continue
+			}
+			var ev struct {
+				Item struct {
+					ProviderData json.RawMessage `json:"provider_data"`
+				} `json:"item"`
+			}
+			if err := json.Unmarshal([]byte(l[6:]), &ev); err != nil {
+				t.Fatalf("unmarshal ItemCompletedEvent: %v", err)
+			}
+			if got := thoughtSignatureFrom(ev.Item.ProviderData); got != "sig-stream-rs" {
+				t.Errorf("thoughtSignature: got %q, want %q", got, "sig-stream-rs")
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("item.completed not found in output: %s", out)
+	}
+}
+
 // ---- helpers ----
 
 func jsonMust(v any) []byte {

@@ -32,6 +32,13 @@ type geminiPart struct {
 	Text    string `json:"text,omitempty"`
 	Thought bool   `json:"thought,omitempty"`
 
+	// thoughtSignature is a base64 string attached by Gemini thinking models to
+	// thought and functionCall parts. It must be echoed verbatim in the next
+	// request's corresponding part for coherent multi-turn thinking. It rides on
+	// the part object itself (not on the nested functionCall sub-object) per the
+	// Gemini REST API shape.
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
+
 	// inlineData (base64 image/audio)
 	InlineData *inlineData `json:"inlineData,omitempty"`
 
