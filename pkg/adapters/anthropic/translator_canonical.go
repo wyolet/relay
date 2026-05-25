@@ -14,8 +14,11 @@
 //     round-trip. Cross-vendor the blob is unusable and dropped on serialize.
 //   - pause_turn: maps to StatusIncomplete + IncompleteDetails.Reason="pause_turn".
 //   - ping events: silently dropped in stream.
-//   - max_tokens: required by Anthropic wire. Defaults to 4096 when canonical
-//     SamplingParams.MaxTokens is nil.
+//   - max_tokens: required by Anthropic wire. Dispatch seeds the canonical
+//     SamplingParams.MaxTokens from the catalog model's MaxOutputTokens when
+//     the caller leaves it unset (see app/httpapi/inference applyOutputDefaults);
+//     the 4096 constant here is only a last-resort fallback for models whose
+//     catalog entry has no published max.
 
 package anthropic
 

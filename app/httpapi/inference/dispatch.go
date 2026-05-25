@@ -200,6 +200,49 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 // inboundV1 parses the inbound body and serializes the response back to the
 // inbound wire shape. upstreamV1 serializes the canonical request and parses
 // the upstream response.
+// applyOutputDefaults seeds the canonical request's max-output-tokens from the
+// catalog model when the caller left it unset. Vendor-neutral and rule-4 clean:
+// Anthropic *requires* max_tokens on the wire (its adapter otherwise falls back
+// to a fixed 4096 that silently caps high-output models), and for OpenAI/Gemini
+// the published model max is a harmless ceiling the model can't exceed anyway.
+// No-op when the catalog has no max or the caller already set one.
+func applyOutputDefaults(req *v1.Request, modelMaxOutput int) {
+	if modelMaxOutput <= 0 || len(req.ModelConfig) > 1 {
+		return
+	}
+	opts := effectiveModelOpts(req)
+	if opts.Sampling == nil {
+		opts.Sampling = &v1.SamplingParams{}
+	}
+	if opts.Sampling.MaxTokens == nil {
+		m := modelMaxOutput
+		opts.Sampling.MaxTokens = &m
+	}
+}
+
+// effectiveModelOpts returns the *ModelOpts a vendor SerializeRequest will
+// resolve for req, mirroring the resolution every translator uses (entry keyed
+// by the model, else the sole entry). Creates one keyed by the model if none
+// exists. Caller guarantees len(ModelConfig) <= 1.
+func effectiveModelOpts(req *v1.Request) *v1.ModelOpts {
+	key := ""
+	if len(req.Model) > 0 {
+		key = req.Model[0]
+	}
+	if req.ModelConfig == nil {
+		req.ModelConfig = map[string]*v1.ModelOpts{}
+	}
+	if o, ok := req.ModelConfig[key]; ok {
+		return o
+	}
+	for _, o := range req.ModelConfig { // sole entry (key may differ from upstream name)
+		return o
+	}
+	o := &v1.ModelOpts{}
+	req.ModelConfig[key] = o
+	return o
+}
+
 func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, inboundV1, upstreamV1 v1.Translator) {
 	ctx := r.Context()
 
@@ -209,6 +252,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		return
 	}
 	canonReq.Model = v1.ModelRefs{plan.Snapshot.Upstream()}
+	applyOutputDefaults(canonReq, plan.Model.Spec.MaxOutputTokens)
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
 	if err != nil {

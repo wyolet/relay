@@ -301,7 +301,7 @@ Non-streaming same-vendor round-trip is **correct** as long as `ProviderData` is
 
 | Element | Value | Risk | File:line |
 |---|---|---|---|
-| `max_tokens` default | `4096` | **Medium-high.** Anthropic requires this field. When canonical `SamplingParams.MaxTokens` is nil, the adapter silently caps output at 4096 tokens regardless of the model's actual limit (claude-3-5-sonnet supports 8192; claude-3-7-sonnet supports 64k with extended thinking). A caller that omits `max_tokens` expecting model-default behaviour gets a 4096-token cap with no indication. This is a known limitation documented at `translator_canonical.go:17–18` but the cap is never surfaced to the caller. | `translator_canonical.go:32`, `354` |
+| `max_tokens` default | model max (was `4096`) | **FIXED.** Dispatch now seeds canonical `SamplingParams.MaxTokens` from the catalog model's `MaxOutputTokens` when the caller leaves it unset (`app/httpapi/inference` `applyOutputDefaults`). The `4096` constant remains only as a last-resort fallback for models with no published max. | `app/httpapi/inference/dispatch.go`, `translator_canonical.go:32` |
 | `Response.Object` | `"response"` | Low — Anthropic shape uses `"message"` on the wire but this field is only visible in canonical response, not re-serialized to Anthropic clients. | `translator_canonical.go:400` |
 | `Response.CreatedAt` | `time.Now().Unix()` | Low — Anthropic provides no timestamp. Every relay re-read of the same response gets a different `created_at`. | `translator_canonical.go:401` |
 | `SerializeResponse` `type` | `"message"` | Low — correct for Anthropic wire. | `translator_canonical.go:520` |
