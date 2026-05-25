@@ -194,7 +194,7 @@ The adapter covers the happy path (text, tool call, reasoning, multimodal, sampl
 | `grounding` / search tool | ⛔ not in struct | Gemini built-in tools (Google Search, code execution) have no canonical or extension mapping. |
 | `safetyRatings` on candidate | ⛔ discarded on parse | `candidate` struct has no `safetyRatings` field. |
 | Grounding metadata on response | ⛔ discarded | No `groundingMetadata` field; not forwarded to `Extensions`. |
-| `thoughtSignature` on reasoning parts (v1beta newer models) | ⛔ not in struct | `geminiPart` has no `thoughtSignature` field. Cannot round-trip Gemini's reasoning signature for same-vendor fidelity (no `ProviderData` populated). |
+| `thoughtSignature` on reasoning/functionCall parts (v1beta newer models) | ✅ FIXED | `geminiPart.ThoughtSignature` now round-trips via `ProviderData` on `Reasoning` + `FunctionCall` (parse, serialize, and stream). |
 | `audio` input/output parts | ⛔ not in struct | No canonical mapping for audio modality exists either. |
 | Multiple `AllowedFunctionNames` in `ANY` mode | ⚠️ data loss | Collapses to `required` losing the name list (`translator_canonical.go:1055–1057`). |
 
@@ -302,7 +302,7 @@ p = geminiPart{FunctionCall: &geminiFC{Args: json.RawMessage(fmt.Sprintf("%q", e
 
 4. **(P1) Document `CallID` synthesis** in a code comment and add a test with two parallel calls to the same function. If the relay's `FunctionCallOutput` matching is name-based rather than ID-based for Gemini, document it. If it must be unique, append the output index: `CallID = fmt.Sprintf("%s_%d", name, outputIndex)`.
 
-5. **(P2) Add `thoughtSignature` to `geminiPart` and round-trip it through `ProviderData`** on `Reasoning` items. This preserves Gemini's reasoning signature for same-vendor multi-turn correctness and matches the `provider_data` contract in the canonical protocol.
+5. ~~**(P2) Add `thoughtSignature`**~~ — **DONE.** `geminiPart.ThoughtSignature` round-trips via `ProviderData` on `Reasoning` + `FunctionCall` (parse/serialize/stream). Validated end-to-end by `app/adapter/gemini_integration_test.go` (fake-Gemini upstream — there is no live Gemini access). Remaining Gemini follow-ups: native *inbound* route (deferred — framework work, untestable without access) and catalog wiring + live dogfood (blocked on access).
 
 6. **(P2) Surface `CacheConfig` drop as a no-op comment** rather than silent discard. Optionally log a debug line; this prevents hours of debugging why cache hits never appear on Gemini routes.
 

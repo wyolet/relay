@@ -9,8 +9,8 @@ import (
 // Registry holds all registered adapter specs. Built once at boot in
 // cmd/relay/main.go via NewRegistry. Read-only after construction.
 type Registry struct {
-	specs   []*Spec
-	byName  map[adapters.Name]*Spec
+	specs    []*Spec
+	byName   map[adapters.Name]*Spec
 	adapters map[adapters.Name]pipeline.Adapter
 }
 
