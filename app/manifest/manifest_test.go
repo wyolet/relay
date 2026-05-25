@@ -168,7 +168,11 @@ metadata:
 spec:
   hosts:
     - host: anthropic-direct
-      upstreamName: claude-3-5-sonnet-20241022
+      adapter: anthropic
+  snapshots:
+    - name: claude-3-5-sonnet
+      originalName: claude-3-5-sonnet-20241022
+  pointer: claude-3-5-sonnet
 `
 
 func TestToModel_HappyPath(t *testing.T) {
