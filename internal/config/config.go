@@ -107,9 +107,9 @@ func Load() (*Config, error) {
 		cfg.EventlogBackend = "file"
 	}
 	switch cfg.EventlogBackend {
-	case "file", "clickhouse", "valkey":
+	case "file", "clickhouse", "valkey", "postgres":
 	default:
-		return nil, fmt.Errorf(`RELAY_EVENTLOG_BACKEND must be "file", "clickhouse", or "valkey", got %q`, cfg.EventlogBackend)
+		return nil, fmt.Errorf(`RELAY_EVENTLOG_BACKEND must be "file", "clickhouse", "valkey", or "postgres", got %q`, cfg.EventlogBackend)
 	}
 
 	// --- Connections ---

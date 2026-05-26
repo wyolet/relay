@@ -1,0 +1,130 @@
+//go:build integration
+
+// Live PostgreSQL round-trip smoke. Runs only with -tags=integration AND
+// RELAY_PG_DSN set (else skipped). Validates schema DDL, CopyFrom column
+// mapping, and reader SQL against a real server.
+//
+//	RELAY_PG_DSN=postgres://user:pass@host/db \
+//	  go test -tags=integration ./pkg/usage/postgres/ -run Integration -v
+package postgres
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/wyolet/relay/pkg/usage"
+)
+
+func TestIntegration_RoundTrip(t *testing.T) {
+	dsn := os.Getenv("RELAY_PG_DSN")
+	if dsn == "" {
+		t.Skip("RELAY_PG_DSN unset; skipping live PostgreSQL smoke")
+	}
+
+	ctx := context.Background()
+
+	s, err := New(ctx, Config{
+		DSN:           dsn,
+		RetentionDays: 90,
+		FlushInterval: 200 * time.Millisecond,
+		Table:         "usage_events_smoke_test",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() {
+		s.pool.Exec(ctx, "DROP TABLE IF EXISTS usage_events_smoke_test")
+		s.Close()
+	}()
+
+	// Unique marker so repeated runs don't interfere.
+	marker := "smoke-" + time.Now().Format("20060102T150405.000000000")
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	events := []usage.Event{
+		{
+			RequestID: marker + "-1", Source: "pipeline", Timestamp: now,
+			Status: 200, DurationMs: 123, Streamed: true, FinishReason: "stop",
+			Attempts: 1, ModelID: marker, PolicyID: "p1",
+			Upstream: &usage.UpstreamTiming{Start: 100, ResponseStart: 200, ResponseEnd: 300},
+			Tokens:   usage.Tokens{"input": 10, "output": 5},
+			Extras:   map[string]string{"client_ip": "1.2.3.4"},
+		},
+		{
+			RequestID: marker + "-2", Source: "pipeline", Timestamp: now.Add(time.Second),
+			Status: 500, DurationMs: 50, ModelID: marker, PolicyID: "p1",
+			ErrorKind: "upstream_5xx",
+		},
+	}
+	for _, ev := range events {
+		if err := s.Write(ev); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	// Wait for flush tick.
+	q := usage.EventQuery{Since: time.Hour, ModelID: marker, Limit: 10}
+	var got []usage.Event
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err = s.Events(ctx, q)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		if len(got) == 2 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 events back, got %d", len(got))
+	}
+
+	// Newest-first.
+	if got[0].RequestID != marker+"-2" || got[1].RequestID != marker+"-1" {
+		t.Fatalf("not newest-first: %s, %s", got[0].RequestID, got[1].RequestID)
+	}
+
+	e1 := got[1]
+	if e1.Status != 200 || e1.DurationMs != 123 || !e1.Streamed || e1.FinishReason != "stop" {
+		t.Fatalf("scalar round-trip mismatch: %+v", e1)
+	}
+	if e1.Upstream == nil || e1.Upstream.ResponseEnd != 300 {
+		t.Fatalf("upstream round-trip mismatch: %+v", e1.Upstream)
+	}
+	if e1.Tokens["input"] != 10 || e1.Tokens["output"] != 5 {
+		t.Fatalf("tokens round-trip mismatch: %+v", e1.Tokens)
+	}
+	if e1.Extras["client_ip"] != "1.2.3.4" {
+		t.Fatalf("extras round-trip mismatch: %+v", e1.Extras)
+	}
+	if got[0].Upstream != nil {
+		t.Fatalf("event-2 had no upstream timing; want nil, got %+v", got[0].Upstream)
+	}
+
+	// Summary aggregation.
+	res, err := s.Summary(ctx, usage.SummaryQuery{
+		EventQuery: q, GroupBy: "model_id",
+	})
+	if err != nil {
+		t.Fatalf("Summary: %v", err)
+	}
+	if len(res.Rows) != 1 {
+		t.Fatalf("want 1 group, got %d", len(res.Rows))
+	}
+	row := res.Rows[0]
+	if row.Group["model_id"] != marker {
+		t.Fatalf("group key: %+v", row.Group)
+	}
+	if row.Requests != 2 || row.ErrorCount != 1 {
+		t.Fatalf("requests/errors: %d/%d", row.Requests, row.ErrorCount)
+	}
+	if row.Tokens["input"] != 10 || row.Tokens["output"] != 5 {
+		t.Fatalf("summary tokens: %+v", row.Tokens)
+	}
+	if row.DurationMs.P50 <= 0 {
+		t.Fatalf("p50 not computed: %+v", row.DurationMs)
+	}
+}
