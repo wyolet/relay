@@ -31,6 +31,7 @@ import (
 	"github.com/wyolet/relay/pkg/adapters/anthropic"
 	"github.com/wyolet/relay/pkg/adapters/openai"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 // Auth describes how the API key is attached to requests.
@@ -142,7 +143,7 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, e
 // canonical events until io.EOF; the caller must Close it. OutputMode is forced
 // to stream.
 func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, error) {
-	start := time.Now() // anchor for reasoning-span offsets, like relay's request-accept
+	start := time.Now() // anchor for Timing() offsets, like relay's request-accept
 	resp, err := c.roundTrip(ctx, req, v1.OutputModeStream)
 	if err != nil {
 		return nil, err
@@ -186,10 +187,14 @@ type Stream struct {
 	toCanon func([]byte) ([]byte, error)
 	pending [][]byte // canonical frames produced from one upstream frame, not yet returned
 
-	// Reasoning span, tracked as the caller drains via Recv. Offsets from
-	// start (GenerateStream call), mirroring relay's server-side timing so
-	// a direct (non-relay) consumer gets the same data quality.
+	// Timing, tracked as the caller drains via Recv. Offsets from start
+	// (the GenerateStream call), surfaced through Timing() in the exact
+	// usage.{Upstream,Reasoning}Timing shape relay ships — so standalone-
+	// client data never drifts from through-relay data.
 	start          time.Time
+	firstByte      time.Duration // first event received (TTFT)
+	firstByteSeen  bool
+	end            time.Duration // stream closed (io.EOF)
 	reasoningStart time.Duration
 	reasoningEnd   time.Duration
 	reasoningSeen  bool
@@ -202,8 +207,12 @@ func (s *Stream) Recv() (*Event, error) {
 			frame := s.pending[0]
 			s.pending = s.pending[1:]
 			if event, data, ok := v1.ParseSSEChunk(frame); ok {
+				now := time.Since(s.start)
+				if !s.firstByteSeen {
+					s.firstByte = now
+					s.firstByteSeen = true
+				}
 				if v1.IsReasoningEvent(event, data) {
-					now := time.Since(s.start)
 					if !s.reasoningSeen {
 						s.reasoningStart = now
 						s.reasoningSeen = true
@@ -218,6 +227,7 @@ func (s *Stream) Recv() (*Event, error) {
 			if err := s.sc.Err(); err != nil {
 				return nil, err
 			}
+			s.end = time.Since(s.start)
 			return nil, io.EOF
 		}
 		raw := append(append([]byte(nil), s.sc.Bytes()...), '\n', '\n')
@@ -236,12 +246,36 @@ func (s *Stream) Recv() (*Event, error) {
 // Close releases the underlying response body.
 func (s *Stream) Close() error { return s.body.Close() }
 
-// ReasoningSpan reports the reasoning span observed so far: offsets from the
-// GenerateStream call to the first and last reasoning frames, and ok=false if
-// the stream carried no reasoning. Call it after draining the stream for the
-// full span; mid-stream it reflects reasoning seen up to the last Recv.
-func (s *Stream) ReasoningSpan() (start, end time.Duration, ok bool) {
-	return s.reasoningStart, s.reasoningEnd, s.reasoningSeen
+// StreamTiming is the client-side timing of one streamed generation, in the
+// exact shape relay ships server-side (usage.UpstreamTiming +
+// usage.ReasoningTiming, microseconds from the GenerateStream call). A
+// consumer reads identical fields whether it called relay or a provider
+// directly — no drift, no branching on the path.
+//
+// The client has no separate relay→upstream handoff, so Upstream.Start is
+// collapsed onto ResponseStart (both = TTFT); when relay is in the path the
+// relay server records its own earlier Start in its own event.
+type StreamTiming struct {
+	Upstream  usage.UpstreamTiming   // Start == ResponseStart == TTFT; ResponseEnd == close
+	Reasoning *usage.ReasoningTiming // nil when the stream carried no reasoning
+}
+
+// Timing reports the stream timing observed so far. Call it after draining
+// the stream for the full picture; mid-stream it reflects events up to the
+// last Recv (ResponseEnd is zero until io.EOF).
+func (s *Stream) Timing() StreamTiming {
+	t := StreamTiming{Upstream: usage.UpstreamTiming{
+		Start:         s.firstByte.Microseconds(),
+		ResponseStart: s.firstByte.Microseconds(),
+		ResponseEnd:   s.end.Microseconds(),
+	}}
+	if s.reasoningSeen {
+		t.Reasoning = &usage.ReasoningTiming{
+			Start: s.reasoningStart.Microseconds(),
+			End:   s.reasoningEnd.Microseconds(),
+		}
+	}
+	return t
 }
 
 // APIError is a non-2xx response from the target.

@@ -119,12 +119,23 @@ func TestRelay_Stream_ReasoningSpan(t *testing.T) {
 		}
 	}
 
-	start, end, ok := stream.ReasoningSpan()
-	if !ok {
+	tm := stream.Timing()
+	// Upstream timing populated in the relay-identical shape: Start collapsed
+	// onto ResponseStart (TTFT), ResponseEnd at stream close.
+	if tm.Upstream.ResponseStart <= 0 {
+		t.Fatalf("TTFT not stamped: %+v", tm.Upstream)
+	}
+	if tm.Upstream.Start != tm.Upstream.ResponseStart {
+		t.Fatalf("client Start should equal ResponseStart (no relay leg): %+v", tm.Upstream)
+	}
+	if tm.Upstream.ResponseEnd < tm.Upstream.ResponseStart {
+		t.Fatalf("ResponseEnd %d before ResponseStart %d", tm.Upstream.ResponseEnd, tm.Upstream.ResponseStart)
+	}
+	if tm.Reasoning == nil {
 		t.Fatal("reasoning span not detected")
 	}
-	if start <= 0 || end < start {
-		t.Fatalf("bad reasoning span: start=%v end=%v", start, end)
+	if tm.Reasoning.Start <= 0 || tm.Reasoning.End < tm.Reasoning.Start {
+		t.Fatalf("bad reasoning span: %+v", tm.Reasoning)
 	}
 }
 
@@ -152,8 +163,12 @@ func TestRelay_Stream_NoReasoning_NoSpan(t *testing.T) {
 			t.Fatalf("recv: %v", err)
 		}
 	}
-	if _, _, ok := stream.ReasoningSpan(); ok {
-		t.Fatal("expected no reasoning span")
+	tm := stream.Timing()
+	if tm.Reasoning != nil {
+		t.Fatalf("expected no reasoning span, got %+v", tm.Reasoning)
+	}
+	if tm.Upstream.ResponseStart <= 0 || tm.Upstream.ResponseEnd < tm.Upstream.ResponseStart {
+		t.Fatalf("upstream timing should still be populated: %+v", tm.Upstream)
 	}
 }
 
