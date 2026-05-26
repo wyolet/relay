@@ -127,4 +127,37 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if row.DurationMs.P50 <= 0 {
 		t.Fatalf("p50 not computed: %+v", row.DurationMs)
 	}
+
+	// TimeSeries: both events within one hour-bucket, single series.
+	ts, err := s.TimeSeries(ctx, usage.TimeSeriesQuery{EventQuery: q, Interval: time.Hour})
+	if err != nil {
+		t.Fatalf("TimeSeries: %v", err)
+	}
+	if len(ts.Rows) != 1 || ts.Rows[0].Group != nil {
+		t.Fatalf("want 1 ungrouped series, got %d rows: %+v", len(ts.Rows), ts.Rows)
+	}
+	var reqs, errs int64
+	tokens := map[string]int64{}
+	for _, p := range ts.Rows[0].Points {
+		reqs += p.Requests
+		errs += p.ErrorCount
+		for k, v := range p.Tokens {
+			tokens[k] += v
+		}
+	}
+	if reqs != 2 || errs != 1 {
+		t.Fatalf("timeseries totals: reqs=%d errs=%d", reqs, errs)
+	}
+	if tokens["input"] != 10 || tokens["output"] != 5 {
+		t.Fatalf("timeseries tokens: %+v", tokens)
+	}
+
+	// Grouped by model_id yields one series carrying the group key.
+	tsg, err := s.TimeSeries(ctx, usage.TimeSeriesQuery{EventQuery: q, Interval: time.Hour, GroupBy: "model_id"})
+	if err != nil {
+		t.Fatalf("TimeSeries grouped: %v", err)
+	}
+	if len(tsg.Rows) != 1 || tsg.Rows[0].Group["model_id"] != marker {
+		t.Fatalf("grouped timeseries: %+v", tsg.Rows)
+	}
 }

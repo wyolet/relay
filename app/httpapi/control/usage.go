@@ -3,8 +3,8 @@
 // usagelog.Reader, so the store can swap (file today, ClickHouse later)
 // without touching this layer.
 //
-//   GET /usage/events    raw events, newest first, filterable
-//   GET /usage/summary   per-group aggregates over the filtered set
+//	GET /usage/events    raw events, newest first, filterable
+//	GET /usage/summary   per-group aggregates over the filtered set
 package control
 
 import (
@@ -71,6 +71,18 @@ type usageSummaryInput struct {
 
 type usageSummaryOutput struct {
 	Body usagelog.SummaryResult
+}
+
+// --- /usage/timeseries ---
+
+type usageTimeSeriesInput struct {
+	usageFilterInput
+	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\". Empty returns a single series."`
+}
+
+type usageTimeSeriesOutput struct {
+	Body usagelog.TimeSeriesResult
 }
 
 // --- registration ---
@@ -142,6 +154,68 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		return &usageSummaryOutput{Body: res}, nil
 	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "usage_timeseries",
+		Method:      http.MethodGet,
+		Path:        "/usage/timeseries",
+		Summary:     "Time-bucketed usage aggregates for charting",
+		Description: "Buckets the filtered stream by `interval` (epoch-aligned) " +
+			"and returns per-bucket requests, error_count, and token sums. " +
+			"With `group_by` set, returns one series per dimension value for " +
+			"stacked charts; empty returns a single series. Empty buckets are " +
+			"omitted — zero-fill against the returned from/to range.",
+		Tags:        []string{"usage"},
+		Middlewares: protect,
+		Errors:      []int{400, 401, 500},
+	}, func(ctx context.Context, in *usageTimeSeriesInput) (*usageTimeSeriesOutput, error) {
+		if err := d.Authz.Authorize(ctx, "usage.timeseries", authz.Resource{Kind: "usage"}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		base, err := in.toEventQuery()
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
+		interval, err := parseInterval(in.Interval)
+		if err != nil {
+			return nil, err
+		}
+		if in.GroupBy != "" && !usagelog.IsValidGroupBy(in.GroupBy) {
+			return nil, huma.Error400BadRequest("invalid group_by: " + in.GroupBy)
+		}
+		// Guard against a tiny interval over a large window producing an
+		// unbounded number of buckets. base.Since is always > 0 (parseSince
+		// defaults to 1h).
+		if int64(base.Since/interval) > usagelog.MaxBuckets {
+			return nil, huma.Error400BadRequest(
+				"interval too small for the requested window: would exceed the bucket cap — widen interval or shorten since")
+		}
+		q := usagelog.TimeSeriesQuery{EventQuery: base, Interval: interval, GroupBy: in.GroupBy}
+		res, err := d.UsageReader.TimeSeries(ctx, q)
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
+		if res.Rows == nil {
+			res.Rows = []usagelog.TimeSeriesRow{}
+		}
+		return &usageTimeSeriesOutput{Body: res}, nil
+	})
+}
+
+// parseInterval parses a required bucket width ("5m", "1h", "1d"). Unlike
+// parseSince it has no default — empty or non-positive is a 400.
+func parseInterval(raw string) (time.Duration, error) {
+	if strings.TrimSpace(raw) == "" {
+		return 0, huma.Error400BadRequest("`interval` is required (e.g. \"1h\", \"1d\")")
+	}
+	d, err := parseSince(raw)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, huma.Error400BadRequest("`interval` must be positive")
+	}
+	return d, nil
 }
 
 // parseSince accepts "1h", "24h", "7d", or empty (defaults to 1h).
