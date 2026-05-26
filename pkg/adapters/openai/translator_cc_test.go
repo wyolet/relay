@@ -1539,3 +1539,159 @@ func indexDoubleNewline(b []byte) int {
 	}
 	return -1
 }
+
+// --- Ollama reasoning divergence (reasoning vs reasoning_content) ---
+
+func TestCCParseResponse_OllamaReasoning(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":     "chatcmpl-r1",
+		"object": "chat.completion",
+		"model":  "gpt-oss",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role":      "assistant",
+				"content":   "The answer is 42.",
+				"reasoning": "Let me think step by step...",
+			},
+			"finish_reason": "stop",
+		}},
+	})
+	resp, err := (CCTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 2 {
+		t.Fatalf("output len: %d (want reasoning + message)", len(resp.Output))
+	}
+	r, ok := resp.Output[0].(*v1.Reasoning)
+	if !ok {
+		t.Fatalf("output[0] is %T, want *v1.Reasoning", resp.Output[0])
+	}
+	if r.Content != "Let me think step by step..." {
+		t.Errorf("reasoning content: %q", r.Content)
+	}
+	if got := ccReasoningField(r.ProviderData); got != ccReasoningFieldOllama {
+		t.Errorf("preserved field: %q, want %q", got, ccReasoningFieldOllama)
+	}
+	if _, ok := resp.Output[1].(*v1.Message); !ok {
+		t.Fatalf("output[1] is %T, want *v1.Message", resp.Output[1])
+	}
+}
+
+func TestCCParseResponse_ReasoningContentField(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":     "chatcmpl-r2",
+		"object": "chat.completion",
+		"model":  "deepseek-r1",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role":              "assistant",
+				"content":           "Done.",
+				"reasoning_content": "deliberating",
+			},
+			"finish_reason": "stop",
+		}},
+	})
+	resp, err := (CCTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := resp.Output[0].(*v1.Reasoning)
+	if !ok {
+		t.Fatalf("output[0] is %T, want *v1.Reasoning", resp.Output[0])
+	}
+	if r.Content != "deliberating" {
+		t.Errorf("reasoning content: %q", r.Content)
+	}
+	if got := ccReasoningField(r.ProviderData); got != ccReasoningFieldStd {
+		t.Errorf("preserved field: %q, want %q", got, ccReasoningFieldStd)
+	}
+}
+
+func TestCCToCanonicalStream_OllamaReasoning(t *testing.T) {
+	fn := (CCTranslator{}).NewToCanonicalStream()
+	chunks := [][]byte{
+		ccSSEChunk(map[string]any{
+			"id":     "chatcmpl-rs",
+			"object": "chat.completion.chunk",
+			"model":  "gpt-oss",
+			"choices": []any{map[string]any{
+				"index": 0,
+				"delta": map[string]any{"role": "assistant", "reasoning": "thinking..."},
+			}},
+		}),
+		ccSSEChunk(map[string]any{
+			"id":     "chatcmpl-rs",
+			"object": "chat.completion.chunk",
+			"model":  "gpt-oss",
+			"choices": []any{map[string]any{
+				"index": 0,
+				"delta": map[string]any{"content": "Answer"},
+			}},
+		}),
+		ccDoneChunk(),
+	}
+	var out []byte
+	for _, c := range chunks {
+		b, err := fn(c)
+		if err != nil {
+			t.Fatalf("translate: %v", err)
+		}
+		out = append(out, b...)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"reasoning"`) {
+		t.Fatalf("expected a canonical reasoning delta in stream output:\n%s", s)
+	}
+	if !strings.Contains(s, `"cc_reasoning_field":"reasoning"`) {
+		t.Fatalf("expected provider_data to preserve Ollama field:\n%s", s)
+	}
+}
+
+func TestCCSerializeResponse_ReasoningRoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		pd        string
+		wantField string
+	}{
+		{"ollama", `{"cc_reasoning_field":"reasoning"}`, "reasoning"},
+		{"default", "", "reasoning_content"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &v1.Response{
+				ID:           "resp-1",
+				Model:        "gpt-oss",
+				FinishReason: v1.FinishReasonStop,
+				Output: []v1.Item{
+					&v1.Reasoning{Content: "because", ProviderData: json.RawMessage(tc.pd)},
+					&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hi"}}},
+				},
+			}
+			body, err := (CCTranslator{}).SerializeResponse(resp, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var probe struct {
+				Choices []struct {
+					Message struct {
+						Reasoning        string `json:"reasoning"`
+						ReasoningContent string `json:"reasoning_content"`
+					} `json:"message"`
+				} `json:"choices"`
+			}
+			if err := json.Unmarshal(body, &probe); err != nil {
+				t.Fatal(err)
+			}
+			m := probe.Choices[0].Message
+			if tc.wantField == "reasoning" && m.Reasoning != "because" {
+				t.Errorf("want reasoning=because, got reasoning=%q reasoning_content=%q", m.Reasoning, m.ReasoningContent)
+			}
+			if tc.wantField == "reasoning_content" && m.ReasoningContent != "because" {
+				t.Errorf("want reasoning_content=because, got reasoning=%q reasoning_content=%q", m.Reasoning, m.ReasoningContent)
+			}
+		})
+	}
+}
