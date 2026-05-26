@@ -85,6 +85,59 @@ PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)
 TTL toDateTime(ts) + INTERVAL %d DAY`
 
+// expectedColumns is the column set insertBatch writes, in any order. Used
+// by ensureSchema to detect a pre-existing incompatible table.
+var expectedColumns = []string{
+	"request_id", "source", "ts", "status", "duration_ms", "streamed",
+	"finish_reason", "attempts", "error_kind", "error_message",
+	"upstream_start", "upstream_response_start", "upstream_response_end",
+	"relay_key_hash", "policy_id", "model_id", "requested_model",
+	"host_id", "host_key_id", "tokens", "extras",
+}
+
+// ensureSchema creates the table if absent, then verifies its columns match
+// what insertBatch writes. CREATE TABLE IF NOT EXISTS is a silent no-op
+// against a pre-existing table (e.g. an older usage_events schema), which
+// would make every insert fail forever. Rather than auto-drop (destructive),
+// fail fast with an actionable error so the operator resolves it.
+func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
+	if err := conn.Exec(ctx, fmt.Sprintf(createTableSQL, retentionDays)); err != nil {
+		return fmt.Errorf("usage/clickhouse: create table: %w", err)
+	}
+
+	rows, err := conn.Query(ctx,
+		"SELECT name FROM system.columns WHERE database = currentDatabase() AND table = ?", chTable)
+	if err != nil {
+		return fmt.Errorf("usage/clickhouse: describe %s: %w", chTable, err)
+	}
+	defer rows.Close()
+
+	have := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("usage/clickhouse: scan column: %w", err)
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	var missing []string
+	for _, c := range expectedColumns {
+		if !have[c] {
+			missing = append(missing, c)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf(
+			"usage/clickhouse: table %q exists with an incompatible schema (missing columns: %s) — drop or rename it (or point RELAY_CH_DSN at a fresh database) so relay can create the current schema",
+			chTable, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // Sink is the ClickHouse-backed implementation of usage.Sink, usage.Reader,
 // and usage.Closer.
 type Sink struct {
@@ -127,10 +180,9 @@ func New(cfg Config) (*Sink, error) {
 		return nil, fmt.Errorf("usage/clickhouse: ping: %w", err)
 	}
 
-	ddl := fmt.Sprintf(createTableSQL, cfg.RetentionDays)
-	if err := conn.Exec(pingCtx, ddl); err != nil {
+	if err := ensureSchema(pingCtx, conn, cfg.RetentionDays); err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("usage/clickhouse: ensure schema: %w", err)
+		return nil, err
 	}
 
 	s := &Sink{
@@ -339,8 +391,8 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 	sql := fmt.Sprintf(`
 SELECT
     %s,
-    count()                             AS requests,
-    countIf(status >= 400)              AS error_count,
+    toInt64(count())                    AS requests,
+    toInt64(countIf(status >= 400))     AS error_count,
     sumMap(tokens)                      AS tokens,
     toInt64(avg(duration_ms))           AS avg_ms,
     toInt64(quantile(0.5)(duration_ms)) AS p50,
