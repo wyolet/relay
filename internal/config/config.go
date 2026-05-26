@@ -106,6 +106,11 @@ func Load() (*Config, error) {
 	if cfg.EventlogBackend == "" {
 		cfg.EventlogBackend = "file"
 	}
+	switch cfg.EventlogBackend {
+	case "file", "clickhouse", "valkey":
+	default:
+		return nil, fmt.Errorf(`RELAY_EVENTLOG_BACKEND must be "file", "clickhouse", or "valkey", got %q`, cfg.EventlogBackend)
+	}
 
 	// --- Connections ---
 	cfg.PGDSN = os.Getenv("RELAY_PG_DSN")
