@@ -183,4 +183,3 @@ func modelHasAdapter(m *model.Model, name adapters.Name) bool {
 	}
 	return false
 }
-

@@ -268,6 +268,7 @@ func main() {
 		Resolver:      routing.New(cat),
 		Pipeline:      pl,
 		Proxy:         proxyPipeline,
+		Lifecycle:     lifecycleReg,
 		Adapters:      specRegistry.AdapterMap(),
 		Specs:         specRegistry,
 		RouteMounters: []inference.RouteMounter{inference.MountRegistry(specRegistry)},

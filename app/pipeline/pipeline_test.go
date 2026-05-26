@@ -232,6 +232,82 @@ func TestPostFlight_TimingMarks(t *testing.T) {
 	}
 }
 
+func TestRun_NoKeysEmitsFailureEvent(t *testing.T) {
+	t.Parallel()
+
+	var gotKind string
+	var gotStatus int
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	reg := lifecycle.New()
+	reg.RegisterPostFlight(func(_ context.Context, _ *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+		gotKind, gotStatus = ev.ErrorKind, ev.Status
+		wg.Done()
+	})
+	p := newPipeline()
+	p.Lifecycle = reg
+
+	_, err := p.Run(context.Background(), &pipeline.Request{
+		Adapter:   &fakeAdapter{},
+		Keys:      nil, // → ErrNoKeys
+		Policy:    makePolicy(),
+		Lifecycle: lifecycle.NewContext("req-nokeys", "pipeline", time.Now()),
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	wg.Wait()
+	if gotKind != "no_keys" {
+		t.Errorf("ErrorKind = %q, want no_keys", gotKind)
+	}
+	if gotStatus != 0 {
+		t.Errorf("Status = %d, want 0 (upstream never reached)", gotStatus)
+	}
+}
+
+func TestRun_UpstreamFailureEmitsEvent(t *testing.T) {
+	t.Parallel()
+
+	var gotKind string
+	var gotStatus int
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	reg := lifecycle.New()
+	reg.RegisterPostFlight(func(_ context.Context, _ *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+		gotKind, gotStatus = ev.ErrorKind, ev.Status
+		wg.Done()
+	})
+	p := newPipeline()
+	p.Lifecycle = reg
+
+	adp := &fakeAdapter{
+		callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+			return errResp(503), nil
+		},
+		retryFn: func(*http.Response) (bool, keypool.FailureKind, time.Duration) {
+			return true, keypool.FailureServerError, 0
+		},
+	}
+	_, err := p.Run(context.Background(), &pipeline.Request{
+		Adapter:   adp,
+		Keys:      []*hostkey.HostKey{makeKey("h1", "sk-1")},
+		Policy:    makePolicy(),
+		Lifecycle: lifecycle.NewContext("req-upfail", "pipeline", time.Now()),
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	wg.Wait()
+	if gotKind != "upstream_error" {
+		t.Errorf("ErrorKind = %q, want upstream_error", gotKind)
+	}
+	if gotStatus != 503 {
+		t.Errorf("Status = %d, want 503 (surfaced upstream status)", gotStatus)
+	}
+}
+
 func TestRetryOnTransient_RotatesKey(t *testing.T) {
 	t.Parallel()
 

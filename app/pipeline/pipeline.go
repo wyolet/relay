@@ -107,7 +107,18 @@ var (
 
 // Run orchestrates one request. Caller MUST Close the returned
 // Result.Body to release the connection and trigger post-flight.
-func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
+func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
+	// Failure telemetry: any error return (guard, reservation, routing
+	// of keys, all-keys-exhausted, upstream failure) fires a post-flight
+	// observer event so failed requests aren't invisible to usage
+	// tracking. Success returns nil err here and fires post-flight later
+	// on Body.Close instead — the two are mutually exclusive.
+	defer func() {
+		if err != nil {
+			go p.fireFailure(req, err)
+		}
+	}()
+
 	if req.Adapter == nil {
 		return nil, ErrAdapterMissing
 	}
@@ -327,6 +338,55 @@ func (p *Pipeline) runPostFlight(
 			ResponseBody: body,
 		}
 		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)
+	}
+}
+
+// fireFailure emits a post-flight observer event for a request that
+// never produced a response body. Runs in its own goroutine (the caller
+// is about to write an error response — telemetry must not block it).
+// No rate-limit commit / RecordSuccess: there was no success.
+func (p *Pipeline) fireFailure(req *Request, runErr error) {
+	if p.Lifecycle == nil || req.Lifecycle == nil {
+		return
+	}
+	kind, status := classifyFailure(runErr)
+	req.Lifecycle.MarkEnd()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+		Status:       status,
+		ErrorKind:    kind,
+		ErrorMessage: runErr.Error(),
+	})
+}
+
+// classifyFailure maps a Run error to a machine-readable category and the
+// upstream status to record (0 when upstream was never reached). Kinds are
+// telemetry categories for slicing — they don't mirror HTTP status codes.
+func classifyFailure(err error) (kind string, status int) {
+	var upstream *UpstreamFailureError
+	var exceeded *pkgratelimit.ExceededError
+	switch {
+	case errors.As(err, &upstream):
+		return "upstream_error", upstream.Status
+	case errors.As(err, &exceeded):
+		// Reservation rejected before any upstream call → status 0
+		// (the kind carries the 429 meaning; Status is the upstream status).
+		return "rate_limited", 0
+	case errors.Is(err, ErrNoKeys):
+		return "no_keys", 0
+	case errors.Is(err, ErrAllKeysExhausted):
+		return "keys_exhausted", 0
+	case errors.Is(err, ErrAdapterMissing):
+		return "adapter_missing", 0
+	case errors.Is(err, ErrPolicyMissing):
+		return "policy_missing", 0
+	case errors.Is(err, context.Canceled):
+		return "client_canceled", 0
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout", 0
+	default:
+		return "error", 0
 	}
 }
 

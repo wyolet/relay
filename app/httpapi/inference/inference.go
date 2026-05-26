@@ -12,13 +12,14 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 // RouteMounter is what an adapter package exposes to mount its own
@@ -45,6 +46,12 @@ type Deps struct {
 
 	// Proxy orchestrates a proxy-mode (BYO upstream key) request.
 	Proxy *proxy.Pipeline
+
+	// Lifecycle is the observer registry. Dispatch uses it to fire a
+	// failure post-flight event for requests rejected before a runner is
+	// reached (routing / proxy gating / translate errors) — runner-stage
+	// failures are fired by the runner. Same registry the runners hold.
+	Lifecycle *lifecycle.Registry
 
 	// Adapters keys the wire-protocol implementation by adapters.Name.
 	// Handlers look up the binding's Adapter Name here at request time;

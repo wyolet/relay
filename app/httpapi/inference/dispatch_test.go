@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkgrelay "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/slug"
@@ -227,6 +229,45 @@ func parseDispatchErr(t *testing.T, body []byte) errBody {
 		t.Fatalf("failed to parse error body: %v — raw: %s", err, body)
 	}
 	return e
+}
+
+// TestDispatch_RoutingFailure_EmitsUsageEvent verifies that a request
+// rejected during routing (model not resolvable) — i.e. before any runner
+// is invoked — still fires a failure usage event off the Context minted at
+// dispatch entry. This is the routing-stage capture the runner-side
+// failure firing alone could not reach.
+func TestDispatch_RoutingFailure_EmitsUsageEvent(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	d := buildDeps(t, cat)
+
+	var gotKind string
+	var wg sync.WaitGroup
+	wg.Add(1)
+	reg := lifecycle.New()
+	reg.RegisterPostFlight(func(_ context.Context, _ *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+		gotKind = ev.ErrorKind
+		wg.Done()
+	})
+	d.Lifecycle = reg
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	r = withNormalContext(r, rk)
+	w := httptest.NewRecorder()
+
+	Dispatch(d, w, r, DispatchInput{
+		Inbound:   adapters.OpenAI,
+		Body:      []byte(`{"model":"no-such-model"}`),
+		ModelName: "no-such-model",
+		Stream:    false,
+	})
+
+	if w.Code < 400 {
+		t.Fatalf("status = %d, want a 4xx/5xx routing rejection", w.Code)
+	}
+	wg.Wait()
+	if gotKind == "" {
+		t.Fatal("routing failure fired a usage event with empty ErrorKind")
+	}
 }
 
 // TestDispatch_Responses_OpenAIProperHost_BytePass verifies that

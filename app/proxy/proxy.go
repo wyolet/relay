@@ -131,15 +131,22 @@ func New(limiter *pkgratelimit.Limiter, registry *lifecycle.Registry, logger *sl
 var ErrNoUpstreamAuth = errors.New("proxy: upstream authorization required")
 
 // Run forwards one proxy-mode request. The returned Body MUST be Closed.
-func (p *Pipeline) Run(ctx context.Context, req *Request) (*Result, error) {
+func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
+	// Failure telemetry: any error return (missing auth, rate-limit
+	// rejection, upstream network failure) fires a post-flight observer
+	// event so failed proxy requests aren't invisible to usage tracking.
+	// Success returns nil err here and fires post-flight on Body.Close.
+	defer func() {
+		if err != nil {
+			go p.fireFailure(req, err)
+		}
+	}()
+
 	if req.UpstreamAuth == "" {
 		return nil, ErrNoUpstreamAuth
 	}
 
-	var (
-		reservation *pkgratelimit.Reservation
-		err         error
-	)
+	var reservation *pkgratelimit.Reservation
 	if p.Limiter != nil && len(req.Rules) > 0 && req.RateScope != "" {
 		reservation, err = p.Limiter.Reserve(ctx, req.RateScope, req.Rules)
 		if err != nil {
@@ -235,6 +242,45 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 			ResponseBody: body,
 		}
 		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)
+	}
+}
+
+// fireFailure emits a post-flight observer event for a proxy request
+// that never produced a response body. Own goroutine — the caller is
+// about to write an error response. No reservation commit: no success.
+func (p *Pipeline) fireFailure(req *Request, runErr error) {
+	if p.Lifecycle == nil || req.Lifecycle == nil {
+		return
+	}
+	kind, status := classifyFailure(runErr)
+	req.Lifecycle.MarkEnd()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+		Status:       status,
+		ErrorKind:    kind,
+		ErrorMessage: runErr.Error(),
+	})
+}
+
+// classifyFailure maps a proxy Run error to a telemetry category. Proxy
+// reaches upstream in one attempt with the caller's own credential, so
+// the failure set is narrower than the pipeline's.
+func classifyFailure(err error) (kind string, status int) {
+	var exceeded *pkgratelimit.ExceededError
+	switch {
+	case errors.Is(err, ErrNoUpstreamAuth):
+		return "no_upstream_auth", 0
+	case errors.As(err, &exceeded):
+		// Reservation rejected before the upstream call → status 0.
+		return "rate_limited", 0
+	case errors.Is(err, context.Canceled):
+		return "client_canceled", 0
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout", 0
+	default:
+		// Build-request or upstream Do() failure (network, DNS, TLS).
+		return "upstream_error", 0
 	}
 }
 
