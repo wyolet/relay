@@ -69,6 +69,11 @@ type Context struct {
 	// Collectors (store) and by pre-send readers (e.g. usage echo).
 	collected map[string]any
 
+	// filled records that the Registry already ran the hooks for this
+	// request. Set by Registry.Fill so a pre-send fill (echo) isn't
+	// repeated by the post-send Finalize. Registry-only.
+	filled bool
+
 	// Translator is the per-request vendor adapter, set by the runner
 	// when routing decides the upstream. Observers that want a
 	// canonical view of the response (usage, finish reason, output

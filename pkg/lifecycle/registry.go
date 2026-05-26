@@ -82,30 +82,40 @@ func (r *Registry) RunPreFlight(ctx context.Context, lc *Context, ev *PreFlightE
 	return nil
 }
 
-// Finalize runs the end-of-lifecycle sweep: every Hook fills its result
-// and the Registry attaches it to lc under the hook's name (serial — the
-// Registry is the sole writer of the collected set), then every
-// Collector stores the collected results to its sink (parallel,
-// read-only). Panics in a hook or collector are recovered and logged;
-// siblings proceed.
+// Fill runs every Hook and attaches its result to lc, serially (the
+// Registry is the sole writer of the collected set). Idempotent: a second
+// call is a no-op, so a pre-send fill (usage echo, which needs the
+// collected results before the response is written) isn't repeated by the
+// post-send Finalize. Nil-safe on lc.
+func (r *Registry) Fill(lc *Context, ev *PostFlightEvent) {
+	if lc == nil || lc.filled {
+		return
+	}
+	r.mu.RLock()
+	hooks := r.hooks
+	r.mu.RUnlock()
+	for _, h := range hooks {
+		if v := safeFill(h, lc, ev); v != nil {
+			lc.attach(h.Name(), v)
+		}
+	}
+	lc.filled = true
+}
+
+// Finalize runs the end-of-lifecycle sweep: Fill (if not already done
+// pre-send) then every Collector stores the collected results to its sink
+// (parallel, read-only). Panics in a hook or collector are recovered and
+// logged; siblings proceed.
 //
 // Called from the runner's detached post-flight goroutine. Blocks only
 // that goroutine, never the caller — the wait gives accurate post-flight
 // latency and lets graceful shutdown drain in-flight collectors.
 func (r *Registry) Finalize(ctx context.Context, lc *Context, ev *PostFlightEvent) {
+	r.Fill(lc, ev)
+
 	r.mu.RLock()
-	hooks := r.hooks
 	collectors := r.collectors
 	r.mu.RUnlock()
-
-	// Produce → attach. Serial: the Registry is the only writer of the
-	// collected set, so hooks can't race it.
-	for _, h := range hooks {
-		v := safeFill(h, lc, ev)
-		if v != nil {
-			lc.attach(h.Name(), v)
-		}
-	}
 
 	// Store. Parallel, read-only on the collected set.
 	if len(collectors) == 0 {

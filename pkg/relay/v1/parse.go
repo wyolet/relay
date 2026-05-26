@@ -15,15 +15,15 @@ import (
 //   - model string → []string{model}; array accepted but multiplex rejected at runtime
 func Parse(body []byte) (*Request, error) {
 	var wire struct {
-		Model       ModelRefs                  `json:"model"`
-		Input       json.RawMessage            `json:"input"`
-		Instructions string                    `json:"instructions"`
-		ModelConfig map[string]*ModelOpts      `json:"model_config"`
-		CacheConfig *CacheConfig               `json:"cache_config"`
-		OutputMode  string                     `json:"output_mode"`
-		User        string                     `json:"user"`
-		Metadata    map[string]string          `json:"metadata"`
-		Extensions  map[string]json.RawMessage `json:"extensions"`
+		Model        ModelRefs                  `json:"model"`
+		Input        json.RawMessage            `json:"input"`
+		Instructions string                     `json:"instructions"`
+		ModelConfig  map[string]*ModelOpts      `json:"model_config"`
+		CacheConfig  *CacheConfig               `json:"cache_config"`
+		OutputMode   string                     `json:"output_mode"`
+		User         string                     `json:"user"`
+		Metadata     map[string]string          `json:"metadata"`
+		Extensions   map[string]json.RawMessage `json:"extensions"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)

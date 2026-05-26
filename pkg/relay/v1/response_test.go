@@ -118,11 +118,11 @@ func TestResponseWithError(t *testing.T) {
 
 func TestResponseWithIncompleteDetails(t *testing.T) {
 	resp := &Response{
-		ID:        "resp_inc",
-		Object:    "response",
-		CreatedAt: 1716000000,
-		Model:     "gpt-4o",
-		Status:    StatusIncomplete,
+		ID:                "resp_inc",
+		Object:            "response",
+		CreatedAt:         1716000000,
+		Model:             "gpt-4o",
+		Status:            StatusIncomplete,
 		IncompleteDetails: &IncompleteDetails{Reason: "max_output_tokens"},
 	}
 	b, err := Marshal(resp)

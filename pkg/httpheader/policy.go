@@ -18,6 +18,12 @@ const (
 	HeaderProxyMode     = "X-WR-Proxy-Mode"
 	HeaderUpstreamHost  = "X-WR-Upstream-Host"
 	ProxyModeValueProxy = "Proxy"
+
+	// HeaderUsage opts the caller into an inline relay_usage block on the
+	// response ("full"). Relay-internal; stripped from the upstream
+	// request by the X-WR-* denylist.
+	HeaderUsage    = "X-WR-Usage"
+	UsageValueFull = "full"
 )
 
 // SafeUpstreamError returns a user-safe error message for an upstream failure,

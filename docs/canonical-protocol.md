@@ -110,6 +110,52 @@ These rules govern how the canonical protocol relates to the rest of the repo. P
 
 ---
 
+## `relay_usage` — a relay-produced response field (the one schema escape hatch)
+
+`Response.RelayUsage` (`relay_usage`, optional) is the single field on the
+canonical response that **no vendor adapter ever populates**. It's relay's own
+per-request observability — token counts, finish reason, retry `attempts`,
+`streamed`, and the anchored `timing` breakdown (`upstream.{start,
+response_start, response_end}` + `end`, all µs from the request-start anchor;
+derive TTFT/relay-overhead/upstream-duration by subtracting, never chained).
+It's a public *subset* of the internal usage record — no relay-key hash, no
+policy/host/model UUIDs.
+
+It's a deliberate, documented tension with rules 1 and 7, resolved like the
+`CacheConfig` carve-out:
+
+- **Why it's in the schema at all (not pure injection):** relay emits this
+  field on the wire when the caller sends `X-WR-Usage: full`. If the canonical
+  *type* didn't declare it, our own `pkg/relay/client` would be blind to a
+  field that's actually on the wire, and the schema would lie. For a vendorable
+  library + client we ship, that's a defect. So the type declares it (rule 1's
+  letter holds — `pkg/relay/v1` declares its *own* `RelayUsage` type, imports
+  nothing from `app/`).
+- **Why it's relay-native, not `extensions`:** like caching, it's a clean
+  cross-cutting concept with a stable intent, and the client wants it *typed*,
+  not an opaque `RawMessage`. So it's first-class, nil by default.
+- **The dual nature (important):**
+  - **Canonical-served path (`/v1/generate`):** `relay_usage` is a *real
+    serialized field*. The canonical client reads it natively.
+  - **Vendor-shaped paths (`/openai/*`, `/anthropic/*`):** the vendor
+    serializer doesn't know `relay_usage`, so relay **injects it as a
+    top-level `relay_usage` key into the response body after translation** —
+    the injected JSON is exactly `v1.RelayUsage` marshaled (one definition,
+    `app/` imports it, never copies). Vendor SDKs ignore the unknown key
+    (same as OpenRouter adding its own fields). So on these paths the wire
+    response carries a field relay *added post-translation* — the schema is
+    honest about the shape, this section is honest about the mechanism.
+- **Collection timing:** when echo is on, the usage producer is filled
+  *pre-send* (so the block exists before the body is written); `lifecycle`'s
+  fill is idempotent so the post-flight sink reuses the same collection. The
+  echoed `timing.end` is therefore "response-ready", not "fully transmitted" —
+  the client-egress tail is excluded (it isn't relay overhead). Accepted.
+- **Coverage:** non-streaming responses (buffered cross-shape, same-shape
+  byte-pass, canonical-served). Streaming echo (a final `relay_usage` SSE
+  event) and a `gzip`'d byte-pass body are follow-ups.
+
+---
+
 ## Item taxonomy — v1
 
 Closed union, 4 types. Adding a new item type requires a protocol bump.

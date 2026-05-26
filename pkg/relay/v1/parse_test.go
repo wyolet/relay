@@ -358,14 +358,14 @@ func TestParseRoundTrip(t *testing.T) {
 
 	// Marshal to wire (exclude Input since it's json:"-")
 	type wireReq struct {
-		Model        ModelRefs              `json:"model"`
-		Instructions string                 `json:"instructions,omitempty"`
-		ModelConfig  map[string]*ModelOpts  `json:"model_config,omitempty"`
-		OutputMode   string                 `json:"output_mode,omitempty"`
-		User         string                 `json:"user,omitempty"`
-		Metadata     map[string]string      `json:"metadata,omitempty"`
+		Model        ModelRefs                  `json:"model"`
+		Instructions string                     `json:"instructions,omitempty"`
+		ModelConfig  map[string]*ModelOpts      `json:"model_config,omitempty"`
+		OutputMode   string                     `json:"output_mode,omitempty"`
+		User         string                     `json:"user,omitempty"`
+		Metadata     map[string]string          `json:"metadata,omitempty"`
 		Extensions   map[string]json.RawMessage `json:"extensions,omitempty"`
-		Input        string                 `json:"input"`
+		Input        string                     `json:"input"`
 	}
 	wire := wireReq{
 		Model:        req.Model,
