@@ -31,16 +31,26 @@ func (*UsageHook) Name() string { return Namespace }
 // Fill builds the Event. Always returns one (error rows are valid usage
 // records), so every finalized request yields exactly one row.
 func (*UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+	return buildEvent(lc, ev.Status, ev.ErrorKind, ev.ErrorMessage, ev.ResponseBody), nil
+}
+
+// buildEvent assembles the canonical usage Event from the per-request
+// Context plus this-request outcome (status/error/body). Shared by the
+// post-flight UsageHook and the streaming observer (which passes the
+// accumulated stream bytes as body); both land the same Event under the
+// same Namespace so echo + sink see one shape regardless of stream vs
+// buffered.
+func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body []byte) *Event {
 	out := Event{
 		RequestID:      lc.RequestID,
 		Source:         lc.Source,
 		Timestamp:      lc.Timing.Start,
-		Status:         ev.Status,
+		Status:         status,
 		DurationMs:     lc.Timing.End.Milliseconds(),
 		Streamed:       lc.Streamed,
 		Attempts:       lc.Attempts,
-		ErrorKind:      ev.ErrorKind,
-		ErrorMessage:   ev.ErrorMessage,
+		ErrorKind:      errKind,
+		ErrorMessage:   errMsg,
 		RelayKeyHash:   lc.RelayKeyHash,
 		PolicyID:       lc.PolicyID,
 		ModelID:        lc.ModelID,
@@ -62,8 +72,8 @@ func (*UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (an
 		}
 	}
 
-	if lc.Translator != nil && len(ev.ResponseBody) > 0 {
-		if s, err := v1.ExtractSummary(lc.Translator, ev.ResponseBody); err == nil {
+	if lc.Translator != nil && len(body) > 0 {
+		if s, err := v1.ExtractSummary(lc.Translator, body); err == nil {
 			out.Tokens = s.Tokens
 			out.FinishReason = string(s.FinishReason)
 		}
@@ -81,5 +91,5 @@ func (*UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (an
 		}
 	}
 
-	return &out, nil
+	return &out
 }

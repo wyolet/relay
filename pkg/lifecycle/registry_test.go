@@ -228,6 +228,67 @@ func TestCollectorReadsHookResult(t *testing.T) {
 	}
 }
 
+// --- stream observers ---
+
+type testStreamFactory struct {
+	name string
+	obs  *testStreamObserver
+}
+
+func (f *testStreamFactory) Name() string { return f.name }
+func (f *testStreamFactory) NewObserver(_ *Context) StreamObserver {
+	f.obs = &testStreamObserver{}
+	return f.obs
+}
+
+type testStreamObserver struct {
+	frames int
+}
+
+func (o *testStreamObserver) Observe(_ []byte)     { o.frames++ }
+func (o *testStreamObserver) Result() (any, error) { return o.frames, nil }
+
+func TestStreamSession_ObserveFinishAttachesAndFills(t *testing.T) {
+	r := New()
+	f := &testStreamFactory{name: "frames"}
+	r.RegisterStreamObserver(f)
+
+	lc := NewContext("r", "test", time.Now())
+	sess := r.NewStreamSession(lc)
+	if sess == nil {
+		t.Fatal("expected a session for a registered factory")
+	}
+	sess.Observe([]byte("a"))
+	sess.Observe([]byte("b"))
+	sess.Finish()
+
+	if v, ok := lc.Collected("frames"); !ok || v.(int) != 2 {
+		t.Fatalf("stream observer result not attached: %v ok=%v", v, ok)
+	}
+	if !lc.filled {
+		t.Fatal("Finish must mark the context filled")
+	}
+
+	// A subsequent post-flight Finalize must NOT re-run hooks (collect-once):
+	// register a hook that would panic-mark if it ran.
+	ran := false
+	r.RegisterHook(hookFn("h", func(_ *Context, _ *PostFlightEvent) (any, error) {
+		ran = true
+		return 1, nil
+	}))
+	r.Finalize(context.Background(), lc, &PostFlightEvent{})
+	if ran {
+		t.Fatal("Finalize re-ran hooks despite stream session already filling")
+	}
+}
+
+func TestNewStreamSession_NilWhenNoFactories(t *testing.T) {
+	r := New()
+	if s := r.NewStreamSession(NewContext("r", "test", time.Now())); s != nil {
+		t.Fatal("expected nil session with no factories")
+	}
+}
+
 // --- concurrent register / finalize ---
 
 func TestConcurrentRegisterAndFinalize(t *testing.T) {
