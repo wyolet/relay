@@ -336,9 +336,13 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	// Only a canonical caller (/v1/*, adapters.Canonical) gets relay's usage,
 	// on the typed field (buffered) or the terminal event (stream).
 	echo := usageEchoRequested(r) && in.Inbound == adapters.Canonical
+	// Reasoning timing is stamped from canonical events, so it's only
+	// available when the caller speaks canonical (input shape canonical,
+	// any upstream); vendor-inbound and non-stream get no reasoning span.
+	trackReasoning := in.Inbound == adapters.Canonical
 	if in.Stream {
 		w.WriteHeader(result.Status)
-		streamCanonical(d, w, r, result.Body, echo, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
+		streamCanonical(d, w, r, result.Body, echo, trackReasoning, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
 		return
 	}
 	bufferCanonical(d, w, r, result.Body, result.Status, echo, canonReq, upstreamV1, inboundV1)
@@ -354,7 +358,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 // generation.completed event) — never as a standalone frame, so the canonical
 // client reads it off the event it already parses. One-frame lookahead lets
 // us reach "the last frame" before flushing it.
-func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, echo bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
+func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, echo, trackReasoning bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -362,8 +366,10 @@ func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 
 	var sess *lifecycle.StreamSession
 	var lc *lifecycle.Context
-	if echo && d.Lifecycle != nil {
+	if (echo || trackReasoning) && d.Lifecycle != nil {
 		lc = lifecycle.FromContext(r.Context())
+	}
+	if echo && lc != nil {
 		sess = d.Lifecycle.NewStreamSession(lc)
 	}
 
@@ -390,6 +396,18 @@ func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 			out = translated
 		} else {
 			out = chunk
+		}
+
+		// out is canonical here (toCanon ran). Time the reasoning span off
+		// the canonical reasoning events the adapter emitted — start on the
+		// first reasoning frame, end on the last.
+		if trackReasoning && lc != nil && toCanon != nil {
+			for _, f := range splitCanonFrames(out) {
+				if v1.IsReasoningFrame(f) {
+					lc.MarkReasoningStart()
+					lc.MarkReasoningEnd()
+				}
+			}
 		}
 
 		if fromCanon != nil && len(out) > 0 {

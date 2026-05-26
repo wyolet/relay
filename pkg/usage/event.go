@@ -36,6 +36,11 @@ type Event struct {
 	// can't express. See UpstreamTiming for unit + how to derive TTFT.
 	Upstream *UpstreamTiming `json:"upstream,omitempty"`
 
+	// Reasoning is the reasoning span (when the model emitted reasoning
+	// content). Nil unless the response was a canonical-observed stream
+	// that carried reasoning. Microseconds from start, like Upstream.
+	Reasoning *ReasoningTiming `json:"reasoning,omitempty"`
+
 	// Attribution — UUIDs (stable, snapshot-resolvable to slugs at
 	// query time). Hash of the inbound bearer is included so the
 	// plaintext is never logged.
@@ -65,4 +70,13 @@ type UpstreamTiming struct {
 	Start         int64 `json:"start"`          // start → handed to upstream
 	ResponseStart int64 `json:"response_start"` // start → first byte (TTFT)
 	ResponseEnd   int64 `json:"response_end"`   // start → upstream done
+}
+
+// ReasoningTiming is the reasoning span. Microseconds elapsed from the
+// request start, anchored not chained, same as UpstreamTiming:
+//
+//	reasoning span = End - Start
+type ReasoningTiming struct {
+	Start int64 `json:"start"` // start → first reasoning frame
+	End   int64 `json:"end"`   // start → last reasoning frame
 }

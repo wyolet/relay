@@ -88,6 +88,75 @@ func TestRelay_Stream(t *testing.T) {
 	assertEvents(t, got, want)
 }
 
+func TestRelay_Stream_ReasoningSpan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fl, _ := w.(http.Flusher)
+		write := func(f v1.SSEFrame) {
+			_, _ = w.Write(f.Bytes())
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		write(v1.SSEFrame{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"r1"}`)})
+		write(v1.SSEFrame{Event: v1.EventItemStarted, Data: []byte(`{"item_id":"rs1","item_type":"reasoning","index":0}`)})
+		time.Sleep(2 * time.Millisecond)
+		write(v1.SSEFrame{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"rs1","kind":"reasoning","delta":"x"}`)})
+		write(v1.SSEFrame{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"m1","kind":"text","delta":"hi"}`)})
+		write(v1.SSEFrame{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r1","status":"completed"}`)})
+	}))
+	defer srv.Close()
+
+	stream, err := Relay(srv.URL, "rk").GenerateStream(context.Background(), sampleReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	for {
+		if _, err := stream.Recv(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+	}
+
+	start, end, ok := stream.ReasoningSpan()
+	if !ok {
+		t.Fatal("reasoning span not detected")
+	}
+	if start <= 0 || end < start {
+		t.Fatalf("bad reasoning span: start=%v end=%v", start, end)
+	}
+}
+
+func TestRelay_Stream_NoReasoning_NoSpan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for _, f := range []v1.SSEFrame{
+			{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"r1"}`)},
+			{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"m1","kind":"text","delta":"hi"}`)},
+			{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r1","status":"completed"}`)},
+		} {
+			_, _ = w.Write(f.Bytes())
+		}
+	}))
+	defer srv.Close()
+
+	stream, err := Relay(srv.URL, "rk").GenerateStream(context.Background(), sampleReq())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	for {
+		if _, err := stream.Recv(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+	}
+	if _, _, ok := stream.ReasoningSpan(); ok {
+		t.Fatal("expected no reasoning span")
+	}
+}
+
 func TestRelay_APIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
