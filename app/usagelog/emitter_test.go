@@ -3,15 +3,36 @@ package usagelog
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
+// newTestSink is a minimal JSONL sink for Emitter tests. The concrete
+// file backend now lives in pkg/usage/file; the Emitter only needs the
+// Sink interface, so tests carry their own tiny writer.
+func newTestSink(w io.Writer) *testSink {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	return &testSink{enc: enc}
+}
+
+type testSink struct {
+	mu  sync.Mutex
+	enc *json.Encoder
+}
+
+func (s *testSink) Write(ev Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enc.Encode(ev)
+}
+
 func TestEmitter_WritesEventToSink(t *testing.T) {
 	var buf bytes.Buffer
-	sink := NewFileSinkFromWriter(&buf)
+	sink := newTestSink(&buf)
 	e := NewEmitter(EmitterOptions{}, sink)
 	defer e.Close()
 
@@ -55,7 +76,7 @@ func TestEmitter_DropOnFull(t *testing.T) {
 
 func TestEmitter_ConcurrentEmit(t *testing.T) {
 	var buf safeBuffer
-	sink := NewFileSinkFromWriter(&buf)
+	sink := newTestSink(&buf)
 	e := NewEmitter(EmitterOptions{QueueSize: 10_000}, sink)
 
 	var wg sync.WaitGroup
@@ -81,7 +102,7 @@ func TestEmitter_ConcurrentEmit(t *testing.T) {
 }
 
 func TestEmitter_CloseIsIdempotent(t *testing.T) {
-	e := NewEmitter(EmitterOptions{}, NewFileSinkFromWriter(&bytes.Buffer{}))
+	e := NewEmitter(EmitterOptions{}, newTestSink(&bytes.Buffer{}))
 	e.Close()
 	e.Close() // must not panic on double-close
 }

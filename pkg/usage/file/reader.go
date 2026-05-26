@@ -1,4 +1,4 @@
-package usagelog
+package file
 
 import (
 	"bufio"
@@ -8,31 +8,35 @@ import (
 	"os"
 	"sort"
 	"time"
+
+	"github.com/wyolet/relay/pkg/usage"
 )
 
-// FileReader is a Reader backed by the same JSONL file FileSink writes
-// to. Linear scan per query — fine for dogfood files (MB range,
-// thousands of events). For production-scale (millions of events,
-// GB-scale files), swap to a ClickHouseReader or similar.
-type FileReader struct {
+var _ usage.Reader = (*Reader)(nil)
+
+// Reader is a usage.Reader backed by the same JSONL file Sink writes to.
+// Linear scan per query — fine for dogfood files (MB range, thousands of
+// events). For production-scale (millions of events, GB-scale files), use
+// the ClickHouse backend instead.
+type Reader struct {
 	path string
 }
 
-// NewFileReader constructs a FileReader for path. Path must match the
-// FileSink the relay is currently writing to.
-func NewFileReader(path string) *FileReader {
-	return &FileReader{path: path}
+// NewReader constructs a Reader for path. Path must match the Sink the
+// relay is currently writing to.
+func NewReader(path string) *Reader {
+	return &Reader{path: path}
 }
 
 // Events streams the file, applies filters, returns the newest matching
 // events up to q.Limit. Sort by timestamp descending.
-func (r *FileReader) Events(_ context.Context, q EventQuery) ([]Event, error) {
+func (r *Reader) Events(_ context.Context, q usage.EventQuery) ([]usage.Event, error) {
 	limit := q.Limit
 	if limit <= 0 {
-		limit = DefaultEventLimit
+		limit = usage.DefaultEventLimit
 	}
-	if limit > MaxEventLimit {
-		limit = MaxEventLimit
+	if limit > usage.MaxEventLimit {
+		limit = usage.MaxEventLimit
 	}
 
 	matches, err := r.scan(q)
@@ -48,20 +52,20 @@ func (r *FileReader) Events(_ context.Context, q EventQuery) ([]Event, error) {
 	return matches, nil
 }
 
-// Summary streams the file, applies filters, builds per-group
-// aggregates including latency percentiles.
-func (r *FileReader) Summary(_ context.Context, q SummaryQuery) (SummaryResult, error) {
+// Summary streams the file, applies filters, builds per-group aggregates
+// including latency percentiles.
+func (r *Reader) Summary(_ context.Context, q usage.SummaryQuery) (usage.SummaryResult, error) {
 	groupBy := q.GroupBy
 	if groupBy == "" {
 		groupBy = "source"
 	}
-	if !IsValidGroupBy(groupBy) {
-		return SummaryResult{}, fmt.Errorf("usagelog.Summary: invalid group_by %q", groupBy)
+	if !usage.IsValidGroupBy(groupBy) {
+		return usage.SummaryResult{}, fmt.Errorf("usage/file.Summary: invalid group_by %q", groupBy)
 	}
 
 	events, err := r.scan(q.EventQuery)
 	if err != nil {
-		return SummaryResult{}, err
+		return usage.SummaryResult{}, err
 	}
 
 	type bucket struct {
@@ -102,9 +106,9 @@ func (r *FileReader) Summary(_ context.Context, q SummaryQuery) (SummaryResult, 
 		}
 	}
 
-	rows := make([]SummaryRow, 0, len(groups))
+	rows := make([]usage.SummaryRow, 0, len(groups))
 	for key, b := range groups {
-		rows = append(rows, SummaryRow{
+		rows = append(rows, usage.SummaryRow{
 			Group:      map[string]string{groupBy: key},
 			Requests:   b.count,
 			ErrorCount: b.errs,
@@ -118,18 +122,18 @@ func (r *FileReader) Summary(_ context.Context, q SummaryQuery) (SummaryResult, 
 		return rows[i].Requests > rows[j].Requests
 	})
 
-	return SummaryResult{Rows: rows, From: from, To: to}, nil
+	return usage.SummaryResult{Rows: rows, From: from, To: to}, nil
 }
 
-// scan opens the file once and returns every event matching the
-// filter (no limit applied at this layer; callers cap).
-func (r *FileReader) scan(q EventQuery) ([]Event, error) {
+// scan opens the file once and returns every event matching the filter
+// (no limit applied at this layer; callers cap).
+func (r *Reader) scan(q usage.EventQuery) ([]usage.Event, error) {
 	f, err := os.Open(r.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("usagelog.FileReader: open %q: %w", r.path, err)
+		return nil, fmt.Errorf("usage/file.Reader: open %q: %w", r.path, err)
 	}
 	defer f.Close()
 
@@ -138,7 +142,7 @@ func (r *FileReader) scan(q EventQuery) ([]Event, error) {
 		cutoff = time.Now().Add(-q.Since)
 	}
 
-	var out []Event
+	var out []usage.Event
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -146,7 +150,7 @@ func (r *FileReader) scan(q EventQuery) ([]Event, error) {
 		if len(line) == 0 {
 			continue
 		}
-		var ev Event
+		var ev usage.Event
 		if err := json.Unmarshal(line, &ev); err != nil {
 			// Skip malformed lines silently — better to lose one event
 			// than to fail the whole query.
@@ -158,12 +162,12 @@ func (r *FileReader) scan(q EventQuery) ([]Event, error) {
 		out = append(out, ev)
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("usagelog.FileReader: scan: %w", err)
+		return nil, fmt.Errorf("usage/file.Reader: scan: %w", err)
 	}
 	return out, nil
 }
 
-func matches(ev Event, q EventQuery, cutoff time.Time) bool {
+func matches(ev usage.Event, q usage.EventQuery, cutoff time.Time) bool {
 	if !cutoff.IsZero() && ev.Timestamp.Before(cutoff) {
 		return false
 	}
@@ -191,7 +195,7 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	return true
 }
 
-func groupKey(ev Event, groupBy string) string {
+func groupKey(ev usage.Event, groupBy string) string {
 	switch groupBy {
 	case "relay_key_hash":
 		return ev.RelayKeyHash
@@ -208,12 +212,12 @@ func groupKey(ev Event, groupBy string) string {
 	}
 }
 
-// durationStats computes avg + percentiles + max from raw samples.
-// For dogfood-sized inputs (thousands of values per group) a full
-// sort is fine. Production scale would use t-digest or HDR histogram.
-func durationStats(samples []int64) DurationStats {
+// durationStats computes avg + percentiles + max from raw samples. For
+// dogfood-sized inputs (thousands of values per group) a full sort is
+// fine. Production scale would use t-digest or HDR histogram.
+func durationStats(samples []int64) usage.DurationStats {
 	if len(samples) == 0 {
-		return DurationStats{}
+		return usage.DurationStats{}
 	}
 	sorted := make([]int64, len(samples))
 	copy(sorted, samples)
@@ -223,7 +227,7 @@ func durationStats(samples []int64) DurationStats {
 	for _, v := range sorted {
 		sum += v
 	}
-	return DurationStats{
+	return usage.DurationStats{
 		Avg: sum / int64(len(sorted)),
 		P50: percentile(sorted, 0.50),
 		P95: percentile(sorted, 0.95),

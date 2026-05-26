@@ -44,6 +44,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	relayv1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/usage/file"
 )
 
 func main() {
@@ -248,10 +249,10 @@ func main() {
 	if usagePath == "" {
 		usagePath = "relay-usage.jsonl"
 	}
-	usageSink, err := usagelog.NewFileSink(usagePath)
+	usageSink, err := file.NewSink(usagePath)
 	if err != nil {
 		slog.Error("usagelog: file sink failed; using stdout", "err", err, "path", usagePath)
-		usageSink = usagelog.StdoutSink()
+		usageSink = file.Stdout()
 	}
 	usageEmitter := usagelog.NewEmitter(usagelog.EmitterOptions{}, usageSink)
 	defer usageEmitter.Close()
@@ -302,7 +303,7 @@ func main() {
 			Catalog:      cat,
 			Stores:       stores,
 			CookieSecure: cookieSecure,
-			UsageReader:  usagelog.NewFileReader(usagePath),
+			UsageReader:  file.NewReader(usagePath),
 		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))

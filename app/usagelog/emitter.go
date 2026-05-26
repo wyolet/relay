@@ -84,14 +84,23 @@ func (e *Emitter) Emit(ev Event) {
 func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }
 
 // Close signals the drain goroutine to finish, drains pending events,
-// and returns once all sinks have processed everything in flight.
-// Subsequent Emit calls are no-ops.
+// and returns once all sinks have processed everything in flight. After
+// the queue drains, any sink implementing Closer is closed (flush final
+// batch, close remote conn) so buffered/remote backends lose nothing on
+// graceful shutdown. Subsequent Emit calls are no-ops.
 func (e *Emitter) Close() {
 	if e.stopped.Swap(true) {
 		return
 	}
 	close(e.queue)
 	e.wg.Wait()
+	for _, sink := range e.sinks {
+		if c, ok := sink.(Closer); ok {
+			if err := c.Close(); err != nil {
+				e.log.Warn("usagelog: sink close failed", "err", err)
+			}
+		}
+	}
 }
 
 func (e *Emitter) drain() {
