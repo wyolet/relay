@@ -24,7 +24,6 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model)
 			return true
 		}
 	}
-	providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
 	deprecated := isDeprecated(m)
 	wildcardGrant := len(pol.Spec.ModelIDs) == 0 && len(pol.Spec.Models) == 0
 
@@ -41,19 +40,14 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model)
 		if _, ok := keyHosts[hb.HostID]; !ok {
 			continue
 		}
-		h, ok := snap.Host(hb.HostID)
-		if !ok {
-			continue
-		}
-		switch {
-		case len(pol.Spec.Models) > 0:
-			if refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name, deprecated && !pol.Spec.IncludeDeprecated) {
-				return true
-			}
-		case wildcardGrant:
+		// Explicit policies consult the precomputed allow-set; implicit
+		// wildcards allow any non-deprecated model (mirrors Resolve).
+		if wildcardGrant {
 			if !deprecated || pol.Spec.IncludeDeprecated {
 				return true
 			}
+		} else if snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.HostID) {
+			return true
 		}
 	}
 	return false

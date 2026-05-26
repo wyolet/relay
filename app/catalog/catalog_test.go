@@ -1,8 +1,8 @@
 package catalog
 
 import (
-	"github.com/wyolet/relay/app/adapters"
 	"context"
+	"github.com/wyolet/relay/app/adapters"
 	"strings"
 	"testing"
 
@@ -131,9 +131,9 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerUser},
 		},
 		Spec: policy.Spec{
-			ModelIDs:       []string{m1.Meta.ID, m2.Meta.ID},
-			HostKeyIDs: []string{k1.Meta.ID, k2.Meta.ID},
-			RateLimitID:    rl.Meta.ID,
+			ModelIDs:    []string{m1.Meta.ID, m2.Meta.ID},
+			HostKeyIDs:  []string{k1.Meta.ID, k2.Meta.ID},
+			RateLimitID: rl.Meta.ID,
 		},
 	}
 
@@ -273,8 +273,8 @@ func TestReload_PricingResolves(t *testing.T) {
 	modelID := models[0].Meta.ID
 	pr := &pricing.Pricing{
 		Meta: meta.Metadata{
-			ID:   meta.NewID(),
-			Name: "openai-standard",
+			ID:    meta.NewID(),
+			Name:  "openai-standard",
 			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
 		},
 		Spec: pricing.Spec{
@@ -305,8 +305,8 @@ func TestReload_DuplicatePricingFails(t *testing.T) {
 	mkPricing := func(name string) *pricing.Pricing {
 		return &pricing.Pricing{
 			Meta: meta.Metadata{
-				ID:   meta.NewID(),
-				Name: name,
+				ID:    meta.NewID(),
+				Name:  name,
 				Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
 			},
 			Spec: pricing.Spec{
@@ -329,8 +329,8 @@ func TestReload_DuplicatePricingFails(t *testing.T) {
 func hostOwnedPolicy(name, hostID string) *policy.Policy {
 	return &policy.Policy{
 		Meta: meta.Metadata{
-			ID:   meta.NewID(),
-			Name: name,
+			ID:    meta.NewID(),
+			Name:  name,
 			Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID},
 		},
 	}

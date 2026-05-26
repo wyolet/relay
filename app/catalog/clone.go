@@ -32,9 +32,10 @@ func (s *Snapshot) clone() *Snapshot {
 		relayKeysByID:   shallowMap(s.relayKeysByID),
 		relayKeysByHash: shallowMap(s.relayKeysByHash),
 
-		modelsByPolicy:    copySliceMap(s.modelsByPolicy),
-		hostKeysByPolicy:  copySliceMap(s.hostKeysByPolicy),
-		rateLimitByPolicy: shallowMap(s.rateLimitByPolicy),
+		modelsByPolicy:        copySliceMap(s.modelsByPolicy),
+		hostKeysByPolicy:      copySliceMap(s.hostKeysByPolicy),
+		rateLimitByPolicy:     shallowMap(s.rateLimitByPolicy),
+		allowedCombosByPolicy: shallowMap(s.allowedCombosByPolicy),
 
 		pricingsByID:       shallowMap(s.pricingsByID),
 		pricingByModelHost: shallowMap(s.pricingByModelHost),

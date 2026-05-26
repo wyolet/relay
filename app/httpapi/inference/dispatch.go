@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
@@ -103,13 +104,20 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 
+	// Fold the X-WR-Upstream-Host header into the model ref as a host pin,
+	// unless the ref already pins one with "@host" (explicit pin wins).
+	modelRef := in.ModelName
+	if uh := r.Header.Get(httpheader.HeaderUpstreamHost); uh != "" && !strings.Contains(modelRef, "@") {
+		modelRef = modelRef + "@" + uh
+	}
+
 	plan, err := d.Resolver.Resolve(routing.Request{
-		ModelName: in.ModelName,
+		ModelName: modelRef,
 		RelayKey:  rk,
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
-		mapRoutingErr(w, err, in.ModelName, rk.Spec.PolicyID)
+		mapRoutingErr(w, err, modelRef, rk.Spec.PolicyID)
 		return
 	}
 	lc.PayloadLog = plan.PayloadLoggingEnabled

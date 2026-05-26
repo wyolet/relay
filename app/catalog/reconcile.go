@@ -13,6 +13,15 @@ import (
 	"github.com/wyolet/relay/app/relaykey"
 )
 
+// commitWithGrants recomputes the per-policy allowed-combo sets (a function of
+// providers + hosts + models + policies) then atomically publishes the clone.
+// Used by every Apply that can change a grant; hostkey/ratelimit/relaykey/
+// pricing writes don't affect grants and call c.snap.Store directly.
+func (c *Catalog) commitWithGrants(s *Snapshot) {
+	s.rebuildPolicyAllowSets()
+	c.snap.Store(s)
+}
+
 func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {
 	if !p.IsEnabled() {
 		return c.ApplyProviderDelete(p.Meta.ID)
@@ -31,7 +40,7 @@ func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {
 	}
 	s.providersByID[p.Meta.ID] = p
 	s.providersByName[p.Meta.Name] = p
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -40,7 +49,7 @@ func (c *Catalog) ApplyProviderDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteProvider(s, id)
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -74,7 +83,7 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	}
 	s.hostsByID[clean.Meta.ID] = clean
 	s.hostsByName[clean.Meta.Name] = clean
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -83,7 +92,7 @@ func (c *Catalog) ApplyHostDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteHost(s, id)
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -113,11 +122,11 @@ func (c *Catalog) ApplyModelUpsert(m *model.Model) error {
 	clean, keep := sanitizeModel(m, snapIDs(s.providersByID), snapIDs(s.hostsByID))
 	if !keep {
 		deleteModel(s, m.Meta.ID)
-		c.snap.Store(s)
+		c.commitWithGrants(s)
 		return nil
 	}
 	insertModel(s, clean)
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -126,7 +135,7 @@ func (c *Catalog) ApplyModelDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteModel(s, id)
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -296,7 +305,7 @@ func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
 	s := c.snap.Load().clone()
 	clean := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID))
 	insertPolicy(s, clean)
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 
@@ -305,7 +314,7 @@ func (c *Catalog) ApplyPolicyDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deletePolicy(s, id)
-	c.snap.Store(s)
+	c.commitWithGrants(s)
 	return nil
 }
 

@@ -76,6 +76,12 @@ type Snapshot struct {
 	hostKeysByPolicy  map[string][]*hostkey.HostKey
 	rateLimitByPolicy map[string]*ratelimit.RateLimit
 
+	// allowedCombosByPolicy[policyID] is the set of (model, host) pairs an
+	// explicit-grant policy allows — built from its ModelIDs + Models refs so
+	// authorization is an O(1) membership test. Implicit-wildcard policies are
+	// absent (PolicyAllowsCombo returns true). See policy_allow.go.
+	allowedCombosByPolicy map[string]map[comboKey]struct{}
+
 	pricingsByID map[string]*pricing.Pricing
 	// pricingByModelHost keys on modelID+"|"+hostID for O(1) hot-path lookup.
 	pricingByModelHost map[string]*pricing.Pricing

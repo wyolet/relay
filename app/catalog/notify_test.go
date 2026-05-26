@@ -27,11 +27,11 @@ func TestParseEvent_HappyPath(t *testing.T) {
 func TestParseEvent_Malformed(t *testing.T) {
 	cases := []string{
 		"",
-		"provider:upsert",             // too few segments
-		"provider:upsert:id:extra",    // too many segments (4 parts after SplitN(4))
-		"badkind:upsert:id",           // unknown kind
-		"provider:badop:id",           // unknown op
-		"provider:upsert:",            // empty id
+		"provider:upsert",          // too few segments
+		"provider:upsert:id:extra", // too many segments (4 parts after SplitN(4))
+		"badkind:upsert:id",        // unknown kind
+		"provider:badop:id",        // unknown op
+		"provider:upsert:",         // empty id
 	}
 	for _, payload := range cases {
 		_, ok := parseEvent(payload)
