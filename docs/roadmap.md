@@ -244,12 +244,17 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
 
 ### Cutover tech debt
 
-- **Settings hot-swap follow-ups** (both greenlit, not yet done). (a) The
-  payload-logging `Controller` reconciles via a 2s **poll** of
-  `cat.Setting` because there's no settings change-callback seam; add an
-  on-change hook to `app/catalog`'s `settingsHolder` (call it at the end of
-  `applyUpsert`/`applyDelete`) so consumers rebuild event-driven instead of
-  polling. (b) ~~Apply the same settings-section treatment to other env
+- **Settings hot-swap follow-ups** (both shipped). (a) ~~The
+  payload-logging `Controller` reconciles via a 2s poll~~ — **done.**
+  `app/catalog`'s `settingsHolder` now has a change-callback seam
+  (`Catalog.OnSettingsChange(section, fn)`); `applyUpsert`/`applyDelete`
+  and the boot `reload` fire registered callbacks. Both consumers are
+  event-driven: `settingswatch.Watcher` applies inline on the callback
+  (cheap setter), and `payloadlog.Controller` has the callback signal a
+  kick channel so its sink rebuild stays off the catalog's serial NOTIFY
+  goroutine. No poll, no fixed-interval lag. Wiring registers subscribers
+  before `Hydrate` so the boot `reload`'s one-shot notification lands.
+  (b) ~~Apply the same settings-section treatment to other env
   knobs~~ — **partially done.** `RELAY_RICH_PARSING` moved to the
   `parsing` settings section, hot-swapped via the new generic
   `app/settingswatch.Watcher[T]` (a value-applier counterpart to
