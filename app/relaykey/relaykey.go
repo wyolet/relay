@@ -53,6 +53,12 @@ type Spec struct {
 	// Authorization header verbatim to the provider. Gated by the relay's
 	// global passthrough mode — when that mode is off the flag is moot.
 	PassthroughAllowed bool `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
+
+	// PayloadLoggingEnabled opts requests authenticated by this key into
+	// full request/response body capture by the payloadlog observer. Off
+	// by default. Independent of the policy-level flag — either enables
+	// capture.
+	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
 // IsEnabled returns true when Enabled is unset or explicitly true.

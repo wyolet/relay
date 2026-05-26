@@ -70,6 +70,10 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	cls := ClassificationFrom(ctx)
 	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
 	lc.RequestedModel = in.ModelName
+	// Retain the inbound body for the payloadlog observer (a reference, not
+	// a copy — in.Body is already the fully-buffered request). The capture
+	// gate (lc.PayloadLog) is set once routing resolves the opt-in.
+	lc.RequestBody = in.Body
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
@@ -82,6 +86,11 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		"body_bytes", len(in.Body),
 	)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
+		// Proxy bypasses routing.Resolve; the only opt-in surface is the
+		// authenticating relay key (anonymous proxy has none).
+		if rk := RelayKeyFromContext(ctx); rk != nil {
+			lc.PayloadLog = rk.Spec.PayloadLoggingEnabled
+		}
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
 		handleProxy(d, w, r, in.Inbound)
 		return
@@ -103,6 +112,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		mapRoutingErr(w, err)
 		return
 	}
+	lc.PayloadLog = plan.PayloadLoggingEnabled
 
 	inboundSpec := d.Specs.Spec(in.Inbound)
 	if inboundSpec == nil {

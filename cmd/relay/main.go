@@ -26,6 +26,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/proxy"
@@ -312,6 +313,23 @@ func main() {
 	slog.Info("usagelog: wired", "backend", cfg.EventlogBackend,
 		"hooks", lifecycleReg.HookCount(), "collectors", lifecycleReg.CollectorCount(),
 		"stream_observers", lifecycleReg.StreamObserverCount())
+
+	// Payload logging: the second lifecycle observer. Off unless
+	// RELAY_PAYLOADLOG is set; per-request capture is gated by the
+	// Policy/RelayKey opt-in resolved at the inference entry.
+	if cfg.PayloadLog {
+		payloadSink, err := buildPayloadSink(bootCtx, cfg)
+		if err != nil {
+			slog.Error("payloadlog: sink init failed", "err", err, "backend", cfg.PayloadLogBackend)
+			os.Exit(1)
+		}
+		payloadEmitter := payloadlog.NewEmitter(payloadlog.EmitterOptions{}, payloadSink)
+		defer payloadEmitter.Close()
+		lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(cfg.PayloadLogMaxBytes))
+		lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadEmitter))
+		lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(cfg.PayloadLogMaxBytes))
+		slog.Info("payloadlog: wired", "backend", cfg.PayloadLogBackend, "max_bytes", cfg.PayloadLogMaxBytes)
+	}
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()

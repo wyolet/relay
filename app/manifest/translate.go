@@ -372,14 +372,15 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	return &policy.Policy{
 		Meta: m,
 		Spec: policy.Spec{
-			Models:            models,
-			HostKeyIDs:        hostKeyIDs,
-			RateLimitID:       rateLimitID,
-			RLBindings:        rlBindings,
-			KeySelection:      policy.KeySelection(d.Spec.KeySelection),
-			SkipDefaultLimits: d.Spec.SkipDefaultLimits,
-			IncludeDeprecated: d.Spec.IncludeDeprecated,
-			Enabled:           d.Spec.Enabled,
+			Models:                models,
+			HostKeyIDs:            hostKeyIDs,
+			RateLimitID:           rateLimitID,
+			RLBindings:            rlBindings,
+			KeySelection:          policy.KeySelection(d.Spec.KeySelection),
+			SkipDefaultLimits:     d.Spec.SkipDefaultLimits,
+			IncludeDeprecated:     d.Spec.IncludeDeprecated,
+			Enabled:               d.Spec.Enabled,
+			PayloadLoggingEnabled: d.Spec.PayloadLoggingEnabled,
 		},
 	}, nil
 }
@@ -433,14 +434,15 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 		Kind:       "Policy",
 		Metadata:   metaToWire(p.Meta),
 		Spec: PolicySpec{
-			Models:            models,
-			HostKeys:          hostKeys,
-			RateLimit:         rlName,
-			RLBindings:        bindings,
-			KeySelection:      string(p.Spec.KeySelection),
-			SkipDefaultLimits: p.Spec.SkipDefaultLimits,
-			IncludeDeprecated: p.Spec.IncludeDeprecated,
-			Enabled:           p.Spec.Enabled,
+			Models:                models,
+			HostKeys:              hostKeys,
+			RateLimit:             rlName,
+			RLBindings:            bindings,
+			KeySelection:          string(p.Spec.KeySelection),
+			SkipDefaultLimits:     p.Spec.SkipDefaultLimits,
+			IncludeDeprecated:     p.Spec.IncludeDeprecated,
+			Enabled:               p.Spec.Enabled,
+			PayloadLoggingEnabled: p.Spec.PayloadLoggingEnabled,
 		},
 	}
 }
@@ -627,12 +629,13 @@ func ToRelayKey(d RelayKeyDTO, idx Resolver) (*relaykey.RelayKey, error) {
 	return &relaykey.RelayKey{
 		Meta: d.Metadata.toMeta(),
 		Spec: relaykey.Spec{
-			PolicyID:           policyID,
-			KeyHash:            d.Spec.KeyHash,
-			Prefix:             d.Spec.Prefix,
-			RevokedAt:          revokedAt,
-			Enabled:            d.Spec.Enabled,
-			PassthroughAllowed: d.Spec.PassthroughAllowed,
+			PolicyID:              policyID,
+			KeyHash:               d.Spec.KeyHash,
+			Prefix:                d.Spec.Prefix,
+			RevokedAt:             revokedAt,
+			Enabled:               d.Spec.Enabled,
+			PassthroughAllowed:    d.Spec.PassthroughAllowed,
+			PayloadLoggingEnabled: d.Spec.PayloadLoggingEnabled,
 		},
 	}, nil
 }
@@ -654,12 +657,13 @@ func FromRelayKey(k *relaykey.RelayKey, rev ReverseResolver) RelayKeyDTO {
 		Kind:       "RelayKey",
 		Metadata:   metaToWire(k.Meta),
 		Spec: RelayKeySpec{
-			Policy:             policyName,
-			KeyHash:            k.Spec.KeyHash,
-			Prefix:             k.Spec.Prefix,
-			RevokedAt:          revokedAt,
-			Enabled:            k.Spec.Enabled,
-			PassthroughAllowed: k.Spec.PassthroughAllowed,
+			Policy:                policyName,
+			KeyHash:               k.Spec.KeyHash,
+			Prefix:                k.Spec.Prefix,
+			RevokedAt:             revokedAt,
+			Enabled:               k.Spec.Enabled,
+			PassthroughAllowed:    k.Spec.PassthroughAllowed,
+			PayloadLoggingEnabled: k.Spec.PayloadLoggingEnabled,
 		},
 	}
 }
