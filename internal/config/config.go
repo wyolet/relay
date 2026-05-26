@@ -2,7 +2,7 @@
 // It is the single source of truth for the env contract; grep here to learn
 // what env vars Relay reads.
 //
-// Load() validates inputs at boot (master key shape, RICH_PARSING enum, etc.)
+// Load() validates inputs at boot (master key shape, cluster-mode enum, etc.)
 // so subsystem constructors can trust the fields they receive. Subsystems do
 // NOT read env vars themselves — they accept values via their own typed configs.
 package config
@@ -36,8 +36,6 @@ type Config struct {
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
 
 	// Behavior knobs
-	RichParsing     bool
-	AdminReloadRPM  int
 	CHRetentionDays int
 	AutoSeedIfEmpty bool
 	ConfigDir       string
@@ -80,16 +78,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf(`RELAY_CLUSTER_MODE must be "on" or "off", got %q`, v)
 	}
 
-	// --- RELAY_RICH_PARSING ---
-	switch v := os.Getenv("RELAY_RICH_PARSING"); v {
-	case "", "on":
-		cfg.RichParsing = true
-	case "off":
-		cfg.RichParsing = false
-	default:
-		return nil, fmt.Errorf(`RELAY_RICH_PARSING must be "on" or "off", got %q`, v)
-	}
-
 	// --- RELAY_MASTER_KEY ---
 	if raw := os.Getenv("RELAY_MASTER_KEY"); raw != "" {
 		mk, err := crypto.ParseMasterKey(raw)
@@ -128,7 +116,6 @@ func Load() (*Config, error) {
 	cfg.AdminToken = os.Getenv("RELAY_ADMIN_TOKEN")
 
 	// --- Behavior knobs ---
-	cfg.AdminReloadRPM = envInt("RELAY_ADMIN_RELOAD_RPM", 10)
 	cfg.CHRetentionDays = envInt("RELAY_CH_RETENTION_DAYS", 90)
 	cfg.AutoSeedIfEmpty = os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
 

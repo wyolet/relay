@@ -147,14 +147,11 @@ Boot fails with a non-zero exit code if a required DSN is missing for the config
 
 | Var | Default | Required when | Semantics |
 |---|---|---|---|
-| `RELAY_ADMIN_RELOAD_RPM` | `10` | optional | Rate limit (requests per minute) on `POST /control/reload`, enforced per source IP. Default 10 RPM. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | optional | Per-backend ping timeout for `/healthz` in milliseconds. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | optional | Total graceful shutdown budget in seconds. Covers all drain steps. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | optional | Set to `1` to seed Postgres from `RELAY_CONFIG_DIR` on first boot if all catalog tables are empty. Subsequent boots with any rows are no-ops. |
 | `RELAY_MAX_REQUEST_BYTES` | `2097152` (2 MiB) | optional | Maximum inbound request body size in bytes. Requests exceeding this are rejected with 413 before parsing. |
-| `RELAY_RICH_PARSING` | `on` | never | Default `on`. Full body parse to a typed `ChatRequest` struct (extracts `model`, `stream`, `user`, `metadata`, `messages` as raw). `off` reverts to the legacy partial-parse path (only `model`, `stream`, `user` extracted; body's `metadata` field ignored). The raw body is always forwarded byte-equivalent to the upstream provider regardless of this setting. |
-
-`RELAY_RICH_PARSING` controls how much of the request body is decoded on the hot path. The default (`on`) gives typical callers body-native attribution (see `metadata` field) and makes `messages` available as raw JSON for future enrichment — with no deep content parse. Set to `off` only when shaving every microsecond matters and body-level attribution is not used; the legacy partial-parse path extracts only `model`, `stream`, and `user`.
+Rich parsing is no longer an env var — it lives in the `parsing` settings section (`PUT /settings/parsing {"richParsing": false}`), hot-reloaded without a restart. Default `on`: full body parse to a typed `ChatRequest` struct (extracts `model`, `stream`, `user`, `metadata`, `messages` as raw), giving callers body-native attribution and raw `messages` for future enrichment with no deep content parse. Set `richParsing` off only when shaving every microsecond matters and body-level attribution is unused; the minimal path extracts only `model`, `stream`, and `user` and ignores the body's `metadata` field. The raw body is always forwarded byte-equivalent to the upstream provider regardless of this setting.
 
 ---
 
@@ -639,7 +636,6 @@ There is no multi-token support for the admin endpoint today — rotation requir
 
 - All `/control/*` routes are only registered when `RELAY_ADMIN_TOKEN` is set AND `RELAY_CATALOG_BACKEND=pg`.
 - A wrong or missing admin token returns 404 (obscures endpoint existence).
-- Rate limiting on `POST /control/reload`: 10 RPM per source IP by default (configurable via `RELAY_ADMIN_RELOAD_RPM`). The 11th request in a 60s window returns 429 with `Retry-After`.
 - When caller auth is active (`RELAY_API_KEY`/`RELAY_API_KEYS`), pass the caller bearer key in `Authorization: Bearer` and the admin secret in `X-Relay-Admin-Token`. Without caller auth, use `Authorization: Bearer` for the admin token directly.
 - Restrict network access to the admin port via your LB/ingress CIDR allowlist or a private-only VPC subnet.
 - `RELAY_MASTER_KEY` must be kept separate from Postgres — if both are compromised together, stored-mode secrets are fully exposed.

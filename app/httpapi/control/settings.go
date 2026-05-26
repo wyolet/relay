@@ -36,6 +36,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionPayloadLogging,
 		Description: "Request/response body capture sink config. Hot-reloaded — toggle, backend (file|s3), size cap, and S3 settings (with secret-ref credentials) take effect without a restart.",
 	})
+	registerSettingsSection[settings.Parsing](api, d, protect, settings.Section{
+		Name:        settings.SectionParsing,
+		Description: "Inbound request-body parsing depth. RichParsing extracts per-request metadata + messages for attribution/observability; off reads only routing fields. Default on. Hot-reloaded.",
+	})
 	registerSettingsList(api, d, protect)
 	registerSettingsSectionsCatalog(api, d, protect)
 }

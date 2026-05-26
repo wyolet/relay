@@ -4,16 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 )
 
-var richParsing = true // default on; set via SetRichParsing at boot
+// richParsing is the live toggle for metadata/message extraction. Atomic
+// so the composition root can hot-swap it at runtime (a settings change)
+// while requests are in flight. Defaults on.
+var richParsing atomic.Bool
+
+func init() { richParsing.Store(true) }
 
 // SetRichParsing controls whether Parse extracts metadata and messages.
-// Must be called before any request is served (boot-time only).
-func SetRichParsing(on bool) { richParsing = on }
+// Safe to call at runtime; takes effect on the next Parse.
+func SetRichParsing(on bool) { richParsing.Store(on) }
 
 // RichParsing reports the current toggle state.
-func RichParsing() bool { return richParsing }
+func RichParsing() bool { return richParsing.Load() }
 
 type errEnvelope struct {
 	Error errBody `json:"error"`
@@ -83,7 +89,7 @@ func Parse(_ context.Context, body []byte, _ http.Header) (*ChatRequest, error) 
 		Raw:    json.RawMessage(body),
 	}
 
-	if richParsing {
+	if richParsing.Load() {
 		if len(w.Metadata) > 0 {
 			cr.Metadata = validateBodyMetadata(w.Metadata)
 		}

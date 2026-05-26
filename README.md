@@ -214,7 +214,7 @@ Auth: either a valid `relay_session` cookie (set by `/auth/login`) OR
 | `RELAY_MASTER_KEY` | _(empty)_ | 32-byte base64 master key for stored-mode HostKeys. Generate via `POST /master-key/generate`. |
 | `RELAY_COOKIE_SECURE` | _(unset = true)_ | Set to `false` for HTTP-only local dev. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget. |
-| `RELAY_RICH_PARSING` | `on` | `off` reverts to minimal-parse hot-path. |
+| _(rich parsing)_ | `on` | Moved to the `parsing` settings section (`PUT /settings/parsing {"richParsing": false}`). Hot-reloaded; no env var, no restart. |
 
 ## Auth model
 

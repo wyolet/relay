@@ -33,6 +33,8 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
+	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/settingswatch"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
@@ -327,6 +329,14 @@ func main() {
 	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
 	go payloadCtl.Run(listenerCtx)
 	slog.Info("payloadlog: observer wired (config via settings: payload-logging)")
+
+	// Request-parsing depth lives in the "parsing" settings section and
+	// hot-swaps the openai adapter's rich-parse toggle. The vendor setter
+	// is confined here (composition root) so app/ stays vendor-neutral.
+	go settingswatch.New(cat, settings.SectionParsing, func(p settings.Parsing) {
+		pkgopenai.SetRichParsing(p.RichParsing)
+		slog.Info("parsing: applied", "rich_parsing", p.RichParsing)
+	}, slog.Default()).Run(listenerCtx)
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
