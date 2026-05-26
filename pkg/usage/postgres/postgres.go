@@ -695,14 +695,14 @@ CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
 GROUP BY %ssub.bucket, kv.key`,
 			func() string {
 				if groupBy != "" {
-					return "sub." + groupBy + " AS grp, "
+					return "sub.grp, "
 				}
 				return ""
 			}(),
 			selPrefix, bucketExpr, s.cfg.Table, where,
 			func() string {
 				if groupBy != "" {
-					return "sub." + groupBy + ", "
+					return "sub.grp, "
 				}
 				return ""
 			}(),
