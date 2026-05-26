@@ -15,7 +15,9 @@ import (
 // an SSE event sequence when streaming, a single JSON object otherwise —
 // so Generate / GenerateStream stay transport-agnostic.
 type transport interface {
-	roundTrip(ctx context.Context, c *Client, body []byte) (*rtResponse, error)
+	// path is resolved per call (it may depend on the model / stream mode,
+	// e.g. Gemini's URL-path-encoded model) so a shared Client stays race-free.
+	roundTrip(ctx context.Context, c *Client, path string, body []byte) (*rtResponse, error)
 	// Close releases any persistent resources (a WebSocket connection).
 	// The default HTTP transport is a no-op.
 	Close() error
@@ -31,8 +33,8 @@ type rtResponse struct {
 // httpTransport is the default: one HTTP POST per request.
 type httpTransport struct{}
 
-func (httpTransport) roundTrip(ctx context.Context, c *Client, body []byte) (*rtResponse, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+c.path, bytes.NewReader(body))
+func (httpTransport) roundTrip(ctx context.Context, c *Client, path string, body []byte) (*rtResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

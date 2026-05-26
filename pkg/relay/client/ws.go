@@ -55,7 +55,7 @@ type wsTransport struct {
 	nextID int
 }
 
-func (t *wsTransport) roundTrip(ctx context.Context, c *Client, body []byte) (*rtResponse, error) {
+func (t *wsTransport) roundTrip(ctx context.Context, c *Client, _ string, body []byte) (*rtResponse, error) {
 	t.mu.Lock()
 	if err := t.ensureConn(ctx, c); err != nil {
 		t.mu.Unlock()

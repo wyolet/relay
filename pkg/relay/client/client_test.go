@@ -495,6 +495,98 @@ func TestRelay_BadTimeoutEnv_FailsOnCall(t *testing.T) {
 	}
 }
 
+func TestVendorClients_ConventionalKeyEnv(t *testing.T) {
+	t.Setenv(EnvOpenAIKey, "sk-openai-env")
+	t.Setenv(EnvAnthropicKey, "sk-anthropic-env")
+
+	if c := OpenAI("https://api.openai.com", ""); c.apiKey != "sk-openai-env" {
+		t.Errorf("OpenAI key not from env: %q", c.apiKey)
+	}
+	if c := Anthropic("https://api.anthropic.com", ""); c.apiKey != "sk-anthropic-env" {
+		t.Errorf("Anthropic key not from env: %q", c.apiKey)
+	}
+	// explicit wins
+	if c := OpenAI("https://api.openai.com", "sk-explicit"); c.apiKey != "sk-explicit" {
+		t.Errorf("explicit OpenAI key lost to env: %q", c.apiKey)
+	}
+}
+
+func TestVendorClients_NoKeyStaysKeyless(t *testing.T) {
+	t.Setenv(EnvOpenAIKey, "")
+	t.Setenv(EnvAPIKey, "rk-relay") // must NOT leak into a vendor client
+
+	c := OpenAI("http://localhost:11434", "") // Ollama-style keyless
+	if c.apiKey != "" {
+		t.Errorf("keyless vendor client picked up a key: %q", c.apiKey)
+	}
+	if c.configErr != nil {
+		t.Errorf("keyless vendor client must not carry a config error: %v", c.configErr)
+	}
+}
+
+func TestGemini_KeyEnvAndPathTemplating(t *testing.T) {
+	var gotPath, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("x-goog-api-key")
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"pong"}]}}]}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(EnvGeminiKey, "")
+	t.Setenv(EnvGoogleKey, "goog-env-key") // falls through to GOOGLE_API_KEY
+
+	c := Gemini(srv.URL, "")
+	if _, err := c.Generate(context.Background(), liveReq("gemini-2.0-flash")); err != nil {
+		t.Fatal(err)
+	}
+	if gotKey != "goog-env-key" {
+		t.Errorf("x-goog-api-key: %q", gotKey)
+	}
+	if gotPath != "/v1beta/models/gemini-2.0-flash:generateContent" {
+		t.Errorf("sync path: %q", gotPath)
+	}
+}
+
+func TestGemini_StreamPath(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"pong\"}]}}]}\n\n"))
+	}))
+	defer srv.Close()
+
+	c := Gemini(srv.URL, "k")
+	stream, err := c.GenerateStream(context.Background(), liveReq("gemini-2.0-flash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	for {
+		if _, err := stream.Recv(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if gotPath != "/v1beta/models/gemini-2.0-flash:streamGenerateContent" {
+		t.Errorf("stream path: %q", gotPath)
+	}
+	if gotQuery != "alt=sse" {
+		t.Errorf("stream query: %q", gotQuery)
+	}
+}
+
+func TestGemini_GeminiKeyBeatsGoogleKey(t *testing.T) {
+	t.Setenv(EnvGeminiKey, "gemini-env")
+	t.Setenv(EnvGoogleKey, "google-env")
+	if c := Gemini("https://x.invalid", ""); c.apiKey != "gemini-env" {
+		t.Errorf("GEMINI_API_KEY should win: %q", c.apiKey)
+	}
+}
+
 // --- helpers ---
 
 func liveReq(model string) *v1.Request {
