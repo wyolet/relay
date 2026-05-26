@@ -121,7 +121,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 
 	// 1. Snapshot lookup — customer-facing addressing is purely by
 	//    snapshot name. Model.Meta.Name is admin-only.
-	models, snapMatch := resolveModel(snap, req.ModelName)
+	models, snapMatch, pinHostID := resolveModel(snap, req.ModelName)
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
@@ -133,7 +133,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
 		}
-		plan, err := r.resolvePolicyless(snap, models, snapMatch)
+		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID)
 		if err == nil && plan != nil {
 			plan.PayloadLoggingEnabled = req.RelayKey.Spec.PayloadLoggingEnabled
 		}
@@ -190,6 +190,9 @@ candidates:
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
 			if !hb.IsEnabled() {
+				continue
+			}
+			if pinHostID != "" && hb.HostID != pinHostID {
 				continue
 			}
 			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
@@ -266,15 +269,21 @@ candidates:
 // upstream wire form (e.g. "gpt-5.5") or the slug form ("gpt-5-5") and
 // either resolves. The resolved Snapshot's Upstream() carries the real
 // upstream name for the body rewrite.
-func resolveModel(snap *appcatalog.Snapshot, name string) ([]*model.Model, *model.Snapshot) {
+// resolveModel maps a caller-supplied model ref to its snapshot via the
+// snapshot's pre-materialized alias index — a single normalized lookup, no
+// request-time parsing. The input is slug-normalized so dotted and slugified
+// forms collapse identically ("openai/gpt-5.4-mini" == "openai/gpt-5-4-mini").
+// pinHostID is non-empty when the ref named a host ("model@host"), in which
+// case binding selection is constrained to that host.
+func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model, snap2 *model.Snapshot, pinHostID string) {
 	key := slug.From(name)
 	if key == "" {
-		return nil, nil
+		return nil, nil, ""
 	}
-	if m, s, ok := snap.SnapshotByName(key); ok {
-		return []*model.Model{m}, s
+	if m, s, hostID, ok := snap.ResolveSnapshot(key); ok {
+		return []*model.Model{m}, s, hostID
 	}
-	return nil, nil
+	return nil, nil, ""
 }
 
 // hostKeysForHost returns the subset of Policy.Spec.HostKeyIDs whose
@@ -341,7 +350,7 @@ func (r *Resolver) allowPolicylessTraffic() bool {
 // the relay has any enabled hostkey for the host. No policy filter, no
 // policy-level rate limits — Plan.Policy is nil, Plan.Keys is the full
 // pool of hostkeys for the chosen host.
-func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot) (*Plan, error) {
+func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot, pinHostID string) (*Plan, error) {
 	var (
 		anyEnabledMod bool
 		anyEnabledBnd bool
@@ -360,6 +369,9 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
 			if !hb.IsEnabled() {
+				continue
+			}
+			if pinHostID != "" && hb.HostID != pinHostID {
 				continue
 			}
 			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
