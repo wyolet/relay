@@ -251,10 +251,17 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   that one object. Routing rejections (`model_not_found`,
   `no_host_binding`, disabled policy, …) and proxy gating
   (`proxy_disabled`, `unknown_upstream_host`, …) now fire a failure event
-  via `Deps.fireUsageFailure` — every failure stage is covered.
-  **Remaining:** (a) cheap fields the data's already on hand for —
-  requested-model string, `finish_reason` (needs `v1.ExtractUsage` to
-  also surface it), upstream attempt count; (b) the pure server-misconfig
+  via `Deps.fireUsageFailure` — every failure stage is covered; (4)
+  **enrichment fields** — `finish_reason` (via new `v1.ExtractSummary`,
+  tokens+finish in one decode), `requested_model` (caller's wire model
+  string, set at entry), and `attempts` (pipeline failover count). **Done.**
+  **Remaining:** (a) — enrichment landed; next is the optional
+  echo-usage-in-response feature: a flag-gated (`X-WR-Usage: full`)
+  inline `relay_usage` block returned to the caller (tokens + TTFT +
+  attempts + finish_reason), so callers get relay's observability without
+  a second analytics call (OpenRouter forces a `/generation` round-trip).
+  Scoped to buffered/streaming paths first — byte-pass passthrough would
+  need response headers, not body injection; (b) the pure server-misconfig
   500 guards (no spec/adapter/translator registered) are not fired — they
   signal a boot-config bug, not request telemetry; (c) per-shape parse
   failures *before* `Dispatch` (malformed body that can't yield a model

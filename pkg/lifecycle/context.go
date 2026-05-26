@@ -39,6 +39,16 @@ type Context struct {
 	// upstream Content-Type in proxy).
 	Streamed bool
 
+	// RequestedModel is the model identifier the caller asked for, as it
+	// arrived on the wire — before resolution to the catalog Model id
+	// (ModelID). Set at the inference entry.
+	RequestedModel string
+
+	// Attempts is the number of upstream tries the pipeline made (1 when
+	// the first key succeeded; >1 on failover). Pipeline-only; stays 0 in
+	// proxy mode, which is single-shot by design.
+	Attempts int
+
 	// Routing identity (filled during routing / pre-flight).
 
 	RelayKeyHash string

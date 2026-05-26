@@ -67,6 +67,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// later via applyPlanIdentity.
 	cls := ClassificationFrom(ctx)
 	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
+	lc.RequestedModel = in.ModelName
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
