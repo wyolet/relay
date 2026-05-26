@@ -63,9 +63,9 @@ func metaToWire(m meta.Metadata) WireMeta {
 // ProviderDTO is the wire form of a Provider. No cross-refs — Provider has
 // only display fields in its spec.
 type ProviderDTO struct {
-	APIVersion string      `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string      `json:"kind"       yaml:"kind"`
-	Metadata   WireMeta    `json:"metadata"   yaml:"metadata"`
+	APIVersion string       `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string       `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta     `json:"metadata"   yaml:"metadata"`
 	Spec       ProviderSpec `json:"spec"      yaml:"spec"`
 }
 
@@ -86,18 +86,18 @@ type HostDTO struct {
 }
 
 type HostSpec struct {
-	BaseURL       string            `json:"baseURL"               yaml:"baseURL"`
-	Backend       map[string]string `json:"backend,omitempty"     yaml:"backend,omitempty"`
+	BaseURL string            `json:"baseURL"               yaml:"baseURL"`
+	Backend map[string]string `json:"backend,omitempty"     yaml:"backend,omitempty"`
 	// Policies holds policy *names* (wire form), resolved to ids on parse.
-	Policies      []string          `json:"policies,omitempty"    yaml:"policies,omitempty"`
+	Policies []string `json:"policies,omitempty"    yaml:"policies,omitempty"`
 	// DefaultPolicy is a policy *name* (wire form) referencing one of Policies.
-	DefaultPolicy string            `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
-	Enabled       *bool             `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
-	HomepageURL   string            `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
-	DocsURL       string            `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
-	ConsoleURL    string            `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
-	StatusPageURL string            `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
-	Icon          *meta.Icon        `json:"icon,omitempty"        yaml:"icon,omitempty"`
+	DefaultPolicy string     `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
+	Enabled       *bool      `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
+	HomepageURL   string     `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
+	DocsURL       string     `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
+	ConsoleURL    string     `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
+	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
+	Icon          *meta.Icon `json:"icon,omitempty"        yaml:"icon,omitempty"`
 }
 
 // ModelDTO is the wire form of a Model. Hosts[].host is a name, not an id.
@@ -113,8 +113,8 @@ type ModelSpec struct {
 	// Hosts carries host names (not ids) in the wire form.
 	Hosts []HostBindingDTO `json:"hosts" yaml:"hosts"`
 
-	Family      string `json:"family,omitempty"  yaml:"family,omitempty"`
-	Version     string `json:"version,omitempty" yaml:"version,omitempty"`
+	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
+	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 
 	Capabilities model.Capabilities `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
 	Modalities   model.Modalities   `json:"modalities,omitempty"   yaml:"modalities,omitempty"`
@@ -124,9 +124,9 @@ type ModelSpec struct {
 	ContextWindowTotal  int `json:"contextWindowTotal,omitempty"  yaml:"contextWindowTotal,omitempty"`
 	MaxOutputTokens     int `json:"maxOutputTokens,omitempty"     yaml:"maxOutputTokens,omitempty"`
 
-	KnowledgeCutoff string      `json:"knowledgeCutoff,omitempty" yaml:"knowledgeCutoff,omitempty"`
-	ReleaseDate     string      `json:"releaseDate,omitempty"     yaml:"releaseDate,omitempty"`
-	DeprecationDate string      `json:"deprecationDate,omitempty" yaml:"deprecationDate,omitempty"`
+	KnowledgeCutoff string             `json:"knowledgeCutoff,omitempty" yaml:"knowledgeCutoff,omitempty"`
+	ReleaseDate     string             `json:"releaseDate,omitempty"     yaml:"releaseDate,omitempty"`
+	DeprecationDate string             `json:"deprecationDate,omitempty" yaml:"deprecationDate,omitempty"`
 	Deprecation     *model.Deprecation `json:"deprecation,omitempty"     yaml:"deprecation,omitempty"`
 
 	Tags                 []string `json:"tags,omitempty"                 yaml:"tags,omitempty"`
@@ -194,10 +194,11 @@ type PolicySpec struct {
 	// RateLimit field carries a *name* that translate resolves to an id.
 	RLBindings []RLBindingDTO `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty"`
 
-	KeySelection      string `json:"keySelection,omitempty"      yaml:"keySelection,omitempty"`
-	SkipDefaultLimits bool   `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
-	IncludeDeprecated bool   `json:"includeDeprecated,omitempty" yaml:"includeDeprecated,omitempty"`
-	Enabled           *bool  `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
+	KeySelection          string `json:"keySelection,omitempty"          yaml:"keySelection,omitempty"`
+	SkipDefaultLimits     bool   `json:"skipDefaultLimits,omitempty"     yaml:"skipDefaultLimits,omitempty"`
+	IncludeDeprecated     bool   `json:"includeDeprecated,omitempty"     yaml:"includeDeprecated,omitempty"`
+	Enabled               *bool  `json:"enabled,omitempty"               yaml:"enabled,omitempty"`
+	PayloadLoggingEnabled bool   `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
 // RLBindingDTO is the wire form of a policy.RLBinding. Models are modelref
@@ -209,9 +210,9 @@ type RLBindingDTO struct {
 
 // RateLimitDTO is the wire form of a RateLimit. No cross-refs.
 type RateLimitDTO struct {
-	APIVersion string       `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string       `json:"kind"       yaml:"kind"`
-	Metadata   WireMeta     `json:"metadata"   yaml:"metadata"`
+	APIVersion string        `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string        `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta      `json:"metadata"   yaml:"metadata"`
 	Spec       RateLimitSpec `json:"spec"      yaml:"spec"`
 }
 
@@ -237,12 +238,13 @@ type RelayKeyDTO struct {
 
 type RelayKeySpec struct {
 	// Policy is the policy *name* (wire form).
-	Policy             string     `json:"policy"                      yaml:"policy"`
-	KeyHash            string     `json:"keyHash"                     yaml:"keyHash"`
-	Prefix             string     `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
-	RevokedAt          *string    `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
-	Enabled            *bool      `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
-	PassthroughAllowed bool       `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
+	Policy                string  `json:"policy"                      yaml:"policy"`
+	KeyHash               string  `json:"keyHash"                     yaml:"keyHash"`
+	Prefix                string  `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
+	RevokedAt             *string `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
+	Enabled               *bool   `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
+	PassthroughAllowed    bool    `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
+	PayloadLoggingEnabled bool    `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
 // PricingDTO is the wire form of a Pricing. Owner.ID is a host *name* here.

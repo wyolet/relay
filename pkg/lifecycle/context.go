@@ -57,6 +57,19 @@ type Context struct {
 	HostID       string
 	HostKeyID    string
 
+	// PayloadLog opts this request into full request/response body capture
+	// by the payloadlog observer. Set at the inference entry from the
+	// routing Plan (Policy or RelayKey opt-in). When false, the payload
+	// observer skips the request and its stream observer does not buffer.
+	PayloadLog bool
+
+	// RequestBody is the raw inbound request bytes, retained for the
+	// payloadlog observer. Set at the inference entry (pipeline: the
+	// dispatched body; proxy: a capped tee of the request stream). Nil
+	// when payload logging is off or the body wasn't retained. It is a
+	// reference to the dispatch buffer, not a copy — never mutated.
+	RequestBody []byte
+
 	// Cross-hook channel. Middleware writes; observers read.
 	// Concurrent map writes during post-flight are a panic — keep
 	// writes to the pre-flight phase only, or wrap with your own lock

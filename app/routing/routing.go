@@ -4,24 +4,24 @@
 // of the snapshot.
 //
 // Resolution flow:
-//   1. Model: caller supplies a snapshot name (from the request body's
-//      `model` field); look it up via snapshot.SnapshotByName. The owning
-//      Model + the picked Snapshot are carried into the Plan.
-//   2. Policy: comes from the authenticated RelayKey's PolicyID. (No
-//      "default route" indirection in the new arch — RelayKey → Policy
-//      is direct. Anonymous traffic is served by a separate package.)
-//   3. Authorization: model must be allowed by the Policy. Allowed if
-//      its id is in Spec.ModelIDs, OR Spec.Models (modelref DSL) matches,
-//      OR — when both grant fields are empty — the policy is an implicit
-//      wildcard: any model reachable via its hostkeys is allowed. The
-//      hostkey-coverage check below is the real gate in that case.
-//   4. HostBinding: pick one Host from Model.Spec.Hosts the operator has
-//      bound. v1 picks the first enabled binding; multi-host failover is
-//      a future feature.
-//   5. Host: lookup by binding.HostID for BaseURL.
-//   6. Keys: Policy.Spec.HostKeyIDs filtered to those whose Owner.ID is
-//      the chosen Host (a key authenticates against one host).
-//   7. RateLimit: Policy.Spec.RateLimitID, resolved to []pkgratelimit.Rule.
+//  1. Model: caller supplies a snapshot name (from the request body's
+//     `model` field); look it up via snapshot.SnapshotByName. The owning
+//     Model + the picked Snapshot are carried into the Plan.
+//  2. Policy: comes from the authenticated RelayKey's PolicyID. (No
+//     "default route" indirection in the new arch — RelayKey → Policy
+//     is direct. Anonymous traffic is served by a separate package.)
+//  3. Authorization: model must be allowed by the Policy. Allowed if
+//     its id is in Spec.ModelIDs, OR Spec.Models (modelref DSL) matches,
+//     OR — when both grant fields are empty — the policy is an implicit
+//     wildcard: any model reachable via its hostkeys is allowed. The
+//     hostkey-coverage check below is the real gate in that case.
+//  4. HostBinding: pick one Host from Model.Spec.Hosts the operator has
+//     bound. v1 picks the first enabled binding; multi-host failover is
+//     a future feature.
+//  5. Host: lookup by binding.HostID for BaseURL.
+//  6. Keys: Policy.Spec.HostKeyIDs filtered to those whose Owner.ID is
+//     the chosen Host (a key authenticates against one host).
+//  7. RateLimit: Policy.Spec.RateLimitID, resolved to []pkgratelimit.Rule.
 //
 // Each lookup is a snapshot.Get — no PG, no I/O. Resolve() is allocation-
 // conscious where it matters but not micro-optimised; the hot-path budget
@@ -93,6 +93,12 @@ type Plan struct {
 	Host        *host.Host
 	Provider    string
 	Keys        []*hostkey.HostKey
+
+	// PayloadLoggingEnabled is the resolved opt-in for full request/response
+	// body capture: true when the matched Policy or the inbound RelayKey
+	// sets PayloadLoggingEnabled. Read by the inference entry to flag the
+	// lifecycle Context so the payloadlog observer captures bodies.
+	PayloadLoggingEnabled bool
 }
 
 // Resolver wraps a Catalog snapshot accessor and answers Resolve calls.
@@ -127,7 +133,11 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
 		}
-		return r.resolvePolicyless(snap, models, snapMatch)
+		plan, err := r.resolvePolicyless(snap, models, snapMatch)
+		if err == nil && plan != nil {
+			plan.PayloadLoggingEnabled = req.RelayKey.Spec.PayloadLoggingEnabled
+		}
+		return plan, err
 	}
 
 	pol, ok := snap.Policy(req.RelayKey.Spec.PolicyID)
@@ -246,6 +256,8 @@ candidates:
 		Host:        h,
 		Provider:    providerSlug,
 		Keys:        keys,
+		PayloadLoggingEnabled: (pol != nil && pol.Spec.PayloadLoggingEnabled) ||
+			req.RelayKey.Spec.PayloadLoggingEnabled,
 	}, nil
 }
 
@@ -400,4 +412,3 @@ func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID strin
 	}
 	return out
 }
-

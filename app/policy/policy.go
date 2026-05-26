@@ -109,6 +109,12 @@ type Spec struct {
 
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+
+	// PayloadLoggingEnabled opts every request authorized by this policy
+	// into full request/response body capture by the payloadlog observer.
+	// Off by default. A RelayKey may also opt in independently; either
+	// being set enables capture for the request.
+	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
 // RLBinding maps a set of Models to one RateLimit. The Models list uses
