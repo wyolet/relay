@@ -22,13 +22,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/wyolet/relay/pkg/adapters/anthropic"
+	"github.com/wyolet/relay/pkg/adapters/gemini"
 	"github.com/wyolet/relay/pkg/adapters/openai"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/usage"
@@ -42,14 +45,17 @@ type Auth struct {
 
 // Client sends canonical requests to one target (relay or a vendor).
 type Client struct {
-	translator v1.Translator
-	baseURL    string
-	path       string
-	apiKey     string
-	auth       Auth
-	headers    map[string]string
-	http       *http.Client
-	transport  transport
+	translator  v1.Translator
+	baseURL     string
+	path        string
+	apiKey      string
+	auth        Auth
+	headers     map[string]string
+	http        *http.Client
+	transport   transport
+	configErr   error                                  // deferred construction error, surfaced on the first call
+	syncTimeout time.Duration                          // WR_TIMEOUT; applies to Generate only, never streams
+	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
 }
 
 // Option configures a Client. Options apply over the preset defaults.
@@ -64,6 +70,13 @@ func WithAuth(a Auth) Option { return func(c *Client) { c.auth = a } }
 
 // WithPath overrides the request path (e.g. an Azure-style deployment path).
 func WithPath(p string) Option { return func(c *Client) { c.path = p } }
+
+// WithPathFn sets a per-call path resolver, for targets that encode the model
+// or the stream/sync choice in the URL path (e.g. Gemini). When set it
+// overrides the static path. The model is the request's first model ref.
+func WithPathFn(fn func(model string, stream bool) string) Option {
+	return func(c *Client) { c.pathFn = fn }
+}
 
 // WithHeader sets one extra default header sent on every request (e.g. an
 // OpenAI-Organization header, or anthropic-version override).
@@ -99,20 +112,137 @@ func New(translator v1.Translator, baseURL, path, apiKey string, opts ...Option)
 // connection. Safe to call once when done with the client.
 func (c *Client) Close() error { return c.transport.Close() }
 
+// Relay env vars, mirroring the OpenAI SDK's OPENAI_BASE_URL / OPENAI_API_KEY
+// convention. Only the relay target consults them — direct-to-vendor clients
+// do not, so an upstream call never depends on relay config.
+//
+//	WR_BASE_URL  relay endpoint           (fallback when baseURL == "")
+//	WR_API_KEY   relay key                (fallback when relayKey == "")
+//	WR_USAGE     default X-WR-Usage value  (e.g. "full" to echo usage inline)
+//	WR_HEADERS   default headers, "k1=v1,k2=v2"
+//	WR_TIMEOUT   sync-call timeout, a Go duration (e.g. "30s"); streams are
+//	             unaffected — a stream needs no overall deadline.
+const (
+	EnvBaseURL = "WR_BASE_URL"
+	EnvAPIKey  = "WR_API_KEY"
+	EnvUsage   = "WR_USAGE"
+	EnvHeaders = "WR_HEADERS"
+	EnvTimeout = "WR_TIMEOUT"
+)
+
+// headerUsage is httpheader.HeaderUsage, inlined: the client deliberately
+// imports nothing of relay's server graph (see package doc).
+const headerUsage = "X-WR-Usage"
+
 // Relay targets a relay server's canonical endpoint (POST /v1/generate). The
 // primary use: full key pooling, routing, limits, and observability.
+//
+// Empty baseURL/relayKey fall back to WR_BASE_URL / WR_API_KEY; WR_USAGE,
+// WR_HEADERS, and WR_TIMEOUT supply further defaults. Explicit opts override
+// env-derived headers. Any missing/invalid config is returned on the client
+// anyway and surfaces on the first Generate/GenerateStream call — never at
+// construction.
 func Relay(baseURL, relayKey string, opts ...Option) *Client {
-	return New(v1.IdentityTranslator{}, baseURL, "/v1/generate", relayKey, opts...)
+	if baseURL == "" {
+		baseURL = os.Getenv(EnvBaseURL)
+	}
+	if relayKey == "" {
+		relayKey = os.Getenv(EnvAPIKey)
+	}
+
+	// env-derived opts apply first so explicit opts override them.
+	envOpts, envErr := relayEnvOptions()
+	c := New(v1.IdentityTranslator{}, baseURL, "/v1/generate", relayKey, append(envOpts, opts...)...)
+
+	if d := os.Getenv(EnvTimeout); d != "" {
+		dur, err := time.ParseDuration(d)
+		if err != nil {
+			envErr = errors.Join(envErr, fmt.Errorf("relay client: invalid %s %q: %w", EnvTimeout, d, err))
+		} else {
+			c.syncTimeout = dur
+		}
+	}
+
+	var missing []string
+	if c.baseURL == "" {
+		missing = append(missing, EnvBaseURL)
+	}
+	if c.apiKey == "" {
+		missing = append(missing, EnvAPIKey)
+	}
+	var missErr error
+	if len(missing) > 0 {
+		missErr = fmt.Errorf("relay client: missing config — set %s or pass explicitly", strings.Join(missing, " and "))
+	}
+	c.configErr = errors.Join(missErr, envErr)
+	return c
 }
 
+// relayEnvOptions builds the Options implied by WR_USAGE and WR_HEADERS.
+func relayEnvOptions() ([]Option, error) {
+	var opts []Option
+	if u := os.Getenv(EnvUsage); u != "" {
+		opts = append(opts, WithHeader(headerUsage, u))
+	}
+	hdrs, err := parseHeaderEnv(os.Getenv(EnvHeaders))
+	for k, v := range hdrs {
+		opts = append(opts, WithHeader(k, v))
+	}
+	return opts, err
+}
+
+// parseHeaderEnv parses "k1=v1,k2=v2" into a header map. An entry without an
+// "=" or with an empty key is an error (no silent drop) — it surfaces on the
+// first call like any other config problem.
+func parseHeaderEnv(s string) (map[string]string, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		if strings.TrimSpace(pair) == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(pair, "=")
+		k = strings.TrimSpace(k)
+		if !ok || k == "" {
+			return nil, fmt.Errorf("relay client: invalid %s entry %q (want k=v)", EnvHeaders, pair)
+		}
+		out[k] = strings.TrimSpace(v)
+	}
+	return out, nil
+}
+
+// Conventional per-vendor key env vars, read when a direct-to-vendor
+// constructor is called with an empty apiKey. These are the vendor's own
+// credential — never WR_API_KEY, which is a relay key bound to a relay
+// endpoint and meaningless to a vendor. An empty key after fallback is left
+// as-is (Ollama and other keyless OpenAI-compatible hosts are valid).
+const (
+	EnvOpenAIKey    = "OPENAI_API_KEY"
+	EnvAnthropicKey = "ANTHROPIC_API_KEY"
+	// Gemini reads GEMINI_API_KEY first, then GOOGLE_API_KEY — matching the
+	// google-genai SDK precedence.
+	EnvGeminiKey = "GEMINI_API_KEY"
+	EnvGoogleKey = "GOOGLE_API_KEY"
+)
+
 // OpenAI targets the OpenAI Chat Completions API directly (also Ollama and any
-// OpenAI-compatible host — point baseURL at it). Bypasses relay.
+// OpenAI-compatible host — point baseURL at it). Bypasses relay. Empty apiKey
+// falls back to OPENAI_API_KEY.
 func OpenAI(baseURL, apiKey string, opts ...Option) *Client {
+	if apiKey == "" {
+		apiKey = os.Getenv(EnvOpenAIKey)
+	}
 	return New(openai.CCTranslator{}, baseURL, "/v1/chat/completions", apiKey, opts...)
 }
 
-// Anthropic targets the Anthropic Messages API directly. Bypasses relay.
+// Anthropic targets the Anthropic Messages API directly. Bypasses relay. Empty
+// apiKey falls back to ANTHROPIC_API_KEY.
 func Anthropic(baseURL, apiKey string, opts ...Option) *Client {
+	if apiKey == "" {
+		apiKey = os.Getenv(EnvAnthropicKey)
+	}
 	withAnthropicDefaults := append([]Option{
 		WithAuth(Auth{Header: "x-api-key"}),
 		WithHeader("anthropic-version", "2023-06-01"),
@@ -120,9 +250,40 @@ func Anthropic(baseURL, apiKey string, opts ...Option) *Client {
 	return New(anthropic.AnthropicTranslator{}, baseURL, "/v1/messages", apiKey, withAnthropicDefaults...)
 }
 
+// geminiPath mirrors relay's server-side Gemini spec: the model and the
+// sync/stream choice live in the URL path, not the body.
+func geminiPath(model string, stream bool) string {
+	if stream {
+		return "/v1beta/models/" + model + ":streamGenerateContent?alt=sse"
+	}
+	return "/v1beta/models/" + model + ":generateContent"
+}
+
+// Gemini targets the Gemini native generateContent API directly. Bypasses
+// relay. Point baseURL at the API host (e.g.
+// https://generativelanguage.googleapis.com). Empty apiKey falls back to
+// GEMINI_API_KEY, then GOOGLE_API_KEY. Auth is the raw key in x-goog-api-key.
+func Gemini(baseURL, apiKey string, opts ...Option) *Client {
+	if apiKey == "" {
+		if apiKey = os.Getenv(EnvGeminiKey); apiKey == "" {
+			apiKey = os.Getenv(EnvGoogleKey)
+		}
+	}
+	withGeminiDefaults := append([]Option{
+		WithAuth(Auth{Header: "x-goog-api-key"}), // raw key, no scheme
+		WithPathFn(geminiPath),
+	}, opts...)
+	return New(gemini.GeminiTranslator{}, baseURL, "", apiKey, withGeminiDefaults...)
+}
+
 // Generate runs a non-streaming generation. OutputMode is forced to sync; the
 // caller's request is not mutated.
 func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, error) {
+	if c.syncTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.syncTimeout)
+		defer cancel()
+	}
 	resp, err := c.roundTrip(ctx, req, v1.OutputModeSync)
 	if err != nil {
 		return nil, err
@@ -162,13 +323,24 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 // roundTrip serializes the request (translator-owned) and hands the bytes
 // to the transport. The caller's request is not mutated.
 func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*rtResponse, error) {
+	if c.configErr != nil {
+		return nil, c.configErr
+	}
 	r := *req // shallow copy: don't mutate the caller's request
 	r.OutputMode = mode
 	body, err := c.translator.SerializeRequest(&r)
 	if err != nil {
 		return nil, fmt.Errorf("relay client: serialize request: %w", err)
 	}
-	return c.transport.roundTrip(ctx, c, body)
+	path := c.path
+	if c.pathFn != nil {
+		var model string
+		if len(req.Model) > 0 {
+			model = req.Model[0]
+		}
+		path = c.pathFn(model, mode == v1.OutputModeStream)
+	}
+	return c.transport.roundTrip(ctx, c, path, body)
 }
 
 // Event is one canonical stream event: its name (a v1.Event* constant) and the
