@@ -1,4 +1,4 @@
-package usagelog
+package file
 
 import (
 	"context"
@@ -12,11 +12,11 @@ import (
 
 // writeFixture writes a few representative events to a tmp file and
 // returns the path.
-func writeFixture(t *testing.T, events []Event) string {
+func writeFixture(t *testing.T, events []usage.Event) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
-	sink, err := NewFileSink(path)
+	sink, err := NewSink(path)
 	if err != nil {
 		t.Fatalf("file sink: %v", err)
 	}
@@ -28,17 +28,17 @@ func writeFixture(t *testing.T, events []Event) string {
 	return path
 }
 
-func TestFileReader_Events_FiltersAndLimit(t *testing.T) {
+func TestReader_Events_FiltersAndLimit(t *testing.T) {
 	now := time.Now()
-	path := writeFixture(t, []Event{
+	path := writeFixture(t, []usage.Event{
 		{RequestID: "a", Source: "pipeline", Timestamp: now.Add(-5 * time.Minute), Status: 200, ModelID: "m1"},
 		{RequestID: "b", Source: "proxy", Timestamp: now.Add(-2 * time.Minute), Status: 500, ModelID: "m1"},
 		{RequestID: "c", Source: "pipeline", Timestamp: now.Add(-1 * time.Minute), Status: 200, ModelID: "m2"},
 	})
-	r := NewFileReader(path)
+	r := NewReader(path)
 
 	// All within last hour, no filter
-	got, err := r.Events(context.Background(), EventQuery{Since: time.Hour})
+	got, err := r.Events(context.Background(), usage.EventQuery{Since: time.Hour})
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
@@ -51,35 +51,35 @@ func TestFileReader_Events_FiltersAndLimit(t *testing.T) {
 	}
 
 	// Source filter
-	got, _ = r.Events(context.Background(), EventQuery{Since: time.Hour, Source: "pipeline"})
+	got, _ = r.Events(context.Background(), usage.EventQuery{Since: time.Hour, Source: "pipeline"})
 	if len(got) != 2 {
 		t.Fatalf("source pipeline: want 2 got %d", len(got))
 	}
 
 	// Status range filter — errors only
-	got, _ = r.Events(context.Background(), EventQuery{Since: time.Hour, StatusMin: 400})
+	got, _ = r.Events(context.Background(), usage.EventQuery{Since: time.Hour, StatusMin: 400})
 	if len(got) != 1 || got[0].RequestID != "b" {
 		t.Fatalf("status>=400: want [b] got %+v", got)
 	}
 
 	// Limit
-	got, _ = r.Events(context.Background(), EventQuery{Since: time.Hour, Limit: 2})
+	got, _ = r.Events(context.Background(), usage.EventQuery{Since: time.Hour, Limit: 2})
 	if len(got) != 2 {
 		t.Fatalf("limit=2: want 2 got %d", len(got))
 	}
 }
 
-func TestFileReader_Summary_GroupAggregation(t *testing.T) {
+func TestReader_Summary_GroupAggregation(t *testing.T) {
 	now := time.Now()
-	path := writeFixture(t, []Event{
+	path := writeFixture(t, []usage.Event{
 		{Timestamp: now, Source: "pipeline", Status: 200, ModelID: "m1", DurationMs: 100, Tokens: usage.Tokens{"input": 10, "output": 5}},
 		{Timestamp: now, Source: "pipeline", Status: 200, ModelID: "m1", DurationMs: 200, Tokens: usage.Tokens{"input": 20, "output": 10}},
 		{Timestamp: now, Source: "pipeline", Status: 500, ModelID: "m2", DurationMs: 50, Tokens: nil},
 	})
-	r := NewFileReader(path)
+	r := NewReader(path)
 
-	res, err := r.Summary(context.Background(), SummaryQuery{
-		EventQuery: EventQuery{Since: time.Hour},
+	res, err := r.Summary(context.Background(), usage.SummaryQuery{
+		EventQuery: usage.EventQuery{Since: time.Hour},
 		GroupBy:    "model_id",
 	})
 	if err != nil {
@@ -109,20 +109,20 @@ func TestFileReader_Summary_GroupAggregation(t *testing.T) {
 	}
 }
 
-func TestFileReader_Summary_InvalidGroupBy(t *testing.T) {
+func TestReader_Summary_InvalidGroupBy(t *testing.T) {
 	path := writeFixture(t, nil)
-	r := NewFileReader(path)
-	_, err := r.Summary(context.Background(), SummaryQuery{GroupBy: "bogus"})
+	r := NewReader(path)
+	_, err := r.Summary(context.Background(), usage.SummaryQuery{GroupBy: "bogus"})
 	if err == nil {
 		t.Fatal("expected error for invalid group_by")
 	}
 }
 
-func TestFileReader_MissingFile(t *testing.T) {
+func TestReader_MissingFile(t *testing.T) {
 	// Non-existent path → empty result, not an error. Useful for boot
 	// before any request has fired.
-	r := NewFileReader("/nonexistent/usage.jsonl")
-	got, err := r.Events(context.Background(), EventQuery{Since: time.Hour})
+	r := NewReader("/nonexistent/usage.jsonl")
+	got, err := r.Events(context.Background(), usage.EventQuery{Since: time.Hour})
 	if err != nil {
 		t.Fatalf("missing file should not error: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestFileReader_MissingFile(t *testing.T) {
 	}
 }
 
-func TestFileReader_MalformedLinesSkipped(t *testing.T) {
+func TestReader_MalformedLinesSkipped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
 	content := []byte(`{"request_id":"good","source":"pipeline","ts":"` + time.Now().Format(time.RFC3339) + `","status":200}
@@ -141,8 +141,8 @@ this is not json
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	r := NewFileReader(path)
-	got, err := r.Events(context.Background(), EventQuery{Since: time.Hour})
+	r := NewReader(path)
+	got, err := r.Events(context.Background(), usage.EventQuery{Since: time.Hour})
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}

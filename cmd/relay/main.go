@@ -44,6 +44,9 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	relayv1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
+	chsink "github.com/wyolet/relay/pkg/usage/clickhouse"
+	"github.com/wyolet/relay/pkg/usage/file"
+	vksink "github.com/wyolet/relay/pkg/usage/valkey"
 )
 
 func main() {
@@ -248,17 +251,54 @@ func main() {
 	if usagePath == "" {
 		usagePath = "relay-usage.jsonl"
 	}
-	usageSink, err := usagelog.NewFileSink(usagePath)
-	if err != nil {
-		slog.Error("usagelog: file sink failed; using stdout", "err", err, "path", usagePath)
-		usageSink = usagelog.StdoutSink()
+	// Backend selection (RELAY_EVENTLOG_BACKEND). The composition root is the
+	// only place backend packages are named; each implements usagelog.Sink +
+	// usagelog.Reader so the same instance feeds the Emitter (write) and the
+	// control plane (read).
+	var usageSink usagelog.Sink
+	var usageReader usagelog.Reader
+	switch cfg.EventlogBackend {
+	case "clickhouse":
+		if cfg.CHDSN == "" {
+			slog.Error("RELAY_CH_DSN required when RELAY_EVENTLOG_BACKEND=clickhouse")
+			os.Exit(1)
+		}
+		walDir := cfg.EventlogDir
+		if walDir == "" {
+			walDir = "relay-usage-wal"
+		}
+		ch, err := chsink.New(chsink.Config{
+			DSN:           cfg.CHDSN,
+			RetentionDays: cfg.CHRetentionDays,
+			WALDir:        walDir,
+		})
+		if err != nil {
+			slog.Error("usagelog: clickhouse backend init failed", "err", err)
+			os.Exit(1)
+		}
+		usageSink, usageReader = ch, ch
+		slog.Info("usagelog: backend clickhouse", "wal_dir", walDir, "retention_days", cfg.CHRetentionDays)
+	case "valkey":
+		vk := vksink.New(kvStore, vksink.Config{})
+		usageSink, usageReader = vk, vk
+		slog.Info("usagelog: backend valkey")
+	default: // "file"
+		if fs, err := file.NewSink(usagePath); err != nil {
+			slog.Error("usagelog: file sink failed; using stdout", "err", err, "path", usagePath)
+			usageSink = file.Stdout()
+		} else {
+			usageSink = fs
+		}
+		usageReader = file.NewReader(usagePath)
+		slog.Info("usagelog: backend file", "path", usagePath)
 	}
+
 	usageEmitter := usagelog.NewEmitter(usagelog.EmitterOptions{}, usageSink)
 	defer usageEmitter.Close()
 	lifecycleReg.RegisterHook(usagelog.NewUsageHook())
 	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageEmitter))
 	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory())
-	slog.Info("usagelog: wired", "path", usagePath,
+	slog.Info("usagelog: wired", "backend", cfg.EventlogBackend,
 		"hooks", lifecycleReg.HookCount(), "collectors", lifecycleReg.CollectorCount(),
 		"stream_observers", lifecycleReg.StreamObserverCount())
 
@@ -302,7 +342,7 @@ func main() {
 			Catalog:      cat,
 			Stores:       stores,
 			CookieSecure: cookieSecure,
-			UsageReader:  usagelog.NewFileReader(usagePath),
+			UsageReader:  usageReader,
 		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))

@@ -1,67 +1,60 @@
-package usagelog
+package usage
 
 import (
-	"bufio"
-	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 )
 
-// FileReader is a Reader backed by the same JSONL file FileSink writes
-// to. Linear scan per query — fine for dogfood files (MB range,
-// thousands of events). For production-scale (millions of events,
-// GB-scale files), swap to a ClickHouseReader or similar.
-type FileReader struct {
-	path string
+// In-memory query evaluation shared by scan-style backends (file, valkey)
+// that pull a candidate set of events and filter/aggregate in Go rather
+// than pushing the query into a store engine. The ClickHouse backend does
+// NOT use these — it pushes filters + aggregation into SQL.
+
+// FilterEvents returns the subset of events matching q's time cutoff,
+// dimension filters, and status range. It does not sort or apply Limit;
+// use SortAndLimit for that.
+func FilterEvents(events []Event, q EventQuery) []Event {
+	var cutoff time.Time
+	if q.Since > 0 {
+		cutoff = time.Now().Add(-q.Since)
+	}
+	out := events[:0:0]
+	for _, ev := range events {
+		if matches(ev, q, cutoff) {
+			out = append(out, ev)
+		}
+	}
+	return out
 }
 
-// NewFileReader constructs a FileReader for path. Path must match the
-// FileSink the relay is currently writing to.
-func NewFileReader(path string) *FileReader {
-	return &FileReader{path: path}
-}
-
-// Events streams the file, applies filters, returns the newest matching
-// events up to q.Limit. Sort by timestamp descending.
-func (r *FileReader) Events(_ context.Context, q EventQuery) ([]Event, error) {
-	limit := q.Limit
+// SortAndLimit sorts events newest-first and caps to limit (clamped to
+// [DefaultEventLimit, MaxEventLimit] when out of range).
+func SortAndLimit(events []Event, limit int) []Event {
 	if limit <= 0 {
 		limit = DefaultEventLimit
 	}
 	if limit > MaxEventLimit {
 		limit = MaxEventLimit
 	}
-
-	matches, err := r.scan(q)
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].Timestamp.After(matches[j].Timestamp)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
 	})
-	if len(matches) > limit {
-		matches = matches[:limit]
+	if len(events) > limit {
+		events = events[:limit]
 	}
-	return matches, nil
+	return events
 }
 
-// Summary streams the file, applies filters, builds per-group
-// aggregates including latency percentiles.
-func (r *FileReader) Summary(_ context.Context, q SummaryQuery) (SummaryResult, error) {
-	groupBy := q.GroupBy
+// Summarize groups the (already-filtered) events by groupBy and builds
+// per-group totals + latency percentiles, sorted by request count desc.
+// Returns an error for an unknown groupBy dimension.
+func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	if groupBy == "" {
 		groupBy = "source"
 	}
 	if !IsValidGroupBy(groupBy) {
-		return SummaryResult{}, fmt.Errorf("usagelog.Summary: invalid group_by %q", groupBy)
-	}
-
-	events, err := r.scan(q.EventQuery)
-	if err != nil {
-		return SummaryResult{}, err
+		return SummaryResult{}, fmt.Errorf("usage.Summarize: invalid group_by %q", groupBy)
 	}
 
 	type bucket struct {
@@ -117,50 +110,7 @@ func (r *FileReader) Summary(_ context.Context, q SummaryQuery) (SummaryResult, 
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].Requests > rows[j].Requests
 	})
-
 	return SummaryResult{Rows: rows, From: from, To: to}, nil
-}
-
-// scan opens the file once and returns every event matching the
-// filter (no limit applied at this layer; callers cap).
-func (r *FileReader) scan(q EventQuery) ([]Event, error) {
-	f, err := os.Open(r.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("usagelog.FileReader: open %q: %w", r.path, err)
-	}
-	defer f.Close()
-
-	var cutoff time.Time
-	if q.Since > 0 {
-		cutoff = time.Now().Add(-q.Since)
-	}
-
-	var out []Event
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var ev Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			// Skip malformed lines silently — better to lose one event
-			// than to fail the whole query.
-			continue
-		}
-		if !matches(ev, q, cutoff) {
-			continue
-		}
-		out = append(out, ev)
-	}
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("usagelog.FileReader: scan: %w", err)
-	}
-	return out, nil
 }
 
 func matches(ev Event, q EventQuery, cutoff time.Time) bool {
@@ -208,9 +158,9 @@ func groupKey(ev Event, groupBy string) string {
 	}
 }
 
-// durationStats computes avg + percentiles + max from raw samples.
-// For dogfood-sized inputs (thousands of values per group) a full
-// sort is fine. Production scale would use t-digest or HDR histogram.
+// durationStats computes avg + percentiles + max from raw samples. For
+// dogfood-sized inputs (thousands of values per group) a full sort is
+// fine. Production scale would use t-digest or HDR histogram.
 func durationStats(samples []int64) DurationStats {
 	if len(samples) == 0 {
 		return DurationStats{}
