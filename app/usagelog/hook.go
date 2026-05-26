@@ -72,6 +72,15 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 		}
 	}
 
+	// Reasoning span, microseconds from start. Present only when a
+	// reasoning frame was observed on the canonical stream.
+	if rz := lc.Timing.Reasoning; rz.Start > 0 {
+		out.Reasoning = &ReasoningTiming{
+			Start: rz.Start.Microseconds(),
+			End:   rz.End.Microseconds(),
+		}
+	}
+
 	if lc.Translator != nil && len(body) > 0 {
 		if s, err := v1.ExtractSummary(lc.Translator, body); err == nil {
 			out.Tokens = s.Tokens

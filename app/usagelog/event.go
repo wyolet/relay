@@ -11,3 +11,6 @@ type Event = usage.Event
 // UpstreamTiming is the upstream-leg timing breakdown — see
 // pkg/usage.UpstreamTiming.
 type UpstreamTiming = usage.UpstreamTiming
+
+// ReasoningTiming is the reasoning span — see pkg/usage.ReasoningTiming.
+type ReasoningTiming = usage.ReasoningTiming

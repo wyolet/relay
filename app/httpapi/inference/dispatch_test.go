@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -529,6 +531,66 @@ func TestDispatch_CanonicalInbound_InvalidBody(t *testing.T) {
 	}
 	if e := parseDispatchErr(t, w.Body.Bytes()); e.Error.Code != "translate_request" {
 		t.Errorf("error code: want translate_request, got %q", e.Error.Code)
+	}
+}
+
+// TestStreamCanonical_StampsReasoningSpan feeds a canonical SSE stream with
+// a reasoning item through streamCanonical and asserts the reasoning span is
+// stamped onto the lifecycle Context (start on first reasoning frame, end on
+// the last), independent of usage-echo.
+func TestStreamCanonical_StampsReasoningSpan(t *testing.T) {
+	cat, _ := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	d := buildDeps(t, cat)
+	d.Lifecycle = lifecycle.New()
+
+	// Anchor in the past so elapsed marks are unambiguously > 0.
+	lc := lifecycle.NewContext("req-1", "pipeline", time.Now().Add(-time.Millisecond))
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	r = r.WithContext(lifecycle.ContextWith(r.Context(), lc))
+	w := httptest.NewRecorder()
+
+	stream := "" +
+		"event: generation.created\ndata: {\"id\":\"g1\",\"model\":\"m\"}\n\n" +
+		"event: item.started\ndata: {\"item_id\":\"r1\",\"item_type\":\"reasoning\",\"index\":0}\n\n" +
+		"event: item.delta\ndata: {\"item_id\":\"r1\",\"kind\":\"reasoning\",\"delta\":\"think\"}\n\n" +
+		"event: item.completed\ndata: {\"item_id\":\"r1\",\"item\":{\"type\":\"reasoning\",\"id\":\"r1\",\"summary\":[{\"text\":\"t\"}]}}\n\n" +
+		"event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"hi\"}\n\n" +
+		"event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"completed\"}\n\n"
+
+	identity := func(b []byte) ([]byte, error) { return b, nil }
+	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false /*echo*/, true /*trackReasoning*/, identity, identity)
+
+	rz := lc.Timing.Reasoning
+	if rz.Start <= 0 {
+		t.Fatalf("reasoning start not stamped: %v", rz.Start)
+	}
+	if rz.End < rz.Start {
+		t.Fatalf("reasoning end %v before start %v", rz.End, rz.Start)
+	}
+}
+
+// TestStreamCanonical_NoReasoning_NoSpan confirms a stream with no reasoning
+// frames leaves the reasoning span zero (so buildEvent omits it).
+func TestStreamCanonical_NoReasoning_NoSpan(t *testing.T) {
+	cat, _ := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	d := buildDeps(t, cat)
+	d.Lifecycle = lifecycle.New()
+
+	lc := lifecycle.NewContext("req-2", "pipeline", time.Now().Add(-time.Millisecond))
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	r = r.WithContext(lifecycle.ContextWith(r.Context(), lc))
+	w := httptest.NewRecorder()
+
+	stream := "" +
+		"event: generation.created\ndata: {\"id\":\"g1\",\"model\":\"m\"}\n\n" +
+		"event: item.delta\ndata: {\"item_id\":\"m1\",\"kind\":\"text\",\"delta\":\"hi\"}\n\n" +
+		"event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"completed\"}\n\n"
+
+	identity := func(b []byte) ([]byte, error) { return b, nil }
+	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false, true, identity, identity)
+
+	if rz := lc.Timing.Reasoning; rz.Start != 0 || rz.End != 0 {
+		t.Fatalf("expected zero reasoning span, got %+v", rz)
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wyolet/relay/pkg/adapters/anthropic"
 	"github.com/wyolet/relay/pkg/adapters/openai"
@@ -141,6 +142,7 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, e
 // canonical events until io.EOF; the caller must Close it. OutputMode is forced
 // to stream.
 func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, error) {
+	start := time.Now() // anchor for reasoning-span offsets, like relay's request-accept
 	resp, err := c.roundTrip(ctx, req, v1.OutputModeStream)
 	if err != nil {
 		return nil, err
@@ -153,7 +155,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	sc.Split(splitSSEFrames)
-	return &Stream{body: resp.body, sc: sc, toCanon: c.translator.NewToCanonicalStream()}, nil
+	return &Stream{body: resp.body, sc: sc, toCanon: c.translator.NewToCanonicalStream(), start: start}, nil
 }
 
 // roundTrip serializes the request (translator-owned) and hands the bytes
@@ -183,6 +185,14 @@ type Stream struct {
 	sc      *bufio.Scanner
 	toCanon func([]byte) ([]byte, error)
 	pending [][]byte // canonical frames produced from one upstream frame, not yet returned
+
+	// Reasoning span, tracked as the caller drains via Recv. Offsets from
+	// start (GenerateStream call), mirroring relay's server-side timing so
+	// a direct (non-relay) consumer gets the same data quality.
+	start          time.Time
+	reasoningStart time.Duration
+	reasoningEnd   time.Duration
+	reasoningSeen  bool
 }
 
 // Recv returns the next canonical event, or io.EOF at end.
@@ -192,6 +202,14 @@ func (s *Stream) Recv() (*Event, error) {
 			frame := s.pending[0]
 			s.pending = s.pending[1:]
 			if event, data, ok := v1.ParseSSEChunk(frame); ok {
+				if v1.IsReasoningEvent(event, data) {
+					now := time.Since(s.start)
+					if !s.reasoningSeen {
+						s.reasoningStart = now
+						s.reasoningSeen = true
+					}
+					s.reasoningEnd = now
+				}
 				return &Event{Type: event, Data: append([]byte(nil), data...)}, nil
 			}
 			continue
@@ -217,6 +235,14 @@ func (s *Stream) Recv() (*Event, error) {
 
 // Close releases the underlying response body.
 func (s *Stream) Close() error { return s.body.Close() }
+
+// ReasoningSpan reports the reasoning span observed so far: offsets from the
+// GenerateStream call to the first and last reasoning frames, and ok=false if
+// the stream carried no reasoning. Call it after draining the stream for the
+// full span; mid-stream it reflects reasoning seen up to the last Recv.
+func (s *Stream) ReasoningSpan() (start, end time.Duration, ok bool) {
+	return s.reasoningStart, s.reasoningEnd, s.reasoningSeen
+}
 
 // APIError is a non-2xx response from the target.
 type APIError struct {
