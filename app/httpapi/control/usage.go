@@ -22,14 +22,19 @@ import (
 // --- shared input filters ---
 
 type usageFilterInput struct {
-	Since        string `query:"since" doc:"Time window (e.g. \"1h\", \"24h\", \"7d\"). Default: \"1h\"."`
-	RelayKeyHash string `query:"relay_key_hash" doc:"Exact match on the sha256 hash of the inbound bearer."`
-	PolicyID     string `query:"policy_id" doc:"Exact match on Policy.metadata.id."`
-	ModelID      string `query:"model_id" doc:"Exact match on Model.metadata.id."`
-	HostID       string `query:"host_id" doc:"Exact match on Host.metadata.id."`
-	Source       string `query:"source" doc:"\"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
-	StatusMin    int    `query:"status_min" doc:"Minimum HTTP status to include."`
-	StatusMax    int    `query:"status_max" doc:"Maximum HTTP status to include."`
+	Since        string   `query:"since" doc:"Relative window (e.g. \"1h\", \"24h\", \"7d\"). Default \"1h\". Ignored when from is set."`
+	From         string   `query:"from" doc:"Absolute lower bound (RFC3339). Overrides since."`
+	To           string   `query:"to" doc:"Absolute upper bound (RFC3339)."`
+	RequestID    string   `query:"request_id" doc:"Exact match on a single request id (deep-link one event)."`
+	RelayKeyHash []string `query:"relay_key_hash" doc:"Match any of the given sha256 hashes of the inbound bearer."`
+	PolicyID     []string `query:"policy_id" doc:"Match any of the given Policy.metadata.id values."`
+	ModelID      []string `query:"model_id" doc:"Match any of the given Model.metadata.id values."`
+	HostID       []string `query:"host_id" doc:"Match any of the given Host.metadata.id values."`
+	Source       []string `query:"source" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
+	FinishReason []string `query:"finish_reason" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\"."`
+	ErrorKind    []string `query:"error_kind" doc:"Match any of the given error_kind values."`
+	StatusMin    int      `query:"status_min" doc:"Minimum HTTP status to include."`
+	StatusMax    int      `query:"status_max" doc:"Maximum HTTP status to include."`
 }
 
 func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
@@ -37,16 +42,45 @@ func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 	if err != nil {
 		return usagelog.EventQuery{}, err
 	}
+	from, err := parseTime("from", f.From)
+	if err != nil {
+		return usagelog.EventQuery{}, err
+	}
+	to, err := parseTime("to", f.To)
+	if err != nil {
+		return usagelog.EventQuery{}, err
+	}
+	if !from.IsZero() && !to.IsZero() && to.Before(from) {
+		return usagelog.EventQuery{}, huma.Error400BadRequest("`to` must not be before `from`")
+	}
 	return usagelog.EventQuery{
 		Since:        since,
+		From:         from,
+		To:           to,
+		RequestID:    f.RequestID,
 		RelayKeyHash: f.RelayKeyHash,
 		PolicyID:     f.PolicyID,
 		ModelID:      f.ModelID,
 		HostID:       f.HostID,
 		Source:       f.Source,
+		FinishReason: f.FinishReason,
+		ErrorKind:    f.ErrorKind,
 		StatusMin:    f.StatusMin,
 		StatusMax:    f.StatusMax,
 	}, nil
+}
+
+// effectiveWindow returns the wall-clock span the query covers, used to
+// guard the time-series bucket count. From/To take precedence over Since.
+func effectiveWindow(q usagelog.EventQuery) time.Duration {
+	if !q.From.IsZero() {
+		end := q.To
+		if end.IsZero() {
+			end = time.Now()
+		}
+		return end.Sub(q.From)
+	}
+	return q.Since
 }
 
 // --- /usage/events ---
@@ -184,9 +218,9 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error400BadRequest("invalid group_by: " + in.GroupBy)
 		}
 		// Guard against a tiny interval over a large window producing an
-		// unbounded number of buckets. base.Since is always > 0 (parseSince
-		// defaults to 1h).
-		if int64(base.Since/interval) > usagelog.MaxBuckets {
+		// unbounded number of buckets. The window is From..To when set,
+		// else the relative Since (defaults to 1h).
+		if int64(effectiveWindow(base)/interval) > usagelog.MaxBuckets {
 			return nil, huma.Error400BadRequest(
 				"interval too small for the requested window: would exceed the bucket cap — widen interval or shorten since")
 		}
@@ -200,6 +234,19 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		return &usageTimeSeriesOutput{Body: res}, nil
 	})
+}
+
+// parseTime parses an optional RFC3339 timestamp. Empty yields the zero
+// time (no bound). field names the param for the error message.
+func parseTime(field, raw string) (time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, huma.Error400BadRequest("invalid `" + field + "` (want RFC3339): " + raw)
+	}
+	return t, nil
 }
 
 // parseInterval parses a required bucket width ("5m", "1h", "1d"). Unlike
