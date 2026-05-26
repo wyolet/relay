@@ -12,21 +12,21 @@ import (
 // the stream is written). When capture is disabled for the request it
 // returns a no-op observer so non-logged streams never buffer.
 type StreamPayloadFactory struct {
-	maxBytes int
+	c *Controller
 }
 
-// NewStreamPayloadFactory constructs the factory with a per-body cap.
-func NewStreamPayloadFactory(maxBytes int) *StreamPayloadFactory {
-	return &StreamPayloadFactory{maxBytes: maxBytes}
+// NewStreamPayloadFactory constructs the factory bound to the Controller.
+func NewStreamPayloadFactory(c *Controller) *StreamPayloadFactory {
+	return &StreamPayloadFactory{c: c}
 }
 
 func (*StreamPayloadFactory) Name() string { return Namespace }
 
 func (f *StreamPayloadFactory) NewObserver(lc *lifecycle.Context) lifecycle.StreamObserver {
-	if lc == nil || !lc.PayloadLog {
+	if lc == nil || !lc.PayloadLog || !f.c.Enabled() {
 		return noopObserver{}
 	}
-	return &streamPayloadObserver{lc: lc, max: f.maxBytes}
+	return &streamPayloadObserver{lc: lc, max: f.c.MaxBytes()}
 }
 
 // streamPayloadObserver accumulates upstream frames for one opted-in

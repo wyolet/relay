@@ -12,22 +12,22 @@ import (
 // request isn't opted into capture, so non-logged requests cost nothing
 // beyond the gate check.
 //
-// maxBytes caps each stored body (0 = unlimited); oversized bodies are
-// truncated and flagged on the Record.
+// The Controller supplies the live master switch + per-body cap, both
+// runtime-mutable via settings.
 type PayloadHook struct {
-	maxBytes int
+	c *Controller
 }
 
-// NewPayloadHook constructs the producer with a per-body storage cap.
-func NewPayloadHook(maxBytes int) *PayloadHook { return &PayloadHook{maxBytes: maxBytes} }
+// NewPayloadHook constructs the producer bound to the Controller.
+func NewPayloadHook(c *Controller) *PayloadHook { return &PayloadHook{c: c} }
 
 func (*PayloadHook) Name() string { return Namespace }
 
 func (h *PayloadHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
-	if lc == nil || !lc.PayloadLog {
+	if lc == nil || !lc.PayloadLog || !h.c.Enabled() {
 		return nil, nil
 	}
-	return buildRecord(lc, ev.Status, ev.ErrorKind, ev.ResponseBody, h.maxBytes), nil
+	return buildRecord(lc, ev.Status, ev.ErrorKind, ev.ResponseBody, h.c.MaxBytes()), nil
 }
 
 // buildRecord assembles a Record from the per-request Context plus this

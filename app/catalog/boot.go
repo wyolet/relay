@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
+	pkgsecret "github.com/wyolet/relay/pkg/secret"
 )
 
 // BootstrapOptions configures the one-call Bootstrap helper. Pool and
@@ -50,6 +51,11 @@ type Stores struct {
 	Pricing   *pricing.Store
 	RelayKey  *relaykey.Store
 	Settings  *settings.Store
+
+	// Secrets is the shared secret-resolution registry (env + stored
+	// backends). Exposed so data-plane components (e.g. the payload-logging
+	// controller resolving S3 credentials) resolve through the same seam.
+	Secrets *pkgsecret.Registry
 }
 
 // BootstrapStores wires the eight entity stores against the pool and
@@ -72,6 +78,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		Pricing:   pricing.NewStore(opts.Pool),
 		RelayKey:  relaykey.NewStore(q),
 		Settings:  settings.NewStore(q),
+		Secrets:   secReg,
 	}
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,

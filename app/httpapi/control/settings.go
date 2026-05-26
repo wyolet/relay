@@ -32,6 +32,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionInference,
 		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets RelayKeys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
 	})
+	registerSettingsSection[settings.PayloadLogging](api, d, protect, settings.Section{
+		Name:        settings.SectionPayloadLogging,
+		Description: "Request/response body capture sink config. Hot-reloaded — toggle, backend (file|s3), size cap, and S3 settings (with secret-ref credentials) take effect without a restart.",
+	})
 	registerSettingsList(api, d, protect)
 	registerSettingsSectionsCatalog(api, d, protect)
 }
