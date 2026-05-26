@@ -9,9 +9,9 @@ import (
 )
 
 func withRich(on bool, fn func()) {
-	prev := richParsing
-	richParsing = on
-	defer func() { richParsing = prev }()
+	prev := richParsing.Load()
+	richParsing.Store(on)
+	defer func() { richParsing.Store(prev) }()
 	fn()
 }
 

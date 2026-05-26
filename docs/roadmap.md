@@ -249,11 +249,17 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   `cat.Setting` because there's no settings change-callback seam; add an
   on-change hook to `app/catalog`'s `settingsHolder` (call it at the end of
   `applyUpsert`/`applyDelete`) so consumers rebuild event-driven instead of
-  polling. (b) Apply the same **settings-section treatment to other env
-  knobs** that aren't bootstrap constants — `RELAY_RICH_PARSING`,
-  `RELAY_CH_RETENTION_DAYS`, `RELAY_ADMIN_RELOAD_RPM` — moving them to
-  runtime-mutable sections. Pattern: settings section + (if it owns a
-  resource) a reconcile/rebuild like `payloadlog.Controller`. ~1 day each.
+  polling. (b) ~~Apply the same settings-section treatment to other env
+  knobs~~ — **partially done.** `RELAY_RICH_PARSING` moved to the
+  `parsing` settings section, hot-swapped via the new generic
+  `app/settingswatch.Watcher[T]` (a value-applier counterpart to
+  `payloadlog.Controller`, which owns sink lifecycle); the openai toggle
+  is now an `atomic.Bool`. `RELAY_ADMIN_RELOAD_RPM` was **dropped** — it
+  was dead (no rate limiter ever existed on `/reload`; the runbook claim
+  was fiction, now corrected). `RELAY_CH_RETENTION_DAYS` **stays on env**:
+  it feeds the ClickHouse MergeTree TTL inside the `CREATE TABLE` DDL, so
+  runtime hot-swap would require issuing `ALTER TABLE ... MODIFY TTL` at
+  reconcile — deferred until that's worth the complexity.
 - **A2 — Observability observers**. The lifecycle spine + usage emit
   shipped; the **ClickHouse usage sink shipped** too (`pkg/usage/clickhouse`,
   PRs #218/#220 — also Postgres + valkey backends). Remaining observers:
