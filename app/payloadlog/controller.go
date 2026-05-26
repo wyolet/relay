@@ -4,21 +4,15 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/wyolet/relay/app/settings"
 )
 
-// DefaultReconcileInterval is how often the controller re-reads the
-// payload-logging settings section and hot-swaps its sink on change.
-// Convergence after a settings PUT is bounded by this plus the catalog
-// NOTIFY debounce (~1s).
-const DefaultReconcileInterval = 2 * time.Second
-
-// SettingsReader reads a live settings section. Satisfied by
-// *app/catalog.Catalog (Setting(section) (any, bool)).
-type SettingsReader interface {
+// SettingsSource reads a live settings section and subscribes to its
+// changes. Satisfied by *app/catalog.Catalog.
+type SettingsSource interface {
 	Setting(section string) (any, bool)
+	OnSettingsChange(section string, fn func())
 }
 
 // SinkBuilder constructs the concrete Sink for a resolved config. Injected
@@ -28,17 +22,19 @@ type SinkBuilder func(ctx context.Context, cfg settings.PayloadLogging) (Sink, e
 
 // Controller owns payload logging's runtime state: a single long-lived
 // Emitter draining into a reloadable sink, plus the live enabled/maxBytes
-// the Hook and StreamObserver read per request. A reconcile loop polls the
-// settings section and hot-swaps the sink (toggle / backend / bucket /
-// credentials) without a restart — the observer is always registered, so
-// flipping the setting on takes effect within a reconcile interval.
+// the Hook and StreamObserver read per request. It reconciles the sink
+// (toggle / backend / bucket / credentials) on settings changes without a
+// restart — the observer is always registered, so flipping the setting on
+// just installs a sink. Changes are event-driven: Subscribe registers a
+// catalog change-callback that signals Run; the rebuild (which may do
+// network I/O) happens on Run's goroutine, never on the catalog listener.
 type Controller struct {
-	reader   SettingsReader
-	build    SinkBuilder
-	emitter  *Emitter
-	rsink    *reloadableSink
-	log      *slog.Logger
-	interval time.Duration
+	src     SettingsSource
+	build   SinkBuilder
+	emitter *Emitter
+	rsink   *reloadableSink
+	log     *slog.Logger
+	kick    chan struct{}
 
 	mu         sync.RWMutex
 	enabled    bool
@@ -50,18 +46,36 @@ type Controller struct {
 // NewController wires the emitter → reloadable-sink chain. The sink starts
 // empty (nothing written) until the first reconcile applies the live
 // config. reader provides the live settings; build constructs sinks.
-func NewController(reader SettingsReader, build SinkBuilder, log *slog.Logger) *Controller {
+func NewController(src SettingsSource, build SinkBuilder, log *slog.Logger) *Controller {
 	if log == nil {
 		log = slog.Default()
 	}
 	rsink := &reloadableSink{}
 	return &Controller{
-		reader:   reader,
-		build:    build,
-		emitter:  NewEmitter(EmitterOptions{Logger: log}, rsink),
-		rsink:    rsink,
-		log:      log,
-		interval: DefaultReconcileInterval,
+		src:     src,
+		build:   build,
+		emitter: NewEmitter(EmitterOptions{Logger: log}, rsink),
+		rsink:   rsink,
+		log:     log,
+		kick:    make(chan struct{}, 1),
+	}
+}
+
+// Subscribe registers the controller for payload-logging settings
+// changes. Call it synchronously during composition, before the catalog
+// Hydrate runs, so the boot reload's notification isn't missed. The
+// callback only signals Run; it never rebuilds inline, keeping slow sink
+// I/O off the catalog's serial listener goroutine.
+func (c *Controller) Subscribe() {
+	c.src.OnSettingsChange(settings.SectionPayloadLogging, c.signal)
+}
+
+// signal nudges Run to reconcile. Non-blocking: a pending kick already
+// means "re-read", so a coalesced extra change is a no-op.
+func (c *Controller) signal() {
+	select {
+	case c.kick <- struct{}{}:
+	default:
 	}
 }
 
@@ -83,17 +97,16 @@ func (c *Controller) MaxBytes() int {
 	return c.maxBytes
 }
 
-// Run drives the reconcile loop until ctx is cancelled. Call in a
-// goroutine after the catalog is wired.
+// Run reconciles once, then on every signal from Subscribe's callback,
+// until ctx is cancelled. Call in a goroutine after Subscribe. The
+// rebuild runs here, off the catalog listener.
 func (c *Controller) Run(ctx context.Context) {
-	t := time.NewTicker(c.interval)
-	defer t.Stop()
 	c.reconcile(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-c.kick:
 			c.reconcile(ctx)
 		}
 	}
@@ -137,7 +150,7 @@ func (c *Controller) reconcile(ctx context.Context) {
 }
 
 func (c *Controller) current() settings.PayloadLogging {
-	v, ok := c.reader.Setting(settings.SectionPayloadLogging)
+	v, ok := c.src.Setting(settings.SectionPayloadLogging)
 	if !ok {
 		return settings.PayloadLogging{}
 	}

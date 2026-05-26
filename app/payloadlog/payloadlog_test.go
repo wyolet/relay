@@ -33,11 +33,30 @@ func (m *memSink) count() int {
 	return len(m.recs)
 }
 
-// fakeReader is a settable SettingsReader.
+// fakeReader is a settable SettingsSource. The tests drive reconcile
+// directly, so OnSettingsChange just records the callback.
 type fakeReader struct {
 	mu      sync.Mutex
 	cfg     settings.PayloadLogging
 	present bool
+	subs    []func()
+}
+
+func (f *fakeReader) OnSettingsChange(_ string, fn func()) {
+	f.mu.Lock()
+	f.subs = append(f.subs, fn)
+	f.mu.Unlock()
+}
+
+// fire invokes the registered callbacks the way the catalog NOTIFY
+// listener would after a settings change.
+func (f *fakeReader) fire() {
+	f.mu.Lock()
+	subs := append([]func(){}, f.subs...)
+	f.mu.Unlock()
+	for _, fn := range subs {
+		fn()
+	}
 }
 
 func (f *fakeReader) set(c settings.PayloadLogging) {
@@ -220,5 +239,38 @@ func TestController_BuildErrorKeepsPrevious(t *testing.T) {
 	c.reconcile(context.Background())
 	if !c.Enabled() || c.MaxBytes() == 99 {
 		t.Fatalf("build error should keep previous: enabled=%v max=%d", c.Enabled(), c.MaxBytes())
+	}
+}
+
+func TestController_SignalDrivenRun(t *testing.T) {
+	reader := &fakeReader{}
+	c := NewController(reader, func(context.Context, settings.PayloadLogging) (Sink, error) {
+		return &memSink{}, nil
+	}, testLogger())
+
+	c.Subscribe()
+	reader.mu.Lock()
+	nSubs := len(reader.subs)
+	reader.mu.Unlock()
+	if nSubs != 1 {
+		t.Fatalf("Subscribe registered %d callbacks, want 1", nSubs)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+
+	// Enable via settings, then fire the change callback as the catalog
+	// would. Run must pick it up off the signal and reconcile to enabled.
+	reader.set(settings.PayloadLogging{Enabled: true, Backend: "file"})
+	reader.fire()
+
+	deadline := time.After(2 * time.Second)
+	for !c.Enabled() {
+		select {
+		case <-deadline:
+			t.Fatal("controller did not enable after settings-change signal")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }

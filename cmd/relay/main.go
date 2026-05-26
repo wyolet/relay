@@ -111,7 +111,10 @@ func main() {
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
-	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
+	// hydrateLoop launches below, after settings-change subscribers are
+	// registered — its first Hydrate runs settings.reload, which notifies
+	// subscribers with the stored values. Registering after it would race
+	// that one-shot boot notification.
 
 	// Identity store — fatal if YAML is malformed (login would silently
 	// be disabled otherwise). Empty store is fine (login returns 503).
@@ -327,16 +330,22 @@ func main() {
 	lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(payloadCtl))
 	lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadCtl.Emitter()))
 	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
+	payloadCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go payloadCtl.Run(listenerCtx)
 	slog.Info("payloadlog: observer wired (config via settings: payload-logging)")
 
 	// Request-parsing depth lives in the "parsing" settings section and
 	// hot-swaps the openai adapter's rich-parse toggle. The vendor setter
 	// is confined here (composition root) so app/ stays vendor-neutral.
-	go settingswatch.New(cat, settings.SectionParsing, func(p settings.Parsing) {
+	settingswatch.New(cat, settings.SectionParsing, func(p settings.Parsing) {
 		pkgopenai.SetRichParsing(p.RichParsing)
 		slog.Info("parsing: applied", "rich_parsing", p.RichParsing)
-	}, slog.Default()).Run(listenerCtx)
+	}, slog.Default()).Start()
+
+	// All settings-change subscribers are now registered; start background
+	// hydration. Its first Hydrate runs settings.reload → notifies them with
+	// the stored values (the data plane gates on IsReady until it completes).
+	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
