@@ -110,6 +110,15 @@ func (q *Queries) DeleteSecret(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteSecretValue = `-- name: DeleteSecretValue :exec
+DELETE FROM secret_values WHERE id = $1
+`
+
+func (q *Queries) DeleteSecretValue(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteSecretValue, id)
+	return err
+}
+
 const deleteSetting = `-- name: DeleteSetting :exec
 DELETE FROM settings WHERE section = $1
 `
@@ -409,6 +418,25 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 	return i, err
 }
 
+const getSecretValue = `-- name: GetSecretValue :one
+
+SELECT ciphertext, nonce, key_version FROM secret_values WHERE id = $1
+`
+
+type GetSecretValueRow struct {
+	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte `db:"nonce" json:"nonce"`
+	KeyVersion int32  `db:"key_version" json:"key_version"`
+}
+
+// secret_values: generic stored-secret value store (pkg/secret "stored").
+func (q *Queries) GetSecretValue(ctx context.Context, id string) (GetSecretValueRow, error) {
+	row := q.db.QueryRow(ctx, getSecretValue, id)
+	var i GetSecretValueRow
+	err := row.Scan(&i.Ciphertext, &i.Nonce, &i.KeyVersion)
+	return i, err
+}
+
 const getSetting = `-- name: GetSetting :one
 SELECT section, value, updated_at FROM settings WHERE section = $1
 `
@@ -582,6 +610,71 @@ func (q *Queries) InsertSecretStored(ctx context.Context, arg InsertSecretStored
 		arg.Spec,
 	)
 	var i InsertSecretStoredRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.ValueKind,
+		&i.ValueFromEnv,
+		&i.ValueCiphertext,
+		&i.ValueNonce,
+		&i.ValueKeyVersion,
+		&i.Metadata,
+		&i.Spec,
+	)
+	return i, err
+}
+
+const insertSecretStoredRef = `-- name: InsertSecretStoredRef :one
+INSERT INTO secrets (id, name, display_name, value_kind, metadata, spec)
+VALUES ($1, $2, $3, 'stored', $4, $5)
+ON CONFLICT (id) DO UPDATE
+    SET name              = EXCLUDED.name,
+        display_name      = EXCLUDED.display_name,
+        value_kind        = 'stored',
+        value_from_env    = NULL,
+        value_ciphertext  = NULL,
+        value_nonce       = NULL,
+        value_key_version = NULL,
+        metadata          = EXCLUDED.metadata,
+        spec              = EXCLUDED.spec,
+        updated_at        = NOW()
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
+`
+
+type InsertSecretStoredRefParams struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+type InsertSecretStoredRefRow struct {
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	ValueKind       string      `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+}
+
+// InsertSecretStoredRef upserts a stored-mode HostKey row WITHOUT inline
+// ciphertext — the encrypted value lives in secret_values (pkg/secret),
+// keyed by this row's id. Replaces InsertSecretStored on the new path.
+func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretStoredRefParams) (InsertSecretStoredRefRow, error) {
+	row := q.db.QueryRow(ctx, insertSecretStoredRef,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
+	var i InsertSecretStoredRefRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -985,6 +1078,42 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 	return items, nil
 }
 
+const listSecretValuesForRotation = `-- name: ListSecretValuesForRotation :many
+SELECT id, ciphertext, nonce, key_version FROM secret_values ORDER BY id
+`
+
+type ListSecretValuesForRotationRow struct {
+	ID         string `db:"id" json:"id"`
+	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte `db:"nonce" json:"nonce"`
+	KeyVersion int32  `db:"key_version" json:"key_version"`
+}
+
+func (q *Queries) ListSecretValuesForRotation(ctx context.Context) ([]ListSecretValuesForRotationRow, error) {
+	rows, err := q.db.Query(ctx, listSecretValuesForRotation)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSecretValuesForRotationRow
+	for rows.Next() {
+		var i ListSecretValuesForRotationRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ciphertext,
+			&i.Nonce,
+			&i.KeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSecrets = `-- name: ListSecrets :many
 SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets ORDER BY name
 `
@@ -1091,6 +1220,17 @@ func (q *Queries) ListStoredSecretsForRotation(ctx context.Context) ([]ListStore
 		return nil, err
 	}
 	return items, nil
+}
+
+const maxSecretValueKeyVersion = `-- name: MaxSecretValueKeyVersion :one
+SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values
+`
+
+func (q *Queries) MaxSecretValueKeyVersion(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, maxSecretValueKeyVersion)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const setPolicyModels = `-- name: SetPolicyModels :exec
@@ -1496,6 +1636,33 @@ func (q *Queries) UpsertSecret(ctx context.Context, arg UpsertSecretParams) erro
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+	)
+	return err
+}
+
+const upsertSecretValue = `-- name: UpsertSecretValue :exec
+INSERT INTO secret_values (id, ciphertext, nonce, key_version, updated_at)
+VALUES ($1, $2, $3, $4, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    ciphertext  = EXCLUDED.ciphertext,
+    nonce       = EXCLUDED.nonce,
+    key_version = EXCLUDED.key_version,
+    updated_at  = NOW()
+`
+
+type UpsertSecretValueParams struct {
+	ID         string `db:"id" json:"id"`
+	Ciphertext []byte `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte `db:"nonce" json:"nonce"`
+	KeyVersion int32  `db:"key_version" json:"key_version"`
+}
+
+func (q *Queries) UpsertSecretValue(ctx context.Context, arg UpsertSecretValueParams) error {
+	_, err := q.db.Exec(ctx, upsertSecretValue,
+		arg.ID,
+		arg.Ciphertext,
+		arg.Nonce,
+		arg.KeyVersion,
 	)
 	return err
 }

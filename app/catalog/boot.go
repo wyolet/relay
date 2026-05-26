@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -60,11 +61,12 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		return nil, nil, fmt.Errorf("catalog.BootstrapStores: Pool is required")
 	}
 	q := gen.New(opts.Pool)
+	secReg, secStored := appsecret.Wire(q, opts.Pool, opts.MasterKey)
 	stores := &Stores{
 		Provider:  provider.NewStore(q),
 		Host:      host.NewStore(q),
 		Model:     model.NewStore(q),
-		HostKey:   hostkey.NewStore(q, opts.Pool, opts.MasterKey),
+		HostKey:   hostkey.NewStore(q, secReg, secStored),
 		RateLimit: ratelimit.NewStore(q),
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),

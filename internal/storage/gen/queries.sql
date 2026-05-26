@@ -113,6 +113,48 @@ RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, 
 -- name: DeleteSecret :exec
 DELETE FROM secrets WHERE id = $1;
 
+-- InsertSecretStoredRef upserts a stored-mode HostKey row WITHOUT inline
+-- ciphertext — the encrypted value lives in secret_values (pkg/secret),
+-- keyed by this row's id. Replaces InsertSecretStored on the new path.
+-- name: InsertSecretStoredRef :one
+INSERT INTO secrets (id, name, display_name, value_kind, metadata, spec)
+VALUES ($1, $2, $3, 'stored', $4, $5)
+ON CONFLICT (id) DO UPDATE
+    SET name              = EXCLUDED.name,
+        display_name      = EXCLUDED.display_name,
+        value_kind        = 'stored',
+        value_from_env    = NULL,
+        value_ciphertext  = NULL,
+        value_nonce       = NULL,
+        value_key_version = NULL,
+        metadata          = EXCLUDED.metadata,
+        spec              = EXCLUDED.spec,
+        updated_at        = NOW()
+RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
+
+-- secret_values: generic stored-secret value store (pkg/secret "stored").
+
+-- name: GetSecretValue :one
+SELECT ciphertext, nonce, key_version FROM secret_values WHERE id = $1;
+
+-- name: UpsertSecretValue :exec
+INSERT INTO secret_values (id, ciphertext, nonce, key_version, updated_at)
+VALUES ($1, $2, $3, $4, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    ciphertext  = EXCLUDED.ciphertext,
+    nonce       = EXCLUDED.nonce,
+    key_version = EXCLUDED.key_version,
+    updated_at  = NOW();
+
+-- name: ListSecretValuesForRotation :many
+SELECT id, ciphertext, nonce, key_version FROM secret_values ORDER BY id;
+
+-- name: DeleteSecretValue :exec
+DELETE FROM secret_values WHERE id = $1;
+
+-- name: MaxSecretValueKeyVersion :one
+SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values;
+
 -- name: UpsertModel :exec
 INSERT INTO models (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
