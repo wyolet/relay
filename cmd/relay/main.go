@@ -314,22 +314,19 @@ func main() {
 		"hooks", lifecycleReg.HookCount(), "collectors", lifecycleReg.CollectorCount(),
 		"stream_observers", lifecycleReg.StreamObserverCount())
 
-	// Payload logging: the second lifecycle observer. Off unless
-	// RELAY_PAYLOADLOG is set; per-request capture is gated by the
-	// Policy/RelayKey opt-in resolved at the inference entry.
-	if cfg.PayloadLog {
-		payloadSink, err := buildPayloadSink(bootCtx, cfg)
-		if err != nil {
-			slog.Error("payloadlog: sink init failed", "err", err, "backend", cfg.PayloadLogBackend)
-			os.Exit(1)
-		}
-		payloadEmitter := payloadlog.NewEmitter(payloadlog.EmitterOptions{}, payloadSink)
-		defer payloadEmitter.Close()
-		lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(cfg.PayloadLogMaxBytes))
-		lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadEmitter))
-		lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(cfg.PayloadLogMaxBytes))
-		slog.Info("payloadlog: wired", "backend", cfg.PayloadLogBackend, "max_bytes", cfg.PayloadLogMaxBytes)
-	}
+	// Payload logging: the second lifecycle observer. Always wired; its
+	// runtime config lives in the "payload-logging" settings section, so it
+	// toggles and reconfigures (backend / bucket / credentials) without a
+	// restart. Per-request capture is still gated by the Policy/RelayKey
+	// opt-in resolved at the inference entry. S3 credentials resolve through
+	// the shared secret registry.
+	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets), slog.Default())
+	defer payloadCtl.Close()
+	lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(payloadCtl))
+	lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadCtl.Emitter()))
+	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
+	go payloadCtl.Run(listenerCtx)
+	slog.Info("payloadlog: observer wired (config via settings: payload-logging)")
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()

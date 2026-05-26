@@ -46,23 +46,10 @@ type Config struct {
 	EventlogDir     string
 	MaxRequestBytes int64 // 0 = use httpmw.DefaultMaxRequestBytes
 
-	// PayloadLog enables the request/response body capture observer.
-	// Off by default; per-request opt-in is via Policy/RelayKey.
-	PayloadLog         bool
-	PayloadLogBackend  string // "file" or "s3". Default "file".
-	PayloadLogPath     string // file backend path. Default "relay-payloads.jsonl".
-	PayloadLogMaxBytes int    // per-body storage cap; 0 = unlimited. Default 1 MiB.
-
-	// S3 backend settings (used when PayloadLogBackend == "s3"). The s3
-	// sink is excluded from the "minimal" build; selecting it there errors
-	// at boot.
-	PayloadLogS3Endpoint  string
-	PayloadLogS3Bucket    string
-	PayloadLogS3Region    string
-	PayloadLogS3AccessKey string
-	PayloadLogS3SecretKey string
-	PayloadLogS3Prefix    string
-	PayloadLogS3UseSSL    bool
+	// Payload logging has no env knobs — its config (enable, backend, S3
+	// settings, credentials) lives in the runtime "payload-logging" settings
+	// section and hot-reloads without a restart. See app/settings +
+	// app/payloadlog.Controller.
 
 	HealthzDeadlineMS int
 	ShutdownDeadlineS int
@@ -169,33 +156,6 @@ func Load() (*Config, error) {
 
 	cfg.HealthzDeadlineMS = envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
 	cfg.ShutdownDeadlineS = envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)
-
-	cfg.PayloadLog = os.Getenv("RELAY_PAYLOADLOG") == "on" || os.Getenv("RELAY_PAYLOADLOG") == "1"
-	cfg.PayloadLogBackend = os.Getenv("RELAY_PAYLOADLOG_BACKEND")
-	if cfg.PayloadLogBackend == "" {
-		cfg.PayloadLogBackend = "file"
-	}
-	switch cfg.PayloadLogBackend {
-	case "file", "s3":
-	default:
-		return nil, fmt.Errorf(`RELAY_PAYLOADLOG_BACKEND must be "file" or "s3", got %q`, cfg.PayloadLogBackend)
-	}
-	cfg.PayloadLogPath = os.Getenv("RELAY_PAYLOADLOG_PATH")
-	if cfg.PayloadLogPath == "" {
-		cfg.PayloadLogPath = "relay-payloads.jsonl"
-	}
-	cfg.PayloadLogMaxBytes = envInt("RELAY_PAYLOADLOG_MAX_BYTES", 1<<20)
-
-	cfg.PayloadLogS3Endpoint = os.Getenv("RELAY_PAYLOADLOG_S3_ENDPOINT")
-	cfg.PayloadLogS3Bucket = os.Getenv("RELAY_PAYLOADLOG_S3_BUCKET")
-	cfg.PayloadLogS3Region = os.Getenv("RELAY_PAYLOADLOG_S3_REGION")
-	cfg.PayloadLogS3AccessKey = os.Getenv("RELAY_PAYLOADLOG_S3_ACCESS_KEY")
-	cfg.PayloadLogS3SecretKey = os.Getenv("RELAY_PAYLOADLOG_S3_SECRET_KEY")
-	cfg.PayloadLogS3Prefix = os.Getenv("RELAY_PAYLOADLOG_S3_PREFIX")
-	cfg.PayloadLogS3UseSSL = os.Getenv("RELAY_PAYLOADLOG_S3_USE_SSL") != "false"
-	if cfg.PayloadLog && cfg.PayloadLogBackend == "s3" && cfg.PayloadLogS3Bucket == "" {
-		return nil, fmt.Errorf("RELAY_PAYLOADLOG_S3_BUCKET required when RELAY_PAYLOADLOG_BACKEND=s3")
-	}
 
 	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
 	if cfg.ControlPort == "" {
