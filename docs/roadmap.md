@@ -67,6 +67,27 @@ waiting to be written; the path under `docs/` is the placeholder.
   generation it replaced — `internal/usage`, `pkg/eventlog`,
   `Request.OnSuccess`, the no-op `reqid` OTel span, and the
   `X-Relay-Metadata` header — was deleted (PR purge-precutover-observability).
+- **Usage read API** (PRs #221/#224/#223, 2026-05-26) — control-plane
+  `/usage/{events,summary,timeseries}` over the `usage.Reader` seam (file/
+  CH/PG/valkey). Timeseries (epoch-aligned buckets + optional group_by),
+  absolute `from`/`to` + multi-value + finish_reason/error_kind/request_id
+  filters, and keyset cursor pagination on `/usage/events`. Session/admin
+  auth; cost still derived in the sink (events stay pricing-free).
+- **Payload logging** (PR #225, config→settings #227, 2026-05-26) — second
+  lifecycle observer: full request/response **body** capture for opted-in
+  requests (per-policy/relaykey `PayloadLoggingEnabled`), off the hot path.
+  `pkg/payload` contract + `pkg/payload/{file,s3}` drivers (s3 behind a
+  `-tags minimal` build seam — minio-go excluded from minimal builds);
+  `app/payloadlog` observer. Runtime config lives in the `payload-logging`
+  settings section, hot-swapped by a reconcile-loop `Controller` (toggle /
+  backend / bucket / creds, no restart). No read endpoint (offline artifact,
+  joins to usage by request_id).
+- **`pkg/secret` unified resolver** (PR #226, 2026-05-26) — **the seam half
+  of Now #1, done.** `Ref{Kind,Env,ID}` + `Resolver`/`Registry`/`Writer`;
+  built-in `env` + `stored` (AES-GCM, `secret_values` table, transactional
+  rotation). HostKey resolves through it; the relay's own secrets (payload
+  S3 creds) do too. RelayKey deliberately excluded (hash-only). Integration-
+  validated incl. stored-key rotation against real PG.
 
 ## Now — priority queue
 
@@ -75,24 +96,24 @@ deployment that mandates a non-env secret store; batch is the heaviest
 build and the headline differentiator; webhooks unlock async UX once
 batch lands; new adapters broaden the upstream surface.
 
-### 1. Pluggable secret backends
+### 1. Pluggable secret backends — external resolvers (seam DONE)
 
-What: extract `pkg/secret` with a `Resolver` interface. Built-in
-resolvers: `env` (env-ref, today) and `stored` (AES-GCM in PG, today).
-Add subpackages for Vault, AWS Secrets Manager, AWS KMS, GCP Secret
-Manager, Kubernetes Secrets. `HostKey.ValueFrom` grows new `kind`
-values that select a resolver.
+**The `pkg/secret` seam shipped** (PR #226, see Recently shipped): `Ref`
++ `Resolver`/`Registry`/`Writer`, built-in `env` + `stored`, HostKey +
+the relay's own secrets routed through it. **Remaining: the external
+backend subpackages** — `pkg/secret/aws` (Secrets Manager first, most-
+requested), `pkg/secret/vault`, AWS KMS, GCP Secret Manager, Kubernetes
+Secrets. Each registers a new `Kind` + resolver in the registry; no core
+change. `secret.Ref` grows the per-kind locator fields (e.g. a Vault
+path).
 
-Why: larger deployments mandate a specific secret store; today
-`app/hostkey` only supports env + stored. A Resolver seam makes new
-backends additive instead of a rewrite.
+Why: larger deployments mandate a specific secret store. The seam makes
+each new backend additive.
 
-Size: ~3-4 days for the seam + one external backend (AWS Secrets
-Manager first — most-requested). Each additional backend ~half day.
+Size: ~half-day to ~1 day per external backend now that the seam exists.
 
-Where: `pkg/secret/` (new), `pkg/secret/aws/`, `pkg/secret/vault/`, …;
-`app/hostkey` dispatches through Resolver; migration adds new
-`kind` variants.
+Where: `pkg/secret/aws/`, `pkg/secret/vault/`, …; register the new kind
+in `app/secret.Wire`.
 
 ### 2. Batch processing (relay-native)
 
@@ -223,11 +244,20 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
 
 ### Cutover tech debt
 
+- **Settings hot-swap follow-ups** (both greenlit, not yet done). (a) The
+  payload-logging `Controller` reconciles via a 2s **poll** of
+  `cat.Setting` because there's no settings change-callback seam; add an
+  on-change hook to `app/catalog`'s `settingsHolder` (call it at the end of
+  `applyUpsert`/`applyDelete`) so consumers rebuild event-driven instead of
+  polling. (b) Apply the same **settings-section treatment to other env
+  knobs** that aren't bootstrap constants — `RELAY_RICH_PARSING`,
+  `RELAY_CH_RETENTION_DAYS`, `RELAY_ADMIN_RELOAD_RPM` — moving them to
+  runtime-mutable sections. Pattern: settings section + (if it owns a
+  resource) a reconcile/rebuild like `payloadlog.Controller`. ~1 day each.
 - **A2 — Observability observers**. The lifecycle spine + usage emit
-  shipped (see Recently shipped); remaining is adding observers on it:
-  (a) a **ClickHouse usage sink** behind `app/usagelog`'s `Sink`
-  interface — reference the deleted `pkg/eventlog/clickhouse.go` from git
-  history; (b) **OTel tracing** — a span on the lifecycle `Context`,
+  shipped; the **ClickHouse usage sink shipped** too (`pkg/usage/clickhouse`,
+  PRs #218/#220 — also Postgres + valkey backends). Remaining observers:
+  (a) **OTel tracing** — a span on the lifecycle `Context`,
   started at entry, ended in post-flight with routing attributes
   (replaces the deleted no-op `reqid` span); (c) **Prometheus** — wire
   `pkg/metrics` request counters/histograms +
@@ -255,20 +285,17 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   **enrichment fields** — `finish_reason` (via new `v1.ExtractSummary`,
   tokens+finish in one decode), `requested_model` (caller's wire model
   string, set at entry), and `attempts` (pipeline failover count). **Done.**
-  **Remaining:** (a) — enrichment landed; next is the optional
-  echo-usage-in-response feature: a flag-gated (`X-WR-Usage: full`)
-  inline `relay_usage` block returned to the caller (tokens + TTFT +
-  attempts + finish_reason), so callers get relay's observability without
-  a second analytics call (OpenRouter forces a `/generation` round-trip).
-  Scoped to buffered/streaming paths first — byte-pass passthrough would
-  need response headers, not body injection; (b) the pure server-misconfig
-  500 guards (no spec/adapter/translator registered) are not fired — they
-  signal a boot-config bug, not request telemetry; (c) per-shape parse
-  failures *before* `Dispatch` (malformed body that can't yield a model
-  name) are at the route edge, before the Context is minted. **Out of
-  scope by design**: cost (derive in the sink from tokens × pricing, keep
-  the event pricing-free), request/response content (S3 payload path),
-  SaaS attribution (session/app/end-user — B-track).
+  **Also done since:** the **echo-usage-in-response** feature shipped
+  (`X-WR-Usage: full` → inline `relay_usage` block, PRs #216/#217), and
+  **request/response content capture** shipped as the payload-logging
+  observer (PR #225/#227 — see Recently shipped; the "S3 payload path" is
+  now real). **Remaining:** (b) the pure server-misconfig 500 guards (no
+  spec/adapter/translator registered) are not fired — they signal a
+  boot-config bug, not request telemetry; (c) per-shape parse failures
+  *before* `Dispatch` (malformed body that can't yield a model name) are at
+  the route edge, before the Context is minted. **Out of scope by design**:
+  cost (derive in the sink from tokens × pricing, keep the event
+  pricing-free), SaaS attribution (session/app/end-user — B-track).
 - **A3 — Perf bench harness**. A `bench/pipeline/` harness against
   `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
   Remaining: wire it into CI as a regression gate and document the
