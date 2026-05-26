@@ -8,12 +8,12 @@
 // Build tag `integration` keeps these out of the default `go test ./...`
 // run. Bring up the test pg first:
 //
-//   docker compose -f deploy/compose/docker-compose.test.yml up -d --wait
+//	docker compose -f deploy/compose/docker-compose.test.yml up -d --wait
 //
 // Then either:
 //
-//   RELAY_TEST_PG_DSN='postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable' \
-//     go test -tags=integration -race ./integration/
+//	RELAY_TEST_PG_DSN='postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable' \
+//	  go test -tags=integration -race ./integration/
 //
 // or use `make test-integration` which wraps both steps.
 package integration_test
@@ -38,11 +38,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
-	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
-	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -53,16 +51,19 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
+	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
@@ -128,8 +129,9 @@ func newStack(t *testing.T) *stack {
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	policySvc := policy.NewService(catSnapReader{cat: cat}, selector, limiter)
-	pl := &pipeline.Pipeline{Policy: policySvc, Logger: slog.Default()}
-	proxyPipeline := proxy.New(limiter, slog.Default())
+	lifecycleReg := lifecycle.New()
+	pl := &pipeline.Pipeline{Policy: policySvc, Lifecycle: lifecycleReg, Logger: slog.Default()}
+	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
 
 	openaiAuth := adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"}
 	anthropicAuth := adapter.AuthStrategy{
