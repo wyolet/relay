@@ -349,6 +349,152 @@ func TestLive_Ollama(t *testing.T) {
 	t.Logf("Ollama %s streamed events: [%s] text=%q", model, strings.TrimSpace(events.String()), deltaText.String())
 }
 
+// --- env-var defaults ---
+
+func TestRelay_EnvDefaults(t *testing.T) {
+	var gotAuth, gotHost string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotHost = r.Host
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed"}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(EnvBaseURL, srv.URL)
+	t.Setenv(EnvAPIKey, "rk-from-env")
+
+	if _, err := Relay("", "").Generate(context.Background(), sampleReq()); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer rk-from-env" {
+		t.Errorf("auth: %q", gotAuth)
+	}
+	if gotHost != strings.TrimPrefix(srv.URL, "http://") {
+		t.Errorf("host: %q want %q", gotHost, srv.URL)
+	}
+}
+
+func TestRelay_ExplicitArgsBeatEnv(t *testing.T) {
+	t.Setenv(EnvBaseURL, "http://env-host.invalid")
+	t.Setenv(EnvAPIKey, "rk-from-env")
+
+	c := Relay("http://explicit.invalid", "rk-explicit")
+	if c.baseURL != "http://explicit.invalid" || c.apiKey != "rk-explicit" {
+		t.Errorf("explicit args overridden by env: base=%q key=%q", c.baseURL, c.apiKey)
+	}
+}
+
+func TestRelay_MissingConfig_FailsOnCallNotConstruction(t *testing.T) {
+	t.Setenv(EnvBaseURL, "")
+	t.Setenv(EnvAPIKey, "")
+
+	c := Relay("", "") // must not panic / must return a client
+	if c == nil {
+		t.Fatal("Relay returned nil")
+	}
+	_, err := c.Generate(context.Background(), sampleReq())
+	if err == nil || !strings.Contains(err.Error(), "missing config") {
+		t.Fatalf("want missing-config error on call, got %v", err)
+	}
+
+	_, serr := c.GenerateStream(context.Background(), sampleReq())
+	if serr == nil || !strings.Contains(serr.Error(), "missing config") {
+		t.Fatalf("want missing-config error on stream call, got %v", serr)
+	}
+}
+
+func TestVendorClients_IgnoreRelayEnv(t *testing.T) {
+	t.Setenv(EnvBaseURL, "http://relay-env.invalid")
+	t.Setenv(EnvAPIKey, "rk-from-env")
+
+	c := OpenAI("https://api.openai.com", "")
+	if c.configErr != nil {
+		t.Errorf("vendor client should never carry relay config error: %v", c.configErr)
+	}
+	if c.baseURL != "https://api.openai.com" {
+		t.Errorf("vendor baseURL pulled from relay env: %q", c.baseURL)
+	}
+}
+
+func TestRelay_UsageAndHeaderEnv(t *testing.T) {
+	var gotUsage, gotCustom string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUsage = r.Header.Get("X-WR-Usage")
+		gotCustom = r.Header.Get("X-Custom")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed"}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(EnvBaseURL, srv.URL)
+	t.Setenv(EnvAPIKey, "rk")
+	t.Setenv(EnvUsage, "full")
+	t.Setenv(EnvHeaders, "X-Custom=hi, X-Other=2")
+
+	if _, err := Relay("", "").Generate(context.Background(), sampleReq()); err != nil {
+		t.Fatal(err)
+	}
+	if gotUsage != "full" {
+		t.Errorf("X-WR-Usage: %q", gotUsage)
+	}
+	if gotCustom != "hi" {
+		t.Errorf("X-Custom: %q", gotCustom)
+	}
+}
+
+func TestRelay_ExplicitHeaderBeatsEnv(t *testing.T) {
+	t.Setenv(EnvBaseURL, "http://x.invalid")
+	t.Setenv(EnvAPIKey, "rk")
+	t.Setenv(EnvUsage, "full")
+
+	c := Relay("", "", WithHeader(headerUsage, "off"))
+	if c.headers[headerUsage] != "off" {
+		t.Errorf("explicit WithHeader lost to env: %q", c.headers[headerUsage])
+	}
+}
+
+func TestRelay_BadHeaderEnv_FailsOnCall(t *testing.T) {
+	t.Setenv(EnvBaseURL, "http://x.invalid")
+	t.Setenv(EnvAPIKey, "rk")
+	t.Setenv(EnvHeaders, "no-equals-sign")
+
+	_, err := Relay("", "").Generate(context.Background(), sampleReq())
+	if err == nil || !strings.Contains(err.Error(), "WR_HEADERS") {
+		t.Fatalf("want WR_HEADERS parse error on call, got %v", err)
+	}
+}
+
+func TestRelay_TimeoutEnv_AppliesToSyncNotStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","status":"completed"}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(EnvBaseURL, srv.URL)
+	t.Setenv(EnvAPIKey, "rk")
+	t.Setenv(EnvTimeout, "20ms")
+
+	_, err := Relay("", "").Generate(context.Background(), sampleReq())
+	if err == nil || !strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("want deadline-exceeded on sync, got %v", err)
+	}
+
+	if c := Relay("", ""); c.syncTimeout != 20*time.Millisecond {
+		t.Errorf("syncTimeout: %v", c.syncTimeout)
+	}
+}
+
+func TestRelay_BadTimeoutEnv_FailsOnCall(t *testing.T) {
+	t.Setenv(EnvBaseURL, "http://x.invalid")
+	t.Setenv(EnvAPIKey, "rk")
+	t.Setenv(EnvTimeout, "not-a-duration")
+
+	_, err := Relay("", "").Generate(context.Background(), sampleReq())
+	if err == nil || !strings.Contains(err.Error(), "WR_TIMEOUT") {
+		t.Fatalf("want WR_TIMEOUT parse error on call, got %v", err)
+	}
+}
+
 // --- helpers ---
 
 func liveReq(model string) *v1.Request {
