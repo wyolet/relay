@@ -155,11 +155,17 @@ type Choice struct {
 // ChatResponseMessage is the assistant message in a non-streaming response.
 // Content is nullable per the spec (null when refusal is set).
 type ChatResponseMessage struct {
-	Role        string       `json:"role"`
-	Content     *string      `json:"content"`
-	Refusal     *string      `json:"refusal,omitempty"`
-	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
-	Annotations []Annotation `json:"annotations,omitempty"`
+	Role    string  `json:"role"`
+	Content *string `json:"content"`
+	Refusal *string `json:"refusal,omitempty"`
+	// Reasoning text — a non-standard CC extension. OLLAMA DIVERGES FROM
+	// OPENAI HERE: Ollama emits "reasoning" where OpenAI-compatible o-series /
+	// DeepSeek upstreams emit "reasoning_content". Both are read; canonical
+	// normalizes them to one Reasoning item. See ccExtractReasoningContent.
+	ReasoningContent string       `json:"reasoning_content,omitempty"`
+	Reasoning        string       `json:"reasoning,omitempty"`
+	ToolCalls        []ToolCall   `json:"tool_calls,omitempty"`
+	Annotations      []Annotation `json:"annotations,omitempty"`
 }
 
 // Annotation is a URL citation attached to an assistant message (web search tool).

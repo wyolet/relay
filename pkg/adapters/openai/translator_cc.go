@@ -419,7 +419,21 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 				},
 			})
 		case *v1.Reasoning:
-			// Reasoning items don't map to CC response; drop.
+			// Echo reasoning under its original wire field, preserved in
+			// provider_data (Ollama "reasoning" / o-series "reasoning_content").
+			rt := v.Content
+			if rt == "" {
+				for _, st := range v.Summary {
+					rt += st.Text
+				}
+			}
+			if rt != "" {
+				if ccReasoningField(v.ProviderData) == ccReasoningFieldOllama {
+					msg.Reasoning = rt
+				} else {
+					msg.ReasoningContent = rt
+				}
+			}
 		}
 	}
 
@@ -777,6 +791,23 @@ func ccChoiceToCanonicalOutput(ccID string, ch *Choice) []v1.Item {
 		refusal = *msg.Refusal
 	}
 
+	// Reasoning leads the output. Ollama emits "reasoning", o-series/DeepSeek
+	// emit "reasoning_content"; canonical maps both to one Reasoning.Content
+	// and provider_data preserves which field carried it.
+	rtext, rfield := msg.ReasoningContent, ccReasoningFieldStd
+	if rtext == "" && msg.Reasoning != "" {
+		rtext, rfield = msg.Reasoning, ccReasoningFieldOllama
+	}
+	if rtext != "" {
+		items = append(items, &v1.Reasoning{
+			ID:           "rs_" + ccID,
+			Content:      rtext,
+			Summary:      []v1.SummaryText{{Text: rtext}},
+			Status:       v1.StatusCompleted,
+			ProviderData: ccReasoningProviderDataJSON(rfield),
+		})
+	}
+
 	// Emit message item if there is text or refusal content, or no tool calls.
 	if textContent != "" || refusal != "" || len(msg.ToolCalls) == 0 {
 		msgItem := &v1.Message{
@@ -941,6 +972,9 @@ type ccStreamItem struct {
 	name        string
 	textBuf     string
 	argsBuf     string
+	// reasoningField records the wire field name (reasoning|reasoning_content)
+	// for reasoning items, preserved into the canonical item's provider_data.
+	reasoningField string
 }
 
 // ccToCanonicalStream is a stateful CC SSE → canonical SSE translator.
@@ -1015,9 +1049,9 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		s.status, s.finishReason, _ = ccFinishReasonToCanonical(*ch.FinishReason)
 	}
 
-	// Reasoning content (non-standard field from some o-series upstreams).
-	if rc := ccExtractReasoningContent(data); rc != "" {
-		rf, err := s.handleReasoningDelta(rc)
+	// Reasoning text (Ollama "reasoning" or o-series "reasoning_content").
+	if rc, field := ccExtractReasoningContent(data); rc != "" {
+		rf, err := s.handleReasoningDelta(rc, field)
 		if err != nil {
 			return nil, err
 		}
@@ -1100,14 +1134,15 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 	return marshalCanonicalFrames(frames), nil
 }
 
-func (s *ccToCanonicalStream) handleReasoningDelta(text string) ([]v1.SSEFrame, error) {
+func (s *ccToCanonicalStream) handleReasoningDelta(text, field string) ([]v1.SSEFrame, error) {
 	var frames []v1.SSEFrame
 
 	if s.reasoningItem == nil {
 		ti := &ccStreamItem{
-			kind:        ccStreamKindReasoning,
-			outputIndex: s.nextIndex,
-			itemID:      fmt.Sprintf("rs_%d", s.nextIndex),
+			kind:           ccStreamKindReasoning,
+			outputIndex:    s.nextIndex,
+			itemID:         fmt.Sprintf("rs_%d", s.nextIndex),
+			reasoningField: field,
 		}
 		s.nextIndex++
 		s.reasoningItem = ti
@@ -1244,9 +1279,10 @@ func (s *ccToCanonicalStream) closeMsgItem(ti *ccStreamItem) []v1.SSEFrame {
 
 func (s *ccToCanonicalStream) closeReasoningItem(ti *ccStreamItem) []v1.SSEFrame {
 	finalItem := &v1.Reasoning{
-		ID:      ti.itemID,
-		Content: ti.textBuf,
-		Status:  v1.StatusCompleted,
+		ID:           ti.itemID,
+		Content:      ti.textBuf,
+		Status:       v1.StatusCompleted,
+		ProviderData: ccReasoningProviderDataJSON(ti.reasoningField),
 	}
 	if ti.textBuf != "" {
 		finalItem.Summary = []v1.SummaryText{{Text: ti.textBuf}}
@@ -1275,22 +1311,68 @@ func (s *ccToCanonicalStream) closeToolItem(ti *ccStreamItem) []v1.SSEFrame {
 	return []v1.SSEFrame{{Event: v1.EventItemCompleted, Data: completedData}}
 }
 
-// ccExtractReasoningContent extracts the non-standard reasoning_content field from a raw CC chunk.
-func ccExtractReasoningContent(raw []byte) string {
+// Reasoning is carried on CC under one of two non-standard delta/message
+// fields. OLLAMA DIVERGES FROM OPENAI: it maps its Thinking output to
+// "reasoning", whereas OpenAI-compatible o-series / DeepSeek upstreams use
+// "reasoning_content". The shared OpenAI adapter handles both rather than
+// forking a near-identical pkg/adapters/ollama for a single field name; if
+// Ollama's divergence grows beyond this, promote it to its own vendor adapter.
+const (
+	ccReasoningFieldStd    = "reasoning_content" // o-series / DeepSeek / vLLM
+	ccReasoningFieldOllama = "reasoning"         // Ollama
+)
+
+// ccReasoningProviderData preserves which CC wire field carried the reasoning
+// text. Canonical normalizes both names into the single Reasoning.Content
+// ("canonical maps it to one"); this records the original so a canonical→CC
+// serialize can echo the field verbatim ("the adapter never invents a field").
+type ccReasoningProviderData struct {
+	Field string `json:"cc_reasoning_field"`
+}
+
+func ccReasoningProviderDataJSON(field string) json.RawMessage {
+	if field == "" {
+		field = ccReasoningFieldStd
+	}
+	b, _ := json.Marshal(ccReasoningProviderData{Field: field})
+	return b
+}
+
+// ccReasoningField reads the preserved wire field from a canonical Reasoning
+// item's provider_data, defaulting to reasoning_content.
+func ccReasoningField(pd json.RawMessage) string {
+	if len(pd) > 0 {
+		var d ccReasoningProviderData
+		if json.Unmarshal(pd, &d) == nil && d.Field != "" {
+			return d.Field
+		}
+	}
+	return ccReasoningFieldStd
+}
+
+// ccExtractReasoningContent extracts the reasoning text from a raw CC chunk,
+// probing both the OpenAI ("reasoning_content") and Ollama ("reasoning") field
+// names. Returns the text and which field carried it (empty when neither).
+func ccExtractReasoningContent(raw []byte) (text, field string) {
 	var probe struct {
 		Choices []struct {
 			Delta struct {
 				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
 			} `json:"delta"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return ""
+	if err := json.Unmarshal(raw, &probe); err != nil || len(probe.Choices) == 0 {
+		return "", ""
 	}
-	if len(probe.Choices) == 0 {
-		return ""
+	d := probe.Choices[0].Delta
+	if d.ReasoningContent != "" {
+		return d.ReasoningContent, ccReasoningFieldStd
 	}
-	return probe.Choices[0].Delta.ReasoningContent
+	if d.Reasoning != "" {
+		return d.Reasoning, ccReasoningFieldOllama
+	}
+	return "", ""
 }
 
 // marshalCanonicalFrames serializes a slice of v1.SSEFrame values to wire bytes.
@@ -1428,8 +1510,12 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 			out = append(out, ccSSEDataFrame(b)...)
 
 		case v1.DeltaKindReasoning:
-			// reasoning_content is a non-standard extension present on some o-series
-			// deployments; clients that don't understand it skip it safely.
+			// Emits the "reasoning_content" field. Unlike the non-stream path,
+			// the canonical Reasoning item's provider_data (which records the
+			// original Ollama-vs-OpenAI field) only arrives at item.completed —
+			// after these deltas have already flushed — so the wire field can't
+			// be preserved here without buffering. reasoning_content is the safe
+			// default; clients that don't understand it skip it.
 			b, _ := ccMarshalReasoningChunk(s.responseID, s.model, s.created, ev.Delta)
 			out = append(out, ccSSEDataFrame(b)...)
 		}
