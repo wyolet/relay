@@ -79,6 +79,14 @@ type EventQuery struct {
 
 	// Limit caps the number of events returned. <=0 → DefaultEventLimit.
 	Limit int
+
+	// CursorTS / CursorID implement keyset pagination for Events. When
+	// CursorTS is non-zero, only events strictly older than the cursor are
+	// returned — i.e. (ts, request_id) < (CursorTS, CursorID) under the
+	// (ts DESC, request_id DESC) ordering. Set only on the Events path;
+	// ignored by Summary / TimeSeries.
+	CursorTS time.Time
+	CursorID string
 }
 
 // SummaryQuery is EventQuery + group dimension. The filter fields are

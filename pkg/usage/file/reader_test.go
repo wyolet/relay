@@ -153,6 +153,52 @@ func TestReader_Events_RichFilters(t *testing.T) {
 	}
 }
 
+func TestReader_Events_KeysetPagination(t *testing.T) {
+	now := time.Now().Truncate(time.Millisecond)
+	// Two events share a timestamp (tie) to exercise the request_id tiebreak.
+	tie := now.Add(-3 * time.Minute)
+	path := writeFixture(t, []usage.Event{
+		{RequestID: "e", Timestamp: now.Add(-1 * time.Minute)},
+		{RequestID: "d", Timestamp: now.Add(-2 * time.Minute)},
+		{RequestID: "c2", Timestamp: tie},
+		{RequestID: "c1", Timestamp: tie},
+		{RequestID: "a", Timestamp: now.Add(-4 * time.Minute)},
+	})
+	r := NewReader(path)
+	ctx := context.Background()
+
+	// Walk pages of 2, accumulating request_ids; expect newest-first with no
+	// gaps or repeats. Tie bucket orders by request_id DESC: c2 before c1.
+	want := []string{"e", "d", "c2", "c1", "a"}
+	var got []string
+	q := usage.EventQuery{Limit: 2}
+	for {
+		page, err := r.Events(ctx, q)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, ev := range page {
+			got = append(got, ev.RequestID)
+		}
+		if len(page) < 2 {
+			break
+		}
+		last := page[len(page)-1]
+		q.CursorTS, q.CursorID = last.Timestamp, last.RequestID
+	}
+	if len(got) != len(want) {
+		t.Fatalf("paged %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("page order: got %v want %v", got, want)
+		}
+	}
+}
+
 func TestReader_TimeSeries_Bucketing(t *testing.T) {
 	// Fixed epoch-aligned base so bucket boundaries are deterministic.
 	base := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Hour)

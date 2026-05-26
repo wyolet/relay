@@ -151,4 +151,20 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if len(tsg.Rows) != 1 || tsg.Rows[0].Group["model_id"] != marker {
 		t.Fatalf("grouped timeseries: %+v", tsg.Rows)
 	}
+
+	// Keyset pagination: page size 1 walks newest→oldest with no repeats.
+	pq := usage.EventQuery{Since: time.Hour, ModelID: []string{marker}, Limit: 1}
+	p1, err := s.Events(context.Background(), pq)
+	if err != nil || len(p1) != 1 || p1[0].RequestID != marker+"-2" {
+		t.Fatalf("page1: err=%v rows=%+v", err, p1)
+	}
+	pq.CursorTS, pq.CursorID = p1[0].Timestamp, p1[0].RequestID
+	p2, err := s.Events(context.Background(), pq)
+	if err != nil || len(p2) != 1 || p2[0].RequestID != marker+"-1" {
+		t.Fatalf("page2: err=%v rows=%+v", err, p2)
+	}
+	pq.CursorTS, pq.CursorID = p2[0].Timestamp, p2[0].RequestID
+	if p3, err := s.Events(context.Background(), pq); err != nil || len(p3) != 0 {
+		t.Fatalf("page3 should be empty: err=%v rows=%+v", err, p3)
+	}
 }
