@@ -36,19 +36,21 @@ func NewHook(opts HookOptions, e *Emitter) *Hook {
 // PostFlight is the lifecycle.PostFlightHook entry point.
 func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
 	out := Event{
-		RequestID:    lc.RequestID,
-		Source:       lc.Source,
-		Timestamp:    lc.Timing.Start,
-		Status:       ev.Status,
-		DurationMs:   lc.Timing.End.Milliseconds(),
-		Streamed:     lc.Streamed,
-		ErrorKind:    ev.ErrorKind,
-		ErrorMessage: ev.ErrorMessage,
-		RelayKeyHash: lc.RelayKeyHash,
-		PolicyID:     lc.PolicyID,
-		ModelID:      lc.ModelID,
-		HostID:       lc.HostID,
-		HostKeyID:    lc.HostKeyID,
+		RequestID:      lc.RequestID,
+		Source:         lc.Source,
+		Timestamp:      lc.Timing.Start,
+		Status:         ev.Status,
+		DurationMs:     lc.Timing.End.Milliseconds(),
+		Streamed:       lc.Streamed,
+		Attempts:       lc.Attempts,
+		ErrorKind:      ev.ErrorKind,
+		ErrorMessage:   ev.ErrorMessage,
+		RelayKeyHash:   lc.RelayKeyHash,
+		PolicyID:       lc.PolicyID,
+		ModelID:        lc.ModelID,
+		RequestedModel: lc.RequestedModel,
+		HostID:         lc.HostID,
+		HostKeyID:      lc.HostKeyID,
 	}
 	if out.Timestamp.IsZero() {
 		out.Timestamp = time.Now()
@@ -65,8 +67,9 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 	}
 
 	if lc.Translator != nil && len(ev.ResponseBody) > 0 {
-		if tokens, err := v1.ExtractUsage(lc.Translator, ev.ResponseBody); err == nil {
-			out.Tokens = tokens
+		if s, err := v1.ExtractSummary(lc.Translator, ev.ResponseBody); err == nil {
+			out.Tokens = s.Tokens
+			out.FinishReason = string(s.FinishReason)
 		}
 	}
 

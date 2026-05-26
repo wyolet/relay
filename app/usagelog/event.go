@@ -23,6 +23,8 @@ type Event struct {
 	Status       int    `json:"status"`
 	DurationMs   int64  `json:"duration_ms"` // total: start → response closed
 	Streamed     bool   `json:"streamed,omitempty"`
+	FinishReason string `json:"finish_reason,omitempty"` // "stop"|"length"|"tool_calls"|"content_filter"|"refusal"
+	Attempts     int    `json:"attempts,omitempty"`      // upstream tries (pipeline failover); 0 = not tracked
 	ErrorKind    string `json:"error_kind,omitempty"`
 	ErrorMessage string `json:"error_message,omitempty"`
 
@@ -35,11 +37,12 @@ type Event struct {
 	// Attribution — UUIDs (stable, snapshot-resolvable to slugs at
 	// query time). Hash of the inbound bearer is included so the
 	// plaintext is never logged.
-	RelayKeyHash string `json:"relay_key_hash,omitempty"`
-	PolicyID     string `json:"policy_id,omitempty"`
-	ModelID      string `json:"model_id,omitempty"`
-	HostID       string `json:"host_id,omitempty"`
-	HostKeyID    string `json:"host_key_id,omitempty"`
+	RelayKeyHash   string `json:"relay_key_hash,omitempty"`
+	PolicyID       string `json:"policy_id,omitempty"`
+	ModelID        string `json:"model_id,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"` // model string as the caller sent it
+	HostID         string `json:"host_id,omitempty"`
+	HostKeyID      string `json:"host_key_id,omitempty"`
 
 	// Token usage as reported by the upstream. Empty on error or when
 	// the adapter could not extract.

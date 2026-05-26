@@ -188,6 +188,7 @@ func TestPostFlight_TimingMarks(t *testing.T) {
 	t.Parallel()
 
 	var got lifecycle.Timing
+	var gotAttempts int
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -197,6 +198,7 @@ func TestPostFlight_TimingMarks(t *testing.T) {
 	reg := lifecycle.New()
 	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, _ *lifecycle.PostFlightEvent) {
 		got = lc.Timing
+		gotAttempts = lc.Attempts
 		wg.Done()
 	})
 	p := newPipeline()
@@ -229,6 +231,9 @@ func TestPostFlight_TimingMarks(t *testing.T) {
 	}
 	if got.End < got.Upstream.ResponseEnd {
 		t.Errorf("End %v < ResponseEnd %v", got.End, got.Upstream.ResponseEnd)
+	}
+	if gotAttempts != 1 {
+		t.Errorf("Attempts = %d, want 1 (single key, first-try success)", gotAttempts)
 	}
 }
 

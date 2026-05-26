@@ -22,12 +22,27 @@ func (fakeTranslator) NewFromCanonicalStream() func([]byte) ([]byte, error) { re
 
 func (fakeTranslator) ParseResponse(body []byte) (*Response, error) {
 	var r struct {
-		Usage usage.Tokens `json:"usage"`
+		Usage        usage.Tokens `json:"usage"`
+		FinishReason FinishReason `json:"finish_reason"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
 		return nil, err
 	}
-	return &Response{Usage: r.Usage}, nil
+	return &Response{Usage: r.Usage, FinishReason: r.FinishReason}, nil
+}
+
+func TestExtractSummary_SyncJSON(t *testing.T) {
+	body := []byte(`{"usage":{"input":12,"output":34},"finish_reason":"length"}`)
+	s, err := ExtractSummary(fakeTranslator{}, body)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if s.Tokens["input"] != 12 || s.Tokens["output"] != 34 {
+		t.Fatalf("tokens: got %+v", s.Tokens)
+	}
+	if s.FinishReason != FinishReasonLength {
+		t.Fatalf("finish_reason = %q, want length", s.FinishReason)
+	}
 }
 
 func TestExtractUsage_SyncJSON(t *testing.T) {

@@ -161,6 +161,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		lastBody   string
 	)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if req.Lifecycle != nil {
+			req.Lifecycle.Attempts = attempt + 1
+		}
 		acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
 			Policy:   req.Policy,
 			Keys:     req.Keys,

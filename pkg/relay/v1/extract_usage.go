@@ -32,36 +32,54 @@ import (
 // gzip + SSE handling lives in the canonical layer where it can be
 // shared across every observer that needs Usage.
 func ExtractUsage(tr Translator, body []byte) (usage.Tokens, error) {
+	s, err := ExtractSummary(tr, body)
+	return s.Tokens, err
+}
+
+// Summary is the canonical post-flight view of a response body: token
+// counts plus the finish reason. Both are harvested in a single decode
+// (one ParseResponse / one SSE walk) so observers don't double-parse.
+type Summary struct {
+	Tokens       usage.Tokens
+	FinishReason FinishReason
+}
+
+// ExtractSummary decodes a vendor wire response body — sync JSON or SSE
+// stream, optionally gzipped — into a canonical Summary. Returns the zero
+// Summary when the body carries no completion block; returns an error
+// only for decompression failures we want to surface. Same three-layer
+// normalization as ExtractUsage (which is now a thin wrapper).
+func ExtractSummary(tr Translator, body []byte) (Summary, error) {
 	if tr == nil || len(body) == 0 {
-		return nil, nil
+		return Summary{}, nil
 	}
 	body, err := maybeUngzip(body)
 	if err != nil {
-		return nil, err
+		return Summary{}, err
 	}
 
 	if !looksLikeSSE(body) {
 		resp, err := tr.ParseResponse(body)
 		if err != nil || resp == nil {
-			return nil, nil
+			return Summary{}, nil
 		}
-		return resp.Usage, nil
+		return Summary{Tokens: resp.Usage, FinishReason: resp.FinishReason}, nil
 	}
 
-	return extractUsageFromSSE(tr, body), nil
+	return extractSummaryFromSSE(tr, body), nil
 }
 
-// extractUsageFromSSE walks a vendor SSE body through the translator's
-// to-canonical stream factory and harvests Usage from the terminal
+// extractSummaryFromSSE walks a vendor SSE body through the translator's
+// to-canonical stream factory and harvests the Summary from the terminal
 // generation.completed event. Errors per-frame are skipped (one bad
 // chunk shouldn't lose the whole stream's usage).
-func extractUsageFromSSE(tr Translator, body []byte) usage.Tokens {
+func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 	toCanon := tr.NewToCanonicalStream()
 	if toCanon == nil {
 		// Translator declares no stream transform — the wire IS canonical.
 		// In that case the body itself is already canonical SSE; parse it
 		// directly without round-tripping through the translator.
-		return harvestUsageFromCanonicalSSE(body)
+		return harvestSummaryFromCanonicalSSE(body)
 	}
 
 	// Split vendor body on blank-line boundaries; each frame is one SSE
@@ -71,7 +89,7 @@ func extractUsageFromSSE(tr Translator, body []byte) usage.Tokens {
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	sc.Split(splitSSEFrames)
 
-	var found usage.Tokens
+	var found Summary
 	for sc.Scan() {
 		frame := sc.Bytes()
 		if len(frame) == 0 {
@@ -87,23 +105,23 @@ func extractUsageFromSSE(tr Translator, body []byte) usage.Tokens {
 		if err != nil || len(canonChunk) == 0 {
 			continue
 		}
-		if u := harvestUsageFromCanonicalSSE(canonChunk); u != nil {
-			found = u
+		if s := harvestSummaryFromCanonicalSSE(canonChunk); len(s.Tokens) > 0 || s.FinishReason != "" {
+			found = s
 		}
 	}
 	return found
 }
 
-// harvestUsageFromCanonicalSSE scans canonical SSE chunks and returns
-// the Usage carried by a generation.completed event if present.
+// harvestSummaryFromCanonicalSSE scans canonical SSE chunks and returns
+// the Summary carried by a generation.completed event if present.
 // Used both for translator-emitted canonical chunks and for bodies
 // whose translator declares identity stream (wire IS canonical).
-func harvestUsageFromCanonicalSSE(canon []byte) usage.Tokens {
+func harvestSummaryFromCanonicalSSE(canon []byte) Summary {
 	sc := bufio.NewScanner(bytes.NewReader(canon))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	sc.Split(splitSSEFrames)
 
-	var found usage.Tokens
+	var found Summary
 	for sc.Scan() {
 		frame := sc.Bytes()
 		if len(frame) == 0 {
@@ -118,7 +136,10 @@ func harvestUsageFromCanonicalSSE(canon []byte) usage.Tokens {
 			continue
 		}
 		if len(ev.Usage) > 0 {
-			found = ev.Usage
+			found.Tokens = ev.Usage
+		}
+		if ev.FinishReason != "" {
+			found.FinishReason = ev.FinishReason
 		}
 	}
 	return found
