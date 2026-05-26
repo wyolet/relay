@@ -46,6 +46,7 @@ import (
 	"github.com/wyolet/relay/pkg/reqid"
 	chsink "github.com/wyolet/relay/pkg/usage/clickhouse"
 	"github.com/wyolet/relay/pkg/usage/file"
+	pgsink "github.com/wyolet/relay/pkg/usage/postgres"
 	vksink "github.com/wyolet/relay/pkg/usage/valkey"
 )
 
@@ -282,6 +283,16 @@ func main() {
 		vk := vksink.New(kvStore, vksink.Config{})
 		usageSink, usageReader = vk, vk
 		slog.Info("usagelog: backend valkey")
+	case "postgres":
+		// Reuses the catalog Postgres (RELAY_PG_DSN) with its own self-managed
+		// usage_events table. PG is its own durable store — no JSONL WAL needed.
+		pg, err := pgsink.New(bootCtx, pgsink.Config{DSN: cfg.PGDSN})
+		if err != nil {
+			slog.Error("usagelog: postgres backend init failed", "err", err)
+			os.Exit(1)
+		}
+		usageSink, usageReader = pg, pg
+		slog.Info("usagelog: backend postgres")
 	default: // "file"
 		if fs, err := file.NewSink(usagePath); err != nil {
 			slog.Error("usagelog: file sink failed; using stdout", "err", err, "path", usagePath)
