@@ -1,40 +1,36 @@
 package usagelog
 
 import (
-	"context"
 	"time"
 
 	"github.com/wyolet/relay/pkg/lifecycle"
 	v1 "github.com/wyolet/relay/pkg/relay/v1"
 )
 
-// HookOptions has no required dependencies — the canonical-first hook
-// reads everything from the lifecycle.Context (Translator, routing
-// identity) and the PostFlightEvent (ResponseBody). Struct is kept
-// so future toggles (sampling, redaction) can be added without
-// breaking the constructor signature.
-type HookOptions struct{}
+// Namespace is the key under which UsageHook attaches its Event to the
+// lifecycle Context. SinkCollector (store side) and any pre-send reader
+// (usage echo) read it back via lc.Collected(Namespace).
+const Namespace = "usage"
 
-// Hook is the lifecycle.PostFlightHook implementation. Construct at
-// boot, register on lifecycle.Registry via RegisterPostFlight.
+// UsageHook is the usage producer: a lifecycle.Hook that builds the
+// canonical per-request Event from the Context's identity/timing and the
+// PostFlightEvent's outcome. Pure — it never touches the Context; the
+// Registry attaches the returned *Event under Namespace. Storing happens
+// later, in SinkCollector.
 //
-// Pure canonical observer: calls v1.ExtractUsage on the buffered
-// response body using the per-request Translator the runner set on
-// lc, builds an Event, queues it. No vendor-specific JSON parsing,
-// no gzip/SSE branching at this layer — that lives in pkg/relay/v1
-// where canonical lives.
-type Hook struct {
-	opts    HookOptions
-	emitter *Emitter
-}
+// Canonical-first: token counts + finish reason come from
+// v1.ExtractSummary on the buffered body using the per-request
+// Translator — no vendor-specific JSON/SSE branching at this layer.
+type UsageHook struct{}
 
-// NewHook constructs a Hook that pushes built Events onto e.
-func NewHook(opts HookOptions, e *Emitter) *Hook {
-	return &Hook{opts: opts, emitter: e}
-}
+// NewUsageHook constructs the (stateless) usage producer.
+func NewUsageHook() *UsageHook { return &UsageHook{} }
 
-// PostFlight is the lifecycle.PostFlightHook entry point.
-func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+func (*UsageHook) Name() string { return Namespace }
+
+// Fill builds the Event. Always returns one (error rows are valid usage
+// records), so every finalized request yields exactly one row.
+func (*UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 	out := Event{
 		RequestID:      lc.RequestID,
 		Source:         lc.Source,
@@ -76,8 +72,8 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 	if len(lc.Metadata) > 0 {
 		extras := make(map[string]string, len(lc.Metadata))
 		for k, v := range lc.Metadata {
-			if s, ok := v.(string); ok {
-				extras[k] = s
+			if str, ok := v.(string); ok {
+				extras[k] = str
 			}
 		}
 		if len(extras) > 0 {
@@ -85,5 +81,5 @@ func (h *Hook) PostFlight(_ context.Context, lc *lifecycle.Context, ev *lifecycl
 		}
 	}
 
-	h.emitter.Emit(out)
+	return &out, nil
 }

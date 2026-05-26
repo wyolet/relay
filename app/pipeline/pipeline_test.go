@@ -144,11 +144,12 @@ func TestHappyPath_SinglePass(t *testing.T) {
 	adp := &fakeAdapter{tokens: pkgusage.Tokens{"input": 5, "output": 10}}
 
 	reg := lifecycle.New()
-	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 		successTokens = adp.ExtractTokens(ev.ResponseBody)
 		successHash = lc.HostKeyID
 		wg.Done()
-	})
+		return nil, nil
+	}})
 	p := newPipeline()
 	p.Lifecycle = reg
 
@@ -196,11 +197,12 @@ func TestPostFlight_TimingMarks(t *testing.T) {
 	adp := &fakeAdapter{tokens: pkgusage.Tokens{"input": 1}}
 
 	reg := lifecycle.New()
-	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, _ *lifecycle.PostFlightEvent) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(lc *lifecycle.Context, _ *lifecycle.PostFlightEvent) (any, error) {
 		got = lc.Timing
 		gotAttempts = lc.Attempts
 		wg.Done()
-	})
+		return nil, nil
+	}})
 	p := newPipeline()
 	p.Lifecycle = reg
 
@@ -246,10 +248,11 @@ func TestRun_NoKeysEmitsFailureEvent(t *testing.T) {
 	wg.Add(1)
 
 	reg := lifecycle.New()
-	reg.RegisterPostFlight(func(_ context.Context, _ *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 		gotKind, gotStatus = ev.ErrorKind, ev.Status
 		wg.Done()
-	})
+		return nil, nil
+	}})
 	p := newPipeline()
 	p.Lifecycle = reg
 
@@ -280,10 +283,11 @@ func TestRun_UpstreamFailureEmitsEvent(t *testing.T) {
 	wg.Add(1)
 
 	reg := lifecycle.New()
-	reg.RegisterPostFlight(func(_ context.Context, _ *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 		gotKind, gotStatus = ev.ErrorKind, ev.Status
 		wg.Done()
-	})
+		return nil, nil
+	}})
 	p := newPipeline()
 	p.Lifecycle = reg
 
@@ -653,11 +657,12 @@ func TestPostFlight_CommitsOnBodyClose(t *testing.T) {
 	}
 
 	reg := lifecycle.New()
-	reg.RegisterPostFlight(func(_ context.Context, lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 		gotTokens = adp.ExtractTokens(ev.ResponseBody)
 		gotHash = lc.HostKeyID
 		wg.Done()
-	})
+		return nil, nil
+	}})
 	p := newPipeline()
 	p.Lifecycle = reg
 	req := &pipeline.Request{

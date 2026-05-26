@@ -11,16 +11,46 @@ import "context"
 // lookup with short-circuit, request enrichment, additional authz.
 type PreFlightMiddleware func(ctx context.Context, lc *Context, ev *PreFlightEvent) error
 
-// PostFlightHook runs asynchronously in the runner's detached
-// post-flight goroutine. Parallel across hooks (each in its own
-// goroutine). Panics inside one hook are recovered and do not affect
-// siblings or the runner.
+// Hook fills its own result struct from the request's read-only state
+// (the Context's identity/timing + the PostFlightEvent). It is a pure
+// producer: it MUST NOT mutate the Context. The Registry calls Fill,
+// then — as the sole writer — attaches the returned value to the Context
+// under Name(). Because the hook never holds the write side of the
+// collected set, it cannot break Context consistency or race a sibling.
 //
-// Pure observer: cannot abort, cannot mutate lc.Metadata (concurrent
-// writes are a race), cannot mutate ev.ResponseBody (shared backing
-// array). To transform, copy first.
+// Fill returns (nil, nil) when the hook has nothing to contribute for
+// this request (e.g. no usage block); the Registry attaches nothing.
 //
-// Hooks themselves must be non-blocking. Long-running work (disk
-// write, network publish) belongs behind a bounded channel inside the
-// hook implementation.
-type PostFlightHook func(ctx context.Context, lc *Context, ev *PostFlightEvent)
+// Fill must be cheap and non-blocking — heavy work (disk, network)
+// belongs in a Collector behind a bounded channel, not here.
+type Hook interface {
+	Name() string
+	Fill(lc *Context, ev *PostFlightEvent) (any, error)
+}
+
+// HookFunc adapts a plain function to the Hook interface — for tests and
+// simple observers that capture state without producing a stored result
+// (return nil, nil).
+type HookFunc struct {
+	HookName string
+	Fn       func(lc *Context, ev *PostFlightEvent) (any, error)
+}
+
+func (h HookFunc) Name() string { return h.HookName }
+
+func (h HookFunc) Fill(lc *Context, ev *PostFlightEvent) (any, error) {
+	return h.Fn(lc, ev)
+}
+
+// Collector (the janitor) runs once at the end of the lifecycle, after
+// every Hook has filled and the Registry has attached their results to
+// the Context. It reads the collected results off the Context (via
+// Context.Collected) and routes them to sinks — the "store" half of the
+// produce → attach → store flow.
+//
+// Collectors run in parallel and treat the Context as read-only. Storing
+// must be non-blocking (push onto a bounded channel); a Collector must
+// never block the post-flight goroutine.
+type Collector interface {
+	Collect(lc *Context)
+}

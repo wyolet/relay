@@ -66,13 +66,13 @@ const MaxEventLimit = 10_000
 // grouping dimension(s) keyed by their column name — single-key today,
 // extensible to multi-key grouping later without changing the type.
 type SummaryRow struct {
-	Group        map[string]string `json:"group"`
-	Requests     int64             `json:"requests"`
-	ErrorCount   int64             `json:"error_count"`
-	Tokens       map[string]int64  `json:"tokens"`
-	DurationMs   DurationStats     `json:"duration_ms"`
-	FirstSeen    time.Time         `json:"first_seen"`
-	LastSeen     time.Time         `json:"last_seen"`
+	Group      map[string]string `json:"group"`
+	Requests   int64             `json:"requests"`
+	ErrorCount int64             `json:"error_count"`
+	Tokens     map[string]int64  `json:"tokens"`
+	DurationMs DurationStats     `json:"duration_ms"`
+	FirstSeen  time.Time         `json:"first_seen"`
+	LastSeen   time.Time         `json:"last_seen"`
 }
 
 // DurationStats holds latency aggregates in milliseconds.

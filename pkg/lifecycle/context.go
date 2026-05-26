@@ -63,6 +63,12 @@ type Context struct {
 	// if you really must.
 	Metadata map[string]any
 
+	// collected holds each Hook's filled result keyed by the hook's
+	// Name(). Written ONLY by the Registry (attach), serially — hooks
+	// never touch it, so it can't race or be left inconsistent. Read by
+	// Collectors (store) and by pre-send readers (e.g. usage echo).
+	collected map[string]any
+
 	// Translator is the per-request vendor adapter, set by the runner
 	// when routing decides the upstream. Observers that want a
 	// canonical view of the response (usage, finish reason, output
@@ -82,5 +88,30 @@ func NewContext(requestID, source string, startTime time.Time) *Context {
 		Source:    source,
 		Timing:    Timing{Start: startTime},
 		Metadata:  map[string]any{},
+		collected: map[string]any{},
 	}
+}
+
+// attach records a Hook's filled result under name. Unexported on
+// purpose: only the Registry (same package) writes the collected set,
+// and only serially — that's what guarantees hooks can't race it.
+func (c *Context) attach(name string, v any) {
+	if c == nil || v == nil {
+		return
+	}
+	if c.collected == nil {
+		c.collected = map[string]any{}
+	}
+	c.collected[name] = v
+}
+
+// Collected returns the result a Hook attached under name, or (nil,
+// false) if none. Read-only access for Collectors (store side) and
+// pre-send readers (e.g. usage echo). Nil-safe.
+func (c *Context) Collected(name string) (any, bool) {
+	if c == nil {
+		return nil, false
+	}
+	v, ok := c.collected[name]
+	return v, ok
 }
