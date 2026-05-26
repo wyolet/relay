@@ -53,6 +53,7 @@ func build(
 	s.addHostKeys(keys, hostIDs, polByID)
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()
+	s.rebuildPolicyAllowSets()
 	s.addPricings(pricings, hostIDs, modelIDs)
 
 	return s
@@ -60,30 +61,32 @@ func build(
 
 func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings int) *Snapshot {
 	return &Snapshot{
-		providersByID:      make(map[string]*provider.Provider, nProvs),
-		providersByName:    make(map[string]*provider.Provider, nProvs),
-		hostsByID:          make(map[string]*host.Host, nHosts),
-		hostsByName:        make(map[string]*host.Host, nHosts),
-		policiesByID:       make(map[string]*policy.Policy, nPols),
-		policiesByName:     make(map[string]*policy.Policy, nPols),
-		modelsByID:         make(map[string]*model.Model, nModels),
-		modelsByName:       map[string][]*model.Model{},
-		snapshotsByName:    map[string]snapshotRef{},
-		hostKeysByID:       make(map[string]*hostkey.HostKey, nKeys),
-		rateLimitsByID:     make(map[string]*ratelimit.RateLimit, nRLs),
-		rateLimitsByName:   make(map[string]*ratelimit.RateLimit, nRLs),
-		relayKeysByID:      make(map[string]*relaykey.RelayKey, nRks),
-		relayKeysByHash:    make(map[string]*relaykey.RelayKey, nRks),
-		modelsByPolicy:     map[string][]*model.Model{},
-		hostKeysByPolicy:   map[string][]*hostkey.HostKey{},
-		rateLimitByPolicy:  map[string]*ratelimit.RateLimit{},
-		pricingsByID:       make(map[string]*pricing.Pricing, nPricings),
-		pricingByModelHost: map[string]*pricing.Pricing{},
-		refsByProvider:     map[string]refSet{},
-		refsByHost:         map[string]refSet{},
-		refsByModel:        map[string]refSet{},
-		refsByHostKey:      map[string]refSet{},
-		refsByRateLimit:    map[string]refSet{},
-		refsByPolicy:       map[string]refSet{},
+		providersByID:         make(map[string]*provider.Provider, nProvs),
+		providersByName:       make(map[string]*provider.Provider, nProvs),
+		hostsByID:             make(map[string]*host.Host, nHosts),
+		hostsByName:           make(map[string]*host.Host, nHosts),
+		policiesByID:          make(map[string]*policy.Policy, nPols),
+		policiesByName:        make(map[string]*policy.Policy, nPols),
+		modelsByID:            make(map[string]*model.Model, nModels),
+		modelsByName:          map[string][]*model.Model{},
+		snapshotsByName:       map[string]snapshotRef{},
+		snapshotAliases:       map[string]snapshotRef{},
+		hostKeysByID:          make(map[string]*hostkey.HostKey, nKeys),
+		rateLimitsByID:        make(map[string]*ratelimit.RateLimit, nRLs),
+		rateLimitsByName:      make(map[string]*ratelimit.RateLimit, nRLs),
+		relayKeysByID:         make(map[string]*relaykey.RelayKey, nRks),
+		relayKeysByHash:       make(map[string]*relaykey.RelayKey, nRks),
+		modelsByPolicy:        map[string][]*model.Model{},
+		hostKeysByPolicy:      map[string][]*hostkey.HostKey{},
+		rateLimitByPolicy:     map[string]*ratelimit.RateLimit{},
+		allowedCombosByPolicy: map[string]map[comboKey]struct{}{},
+		pricingsByID:          make(map[string]*pricing.Pricing, nPricings),
+		pricingByModelHost:    map[string]*pricing.Pricing{},
+		refsByProvider:        map[string]refSet{},
+		refsByHost:            map[string]refSet{},
+		refsByModel:           map[string]refSet{},
+		refsByHostKey:         map[string]refSet{},
+		refsByRateLimit:       map[string]refSet{},
+		refsByPolicy:          map[string]refSet{},
 	}
 }

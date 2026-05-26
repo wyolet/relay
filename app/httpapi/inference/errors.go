@@ -3,6 +3,7 @@ package inference
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -13,19 +14,20 @@ import (
 
 // WriteAPIError emits an OpenAI-shape error envelope. Exported so
 // per-shape route packages (app/adapters/<name>/routes.go) can use it
-// without depending on shape-specific helpers.
-func WriteAPIError(w http.ResponseWriter, status int, errType, code, msg string) {
-	writeAPIError(w, status, errType, code, msg)
+// without depending on shape-specific helpers. Extra slog attrs are
+// attached to the warning log only — never to the client envelope.
+func WriteAPIError(w http.ResponseWriter, status int, errType, code, msg string, attrs ...any) {
+	writeAPIError(w, status, errType, code, msg, attrs...)
 }
 
 // writeAPIError is the internal form used by handlers inside this
 // package; WriteAPIError is the exported wrapper for adapter packages.
-func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string) {
+// attrs add structured fields to the log line (e.g. the requested model
+// and policy on a routing rejection) without leaking them into the
+// client-facing error body.
+func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string, attrs ...any) {
 	slog.Warn("inference: error response",
-		"status", status,
-		"type", errType,
-		"code", code,
-		"msg", msg,
+		append([]any{"status", status, "type", errType, "code", code, "msg", msg}, attrs...)...,
 	)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -37,29 +39,41 @@ func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string)
 	_, _ = w.Write(body)
 }
 
-// mapRoutingErr translates a routing sentinel to a typed HTTP error.
-func mapRoutingErr(w http.ResponseWriter, err error) {
+// mapRoutingErr translates a routing sentinel to a typed HTTP error. model is
+// the caller-supplied model ref (safe to echo back); policy is the resolved
+// policy id (logged only, never returned to the caller). Either may be "".
+func mapRoutingErr(w http.ResponseWriter, err error, model, policy string) {
+	// log-only attrs; the requested model + policy make a routing rejection
+	// diagnosable from logs without re-deriving them from the request.
+	attrs := []any{"model", model, "policy", policy}
+	// modelMsg echoes the requested model into the client message when known.
+	modelMsg := func(format, fallback string) string {
+		if model == "" {
+			return fallback
+		}
+		return fmt.Sprintf(format, model)
+	}
 	switch {
 	case errors.Is(err, routing.ErrModelNotFound):
-		writeAPIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", "model not found")
+		writeAPIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found", modelMsg("model %q not found", "model not found"), attrs...)
 	case errors.Is(err, routing.ErrModelDisabled):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_disabled", "model is disabled")
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_disabled", modelMsg("model %q is disabled", "model is disabled"), attrs...)
 	case errors.Is(err, routing.ErrPolicyNotFound):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_not_found", "policy not found")
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_not_found", "policy not found", attrs...)
 	case errors.Is(err, routing.ErrPolicyDisabled):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_disabled", "policy is disabled")
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policy_disabled", "policy is disabled", attrs...)
 	case errors.Is(err, routing.ErrPolicyless):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policyless_disabled", "this relay key has no policy attached; policy-less traffic is disabled on this relay")
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "policyless_disabled", "this relay key has no policy attached; policy-less traffic is disabled on this relay", attrs...)
 	case errors.Is(err, routing.ErrModelNotInPolicy):
-		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", "model is not allowed by this policy")
+		writeAPIError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed", modelMsg("model %q is not allowed by this policy", "model is not allowed by this policy"), attrs...)
 	case errors.Is(err, routing.ErrNoHostBinding):
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", "no enabled host binding for model")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_host_binding", "no enabled host binding for model", attrs...)
 	case errors.Is(err, routing.ErrHostNotFound):
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "host_not_found", "host referenced by binding not found")
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "host_not_found", "host referenced by binding not found", attrs...)
 	case errors.Is(err, routing.ErrNoKeys):
-		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys available")
+		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys available", attrs...)
 	default:
-		writeAPIError(w, http.StatusInternalServerError, "server_error", "routing_error", err.Error())
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "routing_error", err.Error(), attrs...)
 	}
 }
 

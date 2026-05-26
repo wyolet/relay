@@ -36,7 +36,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/settings"
@@ -121,7 +120,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 
 	// 1. Snapshot lookup — customer-facing addressing is purely by
 	//    snapshot name. Model.Meta.Name is admin-only.
-	models, snapMatch := resolveModel(snap, req.ModelName)
+	models, snapMatch, pinHostID := resolveModel(snap, req.ModelName)
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
@@ -133,7 +132,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
 		}
-		plan, err := r.resolvePolicyless(snap, models, snapMatch)
+		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID)
 		if err == nil && plan != nil {
 			plan.PayloadLoggingEnabled = req.RelayKey.Spec.PayloadLoggingEnabled
 		}
@@ -178,18 +177,13 @@ candidates:
 			continue
 		}
 		anyEnabledMod = true
-		providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
-		legacyAllowed := false
-		for _, id := range pol.Spec.ModelIDs {
-			if id == m.Meta.ID {
-				legacyAllowed = true
-				break
-			}
-		}
 		deprecated := isDeprecated(m)
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
 			if !hb.IsEnabled() {
+				continue
+			}
+			if pinHostID != "" && hb.HostID != pinHostID {
 				continue
 			}
 			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
@@ -200,20 +194,16 @@ candidates:
 				continue
 			}
 			anyEnabledBnd = true
-			// Allow paths in priority order:
-			//   1. Legacy literal ModelIDs grant — always allowed.
-			//   2. Modelref match in Spec.Models — wildcard refs hide
-			//      deprecated models unless IncludeDeprecated.
-			//   3. Implicit wildcard (both grant fields empty) — same
-			//      deprecated-hide rule as a top-level wildcard ref.
-			allowed := legacyAllowed
-			if !allowed {
-				switch {
-				case len(pol.Spec.Models) > 0:
-					allowed = refsAllow(pol.Spec.Models, providerSlug, m.Meta.Name, h.Meta.Name, deprecated && !pol.Spec.IncludeDeprecated)
-				case wildcardGrant:
-					allowed = !deprecated || pol.Spec.IncludeDeprecated
-				}
+			// Authorization. An explicit-grant policy carries a precomputed
+			// allow-set of (model, host) combos — legacy ModelIDs + Models refs
+			// with deprecation already applied (see catalog.policy_allow). An
+			// implicit-wildcard policy has no set and allows any non-deprecated
+			// model (or all, with IncludeDeprecated).
+			var allowed bool
+			if wildcardGrant {
+				allowed = !deprecated || pol.Spec.IncludeDeprecated
+			} else {
+				allowed = snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.HostID)
 			}
 			if !allowed {
 				continue
@@ -241,6 +231,9 @@ candidates:
 	var keys []*hostkey.HostKey
 	if !req.SkipKeyCheck {
 		keys = hostKeysForHost(snap, pol, h.Meta.ID)
+		// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
+		// (model, host). An implicit-wildcard tier policy allows everything.
+		keys = tierAllowedKeys(snap, keys, chosen.Meta.ID, h.Meta.ID)
 		if len(keys) == 0 {
 			return nil, ErrNoKeys
 		}
@@ -261,52 +254,36 @@ candidates:
 	}, nil
 }
 
-// resolveModel maps an inbound model name to a (Model, Snapshot) pair.
-// The input is slug-normalized before lookup so customers can type the
-// upstream wire form (e.g. "gpt-5.5") or the slug form ("gpt-5-5") and
-// either resolves. The resolved Snapshot's Upstream() carries the real
-// upstream name for the body rewrite.
-func resolveModel(snap *appcatalog.Snapshot, name string) ([]*model.Model, *model.Snapshot) {
+// resolveModel maps a caller-supplied model ref to its snapshot via the
+// snapshot's pre-materialized alias index — a single normalized lookup, no
+// request-time parsing. The input is slug-normalized so dotted and slugified
+// forms collapse identically ("openai/gpt-5.4-mini" == "openai/gpt-5-4-mini").
+// pinHostID is non-empty when the ref named a host ("model@host"), in which
+// case binding selection is constrained to that host.
+func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model, snap2 *model.Snapshot, pinHostID string) {
 	key := slug.From(name)
 	if key == "" {
-		return nil, nil
+		return nil, nil, ""
 	}
-	if m, s, ok := snap.SnapshotByName(key); ok {
-		return []*model.Model{m}, s
+	if m, s, hostID, ok := snap.ResolveSnapshot(key); ok {
+		return []*model.Model{m}, s, hostID
 	}
-	return nil, nil
+	return nil, nil, ""
 }
 
-// hostKeysForHost returns the subset of Policy.Spec.HostKeyIDs whose
-// Owner.ID == hostID. Enabled-only; ordered to match Policy's listed
-// order (keypool's prioritized algo depends on this).
-// refsAllow reports whether any of the policy's ref strings matches
-// the candidate (provider, model, host) triple. Refs that fail to parse
-// are skipped silently — Validate rejects them at write time, so a bad
-// ref reaching here means a stored row was hand-edited; ignoring is
-// safer than erroring the request.
-//
-// hideForDeprecated, when true, requires the ref to name the model
-// explicitly (ref.Model == modelSlug, not a wildcard). Wildcard matches
-// — provider, provider@host, @host — are rejected for deprecated models
-// unless the policy opted in via IncludeDeprecated. The reasoning:
-// "anthropic" should not silently grant access to last year's sunset
-// model; "anthropic/claude-3-haiku-20240307" obviously means to.
-func refsAllow(refs []string, providerSlug, modelSlug, hostSlug string, hideForDeprecated bool) bool {
-	for _, raw := range refs {
-		ref, err := modelref.Parse(raw)
-		if err != nil {
-			continue
+// tierAllowedKeys drops keys whose host-owned tier policy doesn't grant the
+// (model, host) combination. A key's tier policy (hostkey.Spec.PolicyID)
+// defines what that key may serve; an implicit-wildcard tier policy permits
+// everything (PolicyAllowsCombo returns true). Reuses the slice backing array
+// (hostKeysForHost returns a fresh slice each call).
+func tierAllowedKeys(snap *appcatalog.Snapshot, keys []*hostkey.HostKey, modelID, hostID string) []*hostkey.HostKey {
+	out := keys[:0]
+	for _, k := range keys {
+		if snap.PolicyAllowsCombo(k.Spec.PolicyID, modelID, hostID) {
+			out = append(out, k)
 		}
-		if !ref.Matches(providerSlug, modelSlug, hostSlug) {
-			continue
-		}
-		if hideForDeprecated && ref.ModelWildcard {
-			continue
-		}
-		return true
 	}
-	return false
+	return out
 }
 
 // isDeprecated reports whether m's lifecycle status excludes it from
@@ -341,7 +318,7 @@ func (r *Resolver) allowPolicylessTraffic() bool {
 // the relay has any enabled hostkey for the host. No policy filter, no
 // policy-level rate limits — Plan.Policy is nil, Plan.Keys is the full
 // pool of hostkeys for the chosen host.
-func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot) (*Plan, error) {
+func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot, pinHostID string) (*Plan, error) {
 	var (
 		anyEnabledMod bool
 		anyEnabledBnd bool
@@ -360,6 +337,9 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
 			if !hb.IsEnabled() {
+				continue
+			}
+			if pinHostID != "" && hb.HostID != pinHostID {
 				continue
 			}
 			if snapMatch != nil && !hb.Serves(snapMatch.Name) {

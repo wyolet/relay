@@ -17,8 +17,8 @@
 package catalog
 
 import (
-	"github.com/wyolet/relay/app/adapters"
 	"context"
+	"github.com/wyolet/relay/app/adapters"
 	"os"
 	"strings"
 	"testing"

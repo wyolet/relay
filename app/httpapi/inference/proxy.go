@@ -251,6 +251,7 @@ const proxyMaxBodyPeek = 1 << 20
 type errProxyHostResolve struct {
 	Reason string
 	Detail string
+	Model  string // requested model, when known — surfaced on routing rejections
 	Inner  error
 }
 
@@ -297,7 +298,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *r
 		SkipKeyCheck: true,
 	})
 	if err != nil {
-		return nil, body, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Inner: err}
+		return nil, body, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Model: peek.Model, Inner: err}
 	}
 	return plan, body, nil
 }
@@ -321,7 +322,7 @@ func mapProxyResolveErr(w http.ResponseWriter, err error) {
 		// Re-map the inner routing sentinel to the same envelope the
 		// normal-mode handler uses, so callers see consistent error codes.
 		if e.Inner != nil {
-			mapRoutingErr(w, e.Inner)
+			mapRoutingErr(w, e.Inner, e.Model, "")
 			return
 		}
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "routing", e.Detail)

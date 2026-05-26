@@ -115,7 +115,7 @@ func (d *debouncer) drain() []drainedEvent {
 // ── narrow store interfaces ───────────────────────────────────────────────────
 
 type listenerStores struct {
-	provider  interface {
+	provider interface {
 		Get(ctx context.Context, id string) (*provider.Provider, error)
 	}
 	host interface {
