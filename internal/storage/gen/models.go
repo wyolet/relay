@@ -115,6 +115,15 @@ type Secret struct {
 	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
 }
 
+type SecretValue struct {
+	ID         string             `db:"id" json:"id"`
+	Ciphertext []byte             `db:"ciphertext" json:"ciphertext"`
+	Nonce      []byte             `db:"nonce" json:"nonce"`
+	KeyVersion int32              `db:"key_version" json:"key_version"`
+	CreatedAt  pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Setting struct {
 	Section   string             `db:"section" json:"section"`
 	Value     []byte             `db:"value" json:"value"`

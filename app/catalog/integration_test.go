@@ -287,16 +287,16 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 		t.Errorf("post-rotate resolved mismatch: got %q", got2.Resolved)
 	}
 
-	// Ciphertext must have changed (re-encrypted under new key with fresh
-	// nonce). Pull raw rows to verify.
-	rows, err := gen.New(pool).ListStoredSecretsForRotation(ctx)
+	// Stored ciphertext now lives in secret_values (pkg/secret), keyed by
+	// the HostKey id; rotation stamps the new key_version there.
+	rows, err := gen.New(pool).ListSecretValuesForRotation(ctx)
 	if err != nil {
 		t.Fatalf("list rotated: %v", err)
 	}
 	if len(rows) != 1 {
-		t.Fatalf("expected 1 stored row, got %d", len(rows))
+		t.Fatalf("expected 1 stored secret value, got %d", len(rows))
 	}
-	if !rows[0].ValueKeyVersion.Valid || rows[0].ValueKeyVersion.Int32 != 2 {
-		t.Errorf("row version: got %+v want 2", rows[0].ValueKeyVersion)
+	if rows[0].KeyVersion != 2 {
+		t.Errorf("secret_values key_version: got %d want 2", rows[0].KeyVersion)
 	}
 }

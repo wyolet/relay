@@ -33,6 +33,13 @@ func (m *memStore) Put(_ context.Context, id string, ct, nonce []byte, ver int32
 	return nil
 }
 
+func (m *memStore) Delete(_ context.Context, id string) error {
+	delete(m.ct, id)
+	delete(m.nonce, id)
+	delete(m.ver, id)
+	return nil
+}
+
 func mustKey(t *testing.T) []byte {
 	t.Helper()
 	raw, err := crypto.GenerateMasterKey()

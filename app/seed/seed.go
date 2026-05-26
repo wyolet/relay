@@ -24,6 +24,7 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -31,7 +32,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
-	"github.com/wyolet/relay/app/manifest"
+	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
@@ -69,11 +70,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	q := gen.New(opts.Pool)
+	secReg, secStored := appsecret.Wire(q, opts.Pool, opts.MasterKey)
 	stores := storeSet{
 		provider:  provider.NewStore(q),
 		host:      host.NewStore(q),
 		ratelimit: ratelimit.NewStore(q),
-		hostkey:   hostkey.NewStore(q, opts.Pool, opts.MasterKey),
+		hostkey:   hostkey.NewStore(q, secReg, secStored),
 		model:     model.NewStore(q),
 		policy:    policy.NewStore(opts.Pool),
 		pricing:   pricing.NewStore(opts.Pool),

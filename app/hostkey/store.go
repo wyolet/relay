@@ -1,16 +1,14 @@
-// store.go is the data-access layer for HostKey. It is the only place
-// that knows about encryption, the env-var lookup, or the split storage
-// columns (value_kind / value_from_env / value_ciphertext / value_nonce /
-// value_key_version).
+// store.go is the data-access layer for HostKey. It owns the secrets-table
+// rows (metadata/spec + value_kind/value_from_env) but delegates ALL secret
+// material to pkg/secret: env lookups and stored AES-GCM ciphertext resolve
+// through a secret.Registry, stored values are written via the
+// StoredResolver into the generic secret_values table, and master-key
+// rotation is the StoredResolver's job. This package no longer touches
+// crypto or env directly.
 //
-// One Upsert routes to the right SQL based on Spec.ValueFrom.Kind. List
-// reconstructs Spec from JSONB and populates the runtime-only Resolved /
-// KeyHash fields by reading the env var or decrypting the ciphertext.
-//
-// Rotate performs an in-place re-encryption of every stored-mode row with
-// a new master key, within a single transaction. The Store's in-memory
-// masterKey and keyVersion are mutated on success so subsequent operations
-// in the same process use the new key without restart.
+// One Upsert routes to the env or stored path based on Spec.ValueFrom.Kind.
+// List/Get reconstruct Spec from JSONB and populate the runtime-only
+// Resolved/KeyHash fields by resolving the secret Ref.
 package hostkey
 
 import (
@@ -20,70 +18,50 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
-	"github.com/wyolet/relay/pkg/crypto"
+	"github.com/wyolet/relay/pkg/secret"
 )
 
-// Store is the HostKey data-access type. The 32-byte AES-GCM master key
-// is plumbed at construction; pass nil to run env-only (any stored-mode
-// operation errors loudly). The pool is required for Rotate's tx; pass
-// nil only in tests that don't exercise Rotate.
+// Store is the HostKey data-access type. resolver resolves env + stored
+// refs to plaintext; stored is the write/rotate/version authority for the
+// stored backend (nil for env-only deployments — stored-mode operations
+// then error loudly).
 type Store struct {
-	q    *gen.Queries
-	pool *pgxpool.Pool
-
-	mu         sync.RWMutex
-	masterKey  []byte
-	keyVersion int32
+	q        *gen.Queries
+	resolver *secret.Registry
+	stored   *secret.StoredResolver
 }
 
-// NewStore constructs a Store. masterKey may be nil if stored-mode keys are
-// not used. The initial keyVersion is 1; call LoadKeyVersion(ctx) after
-// construction to align it with any prior rotations recorded in PG.
-func NewStore(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) *Store {
-	return &Store{q: q, pool: pool, masterKey: masterKey, keyVersion: 1}
+// NewStore constructs a Store. Pass the shared secret Registry + the stored
+// resolver (see app/secret.Wire); stored may be nil to run env-only.
+func NewStore(q *gen.Queries, resolver *secret.Registry, stored *secret.StoredResolver) *Store {
+	return &Store{q: q, resolver: resolver, stored: stored}
 }
 
-// LoadKeyVersion reads MAX(value_key_version) from stored rows and sets the
-// Store's in-memory version to that value, so new Upserts tag their rows
-// with the same generation operators last rotated to. Safe to call on an
-// empty table — leaves keyVersion at its current value.
+// LoadKeyVersion aligns the stored resolver's in-memory key version to the
+// maximum recorded in the store, so new secrets are tagged with the
+// generation operators last rotated to. No-op when env-only.
 func (s *Store) LoadKeyVersion(ctx context.Context) error {
-	if s.pool == nil {
+	if s.stored == nil {
 		return nil
 	}
-	var v pgtype.Int4
-	err := s.pool.QueryRow(ctx,
-		`SELECT MAX(value_key_version) FROM secrets WHERE value_kind = 'stored'`,
-	).Scan(&v)
-	if err != nil {
-		return fmt.Errorf("hostkey.LoadKeyVersion: %w", err)
-	}
-	if v.Valid && v.Int32 > 0 {
-		s.mu.Lock()
-		s.keyVersion = v.Int32
-		s.mu.Unlock()
-	}
-	return nil
+	return s.stored.LoadKeyVersion(ctx)
 }
 
-// KeyVersion returns the current in-memory master-key version.
+// KeyVersion returns the current master-key version (0 when env-only).
 func (s *Store) KeyVersion() int32 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.keyVersion
+	if s.stored == nil {
+		return 0
+	}
+	return s.stored.KeyVersion()
 }
 
 // List returns every HostKey row with Resolved + KeyHash populated.
-// env-mode rows read os.Getenv; stored-mode rows are decrypted with the
-// master key.
 func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 	rows, err := s.q.ListSecrets(ctx)
 	if err != nil {
@@ -91,7 +69,7 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 	}
 	out := make([]*HostKey, 0, len(rows))
 	for _, r := range rows {
-		k, err := s.fromRow(r)
+		k, err := s.fromRow(ctx, r)
 		if err != nil {
 			return nil, fmt.Errorf("hostkey %s: %w", r.Name, err)
 		}
@@ -100,10 +78,10 @@ func (s *Store) List(ctx context.Context) ([]*HostKey, error) {
 	return out, nil
 }
 
-// Upsert writes k. Routes to the env or stored SQL path based on
-// Spec.ValueFrom.Kind. Cleartext Spec.Value is encrypted here and never
-// reaches PG in cleartext; the field on k is cleared after a successful
-// stored-mode write.
+// Upsert writes k. env rows store the var name; stored rows encrypt the
+// cleartext into secret_values (via the stored resolver) and persist a
+// ciphertext-free secrets row. Cleartext Spec.Value never reaches the
+// secrets table and is cleared after a successful stored write.
 func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 	metaJSON, err := meta.MarshalJSONB(k.Meta)
 	if err != nil {
@@ -125,31 +103,22 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 		})
 		return err
 	case ValueKindStored:
-		s.mu.RLock()
-		mk := s.masterKey
-		ver := s.keyVersion
-		s.mu.RUnlock()
-		if len(mk) == 0 {
-			return errors.New("hostkey.Upsert: stored mode requires master key")
+		if s.stored == nil {
+			return errors.New("hostkey.Upsert: stored mode requires a secret backend (master key)")
 		}
 		if k.Spec.Value == "" {
 			return errors.New("hostkey.Upsert: cleartext value required for stored mode")
 		}
-		ct, nonce, err := crypto.Encrypt(mk, []byte(k.Spec.Value))
-		if err != nil {
-			return fmt.Errorf("hostkey.Upsert encrypt: %w", err)
+		if _, err := s.stored.Create(ctx, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
+			return fmt.Errorf("hostkey.Upsert store secret: %w", err)
 		}
-		_, err = s.q.InsertSecretStored(ctx, gen.InsertSecretStoredParams{
-			ID:              k.Meta.ID,
-			Name:            k.Meta.Name,
-			DisplayName:     k.Meta.DisplayName,
-			ValueCiphertext: ct,
-			ValueNonce:      nonce,
-			ValueKeyVersion: pgtype.Int4{Int32: ver, Valid: true},
-			Metadata:        metaJSON,
-			Spec:            specJSON,
-		})
-		if err != nil {
+		if _, err := s.q.InsertSecretStoredRef(ctx, gen.InsertSecretStoredRefParams{
+			ID:          k.Meta.ID,
+			Name:        k.Meta.Name,
+			DisplayName: k.Meta.DisplayName,
+			Metadata:    metaJSON,
+			Spec:        specJSON,
+		}); err != nil {
 			return err
 		}
 		k.Spec.Value = ""
@@ -180,92 +149,49 @@ func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
 		ValueNonce:      r.ValueNonce,
 		ValueKeyVersion: r.ValueKeyVersion,
 	}
-	k, err := s.fromRow(row)
+	k, err := s.fromRow(ctx, row)
 	if err != nil {
 		return nil, fmt.Errorf("hostkey.Get: %w", err)
 	}
 	return k, nil
 }
 
-// Delete removes a HostKey by id.
+// Delete removes a HostKey by id, plus its stored secret value (best-effort
+// — orphaned ciphertext is harmless but we clean it up).
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return s.q.DeleteSecret(ctx, id)
+	if err := s.q.DeleteSecret(ctx, id); err != nil {
+		return err
+	}
+	if s.stored != nil {
+		if err := s.stored.Delete(ctx, id); err != nil {
+			return fmt.Errorf("hostkey.Delete secret value: %w", err)
+		}
+	}
+	return nil
 }
 
 // RotateResult is the outcome of a successful Rotate call.
 type RotateResult struct {
-	// Rotated is the number of stored-mode rows re-encrypted.
-	Rotated int
-	// NewVersion is the value_key_version assigned to every rotated row.
+	Rotated    int
 	NewVersion int32
 }
 
-// Rotate generates ciphertext for every stored-mode row using newKey and
-// commits the updates in a single transaction. On success the Store's
-// in-memory masterKey is swapped to newKey and keyVersion is bumped, so
-// subsequent Upserts and Lists use the new key without a process restart.
-//
-// The caller is responsible for persisting newKey to the deployment's
-// RELAY_MASTER_KEY env so future process boots can decrypt the rotated
-// rows.
+// Rotate re-encrypts every stored secret under newKey (transactionally, via
+// the stored resolver) and swaps the live master key so the process keeps
+// resolving without a restart. The caller persists newKey to the
+// deployment's RELAY_MASTER_KEY for future boots.
 func (s *Store) Rotate(ctx context.Context, newKey []byte) (RotateResult, error) {
-	if s.pool == nil {
-		return RotateResult{}, errors.New("hostkey.Rotate: pool not configured")
+	if s.stored == nil {
+		return RotateResult{}, errors.New("hostkey.Rotate: no secret backend configured")
 	}
-	if len(newKey) != 32 {
-		return RotateResult{}, fmt.Errorf("hostkey.Rotate: newKey must be 32 bytes, got %d", len(newKey))
-	}
-	s.mu.RLock()
-	oldKey := s.masterKey
-	oldVer := s.keyVersion
-	s.mu.RUnlock()
-	if len(oldKey) == 0 {
-		return RotateResult{}, errors.New("hostkey.Rotate: current master key not configured")
-	}
-
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	r, err := s.stored.Rotate(ctx, newKey)
 	if err != nil {
-		return RotateResult{}, fmt.Errorf("hostkey.Rotate begin: %w", err)
+		return RotateResult{}, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	qtx := s.q.WithTx(tx)
-	rows, err := qtx.ListStoredSecretsForRotation(ctx)
-	if err != nil {
-		return RotateResult{}, fmt.Errorf("hostkey.Rotate list: %w", err)
-	}
-	newVer := oldVer + 1
-	for _, r := range rows {
-		plain, err := crypto.Decrypt(oldKey, r.ValueCiphertext, r.ValueNonce)
-		if err != nil {
-			return RotateResult{}, fmt.Errorf("hostkey.Rotate decrypt %s: %w", r.ID, err)
-		}
-		ct, nonce, err := crypto.Encrypt(newKey, plain)
-		if err != nil {
-			return RotateResult{}, fmt.Errorf("hostkey.Rotate encrypt %s: %w", r.ID, err)
-		}
-		if err := qtx.UpdateSecretCiphertext(ctx, gen.UpdateSecretCiphertextParams{
-			ID:              r.ID,
-			ValueCiphertext: ct,
-			ValueNonce:      nonce,
-			ValueKeyVersion: pgtype.Int4{Int32: newVer, Valid: true},
-		}); err != nil {
-			return RotateResult{}, fmt.Errorf("hostkey.Rotate update %s: %w", r.ID, err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return RotateResult{}, fmt.Errorf("hostkey.Rotate commit: %w", err)
-	}
-
-	s.mu.Lock()
-	s.masterKey = newKey
-	s.keyVersion = newVer
-	s.mu.Unlock()
-
-	return RotateResult{Rotated: len(rows), NewVersion: newVer}, nil
+	return RotateResult{Rotated: r.Rotated, NewVersion: r.NewVersion}, nil
 }
 
-func (s *Store) fromRow(r gen.ListSecretsRow) (*HostKey, error) {
+func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
@@ -276,6 +202,7 @@ func (s *Store) fromRow(r gen.ListSecretsRow) (*HostKey, error) {
 	}
 	k := &HostKey{Meta: md, Spec: spec}
 
+	var ref secret.Ref
 	switch r.ValueKind {
 	case string(ValueKindEnv):
 		k.Spec.ValueFrom.Kind = ValueKindEnv
@@ -285,27 +212,19 @@ func (s *Store) fromRow(r gen.ListSecretsRow) (*HostKey, error) {
 		if k.Spec.ValueFrom.Env == "" {
 			return nil, errors.New("env-mode row missing value_from_env")
 		}
-		v, ok := os.LookupEnv(k.Spec.ValueFrom.Env)
-		if !ok || v == "" {
-			return nil, fmt.Errorf("env var %q not set", k.Spec.ValueFrom.Env)
-		}
-		k.Resolved = v
+		ref = secret.Ref{Kind: secret.KindEnv, Env: k.Spec.ValueFrom.Env}
 	case string(ValueKindStored):
 		k.Spec.ValueFrom.Kind = ValueKindStored
-		s.mu.RLock()
-		mk := s.masterKey
-		s.mu.RUnlock()
-		if len(mk) == 0 {
-			return nil, errors.New("stored-mode row but master key not configured")
-		}
-		plain, err := crypto.Decrypt(mk, r.ValueCiphertext, r.ValueNonce)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt: %w", err)
-		}
-		k.Resolved = string(plain)
+		ref = secret.Ref{Kind: secret.KindStored, ID: r.ID}
 	default:
 		return nil, fmt.Errorf("unknown value_kind %q", r.ValueKind)
 	}
+
+	plain, err := s.resolver.Resolve(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("resolve secret: %w", err)
+	}
+	k.Resolved = string(plain)
 	if k.Resolved != "" {
 		sum := sha256.Sum256([]byte(k.Resolved))
 		k.KeyHash = hex.EncodeToString(sum[:6])

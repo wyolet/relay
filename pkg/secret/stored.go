@@ -23,6 +23,9 @@ type Store interface {
 	Get(ctx context.Context, id string) (ciphertext, nonce []byte, keyVersion int32, err error)
 	// Put writes (overwriting) the ciphertext for id.
 	Put(ctx context.Context, id string, ciphertext, nonce []byte, keyVersion int32) error
+	// Delete removes the secret at id. Deleting a missing id is not an
+	// error (idempotent cleanup).
+	Delete(ctx context.Context, id string) error
 }
 
 // StoredResolver decrypts AES-GCM ciphertext from a Store using the master
@@ -67,6 +70,101 @@ func (s *StoredResolver) Resolve(ctx context.Context, ref Ref) ([]byte, error) {
 		return nil, fmt.Errorf("secret/stored: decrypt %q: %w", ref.ID, err)
 	}
 	return pt, nil
+}
+
+// StoredRow is one stored secret's ciphertext, for rotation enumeration.
+type StoredRow struct {
+	ID         string
+	Ciphertext []byte
+	Nonce      []byte
+	KeyVersion int32
+}
+
+// Rotator is the optional transactional re-encryption seam. The store
+// implements the transaction boundary; pkg/secret supplies the crypto via
+// the reencrypt callback, so all key material stays in this package.
+type Rotator interface {
+	// Rotate re-encrypts every stored value within one transaction,
+	// stamping newKeyVersion. reencrypt maps old (ct, nonce) → new.
+	Rotate(ctx context.Context, newKeyVersion int32,
+		reencrypt func(ct, nonce []byte) (newCt, newNonce []byte, err error)) (rotated int, err error)
+}
+
+// MaxVersioner optionally reports the highest key_version stored, so the
+// resolver can align its in-memory version at boot.
+type MaxVersioner interface {
+	MaxKeyVersion(ctx context.Context) (int32, error)
+}
+
+// RotateResult is the outcome of a successful Rotate.
+type RotateResult struct {
+	Rotated    int
+	NewVersion int32
+}
+
+// KeyVersion returns the current in-memory master-key version.
+func (s *StoredResolver) KeyVersion() int32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.keyVersion
+}
+
+// LoadKeyVersion aligns the in-memory version to the store's maximum, so
+// new secrets are tagged with the generation operators last rotated to.
+// No-op when the store doesn't report a max or the table is empty.
+func (s *StoredResolver) LoadKeyVersion(ctx context.Context) error {
+	mv, ok := s.store.(MaxVersioner)
+	if !ok {
+		return nil
+	}
+	v, err := mv.MaxKeyVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if v > 0 {
+		s.mu.Lock()
+		s.keyVersion = v
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// Rotate re-encrypts every stored secret with newKey in a single store
+// transaction, then swaps the live master key so subsequent Resolve/Create
+// use it without a restart. The caller persists newKey to the deployment's
+// RELAY_MASTER_KEY so future boots can decrypt.
+func (s *StoredResolver) Rotate(ctx context.Context, newKey []byte) (RotateResult, error) {
+	if len(newKey) != 32 {
+		return RotateResult{}, fmt.Errorf("secret: newKey must be 32 bytes, got %d", len(newKey))
+	}
+	rot, ok := s.store.(Rotator)
+	if !ok {
+		return RotateResult{}, fmt.Errorf("secret: store does not support rotation")
+	}
+	s.mu.RLock()
+	oldKey, oldVer := s.masterKey, s.keyVersion
+	s.mu.RUnlock()
+	if len(oldKey) == 0 {
+		return RotateResult{}, fmt.Errorf("secret: current master key not set")
+	}
+	newVer := oldVer + 1
+	n, err := rot.Rotate(ctx, newVer, func(ct, nonce []byte) ([]byte, []byte, error) {
+		plain, err := crypto.Decrypt(oldKey, ct, nonce)
+		if err != nil {
+			return nil, nil, err
+		}
+		return crypto.Encrypt(newKey, plain)
+	})
+	if err != nil {
+		return RotateResult{}, err
+	}
+	s.SetMasterKey(newKey, newVer)
+	return RotateResult{Rotated: n, NewVersion: newVer}, nil
+}
+
+// Delete removes the stored secret at id (idempotent).
+func (s *StoredResolver) Delete(ctx context.Context, id string) error {
+	return s.store.Delete(ctx, id)
 }
 
 // Create encrypts plaintext under the current master key and persists it
