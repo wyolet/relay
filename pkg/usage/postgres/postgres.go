@@ -758,25 +758,34 @@ func buildWhere(q usage.EventQuery) (string, []any) {
 		clauses = append(clauses, fmt.Sprintf(clause, n))
 		args = append(args, v)
 	}
+	// any adds a `col = ANY($n)` membership clause; pgx encodes []string as
+	// text[]. Empty slice means no filter on that column.
+	any := func(col string, vals []string) {
+		if len(vals) == 0 {
+			return
+		}
+		add(col+" = ANY($%d)", vals)
+	}
 
-	if q.Since > 0 {
+	// Lower bound: From if set, else relative Since. Upper bound: To.
+	if !q.From.IsZero() {
+		add("ts >= $%d", q.From)
+	} else if q.Since > 0 {
 		add("ts >= now() - ($%d * interval '1 second')", q.Since.Seconds())
 	}
-	if q.RelayKeyHash != "" {
-		add("relay_key_hash = $%d", q.RelayKeyHash)
+	if !q.To.IsZero() {
+		add("ts <= $%d", q.To)
 	}
-	if q.PolicyID != "" {
-		add("policy_id = $%d", q.PolicyID)
+	if q.RequestID != "" {
+		add("request_id = $%d", q.RequestID)
 	}
-	if q.ModelID != "" {
-		add("model_id = $%d", q.ModelID)
-	}
-	if q.HostID != "" {
-		add("host_id = $%d", q.HostID)
-	}
-	if q.Source != "" {
-		add("source = $%d", q.Source)
-	}
+	any("relay_key_hash", q.RelayKeyHash)
+	any("policy_id", q.PolicyID)
+	any("model_id", q.ModelID)
+	any("host_id", q.HostID)
+	any("source", q.Source)
+	any("finish_reason", q.FinishReason)
+	any("error_kind", q.ErrorKind)
 	if q.StatusMin > 0 {
 		add("status >= $%d", int16(q.StatusMin))
 	}

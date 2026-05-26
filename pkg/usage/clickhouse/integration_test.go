@@ -61,7 +61,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 
 	// Wait for a flush tick (segment → CH). async_insert with
 	// wait_for_async_insert=1 makes rows queryable once Send returns.
-	q := usage.EventQuery{Since: time.Hour, ModelID: marker, Limit: 10}
+	q := usage.EventQuery{Since: time.Hour, ModelID: []string{marker}, Limit: 10}
 	var got []usage.Event
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {

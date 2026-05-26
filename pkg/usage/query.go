@@ -51,16 +51,25 @@ type Reader interface {
 // EventQuery filters the raw event stream. All fields are optional;
 // zero values mean "no filter on this dimension."
 type EventQuery struct {
-	// Since restricts to events with ts >= now() - Since.
-	// Zero means no lower bound (all-time).
+	// Time bounds. Lower bound resolution: From if set, else now()-Since,
+	// else unbounded. Upper bound: To if set, else unbounded. From/To are
+	// absolute and take precedence over the relative Since.
 	Since time.Duration
+	From  time.Time
+	To    time.Time
 
-	// Optional dimension filters — exact match.
-	RelayKeyHash string
-	PolicyID     string
-	ModelID      string
-	HostID       string
-	Source       string // "pipeline" | "proxy" | "ws" | "batch"
+	// RequestID is an exact single-value lookup (deep-link one event).
+	RequestID string
+
+	// Categorical filters — match any value in the slice (SQL IN / set
+	// membership). Empty slice means no filter on that dimension.
+	RelayKeyHash []string
+	PolicyID     []string
+	ModelID      []string
+	HostID       []string
+	Source       []string // "pipeline" | "proxy" | "ws" | "batch"
+	FinishReason []string
+	ErrorKind    []string
 
 	// StatusMin / StatusMax restrict by HTTP status. Zero values mean
 	// unbounded on that side. StatusMin=400 picks errors only;

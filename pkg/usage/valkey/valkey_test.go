@@ -128,7 +128,7 @@ func TestDimensionFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := sk.Events(ctx, usage.EventQuery{Source: "proxy"})
+	got, err := sk.Events(ctx, usage.EventQuery{Source: []string{"proxy"}})
 	if err != nil {
 		t.Fatal(err)
 	}

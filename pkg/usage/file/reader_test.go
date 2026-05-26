@@ -51,7 +51,7 @@ func TestReader_Events_FiltersAndLimit(t *testing.T) {
 	}
 
 	// Source filter
-	got, _ = r.Events(context.Background(), usage.EventQuery{Since: time.Hour, Source: "pipeline"})
+	got, _ = r.Events(context.Background(), usage.EventQuery{Since: time.Hour, Source: []string{"pipeline"}})
 	if len(got) != 2 {
 		t.Fatalf("source pipeline: want 2 got %d", len(got))
 	}
@@ -106,6 +106,50 @@ func TestReader_Summary_GroupAggregation(t *testing.T) {
 	// m2 row
 	if res.Rows[1].Group["model_id"] != "m2" || res.Rows[1].ErrorCount != 1 {
 		t.Fatalf("m2 row wrong: %+v", res.Rows[1])
+	}
+}
+
+func TestReader_Events_RichFilters(t *testing.T) {
+	now := time.Now()
+	path := writeFixture(t, []usage.Event{
+		{RequestID: "a", Timestamp: now.Add(-10 * time.Minute), Status: 200, ModelID: "m1", Source: "pipeline", FinishReason: "stop"},
+		{RequestID: "b", Timestamp: now.Add(-5 * time.Minute), Status: 500, ModelID: "m2", Source: "proxy", ErrorKind: "upstream_5xx"},
+		{RequestID: "c", Timestamp: now.Add(-1 * time.Minute), Status: 200, ModelID: "m3", Source: "pipeline", FinishReason: "length"},
+	})
+	r := NewReader(path)
+	ctx := context.Background()
+
+	// Multi-value model_id: m1 OR m3.
+	got, _ := r.Events(ctx, usage.EventQuery{Since: time.Hour, ModelID: []string{"m1", "m3"}})
+	if len(got) != 2 {
+		t.Fatalf("multi-value model_id: want 2, got %d", len(got))
+	}
+
+	// request_id exact lookup.
+	got, _ = r.Events(ctx, usage.EventQuery{RequestID: "b"})
+	if len(got) != 1 || got[0].RequestID != "b" {
+		t.Fatalf("request_id lookup: %+v", got)
+	}
+
+	// finish_reason filter.
+	got, _ = r.Events(ctx, usage.EventQuery{Since: time.Hour, FinishReason: []string{"length"}})
+	if len(got) != 1 || got[0].RequestID != "c" {
+		t.Fatalf("finish_reason filter: %+v", got)
+	}
+
+	// error_kind filter.
+	got, _ = r.Events(ctx, usage.EventQuery{Since: time.Hour, ErrorKind: []string{"upstream_5xx"}})
+	if len(got) != 1 || got[0].RequestID != "b" {
+		t.Fatalf("error_kind filter: %+v", got)
+	}
+
+	// Absolute from/to window: only the middle event.
+	got, _ = r.Events(ctx, usage.EventQuery{
+		From: now.Add(-7 * time.Minute),
+		To:   now.Add(-3 * time.Minute),
+	})
+	if len(got) != 1 || got[0].RequestID != "b" {
+		t.Fatalf("from/to window: %+v", got)
 	}
 }
 
