@@ -90,7 +90,7 @@ type Request struct {
 
 	// Lifecycle is the per-request shared context, constructed by the
 	// handler before Run. Post-flight observers see it via the registered
-	// PostFlightHook chain. Optional — nil skips hook dispatch.
+	// lifecycle observers (Finalize). Optional — nil skips observer dispatch.
 	Lifecycle *lifecycle.Context
 }
 
@@ -241,7 +241,7 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 			Status:       status,
 			ResponseBody: body,
 		}
-		p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, ev)
+		p.Lifecycle.Finalize(ctx, req.Lifecycle, ev)
 	}
 }
 
@@ -256,7 +256,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 	req.Lifecycle.MarkEnd()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	p.Lifecycle.FirePostFlight(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+	p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
 		Status:       status,
 		ErrorKind:    kind,
 		ErrorMessage: runErr.Error(),

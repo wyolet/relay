@@ -14,10 +14,11 @@ import (
 func TestRegisterNilSkipped(t *testing.T) {
 	r := New()
 	r.RegisterPreFlight(nil)
-	r.RegisterPostFlight(nil)
-	if r.PreFlightCount() != 0 || r.PostFlightCount() != 0 {
-		t.Fatalf("nil hooks should not be stored; counts: pre=%d post=%d",
-			r.PreFlightCount(), r.PostFlightCount())
+	r.RegisterHook(nil)
+	r.RegisterCollector(nil)
+	if r.PreFlightCount() != 0 || r.HookCount() != 0 || r.CollectorCount() != 0 {
+		t.Fatalf("nil registrations should not be stored; counts: pre=%d hooks=%d collectors=%d",
+			r.PreFlightCount(), r.HookCount(), r.CollectorCount())
 	}
 }
 
@@ -27,7 +28,17 @@ func TestEmptyRegistryNoPanic(t *testing.T) {
 	if err := r.RunPreFlight(context.Background(), lc, &PreFlightEvent{}); err != nil {
 		t.Fatalf("empty pre-flight: %v", err)
 	}
-	r.FirePostFlight(context.Background(), lc, &PostFlightEvent{})
+	r.Finalize(context.Background(), lc, &PostFlightEvent{})
+}
+
+// collectorFn adapts a func to the Collector interface for tests.
+type collectorFn func(*Context)
+
+func (f collectorFn) Collect(lc *Context) { f(lc) }
+
+// hookFn is a Hook whose Fill runs fn and attaches its return.
+func hookFn(name string, fn func(lc *Context, ev *PostFlightEvent) (any, error)) Hook {
+	return HookFunc{HookName: name, Fn: fn}
 }
 
 // --- pre-flight semantics ---
@@ -107,117 +118,139 @@ func TestPreFlightMutatesContext(t *testing.T) {
 	}
 }
 
-// --- post-flight semantics ---
+// --- finalize semantics ---
 
-func TestPostFlightAllHooksRun(t *testing.T) {
+func TestFinalizeAllHooksFillAndAttach(t *testing.T) {
 	r := New()
-	var ran int64
-	for i := 0; i < 5; i++ {
-		r.RegisterPostFlight(func(_ context.Context, _ *Context, _ *PostFlightEvent) {
-			atomic.AddInt64(&ran, 1)
-		})
+	for i, name := range []string{"a", "b", "c"} {
+		val := i + 1
+		r.RegisterHook(hookFn(name, func(_ *Context, _ *PostFlightEvent) (any, error) {
+			return val, nil
+		}))
 	}
-	r.FirePostFlight(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if got := atomic.LoadInt64(&ran); got != 5 {
-		t.Fatalf("expected 5 hooks ran, got %d", got)
+	lc := NewContext("r", "test", time.Now())
+	r.Finalize(context.Background(), lc, &PostFlightEvent{})
+
+	for _, name := range []string{"a", "b", "c"} {
+		if _, ok := lc.Collected(name); !ok {
+			t.Fatalf("hook %q result not attached to context", name)
+		}
 	}
 }
 
-func TestPostFlightParallel(t *testing.T) {
-	// Each hook sleeps for D; if they run sequentially total > 5*D,
-	// parallel total ≈ D. Use a generous margin to avoid CI flake.
+func TestFinalizeNilResultNotAttached(t *testing.T) {
 	r := New()
-	const hooks = 5
+	r.RegisterHook(hookFn("none", func(_ *Context, _ *PostFlightEvent) (any, error) {
+		return nil, nil // nothing to contribute
+	}))
+	lc := NewContext("r", "test", time.Now())
+	r.Finalize(context.Background(), lc, &PostFlightEvent{})
+	if _, ok := lc.Collected("none"); ok {
+		t.Fatal("nil hook result should not be attached")
+	}
+}
+
+func TestFinalizeCollectorsParallel(t *testing.T) {
+	// Collectors run in parallel: 5 sleepers should finish in ≈sleep, not
+	// 5*sleep. Generous margin to avoid CI flake.
+	r := New()
+	const n = 5
 	const sleep = 50 * time.Millisecond
-	for i := 0; i < hooks; i++ {
-		r.RegisterPostFlight(func(_ context.Context, _ *Context, _ *PostFlightEvent) {
-			time.Sleep(sleep)
-		})
+	for i := 0; i < n; i++ {
+		r.RegisterCollector(collectorFn(func(_ *Context) { time.Sleep(sleep) }))
 	}
 	start := time.Now()
-	r.FirePostFlight(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	elapsed := time.Since(start)
-	// Sequential would be ~hooks*sleep; parallel ~sleep. Allow up to 3*sleep
-	// for scheduling jitter.
-	if elapsed > 3*sleep {
-		t.Fatalf("post-flight not parallel: elapsed=%v, sequential≈%v, parallel≈%v",
-			elapsed, hooks*sleep, sleep)
+	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+	if elapsed := time.Since(start); elapsed > 3*sleep {
+		t.Fatalf("collectors not parallel: elapsed=%v, sequential≈%v", elapsed, n*sleep)
 	}
 }
 
-func TestPostFlightPanicIsolated(t *testing.T) {
+func TestFinalizePanicIsolated(t *testing.T) {
 	r := New()
-	var ran int64
-	r.RegisterPostFlight(func(_ context.Context, _ *Context, _ *PostFlightEvent) {
-		atomic.AddInt64(&ran, 1)
-	})
-	r.RegisterPostFlight(func(_ context.Context, _ *Context, _ *PostFlightEvent) {
+	var hookRan, collRan int64
+
+	r.RegisterHook(hookFn("ok1", func(_ *Context, _ *PostFlightEvent) (any, error) {
+		atomic.AddInt64(&hookRan, 1)
+		return 1, nil
+	}))
+	r.RegisterHook(hookFn("boom", func(_ *Context, _ *PostFlightEvent) (any, error) {
 		panic("intentional in test")
-	})
-	r.RegisterPostFlight(func(_ context.Context, _ *Context, _ *PostFlightEvent) {
-		atomic.AddInt64(&ran, 1)
-	})
+	}))
+	r.RegisterHook(hookFn("ok2", func(_ *Context, _ *PostFlightEvent) (any, error) {
+		atomic.AddInt64(&hookRan, 1)
+		return 2, nil
+	}))
+	r.RegisterCollector(collectorFn(func(_ *Context) { atomic.AddInt64(&collRan, 1) }))
+	r.RegisterCollector(collectorFn(func(_ *Context) { panic("intentional in test") }))
+	r.RegisterCollector(collectorFn(func(_ *Context) { atomic.AddInt64(&collRan, 1) }))
 
-	// Must not panic out of FirePostFlight; both non-panicking hooks must run.
-	r.FirePostFlight(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
-	if got := atomic.LoadInt64(&ran); got != 2 {
-		t.Fatalf("expected 2 non-panicking hooks to run, got %d", got)
+	// Must not panic out of Finalize; non-panicking hooks + collectors run.
+	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+	if got := atomic.LoadInt64(&hookRan); got != 2 {
+		t.Fatalf("expected 2 non-panicking hooks, got %d", got)
+	}
+	if got := atomic.LoadInt64(&collRan); got != 2 {
+		t.Fatalf("expected 2 non-panicking collectors, got %d", got)
 	}
 }
 
-func TestPostFlightSharesContextAndEvent(t *testing.T) {
+func TestFinalizeHookSeesContextAndEvent(t *testing.T) {
 	r := New()
-	wantID := "req-shared"
-	wantStatus := 200
-
-	var seenIDs, seenStatus int64
-	for i := 0; i < 3; i++ {
-		r.RegisterPostFlight(func(_ context.Context, lc *Context, ev *PostFlightEvent) {
-			if lc.RequestID == wantID {
-				atomic.AddInt64(&seenIDs, 1)
-			}
-			if ev.Status == wantStatus {
-				atomic.AddInt64(&seenStatus, 1)
-			}
-		})
-	}
-
-	lc := NewContext(wantID, "test", time.Now())
-	r.FirePostFlight(context.Background(), lc, &PostFlightEvent{Status: wantStatus})
-
-	if seenIDs != 3 || seenStatus != 3 {
-		t.Fatalf("hooks did not see shared lc/ev: ids=%d status=%d", seenIDs, seenStatus)
+	wantID, wantStatus := "req-shared", 200
+	var gotID string
+	var gotStatus int
+	r.RegisterHook(hookFn("probe", func(lc *Context, ev *PostFlightEvent) (any, error) {
+		gotID = lc.RequestID
+		gotStatus = ev.Status
+		return nil, nil
+	}))
+	r.Finalize(context.Background(), NewContext(wantID, "test", time.Now()), &PostFlightEvent{Status: wantStatus})
+	if gotID != wantID || gotStatus != wantStatus {
+		t.Fatalf("hook did not see lc/ev: id=%q status=%d", gotID, gotStatus)
 	}
 }
 
-// --- concurrent register / fire ---
-
-func TestConcurrentRegisterAndFire(t *testing.T) {
-	// race detector catches data races on the slices
+func TestCollectorReadsHookResult(t *testing.T) {
 	r := New()
-	var fired int64
+	r.RegisterHook(hookFn("usage", func(_ *Context, _ *PostFlightEvent) (any, error) {
+		return "the-result", nil
+	}))
+	var seen string
+	r.RegisterCollector(collectorFn(func(lc *Context) {
+		if v, ok := lc.Collected("usage"); ok {
+			seen, _ = v.(string)
+		}
+	}))
+	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+	if seen != "the-result" {
+		t.Fatalf("collector did not read hook result off context: %q", seen)
+	}
+}
 
+// --- concurrent register / finalize ---
+
+func TestConcurrentRegisterAndFinalize(t *testing.T) {
+	// race detector catches data races on the slices + collected map
+	r := New()
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.RegisterPostFlight(func(_ context.Context, _ *Context, _ *PostFlightEvent) {
-				atomic.AddInt64(&fired, 1)
-			})
+			r.RegisterHook(hookFn("h", func(_ *Context, _ *PostFlightEvent) (any, error) { return 1, nil }))
 		}()
 	}
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.FirePostFlight(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+			r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
 		}()
 	}
 	wg.Wait()
-
-	if r.PostFlightCount() != 50 {
-		t.Fatalf("expected 50 registered, got %d", r.PostFlightCount())
+	if r.HookCount() != 50 {
+		t.Fatalf("expected 50 registered, got %d", r.HookCount())
 	}
 }
 

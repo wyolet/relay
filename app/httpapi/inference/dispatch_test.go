@@ -244,10 +244,11 @@ func TestDispatch_RoutingFailure_EmitsUsageEvent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	reg := lifecycle.New()
-	reg.RegisterPostFlight(func(_ context.Context, _ *lifecycle.Context, ev *lifecycle.PostFlightEvent) {
+	reg.RegisterHook(lifecycle.HookFunc{HookName: "test", Fn: func(_ *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
 		gotKind = ev.ErrorKind
 		wg.Done()
-	})
+		return nil, nil
+	}})
 	d.Lifecycle = reg
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
