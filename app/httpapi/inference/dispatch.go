@@ -220,22 +220,9 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
-
-	// Non-streaming + echo requested: buffer the passthrough body so we can
-	// inject the relay_usage block. (Same-shape byte-pass otherwise streams
-	// through untouched.) Streaming echo is a follow-up.
-	if !in.Stream && usageEchoRequested(r) {
-		raw, rerr := io.ReadAll(result.Body)
-		if rerr == nil {
-			out := maybeInjectRelayUsage(d, r, result.Status, raw, raw)
-			w.Header().Del("Content-Length") // injection changed body length
-			w.WriteHeader(result.Status)
-			_, _ = w.Write(out)
-			return
-		}
-	}
-
 	w.WriteHeader(result.Status)
+	// Byte-pass is same-shape / vendor-native — relay_usage is canonical-only,
+	// so nothing is injected here; the upstream body streams through verbatim.
 	_, _ = streamCopy(w, result.Body)
 }
 
@@ -334,25 +321,54 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
+	// relay_usage echo is canonical-only: a vendor-shaped response (openai/
+	// anthropic) never carries it — those callers get a clean vendor body.
+	// Only a canonical caller (/v1/*, adapters.Canonical) gets relay's usage,
+	// on the typed field (buffered) or the terminal event (stream).
+	echo := usageEchoRequested(r) && in.Inbound == adapters.Canonical
 	if in.Stream {
 		w.WriteHeader(result.Status)
-		streamCanonical(w, result.Body, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
+		streamCanonical(d, w, r, result.Body, echo, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
 		return
 	}
-	bufferCanonical(d, w, r, result.Body, result.Status, canonReq, upstreamV1, inboundV1)
+	bufferCanonical(d, w, r, result.Body, result.Status, echo, canonReq, upstreamV1, inboundV1)
 }
 
 // streamCanonical chains upstream→canonical→inbound per-chunk transforms.
 // toCanon converts upstream SSE chunks to canonical SSE.
 // fromCanon converts canonical SSE chunks to inbound SSE.
-func streamCanonical(w http.ResponseWriter, body io.ReadCloser, toCanon, fromCanon func([]byte) ([]byte, error)) {
+//
+// When echo is set (canonical caller + X-WR-Usage: full), it drives a
+// lifecycle StreamSession over the raw upstream frames and, at end-of-stream,
+// splices relay_usage into the terminal frame (the canonical
+// generation.completed event) — never as a standalone frame, so the canonical
+// client reads it off the event it already parses. One-frame lookahead lets
+// us reach "the last frame" before flushing it.
+func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, echo bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	scanner.Split(splitSSEChunks)
 
+	var sess *lifecycle.StreamSession
+	var lc *lifecycle.Context
+	if echo && d.Lifecycle != nil {
+		lc = lifecycle.FromContext(r.Context())
+		sess = d.Lifecycle.NewStreamSession(lc)
+	}
+
+	writeFrame := func(f []byte) {
+		_, _ = w.Write(f)
+		_, _ = w.Write([]byte("\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	var held []byte // one-frame lookahead so the terminal frame can carry relay_usage
 	for scanner.Scan() {
 		chunk := append([]byte(nil), scanner.Bytes()...)
+		sess.Observe(chunk) // nil-safe; raw upstream frame (for ExtractSummary)
 		chunk = append(chunk, '\n', '\n')
 
 		var out []byte
@@ -382,11 +398,26 @@ func streamCanonical(w http.ResponseWriter, body io.ReadCloser, toCanon, fromCan
 			continue
 		}
 		out = bytes.TrimRight(out, "\n")
-		_, _ = w.Write(out)
-		_, _ = w.Write([]byte("\n\n"))
-		if flusher != nil {
-			flusher.Flush()
+		if sess != nil {
+			if held != nil {
+				writeFrame(held)
+			}
+			held = out
+			continue
 		}
+		writeFrame(out)
+	}
+
+	if sess == nil {
+		return
+	}
+	lc.MarkEnd()
+	sess.Finish()
+	if held != nil {
+		if ru := usagelog.EchoFromContext(lc); ru != nil {
+			held = injectRelayUsageSSE(held, ru)
+		}
+		writeFrame(held)
 	}
 }
 
@@ -394,7 +425,7 @@ func streamCanonical(w http.ResponseWriter, body io.ReadCloser, toCanon, fromCan
 // response. It owns the status write so it can drop the upstream
 // Content-Length (the translated — and optionally usage-injected — body
 // differs in length) and optionally inject the relay_usage echo block.
-func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, status int, canonReq *v1.Request, upstreamV1, inboundV1 v1.Translator) {
+func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, status int, echo bool, canonReq *v1.Request, upstreamV1, inboundV1 v1.Translator) {
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		w.WriteHeader(status)
@@ -402,13 +433,18 @@ func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 	}
 	out := raw
 	if canResp, perr := upstreamV1.ParseResponse(raw); perr == nil {
+		if echo {
+			setRelayUsage(d, r, status, raw, canResp)
+		}
+		// Canonical inbound serializes via the identity translator, so a set
+		// canResp.RelayUsage lands as the typed relay_usage field. echo is
+		// only ever true for canonical callers (see Dispatch).
 		if o, serr := inboundV1.SerializeResponse(canResp, canonReq); serr == nil {
 			out = o
 		}
 	}
-	out = maybeInjectRelayUsage(d, r, status, raw, out)
 
-	w.Header().Del("Content-Length") // body length changed by translation/injection
+	w.Header().Del("Content-Length") // body length changed by translation
 	w.WriteHeader(status)
 	_, _ = w.Write(out)
 }
@@ -419,27 +455,47 @@ func usageEchoRequested(r *http.Request) bool {
 	return r.Header.Get(httpheader.HeaderUsage) == httpheader.UsageValueFull
 }
 
-// maybeInjectRelayUsage appends a top-level "relay_usage" key to a JSON
-// response body when echo was requested. It fills the lifecycle hooks
-// pre-send (idempotent — the post-flight Finalize won't refill) and reads
-// the collected usage blob back as a v1.RelayUsage. No-op when echo is off,
-// no lifecycle is wired, or the body isn't a JSON object. raw is the
-// untranslated upstream body (for token extraction); out is what ships.
-func maybeInjectRelayUsage(d Deps, r *http.Request, status int, raw, out []byte) []byte {
-	if !usageEchoRequested(r) || d.Lifecycle == nil {
-		return out
+// setRelayUsage fills the lifecycle hooks pre-send (idempotent — the
+// post-flight Finalize won't refill) and sets the collected usage blob on
+// the canonical response as the typed relay_usage field. No-op when no
+// lifecycle is wired or no usage was collected. raw is the untranslated
+// upstream body, used for token extraction.
+func setRelayUsage(d Deps, r *http.Request, status int, raw []byte, canResp *v1.Response) {
+	if d.Lifecycle == nil || canResp == nil {
+		return
 	}
 	lc := lifecycle.FromContext(r.Context())
 	if lc == nil {
-		return out
+		return
 	}
 	lc.MarkEnd()
 	d.Lifecycle.Fill(lc, &lifecycle.PostFlightEvent{Status: status, ResponseBody: raw})
-	ru := usagelog.EchoFromContext(lc)
-	if ru == nil {
-		return out
+	if ru := usagelog.EchoFromContext(lc); ru != nil {
+		canResp.RelayUsage = ru
 	}
-	return injectRelayUsage(out, ru)
+}
+
+// injectRelayUsageSSE splices relay_usage into the JSON of an SSE frame's
+// `data:` line (the canonical generation.completed terminal event). No-op
+// when the frame has no JSON-object data line.
+func injectRelayUsageSSE(frame []byte, ru *v1.RelayUsage) []byte {
+	const marker = "data: "
+	idx := bytes.Index(frame, []byte(marker))
+	if idx < 0 {
+		return frame
+	}
+	start := idx + len(marker)
+	dataJSON := frame[start:]
+	var tail []byte
+	if nl := bytes.IndexByte(dataJSON, '\n'); nl >= 0 {
+		dataJSON, tail = dataJSON[:nl], dataJSON[nl:]
+	}
+	spliced := injectRelayUsage(dataJSON, ru)
+	out := make([]byte, 0, start+len(spliced)+len(tail))
+	out = append(out, frame[:start]...)
+	out = append(out, spliced...)
+	out = append(out, tail...)
+	return out
 }
 
 // injectRelayUsage splices a top-level "relay_usage" key into a JSON object

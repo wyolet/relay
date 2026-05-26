@@ -124,35 +124,37 @@ policy/host/model UUIDs.
 It's a deliberate, documented tension with rules 1 and 7, resolved like the
 `CacheConfig` carve-out:
 
-- **Why it's in the schema at all (not pure injection):** relay emits this
-  field on the wire when the caller sends `X-WR-Usage: full`. If the canonical
-  *type* didn't declare it, our own `pkg/relay/client` would be blind to a
-  field that's actually on the wire, and the schema would lie. For a vendorable
-  library + client we ship, that's a defect. So the type declares it (rule 1's
-  letter holds — `pkg/relay/v1` declares its *own* `RelayUsage` type, imports
-  nothing from `app/`).
-- **Why it's relay-native, not `extensions`:** like caching, it's a clean
-  cross-cutting concept with a stable intent, and the client wants it *typed*,
-  not an opaque `RawMessage`. So it's first-class, nil by default.
-- **The dual nature (important):**
-  - **Canonical-served path (`/v1/generate`):** `relay_usage` is a *real
-    serialized field*. The canonical client reads it natively.
-  - **Vendor-shaped paths (`/openai/*`, `/anthropic/*`):** the vendor
-    serializer doesn't know `relay_usage`, so relay **injects it as a
-    top-level `relay_usage` key into the response body after translation** —
-    the injected JSON is exactly `v1.RelayUsage` marshaled (one definition,
-    `app/` imports it, never copies). Vendor SDKs ignore the unknown key
-    (same as OpenRouter adding its own fields). So on these paths the wire
-    response carries a field relay *added post-translation* — the schema is
-    honest about the shape, this section is honest about the mechanism.
-- **Collection timing:** when echo is on, the usage producer is filled
-  *pre-send* (so the block exists before the body is written); `lifecycle`'s
-  fill is idempotent so the post-flight sink reuses the same collection. The
-  echoed `timing.end` is therefore "response-ready", not "fully transmitted" —
-  the client-egress tail is excluded (it isn't relay overhead). Accepted.
-- **Coverage:** non-streaming responses (buffered cross-shape, same-shape
-  byte-pass, canonical-served). Streaming echo (a final `relay_usage` SSE
-  event) and a `gzip`'d byte-pass body are follow-ups.
+- **Canonical-only — vendor shapes never carry it.** A caller speaking the
+  OpenAI/Anthropic shape gets a clean vendor response with nothing added; only
+  a **canonical** caller (`adapters.Canonical`, the `/v1/*` shape) gets
+  `relay_usage`. relay's telemetry rides relay's protocol — it is *not*
+  injected into vendor bodies. This keeps every vendor adapter byte-faithful
+  and sidesteps the whole "did we break a vendor SDK's parser" question.
+- **Why it's in the schema (not pure injection):** if the canonical *type*
+  didn't declare it, our own `pkg/relay/client` would be blind to a field
+  that's on the wire and the schema would lie — a defect for a vendorable
+  library + client. So the type declares it (rule 1's letter holds —
+  `pkg/relay/v1` declares its *own* `RelayUsage` type, imports nothing from
+  `app/`). Relay-native and *typed*, like caching — not an opaque
+  `extensions` `RawMessage`.
+- **How it lands:**
+  - **Buffered (`/v1/generate` non-stream):** relay sets the typed
+    `Response.RelayUsage` field before the canonical (identity) serializer
+    runs — a real serialized field, read natively by the client. No byte
+    injection.
+  - **Streaming (`/v1/generate` stream):** it rides the terminal
+    `generation.completed` event as `GenerationCompletedEvent.RelayUsage` —
+    spliced into that last frame at end-of-stream (one-frame lookahead),
+    *never* a standalone trailing frame. The client reads it off the event it
+    already parses.
+- **Collection timing:** echo fills the usage producer pre-send (buffered) or
+  via a `lifecycle.StreamObserver` that watches the upstream frames and
+  produces at end-of-stream; either way the `lifecycle` fill is idempotent so
+  the post-flight sink reuses the same collection (collect once). The echoed
+  `timing.end` is "response-ready", not "fully transmitted" — client-egress
+  tail excluded (it isn't relay overhead). Accepted.
+- **Coverage:** canonical buffered + canonical streaming. A `gzip`'d body is a
+  follow-up (the splice no-ops on non-JSON-object frames).
 
 ---
 

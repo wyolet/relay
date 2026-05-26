@@ -69,6 +69,12 @@ type GenerationCompletedEvent struct {
 	Status       Status       `json:"status"`
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 	Usage        usage.Tokens `json:"usage,omitempty"`
+
+	// RelayUsage rides the terminal event when the caller opted into echo
+	// (X-WR-Usage: full) on a canonical stream. Relay-produced, nil
+	// otherwise — the streaming counterpart of Response.RelayUsage. Only
+	// the canonical stream carries it; vendor-shaped streams never do.
+	RelayUsage *RelayUsage `json:"relay_usage,omitempty"`
 }
 
 // ErrorEvent carries a stream-level failure. After this event no further

@@ -257,8 +257,10 @@ func main() {
 	defer usageEmitter.Close()
 	lifecycleReg.RegisterHook(usagelog.NewUsageHook())
 	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageEmitter))
+	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory())
 	slog.Info("usagelog: wired", "path", usagePath,
-		"hooks", lifecycleReg.HookCount(), "collectors", lifecycleReg.CollectorCount())
+		"hooks", lifecycleReg.HookCount(), "collectors", lifecycleReg.CollectorCount(),
+		"stream_observers", lifecycleReg.StreamObserverCount())
 
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()

@@ -42,6 +42,29 @@ func (h HookFunc) Fill(lc *Context, ev *PostFlightEvent) (any, error) {
 	return h.Fn(lc, ev)
 }
 
+// StreamObserver is a per-request, stateful observer of a streamed
+// response. Unlike a Hook (one-shot, post-flight, too late for a streamed
+// body), it watches frames as they flow: Observe is called once per
+// upstream frame, then Result is called at end-of-stream. The runner
+// attaches Result's value to the Context under the factory's Name() and
+// marks the request filled — so the post-flight sink reuses the same
+// collection (collect once), exactly like the buffered path.
+//
+// Built fresh per request (see StreamObserverFactory) so per-stream state
+// doesn't leak across concurrent requests — mirrors the v1 stream
+// translator closures.
+type StreamObserver interface {
+	Observe(frame []byte)
+	Result() (any, error)
+}
+
+// StreamObserverFactory produces a fresh StreamObserver per streamed
+// request. Registered once at boot.
+type StreamObserverFactory interface {
+	Name() string
+	NewObserver(lc *Context) StreamObserver
+}
+
 // Collector (the janitor) runs once at the end of the lifecycle, after
 // every Hook has filled and the Registry has attached their results to
 // the Context. It reads the collected results off the Context (via

@@ -14,10 +14,11 @@ import (
 // Safe for concurrent Register* / Run* / Finalize calls. Registration is
 // typically a boot-time operation; the hot side is the dispatch methods.
 type Registry struct {
-	mu         sync.RWMutex
-	preFlight  []PreFlightMiddleware
-	hooks      []Hook
-	collectors []Collector
+	mu              sync.RWMutex
+	preFlight       []PreFlightMiddleware
+	hooks           []Hook
+	collectors      []Collector
+	streamFactories []StreamObserverFactory
 }
 
 // New returns an empty Registry.
@@ -60,7 +61,96 @@ func (r *Registry) RegisterCollector(c Collector) {
 	r.collectors = append(r.collectors, c)
 }
 
+// RegisterStreamObserver appends f to the stream-observer factory set.
+// Nil factories are skipped.
+func (r *Registry) RegisterStreamObserver(f StreamObserverFactory) {
+	if f == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.streamFactories = append(r.streamFactories, f)
+}
+
 // --- dispatch ---
+
+// NewStreamSession builds a fresh observer per registered factory for one
+// streamed request. Returns nil when no factories are registered (the
+// caller skips driving a session). Feed each upstream frame to Observe,
+// then call Finish at end-of-stream.
+func (r *Registry) NewStreamSession(lc *Context) *StreamSession {
+	r.mu.RLock()
+	facs := r.streamFactories
+	r.mu.RUnlock()
+	if len(facs) == 0 || lc == nil {
+		return nil
+	}
+	obs := make([]namedObserver, 0, len(facs))
+	for _, f := range facs {
+		obs = append(obs, namedObserver{name: f.Name(), o: f.NewObserver(lc)})
+	}
+	return &StreamSession{lc: lc, obs: obs}
+}
+
+// StreamSession drives the per-request stream observers for one streamed
+// response. Not safe for concurrent use — one stream, one goroutine.
+type StreamSession struct {
+	lc  *Context
+	obs []namedObserver
+}
+
+type namedObserver struct {
+	name string
+	o    StreamObserver
+}
+
+// Observe feeds one upstream frame to every observer. Nil-safe so callers
+// can hold a nil *StreamSession (no factories) and call unconditionally.
+func (s *StreamSession) Observe(frame []byte) {
+	if s == nil {
+		return
+	}
+	for _, no := range s.obs {
+		func() {
+			defer recoverLifecycle(s.lc, "stream observer Observe")
+			no.o.Observe(frame)
+		}()
+	}
+}
+
+// Finish closes the session: each observer's Result is attached to the
+// Context under its name (the Registry is still the sole writer), and the
+// request is marked filled so the post-flight Finalize reuses the same
+// collection instead of re-producing it. Nil-safe.
+func (s *StreamSession) Finish() {
+	if s == nil || s.lc == nil {
+		return
+	}
+	for _, no := range s.obs {
+		v := safeResult(no, s.lc)
+		if v != nil {
+			s.lc.attach(no.name, v)
+		}
+	}
+	s.lc.filled = true
+}
+
+func safeResult(no namedObserver, lc *Context) (out any) {
+	defer func() {
+		if v := recover(); v != nil {
+			slog.Error("lifecycle: stream observer Result panic recovered",
+				"observer", no.name, "request_id", lc.RequestID, "panic", v)
+			out = nil
+		}
+	}()
+	v, err := no.o.Result()
+	if err != nil {
+		slog.Warn("lifecycle: stream observer Result error",
+			"observer", no.name, "request_id", lc.RequestID, "err", err)
+		return nil
+	}
+	return v
+}
 
 // RunPreFlight invokes every registered middleware sequentially with
 // lc and ev. Returns the first non-nil error a middleware produces —
@@ -186,4 +276,12 @@ func (r *Registry) CollectorCount() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.collectors)
+}
+
+// StreamObserverCount returns the number of registered stream-observer
+// factories.
+func (r *Registry) StreamObserverCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.streamFactories)
 }
