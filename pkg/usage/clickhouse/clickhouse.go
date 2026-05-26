@@ -556,29 +556,40 @@ func buildWhere(q usage.EventQuery, _ bool) (string, []any) {
 	var clauses []string
 	var args []any
 
-	if q.Since > 0 {
+	in := func(col string, vals []string) {
+		if len(vals) == 0 {
+			return
+		}
+		ph := make([]string, len(vals))
+		for i, v := range vals {
+			ph[i] = "?"
+			args = append(args, v)
+		}
+		clauses = append(clauses, col+" IN ("+strings.Join(ph, ",")+")")
+	}
+
+	// Lower bound: From if set, else relative Since. Upper bound: To.
+	if !q.From.IsZero() {
+		clauses = append(clauses, "ts >= ?")
+		args = append(args, q.From)
+	} else if q.Since > 0 {
 		clauses = append(clauses, fmt.Sprintf("ts >= now() - INTERVAL %d SECOND", int64(q.Since.Seconds())))
 	}
-	if q.RelayKeyHash != "" {
-		clauses = append(clauses, "relay_key_hash = ?")
-		args = append(args, q.RelayKeyHash)
+	if !q.To.IsZero() {
+		clauses = append(clauses, "ts <= ?")
+		args = append(args, q.To)
 	}
-	if q.PolicyID != "" {
-		clauses = append(clauses, "policy_id = ?")
-		args = append(args, q.PolicyID)
+	if q.RequestID != "" {
+		clauses = append(clauses, "request_id = ?")
+		args = append(args, q.RequestID)
 	}
-	if q.ModelID != "" {
-		clauses = append(clauses, "model_id = ?")
-		args = append(args, q.ModelID)
-	}
-	if q.HostID != "" {
-		clauses = append(clauses, "host_id = ?")
-		args = append(args, q.HostID)
-	}
-	if q.Source != "" {
-		clauses = append(clauses, "source = ?")
-		args = append(args, q.Source)
-	}
+	in("relay_key_hash", q.RelayKeyHash)
+	in("policy_id", q.PolicyID)
+	in("model_id", q.ModelID)
+	in("host_id", q.HostID)
+	in("source", q.Source)
+	in("finish_reason", q.FinishReason)
+	in("error_kind", q.ErrorKind)
 	if q.StatusMin > 0 {
 		clauses = append(clauses, "status >= ?")
 		args = append(args, uint16(q.StatusMin))

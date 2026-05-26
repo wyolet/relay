@@ -16,7 +16,10 @@ import (
 // use SortAndLimit for that.
 func FilterEvents(events []Event, q EventQuery) []Event {
 	var cutoff time.Time
-	if q.Since > 0 {
+	switch {
+	case !q.From.IsZero():
+		cutoff = q.From
+	case q.Since > 0:
 		cutoff = time.Now().Add(-q.Since)
 	}
 	out := events[:0:0]
@@ -223,22 +226,35 @@ func SortTimeSeriesRows(rows []TimeSeriesRow, totals map[string]int64, groupBy s
 }
 
 func matches(ev Event, q EventQuery, cutoff time.Time) bool {
+	// Lower bound: cutoff (From, or now-Since — resolved by caller).
 	if !cutoff.IsZero() && ev.Timestamp.Before(cutoff) {
 		return false
 	}
-	if q.RelayKeyHash != "" && ev.RelayKeyHash != q.RelayKeyHash {
+	if !q.To.IsZero() && ev.Timestamp.After(q.To) {
 		return false
 	}
-	if q.PolicyID != "" && ev.PolicyID != q.PolicyID {
+	if q.RequestID != "" && ev.RequestID != q.RequestID {
 		return false
 	}
-	if q.ModelID != "" && ev.ModelID != q.ModelID {
+	if !inList(q.RelayKeyHash, ev.RelayKeyHash) {
 		return false
 	}
-	if q.HostID != "" && ev.HostID != q.HostID {
+	if !inList(q.PolicyID, ev.PolicyID) {
 		return false
 	}
-	if q.Source != "" && ev.Source != q.Source {
+	if !inList(q.ModelID, ev.ModelID) {
+		return false
+	}
+	if !inList(q.HostID, ev.HostID) {
+		return false
+	}
+	if !inList(q.Source, ev.Source) {
+		return false
+	}
+	if !inList(q.FinishReason, ev.FinishReason) {
+		return false
+	}
+	if !inList(q.ErrorKind, ev.ErrorKind) {
 		return false
 	}
 	if q.StatusMin > 0 && ev.Status < q.StatusMin {
@@ -248,6 +264,20 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 		return false
 	}
 	return true
+}
+
+// inList reports whether val is in set, treating an empty set as "no
+// filter" (matches everything).
+func inList(set []string, val string) bool {
+	if len(set) == 0 {
+		return true
+	}
+	for _, s := range set {
+		if s == val {
+			return true
+		}
+	}
+	return false
 }
 
 func groupKey(ev Event, groupBy string) string {
