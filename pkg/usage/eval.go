@@ -113,6 +113,115 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	return SummaryResult{Rows: rows, From: from, To: to}, nil
 }
 
+// Bucketize groups the (already-filtered) events into time buckets of
+// width interval, optionally split into one series per groupBy dimension.
+// Buckets align to the Unix epoch (bucketStart = floor(unix/intervalSec));
+// empty buckets are omitted. Points within a series are ordered
+// oldest-first; series (rows) are ordered by total request count desc.
+// Returns an error for a non-positive interval or unknown groupBy.
+func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeriesResult, error) {
+	if interval <= 0 {
+		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: interval must be > 0")
+	}
+	if groupBy != "" && !IsValidGroupBy(groupBy) {
+		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: invalid group_by %q", groupBy)
+	}
+	intervalSec := int64(interval / time.Second)
+	if intervalSec <= 0 {
+		return TimeSeriesResult{}, fmt.Errorf("usage.Bucketize: interval must be >= 1s")
+	}
+
+	type point struct {
+		requests, errs int64
+		tokens         map[string]int64
+	}
+	// seriesKey -> bucketUnix -> point
+	series := map[string]map[int64]*point{}
+	totals := map[string]int64{}
+	from, to := time.Time{}, time.Time{}
+
+	for _, ev := range events {
+		sk := ""
+		if groupBy != "" {
+			sk = groupKey(ev, groupBy)
+		}
+		buckets, ok := series[sk]
+		if !ok {
+			buckets = map[int64]*point{}
+			series[sk] = buckets
+		}
+		bu := ev.Timestamp.Unix() - (ev.Timestamp.Unix() % intervalSec)
+		p, ok := buckets[bu]
+		if !ok {
+			p = &point{tokens: map[string]int64{}}
+			buckets[bu] = p
+		}
+		p.requests++
+		totals[sk]++
+		if ev.Status >= 400 {
+			p.errs++
+		}
+		for k, v := range ev.Tokens {
+			p.tokens[k] += v
+		}
+		if from.IsZero() || ev.Timestamp.Before(from) {
+			from = ev.Timestamp
+		}
+		if ev.Timestamp.After(to) {
+			to = ev.Timestamp
+		}
+	}
+
+	rows := make([]TimeSeriesRow, 0, len(series))
+	for sk, buckets := range series {
+		bus := make([]int64, 0, len(buckets))
+		for bu := range buckets {
+			bus = append(bus, bu)
+		}
+		sort.Slice(bus, func(i, j int) bool { return bus[i] < bus[j] })
+
+		points := make([]TimeSeriesPoint, 0, len(bus))
+		for _, bu := range bus {
+			p := buckets[bu]
+			points = append(points, TimeSeriesPoint{
+				Bucket:     time.Unix(bu, 0).UTC(),
+				Requests:   p.requests,
+				ErrorCount: p.errs,
+				Tokens:     p.tokens,
+			})
+		}
+		row := TimeSeriesRow{Points: points}
+		if groupBy != "" {
+			row.Group = map[string]string{groupBy: sk}
+		}
+		rows = append(rows, row)
+	}
+	SortTimeSeriesRows(rows, totals, groupBy)
+
+	return TimeSeriesResult{Rows: rows, From: from, To: to}, nil
+}
+
+// SortTimeSeriesRows orders series by total request count desc, with the
+// group value as a stable tiebreak. totals is keyed by the series key
+// (the groupBy dimension value, or "" for the single-series case). Shared
+// by the in-memory Bucketize path and the SQL backends so all readers
+// return series in the same order.
+func SortTimeSeriesRows(rows []TimeSeriesRow, totals map[string]int64, groupBy string) {
+	key := func(r TimeSeriesRow) string {
+		if groupBy != "" && r.Group != nil {
+			return r.Group[groupBy]
+		}
+		return ""
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		ki, kj := key(rows[i]), key(rows[j])
+		if totals[ki] != totals[kj] {
+			return totals[ki] > totals[kj]
+		}
+		return ki < kj
+	})
+}
+
 func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !cutoff.IsZero() && ev.Timestamp.Before(cutoff) {
 		return false

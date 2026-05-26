@@ -77,6 +77,44 @@ func TestEventsNewestFirstAndLimit(t *testing.T) {
 	}
 }
 
+func TestTimeSeries(t *testing.T) {
+	sk := newSink(t)
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Hour)
+
+	evs := []usage.Event{
+		{RequestID: "a", Timestamp: base, Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 10}},
+		{RequestID: "b", Timestamp: base.Add(5 * time.Minute), Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 20}},
+		{RequestID: "c", Timestamp: base.Add(2 * time.Hour), Status: 500, ModelID: "m1"},
+		{RequestID: "d", Timestamp: base.Add(time.Minute), Status: 200, ModelID: "m2", Tokens: usage.Tokens{"input": 5}},
+	}
+	for _, ev := range evs {
+		if err := sk.Write(ev); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	ts, err := sk.TimeSeries(ctx, usage.TimeSeriesQuery{Interval: time.Hour})
+	if err != nil {
+		t.Fatalf("TimeSeries: %v", err)
+	}
+	if len(ts.Rows) != 1 {
+		t.Fatalf("want single series, got %d rows", len(ts.Rows))
+	}
+	pts := ts.Rows[0].Points
+	if len(pts) != 2 || pts[0].Requests != 3 || pts[0].Tokens["input"] != 35 || pts[1].ErrorCount != 1 {
+		t.Fatalf("unexpected buckets: %+v", pts)
+	}
+
+	tsg, err := sk.TimeSeries(ctx, usage.TimeSeriesQuery{Interval: time.Hour, GroupBy: "model_id"})
+	if err != nil {
+		t.Fatalf("TimeSeries grouped: %v", err)
+	}
+	if len(tsg.Rows) != 2 || tsg.Rows[0].Group["model_id"] != "m1" {
+		t.Fatalf("grouped series wrong: %+v", tsg.Rows)
+	}
+}
+
 func TestDimensionFilter(t *testing.T) {
 	sk := newSink(t)
 	ctx := context.Background()

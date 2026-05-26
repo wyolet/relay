@@ -451,6 +451,104 @@ ORDER BY requests DESC`,
 	return result, rows.Err()
 }
 
+// TimeSeries buckets matched events by q.Interval (epoch-aligned via
+// toStartOfInterval), optionally split into one series per q.GroupBy
+// value. Empty buckets are not emitted. Series are ordered by total
+// requests desc; points within a series oldest-first.
+func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.TimeSeriesResult, error) {
+	if q.Interval <= 0 {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: interval must be > 0")
+	}
+	intervalSec := int64(q.Interval / time.Second)
+	if intervalSec <= 0 {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: interval must be >= 1s")
+	}
+	groupBy := q.GroupBy
+	if groupBy != "" && !usage.IsValidGroupBy(groupBy) {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
+	}
+
+	where, args := buildWhere(q.EventQuery, true)
+
+	bucketExpr := fmt.Sprintf("toStartOfInterval(ts, INTERVAL %d second)", intervalSec)
+	selCols := bucketExpr + " AS bucket"
+	groupOrder := "bucket"
+	if groupBy != "" {
+		selCols = groupBy + " AS grp, " + selCols
+		groupOrder = "grp, bucket"
+	}
+
+	sql := fmt.Sprintf(`
+SELECT
+    %s,
+    toInt64(count())                AS requests,
+    toInt64(countIf(status >= 400)) AS error_count,
+    sumMap(tokens)                  AS tokens,
+    min(ts)                         AS first_seen,
+    max(ts)                         AS last_seen
+FROM %s%s
+GROUP BY %s
+ORDER BY %s`,
+		selCols, chTable, where, groupOrder, groupOrder)
+
+	rows, err := s.conn.Query(ctx, sql, args...)
+	if err != nil {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: timeseries query: %w", err)
+	}
+	defer rows.Close()
+
+	res := usage.TimeSeriesResult{Interval: q.Interval.String()}
+	byKey := map[string]int{} // series key -> index into res.Rows
+	totals := map[string]int64{}
+	for rows.Next() {
+		var (
+			grp      string
+			bucket   time.Time
+			requests int64
+			errCount int64
+			tokens   map[string]int64
+			first    time.Time
+			last     time.Time
+		)
+		dest := []any{&bucket, &requests, &errCount, &tokens, &first, &last}
+		if groupBy != "" {
+			dest = append([]any{&grp}, dest...)
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return usage.TimeSeriesResult{}, fmt.Errorf("usage/clickhouse: scan timeseries: %w", err)
+		}
+		idx, ok := byKey[grp]
+		if !ok {
+			row := usage.TimeSeriesRow{}
+			if groupBy != "" {
+				row.Group = map[string]string{groupBy: grp}
+			}
+			res.Rows = append(res.Rows, row)
+			idx = len(res.Rows) - 1
+			byKey[grp] = idx
+		}
+		res.Rows[idx].Points = append(res.Rows[idx].Points, usage.TimeSeriesPoint{
+			Bucket:     bucket.UTC(),
+			Requests:   requests,
+			ErrorCount: errCount,
+			Tokens:     tokens,
+		})
+		totals[grp] += requests
+		if res.From.IsZero() || first.Before(res.From) {
+			res.From = first
+		}
+		if last.After(res.To) {
+			res.To = last
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return usage.TimeSeriesResult{}, err
+	}
+
+	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
+	return res, nil
+}
+
 // buildWhere generates the WHERE clause and positional args for an EventQuery.
 // The forSummary flag has no effect on output currently; it is reserved for
 // future divergence between the two query paths.

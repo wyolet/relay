@@ -39,6 +39,13 @@ type Reader interface {
 	// carries totals + latency percentiles over the events matching
 	// the filter. Rows are sorted by Requests descending.
 	Summary(ctx context.Context, q SummaryQuery) (SummaryResult, error)
+
+	// TimeSeries returns one or more series of time-bucketed aggregates
+	// over the filtered set. With an empty GroupBy a single series is
+	// returned; with a GroupBy dimension, one series per distinct value.
+	// Buckets are aligned to the Unix epoch by q.Interval and ordered
+	// oldest-first within each series.
+	TimeSeries(ctx context.Context, q TimeSeriesQuery) (TimeSeriesResult, error)
 }
 
 // EventQuery filters the raw event stream. All fields are optional;
@@ -113,6 +120,54 @@ type SummaryResult struct {
 	From time.Time    `json:"from"`
 	To   time.Time    `json:"to"`
 }
+
+// TimeSeriesQuery is EventQuery + a bucket width + optional group
+// dimension. Interval is required (zero is rejected by readers). GroupBy
+// is optional: empty yields a single series, a valid dimension yields one
+// series per distinct value.
+type TimeSeriesQuery struct {
+	EventQuery
+
+	// Interval is the bucket width. Must be > 0.
+	Interval time.Duration
+
+	// GroupBy splits the result into one series per dimension value.
+	// Empty means a single series. Valid values match ValidGroupBy.
+	GroupBy string
+}
+
+// TimeSeriesPoint is one time bucket's aggregates. Bucket is the bucket's
+// start instant (UTC, epoch-aligned). Empty buckets are omitted — the
+// frontend zero-fills gaps against the resolved From/To range.
+type TimeSeriesPoint struct {
+	Bucket     time.Time        `json:"bucket"`
+	Requests   int64            `json:"requests"`
+	ErrorCount int64            `json:"error_count"`
+	Tokens     map[string]int64 `json:"tokens"`
+}
+
+// TimeSeriesRow is one series. Group is nil for the single-series case
+// and carries the grouping dimension keyed by column name otherwise.
+type TimeSeriesRow struct {
+	Group  map[string]string `json:"group,omitempty"`
+	Points []TimeSeriesPoint `json:"points"`
+}
+
+// TimeSeriesResult wraps the series with the resolved interval (echoed as
+// a string, e.g. "1h") and time range so the caller can zero-fill and
+// label the axis without re-deriving from the query.
+type TimeSeriesResult struct {
+	Rows     []TimeSeriesRow `json:"rows"`
+	Interval string          `json:"interval"`
+	From     time.Time       `json:"from"`
+	To       time.Time       `json:"to"`
+}
+
+// MaxBuckets caps the number of time buckets a single TimeSeries query may
+// span (range / interval). Guards against a tiny interval over a huge
+// range producing an unbounded result. The HTTP layer rejects with 400
+// before hitting a backend.
+const MaxBuckets = 5_000
 
 // ValidGroupBy lists the accepted GroupBy values. Used by the HTTP
 // endpoint to reject typos with a clear 400 instead of silently

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -589,6 +590,160 @@ GROUP BY sub.%s, kv.key`,
 		}
 	}
 	return result, nil
+}
+
+// TimeSeries buckets matched events by q.Interval (date_bin, epoch-aligned),
+// optionally split into one series per q.GroupBy value. Like Summary, token
+// sums come from a second jsonb_each_text query merged in Go. Empty buckets
+// are not emitted; series are ordered by total requests desc, points
+// oldest-first.
+func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.TimeSeriesResult, error) {
+	if q.Interval <= 0 {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: interval must be > 0")
+	}
+	intervalSec := int64(q.Interval / time.Second)
+	if intervalSec <= 0 {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: interval must be >= 1s")
+	}
+	groupBy := q.GroupBy
+	if groupBy != "" && !usage.IsValidGroupBy(groupBy) {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
+	}
+
+	where, args := buildWhere(q.EventQuery)
+	bucketExpr := fmt.Sprintf("date_bin(interval '%d seconds', ts, TIMESTAMPTZ 'epoch')", intervalSec)
+
+	selPrefix, grpCols := "", ""
+	if groupBy != "" {
+		selPrefix = groupBy + " AS grp, "
+		grpCols = groupBy + ", "
+	}
+
+	scalarSQL := fmt.Sprintf(`
+SELECT
+    %s%s AS bucket,
+    count(*)::bigint                              AS requests,
+    count(*) FILTER (WHERE status >= 400)::bigint AS error_count,
+    min(ts)                                       AS first_seen,
+    max(ts)                                       AS last_seen
+FROM %s%s
+GROUP BY %sbucket
+ORDER BY %sbucket`,
+		selPrefix, bucketExpr, s.cfg.Table, where, grpCols, grpCols)
+
+	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
+	if err != nil {
+		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: timeseries scalar query: %w", err)
+	}
+	defer scalarRows.Close()
+
+	res := usage.TimeSeriesResult{Interval: q.Interval.String()}
+	rowIdx := map[string]int{}   // series key -> index into res.Rows
+	pointIdx := map[string]int{} // grp|bucketUnix -> index into row.Points
+	totals := map[string]int64{}
+	pkey := func(grp string, bu int64) string { return grp + "|" + strconv.FormatInt(bu, 10) }
+
+	for scalarRows.Next() {
+		var (
+			grp         string
+			bucket      time.Time
+			requests    int64
+			errCount    int64
+			first, last time.Time
+		)
+		dest := []any{&bucket, &requests, &errCount, &first, &last}
+		if groupBy != "" {
+			dest = append([]any{&grp}, dest...)
+		}
+		if err := scalarRows.Scan(dest...); err != nil {
+			return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: scan timeseries scalar: %w", err)
+		}
+		ri, ok := rowIdx[grp]
+		if !ok {
+			row := usage.TimeSeriesRow{}
+			if groupBy != "" {
+				row.Group = map[string]string{groupBy: grp}
+			}
+			res.Rows = append(res.Rows, row)
+			ri = len(res.Rows) - 1
+			rowIdx[grp] = ri
+		}
+		res.Rows[ri].Points = append(res.Rows[ri].Points, usage.TimeSeriesPoint{
+			Bucket:     bucket.UTC(),
+			Requests:   requests,
+			ErrorCount: errCount,
+			Tokens:     map[string]int64{},
+		})
+		pointIdx[pkey(grp, bucket.Unix())] = len(res.Rows[ri].Points) - 1
+		totals[grp] += requests
+		if res.From.IsZero() || first.Before(res.From) {
+			res.From = first
+		}
+		if last.After(res.To) {
+			res.To = last
+		}
+	}
+	if err := scalarRows.Err(); err != nil {
+		return usage.TimeSeriesResult{}, err
+	}
+
+	if len(res.Rows) > 0 {
+		tokenSQL := fmt.Sprintf(`
+SELECT %ssub.bucket, kv.key, sum(kv.value::bigint)::bigint
+FROM (SELECT %s%s AS bucket, tokens FROM %s%s) AS sub
+CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
+GROUP BY %ssub.bucket, kv.key`,
+			func() string {
+				if groupBy != "" {
+					return "sub." + groupBy + " AS grp, "
+				}
+				return ""
+			}(),
+			selPrefix, bucketExpr, s.cfg.Table, where,
+			func() string {
+				if groupBy != "" {
+					return "sub." + groupBy + ", "
+				}
+				return ""
+			}(),
+		)
+		tokenRows, err := s.pool.Query(ctx, tokenSQL, args...)
+		if err != nil {
+			return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: timeseries token query: %w", err)
+		}
+		defer tokenRows.Close()
+
+		for tokenRows.Next() {
+			var (
+				grp    string
+				bucket time.Time
+				key    string
+				val    int64
+			)
+			dest := []any{&bucket, &key, &val}
+			if groupBy != "" {
+				dest = append([]any{&grp}, dest...)
+			}
+			if err := tokenRows.Scan(dest...); err != nil {
+				return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: scan timeseries token: %w", err)
+			}
+			ri, ok := rowIdx[grp]
+			if !ok {
+				continue
+			}
+			pi, ok := pointIdx[pkey(grp, bucket.Unix())]
+			if !ok {
+				continue
+			}
+			res.Rows[ri].Points[pi].Tokens[key] = val
+		}
+		if err := tokenRows.Err(); err != nil {
+			return usage.TimeSeriesResult{}, err
+		}
+	}
+
+	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
+	return res, nil
 }
 
 // buildWhere generates a WHERE clause and positional args ($1, $2, …) for an

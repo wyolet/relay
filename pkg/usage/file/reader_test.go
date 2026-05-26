@@ -109,6 +109,69 @@ func TestReader_Summary_GroupAggregation(t *testing.T) {
 	}
 }
 
+func TestReader_TimeSeries_Bucketing(t *testing.T) {
+	// Fixed epoch-aligned base so bucket boundaries are deterministic.
+	base := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Hour)
+	path := writeFixture(t, []usage.Event{
+		{Timestamp: base, Source: "pipeline", Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 10}},
+		{Timestamp: base.Add(5 * time.Minute), Source: "pipeline", Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 20}},
+		{Timestamp: base.Add(2 * time.Hour), Source: "pipeline", Status: 500, ModelID: "m1"},
+		{Timestamp: base.Add(3 * time.Minute), Source: "proxy", Status: 200, ModelID: "m2", Tokens: usage.Tokens{"input": 5}},
+	})
+	r := NewReader(path)
+	all := usage.EventQuery{} // Since:0 → no lower bound
+
+	// Single series, 1h buckets: bucket0 has 3 events, bucket+2h has 1.
+	ts, err := r.TimeSeries(context.Background(), usage.TimeSeriesQuery{EventQuery: all, Interval: time.Hour})
+	if err != nil {
+		t.Fatalf("timeseries: %v", err)
+	}
+	if ts.Interval != time.Hour.String() {
+		t.Fatalf("interval echo: %q", ts.Interval)
+	}
+	if len(ts.Rows) != 1 || ts.Rows[0].Group != nil {
+		t.Fatalf("want single ungrouped series, got %+v", ts.Rows)
+	}
+	pts := ts.Rows[0].Points
+	if len(pts) != 2 {
+		t.Fatalf("want 2 buckets, got %d: %+v", len(pts), pts)
+	}
+	if !pts[0].Bucket.Before(pts[1].Bucket) {
+		t.Fatalf("points not oldest-first: %v %v", pts[0].Bucket, pts[1].Bucket)
+	}
+	if pts[0].Requests != 3 || pts[0].Tokens["input"] != 35 {
+		t.Fatalf("bucket0: reqs=%d tokens=%+v", pts[0].Requests, pts[0].Tokens)
+	}
+	if pts[1].Requests != 1 || pts[1].ErrorCount != 1 {
+		t.Fatalf("bucket1: reqs=%d errs=%d", pts[1].Requests, pts[1].ErrorCount)
+	}
+
+	// Grouped by model_id: m1 (3 reqs, 2 buckets) sorts before m2 (1 req).
+	tsg, err := r.TimeSeries(context.Background(), usage.TimeSeriesQuery{EventQuery: all, Interval: time.Hour, GroupBy: "model_id"})
+	if err != nil {
+		t.Fatalf("timeseries grouped: %v", err)
+	}
+	if len(tsg.Rows) != 2 {
+		t.Fatalf("want 2 series, got %d", len(tsg.Rows))
+	}
+	if tsg.Rows[0].Group["model_id"] != "m1" || len(tsg.Rows[0].Points) != 2 {
+		t.Fatalf("m1 series wrong: %+v", tsg.Rows[0])
+	}
+	if tsg.Rows[1].Group["model_id"] != "m2" || len(tsg.Rows[1].Points) != 1 {
+		t.Fatalf("m2 series wrong: %+v", tsg.Rows[1])
+	}
+}
+
+func TestReader_TimeSeries_Invalid(t *testing.T) {
+	r := NewReader(writeFixture(t, nil))
+	if _, err := r.TimeSeries(context.Background(), usage.TimeSeriesQuery{Interval: 0}); err == nil {
+		t.Fatal("expected error for zero interval")
+	}
+	if _, err := r.TimeSeries(context.Background(), usage.TimeSeriesQuery{Interval: time.Hour, GroupBy: "bogus"}); err == nil {
+		t.Fatal("expected error for invalid group_by")
+	}
+}
+
 func TestReader_Summary_InvalidGroupBy(t *testing.T) {
 	path := writeFixture(t, nil)
 	r := NewReader(path)

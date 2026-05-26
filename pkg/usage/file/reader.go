@@ -46,6 +46,21 @@ func (r *Reader) Summary(_ context.Context, q usage.SummaryQuery) (usage.Summary
 	return usage.Summarize(usage.FilterEvents(all, q.EventQuery), q.GroupBy)
 }
 
+// TimeSeries streams the file, applies filters, and buckets the matching
+// events into time series via usage.Bucketize.
+func (r *Reader) TimeSeries(_ context.Context, q usage.TimeSeriesQuery) (usage.TimeSeriesResult, error) {
+	all, err := r.scan()
+	if err != nil {
+		return usage.TimeSeriesResult{}, err
+	}
+	res, err := usage.Bucketize(usage.FilterEvents(all, q.EventQuery), q.Interval, q.GroupBy)
+	if err != nil {
+		return usage.TimeSeriesResult{}, err
+	}
+	res.Interval = q.Interval.String()
+	return res, nil
+}
+
 // scan reads every event in the file (no filter/limit; callers evaluate
 // via usage.FilterEvents). A missing file yields an empty slice, not an
 // error — useful at boot before any request has fired.
