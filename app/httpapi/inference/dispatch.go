@@ -109,7 +109,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
-		mapRoutingErr(w, err)
+		mapRoutingErr(w, err, in.ModelName, rk.Spec.PolicyID)
 		return
 	}
 	lc.PayloadLog = plan.PayloadLoggingEnabled
