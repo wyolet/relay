@@ -398,7 +398,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        upstream_start, upstream_response_start, upstream_response_end,
 		        relay_key_hash, policy_id, model_id, requested_model,
 		        host_id, host_key_id, tokens, extras
-		 FROM %s%s ORDER BY ts DESC LIMIT %d`,
+		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
 
@@ -775,6 +775,14 @@ func buildWhere(q usage.EventQuery) (string, []any) {
 	}
 	if !q.To.IsZero() {
 		add("ts <= $%d", q.To)
+	}
+	if !q.CursorTS.IsZero() {
+		n++
+		c1 := n
+		n++
+		c2 := n
+		clauses = append(clauses, fmt.Sprintf("(ts, request_id) < ($%d, $%d)", c1, c2))
+		args = append(args, q.CursorTS, q.CursorID)
 	}
 	if q.RequestID != "" {
 		add("request_id = $%d", q.RequestID)

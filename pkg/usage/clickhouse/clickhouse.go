@@ -309,7 +309,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras FROM %s%s ORDER BY ts DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -578,6 +578,10 @@ func buildWhere(q usage.EventQuery, _ bool) (string, []any) {
 	if !q.To.IsZero() {
 		clauses = append(clauses, "ts <= ?")
 		args = append(args, q.To)
+	}
+	if !q.CursorTS.IsZero() {
+		clauses = append(clauses, "(ts, request_id) < (?, ?)")
+		args = append(args, q.CursorTS, q.CursorID)
 	}
 	if q.RequestID != "" {
 		clauses = append(clauses, "request_id = ?")

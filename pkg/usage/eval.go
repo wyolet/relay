@@ -41,7 +41,10 @@ func SortAndLimit(events []Event, limit int) []Event {
 		limit = MaxEventLimit
 	}
 	sort.Slice(events, func(i, j int) bool {
-		return events[i].Timestamp.After(events[j].Timestamp)
+		if !events[i].Timestamp.Equal(events[j].Timestamp) {
+			return events[i].Timestamp.After(events[j].Timestamp)
+		}
+		return events[i].RequestID > events[j].RequestID // stable keyset tiebreak
 	})
 	if len(events) > limit {
 		events = events[:limit]
@@ -232,6 +235,16 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	}
 	if !q.To.IsZero() && ev.Timestamp.After(q.To) {
 		return false
+	}
+	// Keyset cursor: strictly older than (CursorTS, CursorID) under
+	// (ts DESC, request_id DESC).
+	if !q.CursorTS.IsZero() {
+		if ev.Timestamp.After(q.CursorTS) {
+			return false
+		}
+		if ev.Timestamp.Equal(q.CursorTS) && ev.RequestID >= q.CursorID {
+			return false
+		}
 	}
 	if q.RequestID != "" && ev.RequestID != q.RequestID {
 		return false

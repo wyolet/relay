@@ -9,7 +9,9 @@ package control
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,12 +89,17 @@ func effectiveWindow(q usagelog.EventQuery) time.Duration {
 
 type usageEventsInput struct {
 	usageFilterInput
-	Limit int `query:"limit" doc:"Cap on returned events. Default 100, max 10000."`
+	Limit  int    `query:"limit" doc:"Cap on returned events (page size). Default 100, max 10000."`
+	Cursor string `query:"cursor" doc:"Opaque pagination cursor from a previous response's next_cursor. Returns the next (older) page."`
 }
 
 type usageEventsOutput struct {
 	Body struct {
 		Events []usagelog.Event `json:"events"`
+		// NextCursor is set when a full page was returned (more may exist);
+		// pass it back as ?cursor= to fetch the next page. Empty on the
+		// last page.
+		NextCursor string `json:"next_cursor,omitempty"`
 	}
 }
 
@@ -146,6 +153,13 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 		q.Limit = in.Limit
+		if in.Cursor != "" {
+			ts, id, err := decodeCursor(in.Cursor)
+			if err != nil {
+				return nil, err
+			}
+			q.CursorTS, q.CursorID = ts, id
+		}
 		events, err := d.UsageReader.Events(ctx, q)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -155,6 +169,12 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		out := &usageEventsOutput{}
 		out.Body.Events = events
+		// A full page implies more rows may exist — hand back a cursor
+		// anchored at the oldest (last) returned event.
+		if n := len(events); n > 0 && n == effectiveLimit(in.Limit) {
+			last := events[n-1]
+			out.Body.NextCursor = encodeCursor(last.Timestamp, last.RequestID)
+		}
 		return out, nil
 	})
 
@@ -234,6 +254,44 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		return &usageTimeSeriesOutput{Body: res}, nil
 	})
+}
+
+// effectiveLimit mirrors the reader-side clamp so the handler knows the
+// page size actually applied — needed to decide whether a full page (and
+// thus a next_cursor) was returned.
+func effectiveLimit(limit int) int {
+	if limit <= 0 {
+		return usagelog.DefaultEventLimit
+	}
+	if limit > usagelog.MaxEventLimit {
+		return usagelog.MaxEventLimit
+	}
+	return limit
+}
+
+// encodeCursor packs (ts, request_id) into an opaque base64url token.
+// Nanosecond precision preserves the exact value the store returned, so
+// the keyset comparison round-trips exactly.
+func encodeCursor(ts time.Time, id string) string {
+	raw := strconv.FormatInt(ts.UnixNano(), 10) + ":" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeCursor reverses encodeCursor. A malformed cursor is a 400.
+func decodeCursor(s string) (time.Time, string, error) {
+	b, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return time.Time{}, "", huma.Error400BadRequest("invalid cursor")
+	}
+	ns, id, ok := strings.Cut(string(b), ":")
+	if !ok {
+		return time.Time{}, "", huma.Error400BadRequest("invalid cursor")
+	}
+	nanos, err := strconv.ParseInt(ns, 10, 64)
+	if err != nil {
+		return time.Time{}, "", huma.Error400BadRequest("invalid cursor")
+	}
+	return time.Unix(0, nanos).UTC(), id, nil
 }
 
 // parseTime parses an optional RFC3339 timestamp. Empty yields the zero
