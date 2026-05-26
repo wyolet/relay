@@ -271,6 +271,51 @@ func TestDispatch_RoutingFailure_EmitsUsageEvent(t *testing.T) {
 	}
 }
 
+func TestInjectRelayUsage(t *testing.T) {
+	ru := &pkgrelay.RelayUsage{RequestID: "r1", Attempts: 2}
+
+	cases := []struct {
+		name       string
+		body       string
+		wantInject bool
+	}{
+		{"object", `{"id":"x","object":"chat.completion"}`, true},
+		{"empty object", `{}`, true},
+		{"trailing newline", "{\"id\":\"x\"}\n", true},
+		{"array not object", `[1,2,3]`, false},
+		{"bare string", `"nope"`, false},
+		{"empty", ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := injectRelayUsage([]byte(tc.body), ru)
+			if !tc.wantInject {
+				if string(out) != tc.body {
+					t.Fatalf("non-object should be unchanged: got %q", out)
+				}
+				return
+			}
+			// Must be valid JSON with relay_usage carrying our fields, and the
+			// original keys preserved.
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(out, &m); err != nil {
+				t.Fatalf("injected body not valid JSON: %v — %s", err, out)
+			}
+			raw, ok := m["relay_usage"]
+			if !ok {
+				t.Fatalf("relay_usage not present: %s", out)
+			}
+			var got pkgrelay.RelayUsage
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("relay_usage not parseable: %v", err)
+			}
+			if got.RequestID != "r1" || got.Attempts != 2 {
+				t.Fatalf("relay_usage fields lost: %+v", got)
+			}
+		})
+	}
+}
+
 // TestDispatch_Responses_OpenAIProperHost_BytePass verifies that
 // Inbound=OpenAIResponses on host "openai" (Adapter=OpenAI) takes the
 // byte-pass path (IsNativePath returns true). The pipeline fails on the stub

@@ -189,7 +189,7 @@ type RawAnnotation struct {
 	JSON json.RawMessage `json:"-"`
 }
 
-func (*RawAnnotation) isAnnotation()           {}
+func (*RawAnnotation) isAnnotation()            {}
 func (a *RawAnnotation) AnnotationType() string { return a.Type }
 
 func (a *RawAnnotation) MarshalJSON() ([]byte, error) {

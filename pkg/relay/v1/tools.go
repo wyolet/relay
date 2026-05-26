@@ -14,7 +14,7 @@ type FunctionTool struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-func (*FunctionTool) isTool()           {}
+func (*FunctionTool) isTool()            {}
 func (*FunctionTool) ToolType() ToolType { return ToolTypeFunction }
 
 func (f *FunctionTool) MarshalJSON() ([]byte, error) {
@@ -40,7 +40,7 @@ type ServerTool struct {
 	Name string `json:"name"`
 }
 
-func (*ServerTool) isTool()           {}
+func (*ServerTool) isTool()            {}
 func (*ServerTool) ToolType() ToolType { return ToolTypeServer }
 
 func (s *ServerTool) MarshalJSON() ([]byte, error) {
@@ -61,7 +61,7 @@ type MCPTool struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 }
 
-func (*MCPTool) isTool()           {}
+func (*MCPTool) isTool()            {}
 func (*MCPTool) ToolType() ToolType { return ToolTypeMCP }
 
 func (m *MCPTool) MarshalJSON() ([]byte, error) {

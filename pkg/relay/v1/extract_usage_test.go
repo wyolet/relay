@@ -12,8 +12,8 @@ import (
 // fakeTranslator only implements what ExtractUsage needs.
 type fakeTranslator struct{}
 
-func (fakeTranslator) ParseRequest(_ []byte) (*Request, error)             { return nil, nil }
-func (fakeTranslator) SerializeRequest(_ *Request) ([]byte, error)         { return nil, nil }
+func (fakeTranslator) ParseRequest(_ []byte) (*Request, error)     { return nil, nil }
+func (fakeTranslator) SerializeRequest(_ *Request) ([]byte, error) { return nil, nil }
 func (fakeTranslator) SerializeResponse(_ *Response, _ *Request) ([]byte, error) {
 	return nil, nil
 }

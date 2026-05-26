@@ -26,7 +26,7 @@ func UnmarshalResponse(data []byte) (*Response, error) {
 		Output            []json.RawMessage          `json:"output"`
 		Usage             usage.Tokens               `json:"usage"`
 		Error             *Error                     `json:"error"`
-		IncompleteDetails *IncompleteDetails          `json:"incomplete_details"`
+		IncompleteDetails *IncompleteDetails         `json:"incomplete_details"`
 		Extensions        map[string]json.RawMessage `json:"extensions"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
