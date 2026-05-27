@@ -644,3 +644,94 @@ func TestDispatch_NormalOpenAI_UnaffectedByGuards(t *testing.T) {
 		}
 	}
 }
+
+// okUpstreamTranslator parses any body into a fixed canonical Response with a
+// FLAT orthogonal-meter usage map — the shape relay's real adapters produce.
+type okUpstreamTranslator struct{ stubV1Translator }
+
+func (okUpstreamTranslator) ParseResponse(_ []byte) (*pkgrelay.Response, error) {
+	return &pkgrelay.Response{
+		Object: "response",
+		Status: pkgrelay.StatusCompleted,
+		Usage:  pkgusage.Tokens{"input": 10, "output": 5},
+	}, nil
+}
+
+// rawUpstreamBody is a vendor (OpenAI/Ollama-cloud) sync body whose usage block
+// carries NESTED detail objects — the shape that crashes a canonical client's
+// usage.Tokens (map[string]int64) decode.
+const rawUpstreamBody = `{"id":"x","object":"chat.completion","model":"gpt-oss:120b-cloud",` +
+	`"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],` +
+	`"usage":{"prompt_tokens":10,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":0},` +
+	`"completion_tokens_details":{"reasoning_tokens":0}}}`
+
+// TestBufferCanonical_NeverForwardsRawVendorBody is the contract guard: when the
+// upstream translator fails to parse the response, the canonical caller must get
+// a canonical ERROR — never the raw vendor body. The pre-fix code fell back to
+// out := raw, leaking the nested-usage vendor shape and crashing canonical
+// clients with "cannot unmarshal object into int64". See codebase rule 11.
+func TestBufferCanonical_NeverForwardsRawVendorBody(t *testing.T) {
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	body := io.NopCloser(strings.NewReader(rawUpstreamBody))
+
+	// stubV1Translator.ParseResponse always errors → exercises the fallback path.
+	bufferCanonical(Deps{}, rec, r, body, http.StatusOK, false, nil,
+		stubV1Translator{}, pkgrelay.IdentityTranslator{})
+
+	res := rec.Result()
+	out := rec.Body.Bytes()
+	if res.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", res.StatusCode)
+	}
+	if strings.Contains(string(out), "prompt_tokens_details") {
+		t.Fatalf("raw vendor body leaked to canonical caller: %s", out)
+	}
+	e := parseDispatchErr(t, out)
+	if e.Error.Code != "translate_response" {
+		t.Fatalf("error code = %q, want translate_response (body: %s)", e.Error.Code, out)
+	}
+}
+
+// TestBufferCanonical_FlatUsage is the happy path: a parseable upstream body is
+// translated to canonical with the FLAT usage map a canonical client can decode.
+func TestBufferCanonical_FlatUsage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
+	body := io.NopCloser(strings.NewReader(rawUpstreamBody))
+
+	bufferCanonical(Deps{}, rec, r, body, http.StatusOK, false, nil,
+		okUpstreamTranslator{}, pkgrelay.IdentityTranslator{})
+
+	if rec.Result().StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Result().StatusCode)
+	}
+	var resp struct {
+		Usage pkgusage.Tokens `json:"usage"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("canonical body must decode into usage.Tokens, got: %v (body: %s)", err, rec.Body.Bytes())
+	}
+	if resp.Usage["input"] != 10 || resp.Usage["output"] != 5 {
+		t.Fatalf("usage not flat-canonical: %v", resp.Usage)
+	}
+}
+
+// TestForwardHeaders_DropsAcceptEncoding guards the content-coding fix: the
+// relay must not forward the caller's Accept-Encoding upstream, so Go's
+// transport transparently decompresses and the canonical translate path always
+// receives a parseable, plain body (and never emits a stale Content-Encoding).
+func TestForwardHeaders_DropsAcceptEncoding(t *testing.T) {
+	in := http.Header{}
+	in.Set("Accept-Encoding", "gzip")
+	in.Set("Content-Type", "application/json")
+
+	out := forwardHeaders(in)
+
+	if got := out.Get("Accept-Encoding"); got != "" {
+		t.Fatalf("Accept-Encoding should be stripped, got %q", got)
+	}
+	if got := out.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type should pass through, got %q", got)
+	}
+}

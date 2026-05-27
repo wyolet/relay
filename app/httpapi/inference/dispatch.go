@@ -36,7 +36,15 @@ import (
 // real upstream credential afterward. Cloned so the original request headers
 // stay intact for logging / post-flight. Mirrors the proxy path's strip.
 func forwardHeaders(h http.Header) http.Header {
-	return httpheader.Strip(h.Clone())
+	out := httpheader.Strip(h.Clone())
+	// The relay negotiates its own upstream content-coding; the caller does
+	// not get to dictate it. Dropping Accept-Encoding lets Go's transport add
+	// gzip transparently and hand us a DECOMPRESSED body (Content-Encoding
+	// stripped) — without this, a forwarded "Accept-Encoding: gzip" leaves the
+	// upstream body gzipped, which the canonical translate path can't parse and
+	// whose stale Content-Encoding header breaks the caller's gunzip.
+	out.Del("Accept-Encoding")
+	return out
 }
 
 // DispatchInput is what a per-shape route passes to Dispatch after its
@@ -339,6 +347,13 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
+	// The body is re-serialized by the canonical chain (and may be
+	// usage-injected), so any upstream content coding/length no longer
+	// describes what we emit. Drop them — leaving Content-Encoding: gzip on a
+	// plain translated body makes the caller's gunzip fail ("invalid header").
+	// Byte-pass forwards the encoded body verbatim and keeps these (runBytePass).
+	w.Header().Del("Content-Encoding")
+	w.Header().Del("Content-Length")
 	// relay_usage echo is canonical-only: a vendor-shaped response (openai/
 	// anthropic) never carries it — those callers get a clean vendor body.
 	// Only a canonical caller (/v1/*, adapters.Canonical) gets relay's usage,
@@ -462,22 +477,39 @@ func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 // Content-Length (the translated — and optionally usage-injected — body
 // differs in length) and optionally inject the relay_usage echo block.
 func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, status int, echo bool, canonReq *v1.Request, upstreamV1, inboundV1 v1.Translator) {
+	ctx := r.Context()
 	raw, err := io.ReadAll(body)
 	if err != nil {
 		w.WriteHeader(status)
 		return
 	}
-	out := raw
-	if canResp, perr := upstreamV1.ParseResponse(raw); perr == nil {
-		if echo {
-			setRelayUsage(d, r, status, raw, canResp)
+
+	// Canonical contract: this caller asked for canonical and must receive
+	// canonical — never the raw upstream vendor body. A parse/serialize
+	// failure is surfaced as a canonical error, not masked by forwarding
+	// vendor bytes (which would leak vendor-shaped usage/output a canonical
+	// client can't decode). See codebase rule 11.
+	canResp, perr := upstreamV1.ParseResponse(raw)
+	if perr != nil {
+		st := http.StatusBadGateway
+		if status >= 400 {
+			st = status
 		}
-		// Canonical inbound serializes via the identity translator, so a set
-		// canResp.RelayUsage lands as the typed relay_usage field. echo is
-		// only ever true for canonical callers (see Dispatch).
-		if o, serr := inboundV1.SerializeResponse(canResp, canonReq); serr == nil {
-			out = o
-		}
+		d.fireUsageFailure(ctx, "translate_response", perr.Error())
+		writeAPIError(w, st, "upstream_error", "translate_response", perr.Error())
+		return
+	}
+	if echo {
+		setRelayUsage(d, r, status, raw, canResp)
+	}
+	// Canonical inbound serializes via the identity translator, so a set
+	// canResp.RelayUsage lands as the typed relay_usage field. echo is
+	// only ever true for canonical callers (see Dispatch).
+	out, serr := inboundV1.SerializeResponse(canResp, canonReq)
+	if serr != nil {
+		d.fireUsageFailure(ctx, "serialize_response", serr.Error())
+		writeAPIError(w, http.StatusInternalServerError, "server_error", "serialize_response", serr.Error())
+		return
 	}
 
 	w.Header().Del("Content-Length") // body length changed by translation

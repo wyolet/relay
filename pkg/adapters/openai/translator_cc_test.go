@@ -1695,3 +1695,55 @@ func TestCCSerializeResponse_ReasoningRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// TestCCParseResponse_ContentArray covers the gpt-oss / harmony divergence
+// where a sync response carries message.content as an ARRAY of content parts
+// rather than a string. Before the tolerant ChatResponseMessage.UnmarshalJSON
+// this failed the whole parse ("cannot unmarshal array into Go struct field
+// ...content of type string"), which dropped the caller onto the raw-body
+// fallback and leaked vendor-shaped usage. It must now parse to canonical.
+func TestCCParseResponse_ContentArray(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id":     "chatcmpl-arr",
+		"object": "chat.completion",
+		"model":  "gpt-oss:120b-cloud",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "text", "text": "Hello, "},
+					map[string]any{"type": "text", "text": "world."},
+				},
+			},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]any{
+			"prompt_tokens":             10,
+			"completion_tokens":         5,
+			"total_tokens":              15,
+			"prompt_tokens_details":     map[string]any{"cached_tokens": 0},
+			"completion_tokens_details": map[string]any{"reasoning_tokens": 0},
+		},
+	})
+	resp, err := (CCTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatalf("array content must parse, got: %v", err)
+	}
+	msg, ok := resp.Output[0].(*v1.Message)
+	if !ok {
+		t.Fatalf("output[0] is %T, want *v1.Message", resp.Output[0])
+	}
+	part, ok := msg.Content[0].(*v1.OutputTextPart)
+	if !ok {
+		t.Fatalf("content[0] is %T, want *v1.OutputTextPart", msg.Content[0])
+	}
+	if part.Text != "Hello, world." {
+		t.Errorf("concatenated text: %q", part.Text)
+	}
+	// Canonical usage is the flat orthogonal-meter map — never the nested
+	// vendor detail objects the wire carried.
+	if resp.Usage["input"] != 10 || resp.Usage["output"] != 5 {
+		t.Errorf("usage not flattened to canonical: %v", resp.Usage)
+	}
+}

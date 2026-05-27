@@ -168,6 +168,36 @@ type ChatResponseMessage struct {
 	Annotations      []Annotation `json:"annotations,omitempty"`
 }
 
+// UnmarshalJSON tolerates upstream response shapes that diverge from the
+// strict OpenAI Chat Completions response: `content` may arrive as a string,
+// as an array of content parts (gpt-oss / harmony serializations), or null,
+// and `reasoning`/`reasoning_content` may arrive as a string or a structured
+// block. The request side already accepts this variance via json.RawMessage +
+// ccContentToText; the response side must too, or a single array-shaped
+// content field fails the whole parse and the caller never sees a canonical
+// body. Field types stay as-is so the serialize path (which sets *string /
+// string directly) is unaffected.
+func (m *ChatResponseMessage) UnmarshalJSON(b []byte) error {
+	type alias ChatResponseMessage
+	var raw struct {
+		*alias
+		Content          json.RawMessage `json:"content"`
+		Reasoning        json.RawMessage `json:"reasoning"`
+		ReasoningContent json.RawMessage `json:"reasoning_content"`
+	}
+	raw.alias = (*alias)(m)
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	if len(raw.Content) > 0 && string(raw.Content) != "null" {
+		s := ccContentToText(raw.Content)
+		m.Content = &s
+	}
+	m.Reasoning = ccContentToText(raw.Reasoning)
+	m.ReasoningContent = ccContentToText(raw.ReasoningContent)
+	return nil
+}
+
 // Annotation is a URL citation attached to an assistant message (web search tool).
 type Annotation struct {
 	Type        string      `json:"type"`
