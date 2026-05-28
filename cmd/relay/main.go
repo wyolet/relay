@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
@@ -32,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
+	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
@@ -157,7 +159,15 @@ func main() {
 	// attach. Hooks register below before pipeline+proxy start serving.
 	lifecycleReg := lifecycle.New()
 
-	pl := &pipeline.Pipeline{Policy: policySvc, Lifecycle: lifecycleReg, Logger: slog.Default()}
+	pl := &pipeline.Pipeline{
+		Policy:    policySvc,
+		Lifecycle: lifecycleReg,
+		Logger:    slog.Default(),
+		// On an upstream auth failure the agent re-resolves the key's secret
+		// out-of-band (rotation), failing over without blocking when other
+		// candidates exist and parking only when this key is the last resort.
+		KeyAgent: appsecret.NewAgent(keyRefresher{store: stores.HostKey, cat: cat}, 0, slog.Default()),
+	}
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
 
 	// Adapter specs — one Spec per supported wire shape. The composition
@@ -488,4 +498,29 @@ func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
 
 func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
+}
+
+// keyRefresher implements appsecret.Refresher. It re-resolves a host key's
+// secret from its backend (hostkey.Store.Get re-runs the secret.Ref through
+// the registry) and, if the value changed, heals the live snapshot via the
+// normal apply path — the same machinery catalog NOTIFY uses. Reused by the
+// KeyAgent to recover from upstream key rotation without a restart.
+type keyRefresher struct {
+	store *hostkey.Store
+	cat   *appcatalog.Catalog
+}
+
+func (r keyRefresher) Refresh(ctx context.Context, keyID string) (string, bool, error) {
+	k, err := r.store.Get(ctx, keyID)
+	if err != nil || k == nil {
+		return "", false, err
+	}
+	cur, ok := r.cat.Current().HostKey(keyID)
+	changed := !ok || cur.Resolved != k.Resolved
+	if changed {
+		if err := r.cat.ApplyHostKeyUpsert(k); err != nil {
+			return k.Resolved, true, err
+		}
+	}
+	return k.Resolved, changed, nil
 }

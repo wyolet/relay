@@ -94,6 +94,11 @@ type Pipeline struct {
 	Policy    *policy.Service
 	Lifecycle *lifecycle.Registry
 	Logger    *slog.Logger
+
+	// KeyAgent decides what to do when an upstream key fails (fail over /
+	// retry-with-refreshed-secret / stop). Nil = legacy behavior. The loop
+	// only consults it for retryable failures.
+	KeyAgent KeyAgent
 }
 
 const defaultMaxAttempts = 3
@@ -154,36 +159,48 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		excluded []*hostkey.HostKey
 		acq      *policy.Acquisition
 		resp     *http.Response
+		keyValue string // current secret for acq.Key; overridden on a heal-retry
+		attempts int    // distinct keys tried (a same-key retry doesn't count)
 		// Last upstream response observed during retry. Carried into the
 		// final error so callers see *why* upstream rejected (otherwise
 		// "all keys exhausted" hides the actual auth/quota/server message).
 		lastStatus int
 		lastBody   string
 	)
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if req.Lifecycle != nil {
-			req.Lifecycle.Attempts = attempt + 1
-		}
-		acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
-			Policy:   req.Policy,
-			Keys:     req.Keys,
-			Excluded: excluded,
-			Model:    req.Model,
-			Host:     req.Host,
-			Provider: req.Provider,
-		})
-		if errors.Is(err, policy.ErrSaturated) {
-			if acq != nil && acq.Key != nil {
-				excluded = append(excluded, acq.Key)
+loop:
+	for {
+		if acq == nil {
+			if attempts >= maxAttempts {
+				break loop
 			}
-			continue
+			acq, err = p.Policy.Acquire(ctx, policy.AcquireInput{
+				Policy:   req.Policy,
+				Keys:     req.Keys,
+				Excluded: excluded,
+				Model:    req.Model,
+				Host:     req.Host,
+				Provider: req.Provider,
+			})
+			if errors.Is(err, policy.ErrSaturated) {
+				if acq != nil && acq.Key != nil {
+					excluded = append(excluded, acq.Key)
+				}
+				acq = nil
+				attempts++
+				continue
+			}
+			if err != nil {
+				break loop
+			}
+			attempts++
+			keyValue = acq.Key.Resolved
 		}
-		if err != nil {
-			break
+		if req.Lifecycle != nil {
+			req.Lifecycle.Attempts = attempts
 		}
 
 		req.Lifecycle.MarkUpstreamStart()
-		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, acq.Key.Resolved, req.Body, req.Headers, req.UpstreamModel, req.Stream)
+		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			return p.makeResult(req, inbound, acq, resp), nil
 		}
@@ -193,12 +210,18 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 			lastStatus = resp.StatusCode
 			lastBody = readBodyExcerpt(resp, 512)
 		}
-		if !retry {
-			break
+
+		moreCandidates := retry && attempts < maxAttempts && untried(req.Keys, excluded, acq.Key) > 0
+		action, fresh := p.handleFailure(ctx, acq, retry, kind, retryAfter, moreCandidates)
+		switch action {
+		case actRetrySame:
+			keyValue = fresh // reuse acq + its reservation; re-call with healed secret
+		case actNextKey:
+			excluded = append(excluded, acq.Key)
+			acq = nil
+		default: // actStop
+			break loop
 		}
-		p.Policy.Release(ctx, acq, kind, retryAfter)
-		excluded = append(excluded, acq.Key)
-		acq = nil
 	}
 
 	if err == nil {
@@ -269,6 +292,68 @@ func classify(a Adapter, resp *http.Response, callErr error) (bool, keypool.Fail
 		return true, keypool.FailureNetwork, 0
 	}
 	return a.Retryable(resp)
+}
+
+type attemptAction int
+
+const (
+	actNextKey   attemptAction = iota // fail over to the next candidate key
+	actRetrySame                      // retry the same key with the fresh secret
+	actStop                           // stop the loop; surface the upstream error
+)
+
+// handleFailure decides what to do after a failed Adapter.Call. Non-retryable
+// failures stop without touching the breaker (a 400 isn't the key's fault).
+// For retryable failures it consults the KeyAgent when set; otherwise it falls
+// back to legacy behavior (release the key → fail over). The breaker-tripping
+// Release is issued on every path that abandons the key (Next / agent-Fail),
+// and skipped on a heal-retry (the key is good again).
+func (p *Pipeline) handleFailure(
+	ctx context.Context,
+	acq *policy.Acquisition,
+	retry bool,
+	kind keypool.FailureKind,
+	retryAfter time.Duration,
+	moreCandidates bool,
+) (attemptAction, string) {
+	if !retry {
+		return actStop, ""
+	}
+	if p.KeyAgent != nil && acq != nil && acq.Key != nil {
+		switch v, fresh := p.KeyAgent.OnFailure(ctx, acq.Key.Meta.ID, kind, moreCandidates); v {
+		case VerdictRetry:
+			return actRetrySame, fresh // healed → reuse the key, no breaker trip
+		case VerdictFail:
+			p.Policy.Release(ctx, acq, kind, retryAfter)
+			return actStop, ""
+		}
+		// VerdictNext falls through to the failover release below.
+	}
+	p.Policy.Release(ctx, acq, kind, retryAfter)
+	return actNextKey, ""
+}
+
+// untried counts keys neither excluded nor currently held — candidates the
+// loop could still fail over to.
+func untried(all, excluded []*hostkey.HostKey, current *hostkey.HostKey) int {
+	skip := make(map[string]struct{}, len(excluded)+1)
+	if current != nil {
+		skip[current.Meta.ID] = struct{}{}
+	}
+	for _, k := range excluded {
+		if k != nil {
+			skip[k.Meta.ID] = struct{}{}
+		}
+	}
+	n := 0
+	for _, k := range all {
+		if k != nil {
+			if _, ok := skip[k.Meta.ID]; !ok {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func (p *Pipeline) makeResult(
