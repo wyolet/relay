@@ -12,7 +12,6 @@ import (
 	"github.com/wyolet/relay/pkg/secret/azure"
 	"github.com/wyolet/relay/pkg/secret/bitwarden"
 	"github.com/wyolet/relay/pkg/secret/gcp"
-	"github.com/wyolet/relay/pkg/secret/onepassword"
 )
 
 // Wire builds the relay's secret-resolution stack over Postgres: the
@@ -46,9 +45,10 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Regi
 	if cfg, err := gcp.ConfigFromEnv(); err == nil {
 		reg.Register(pkgsecret.KindGCP, gcp.New(cfg))
 	}
-	if cfg, ok := onepassword.ConfigFromEnv(); ok {
-		reg.Register(pkgsecret.KindOnePassword, onepassword.New(cfg))
-	}
+	// 1Password's SDK requires CGO, so it's only compiled into cgo builds
+	// (see onepassword_cgo.go / onepassword_nocgo.go). Relay's default
+	// CGO_ENABLED=0 build registers nothing here.
+	registerOnePassword(reg)
 
 	return reg, stored
 }
