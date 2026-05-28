@@ -94,6 +94,15 @@ pkg/                       — server-internal shared libs (NOT the SDK)
     postgres,valkey}/      — usage sinks (heavy deps: ch/pgx/redis). Stay
                              server-side; the PURE usage root is in sdk/usage.
   crypto/                  — AES-GCM helpers (master-key)
+  secret/                  — unified secret resolution: Ref{Kind,Env,ID,Path}
+                             + Resolver/Registry/Writer. Built-in env + stored
+                             (AES-GCM in PG via app/secret.Store). External
+                             FETCH-ONLY backends as subpackages (in-memory,
+                             never persisted): aws (stdlib SigV4), azure, gcp
+                             (stdlib), bitwarden (pure-Go client crypto),
+                             onepassword (official SDK, //go:build cgo — the
+                             SDK needs CGO; excluded from default CGO_ENABLED=0
+                             builds). Composition wires kinds in app/secret.Wire.
   httpmw/, httpheader/     — net/http middleware + header helpers
   ids/, slug/              — UUIDv7, slug minting + collision suffixes
   metrics/                 — Prometheus registry + counters
@@ -538,6 +547,16 @@ Full guide: `docs/cluster.md`.
   is roadmap C3.
 - No cross-tenant pooling.
 - Atomic via Redis Lua across all candidate keys.
+- **Breaker keyed by value-hash** — a rotated key gets a new hash → a fresh
+  (closed) breaker automatically; the old hash's record orphans + TTLs out.
+- **Secret failover/heal via `pipeline.KeyAgent`** (impl `app/secret.Agent`):
+  on a `FailureAuth` the dumb request loop calls `KeyAgent.OnFailure` and obeys
+  the verdict — fail over now + heal the key in the background when other
+  candidates remain, or (last resort) park on a single-flighted re-resolve and
+  retry the SAME key with the fresh value. Revoked (value unchanged) → clean
+  error. The request never imports `secret`; `keyRefresher` (cmd/relay)
+  re-resolves via `hostkey.Store.Get` + heals the snapshot via
+  `ApplyHostKeyUpsert`. Nil KeyAgent = legacy failover.
 
 ### Batch
 
