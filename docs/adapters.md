@@ -12,10 +12,10 @@ severity matrix).
 
 ## Concepts
 
-- **Canonical** is `pkg/relay/v1/` — a narrowed-Responses-shape
+- **Canonical** is `sdk/v1/` — a narrowed-Responses-shape
   protocol that all vendor adapters target. Every cross-shape route
   goes through canonical; there are no pairwise translator packages.
-- **Vendor adapter** is one folder under `pkg/adapters/<vendor>/`.
+- **Vendor adapter** is one folder under `sdk/adapters/<vendor>/`.
   Owns *every* wire shape that vendor serves (e.g. OpenAI owns CC,
   Responses, Embeddings as files within the same package).
 - **Wire shape** is one HTTP API surface (e.g. `/v1/chat/completions`
@@ -28,13 +28,13 @@ severity matrix).
 ## File layout
 
 ```
-pkg/relay/v1/                  CANONICAL protocol — zero imports of app/ or pkg/adapters/<vendor>/
+sdk/v1/                  CANONICAL protocol — zero imports of app/ or sdk/adapters/<vendor>/
   doc.go, types.go, request.go, response.go,
   items.go, parts.go, tools.go, events.go,
   parse.go, serialize.go, sse.go,
   translator.go, name.go, model_opts.go
 
-pkg/adapters/openai/           OpenAI vendor — one folder, ALL OpenAI wire shapes
+sdk/adapters/openai/           OpenAI vendor — one folder, ALL OpenAI wire shapes
   adapter.go, types.go, parse.go, chat_request.go,
   context.go, tokens.go           ← Chat Completions wire
   responses_types.go, responses_request.go,
@@ -46,7 +46,7 @@ pkg/adapters/openai/           OpenAI vendor — one folder, ALL OpenAI wire sha
   translator_responses.go         ← v1.Translator for Responses wire
                                      + NewComposedStream helper
 
-pkg/adapters/anthropic/        Anthropic vendor
+sdk/adapters/anthropic/        Anthropic vendor
   adapter.go, types.go, parse.go,
   content.go, stream.go, tokens.go,
   transform.go, transform_response.go  ← Messages wire
@@ -105,7 +105,7 @@ decides the path:
 ## The Translator interface
 
 ```go
-// pkg/relay/v1/translator.go
+// sdk/v1/translator.go
 type Translator interface {
     ParseRequest(body []byte) (*Request, error)
     SerializeRequest(req *Request) ([]byte, error)
@@ -157,7 +157,7 @@ hardcodes (and tracks the still-open gaps).
 For a new vendor wire shape (e.g. Gemini Native, Bedrock Converse,
 Cohere):
 
-1. Add `pkg/adapters/<vendor>/` with:
+1. Add `sdk/adapters/<vendor>/` with:
    - The vendor wire-shape types (`types.go`, etc.).
    - `translator.go` (or `translator_<shape>.go`) implementing
      `v1.Translator`.
@@ -175,7 +175,7 @@ Cohere):
    }).Build(),
    ```
 4. Add round-trip + composition unit tests in
-   `pkg/adapters/<vendor>/translator_test.go`.
+   `sdk/adapters/<vendor>/translator_test.go`.
 
 **Do not** create a vendor-specific package under `app/` or a pairwise
 translator package. The canonical chain composes any A→B via inbound
@@ -185,7 +185,7 @@ translator package. The canonical chain composes any A→B via inbound
 
 For e.g. Anthropic launching a Messages-v2 endpoint:
 
-1. Add new files to the existing `pkg/adapters/<vendor>/` folder
+1. Add new files to the existing `sdk/adapters/<vendor>/` folder
    (e.g. `messages_v2_*.go`).
 2. Add a new `translator_messages_v2.go` implementing `v1.Translator`.
 3. Add a new `Spec` literal in `cmd/relay/main.go` with that

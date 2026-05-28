@@ -14,7 +14,7 @@ waiting to be written; the path under `docs/` is the placeholder.
   defaults at translate.
 - **OpenAI Responses inbound + cross-shape (Phase 1/1.5)** (PRs #175–#183).
 - **Canonical Phase 2** (PRs #185–#189, 2026-05-22):
-  - `pkg/relay/v1/` canonical protocol package (narrowed Responses;
+  - `sdk/v1/` canonical protocol package (narrowed Responses;
     stateless; `extensions` envelope; `provider_data` opaque field).
   - OpenAI + Anthropic vendor adapters target canonical via
     `v1.Translator`. Pairwise translator packages deleted.
@@ -24,10 +24,10 @@ waiting to be written; the path under `docs/` is the placeholder.
   - Verified via `make smoke-mock` + live Claude Code →
     ollama-self/gpt-oss-120b tool-use round-trip.
 - **Canonical client + `/v1/generate`** (PR #195) — transport-agnostic
-  client (`pkg/relay/client`), canonical served at `/v1/generate`,
+  client (`sdk/client`), canonical served at `/v1/generate`,
   vendor-neutral `cache_config` anchors.
 - **Gemini native adapter** (PRs #201 base / #203 fixes, 2026-05-25) —
-  `pkg/adapters/gemini/` implements `v1.Translator` for the
+  `sdk/adapters/gemini/` implements `v1.Translator` for the
   `generateContent` shape. **Upstream-only** (registered as a Spec with
   no `InboundPaths`; reachable via canonical/OpenAI/Anthropic inbound
   through the cross-shape chain). Introduced `Spec.UpstreamPathFn` +
@@ -52,7 +52,7 @@ waiting to be written; the path under `docs/` is the placeholder.
   each frame dispatches through the unchanged `handleShape`/`Dispatch`
   via a synthetic `http.ResponseWriter` (`app/transport/ws`), so
   pipeline + dispatch are untouched. The canonical client
-  (`pkg/relay/client`) speaks it via `RelayWS(...)` — a pluggable
+  (`sdk/client`) speaks it via `RelayWS(...)` — a pluggable
   `transport` seam (HTTP default, WS new) under the translator;
   sequential per connection (one in-flight request, conn reused across
   turns). Library: `coder/websocket`. Follow-ups: anthropic/openai WS
@@ -188,8 +188,8 @@ seam is already in place — adding one is a contained slice.
 Size: ~3-5 days per adapter (shape parser, Call, ExtractTokens,
 streaming, tests).
 
-Where: `pkg/adapters/<vendor>/` implementing `v1.Translator` + a `Spec`
-literal in `cmd/relay/main.go` (see `pkg/adapters/gemini/` as the
+Where: `sdk/adapters/<vendor>/` implementing `v1.Translator` + a `Spec`
+literal in `cmd/relay/main.go` (see `sdk/adapters/gemini/` as the
 reference for a shape with a URL-path model via `Spec.UpstreamPathFn`).
 
 ---

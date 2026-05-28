@@ -1,7 +1,7 @@
 # Adapter Fidelity Audits
 
 Per-adapter, honest maps of what survives translation to/from the
-canonical protocol (`pkg/relay/v1`) and what is **silently dropped**,
+canonical protocol (`sdk/v1`) and what is **silently dropped**,
 **hardcoded**, or **unsupported**. Mechanics live in
 [`../adapters.md`](../adapters.md); protocol design in
 [`../canonical-protocol.md`](../canonical-protocol.md). These docs are

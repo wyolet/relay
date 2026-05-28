@@ -6,7 +6,7 @@
 
 **Not applicable — pure byte-pass, no canonical mapping exists.** The
 embeddings shape is registered with `BytePass: true` and **no
-`Translator`**. There is no canonical embeddings type in `pkg/relay/v1`
+`Translator`**. There is no canonical embeddings type in `sdk/v1`
 (canonical models text generation only). Requests and responses are
 forwarded verbatim to the upstream `/v1/embeddings` with the model field
 rewritten; nothing is parsed into or out of canonical, so there is no

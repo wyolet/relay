@@ -1,6 +1,6 @@
 # Google Gemini (generateContent) — Canonical Fidelity Audit
 
-> Audited 2026-05-25 against `pkg/adapters/gemini/translator_canonical.go`. Critical, honest map. ADAPTER IS NEW (PR #200), UPSTREAM-ONLY, AND NOT YET DOGFOODED — treat gaps as bugs until proven otherwise.
+> Audited 2026-05-25 against `sdk/adapters/gemini/translator_canonical.go`. Critical, honest map. ADAPTER IS NEW (PR #200), UPSTREAM-ONLY, AND NOT YET DOGFOODED — treat gaps as bugs until proven otherwise.
 
 ---
 
