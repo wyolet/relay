@@ -21,7 +21,7 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
+	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // fakeSnap is a minimal policy.SnapshotReader for tests.

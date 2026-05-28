@@ -59,12 +59,12 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	storagemod "github.com/wyolet/relay/internal/storage"
-	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
-	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
+	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
+	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
 )
 
 // stack is the in-process relay under test: a control listener, an

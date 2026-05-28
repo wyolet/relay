@@ -3,7 +3,7 @@ package pricing
 import (
 	"testing"
 
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 func TestCost_SimpleInputOutput(t *testing.T) {

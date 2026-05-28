@@ -39,18 +39,18 @@ import (
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
-	pkganthropic "github.com/wyolet/relay/pkg/adapters/anthropic"
-	pkggemini "github.com/wyolet/relay/pkg/adapters/gemini"
-	pkgopenai "github.com/wyolet/relay/pkg/adapters/openai"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	relayv1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
 	chsink "github.com/wyolet/relay/pkg/usage/clickhouse"
 	"github.com/wyolet/relay/pkg/usage/file"
 	pgsink "github.com/wyolet/relay/pkg/usage/postgres"
 	vksink "github.com/wyolet/relay/pkg/usage/valkey"
+	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
+	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
+	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
+	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
 func main() {

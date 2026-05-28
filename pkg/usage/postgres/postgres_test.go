@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 func TestIntegration_RoundTrip(t *testing.T) {

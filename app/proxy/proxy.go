@@ -35,7 +35,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
+	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // TokenExtractor extracts upstream usage from a response body. The

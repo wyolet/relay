@@ -1,6 +1,6 @@
 package usagelog
 
-import "github.com/wyolet/relay/pkg/usage"
+import "github.com/wyolet/relay/sdk/usage"
 
 // Event is the canonical per-request usage record. The canonical type
 // lives in pkg/usage so every backend (file, ClickHouse, valkey,

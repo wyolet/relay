@@ -3,7 +3,7 @@ package adapter
 import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // Registry holds all registered adapter specs. Built once at boot in

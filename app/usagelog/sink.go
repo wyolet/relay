@@ -1,6 +1,6 @@
 package usagelog
 
-import "github.com/wyolet/relay/pkg/usage"
+import "github.com/wyolet/relay/sdk/usage"
 
 // Sink consumes usage events. Canonical interface in pkg/usage; the
 // concrete backends (file, clickhouse, valkey, postgres) live under

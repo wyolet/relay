@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/lifecycle"
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // Namespace is the key under which UsageHook attaches its Event to the

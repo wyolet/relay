@@ -31,9 +31,9 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgrelay "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/slug"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
+	pkgusage "github.com/wyolet/relay/sdk/usage"
+	pkgrelay "github.com/wyolet/relay/sdk/v1"
 )
 
 // --- catalog list stubs for dispatch tests ---

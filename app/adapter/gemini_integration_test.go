@@ -11,8 +11,8 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	pkggemini "github.com/wyolet/relay/pkg/adapters/gemini"
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 const testGeminiModel = "gemini-1.5-pro"
