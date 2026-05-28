@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Package onepassword resolves secret.KindOnePassword refs via the official
 // 1Password Go SDK and a service-account token. Fetch-only: plaintext is held
 // in memory, never written to Postgres.
