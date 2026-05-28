@@ -61,6 +61,9 @@ func TestRefValidate(t *testing.T) {
 		{Kind: KindEnv, ID: "x"}, // env without env name
 		{Kind: KindAWS},          // path-addressed, missing path
 		{Kind: KindBitwarden},    // path-addressed, missing path
+		{Kind: KindGCP},          // path-addressed, missing path
+		{Kind: KindAzure},        // path-addressed, missing path
+		{Kind: KindOnePassword},  // path-addressed, missing path
 	}
 	for _, r := range bad {
 		if err := r.Validate(); err == nil {
