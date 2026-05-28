@@ -1,11 +1,15 @@
 package secret
 
 import (
+	"os"
+	"time"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	"github.com/wyolet/relay/pkg/secret/aws"
+	"github.com/wyolet/relay/pkg/secret/bitwarden"
 )
 
 // Wire builds the relay's secret-resolution stack over Postgres: the
@@ -17,7 +21,8 @@ import (
 //
 // masterKey may be nil for env-only deployments — stored resolution then
 // errors loudly, which is the intended behavior when no key is configured.
-// External backends (Vault, AWS SM) register additional kinds here later.
+// Optional external backends (Bitwarden, AWS SM, …) register here when their
+// env config is present.
 func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Registry, *pkgsecret.StoredResolver) {
 	store := NewStore(q, pool)
 	stored := pkgsecret.NewStoredResolver(store, masterKey, 1)
@@ -25,8 +30,37 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Regi
 	reg := pkgsecret.NewRegistry()
 	reg.Register(pkgsecret.KindEnv, pkgsecret.EnvResolver{})
 	reg.Register(pkgsecret.KindStored, stored)
+
 	if cfg, err := aws.ConfigFromEnv(); err == nil {
 		reg.Register(pkgsecret.KindAWS, aws.New(cfg))
 	}
+	if cfg, ok := bitwardenConfigFromEnv(); ok {
+		reg.Register(pkgsecret.KindBitwarden, bitwarden.New(cfg))
+	}
+
 	return reg, stored
+}
+
+func bitwardenConfigFromEnv() (bitwarden.Config, bool) {
+	baseURL := os.Getenv("BW_BASE_URL")
+	if baseURL == "" {
+		return bitwarden.Config{}, false
+	}
+
+	interval := 5 * time.Minute
+	if raw := os.Getenv("BW_SYNC_INTERVAL"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			interval = d
+		}
+	}
+
+	return bitwarden.Config{
+		BaseURL:            baseURL,
+		Email:              os.Getenv("BW_EMAIL"),
+		MasterPassword:     os.Getenv("BW_MASTER_PASSWORD"),
+		ClientID:           os.Getenv("BW_CLIENT_ID"),
+		ClientSecret:       os.Getenv("BW_CLIENT_SECRET"),
+		SyncInterval:       interval,
+		InsecureSkipVerify: os.Getenv("BW_INSECURE_SKIP_TLS_VERIFY") == "1",
+	}, true
 }
