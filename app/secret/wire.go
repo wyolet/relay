@@ -5,6 +5,7 @@ import (
 
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	"github.com/wyolet/relay/pkg/secret/aws"
 )
 
 // Wire builds the relay's secret-resolution stack over Postgres: the
@@ -24,5 +25,8 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Regi
 	reg := pkgsecret.NewRegistry()
 	reg.Register(pkgsecret.KindEnv, pkgsecret.EnvResolver{})
 	reg.Register(pkgsecret.KindStored, stored)
+	if cfg, err := aws.ConfigFromEnv(); err == nil {
+		reg.Register(pkgsecret.KindAWS, aws.New(cfg))
+	}
 	return reg, stored
 }
