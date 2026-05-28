@@ -6,13 +6,6 @@ import (
 	"strings"
 )
 
-// hostPinSkip mirrors app/catalog host-pinned alias omission for hosts whose
-// upstream names do not slug-normalize cleanly.
-var hostPinSkip = map[string]struct{}{
-	"amazon-bedrock": {},
-	"google-vertex":  {},
-}
-
 // IndexedCatalog is a loaded catalog with O(1) resolution maps.
 type IndexedCatalog struct {
 	Catalog *Catalog
@@ -37,12 +30,6 @@ func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 		pinned:    map[string]loc{},
 	}
 	for hi, h := range c.Hosts {
-		if _, skip := hostPinSkip[h.Name]; skip {
-			for bi, b := range h.Models {
-				ic.addBareQualified(hi, bi, b)
-			}
-			continue
-		}
 		for bi, b := range h.Models {
 			ic.addBareQualified(hi, bi, b)
 			pinKey := normRef(b.Model + "@" + h.Name)
