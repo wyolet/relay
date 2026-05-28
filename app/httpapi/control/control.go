@@ -10,8 +10,8 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
@@ -88,15 +88,16 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// endpoints omit it.
 	protect := huma.Middlewares{httpapi.HumaAuth(RequireActor)}
 
-	registerVersion(api)            // public
-	registerAuth(api, d)            // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
-	registerMisc(api, d, protect)   // /master-key/generate, /reload
-	registerCRUD(api, d, protect)   // 8 kinds × CRUD
+	registerVersion(api)          // public
+	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
+	registerMisc(api, d, protect) // /master-key/generate, /reload
+	registerCRUD(api, d, protect) // 8 kinds × CRUD
 	registerHostKeyRotate(api, d, protect)
 	registerReferences(api, d, protect)
 	registerPolicyRelayKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
+	registerCatalogGraph(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
 

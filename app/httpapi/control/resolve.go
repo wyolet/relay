@@ -16,21 +16,42 @@ import (
 // resolveQuery accepts one or more refs. Pass each as a repeated query
 // parameter: GET /catalog/resolve?ref=anthropic&ref=openai/gpt-5
 type resolveQuery struct {
-	Refs []string `query:"ref,explode" required:"true" doc:"One or more catalog refs in the modelref DSL: provider[/model][@host], or @host. Repeat the parameter to union multiple refs."`
+	Refs              []string `query:"ref,explode" required:"true" doc:"One or more catalog refs in the modelref DSL: provider[/model][@host], or @host. Repeat the parameter to union multiple refs."`
+	IncludeDeprecated bool     `query:"includeDeprecated" doc:"Include deprecated models in the expansion. Default false drops them, matching /catalog/graph so counts agree with the picker."`
 }
 
-// resolveOutput is the union expansion of all refs in the request.
+// resolveOutput carries both the per-ref breakdown (Results/Unresolved) and
+// the deduplicated union across all refs (Models/Hosts/Bindings/Expanded).
 type resolveOutput struct {
 	Body struct {
-		Refs     []string            `json:"refs"`
-		Models   []resolveEntity     `json:"models"`
-		Hosts    []resolveEntity     `json:"hosts"`
-		Bindings []resolveBindingRef `json:"bindings"`
+		Refs []string `json:"refs"`
+		// Results is the per-ref expansion, in request order — each input
+		// ref mapped to exactly what it covers. Consumers that classify or
+		// count per individual ref (host-requirement grouping, diagnostics,
+		// dead-ref detection) read this; the union fields below are the
+		// flattened convenience view.
+		Results []refResult `json:"results"`
+		// Unresolved lists the input refs that expanded to nothing (no
+		// enabled binding matched) — dead refs.
+		Unresolved []string            `json:"unresolved"`
+		Models     []resolveEntity     `json:"models"`
+		Hosts      []resolveEntity     `json:"hosts"`
+		Bindings   []resolveBindingRef `json:"bindings"`
 		// Expanded is the canonical "provider/model@host" string for
 		// every matched binding. Sorted, deduplicated. The UI uses this
 		// as the authoritative "what does this picker grant" list.
 		Expanded []string `json:"expanded"`
 	}
+}
+
+// refResult is one input ref's own expansion. Bindings within a ref are
+// unique by construction; Expanded is sorted. Empty Expanded ⇒ dead ref.
+type refResult struct {
+	Ref      string              `json:"ref"`
+	Expanded []string            `json:"expanded"`
+	ModelIDs []string            `json:"modelIds"`
+	HostIDs  []string            `json:"hostIds"`
+	Bindings []resolveBindingRef `json:"bindings"`
 }
 
 type resolveEntity struct {
@@ -46,14 +67,15 @@ type resolveBindingRef struct {
 }
 
 // registerResolve installs GET /catalog/resolve. Each request resolves
-// one or more modelref strings against Postgres (not the data-plane
-// snapshot) and returns the union of matched models, hosts, bindings,
-// and the canonical "provider/model@host" string for every binding.
+// one or more modelref strings against the in-memory snapshot and returns
+// both a per-ref breakdown (results[] + unresolved[]) and the deduplicated
+// union (models/hosts/bindings/expanded).
 //
-// Reading PG keeps the control plane independent of snapshot health
-// and includes disabled rows the operator may legitimately want to see
-// when authoring a policy. The data-plane sanitizer is the gate for
-// what traffic can actually use.
+// Snapshot-backed (same source as /catalog/graph), so it reflects exactly
+// what the data plane can route to now: disabled providers/hosts/models are
+// absent, disabled bindings are skipped, and deprecated models are dropped
+// unless includeDeprecated=true (mirroring graph, so counts agree with the
+// picker). Full-list / detail views use the CRUD APIs (PG) for disabled rows.
 //
 // 400 on any malformed ref; 200 with empty sets on valid-but-no-match.
 func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
@@ -86,13 +108,15 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 			parsed = append(parsed, r)
 		}
 
-		idx, err := loadResolveIndex(ctx, d)
+		idx, err := loadResolveIndex(d)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 
 		out := &resolveOutput{}
 		out.Body.Refs = in.Refs
+		out.Body.Results = make([]refResult, 0, len(parsed))
+		out.Body.Unresolved = []string{}
 		out.Body.Models = []resolveEntity{}
 		out.Body.Hosts = []resolveEntity{}
 		out.Body.Bindings = []resolveBindingRef{}
@@ -101,9 +125,47 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 		seenModel := map[string]struct{}{}
 		seenHost := map[string]struct{}{}
 		seenBinding := map[string]struct{}{}
+		seenExpanded := map[string]struct{}{}
 
-		for _, ref := range parsed {
-			expandRef(idx, ref, out, seenModel, seenHost, seenBinding)
+		for i, ref := range parsed {
+			r := expandOne(idx, in.Refs[i], ref, in.IncludeDeprecated)
+			out.Body.Results = append(out.Body.Results, r)
+			if len(r.Expanded) == 0 {
+				out.Body.Unresolved = append(out.Body.Unresolved, in.Refs[i])
+			}
+			for _, b := range r.Bindings {
+				key := b.ModelID + "|" + b.HostID
+				if _, dup := seenBinding[key]; dup {
+					continue
+				}
+				seenBinding[key] = struct{}{}
+				out.Body.Bindings = append(out.Body.Bindings, b)
+			}
+			for _, e := range r.Expanded {
+				if _, dup := seenExpanded[e]; dup {
+					continue
+				}
+				seenExpanded[e] = struct{}{}
+				out.Body.Expanded = append(out.Body.Expanded, e)
+			}
+			for _, mid := range r.ModelIDs {
+				if _, dup := seenModel[mid]; dup {
+					continue
+				}
+				seenModel[mid] = struct{}{}
+				if m, ok := idx.modelsByID[mid]; ok {
+					out.Body.Models = append(out.Body.Models, entityFromModel(m))
+				}
+			}
+			for _, hid := range r.HostIDs {
+				if _, dup := seenHost[hid]; dup {
+					continue
+				}
+				seenHost[hid] = struct{}{}
+				if h, ok := idx.hostsByID[hid]; ok {
+					out.Body.Hosts = append(out.Body.Hosts, entityFromHost(h))
+				}
+			}
 		}
 
 		sort.Strings(out.Body.Expanded)
@@ -111,35 +173,41 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 }
 
-// resolveIndex is a small ad-hoc graph built from store.List() per
-// request — the control-plane equivalent of what the data-plane
-// snapshot provides. Cheap rebuild; admin endpoint, no SLO.
+// resolveIndex is a small ad-hoc graph built from the in-memory catalog
+// snapshot — the same source the data plane routes against. Reading the
+// snapshot (not PG) is deliberate: resolve/graph answer "what can we route
+// to right now", so they must reflect exactly the enabled, reconciled set
+// the data plane sees. Disabled providers/hosts/models are already absent
+// from the snapshot; binding-level Enabled is the one dimension callers
+// must still honour (the snapshot keeps disabled bindings on enabled
+// models). Full-list / detail views use the CRUD APIs (PG) instead — they
+// intentionally show disabled rows.
 type resolveIndex struct {
 	providersByID    map[string]*provider.Provider
 	providersByName  map[string]*provider.Provider
 	hostsByID        map[string]*host.Host
 	allModels        []*model.Model
+	modelsByID       map[string]*model.Model
 	modelsByProvider map[string][]*model.Model
 }
 
-func loadResolveIndex(ctx context.Context, d Deps) (*resolveIndex, error) {
-	provs, err := d.Stores.Provider.List(ctx)
-	if err != nil {
-		return nil, err
+func loadResolveIndex(d Deps) (*resolveIndex, error) {
+	if d.Catalog == nil {
+		return nil, errors.New("catalog not ready")
 	}
-	hosts, err := d.Stores.Host.List(ctx)
-	if err != nil {
-		return nil, err
+	snap := d.Catalog.Current()
+	if snap == nil {
+		return nil, errors.New("catalog snapshot not ready")
 	}
-	models, err := d.Stores.Model.List(ctx)
-	if err != nil {
-		return nil, err
-	}
+	provs := snap.AllProviders()
+	hosts := snap.Hosts()
+	models := snap.AllModels() // already sorted by slug
 	idx := &resolveIndex{
 		providersByID:    make(map[string]*provider.Provider, len(provs)),
 		providersByName:  make(map[string]*provider.Provider, len(provs)),
 		hostsByID:        make(map[string]*host.Host, len(hosts)),
 		allModels:        models,
+		modelsByID:       make(map[string]*model.Model, len(models)),
 		modelsByProvider: map[string][]*model.Model{},
 	}
 	for _, p := range provs {
@@ -150,40 +218,42 @@ func loadResolveIndex(ctx context.Context, d Deps) (*resolveIndex, error) {
 		idx.hostsByID[h.Meta.ID] = h
 	}
 	for _, m := range models {
+		idx.modelsByID[m.Meta.ID] = m
 		idx.modelsByProvider[m.Meta.Owner.ID] = append(idx.modelsByProvider[m.Meta.Owner.ID], m)
 	}
-	for k := range idx.modelsByProvider {
-		sort.Slice(idx.modelsByProvider[k], func(i, j int) bool {
-			return idx.modelsByProvider[k][i].Meta.Name < idx.modelsByProvider[k][j].Meta.Name
-		})
-	}
-	sort.Slice(idx.allModels, func(i, j int) bool {
-		return idx.allModels[i].Meta.Name < idx.allModels[j].Meta.Name
-	})
 	return idx, nil
 }
 
-// expandRef walks the index for one ref and appends matches to out,
-// skipping anything already seen via the dedup maps.
-func expandRef(
-	idx *resolveIndex,
-	ref modelref.Ref,
-	out *resolveOutput,
-	seenModel, seenHost, seenBinding map[string]struct{},
-) {
+// expandOne walks the index for a single ref and returns its own expansion:
+// the matched binding strings, plus the (deduplicated) model and host ids it
+// covers. Disabled bindings are skipped; deprecated models are skipped unless
+// includeDeprecated. Bindings are unique by construction, so no dedup needed.
+func expandOne(idx *resolveIndex, raw string, ref modelref.Ref, includeDeprecated bool) refResult {
+	res := refResult{
+		Ref:      raw,
+		Expanded: []string{},
+		ModelIDs: []string{},
+		HostIDs:  []string{},
+		Bindings: []resolveBindingRef{},
+	}
+
 	var modelsToWalk []*model.Model
 	if ref.ProviderWildcard {
 		modelsToWalk = idx.allModels
 	} else {
 		prov, ok := idx.providersByName[ref.Provider]
 		if !ok {
-			return
+			return res
 		}
 		modelsToWalk = idx.modelsByProvider[prov.Meta.ID]
 	}
 
+	seenHost := map[string]struct{}{}
 	for _, m := range modelsToWalk {
 		if !ref.ModelWildcard && m.Meta.Name != ref.Model {
+			continue
+		}
+		if !includeDeprecated && deprecationStatus(m) != "" {
 			continue
 		}
 		var providerSlug string
@@ -193,6 +263,9 @@ func expandRef(
 		modelMatched := false
 		for i := range m.Spec.Hosts {
 			hb := &m.Spec.Hosts[i]
+			if !hb.IsEnabled() {
+				continue
+			}
 			h, ok := idx.hostsByID[hb.HostID]
 			if !ok {
 				continue
@@ -201,37 +274,28 @@ func expandRef(
 				continue
 			}
 			modelMatched = true
-
-			bindKey := m.Meta.ID + "|" + h.Meta.ID
-			if _, dup := seenBinding[bindKey]; !dup {
-				seenBinding[bindKey] = struct{}{}
-				out.Body.Bindings = append(out.Body.Bindings, resolveBindingRef{
-					ModelID: m.Meta.ID,
-					HostID:  h.Meta.ID,
-				})
-				out.Body.Expanded = append(out.Body.Expanded,
-					providerSlug+"/"+m.Meta.Name+"@"+h.Meta.Name)
-			}
+			res.Bindings = append(res.Bindings, resolveBindingRef{ModelID: m.Meta.ID, HostID: h.Meta.ID})
+			res.Expanded = append(res.Expanded, providerSlug+"/"+m.Meta.Name+"@"+h.Meta.Name)
 			if _, dup := seenHost[h.Meta.ID]; !dup {
 				seenHost[h.Meta.ID] = struct{}{}
-				out.Body.Hosts = append(out.Body.Hosts, entityFromHost(h))
+				res.HostIDs = append(res.HostIDs, h.Meta.ID)
 			}
 		}
 		if modelMatched {
-			if _, dup := seenModel[m.Meta.ID]; !dup {
-				seenModel[m.Meta.ID] = struct{}{}
-				out.Body.Models = append(out.Body.Models, entityFromModel(m))
-			}
+			res.ModelIDs = append(res.ModelIDs, m.Meta.ID)
 		}
 	}
+	sort.Strings(res.Expanded)
+	return res
 }
 
 func entityFromModel(m *model.Model) resolveEntity {
-	e := resolveEntity{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
-	if m.Spec.Deprecation != nil {
-		e.Deprecated = string(m.Spec.Deprecation.Status)
+	return resolveEntity{
+		ID:          m.Meta.ID,
+		Name:        m.Meta.Name,
+		DisplayName: m.Meta.DisplayName,
+		Deprecated:  deprecationStatus(m),
 	}
-	return e
 }
 
 func entityFromHost(h *host.Host) resolveEntity {
