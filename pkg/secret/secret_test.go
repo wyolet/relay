@@ -75,6 +75,8 @@ func TestRefValidate(t *testing.T) {
 		{Kind: KindStored, ID: "abc"},
 		{Kind: KindAWS, Path: "prod/openai-key:apiKey"},
 		{Kind: KindBitwarden, Path: "openai-key/password"},
+		{Kind: KindGCP, Path: "openai-key"},
+		{Kind: KindGCP, Path: "openai-key:3"},
 	}
 	for _, r := range good {
 		if err := r.Validate(); err != nil {
