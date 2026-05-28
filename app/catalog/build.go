@@ -21,6 +21,22 @@ import (
 	"github.com/wyolet/relay/app/relaykey"
 )
 
+// Build assembles a Snapshot from entity slices using the same sanitize rules
+// as Reload. Used by catalog-embed and tests; callers supply only the kinds
+// they need — pass nil/empty slices for the rest.
+func Build(
+	provs []*provider.Provider,
+	hosts []*host.Host,
+	pols []*policy.Policy,
+	rks []*relaykey.RelayKey,
+	models []*model.Model,
+	keys []*hostkey.HostKey,
+	rls []*ratelimit.RateLimit,
+	pricings []*pricing.Pricing,
+) *Snapshot {
+	return build(provs, hosts, pols, rks, models, keys, rls, pricings)
+}
+
 func build(
 	provs []*provider.Provider,
 	hosts []*host.Host,

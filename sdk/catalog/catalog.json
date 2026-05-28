@@ -1,0 +1,7377 @@
+{
+  "version": "relay-catalog@v1alpha2",
+  "generatedAt": "2026-05-28T04:36:37.664648Z",
+  "hosts": [
+    {
+      "name": "anthropic",
+      "baseURL": "https://api.anthropic.com",
+      "models": [
+        {
+          "model": "claude-3-7-sonnet-20250219",
+          "adapter": "anthropic",
+          "upstream": "claude-3-7-sonnet-20250219",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            }
+          ]
+        },
+        {
+          "model": "claude-3-haiku-20240307",
+          "adapter": "anthropic",
+          "upstream": "claude-3-haiku-20240307",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.03
+            }
+          ]
+        },
+        {
+          "model": "claude-3-opus-20240229",
+          "adapter": "anthropic",
+          "upstream": "claude-3-opus-20240229",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 75
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 18.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "claude-4-opus-20250514",
+          "adapter": "anthropic",
+          "upstream": "claude-4-opus-20250514",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 75
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 18.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "claude-4-sonnet-20250514",
+          "adapter": "anthropic",
+          "upstream": "claude-4-sonnet-20250514",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 22.5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "adapter": "anthropic",
+          "upstream": "claude-haiku-4-5",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.09999999999999999
+            }
+          ]
+        },
+        {
+          "model": "claude-haiku-4-5-20251001",
+          "adapter": "anthropic",
+          "upstream": "claude-haiku-4-5-20251001",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.09999999999999999
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-1",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-1",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 75
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 18.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-1-20250805",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-1-20250805",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 75
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 18.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-20250514",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-20250514",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 75
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 18.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-5",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-5",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-5-20251101",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-5-20251101",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-6",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-6",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-6-20260205",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-6-20260205",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-7",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-7",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-7-20260416",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-7-20260416",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-sonnet-4-20250514",
+          "adapter": "anthropic",
+          "upstream": "claude-sonnet-4-20250514",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 22.5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "claude-sonnet-4-5",
+          "adapter": "anthropic",
+          "upstream": "claude-sonnet-4-5",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 22.5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "claude-sonnet-4-5-20250929",
+          "adapter": "anthropic",
+          "upstream": "claude-sonnet-4-5-20250929",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 22.5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "adapter": "anthropic",
+          "upstream": "claude-sonnet-4-6",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "google-ai-studio",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "models": [
+        {
+          "model": "gemini-2-5-flash",
+          "adapter": "openai",
+          "upstream": "gemini-2.5-flash",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.03
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 2.5
+            }
+          ]
+        },
+        {
+          "model": "gemini-2-5-flash-001",
+          "adapter": "openai",
+          "upstream": "gemini-2.5-flash-001",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.03
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 2.5
+            }
+          ]
+        },
+        {
+          "model": "gemini-2-5-flash-lite",
+          "adapter": "openai",
+          "upstream": "gemini-2.5-flash-lite",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1
+            },
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.01
+            }
+          ]
+        },
+        {
+          "model": "gemini-2-5-pro",
+          "adapter": "openai",
+          "upstream": "gemini-2.5-pro",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "gemini-2-5-pro-001",
+          "adapter": "openai",
+          "upstream": "gemini-2.5-pro-001",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-1-flash-lite",
+          "adapter": "openai",
+          "upstream": "gemini-3.1-flash-lite",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.025
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-1-flash-lite-preview",
+          "adapter": "openai",
+          "upstream": "gemini-3.1-flash-lite-preview",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.025
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-1-pro-preview",
+          "adapter": "openai",
+          "upstream": "gemini-3.1-pro-preview",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 12
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 18,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-5-flash",
+          "adapter": "openai",
+          "upstream": "gemini-3.5-flash",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 9
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 18,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.15
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-flash-preview",
+          "adapter": "openai",
+          "upstream": "gemini-3-flash-preview",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.05
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ollama-cloud",
+      "baseURL": "https://ollama.com",
+      "models": [
+        {
+          "model": "cogito-2-1-671b-cloud",
+          "adapter": "openai",
+          "upstream": "cogito-2.1:671b-cloud",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "deepseek-ocr-cloud",
+          "adapter": "openai",
+          "upstream": "deepseek-ocr:cloud",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v3-1-671b",
+          "adapter": "openai",
+          "upstream": "deepseek-v3.1:671b-cloud",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v3-2-cloud",
+          "adapter": "openai",
+          "upstream": "deepseek-v3.2:cloud",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v4-flash-cloud",
+          "adapter": "openai",
+          "upstream": "deepseek-v4-flash:cloud",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v4-pro-cloud",
+          "adapter": "openai",
+          "upstream": "deepseek-v4-pro:cloud",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "gemini-3-flash-preview-cloud",
+          "adapter": "openai",
+          "upstream": "gemini-3-flash-preview:cloud",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-12b-cloud",
+          "adapter": "openai",
+          "upstream": "gemma3:12b-cloud",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-1b",
+          "adapter": "openai",
+          "upstream": "gemma3:1b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-270m",
+          "adapter": "openai",
+          "upstream": "gemma3:270m",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-27b-cloud",
+          "adapter": "openai",
+          "upstream": "gemma3:27b-cloud",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-4b-cloud",
+          "adapter": "openai",
+          "upstream": "gemma3:4b-cloud",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-26b",
+          "adapter": "openai",
+          "upstream": "gemma4:26b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-31b-cloud",
+          "adapter": "openai",
+          "upstream": "gemma4:31b-cloud",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-e2b",
+          "adapter": "openai",
+          "upstream": "gemma4:e2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-e4b",
+          "adapter": "openai",
+          "upstream": "gemma4:e4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "glm-4-6-cloud",
+          "adapter": "openai",
+          "upstream": "glm-4.6:cloud",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm-4-7-cloud",
+          "adapter": "openai",
+          "upstream": "glm-4.7:cloud",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm-4-7-flash-cloud",
+          "adapter": "openai",
+          "upstream": "glm-4.7-flash:cloud",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm-5-1-cloud",
+          "adapter": "openai",
+          "upstream": "glm-5.1:cloud",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm-5-cloud",
+          "adapter": "openai",
+          "upstream": "glm-5:cloud",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm-ocr-cloud",
+          "adapter": "openai",
+          "upstream": "glm-ocr:cloud",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "gpt-oss-120b-cloud",
+          "adapter": "openai",
+          "upstream": "gpt-oss:120b-cloud",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "gpt-oss-20b-cloud",
+          "adapter": "openai",
+          "upstream": "gpt-oss:20b-cloud",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "kimi-k2-1t-cloud",
+          "adapter": "openai",
+          "upstream": "kimi-k2:1t-cloud",
+          "providers": [
+            "moonshot"
+          ]
+        },
+        {
+          "model": "kimi-k2-5-cloud",
+          "adapter": "openai",
+          "upstream": "kimi-k2.5:cloud",
+          "providers": [
+            "moonshot"
+          ]
+        },
+        {
+          "model": "kimi-k2-6-cloud",
+          "adapter": "openai",
+          "upstream": "kimi-k2.6:cloud",
+          "providers": [
+            "moonshot"
+          ]
+        },
+        {
+          "model": "kimi-k2-thinking-cloud",
+          "adapter": "openai",
+          "upstream": "kimi-k2-thinking:cloud",
+          "providers": [
+            "moonshot"
+          ]
+        },
+        {
+          "model": "minimax-m2-1-cloud",
+          "adapter": "openai",
+          "upstream": "minimax-m2.1:cloud",
+          "providers": [
+            "minimax"
+          ]
+        },
+        {
+          "model": "minimax-m2-5-cloud",
+          "adapter": "openai",
+          "upstream": "minimax-m2.5:cloud",
+          "providers": [
+            "minimax"
+          ]
+        },
+        {
+          "model": "minimax-m2-7-cloud",
+          "adapter": "openai",
+          "upstream": "minimax-m2.7:cloud",
+          "providers": [
+            "minimax"
+          ]
+        },
+        {
+          "model": "minimax-m2-cloud",
+          "adapter": "openai",
+          "upstream": "minimax-m2:cloud",
+          "providers": [
+            "minimax"
+          ]
+        },
+        {
+          "model": "ministral-3-14b-cloud",
+          "adapter": "openai",
+          "upstream": "ministral-3:14b-cloud",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "ministral-3-3b-cloud",
+          "adapter": "openai",
+          "upstream": "ministral-3:3b-cloud",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "ministral-3-8b-cloud",
+          "adapter": "openai",
+          "upstream": "ministral-3:8b-cloud",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-large-3-675b-cloud",
+          "adapter": "openai",
+          "upstream": "mistral-large-3:675b-cloud",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "nemotron-3-nano-30b-cloud",
+          "adapter": "openai",
+          "upstream": "nemotron-3-nano:30b-cloud",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-3-nano-4b",
+          "adapter": "openai",
+          "upstream": "nemotron-3-nano:4b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-3-super-cloud",
+          "adapter": "openai",
+          "upstream": "nemotron-3-super:cloud",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "qwen3-5-0-8b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:0.8b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-122b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:122b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-27b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:27b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-2b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:2b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-35b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:35b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-397b-cloud",
+          "adapter": "openai",
+          "upstream": "qwen3.5:397b-cloud",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-4b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-9b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:9b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-30b",
+          "adapter": "openai",
+          "upstream": "qwen3-coder:30b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-480b-cloud",
+          "adapter": "openai",
+          "upstream": "qwen3-coder:480b-cloud",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-next-cloud",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-next:cloud",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-next-80b-cloud",
+          "adapter": "openai",
+          "upstream": "qwen3-next:80b-cloud",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-235b-cloud",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:235b-cloud",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-235b-instruct-cloud",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:235b-instruct-cloud",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-2b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:2b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-30b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:30b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-32b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-4b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-8b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:8b",
+          "providers": [
+            "alibaba"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ollama-self",
+      "baseURL": "",
+      "models": [
+        {
+          "model": "all-minilm-22m",
+          "adapter": "openai",
+          "upstream": "all-minilm:22m",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "all-minilm-33m",
+          "adapter": "openai",
+          "upstream": "all-minilm:33m",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "athene-v2-72b",
+          "adapter": "openai",
+          "upstream": "athene-v2:72b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "athene-v2-latest",
+          "adapter": "openai",
+          "upstream": "athene-v2:latest",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "aya-35b",
+          "adapter": "openai",
+          "upstream": "aya:35b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "aya-8b",
+          "adapter": "openai",
+          "upstream": "aya:8b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "aya-expanse-32b",
+          "adapter": "openai",
+          "upstream": "aya-expanse:32b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "aya-expanse-8b",
+          "adapter": "openai",
+          "upstream": "aya-expanse:8b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "bakllava-7b",
+          "adapter": "openai",
+          "upstream": "bakllava:7b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "bakllava-latest",
+          "adapter": "openai",
+          "upstream": "bakllava:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "bge-large-335m",
+          "adapter": "openai",
+          "upstream": "bge-large:335m",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "bge-large-latest",
+          "adapter": "openai",
+          "upstream": "bge-large:latest",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "bge-m3-567m",
+          "adapter": "openai",
+          "upstream": "bge-m3:567m",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "bge-m3-latest",
+          "adapter": "openai",
+          "upstream": "bge-m3:latest",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "codegeex4",
+          "adapter": "openai",
+          "upstream": "codegeex4",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "codegemma-2b",
+          "adapter": "openai",
+          "upstream": "codegemma:2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "codegemma-7b",
+          "adapter": "openai",
+          "upstream": "codegemma:7b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "codellama-13b",
+          "adapter": "openai",
+          "upstream": "codellama:13b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "codellama-34b",
+          "adapter": "openai",
+          "upstream": "codellama:34b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "codellama-70b",
+          "adapter": "openai",
+          "upstream": "codellama:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "codellama-7b",
+          "adapter": "openai",
+          "upstream": "codellama:7b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "codeqwen-7b",
+          "adapter": "openai",
+          "upstream": "codeqwen:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "codeqwen-latest",
+          "adapter": "openai",
+          "upstream": "codeqwen:latest",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "codestral-22b",
+          "adapter": "openai",
+          "upstream": "codestral:22b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "codestral-latest",
+          "adapter": "openai",
+          "upstream": "codestral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "cogito-14b",
+          "adapter": "openai",
+          "upstream": "cogito:14b",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "cogito-2-1-671b",
+          "adapter": "openai",
+          "upstream": "cogito-2.1:671b",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "cogito-2-1-latest",
+          "adapter": "openai",
+          "upstream": "cogito-2.1:latest",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "cogito-32b",
+          "adapter": "openai",
+          "upstream": "cogito:32b",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "cogito-3b",
+          "adapter": "openai",
+          "upstream": "cogito:3b",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "cogito-70b",
+          "adapter": "openai",
+          "upstream": "cogito:70b",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "cogito-8b",
+          "adapter": "openai",
+          "upstream": "cogito:8b",
+          "providers": [
+            "cogito"
+          ]
+        },
+        {
+          "model": "command-a-111b",
+          "adapter": "openai",
+          "upstream": "command-a:111b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-a-latest",
+          "adapter": "openai",
+          "upstream": "command-a:latest",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r-35b",
+          "adapter": "openai",
+          "upstream": "command-r:35b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r-latest",
+          "adapter": "openai",
+          "upstream": "command-r:latest",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r-plus-104b",
+          "adapter": "openai",
+          "upstream": "command-r-plus:104b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r-plus-latest",
+          "adapter": "openai",
+          "upstream": "command-r-plus:latest",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r7b-7b",
+          "adapter": "openai",
+          "upstream": "command-r7b:7b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r7b-arabic-7b",
+          "adapter": "openai",
+          "upstream": "command-r7b-arabic:7b",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r7b-arabic-latest",
+          "adapter": "openai",
+          "upstream": "command-r7b-arabic:latest",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "command-r7b-latest",
+          "adapter": "openai",
+          "upstream": "command-r7b:latest",
+          "providers": [
+            "cohere"
+          ]
+        },
+        {
+          "model": "dbrx-132b",
+          "adapter": "openai",
+          "upstream": "dbrx:132b",
+          "providers": [
+            "databricks"
+          ]
+        },
+        {
+          "model": "dbrx-latest",
+          "adapter": "openai",
+          "upstream": "dbrx:latest",
+          "providers": [
+            "databricks"
+          ]
+        },
+        {
+          "model": "deepcoder-1-5b",
+          "adapter": "openai",
+          "upstream": "deepcoder:1.5b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepcoder-14b",
+          "adapter": "openai",
+          "upstream": "deepcoder:14b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepscaler-1-5b",
+          "adapter": "openai",
+          "upstream": "deepscaler:1.5b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepscaler-latest",
+          "adapter": "openai",
+          "upstream": "deepscaler:latest",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-1-3b",
+          "adapter": "openai",
+          "upstream": "deepseek-coder:1.3b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-33b",
+          "adapter": "openai",
+          "upstream": "deepseek-coder:33b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-6-7b",
+          "adapter": "openai",
+          "upstream": "deepseek-coder:6.7b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-v2-16b",
+          "adapter": "openai",
+          "upstream": "deepseek-coder-v2:16b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-v2-236b",
+          "adapter": "openai",
+          "upstream": "deepseek-coder-v2:236b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-v2-instruct",
+          "adapter": "openai",
+          "upstream": "deepseek-coder-v2-instruct",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-coder-v2-lite-instruct",
+          "adapter": "openai",
+          "upstream": "deepseek-coder-v2-lite-instruct",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-llm-67b",
+          "adapter": "openai",
+          "upstream": "deepseek-llm:67b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-llm-7b",
+          "adapter": "openai",
+          "upstream": "deepseek-llm:7b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-ocr-latest",
+          "adapter": "openai",
+          "upstream": "deepseek-ocr:latest",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-1-5b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:1.5b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-14b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:14b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-32b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:32b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-671b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:671b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-70b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:70b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-7b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:7b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-r1-8b",
+          "adapter": "openai",
+          "upstream": "deepseek-r1:8b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v2-16b",
+          "adapter": "openai",
+          "upstream": "deepseek-v2:16b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v2-236b",
+          "adapter": "openai",
+          "upstream": "deepseek-v2:236b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v2-5-236b",
+          "adapter": "openai",
+          "upstream": "deepseek-v2.5:236b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v2-5-latest",
+          "adapter": "openai",
+          "upstream": "deepseek-v2.5:latest",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v3-1-671b",
+          "adapter": "openai",
+          "upstream": "deepseek-v3.1:671b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v3-1-latest",
+          "adapter": "openai",
+          "upstream": "deepseek-v3.1:latest",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v3-671b",
+          "adapter": "openai",
+          "upstream": "deepseek-v3:671b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "deepseek-v3-latest",
+          "adapter": "openai",
+          "upstream": "deepseek-v3:latest",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "devstral-2-32b",
+          "adapter": "openai",
+          "upstream": "devstral-2:32b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "devstral-2-latest",
+          "adapter": "openai",
+          "upstream": "devstral-2:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "devstral-24b",
+          "adapter": "openai",
+          "upstream": "devstral:24b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "devstral-latest",
+          "adapter": "openai",
+          "upstream": "devstral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "devstral-small-2-latest",
+          "adapter": "openai",
+          "upstream": "devstral-small-2:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "dolphin-llama3-70b",
+          "adapter": "openai",
+          "upstream": "dolphin-llama3:70b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-llama3-8b",
+          "adapter": "openai",
+          "upstream": "dolphin-llama3:8b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-mistral-7b",
+          "adapter": "openai",
+          "upstream": "dolphin-mistral:7b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-mistral-latest",
+          "adapter": "openai",
+          "upstream": "dolphin-mistral:latest",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-mixtral-8x22b",
+          "adapter": "openai",
+          "upstream": "dolphin-mixtral:8x22b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-mixtral-8x7b",
+          "adapter": "openai",
+          "upstream": "dolphin-mixtral:8x7b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-phi-2-7b",
+          "adapter": "openai",
+          "upstream": "dolphin-phi:2.7b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin-phi-latest",
+          "adapter": "openai",
+          "upstream": "dolphin-phi:latest",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin3-8b",
+          "adapter": "openai",
+          "upstream": "dolphin3:8b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphin3-latest",
+          "adapter": "openai",
+          "upstream": "dolphin3:latest",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphincoder-15b",
+          "adapter": "openai",
+          "upstream": "dolphincoder:15b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "dolphincoder-7b",
+          "adapter": "openai",
+          "upstream": "dolphincoder:7b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "embeddinggemma-300m",
+          "adapter": "openai",
+          "upstream": "embeddinggemma:300m",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "embeddinggemma-latest",
+          "adapter": "openai",
+          "upstream": "embeddinggemma:latest",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "exaone-deep-2-4b",
+          "adapter": "openai",
+          "upstream": "exaone-deep:2.4b",
+          "providers": [
+            "lgai"
+          ]
+        },
+        {
+          "model": "exaone-deep-32b",
+          "adapter": "openai",
+          "upstream": "exaone-deep:32b",
+          "providers": [
+            "lgai"
+          ]
+        },
+        {
+          "model": "exaone-deep-7-8b",
+          "adapter": "openai",
+          "upstream": "exaone-deep:7.8b",
+          "providers": [
+            "lgai"
+          ]
+        },
+        {
+          "model": "exaone3-5-2-4b",
+          "adapter": "openai",
+          "upstream": "exaone3.5:2.4b",
+          "providers": [
+            "lgai"
+          ]
+        },
+        {
+          "model": "exaone3-5-32b",
+          "adapter": "openai",
+          "upstream": "exaone3.5:32b",
+          "providers": [
+            "lgai"
+          ]
+        },
+        {
+          "model": "exaone3-5-7-8b",
+          "adapter": "openai",
+          "upstream": "exaone3.5:7.8b",
+          "providers": [
+            "lgai"
+          ]
+        },
+        {
+          "model": "falcon-180b",
+          "adapter": "openai",
+          "upstream": "falcon:180b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon-40b",
+          "adapter": "openai",
+          "upstream": "falcon:40b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon-7b",
+          "adapter": "openai",
+          "upstream": "falcon:7b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon2-11b",
+          "adapter": "openai",
+          "upstream": "falcon2:11b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon2-latest",
+          "adapter": "openai",
+          "upstream": "falcon2:latest",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon3-10b",
+          "adapter": "openai",
+          "upstream": "falcon3:10b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon3-1b",
+          "adapter": "openai",
+          "upstream": "falcon3:1b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon3-3b",
+          "adapter": "openai",
+          "upstream": "falcon3:3b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "falcon3-7b",
+          "adapter": "openai",
+          "upstream": "falcon3:7b",
+          "providers": [
+            "tii"
+          ]
+        },
+        {
+          "model": "functiongemma-latest",
+          "adapter": "openai",
+          "upstream": "functiongemma:latest",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemini-3-flash-preview-latest",
+          "adapter": "openai",
+          "upstream": "gemini-3-flash-preview:latest",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma-2b",
+          "adapter": "openai",
+          "upstream": "gemma:2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma-7b",
+          "adapter": "openai",
+          "upstream": "gemma:7b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma2-27b",
+          "adapter": "openai",
+          "upstream": "gemma2:27b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma2-2b",
+          "adapter": "openai",
+          "upstream": "gemma2:2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma2-9b",
+          "adapter": "openai",
+          "upstream": "gemma2:9b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-12b",
+          "adapter": "openai",
+          "upstream": "gemma3:12b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-1b",
+          "adapter": "openai",
+          "upstream": "gemma3:1b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-270m",
+          "adapter": "openai",
+          "upstream": "gemma3:270m",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-27b",
+          "adapter": "openai",
+          "upstream": "gemma3:27b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3-4b",
+          "adapter": "openai",
+          "upstream": "gemma3:4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3n-e2b",
+          "adapter": "openai",
+          "upstream": "gemma3n:e2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma3n-e4b",
+          "adapter": "openai",
+          "upstream": "gemma3n:e4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-26b",
+          "adapter": "openai",
+          "upstream": "gemma4:26b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-31b",
+          "adapter": "openai",
+          "upstream": "gemma4:31b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-e2b",
+          "adapter": "openai",
+          "upstream": "gemma4:e2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-e4b",
+          "adapter": "openai",
+          "upstream": "gemma4:e4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "glm-ocr-latest",
+          "adapter": "openai",
+          "upstream": "glm-ocr:latest",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm4-9b",
+          "adapter": "openai",
+          "upstream": "glm4:9b",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "glm4-latest",
+          "adapter": "openai",
+          "upstream": "glm4:latest",
+          "providers": [
+            "zhipuai"
+          ]
+        },
+        {
+          "model": "gpt-oss-120b",
+          "adapter": "openai",
+          "upstream": "gpt-oss:120b",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "gpt-oss-120b-cloud",
+          "adapter": "openai",
+          "upstream": "gpt-oss:120b-cloud",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "gpt-oss-20b",
+          "adapter": "openai",
+          "upstream": "gpt-oss:20b",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "gpt-oss-safeguard-120b",
+          "adapter": "openai",
+          "upstream": "gpt-oss-safeguard:120b",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "gpt-oss-safeguard-20b",
+          "adapter": "openai",
+          "upstream": "gpt-oss-safeguard:20b",
+          "providers": [
+            "openai"
+          ]
+        },
+        {
+          "model": "granite-code-20b",
+          "adapter": "openai",
+          "upstream": "granite-code:20b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite-code-34b",
+          "adapter": "openai",
+          "upstream": "granite-code:34b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite-code-3b",
+          "adapter": "openai",
+          "upstream": "granite-code:3b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite-code-8b",
+          "adapter": "openai",
+          "upstream": "granite-code:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite-embedding-278m",
+          "adapter": "openai",
+          "upstream": "granite-embedding:278m",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite-embedding-30m",
+          "adapter": "openai",
+          "upstream": "granite-embedding:30m",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-1-dense-2b",
+          "adapter": "openai",
+          "upstream": "granite3.1-dense:2b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-1-dense-8b",
+          "adapter": "openai",
+          "upstream": "granite3.1-dense:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-1-moe-1b",
+          "adapter": "openai",
+          "upstream": "granite3.1-moe:1b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-1-moe-3b",
+          "adapter": "openai",
+          "upstream": "granite3.1-moe:3b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-2-2b",
+          "adapter": "openai",
+          "upstream": "granite3.2:2b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-2-8b",
+          "adapter": "openai",
+          "upstream": "granite3.2:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-2-vision-2b",
+          "adapter": "openai",
+          "upstream": "granite3.2-vision:2b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-2-vision-latest",
+          "adapter": "openai",
+          "upstream": "granite3.2-vision:latest",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-3-8b",
+          "adapter": "openai",
+          "upstream": "granite3.3:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-3-latest",
+          "adapter": "openai",
+          "upstream": "granite3.3:latest",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-dense-2b",
+          "adapter": "openai",
+          "upstream": "granite3-dense:2b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-dense-8b",
+          "adapter": "openai",
+          "upstream": "granite3-dense:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-guardian-2b",
+          "adapter": "openai",
+          "upstream": "granite3-guardian:2b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-guardian-8b",
+          "adapter": "openai",
+          "upstream": "granite3-guardian:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-moe-1b",
+          "adapter": "openai",
+          "upstream": "granite3-moe:1b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3-moe-3b",
+          "adapter": "openai",
+          "upstream": "granite3-moe:3b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3n-e2b",
+          "adapter": "openai",
+          "upstream": "granite3n:e2b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite3n-e4b",
+          "adapter": "openai",
+          "upstream": "granite3n:e4b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite4-1-30b",
+          "adapter": "openai",
+          "upstream": "granite4.1:30b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite4-1-3b",
+          "adapter": "openai",
+          "upstream": "granite4.1:3b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite4-1-8b",
+          "adapter": "openai",
+          "upstream": "granite4.1:8b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite4-1b",
+          "adapter": "openai",
+          "upstream": "granite4:1b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite4-350m",
+          "adapter": "openai",
+          "upstream": "granite4:350m",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "granite4-3b",
+          "adapter": "openai",
+          "upstream": "granite4:3b",
+          "providers": [
+            "ibm"
+          ]
+        },
+        {
+          "model": "hermes3-3b",
+          "adapter": "openai",
+          "upstream": "hermes3:3b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "hermes3-405b",
+          "adapter": "openai",
+          "upstream": "hermes3:405b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "hermes3-70b",
+          "adapter": "openai",
+          "upstream": "hermes3:70b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "hermes3-8b",
+          "adapter": "openai",
+          "upstream": "hermes3:8b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "internlm2-20b",
+          "adapter": "openai",
+          "upstream": "internlm2:20b",
+          "providers": [
+            "internlm"
+          ]
+        },
+        {
+          "model": "internlm2-5-20b-chat",
+          "adapter": "openai",
+          "upstream": "internlm2_5-20b-chat",
+          "providers": [
+            "internlm"
+          ]
+        },
+        {
+          "model": "internlm2-7b",
+          "adapter": "openai",
+          "upstream": "internlm2:7b",
+          "providers": [
+            "internlm"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-bf16",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:bf16",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-latest",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:latest",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-mlx-bf16",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:mlx-bf16",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-mxfp8",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:mxfp8",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-nvfp4",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:nvfp4",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-q4-k-m",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:q4_K_M",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "laguna-xs-2-q8-0",
+          "adapter": "openai",
+          "upstream": "laguna-xs.2:q8_0",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "lfm2-24b",
+          "adapter": "openai",
+          "upstream": "lfm2:24b",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "lfm2-5-thinking-1-2b",
+          "adapter": "openai",
+          "upstream": "lfm2.5-thinking:1.2b",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "lfm2-5-thinking-latest",
+          "adapter": "openai",
+          "upstream": "lfm2.5-thinking:latest",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "lfm2-latest",
+          "adapter": "openai",
+          "upstream": "lfm2:latest",
+          "providers": [
+            "liquid"
+          ]
+        },
+        {
+          "model": "llama-guard3-8b",
+          "adapter": "openai",
+          "upstream": "llama-guard3:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama-guard3-latest",
+          "adapter": "openai",
+          "upstream": "llama-guard3:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama-pro-8b",
+          "adapter": "openai",
+          "upstream": "llama-pro:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama-pro-latest",
+          "adapter": "openai",
+          "upstream": "llama-pro:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2",
+          "adapter": "openai",
+          "upstream": "llama2",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-13b",
+          "adapter": "openai",
+          "upstream": "llama2:13b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-70b",
+          "adapter": "openai",
+          "upstream": "llama2:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-7b",
+          "adapter": "openai",
+          "upstream": "llama2:7b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-chinese-13b",
+          "adapter": "openai",
+          "upstream": "llama2-chinese:13b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-chinese-7b",
+          "adapter": "openai",
+          "upstream": "llama2-chinese:7b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-uncensored-70b",
+          "adapter": "openai",
+          "upstream": "llama2-uncensored:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama2-uncensored-7b",
+          "adapter": "openai",
+          "upstream": "llama2-uncensored:7b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3",
+          "adapter": "openai",
+          "upstream": "llama3",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-1",
+          "adapter": "openai",
+          "upstream": "llama3.1",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-2-1b",
+          "adapter": "openai",
+          "upstream": "llama3.2:1b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-2-3b",
+          "adapter": "openai",
+          "upstream": "llama3.2:3b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-2-vision-11b",
+          "adapter": "openai",
+          "upstream": "llama3.2-vision:11b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-2-vision-90b",
+          "adapter": "openai",
+          "upstream": "llama3.2-vision:90b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-3-70b",
+          "adapter": "openai",
+          "upstream": "llama3.3:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-3-latest",
+          "adapter": "openai",
+          "upstream": "llama3.3:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-70b",
+          "adapter": "openai",
+          "upstream": "llama3:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-8b",
+          "adapter": "openai",
+          "upstream": "llama3:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-chatqa-70b",
+          "adapter": "openai",
+          "upstream": "llama3-chatqa:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-chatqa-8b",
+          "adapter": "openai",
+          "upstream": "llama3-chatqa:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-gradient-8b",
+          "adapter": "openai",
+          "upstream": "llama3-gradient:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-gradient-latest",
+          "adapter": "openai",
+          "upstream": "llama3-gradient:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-groq-tool-use-70b",
+          "adapter": "openai",
+          "upstream": "llama3-groq-tool-use:70b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama3-groq-tool-use-8b",
+          "adapter": "openai",
+          "upstream": "llama3-groq-tool-use:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama4-latest",
+          "adapter": "openai",
+          "upstream": "llama4:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama4-maverick",
+          "adapter": "openai",
+          "upstream": "llama4:maverick",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llama4-scout",
+          "adapter": "openai",
+          "upstream": "llama4:scout",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-13b",
+          "adapter": "openai",
+          "upstream": "llava:13b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-34b",
+          "adapter": "openai",
+          "upstream": "llava:34b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-7b",
+          "adapter": "openai",
+          "upstream": "llava:7b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-llama3-8b",
+          "adapter": "openai",
+          "upstream": "llava-llama3:8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-llama3-latest",
+          "adapter": "openai",
+          "upstream": "llava-llama3:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-phi3-3-8b",
+          "adapter": "openai",
+          "upstream": "llava-phi3:3.8b",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "llava-phi3-latest",
+          "adapter": "openai",
+          "upstream": "llava-phi3:latest",
+          "providers": [
+            "meta"
+          ]
+        },
+        {
+          "model": "magistral-24b",
+          "adapter": "openai",
+          "upstream": "magistral:24b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "magistral-latest",
+          "adapter": "openai",
+          "upstream": "magistral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mathstral-7b",
+          "adapter": "openai",
+          "upstream": "mathstral:7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mathstral-latest",
+          "adapter": "openai",
+          "upstream": "mathstral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "medgemma-27b",
+          "adapter": "openai",
+          "upstream": "medgemma:27b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "medgemma-4b",
+          "adapter": "openai",
+          "upstream": "medgemma:4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "medgemma1-5-4b",
+          "adapter": "openai",
+          "upstream": "medgemma1.5:4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "medgemma1-5-latest",
+          "adapter": "openai",
+          "upstream": "medgemma1.5:latest",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "megadolphin-120b",
+          "adapter": "openai",
+          "upstream": "megadolphin:120b",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "megadolphin-latest",
+          "adapter": "openai",
+          "upstream": "megadolphin:latest",
+          "providers": [
+            "cognitivecomputations"
+          ]
+        },
+        {
+          "model": "minicpm-v-8b",
+          "adapter": "openai",
+          "upstream": "minicpm-v:8b",
+          "providers": [
+            "openbmb"
+          ]
+        },
+        {
+          "model": "minicpm-v-latest",
+          "adapter": "openai",
+          "upstream": "minicpm-v:latest",
+          "providers": [
+            "openbmb"
+          ]
+        },
+        {
+          "model": "ministral-3-14b",
+          "adapter": "openai",
+          "upstream": "ministral-3:14b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "ministral-3-3b",
+          "adapter": "openai",
+          "upstream": "ministral-3:3b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "ministral-3-8b",
+          "adapter": "openai",
+          "upstream": "ministral-3:8b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-7b",
+          "adapter": "openai",
+          "upstream": "mistral:7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-7b-instruct-v0-1",
+          "adapter": "openai",
+          "upstream": "mistral-7B-Instruct-v0.1",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-7b-instruct-v0-2",
+          "adapter": "openai",
+          "upstream": "mistral-7B-Instruct-v0.2",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-large-123b",
+          "adapter": "openai",
+          "upstream": "mistral-large:123b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-large-instruct-2407",
+          "adapter": "openai",
+          "upstream": "mistral-large-instruct-2407",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-large-latest",
+          "adapter": "openai",
+          "upstream": "mistral-large:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-latest",
+          "adapter": "openai",
+          "upstream": "mistral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-medium-3-5-128b",
+          "adapter": "openai",
+          "upstream": "mistral-medium-3.5:128b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-medium-3-5-latest",
+          "adapter": "openai",
+          "upstream": "mistral-medium-3.5:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-nemo-12b",
+          "adapter": "openai",
+          "upstream": "mistral-nemo:12b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-nemo-latest",
+          "adapter": "openai",
+          "upstream": "mistral-nemo:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-openorca-7b",
+          "adapter": "openai",
+          "upstream": "mistral-openorca:7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-openorca-latest",
+          "adapter": "openai",
+          "upstream": "mistral-openorca:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-small-22b",
+          "adapter": "openai",
+          "upstream": "mistral-small:22b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-small-latest",
+          "adapter": "openai",
+          "upstream": "mistral-small:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-small3-1-24b",
+          "adapter": "openai",
+          "upstream": "mistral-small3.1:24b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-small3-1-latest",
+          "adapter": "openai",
+          "upstream": "mistral-small3.1:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-small3-2-24b",
+          "adapter": "openai",
+          "upstream": "mistral-small3.2:24b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistral-small3-2-latest",
+          "adapter": "openai",
+          "upstream": "mistral-small3.2:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistrallite-7b",
+          "adapter": "openai",
+          "upstream": "mistrallite:7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mistrallite-latest",
+          "adapter": "openai",
+          "upstream": "mistrallite:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mixtral-8x22b",
+          "adapter": "openai",
+          "upstream": "mixtral:8x22b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mixtral-8x22b-instruct-v0-1",
+          "adapter": "openai",
+          "upstream": "mixtral-8x22B-Instruct-v0.1",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mixtral-8x7b",
+          "adapter": "openai",
+          "upstream": "mixtral:8x7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mixtral-8x7b-instruct-v0-1",
+          "adapter": "openai",
+          "upstream": "mixtral-8x7B-Instruct-v0.1",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "mxbai-embed-large-335m",
+          "adapter": "openai",
+          "upstream": "mxbai-embed-large:335m",
+          "providers": [
+            "mixedbread"
+          ]
+        },
+        {
+          "model": "mxbai-embed-large-latest",
+          "adapter": "openai",
+          "upstream": "mxbai-embed-large:latest",
+          "providers": [
+            "mixedbread"
+          ]
+        },
+        {
+          "model": "nemotron-3-nano-30b",
+          "adapter": "openai",
+          "upstream": "nemotron-3-nano:30b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-3-nano-4b",
+          "adapter": "openai",
+          "upstream": "nemotron-3-nano:4b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-3-super-120b",
+          "adapter": "openai",
+          "upstream": "nemotron-3-super:120b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-3-super-latest",
+          "adapter": "openai",
+          "upstream": "nemotron-3-super:latest",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-70b",
+          "adapter": "openai",
+          "upstream": "nemotron:70b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-cascade-2-30b",
+          "adapter": "openai",
+          "upstream": "nemotron-cascade-2:30b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-cascade-2-latest",
+          "adapter": "openai",
+          "upstream": "nemotron-cascade-2:latest",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-latest",
+          "adapter": "openai",
+          "upstream": "nemotron:latest",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-mini-4b",
+          "adapter": "openai",
+          "upstream": "nemotron-mini:4b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron-mini-latest",
+          "adapter": "openai",
+          "upstream": "nemotron-mini:latest",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron3-8b",
+          "adapter": "openai",
+          "upstream": "nemotron3:8b",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "nemotron3-latest",
+          "adapter": "openai",
+          "upstream": "nemotron3:latest",
+          "providers": [
+            "nvidia"
+          ]
+        },
+        {
+          "model": "neural-chat-7b",
+          "adapter": "openai",
+          "upstream": "neural-chat:7b",
+          "providers": [
+            "intel"
+          ]
+        },
+        {
+          "model": "neural-chat-latest",
+          "adapter": "openai",
+          "upstream": "neural-chat:latest",
+          "providers": [
+            "intel"
+          ]
+        },
+        {
+          "model": "nomic-embed-text-latest",
+          "adapter": "openai",
+          "upstream": "nomic-embed-text:latest",
+          "providers": [
+            "nomic"
+          ]
+        },
+        {
+          "model": "nomic-embed-text-v2-moe-475m",
+          "adapter": "openai",
+          "upstream": "nomic-embed-text-v2-moe:475m",
+          "providers": [
+            "nomic"
+          ]
+        },
+        {
+          "model": "nomic-embed-text-v2-moe-latest",
+          "adapter": "openai",
+          "upstream": "nomic-embed-text-v2-moe:latest",
+          "providers": [
+            "nomic"
+          ]
+        },
+        {
+          "model": "nous-hermes-13b",
+          "adapter": "openai",
+          "upstream": "nous-hermes:13b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "nous-hermes-7b",
+          "adapter": "openai",
+          "upstream": "nous-hermes:7b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "nous-hermes2-10-7b",
+          "adapter": "openai",
+          "upstream": "nous-hermes2:10.7b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "nous-hermes2-34b",
+          "adapter": "openai",
+          "upstream": "nous-hermes2:34b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "nous-hermes2-mixtral-8x7b",
+          "adapter": "openai",
+          "upstream": "nous-hermes2-mixtral:8x7b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "nous-hermes2-mixtral-latest",
+          "adapter": "openai",
+          "upstream": "nous-hermes2-mixtral:latest",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "olmo-3-1-32b",
+          "adapter": "openai",
+          "upstream": "olmo-3.1:32b",
+          "providers": [
+            "allenai"
+          ]
+        },
+        {
+          "model": "olmo-3-1-latest",
+          "adapter": "openai",
+          "upstream": "olmo-3.1:latest",
+          "providers": [
+            "allenai"
+          ]
+        },
+        {
+          "model": "olmo-3-32b",
+          "adapter": "openai",
+          "upstream": "olmo-3:32b",
+          "providers": [
+            "allenai"
+          ]
+        },
+        {
+          "model": "olmo-3-7b",
+          "adapter": "openai",
+          "upstream": "olmo-3:7b",
+          "providers": [
+            "allenai"
+          ]
+        },
+        {
+          "model": "olmo2-13b",
+          "adapter": "openai",
+          "upstream": "olmo2:13b",
+          "providers": [
+            "allenai"
+          ]
+        },
+        {
+          "model": "olmo2-7b",
+          "adapter": "openai",
+          "upstream": "olmo2:7b",
+          "providers": [
+            "allenai"
+          ]
+        },
+        {
+          "model": "openchat-7b",
+          "adapter": "openai",
+          "upstream": "openchat:7b",
+          "providers": [
+            "openchat"
+          ]
+        },
+        {
+          "model": "openchat-latest",
+          "adapter": "openai",
+          "upstream": "openchat:latest",
+          "providers": [
+            "openchat"
+          ]
+        },
+        {
+          "model": "openhermes-7b",
+          "adapter": "openai",
+          "upstream": "openhermes:7b",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "openhermes-latest",
+          "adapter": "openai",
+          "upstream": "openhermes:latest",
+          "providers": [
+            "nous"
+          ]
+        },
+        {
+          "model": "orca-mini-13b",
+          "adapter": "openai",
+          "upstream": "orca-mini:13b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "orca-mini-3b",
+          "adapter": "openai",
+          "upstream": "orca-mini:3b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "orca-mini-70b",
+          "adapter": "openai",
+          "upstream": "orca-mini:70b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "orca-mini-7b",
+          "adapter": "openai",
+          "upstream": "orca-mini:7b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "orca2-13b",
+          "adapter": "openai",
+          "upstream": "orca2:13b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "orca2-7b",
+          "adapter": "openai",
+          "upstream": "orca2:7b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "paraphrase-multilingual-278m",
+          "adapter": "openai",
+          "upstream": "paraphrase-multilingual:278m",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "paraphrase-multilingual-latest",
+          "adapter": "openai",
+          "upstream": "paraphrase-multilingual:latest",
+          "providers": [
+            "baai"
+          ]
+        },
+        {
+          "model": "phi-2-7b",
+          "adapter": "openai",
+          "upstream": "phi:2.7b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi-latest",
+          "adapter": "openai",
+          "upstream": "phi:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi3-14b",
+          "adapter": "openai",
+          "upstream": "phi3:14b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi3-3-8b",
+          "adapter": "openai",
+          "upstream": "phi3:3.8b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi3-5-3-8b",
+          "adapter": "openai",
+          "upstream": "phi3.5:3.8b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi3-5-latest",
+          "adapter": "openai",
+          "upstream": "phi3.5:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-14b",
+          "adapter": "openai",
+          "upstream": "phi4:14b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-latest",
+          "adapter": "openai",
+          "upstream": "phi4:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-mini-3-8b",
+          "adapter": "openai",
+          "upstream": "phi4-mini:3.8b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-mini-latest",
+          "adapter": "openai",
+          "upstream": "phi4-mini:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-mini-reasoning-3-8b",
+          "adapter": "openai",
+          "upstream": "phi4-mini-reasoning:3.8b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-mini-reasoning-latest",
+          "adapter": "openai",
+          "upstream": "phi4-mini-reasoning:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-reasoning-14b",
+          "adapter": "openai",
+          "upstream": "phi4-reasoning:14b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phi4-reasoning-latest",
+          "adapter": "openai",
+          "upstream": "phi4-reasoning:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phind-codellama-34b",
+          "adapter": "openai",
+          "upstream": "phind-codellama:34b",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "phind-codellama-latest",
+          "adapter": "openai",
+          "upstream": "phind-codellama:latest",
+          "providers": [
+            "microsoft"
+          ]
+        },
+        {
+          "model": "qwen-0-5b",
+          "adapter": "openai",
+          "upstream": "qwen:0.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-1-8b",
+          "adapter": "openai",
+          "upstream": "qwen:1.8b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-110b",
+          "adapter": "openai",
+          "upstream": "qwen:110b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-14b",
+          "adapter": "openai",
+          "upstream": "qwen:14b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-32b",
+          "adapter": "openai",
+          "upstream": "qwen:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-4b",
+          "adapter": "openai",
+          "upstream": "qwen:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-72b",
+          "adapter": "openai",
+          "upstream": "qwen:72b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen-7b",
+          "adapter": "openai",
+          "upstream": "qwen:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-0-5b",
+          "adapter": "openai",
+          "upstream": "qwen2:0.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-1-5b",
+          "adapter": "openai",
+          "upstream": "qwen2:1.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-0-5b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:0.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-1-5b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:1.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-14b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:14b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-32b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-3b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:3b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-72b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:72b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-7b",
+          "adapter": "openai",
+          "upstream": "qwen2.5:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-coder-0-5b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-coder:0.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-coder-1-5b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-coder:1.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-coder-14b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-coder:14b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-coder-32b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-coder:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-coder-3b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-coder:3b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5-coder-7b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-coder:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5vl-32b",
+          "adapter": "openai",
+          "upstream": "qwen2.5vl:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5vl-3b",
+          "adapter": "openai",
+          "upstream": "qwen2.5vl:3b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5vl-72b",
+          "adapter": "openai",
+          "upstream": "qwen2.5vl:72b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-5vl-7b",
+          "adapter": "openai",
+          "upstream": "qwen2.5vl:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-72b",
+          "adapter": "openai",
+          "upstream": "qwen2:72b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-7b",
+          "adapter": "openai",
+          "upstream": "qwen2:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-math-1-5b",
+          "adapter": "openai",
+          "upstream": "qwen2-math:1.5b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-math-72b",
+          "adapter": "openai",
+          "upstream": "qwen2-math:72b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen2-math-7b",
+          "adapter": "openai",
+          "upstream": "qwen2-math:7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-0-6b",
+          "adapter": "openai",
+          "upstream": "qwen3:0.6b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-1-7b",
+          "adapter": "openai",
+          "upstream": "qwen3:1.7b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-14b",
+          "adapter": "openai",
+          "upstream": "qwen3:14b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-235b",
+          "adapter": "openai",
+          "upstream": "qwen3:235b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-30b",
+          "adapter": "openai",
+          "upstream": "qwen3:30b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-32b",
+          "adapter": "openai",
+          "upstream": "qwen3:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-4b",
+          "adapter": "openai",
+          "upstream": "qwen3:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-0-8b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:0.8b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-122b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:122b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-27b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:27b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-2b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:2b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-35b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:35b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-397b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:397b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-4b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-5-9b",
+          "adapter": "openai",
+          "upstream": "qwen3.5:9b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-6-27b",
+          "adapter": "openai",
+          "upstream": "qwen3.6:27b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-6-35b",
+          "adapter": "openai",
+          "upstream": "qwen3.6:35b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-8b",
+          "adapter": "openai",
+          "upstream": "qwen3:8b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-30b",
+          "adapter": "openai",
+          "upstream": "qwen3-coder:30b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-480b",
+          "adapter": "openai",
+          "upstream": "qwen3-coder:480b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-next-latest",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-next:latest",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-next-q4-k-m",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-next:q4_K_M",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-coder-next-q8-0",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-next:q8_0",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-embedding-0-6b",
+          "adapter": "openai",
+          "upstream": "qwen3-embedding:0.6b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-embedding-4b",
+          "adapter": "openai",
+          "upstream": "qwen3-embedding:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-embedding-8b",
+          "adapter": "openai",
+          "upstream": "qwen3-embedding:8b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-next-80b",
+          "adapter": "openai",
+          "upstream": "qwen3-next:80b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-next-latest",
+          "adapter": "openai",
+          "upstream": "qwen3-next:latest",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-235b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:235b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-2b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:2b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-30b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:30b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-32b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-4b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:4b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwen3-vl-8b",
+          "adapter": "openai",
+          "upstream": "qwen3-vl:8b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwq-32b",
+          "adapter": "openai",
+          "upstream": "qwq:32b",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "qwq-latest",
+          "adapter": "openai",
+          "upstream": "qwq:latest",
+          "providers": [
+            "alibaba"
+          ]
+        },
+        {
+          "model": "r1-1776-671b",
+          "adapter": "openai",
+          "upstream": "r1-1776:671b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "r1-1776-70b",
+          "adapter": "openai",
+          "upstream": "r1-1776:70b",
+          "providers": [
+            "deepseek"
+          ]
+        },
+        {
+          "model": "samantha-mistral-7b",
+          "adapter": "openai",
+          "upstream": "samantha-mistral:7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "samantha-mistral-latest",
+          "adapter": "openai",
+          "upstream": "samantha-mistral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "shieldgemma-27b",
+          "adapter": "openai",
+          "upstream": "shieldgemma:27b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "shieldgemma-2b",
+          "adapter": "openai",
+          "upstream": "shieldgemma:2b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "shieldgemma-9b",
+          "adapter": "openai",
+          "upstream": "shieldgemma:9b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "smollm-1-7b",
+          "adapter": "openai",
+          "upstream": "smollm:1.7b",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "smollm-135m",
+          "adapter": "openai",
+          "upstream": "smollm:135m",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "smollm-360m",
+          "adapter": "openai",
+          "upstream": "smollm:360m",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "smollm2-1-7b",
+          "adapter": "openai",
+          "upstream": "smollm2:1.7b",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "smollm2-135m",
+          "adapter": "openai",
+          "upstream": "smollm2:135m",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "smollm2-360m",
+          "adapter": "openai",
+          "upstream": "smollm2:360m",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "snowflake-arctic-embed-110m",
+          "adapter": "openai",
+          "upstream": "snowflake-arctic-embed:110m",
+          "providers": [
+            "snowflake"
+          ]
+        },
+        {
+          "model": "snowflake-arctic-embed-137m",
+          "adapter": "openai",
+          "upstream": "snowflake-arctic-embed:137m",
+          "providers": [
+            "snowflake"
+          ]
+        },
+        {
+          "model": "snowflake-arctic-embed-22m",
+          "adapter": "openai",
+          "upstream": "snowflake-arctic-embed:22m",
+          "providers": [
+            "snowflake"
+          ]
+        },
+        {
+          "model": "snowflake-arctic-embed-335m",
+          "adapter": "openai",
+          "upstream": "snowflake-arctic-embed:335m",
+          "providers": [
+            "snowflake"
+          ]
+        },
+        {
+          "model": "snowflake-arctic-embed2-137m",
+          "adapter": "openai",
+          "upstream": "snowflake-arctic-embed2:137m",
+          "providers": [
+            "snowflake"
+          ]
+        },
+        {
+          "model": "snowflake-arctic-embed2-568m",
+          "adapter": "openai",
+          "upstream": "snowflake-arctic-embed2:568m",
+          "providers": [
+            "snowflake"
+          ]
+        },
+        {
+          "model": "solar-10-7b",
+          "adapter": "openai",
+          "upstream": "solar:10.7b",
+          "providers": [
+            "upstage"
+          ]
+        },
+        {
+          "model": "solar-latest",
+          "adapter": "openai",
+          "upstream": "solar:latest",
+          "providers": [
+            "upstage"
+          ]
+        },
+        {
+          "model": "solar-pro-22b",
+          "adapter": "openai",
+          "upstream": "solar-pro:22b",
+          "providers": [
+            "upstage"
+          ]
+        },
+        {
+          "model": "solar-pro-latest",
+          "adapter": "openai",
+          "upstream": "solar-pro:latest",
+          "providers": [
+            "upstage"
+          ]
+        },
+        {
+          "model": "stable-beluga-13b",
+          "adapter": "openai",
+          "upstream": "stable-beluga:13b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stable-beluga-70b",
+          "adapter": "openai",
+          "upstream": "stable-beluga:70b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stable-beluga-7b",
+          "adapter": "openai",
+          "upstream": "stable-beluga:7b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stable-code-3b",
+          "adapter": "openai",
+          "upstream": "stable-code:3b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stable-code-latest",
+          "adapter": "openai",
+          "upstream": "stable-code:latest",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stablelm-zephyr-3b",
+          "adapter": "openai",
+          "upstream": "stablelm-zephyr:3b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stablelm-zephyr-latest",
+          "adapter": "openai",
+          "upstream": "stablelm-zephyr:latest",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stablelm2-1-6b",
+          "adapter": "openai",
+          "upstream": "stablelm2:1.6b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "stablelm2-12b",
+          "adapter": "openai",
+          "upstream": "stablelm2:12b",
+          "providers": [
+            "stability"
+          ]
+        },
+        {
+          "model": "starcoder-7b",
+          "adapter": "openai",
+          "upstream": "starcoder:7b",
+          "providers": [
+            "bigcode"
+          ]
+        },
+        {
+          "model": "starcoder-latest",
+          "adapter": "openai",
+          "upstream": "starcoder:latest",
+          "providers": [
+            "bigcode"
+          ]
+        },
+        {
+          "model": "starcoder2-15b",
+          "adapter": "openai",
+          "upstream": "starcoder2:15b",
+          "providers": [
+            "bigcode"
+          ]
+        },
+        {
+          "model": "starcoder2-3b",
+          "adapter": "openai",
+          "upstream": "starcoder2:3b",
+          "providers": [
+            "bigcode"
+          ]
+        },
+        {
+          "model": "starcoder2-7b",
+          "adapter": "openai",
+          "upstream": "starcoder2:7b",
+          "providers": [
+            "bigcode"
+          ]
+        },
+        {
+          "model": "starling-lm-7b",
+          "adapter": "openai",
+          "upstream": "starling-lm:7b",
+          "providers": [
+            "starling"
+          ]
+        },
+        {
+          "model": "starling-lm-latest",
+          "adapter": "openai",
+          "upstream": "starling-lm:latest",
+          "providers": [
+            "starling"
+          ]
+        },
+        {
+          "model": "tinydolphin-1-1b",
+          "adapter": "openai",
+          "upstream": "tinydolphin:1.1b",
+          "providers": [
+            "tinyllama"
+          ]
+        },
+        {
+          "model": "tinydolphin-latest",
+          "adapter": "openai",
+          "upstream": "tinydolphin:latest",
+          "providers": [
+            "tinyllama"
+          ]
+        },
+        {
+          "model": "tinyllama-1-1b",
+          "adapter": "openai",
+          "upstream": "tinyllama:1.1b",
+          "providers": [
+            "tinyllama"
+          ]
+        },
+        {
+          "model": "tinyllama-latest",
+          "adapter": "openai",
+          "upstream": "tinyllama:latest",
+          "providers": [
+            "tinyllama"
+          ]
+        },
+        {
+          "model": "translategemma-27b",
+          "adapter": "openai",
+          "upstream": "translategemma:27b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "translategemma-4b",
+          "adapter": "openai",
+          "upstream": "translategemma:4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "yarn-mistral-7b",
+          "adapter": "openai",
+          "upstream": "yarn-mistral:7b",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "yarn-mistral-latest",
+          "adapter": "openai",
+          "upstream": "yarn-mistral:latest",
+          "providers": [
+            "mistral"
+          ]
+        },
+        {
+          "model": "yi-34b",
+          "adapter": "openai",
+          "upstream": "yi:34b",
+          "providers": [
+            "01ai"
+          ]
+        },
+        {
+          "model": "yi-6b",
+          "adapter": "openai",
+          "upstream": "yi:6b",
+          "providers": [
+            "01ai"
+          ]
+        },
+        {
+          "model": "yi-9b",
+          "adapter": "openai",
+          "upstream": "yi:9b",
+          "providers": [
+            "01ai"
+          ]
+        },
+        {
+          "model": "yi-coder-1-5b",
+          "adapter": "openai",
+          "upstream": "yi-coder:1.5b",
+          "providers": [
+            "01ai"
+          ]
+        },
+        {
+          "model": "yi-coder-9b",
+          "adapter": "openai",
+          "upstream": "yi-coder:9b",
+          "providers": [
+            "01ai"
+          ]
+        },
+        {
+          "model": "zephyr-7b",
+          "adapter": "openai",
+          "upstream": "zephyr:7b",
+          "providers": [
+            "huggingface"
+          ]
+        },
+        {
+          "model": "zephyr-latest",
+          "adapter": "openai",
+          "upstream": "zephyr:latest",
+          "providers": [
+            "huggingface"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "openai",
+      "baseURL": "https://api.openai.com",
+      "models": [
+        {
+          "model": "chatgpt-4o-latest",
+          "adapter": "openai",
+          "upstream": "chatgpt-4o-latest",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-3-5-turbo",
+          "adapter": "openai",
+          "upstream": "ft:gpt-3.5-turbo",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-3-5-turbo-0125",
+          "adapter": "openai",
+          "upstream": "ft:gpt-3.5-turbo-0125",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-3-5-turbo-0613",
+          "adapter": "openai",
+          "upstream": "ft:gpt-3.5-turbo-0613",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-3-5-turbo-1106",
+          "adapter": "openai",
+          "upstream": "ft:gpt-3.5-turbo-1106",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4-0613",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4-0613",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 30
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4-1-2025-04-14",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4.1-2025-04-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 12
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.75
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4-1-mini-2025-04-14",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4.1-mini-2025-04-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.7999999999999999
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3.1999999999999997
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.19999999999999998
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4-1-nano-2025-04-14",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4.1-nano-2025-04-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.19999999999999998
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.7999999999999999
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.049999999999999996
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4o-2024-08-06",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4o-2024-08-06",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 1.875
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4o-2024-11-20",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4o-2024-11-20",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 1.875
+            }
+          ]
+        },
+        {
+          "model": "ft-gpt-4o-mini-2024-07-18",
+          "adapter": "openai",
+          "upstream": "ft:gpt-4o-mini-2024-07-18",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.15
+            }
+          ]
+        },
+        {
+          "model": "ft-o4-mini-2025-04-16",
+          "adapter": "openai",
+          "upstream": "ft:o4-mini-2025-04-16",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 16
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1
+            }
+          ]
+        },
+        {
+          "model": "gpt-3-5-turbo",
+          "adapter": "openai",
+          "upstream": "gpt-3.5-turbo",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-3-5-turbo-0125",
+          "adapter": "openai",
+          "upstream": "gpt-3.5-turbo-0125",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-3-5-turbo-1106",
+          "adapter": "openai",
+          "upstream": "gpt-3.5-turbo-1106",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            }
+          ]
+        },
+        {
+          "model": "gpt-3-5-turbo-16k",
+          "adapter": "openai",
+          "upstream": "gpt-3.5-turbo-16k",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4
+            }
+          ]
+        },
+        {
+          "model": "gpt-4",
+          "adapter": "openai",
+          "upstream": "gpt-4",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 30
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-0125-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4-0125-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-0314",
+          "adapter": "openai",
+          "upstream": "gpt-4-0314",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 30
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-0613",
+          "adapter": "openai",
+          "upstream": "gpt-4-0613",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 30
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1",
+          "adapter": "openai",
+          "upstream": "gpt-4.1",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1-2025-04-14",
+          "adapter": "openai",
+          "upstream": "gpt-4.1-2025-04-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1-mini",
+          "adapter": "openai",
+          "upstream": "gpt-4.1-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5999999999999999
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.09999999999999999
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1-mini-2025-04-14",
+          "adapter": "openai",
+          "upstream": "gpt-4.1-mini-2025-04-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5999999999999999
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.09999999999999999
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1-nano",
+          "adapter": "openai",
+          "upstream": "gpt-4.1-nano",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.09999999999999999
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.024999999999999998
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1-nano-2025-04-14",
+          "adapter": "openai",
+          "upstream": "gpt-4.1-nano-2025-04-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.09999999999999999
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.024999999999999998
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-1106-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4-1106-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-turbo",
+          "adapter": "openai",
+          "upstream": "gpt-4-turbo",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-turbo-2024-04-09",
+          "adapter": "openai",
+          "upstream": "gpt-4-turbo-2024-04-09",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            }
+          ]
+        },
+        {
+          "model": "gpt-4-turbo-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4-turbo-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o",
+          "adapter": "openai",
+          "upstream": "gpt-4o",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.25
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-2024-05-13",
+          "adapter": "openai",
+          "upstream": "gpt-4o-2024-05-13",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.25
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-2024-08-06",
+          "adapter": "openai",
+          "upstream": "gpt-4o-2024-08-06",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.25
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-2024-11-20",
+          "adapter": "openai",
+          "upstream": "gpt-4o-2024-11-20",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.25
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-audio-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4o-audio-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-audio-preview-2024-12-17",
+          "adapter": "openai",
+          "upstream": "gpt-4o-audio-preview-2024-12-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-audio-preview-2025-06-03",
+          "adapter": "openai",
+          "upstream": "gpt-4o-audio-preview-2025-06-03",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-2024-07-18",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-2024-07-18",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-audio-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-audio-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.6
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-audio-preview-2024-12-17",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-audio-preview-2024-12-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.6
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-realtime-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-realtime-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-realtime-preview-2024-12-17",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-realtime-preview-2024-12-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.3
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-search-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-search-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-mini-search-preview-2025-03-11",
+          "adapter": "openai",
+          "upstream": "gpt-4o-mini-search-preview-2025-03-11",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-realtime-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4o-realtime-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 20
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 2.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-realtime-preview-2024-12-17",
+          "adapter": "openai",
+          "upstream": "gpt-4o-realtime-preview-2024-12-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 20
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 2.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-realtime-preview-2025-06-03",
+          "adapter": "openai",
+          "upstream": "gpt-4o-realtime-preview-2025-06-03",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 20
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 2.5
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-search-preview",
+          "adapter": "openai",
+          "upstream": "gpt-4o-search-preview",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.25
+            }
+          ]
+        },
+        {
+          "model": "gpt-4o-search-preview-2025-03-11",
+          "adapter": "openai",
+          "upstream": "gpt-4o-search-preview-2025-03-11",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1.25
+            }
+          ]
+        },
+        {
+          "model": "gpt-5",
+          "adapter": "openai",
+          "upstream": "gpt-5",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-1",
+          "adapter": "openai",
+          "upstream": "gpt-5.1",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-1-2025-11-13",
+          "adapter": "openai",
+          "upstream": "gpt-5.1-2025-11-13",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-1-chat-latest",
+          "adapter": "openai",
+          "upstream": "gpt-5.1-chat-latest",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-2",
+          "adapter": "openai",
+          "upstream": "gpt-5.2",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 14
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.175
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-2-2025-12-11",
+          "adapter": "openai",
+          "upstream": "gpt-5.2-2025-12-11",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 14
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.175
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-2-chat-latest",
+          "adapter": "openai",
+          "upstream": "gpt-5.2-chat-latest",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 14
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.175
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-2025-08-07",
+          "adapter": "openai",
+          "upstream": "gpt-5-2025-08-07",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-3-chat-latest",
+          "adapter": "openai",
+          "upstream": "gpt-5.3-chat-latest",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 14
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.175
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-4",
+          "adapter": "openai",
+          "upstream": "gpt-5.4",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5,
+              "aboveTokens": 272000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 22.5,
+              "aboveTokens": 272000
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-4-2026-03-05",
+          "adapter": "openai",
+          "upstream": "gpt-5.4-2026-03-05",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5,
+              "aboveTokens": 272000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 22.5,
+              "aboveTokens": 272000
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-4-mini",
+          "adapter": "openai",
+          "upstream": "gpt-5.4-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.5
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-4-mini-2026-03-17",
+          "adapter": "openai",
+          "upstream": "gpt-5.4-mini-2026-03-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.75
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.5
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-4-nano",
+          "adapter": "openai",
+          "upstream": "gpt-5.4-nano",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.19999999999999998
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.02
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-4-nano-2026-03-17",
+          "adapter": "openai",
+          "upstream": "gpt-5.4-nano-2026-03-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.19999999999999998
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.02
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-5",
+          "adapter": "openai",
+          "upstream": "gpt-5.5",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10,
+              "aboveTokens": 272000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 45,
+              "aboveTokens": 272000
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-5-2026-04-23",
+          "adapter": "openai",
+          "upstream": "gpt-5.5-2026-04-23",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10,
+              "aboveTokens": 272000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 45,
+              "aboveTokens": 272000
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-chat",
+          "adapter": "openai",
+          "upstream": "gpt-5-chat",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-chat-latest",
+          "adapter": "openai",
+          "upstream": "gpt-5-chat-latest",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-mini",
+          "adapter": "openai",
+          "upstream": "gpt-5-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.024999999999999998
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-mini-2025-08-07",
+          "adapter": "openai",
+          "upstream": "gpt-5-mini-2025-08-07",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.024999999999999998
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-nano",
+          "adapter": "openai",
+          "upstream": "gpt-5-nano",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.049999999999999996
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.005
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-nano-2025-08-07",
+          "adapter": "openai",
+          "upstream": "gpt-5-nano-2025-08-07",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.049999999999999996
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.005
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-search-api",
+          "adapter": "openai",
+          "upstream": "gpt-5-search-api",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-5-search-api-2025-10-14",
+          "adapter": "openai",
+          "upstream": "gpt-5-search-api-2025-10-14",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.125
+            }
+          ]
+        },
+        {
+          "model": "gpt-audio",
+          "adapter": "openai",
+          "upstream": "gpt-audio",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gpt-audio-1-5",
+          "adapter": "openai",
+          "upstream": "gpt-audio-1.5",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gpt-audio-2025-08-28",
+          "adapter": "openai",
+          "upstream": "gpt-audio-2025-08-28",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gpt-audio-mini",
+          "adapter": "openai",
+          "upstream": "gpt-audio-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        },
+        {
+          "model": "gpt-audio-mini-2025-10-06",
+          "adapter": "openai",
+          "upstream": "gpt-audio-mini-2025-10-06",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        },
+        {
+          "model": "gpt-audio-mini-2025-12-15",
+          "adapter": "openai",
+          "upstream": "gpt-audio-mini-2025-12-15",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime",
+          "adapter": "openai",
+          "upstream": "gpt-realtime",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 16
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime-1-5",
+          "adapter": "openai",
+          "upstream": "gpt-realtime-1.5",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 16
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime-2",
+          "adapter": "openai",
+          "upstream": "gpt-realtime-2",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 16
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime-2025-08-28",
+          "adapter": "openai",
+          "upstream": "gpt-realtime-2025-08-28",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 16
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.39999999999999997
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime-mini",
+          "adapter": "openai",
+          "upstream": "gpt-realtime-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.06
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime-mini-2025-10-06",
+          "adapter": "openai",
+          "upstream": "gpt-realtime-mini-2025-10-06",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.06
+            }
+          ]
+        },
+        {
+          "model": "gpt-realtime-mini-2025-12-15",
+          "adapter": "openai",
+          "upstream": "gpt-realtime-mini-2025-12-15",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.06
+            }
+          ]
+        },
+        {
+          "model": "o1",
+          "adapter": "openai",
+          "upstream": "o1",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 7.5
+            }
+          ]
+        },
+        {
+          "model": "o1-2024-12-17",
+          "adapter": "openai",
+          "upstream": "o1-2024-12-17",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 7.5
+            }
+          ]
+        },
+        {
+          "model": "o3",
+          "adapter": "openai",
+          "upstream": "o3",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "o3-2025-04-16",
+          "adapter": "openai",
+          "upstream": "o3-2025-04-16",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "o3-mini",
+          "adapter": "openai",
+          "upstream": "o3-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.55
+            }
+          ]
+        },
+        {
+          "model": "o3-mini-2025-01-31",
+          "adapter": "openai",
+          "upstream": "o3-mini-2025-01-31",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.55
+            }
+          ]
+        },
+        {
+          "model": "o4-mini",
+          "adapter": "openai",
+          "upstream": "o4-mini",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.275
+            }
+          ]
+        },
+        {
+          "model": "o4-mini-2025-04-16",
+          "adapter": "openai",
+          "upstream": "o4-mini-2025-04-16",
+          "providers": [
+            "openai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.4
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.275
+            }
+          ]
+        },
+        {
+          "model": "openai-container",
+          "adapter": "openai",
+          "upstream": "openai/container",
+          "providers": [
+            "openai"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "opencode-zen",
+      "baseURL": "https://opencode.ai/zen/v1",
+      "models": [
+        {
+          "model": "deepseek-v4-flash-free",
+          "adapter": "openai",
+          "upstream": "deepseek-v4-flash-free",
+          "providers": [
+            "deepseek"
+          ]
+        }
+      ]
+    }
+  ]
+}

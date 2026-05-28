@@ -321,6 +321,9 @@ schemas: ## regenerate JSON Schemas for catalog kinds → schemas/v1alpha2/
 catalog-validate: ## graph-lint the public catalog ($$RELAY_CATALOG_DIR or ../relay-catalog/data)
 	go run ./cmd/catalog-validate $${RELAY_CATALOG_DIR:-../relay-catalog/data}
 
+catalog-embed: ## generate sdk/catalog/catalog.json from the public catalog
+	go run ./cmd/catalog-embed -o sdk/catalog/catalog.json $${RELAY_CATALOG_DIR:-../relay-catalog/data}
+
 COMPOSE_TEST := deploy/compose/docker-compose.test.yml
 TEST_PG_DSN  := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
 
