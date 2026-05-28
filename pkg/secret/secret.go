@@ -36,14 +36,29 @@ const (
 	// decrypted client-side. Fetch-only; held in memory only. Locator is
 	// Path = "<itemNameOrID>[/<field>]" (field defaults to "password").
 	KindBitwarden Kind = "bitwarden"
+	// KindGCP fetches a secret version from GCP Secret Manager. Fetch-only,
+	// in-memory. Locator is Path = "<secretName>[:<version>]" (version
+	// defaults to "latest"); project comes from resolver config.
+	KindGCP Kind = "gcp"
+	// KindAzure fetches a secret from an Azure Key Vault. Fetch-only,
+	// in-memory. Locator is Path = "<secretName>[/<version>]"; the vault
+	// URL comes from resolver config.
+	KindAzure Kind = "azure"
+	// KindOnePassword resolves a secret via the official 1Password SDK
+	// (service-account token). Fetch-only, in-memory. Locator is Path =
+	// "op://<vault>/<item>/<field>".
+	KindOnePassword Kind = "onepassword"
 )
 
 // pathAddressed lists the kinds whose locator is the generic Ref.Path —
 // external fetch-only backends. Their resolvers live in pkg/secret/<kind>
 // and are registered by the composition layer.
 var pathAddressed = map[Kind]struct{}{
-	KindAWS:       {},
-	KindBitwarden: {},
+	KindAWS:         {},
+	KindBitwarden:   {},
+	KindGCP:         {},
+	KindAzure:       {},
+	KindOnePassword: {},
 }
 
 // Ref is a backend-agnostic pointer to a secret. It is JSON-serializable
