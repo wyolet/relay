@@ -600,7 +600,7 @@ func liveReq(model string) *v1.Request {
 	}
 }
 
-func outputText(resp *v1.Response) string {
+func outputText(resp *Response) string {
 	var b strings.Builder
 	for _, it := range resp.Output {
 		if m, ok := it.(*v1.Message); ok {
