@@ -12,6 +12,14 @@ LiteLLM for teams running millions of LLM requests per day.
 - **API key pooling** — failover and load-balanced multi-key
   concurrency to multiply effective rate limits. Per-key circuit
   breakers with auth/quota/rate-limit/server-error classification.
+- **Pluggable secret backends** — BYO keys resolved from env, an
+  AES-GCM Postgres store, or fetch-only external stores (AWS Secrets
+  Manager, Azure Key Vault, GCP Secret Manager, Vaultwarden/Bitwarden,
+  1Password). External secrets are held in memory only, never persisted.
+  On an upstream auth failure the key is re-resolved out-of-band: the
+  request fails over to another key/host immediately and the rotated
+  key heals in the background (or, as a last resort, parks briefly and
+  retries with the fresh value).
 - **Adapter dispatch on (Model, Host)** — one Host (e.g. AWS Bedrock)
   can serve models on different wire protocols; binding-level
   `adapter: openai | anthropic` picks correctly per request.
@@ -35,6 +43,9 @@ LiteLLM for teams running millions of LLM requests per day.
 | **Cross-vendor translation via canonical** (Anthropic ↔ canonical ↔ CC verified end-to-end) | **Shipped (PRs #186–187)** |
 | **Generic `app/adapter/` framework** (no per-vendor packages in `app/`) | **Shipped (PR #189)** |
 | Mock-based smoke (`make smoke-mock`) | **Shipped** — fixture replay through real Caddy edge |
+| **Secret backends** (env, stored, AWS/Azure/GCP/Vaultwarden/1Password) | **Shipped** — fetch-only, in-memory; 1Password behind `cgo` build tag |
+| **Secret rotation healing** (`pipeline.KeyAgent`) | **Shipped** — out-of-band re-resolve on auth failure |
+| **Catalog `/catalog/resolve` + `/catalog/graph`** | **Shipped** — snapshot-backed ref expansion + minimal picker graph |
 | Observability emit (OTel + ClickHouse) | Scaffolding present; **rewiring is roadmap A2** |
 | Multi-tenancy (Org/Workspace/Project) | **roadmap B2** |
 | Postgres-backed users + signup | **roadmap B1**; today identity is YAML |
