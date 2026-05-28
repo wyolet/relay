@@ -3,7 +3,7 @@ package lifecycle
 import (
 	"time"
 
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // Context is the persistent lifecycle state for one request. Created

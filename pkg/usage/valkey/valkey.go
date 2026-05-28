@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 // store is the narrow kv interface this package uses. Declare only what we

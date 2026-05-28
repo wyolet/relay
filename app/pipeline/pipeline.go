@@ -27,7 +27,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
+	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.

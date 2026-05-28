@@ -13,7 +13,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 // Pricing is a rate sheet. Owner.Kind must be OwnerHost; Owner.ID is the

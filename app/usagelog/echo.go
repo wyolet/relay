@@ -2,7 +2,7 @@ package usagelog
 
 import (
 	"github.com/wyolet/relay/pkg/lifecycle"
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // EchoFromContext maps the usage Event that UsageHook attached to lc into

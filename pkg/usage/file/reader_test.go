@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 // writeFixture writes a few representative events to a tmp file and

@@ -1,7 +1,7 @@
 package adapters
 
 import (
-	"github.com/wyolet/relay/pkg/adapters/openai"
+	"github.com/wyolet/relay/sdk/adapters/openai"
 )
 
 // Translator converts between an adapter's native wire shape and OpenAI's

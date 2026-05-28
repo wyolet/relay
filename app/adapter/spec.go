@@ -25,8 +25,8 @@ import (
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
+	pkgusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // AuthStrategy configures how an adapter authenticates to the upstream.

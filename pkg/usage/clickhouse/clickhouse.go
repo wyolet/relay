@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 // Compile-time interface assertions.

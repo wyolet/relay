@@ -5,7 +5,7 @@ package adapters
 import (
 	"errors"
 
-	"github.com/wyolet/relay/pkg/adapters/openai"
+	"github.com/wyolet/relay/sdk/adapters/openai"
 )
 
 // ErrNotImplemented is returned by stub adapter methods not yet written.

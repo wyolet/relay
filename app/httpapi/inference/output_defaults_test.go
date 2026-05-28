@@ -3,7 +3,7 @@ package inference
 import (
 	"testing"
 
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 func TestApplyOutputDefaults(t *testing.T) {

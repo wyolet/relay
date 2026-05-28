@@ -12,7 +12,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 var _ usage.Sink = (*Sink)(nil)

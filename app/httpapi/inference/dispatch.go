@@ -25,8 +25,8 @@ import (
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
-	v1 "github.com/wyolet/relay/pkg/relay/v1"
 	"github.com/wyolet/relay/pkg/reqid"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // forwardHeaders returns a copy of the inbound headers safe to send to the

@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/keypool"
-	pkgusage "github.com/wyolet/relay/pkg/usage"
+	pkgusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // newBearerSpec returns a minimal built Spec for the openai name.

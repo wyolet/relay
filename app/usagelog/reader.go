@@ -1,6 +1,6 @@
 package usagelog
 
-import "github.com/wyolet/relay/pkg/usage"
+import "github.com/wyolet/relay/sdk/usage"
 
 // Reader is the read-side interface backends implement. Canonical
 // definition lives in pkg/usage; re-exported here for the control-plane

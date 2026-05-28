@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
-	"github.com/wyolet/relay/pkg/usage"
 	"github.com/wyolet/relay/pkg/usage/valkey"
+	"github.com/wyolet/relay/sdk/usage"
 )
 
 func newSink(t *testing.T) *valkey.Sink {
