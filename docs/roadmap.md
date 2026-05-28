@@ -91,29 +91,33 @@ waiting to be written; the path under `docs/` is the placeholder.
 
 ## Now — priority queue
 
-Four items, in this order. Order is intentional: secrets unblocks every
-deployment that mandates a non-env secret store; batch is the heaviest
-build and the headline differentiator; webhooks unlock async UX once
-batch lands; new adapters broaden the upstream surface.
+Three active items, in this order. Order is intentional: batch is the
+heaviest build and the headline differentiator; webhooks unlock async UX
+once batch lands; new adapters broaden the upstream surface. (The former
+#1, pluggable secret backends, is **DONE** — see below.)
 
-### 1. Pluggable secret backends — external resolvers (seam DONE)
+### 1. Pluggable secret backends — external resolvers (DONE)
 
-**The `pkg/secret` seam shipped** (PR #226, see Recently shipped): `Ref`
-+ `Resolver`/`Registry`/`Writer`, built-in `env` + `stored`, HostKey +
-the relay's own secrets routed through it. **Remaining: the external
-backend subpackages** — `pkg/secret/aws` (Secrets Manager first, most-
-requested), `pkg/secret/vault`, AWS KMS, GCP Secret Manager, Kubernetes
-Secrets. Each registers a new `Kind` + resolver in the registry; no core
-change. `secret.Ref` grows the per-kind locator fields (e.g. a Vault
-path).
+**Shipped** (foundation PRs #242/#243; backends #244–#248): the
+`Ref.Path` locator + five fetch-only external resolvers as
+`pkg/secret/<kind>` subpackages —
+- `pkg/secret/aws` — AWS Secrets Manager (stdlib SigV4, no SDK)
+- `pkg/secret/azure` — Azure Key Vault (stdlib client-creds, no SDK)
+- `pkg/secret/gcp` — GCP Secret Manager (stdlib SA-JWT, no SDK)
+- `pkg/secret/bitwarden` — Bitwarden/Vaultwarden (pure-Go client-side
+  crypto; no `bw` CLI, no sidecar, no CGO)
+- `pkg/secret/onepassword` — 1Password (official SDK + service-account
+  token; in-process, no sidecar)
 
-Why: larger deployments mandate a specific secret store. The seam makes
-each new backend additive.
+All are fetch-only and in-memory: they resolve a `Ref` to plaintext at
+load time and never persist (no PG, no `Store`, no master key). Each
+registers a `Kind` in `app/secret.Wire`, gated on its env config. Only
+1Password pulls a heavy dep (its SDK), isolated to its subpackage by Go
+module pruning.
 
-Size: ~half-day to ~1 day per external backend now that the seam exists.
-
-Where: `pkg/secret/aws/`, `pkg/secret/vault/`, …; register the new kind
-in `app/secret.Wire`.
+**On demand (not built):** Vault, AWS KMS, Kubernetes Secrets — same
+additive pattern (a new `Kind` + a `pkg/secret/<kind>` resolver), add
+when a deployment needs one.
 
 ### 2. Batch processing (relay-native)
 
