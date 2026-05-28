@@ -1,6 +1,6 @@
 # Anthropic Messages — Canonical Fidelity Audit
 
-> Audited 2026-05-25 against `pkg/adapters/anthropic/translator_canonical.go`.
+> Audited 2026-05-25 against `sdk/adapters/anthropic/translator_canonical.go`.
 > Critical, honest map of what survives canonical translation.
 > Every claim cites file:line.
 

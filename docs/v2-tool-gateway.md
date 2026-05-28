@@ -79,7 +79,7 @@ Two modes, customer-selectable per request:
   mode between turns. Off by default; the customer opts in by enabling
   gateway-provided tools on a non-native host.
 
-The symmetry to lean on: `pkg/relay/v1/` is the canonical *LLM*
+The symmetry to lean on: `sdk/v1/` is the canonical *LLM*
 protocol with vendor `Translator`s behind it. The tool gateway gets a
 canonical *tool* protocol with backend adapters behind it — same purity
 discipline (a vendorable tool-translation library; backends never import
@@ -145,7 +145,7 @@ The orchestration loop is the *easy* part. What takes real care:
 - **Where does the canonical tool schema live** so both Relay (to
   passthrough native tools, #1 from the original discussion) and the
   gateway agree on shape? Candidate: a `pkg/tools/v1/` mirroring
-  `pkg/relay/v1/`.
+  `sdk/v1/`.
 - **Does loop mode reuse the batch worker pool**, or is it its own
   concurrency domain?
 

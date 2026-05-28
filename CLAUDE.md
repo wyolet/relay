@@ -83,34 +83,43 @@ app/                       — the application: domain + composition + handlers
                              Emitter (drop-on-full) → Sink (JSONL today).
                              The live usage-emit path.
 
-pkg/                       — shared, vendorable, ZERO relay-app imports
-  relay/v1/                — CANONICAL protocol: types, Translator
-                             interface, Name + Registry, 6-event streams.
-                             Imports nothing of ours.
-  adapters/openai/         — OpenAI vendor adapter (one folder, all
-                             wire shapes that vendor serves):
-                             • chat_request.go, parse.go, tokens.go,
-                               context.go, types.go — Chat Completions
-                             • responses_*.go — Responses API types
-                             • translator_cc.go — v1.Translator for CC
-                             • translator_responses.go — v1.Translator
-                               for Responses + ComposedStream helper
-  adapters/anthropic/      — Anthropic vendor adapter:
-                             • parse.go, content.go, stream.go,
-                               tokens.go, types.go, transform.go
-                             • translator_canonical.go — v1.Translator
+pkg/                       — server-internal shared libs (NOT the SDK)
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
   kv/                      — Store interface + Mem + Redis backends
   lifecycle/               — per-request Context + PreFlightMiddleware +
                              PostFlightHook + Registry. The observability
                              spine: runners build a Context, observers
                              register hooks, FirePostFlight fans out.
+  usage/{clickhouse,file,
+    postgres,valkey}/      — usage sinks (heavy deps: ch/pgx/redis). Stay
+                             server-side; the PURE usage root is in sdk/usage.
   crypto/                  — AES-GCM helpers (master-key)
   httpmw/, httpheader/     — net/http middleware + header helpers
   ids/, slug/              — UUIDv7, slug minting + collision suffixes
   metrics/                 — Prometheus registry + counters
   reqid/                   — request-id middleware
-  usage/                   — Tokens type alias
+
+sdk/                       — SEPARATE Go module (github.com/wyolet/relay/sdk):
+                             the public, vendorable client library. The server
+                             module depends on it (replace ./sdk + root
+                             go.work); direction is server → sdk, NEVER reverse.
+                             Imports nothing from app/ or internal/ — a consumer
+                             `go get`s only this, no pgx/redis/clickhouse.
+  v1/                      — CANONICAL protocol: types, Translator interface,
+                             Name + Registry, 6-event streams. Imports nothing.
+  adapters/openai/         — OpenAI vendor adapter (one folder, all wire
+                             shapes as files): chat_request/parse/tokens/
+                             context/types (CC), responses_*.go,
+                             translator_cc.go, translator_responses.go.
+  adapters/anthropic/      — Anthropic vendor adapter: parse, content, stream,
+                             tokens, types, transform, translator_canonical.go.
+  adapters/gemini/         — Gemini native generateContent adapter.
+  usage/                   — Tokens + per-request timing types (the pure root).
+  catalog/                 — go:embed'd flattened catalog (hosts/bindings/
+                             pricing) + model-ref resolver + per-binding Cost.
+                             catalog.json is generated; see cmd/catalog-embed.
+  client/                  — the public client: Relay(), For(ref) catalog
+                             resolution, Generate/GenerateStream, Cost(), WS.
 
 internal/                  — composition root / boundary
   config/                  — RELAY_* env parsing
@@ -122,6 +131,8 @@ cmd/relay/                 — the binary entrypoint AND the ONLY place
 cmd/litellm-import/        — fetches LiteLLM JSON → manifest YAMLs
 cmd/catalog-validate/      — schema-validates the catalog repo's data tree
 cmd/catalog-schemas/       — regenerates JSON Schemas for catalog kinds
+cmd/catalog-embed/         — composes the public catalog → sdk/catalog/catalog.json
+                             (server-side; imports app/seed+manifest, skips drafts)
 
 config/                    — relay-local YAML (NOT the public catalog)
   ratelimits/system.yaml   — relay-internal admission/DoS rules
@@ -138,7 +149,7 @@ integration/               — make test-integration + make smoke-mock
 
 - `app/adapters/openai/` and `app/adapters/anthropic/` — Relay-side glue
   collapsed into the generic `app/adapter/` framework.
-- `pkg/adapters/openai/responses/{cctranslator,anthropictranslator}/`
+- `sdk/adapters/openai/responses/{cctranslator,anthropictranslator}/`
   pairwise translator packages — replaced by canonical chain
   composition (see docs/canonical-protocol.md).
 - `Deps.CrossShapeHandlers` + `inference.CrossShapeHandler` — the
@@ -203,13 +214,13 @@ These are the load-bearing rules every change must obey. Authoritative
 source: `docs/canonical-protocol.md` "Codebase rules" section. Quoted
 here because new sessions must inherit them.
 
-1. **Canonical knows nothing.** `pkg/relay/v1/` declares its own types,
+1. **Canonical knows nothing.** `sdk/v1/` declares its own types,
    `Translator` interface, `Name` + `Registry`, and nothing else. Zero
-   imports of `app/`, `internal/`, or any `pkg/adapters/<vendor>/`.
-2. **Vendors import canonical.** Each `pkg/adapters/<vendor>/` imports
-   `pkg/relay/v1/` and implements its `Translator`. Vendor adapters
+   imports of `app/`, `internal/`, or any `sdk/adapters/<vendor>/`.
+2. **Vendors import canonical.** Each `sdk/adapters/<vendor>/` imports
+   `sdk/v1/` and implements its `Translator`. Vendor adapters
    never import each other.
-3. **One folder per vendor, not per wire shape.** `pkg/adapters/openai/`
+3. **One folder per vendor, not per wire shape.** `sdk/adapters/openai/`
    owns all OpenAI wire shapes (CC, Responses, Embeddings) as files.
    Wire-shape names never appear in folder paths.
 4. **No vendor names in `app/` code.** Enforceable by
@@ -247,9 +258,13 @@ here because new sessions must inherit them.
    text appears as a normal `message` item's text content with
    `finish_reason: "refusal"` on the response. There is no
    `refusal_part` type.
-10. **`pkg/` purity preserved.** No `pkg/` package imports anything from
-    `app/` or `internal/`. `pkg/relay/v1/` and `pkg/adapters/<vendor>/`
-    together form a vendorable translation library.
+10. **SDK module purity preserved.** The `sdk/` module
+    (`github.com/wyolet/relay/sdk`) imports nothing from `app/` or
+    `internal/` — it is a standalone, vendorable library (`v1`, `adapters/*`,
+    `usage`, `catalog`, `client`). The server module depends on `sdk`, never
+    the reverse. (`pkg/` likewise imports nothing from `app/`/`internal/`.)
+    The catalog is delivered as a generated `go:embed`'d JSON, not an import,
+    so no edge crosses the boundary.
 11. **No silent drops.** An adapter must never accept canonical input (or
     upstream output) it can't express and discard it silently. Either emit
     it, carry it in `provider_data`/`extensions` (rules 7–8), annotate an
@@ -332,7 +347,7 @@ A single Host (e.g. AWS Bedrock) can serve models that speak different
 wire protocols — Claude (Anthropic shape) and Llama (OpenAI shape).
 The dispatch key therefore lives on the per-`(Model, Host)` binding,
 not on the Host. `HostBinding.Adapter` is `openai | anthropic` today;
-new vendors land as a new `pkg/adapters/<vendor>/` package implementing
+new vendors land as a new `sdk/adapters/<vendor>/` package implementing
 `v1.Translator` plus a `Spec` registration in `cmd/relay/main.go`.
 
 Ollama uses `Adapter: openai` (it exposes an OpenAI-compatible
@@ -410,7 +425,7 @@ Future-proof seams (already wired; do not bypass):
 
 - **No Postgres calls** on the request path. Catalog reads come from
   the in-memory `app/catalog.Snapshot` only.
-- **Pure shape stays vendorable**: `pkg/adapters/<vendor>/` has zero
+- **Pure shape stays vendorable**: `sdk/adapters/<vendor>/` has zero
   `app/` or `internal/` imports. Vendor adapter's `pipeline.Adapter`
   implementation is generic (`app/adapter.specAdapter`) parameterised
   by upstream URL + auth strategy from the Spec.
@@ -428,7 +443,7 @@ Future-proof seams (already wired; do not bypass):
   counter. Never unbounded queues. Never block-on-send on the hot
   path.
 - **Cross-shape translation** runs against a relay-native canonical
-  (`pkg/relay/v1/`, narrowed Responses shape). Every vendor adapter
+  (`sdk/v1/`, narrowed Responses shape). Every vendor adapter
   implements `v1.Translator`'s six methods (parse/serialize × request/
   response + two stream factories). Composition handles any A→B route
   — no pairwise packages. When inbound shape == upstream shape (same-

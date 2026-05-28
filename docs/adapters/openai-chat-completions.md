@@ -1,6 +1,6 @@
 # OpenAI Chat Completions — Canonical Fidelity Audit
 
-> Audited 2026-05-25 against `pkg/adapters/openai/translator_cc.go`. Critical, honest map of what survives canonical translation.
+> Audited 2026-05-25 against `sdk/adapters/openai/translator_cc.go`. Critical, honest map of what survives canonical translation.
 
 ## Verdict
 

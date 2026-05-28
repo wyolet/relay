@@ -1,6 +1,6 @@
 # OpenAI Responses API — Canonical Fidelity Audit
 
-> Audited 2026-05-25 against `pkg/adapters/openai/translator_responses.go` (1301 lines)
+> Audited 2026-05-25 against `sdk/adapters/openai/translator_responses.go` (1301 lines)
 > plus `responses_{types,request,response,items,parts,tools,events,parse,serialize,sse}.go`.
 > Critical, honest map. **NOTE: when the inbound host is `openai` and the adapter name is
 > `openai` (i.e., `plan.Host.Meta.Name == "openai"` and `plan.HostBinding.Adapter == "openai"`),
