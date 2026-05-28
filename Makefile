@@ -111,14 +111,16 @@ DEV_DATA_PORT    ?= $(RELAY_LB_PORT)
 DEV_CONTROL_PORT ?= $(RELAY_CONTROL_PORT)
 RELAY_VALKEY_PORT ?= 6379
 
-dev: dev-redis ## go run on the Mac against dev-stack PG/CH + local valkey
+dev: dev-redis ## build a fresh ./relay binary, then serve it against dev-stack PG/CH + local valkey
+	@echo "▸ building ./relay…"
+	CGO_ENABLED=0 go build -o relay ./cmd/relay
 	@echo "▸ relay-api.wyolet.dev → Mac:$(DEV_DATA_PORT)   control → :$(DEV_CONTROL_PORT)"
 	RELAY_PORT=$(DEV_DATA_PORT) \
 	RELAY_CONTROL_PORT=$(DEV_CONTROL_PORT) \
 	RELAY_REDIS_ADDR=127.0.0.1:$(RELAY_VALKEY_PORT) \
 	RELAY_CONFIG_DIR=$(CURDIR)/deploy/compose/config \
 	RELAY_INSTANCE_ID=relay-local \
-	go run ./cmd/relay
+	./relay
 
 dev-redis: ## bring up just the valkey container, host-published on $(RELAY_VALKEY_PORT)
 	RELAY_VALKEY_PORT=$(RELAY_VALKEY_PORT) docker compose $(COMPOSE_DEV_ARGS) up -d valkey
