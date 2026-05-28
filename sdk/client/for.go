@@ -40,6 +40,16 @@ func WithUpstreamModel(name string) TargetOption {
 	}
 }
 
+// WithClient attaches client Options (custom *http.Client, extra headers,
+// sync timeout, ...) to a catalog-resolved client. They apply over the
+// adapter's defaults at construction.
+func WithClient(opts ...Option) TargetOption {
+	return func(t *Target) error {
+		t.clientOpts = append(t.clientOpts, opts...)
+		return nil
+	}
+}
+
 // For resolves a model ref against the embedded catalog and returns a wired
 // client. ref forms: "gpt-4o", "openai/gpt-4o", "gpt-4o@openai-direct".
 func For(ref, apiKey string, opts ...TargetOption) (*Client, error) {

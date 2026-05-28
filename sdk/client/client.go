@@ -348,9 +348,13 @@ func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*
 	}
 	r := *req // shallow copy: don't mutate the caller's request
 	r.OutputMode = mode
-	if c.target.upstream != "" && len(r.Model) > 0 {
-		r.Model = append(v1.ModelRefs(nil), r.Model...)
-		r.Model[0] = c.target.upstream
+	if c.target.upstream != "" {
+		if len(r.Model) == 0 {
+			r.Model = v1.ModelRefs{c.target.upstream}
+		} else {
+			r.Model = append(v1.ModelRefs(nil), r.Model...)
+			r.Model[0] = c.target.upstream
+		}
 	}
 	body, err := c.translator.SerializeRequest(&r)
 	if err != nil {

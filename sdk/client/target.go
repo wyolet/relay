@@ -9,11 +9,17 @@ import (
 )
 
 // Target is a fully-resolved, self-consistent upstream call config.
+//
+// binding (and therefore the pricing behind Cost) reflects the catalog entry
+// the ref resolved to. Overrides (WithBaseURL/WithAdapterName) change where and
+// how the call is made but keep that pricing — fine for a same-price proxy,
+// potentially stale if pointed at a genuinely different upstream.
 type Target struct {
-	baseURL  string
-	adapter  Adapter
-	upstream string
-	binding  catalog.Binding
+	baseURL    string
+	adapter    Adapter
+	upstream   string
+	binding    catalog.Binding
+	clientOpts []Option
 }
 
 func targetFromBinding(b catalog.Binding, h catalog.Host) (Target, error) {
@@ -57,6 +63,9 @@ func (t Target) client(apiKey string, opts ...Option) *Client {
 		target:    t,
 	}
 	t.adapter.apply(c)
+	for _, o := range t.clientOpts {
+		o(c)
+	}
 	for _, o := range opts {
 		o(c)
 	}
