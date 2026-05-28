@@ -9,7 +9,9 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	"github.com/wyolet/relay/pkg/secret/aws"
+	"github.com/wyolet/relay/pkg/secret/azure"
 	"github.com/wyolet/relay/pkg/secret/bitwarden"
+	"github.com/wyolet/relay/pkg/secret/gcp"
 	"github.com/wyolet/relay/pkg/secret/onepassword"
 )
 
@@ -22,7 +24,7 @@ import (
 //
 // masterKey may be nil for env-only deployments — stored resolution then
 // errors loudly, which is the intended behavior when no key is configured.
-// Optional external backends (Bitwarden, AWS SM, …) register here when their
+// Optional external backends (Bitwarden, AWS SM, GCP SM, …) register here when their
 // env config is present.
 func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Registry, *pkgsecret.StoredResolver) {
 	store := NewStore(q, pool)
@@ -37,6 +39,12 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Regi
 	}
 	if cfg, ok := bitwardenConfigFromEnv(); ok {
 		reg.Register(pkgsecret.KindBitwarden, bitwarden.New(cfg))
+	}
+	if cfg, err := azure.ConfigFromEnv(); err == nil {
+		reg.Register(pkgsecret.KindAzure, azure.New(cfg))
+	}
+	if cfg, err := gcp.ConfigFromEnv(); err == nil {
+		reg.Register(pkgsecret.KindGCP, gcp.New(cfg))
 	}
 	if cfg, ok := onepassword.ConfigFromEnv(); ok {
 		reg.Register(pkgsecret.KindOnePassword, onepassword.New(cfg))
