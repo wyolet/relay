@@ -9,6 +9,7 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	"github.com/wyolet/relay/pkg/secret/aws"
+	"github.com/wyolet/relay/pkg/secret/azure"
 	"github.com/wyolet/relay/pkg/secret/bitwarden"
 )
 
@@ -36,6 +37,9 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Regi
 	}
 	if cfg, ok := bitwardenConfigFromEnv(); ok {
 		reg.Register(pkgsecret.KindBitwarden, bitwarden.New(cfg))
+	}
+	if cfg, err := azure.ConfigFromEnv(); err == nil {
+		reg.Register(pkgsecret.KindAzure, azure.New(cfg))
 	}
 
 	return reg, stored
