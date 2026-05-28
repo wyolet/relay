@@ -59,13 +59,20 @@ func TestRefValidate(t *testing.T) {
 		{Kind: KindStored},       // missing id
 		{Kind: "vault", ID: "x"}, // unknown kind
 		{Kind: KindEnv, ID: "x"}, // env without env name
+		{Kind: KindAWS},          // path-addressed, missing path
+		{Kind: KindBitwarden},    // path-addressed, missing path
 	}
 	for _, r := range bad {
 		if err := r.Validate(); err == nil {
 			t.Errorf("Validate(%+v): want error", r)
 		}
 	}
-	good := []Ref{{Kind: KindEnv, Env: "FOO"}, {Kind: KindStored, ID: "abc"}}
+	good := []Ref{
+		{Kind: KindEnv, Env: "FOO"},
+		{Kind: KindStored, ID: "abc"},
+		{Kind: KindAWS, Path: "prod/openai-key:apiKey"},
+		{Kind: KindBitwarden, Path: "openai-key/password"},
+	}
 	for _, r := range good {
 		if err := r.Validate(); err != nil {
 			t.Errorf("Validate(%+v): %v", r, err)
