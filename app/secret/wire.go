@@ -10,6 +10,7 @@ import (
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	"github.com/wyolet/relay/pkg/secret/aws"
 	"github.com/wyolet/relay/pkg/secret/bitwarden"
+	"github.com/wyolet/relay/pkg/secret/onepassword"
 )
 
 // Wire builds the relay's secret-resolution stack over Postgres: the
@@ -36,6 +37,9 @@ func Wire(q *gen.Queries, pool *pgxpool.Pool, masterKey []byte) (*pkgsecret.Regi
 	}
 	if cfg, ok := bitwardenConfigFromEnv(); ok {
 		reg.Register(pkgsecret.KindBitwarden, bitwarden.New(cfg))
+	}
+	if cfg, ok := onepassword.ConfigFromEnv(); ok {
+		reg.Register(pkgsecret.KindOnePassword, onepassword.New(cfg))
 	}
 
 	return reg, stored
