@@ -1,14 +1,12 @@
-// Package client is a thin, dependency-free Go client that speaks the relay
-// canonical shape (pkg/relay/v1). Callers build a *v1.Request once and get a
-// *v1.Response or a stream of canonical events — regardless of the target.
+// Package client is a thin Go client that speaks the relay canonical shape
+// (sdk/v1). Callers build a *v1.Request once and get a *Response or a stream
+// of canonical events — regardless of the target.
 //
-// The client does not care whether it talks to a relay server or directly to a
-// vendor: a target is just a v1.Translator + base URL + path + auth. Relay is
-// the primary target (POST /v1/generate, identity translator), but the same
-// client bridges straight to OpenAI, Anthropic, Ollama, or any future adapter
-// by swapping the translator — relay's own dispatchCanonical chain, run
-// client-side. Direct-to-vendor bypasses relay's key pooling, rate limiting,
-// breakers, and observability; it's a local-dev / offline / fallback path.
+// Use Relay for the primary relay-server path (key pooling, routing, limits).
+// Use For(ref, apiKey) to call any catalogued upstream host directly by model
+// ref ("gpt-4o", "openai/gpt-4o", "gpt-4o@openai-direct") with zero manual
+// baseURL/path/auth wiring. OpenAI, Anthropic, and Gemini constructors remain
+// for explicit off-catalog targets.
 //
 // Configuration mirrors the OpenAI SDK: base URL, API key, auth header/scheme,
 // extra default headers, request path, and HTTP client are all settable.
@@ -30,9 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wyolet/relay/sdk/adapters/anthropic"
-	"github.com/wyolet/relay/sdk/adapters/gemini"
-	"github.com/wyolet/relay/sdk/adapters/openai"
+	"github.com/wyolet/relay/sdk/catalog"
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -56,6 +52,7 @@ type Client struct {
 	configErr   error                                  // deferred construction error, surfaced on the first call
 	syncTimeout time.Duration                          // WR_TIMEOUT; applies to Generate only, never streams
 	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
+	target      Target                                   // set by For(); zero for Relay/manual constructors
 }
 
 // Option configures a Client. Options apply over the preset defaults.
@@ -234,7 +231,7 @@ func OpenAI(baseURL, apiKey string, opts ...Option) *Client {
 	if apiKey == "" {
 		apiKey = os.Getenv(EnvOpenAIKey)
 	}
-	return New(openai.CCTranslator{}, baseURL, "/v1/chat/completions", apiKey, opts...)
+	return newFromAdapter(adapters["openai"], baseURL, apiKey, opts...)
 }
 
 // Anthropic targets the Anthropic Messages API directly. Bypasses relay. Empty
@@ -243,20 +240,7 @@ func Anthropic(baseURL, apiKey string, opts ...Option) *Client {
 	if apiKey == "" {
 		apiKey = os.Getenv(EnvAnthropicKey)
 	}
-	withAnthropicDefaults := append([]Option{
-		WithAuth(Auth{Header: "x-api-key"}),
-		WithHeader("anthropic-version", "2023-06-01"),
-	}, opts...)
-	return New(anthropic.AnthropicTranslator{}, baseURL, "/v1/messages", apiKey, withAnthropicDefaults...)
-}
-
-// geminiPath mirrors relay's server-side Gemini spec: the model and the
-// sync/stream choice live in the URL path, not the body.
-func geminiPath(model string, stream bool) string {
-	if stream {
-		return "/v1beta/models/" + model + ":streamGenerateContent?alt=sse"
-	}
-	return "/v1beta/models/" + model + ":generateContent"
+	return newFromAdapter(adapters["anthropic"], baseURL, apiKey, opts...)
 }
 
 // Gemini targets the Gemini native generateContent API directly. Bypasses
@@ -269,16 +253,26 @@ func Gemini(baseURL, apiKey string, opts ...Option) *Client {
 			apiKey = os.Getenv(EnvGoogleKey)
 		}
 	}
-	withGeminiDefaults := append([]Option{
-		WithAuth(Auth{Header: "x-goog-api-key"}), // raw key, no scheme
-		WithPathFn(geminiPath),
-	}, opts...)
-	return New(gemini.GeminiTranslator{}, baseURL, "", apiKey, withGeminiDefaults...)
+	return newFromAdapter(adapters["gemini"], baseURL, apiKey, opts...)
+}
+
+func newFromAdapter(a Adapter, baseURL, apiKey string, opts ...Option) *Client {
+	c := &Client{
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		apiKey:    apiKey,
+		http:      http.DefaultClient,
+		transport: httpTransport{},
+	}
+	a.apply(c)
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // Generate runs a non-streaming generation. OutputMode is forced to sync; the
 // caller's request is not mutated.
-func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, error) {
+func (c *Client) Generate(ctx context.Context, req *v1.Request) (*Response, error) {
 	if c.syncTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.syncTimeout)
@@ -297,7 +291,11 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*v1.Response, e
 	if resp.status/100 != 2 {
 		return nil, parseAPIError(resp.status, body)
 	}
-	return c.translator.ParseResponse(body)
+	wire, err := c.translator.ParseResponse(body)
+	if err != nil {
+		return nil, err
+	}
+	return c.wrapResponse(wire), nil
 }
 
 // GenerateStream runs a streaming generation. The returned *Stream yields
@@ -317,7 +315,29 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	sc.Split(splitSSEFrames)
-	return &Stream{body: resp.body, sc: sc, toCanon: c.translator.NewToCanonicalStream(), start: start}, nil
+	return c.wrapStream(&Stream{
+		body:    resp.body,
+		sc:      sc,
+		toCanon: c.translator.NewToCanonicalStream(),
+		start:   start,
+	}), nil
+}
+
+func (c *Client) wrapResponse(r *v1.Response) *Response {
+	out := &Response{Response: r}
+	if len(c.target.binding.Pricing) > 0 {
+		out.binding = c.target.binding
+		out.priced = true
+	}
+	return out
+}
+
+func (c *Client) wrapStream(s *Stream) *Stream {
+	if len(c.target.binding.Pricing) > 0 {
+		s.binding = c.target.binding
+		s.priced = true
+	}
+	return s
 }
 
 // roundTrip serializes the request (translator-owned) and hands the bytes
@@ -328,6 +348,14 @@ func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*
 	}
 	r := *req // shallow copy: don't mutate the caller's request
 	r.OutputMode = mode
+	if c.target.upstream != "" {
+		if len(r.Model) == 0 {
+			r.Model = v1.ModelRefs{c.target.upstream}
+		} else {
+			r.Model = append(v1.ModelRefs(nil), r.Model...)
+			r.Model[0] = c.target.upstream
+		}
+	}
 	body, err := c.translator.SerializeRequest(&r)
 	if err != nil {
 		return nil, fmt.Errorf("relay client: serialize request: %w", err)
@@ -335,7 +363,9 @@ func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*
 	path := c.path
 	if c.pathFn != nil {
 		var model string
-		if len(req.Model) > 0 {
+		if c.target.upstream != "" {
+			model = c.target.upstream
+		} else if len(req.Model) > 0 {
 			model = req.Model[0]
 		}
 		path = c.pathFn(model, mode == v1.OutputModeStream)
@@ -358,6 +388,10 @@ type Stream struct {
 	sc      *bufio.Scanner
 	toCanon func([]byte) ([]byte, error)
 	pending [][]byte // canonical frames produced from one upstream frame, not yet returned
+
+	binding catalog.Binding
+	priced  bool
+	usage   usage.Tokens
 
 	// Timing, tracked as the caller drains via Recv. Offsets from start
 	// (the GenerateStream call), surfaced through Timing() in the exact
@@ -391,6 +425,12 @@ func (s *Stream) Recv() (*Event, error) {
 					}
 					s.reasoningEnd = now
 				}
+				if event == v1.EventGenerationCompleted {
+					var ev v1.GenerationCompletedEvent
+					if json.Unmarshal(data, &ev) == nil && len(ev.Usage) > 0 {
+						s.usage = ev.Usage
+					}
+				}
 				return &Event{Type: event, Data: append([]byte(nil), data...)}, nil
 			}
 			continue
@@ -417,6 +457,16 @@ func (s *Stream) Recv() (*Event, error) {
 
 // Close releases the underlying response body.
 func (s *Stream) Close() error { return s.body.Close() }
+
+// Cost returns total cost from the target's pricing rate sheet after the
+// stream's terminal usage event has been received. ok is false for relay
+// targets, unpriced hosts, and when usage is not yet available.
+func (s *Stream) Cost() (float64, bool) {
+	if !s.priced || len(s.usage) == 0 {
+		return 0, false
+	}
+	return s.binding.Cost(s.usage)
+}
 
 // StreamTiming is the client-side timing of one streamed generation, in the
 // exact shape relay ships server-side (usage.UpstreamTiming +
