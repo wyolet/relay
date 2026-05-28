@@ -245,7 +245,7 @@ func registerKind[T any](
 			}
 			if guard != nil {
 				if err := guard("create", nil, v); err != nil {
-					return nil, huma.Error403Forbidden(err.Error())
+					return nil, mapGuardErr(err)
 				}
 			}
 			if err := store.Upsert(ctx, v); err != nil {
@@ -292,7 +292,7 @@ func registerKind[T any](
 		}
 		if guard != nil {
 			if err := guard("update", existing, v); err != nil {
-				return nil, huma.Error403Forbidden(err.Error())
+				return nil, mapGuardErr(err)
 			}
 		}
 		if err := store.Upsert(ctx, v); err != nil {
@@ -366,6 +366,18 @@ func slugTakenFn[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) fu
 		_, ok := taken[candidate]
 		return ok
 	}
+}
+
+// mapGuardErr maps a mutationGuard error to an HTTP response. Guards that
+// return a huma.StatusError (e.g. a 400 for an unresolvable ref) keep their
+// chosen status; bare errors default to 403, matching the original
+// "guard rejects = forbidden" contract.
+func mapGuardErr(err error) error {
+	var se huma.StatusError
+	if errors.As(err, &se) {
+		return err
+	}
+	return huma.Error403Forbidden(err.Error())
 }
 
 func mapAuthzErr(err error) error {
@@ -737,7 +749,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(p *policy.Policy) error { return p.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.Policy, polmeta),
-		nil,
+		guardPolicyModels(d),
 		nil,
 		cascadePolicyDetach(d),
 		nil,
