@@ -77,6 +77,7 @@ func TestRefValidate(t *testing.T) {
 		{Kind: KindBitwarden, Path: "openai-key/password"},
 		{Kind: KindGCP, Path: "openai-key"},
 		{Kind: KindGCP, Path: "openai-key:3"},
+		{Kind: KindOnePassword, Path: "op://Prod/openai/credential"},
 	}
 	for _, r := range good {
 		if err := r.Validate(); err != nil {
