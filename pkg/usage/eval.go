@@ -3,6 +3,7 @@ package usage
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -276,7 +277,69 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if q.StatusMax > 0 && ev.Status > q.StatusMax {
 		return false
 	}
+	if len(q.Status) > 0 && !intInList(q.Status, ev.Status) {
+		return false
+	}
+	if !inList(q.HostKeyID, ev.HostKeyID) {
+		return false
+	}
+	if !inList(q.RequestedModel, ev.RequestedModel) {
+		return false
+	}
+	if q.Streamed != nil && ev.Streamed != *q.Streamed {
+		return false
+	}
+	if q.ErrorsOnly != nil {
+		isErr := ev.Status >= 400 || ev.ErrorKind != ""
+		if isErr != *q.ErrorsOnly {
+			return false
+		}
+	}
+	if q.AttemptsMin > 0 && ev.Attempts < q.AttemptsMin {
+		return false
+	}
+	if q.DurationMsMin > 0 && ev.DurationMs < q.DurationMsMin {
+		return false
+	}
+	if q.DurationMsMax > 0 && ev.DurationMs > q.DurationMsMax {
+		return false
+	}
+	if q.TTFTMsMin > 0 || q.TTFTMsMax > 0 {
+		if ev.Upstream == nil {
+			return false
+		}
+		ttft := ev.Upstream.ResponseStart / 1000 // µs → ms
+		if q.TTFTMsMin > 0 && ttft < q.TTFTMsMin {
+			return false
+		}
+		if q.TTFTMsMax > 0 && ttft > q.TTFTMsMax {
+			return false
+		}
+	}
+	if q.Q != "" {
+		needle := strings.ToLower(q.Q)
+		if !containsFold(ev.RequestID, needle) &&
+			!containsFold(ev.ModelID, needle) &&
+			!containsFold(ev.RequestedModel, needle) &&
+			!containsFold(ev.Source, needle) {
+			return false
+		}
+	}
 	return true
+}
+
+func intInList(set []int, v int) bool {
+	for _, s := range set {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// containsFold reports whether s contains needle (needle already lowercased).
+func containsFold(s, lowerNeedle string) bool {
+	return strings.Contains(strings.ToLower(s), lowerNeedle)
 }
 
 // inList reports whether val is in set, treating an empty set as "no
