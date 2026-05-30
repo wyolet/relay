@@ -34,7 +34,7 @@ services:
       retries: 10
 
   relay-a:
-    image: ${RELAY_IMAGE:-harbor.aliboyev.com/wyolet/relay:latest}
+    image: ${RELAY_IMAGE:-ghcr.io/wyolet/relay:latest}
     container_name: relay-a
     restart: unless-stopped
     env_file: [../../.env]
@@ -51,7 +51,7 @@ services:
     networks: [default, dev-net]
 
   relay-b:
-    image: ${RELAY_IMAGE:-harbor.aliboyev.com/wyolet/relay:latest}
+    image: ${RELAY_IMAGE:-ghcr.io/wyolet/relay:latest}
     container_name: relay-b
     restart: unless-stopped
     env_file: [../../.env]

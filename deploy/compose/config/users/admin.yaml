@@ -5,8 +5,8 @@ metadata:
   labels:
     role: bootstrap
 spec:
-  username: aaliboyev
-  email: abror@aliboyev.com
+  username: admin
+  email: admin@example.com
   password:
     valueFrom:
       env: RELAY_ADMIN_PASSWORD

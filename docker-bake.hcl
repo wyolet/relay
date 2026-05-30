@@ -1,6 +1,6 @@
 // wyolet relay — docker buildx bake config
 
-variable "REGISTRY"     { default = "harbor.aliboyev.com/wyolet" }
+variable "REGISTRY"     { default = "ghcr.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }

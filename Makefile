@@ -10,7 +10,7 @@
 export
 
 # Registry + image
-REGISTRY    ?= harbor.aliboyev.com/wyolet
+REGISTRY    ?= ghcr.io/wyolet
 IMAGE_NAME  ?= relay
 VERSION     ?= latest
 GIT_REVISION := $(shell git rev-parse --short HEAD 2>/dev/null)
@@ -281,7 +281,7 @@ control-login: ## POST /control/login using .env creds
 	@test -f .env || (echo "no .env; create one with RELAY_ADMIN_USERNAME and RELAY_ADMIN_PASSWORD" && exit 1)
 	@USERNAME=$$(grep '^RELAY_ADMIN_USERNAME=' .env | cut -d= -f2-); \
 	 PASSWORD=$$(grep '^RELAY_ADMIN_PASSWORD=' .env | cut -d= -f2-); \
-	 if [ -z "$$USERNAME" ]; then USERNAME=aaliboyev; fi; \
+	 if [ -z "$$USERNAME" ]; then USERNAME=admin; fi; \
 	 rm -f $(COOKIE_JAR); \
 	 curl -sS -c $(COOKIE_JAR) -X POST $(CONTROL_HOST)/control/login \
 	   -H 'content-type: application/json' \
