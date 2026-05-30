@@ -71,21 +71,15 @@ func (c *Config) applyDefaults() {
 
 const chTable = "payload_logs"
 
-// Bodies are large and highly compressible — ZSTD(3) trades a little CPU for
-// a much better ratio than the default level. The bloom_filter skip index on
-// request_id makes Get (a point lookup with no time bound, so no partition
-// pruning) skip most granules instead of scanning the table.
+// Body-only: the request/response bytes keyed by request_id, nothing else.
+// All per-request metadata lives on the log event (usage_events) and is
+// joined by request_id at the API layer. Bodies are large and highly
+// compressible — ZSTD(3) trades a little CPU for a much better ratio. The
+// bloom_filter skip index on request_id makes Get (a point lookup with no
+// time bound, so no partition pruning) skip most granules.
 var createTableSQL = `CREATE TABLE IF NOT EXISTS payload_logs (
     request_id          String                 CODEC(ZSTD),
     ts                  DateTime64(9, 'UTC')   CODEC(DoubleDelta),
-    source              LowCardinality(String),
-    status              UInt16,
-    streamed            UInt8,
-    relay_key_hash      String,
-    policy_id           String,
-    model_id            String,
-    host_id             String,
-    error_kind          LowCardinality(String),
     request_body        String                 CODEC(ZSTD(3)),
     response_body       String                 CODEC(ZSTD(3)),
     request_truncated   UInt8,
@@ -99,16 +93,9 @@ TTL toDateTime(ts) + INTERVAL %d DAY`
 // expectedColumns is the column set insertBatch writes. Used by ensureSchema
 // to detect a pre-existing incompatible table.
 var expectedColumns = []string{
-	"request_id", "ts", "source", "status", "streamed",
-	"relay_key_hash", "policy_id", "model_id", "host_id", "error_kind",
+	"request_id", "ts",
 	"request_body", "response_body", "request_truncated", "response_truncated",
 }
-
-// listColumns are the metadata columns List selects — deliberately excludes
-// the body columns so the table view never reads (or ships) captured bodies.
-// This is the column-projection win ClickHouse gives over the flat file/S3
-// readers, which must read whole rows to filter.
-const listColumns = "request_id, ts, source, status, streamed, relay_key_hash, policy_id, model_id, host_id, error_kind, request_truncated, response_truncated"
 
 // ensureSchema creates the table if absent, then verifies its columns match
 // what insertBatch writes. CREATE TABLE IF NOT EXISTS silently no-ops against
@@ -278,14 +265,6 @@ func (s *Sink) insertBatch(records []payload.Record) error {
 		if err := batch.Append(
 			r.RequestID,
 			r.Timestamp,
-			r.Source,
-			uint16(r.Status),
-			b2u8(r.Streamed),
-			r.RelayKeyHash,
-			r.PolicyID,
-			r.ModelID,
-			r.HostID,
-			r.ErrorKind,
 			string(r.RequestBody),
 			string(r.ResponseBody),
 			b2u8(r.RequestTruncated),
@@ -297,59 +276,12 @@ func (s *Sink) insertBatch(records []payload.Record) error {
 	return batch.Send()
 }
 
-// List returns matching records newest-first with bodies stripped — the body
-// columns are never selected, so the query reads only the metadata columns
-// off disk.
-func (s *Reader) List(ctx context.Context, q payload.Query) ([]payload.Record, error) {
-	limit := q.Limit
-	if limit <= 0 {
-		limit = payload.DefaultLimit
-	}
-	if limit > payload.MaxLimit {
-		limit = payload.MaxLimit
-	}
-
-	where, args := buildWhere(q)
-	sql := fmt.Sprintf("SELECT %s FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
-		listColumns, chTable, where, limit)
-
-	rows, err := s.conn.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, fmt.Errorf("payload/clickhouse: list query: %w", err)
-	}
-	defer rows.Close()
-
-	var out []payload.Record
-	for rows.Next() {
-		var (
-			r         payload.Record
-			status    uint16
-			streamed  uint8
-			reqTrunc  uint8
-			respTrunc uint8
-		)
-		if err := rows.Scan(
-			&r.RequestID, &r.Timestamp, &r.Source, &status, &streamed,
-			&r.RelayKeyHash, &r.PolicyID, &r.ModelID, &r.HostID, &r.ErrorKind,
-			&reqTrunc, &respTrunc,
-		); err != nil {
-			return nil, fmt.Errorf("payload/clickhouse: scan list row: %w", err)
-		}
-		r.Status = int(status)
-		r.Streamed = streamed == 1
-		r.RequestTruncated = reqTrunc == 1
-		r.ResponseTruncated = respTrunc == 1
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-// Get returns the full record (bodies included) for one request id. The
+// Get returns the captured record (bodies included) for one request id. The
 // newest row wins if an id was somehow reused. Returns payload.ErrNotFound
 // when absent.
 func (s *Reader) Get(ctx context.Context, requestID string) (payload.Record, error) {
 	sql := fmt.Sprintf(
-		"SELECT request_id, ts, source, status, streamed, relay_key_hash, policy_id, model_id, host_id, error_kind, request_body, response_body, request_truncated, response_truncated FROM %s WHERE request_id = ? ORDER BY ts DESC LIMIT 1",
+		"SELECT request_id, ts, request_body, response_body, request_truncated, response_truncated FROM %s WHERE request_id = ? ORDER BY ts DESC LIMIT 1",
 		chTable)
 
 	rows, err := s.conn.Query(ctx, sql, requestID)
@@ -367,20 +299,14 @@ func (s *Reader) Get(ctx context.Context, requestID string) (payload.Record, err
 
 	var (
 		r                   payload.Record
-		status              uint16
-		streamed            uint8
 		reqTrunc, respTrunc uint8
 		reqBody, respBody   string
 	)
 	if err := rows.Scan(
-		&r.RequestID, &r.Timestamp, &r.Source, &status, &streamed,
-		&r.RelayKeyHash, &r.PolicyID, &r.ModelID, &r.HostID, &r.ErrorKind,
-		&reqBody, &respBody, &reqTrunc, &respTrunc,
+		&r.RequestID, &r.Timestamp, &reqBody, &respBody, &reqTrunc, &respTrunc,
 	); err != nil {
 		return payload.Record{}, fmt.Errorf("payload/clickhouse: scan get row: %w", err)
 	}
-	r.Status = int(status)
-	r.Streamed = streamed == 1
 	r.RequestTruncated = reqTrunc == 1
 	r.ResponseTruncated = respTrunc == 1
 	if reqBody != "" {
@@ -390,59 +316,6 @@ func (s *Reader) Get(ctx context.Context, requestID string) (payload.Record, err
 		r.ResponseBody = []byte(respBody)
 	}
 	return r, rows.Err()
-}
-
-// buildWhere generates the WHERE clause + positional args for a payload.Query.
-// Mirrors the usage CH buildWhere, narrowed to the dimensions a Record carries.
-func buildWhere(q payload.Query) (string, []any) {
-	var clauses []string
-	var args []any
-
-	in := func(col string, vals []string) {
-		if len(vals) == 0 {
-			return
-		}
-		ph := make([]string, len(vals))
-		for i, v := range vals {
-			ph[i] = "?"
-			args = append(args, v)
-		}
-		clauses = append(clauses, col+" IN ("+strings.Join(ph, ",")+")")
-	}
-
-	if !q.From.IsZero() {
-		clauses = append(clauses, "ts >= ?")
-		args = append(args, q.From)
-	} else if q.Since > 0 {
-		clauses = append(clauses, fmt.Sprintf("ts >= now() - INTERVAL %d SECOND", int64(q.Since.Seconds())))
-	}
-	if !q.To.IsZero() {
-		clauses = append(clauses, "ts <= ?")
-		args = append(args, q.To)
-	}
-	if !q.CursorTS.IsZero() {
-		clauses = append(clauses, "(ts, request_id) < (?, ?)")
-		args = append(args, q.CursorTS, q.CursorID)
-	}
-	in("relay_key_hash", q.RelayKeyHash)
-	in("policy_id", q.PolicyID)
-	in("model_id", q.ModelID)
-	in("host_id", q.HostID)
-	in("source", q.Source)
-	in("error_kind", q.ErrorKind)
-	if q.StatusMin > 0 {
-		clauses = append(clauses, "status >= ?")
-		args = append(args, uint16(q.StatusMin))
-	}
-	if q.StatusMax > 0 {
-		clauses = append(clauses, "status <= ?")
-		args = append(args, uint16(q.StatusMax))
-	}
-
-	if len(clauses) == 0 {
-		return "", args
-	}
-	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
 func b2u8(b bool) uint8 {

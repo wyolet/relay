@@ -49,7 +49,7 @@ func (o *streamPayloadObserver) Observe(frame []byte) {
 }
 
 func (o *streamPayloadObserver) Result() (any, error) {
-	return buildRecord(o.lc, 200, "", o.buf.Bytes(), o.max), nil
+	return buildRecord(o.lc, o.buf.Bytes(), o.max), nil
 }
 
 // noopObserver is returned for non-opted-in streams: it ignores frames

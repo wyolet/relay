@@ -17,10 +17,9 @@ type (
 	Sink   = payload.Sink
 	Closer = payload.Closer
 
-	// Reader / Query are the read-side contract, re-exported so the control
-	// plane imports just payloadlog.
+	// Reader is the read-side contract (Get by request_id), re-exported so
+	// the control plane imports just payloadlog.
 	Reader = payload.Reader
-	Query  = payload.Query
 )
 
 // ErrNotFound is re-exported so control handlers can map an absent capture

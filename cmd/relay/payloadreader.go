@@ -46,14 +46,6 @@ func newPayloadReaderResolver(src payloadlog.SettingsSource, resolver *secret.Re
 	return &payloadReaderResolver{src: src, resolver: resolver, chBoot: chBoot, log: log}
 }
 
-func (p *payloadReaderResolver) List(ctx context.Context, q payloadlog.Query) ([]payloadlog.Record, error) {
-	r, err := p.current(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return r.List(ctx, q)
-}
-
 func (p *payloadReaderResolver) Get(ctx context.Context, requestID string) (payloadlog.Record, error) {
 	r, err := p.current(ctx)
 	if err != nil {

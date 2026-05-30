@@ -15,8 +15,6 @@ func TestSink_RoundTrip(t *testing.T) {
 	rec := payload.Record{
 		RequestID:    "req-1",
 		Timestamp:    time.Now().UTC().Truncate(time.Second),
-		Source:       "pipeline",
-		Status:       200,
 		RequestBody:  []byte(`{"in":1}`),
 		ResponseBody: []byte(`{"out":2}`),
 	}
