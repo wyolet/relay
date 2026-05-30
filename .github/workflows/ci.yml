@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Codebase rules (canonical-protocol 1/2/4/10)
+        run: make lint-rules
+
+      - name: Vet
+        run: |
+          go vet ./...
+          (cd sdk && go vet ./...)
+
+      - name: Build
+        run: |
+          go build ./...
+          (cd sdk && go build ./...)
+
+      - name: Test
+        run: |
+          go test ./...
+          (cd sdk && go test ./...)
