@@ -96,7 +96,7 @@ Every catalog YAML carries a directive comment pointing at the published
 schema:
 
 ```yaml
-# yaml-language-server: $schema=https://relay-api.wyolet.dev/schemas/v1alpha2/Model.schema.json
+# yaml-language-server: $schema=https://your-relay-host/schemas/v1alpha2/Model.schema.json
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Model
 metadata:
@@ -129,8 +129,8 @@ Exit 1 on errors; warnings are surfaced but don't fail the build.
   the relay binary uses; drift would mean wire-format incompatibility.
 - **Make target enforces it.** `make schemas` regenerates. CI compares
   with the committed copy via `git diff --exit-code schemas/`.
-- **Hosted at a stable URL.** Caddy serves them at
-  `relay-api.wyolet.dev/schemas/v1alpha2/<Kind>.schema.json`. Editors
+- **Hosted at a stable URL.** Serve them from your relay deployment at
+  `https://your-relay-host/schemas/v1alpha2/<Kind>.schema.json`. Editors
   pull them by URL; offline users can run the relay binary locally and
   point editors at `file://` paths.
 
