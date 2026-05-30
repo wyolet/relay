@@ -58,8 +58,23 @@ relay-canonical protocol design.
 
 ## Quickstart
 
-Requires Go 1.25+, Docker, and `make`. Ephemeral Postgres is brought up
-via compose.
+### Docker (standalone — one command)
+
+Requires Docker. Bundles its own Postgres, ClickHouse, Valkey, and Jaeger;
+builds the relay image from source (no published image yet).
+
+```bash
+cp .env.example .env
+# REQUIRED: set a master key in .env — generate one with:
+#   openssl rand -base64 32
+docker compose up --build
+```
+
+Data plane: `http://localhost:5100` · control plane: `http://localhost:5103`.
+
+### Run from source (dev)
+
+Requires Go 1.25+, Docker, and `make`. Ephemeral Postgres via compose.
 
 ```bash
 # Bring the test PG up.
@@ -308,27 +323,26 @@ go run ./cmd/litellm-import --out config
 make dev
 ```
 
-The repo follows the wyolet dev workflow — see the Obsidian notes
-referenced in [`CLAUDE.md`](CLAUDE.md) for Mac+infra split, port
-allocations, and the Harbor / Argo deploy pipeline.
-
-PR discipline: one stage per branch, branch off fresh `main` after the
-previous merges, delete merged branches immediately. Subagents handle
-mechanical work (`model: "sonnet"`); orchestration stays on the parent.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the build/test workflow, the
+load-bearing codebase rules, and PR conventions. `make lint-rules`
+enforces the canonical-protocol import boundaries (rules 1/2/4/10).
 
 ## Roadmap
 
-[`docs/roadmap.md`](docs/roadmap.md) has the full breakdown:
+The roadmap is split by product phase — [`docs/roadmap.md`](docs/roadmap.md)
+is the index:
 
-- **Track A** — close out the cutover (E2E test, observability rebuild,
-  bench harness, security leakage test port, settings API).
-- **Track B** — product gaps before v1 launch (user table, multi-
-  tenancy, real authz, programmatic JWT, UI re-mount).
-- **Track C** — operational maturity (passthrough flow, keypool
-  observability, quota-aware selection, slug edit, CI/CD).
-- **Track D** — future (cross-shape translation, MFA/SSO, batch
-  subsystem, ClickHouse analytics).
+- [`roadmap-oss.md`](docs/roadmap-oss.md) — the open-source core: batch
+  orchestration, webhooks, new adapters, observability, and launch readiness.
+- [`roadmap-enterprise.md`](docs/roadmap-enterprise.md) — on-prem: authN/authz,
+  SSO, audit, HA, air-gap, security-review readiness.
+- [`roadmap-saas.md`](docs/roadmap-saas.md) — hosted multi-tenant: billing,
+  quotas, tenant isolation, compliance.
+- [`roadmap-v2.md`](docs/roadmap-v2.md) — beyond v1: the Tool Gateway + icebox.
 
 ## License
 
-TBD — not yet open-sourced.
+[AGPL-3.0](LICENSE). Network use triggers the copyleft — run a modified
+relay as a service and you must publish your changes. Commercial /
+enterprise licensing is a separate arrangement.
+

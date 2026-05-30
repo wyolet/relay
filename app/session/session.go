@@ -147,4 +147,3 @@ func (s *kvStore) Delete(token string) error {
 	defer cancel()
 	return s.kv.Del(ctx, s.key(token))
 }
-

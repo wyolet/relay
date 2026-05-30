@@ -45,10 +45,10 @@ type createRelayKeyResponse struct {
 
 func registerRelayKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 	huma.Register(api, huma.Operation{
-		OperationID:   "create_relay_key",
-		Method:        http.MethodPost,
-		Path:          "/relay-keys",
-		Summary:       "Create a relay-key (server generates plaintext)",
+		OperationID: "create_relay_key",
+		Method:      http.MethodPost,
+		Path:        "/relay-keys",
+		Summary:     "Create a relay-key (server generates plaintext)",
 		Description: "Generates a fresh bearer token server-side via crypto/rand, " +
 			"persists only sha256(plaintext) + a short display prefix, and returns " +
 			"the plaintext once in the response. The caller MUST save the plaintext " +

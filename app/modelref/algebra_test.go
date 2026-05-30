@@ -10,14 +10,14 @@ import (
 
 func TestParse_FiveShapes(t *testing.T) {
 	cases := []struct {
-		in     string
-		wantK  Kind
-		wantP  string
-		wantM  string
-		wantH  string
-		pWild  bool
-		mWild  bool
-		hWild  bool
+		in    string
+		wantK Kind
+		wantP string
+		wantM string
+		wantH string
+		pWild bool
+		mWild bool
+		hWild bool
 	}{
 		{"anthropic", KindProvider, "anthropic", "", "", false, true, true},
 		{"@bedrock", KindHost, "", "", "bedrock", true, true, false},
@@ -248,7 +248,7 @@ func TestAssign_HostAnchoredCarvesOut(t *testing.T) {
 		{"anthropic", "claude-sonnet-4-6", "anthropic"},
 	}
 	groups := []Group[string]{
-		{Owner: "A", Refs: []Ref{MustParse("anthropic@bedrock")}},     // 22
+		{Owner: "A", Refs: []Ref{MustParse("anthropic@bedrock")}},         // 22
 		{Owner: "B", Refs: []Ref{MustParse("anthropic/claude-opus-4-7")}}, // 21
 	}
 	assigns, carve := AssignSpecificityWins(groups, catalog)

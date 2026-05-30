@@ -1,6 +1,15 @@
 # Dev overrides — `make dev` invokes this on top of docker-compose.yml.
 # Uses dev-stack for Postgres / ClickHouse / Jaeger; valkey stays local.
 # Relay binaries built locally from source for fast iteration.
+#
+# The `dev-net` external network lives here (not in the base compose) so the
+# base stays runnable standalone; dev mode reattaches relay to dev-net to
+# reach dev-stack services.
+
+networks:
+  dev-net:
+    name: dev-net
+    external: true
 
 services:
   relay-a:
@@ -8,9 +17,11 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+    networks: [default, dev-net]
 
   relay-b:
     image: relay:dev
     build:
       context: ../..
       dockerfile: Dockerfile
+    networks: [default, dev-net]

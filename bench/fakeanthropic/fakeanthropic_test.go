@@ -159,4 +159,3 @@ func TestRoundRobin(t *testing.T) {
 		t.Errorf("round-robin failed: first=%q, wrapped=%q", ids[0], ids[len(responses)])
 	}
 }
-

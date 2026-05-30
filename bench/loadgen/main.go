@@ -58,12 +58,12 @@ func main() {
 	client := &http.Client{Timeout: *timeout}
 
 	var (
-		sent       atomic.Int64
-		ok2xx      atomic.Int64
-		failOther  atomic.Int64
+		sent        atomic.Int64
+		ok2xx       atomic.Int64
+		failOther   atomic.Int64
 		failTimeout atomic.Int64
-		latMu      sync.Mutex
-		latencies  []time.Duration
+		latMu       sync.Mutex
+		latencies   []time.Duration
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *duration+10*time.Second)

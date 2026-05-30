@@ -459,9 +459,9 @@ func RegisterScripts(m *kv.Mem) {
 
 // pendingEntry is one phase-2 write planned during phase-1 decide.
 type pendingEntry struct {
-	kind     string // "con", "sw_req", "fw", "tb", "lb", "sw"
-	key      string
-	ttl      time.Duration
+	kind string // "con", "sw_req", "fw", "tb", "lb", "sw"
+	key  string
+	ttl  time.Duration
 	// token-bucket
 	newTokens int64
 	nowMs     int64

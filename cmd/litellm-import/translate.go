@@ -317,8 +317,8 @@ type pricingSpec struct {
 
 // pricingMeta is the metadata block of a Pricing YAML document.
 type pricingMeta struct {
-	Name  string             `yaml:"name"`
-	Owner pricingOwnerRef    `yaml:"owner"`
+	Name  string          `yaml:"name"`
+	Owner pricingOwnerRef `yaml:"owner"`
 }
 
 // pricingOwnerRef is the owner reference in Pricing metadata.

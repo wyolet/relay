@@ -15,14 +15,14 @@ import (
 // Document is a discriminated union over all supported wire kinds. Exactly one
 // of the fields below is non-nil after successful parsing.
 type Document struct {
-	Provider *ProviderDTO
-	Host     *HostDTO
-	Model    *ModelDTO
-	HostKey  *HostKeyDTO
-	Policy   *PolicyDTO
+	Provider  *ProviderDTO
+	Host      *HostDTO
+	Model     *ModelDTO
+	HostKey   *HostKeyDTO
+	Policy    *PolicyDTO
 	RateLimit *RateLimitDTO
-	RelayKey *RelayKeyDTO
-	Pricing  *PricingDTO
+	RelayKey  *RelayKeyDTO
+	Pricing   *PricingDTO
 }
 
 // Kind returns the kind string of the contained document.

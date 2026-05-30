@@ -38,11 +38,11 @@ type Entry struct {
 	InputCostPerTokenAbove272kTokens  float64 `json:"input_cost_per_token_above_272k_tokens"`
 	OutputCostPerTokenAbove272kTokens float64 `json:"output_cost_per_token_above_272k_tokens"`
 
-	InputCostPerTokenBatches    float64 `json:"input_cost_per_token_batches"`
-	OutputCostPerTokenBatches   float64 `json:"output_cost_per_token_batches"`
-	InputCostPerImage           float64 `json:"input_cost_per_image"`
-	InputCostPerAudioToken      float64 `json:"input_cost_per_audio_token"`
-	OutputCostPerAudioToken     float64 `json:"output_cost_per_audio_token"`
+	InputCostPerTokenBatches  float64 `json:"input_cost_per_token_batches"`
+	OutputCostPerTokenBatches float64 `json:"output_cost_per_token_batches"`
+	InputCostPerImage         float64 `json:"input_cost_per_image"`
+	InputCostPerAudioToken    float64 `json:"input_cost_per_audio_token"`
+	OutputCostPerAudioToken   float64 `json:"output_cost_per_audio_token"`
 
 	DeprecationDate string `json:"deprecation_date"`
 

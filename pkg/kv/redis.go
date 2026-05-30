@@ -42,8 +42,8 @@ type SentinelConfig struct {
 
 // Redis implements Store (and Scripter) backed by Redis/Valkey.
 type Redis struct {
-	client redis.UniversalClient
-	shas   sync.Map // name -> sha string
+	client   redis.UniversalClient
+	shas     sync.Map // name -> sha string
 	inflight sync.WaitGroup
 }
 

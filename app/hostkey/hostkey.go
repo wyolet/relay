@@ -6,10 +6,10 @@
 // Two value modes:
 //
 //   - ValueKindEnv:    Spec.ValueFrom.Env names an environment variable the
-//                      relay reads at boot. No cleartext touches storage.
+//     relay reads at boot. No cleartext touches storage.
 //   - ValueKindStored: cleartext is supplied on the write boundary
-//                      (Spec.Value), encrypted by the storage layer with
-//                      RELAY_MASTER_KEY, and persisted as opaque bytes.
+//     (Spec.Value), encrypted by the storage layer with
+//     RELAY_MASTER_KEY, and persisted as opaque bytes.
 //
 // Spec.Value is intentionally tagged `json:"-"` so cleartext never appears in
 // JSONB or in API responses. Loading from YAML is the only path that carries

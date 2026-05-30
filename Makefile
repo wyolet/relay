@@ -3,7 +3,7 @@
         version release release-minor release-major \
         sqlc-generate test test-integration smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
-        ui-fetch build clean schemas catalog-validate
+        ui-fetch build clean schemas catalog-validate lint-rules
 
 # Load .env if present.
 -include .env
@@ -314,8 +314,12 @@ clean: ## drop UI dist + binary
 	rm -rf $(UI_DIST_DIR)
 	rm -f relay
 
-test: ## go test ./...
+test: ## go test ./... (both modules)
 	go test ./...
+	cd sdk && go test ./...
+
+lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
+	./scripts/check-codebase-rules.sh
 
 schemas: ## regenerate JSON Schemas for catalog kinds → schemas/v1alpha2/
 	go run ./cmd/catalog-schemas schemas/v1alpha2

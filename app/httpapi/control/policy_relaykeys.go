@@ -4,8 +4,8 @@
 // form can manage its key roster without round-tripping through the
 // relay-key form.
 //
-//   POST   /policies/by-id/{id}/relay-keys/{relayKeyId}   — attach
-//   DELETE /policies/by-id/{id}/relay-keys/{relayKeyId}   — detach
+//	POST   /policies/by-id/{id}/relay-keys/{relayKeyId}   — attach
+//	DELETE /policies/by-id/{id}/relay-keys/{relayKeyId}   — detach
 //
 // Attach overwrites any existing PolicyID on the relay key (no
 // confirmation): moving a key from policy A to policy B is the

@@ -115,8 +115,8 @@ func TestWithLockSerial(t *testing.T) {
 	s := newStore(t)
 
 	var (
-		mu      sync.Mutex
-		counter int
+		mu          sync.Mutex
+		counter     int
 		interleaved bool
 	)
 

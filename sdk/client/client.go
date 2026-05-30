@@ -52,7 +52,7 @@ type Client struct {
 	configErr   error                                  // deferred construction error, surfaced on the first call
 	syncTimeout time.Duration                          // WR_TIMEOUT; applies to Generate only, never streams
 	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
-	target      Target                                   // set by For(); zero for Relay/manual constructors
+	target      Target                                 // set by For(); zero for Relay/manual constructors
 }
 
 // Option configures a Client. Options apply over the preset defaults.

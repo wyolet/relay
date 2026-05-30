@@ -137,14 +137,14 @@ func TestMatches(t *testing.T) {
 		want map[triple]bool
 	}{
 		{"@bedrock", map[triple]bool{
-			{"anthropic", "claude-opus-4-7", "bedrock"}: true,
-			{"openai", "gpt-4o", "bedrock"}:             true,
+			{"anthropic", "claude-opus-4-7", "bedrock"}:   true,
+			{"openai", "gpt-4o", "bedrock"}:               true,
 			{"anthropic", "claude-opus-4-7", "anthropic"}: false,
 		}},
 		{"anthropic", map[triple]bool{
-			{"anthropic", "claude-opus-4-7", "anthropic"}:  true,
-			{"anthropic", "claude-haiku-4-5", "bedrock"}:   true,
-			{"openai", "gpt-4o", "openai"}:                 false,
+			{"anthropic", "claude-opus-4-7", "anthropic"}: true,
+			{"anthropic", "claude-haiku-4-5", "bedrock"}:  true,
+			{"openai", "gpt-4o", "openai"}:                false,
 		}},
 		{"anthropic/claude-opus-4-7", map[triple]bool{
 			{"anthropic", "claude-opus-4-7", "anthropic"}: true,
