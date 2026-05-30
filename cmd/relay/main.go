@@ -45,10 +45,6 @@ import (
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
-	chsink "github.com/wyolet/relay/pkg/usage/clickhouse"
-	"github.com/wyolet/relay/pkg/usage/file"
-	pgsink "github.com/wyolet/relay/pkg/usage/postgres"
-	vksink "github.com/wyolet/relay/pkg/usage/valkey"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
@@ -260,74 +256,37 @@ func main() {
 	}
 	specRegistry := adapter.NewRegistry(specs...)
 
-	// Usage emit: one PostFlight observer that writes JSONL per request.
-	// Path defaults to RELAY_USAGE_LOG (or /tmp fallback) — file sink only
-	// at this stage; ClickHouse / OTel sinks layer on later by registering
-	// alongside.
+	// Log (usage) emit: the constant PostFlight observer (one event per
+	// request). Backend selection lives in the "usage-logging" settings
+	// section (hot-swappable, reroute = clean break); the legacy
+	// RELAY_EVENTLOG_BACKEND is an interim fallback when the section is unset.
+	// DSNs stay bootstrap-tier (env). The Controller hot-swaps both the sink
+	// (emitter) and the reader (control plane) on a settings change.
 	usagePath := os.Getenv("RELAY_USAGE_LOG")
 	if usagePath == "" {
 		usagePath = "relay-usage.jsonl"
 	}
-	// Backend selection (RELAY_EVENTLOG_BACKEND). The composition root is the
-	// only place backend packages are named; each implements usagelog.Sink +
-	// usagelog.Reader so the same instance feeds the Emitter (write) and the
-	// control plane (read).
-	var usageSink usagelog.Sink
-	var usageReader usagelog.Reader
-	switch cfg.EventlogBackend {
-	case "clickhouse":
-		if cfg.CHDSN == "" {
-			slog.Error("RELAY_CH_DSN required when RELAY_EVENTLOG_BACKEND=clickhouse")
-			os.Exit(1)
-		}
-		walDir := cfg.EventlogDir
-		if walDir == "" {
-			walDir = "relay-usage-wal"
-		}
-		ch, err := chsink.New(chsink.Config{
-			DSN:           cfg.CHDSN,
-			RetentionDays: cfg.CHRetentionDays,
-			WALDir:        walDir,
-		})
-		if err != nil {
-			slog.Error("usagelog: clickhouse backend init failed", "err", err)
-			os.Exit(1)
-		}
-		usageSink, usageReader = ch, ch
-		slog.Info("usagelog: backend clickhouse", "wal_dir", walDir, "retention_days", cfg.CHRetentionDays)
-	case "valkey":
-		vk := vksink.New(kvStore, vksink.Config{})
-		usageSink, usageReader = vk, vk
-		slog.Info("usagelog: backend valkey")
-	case "postgres":
-		// Reuses the catalog Postgres (RELAY_PG_DSN) with its own self-managed
-		// usage_events table. PG is its own durable store — no JSONL WAL needed.
-		pg, err := pgsink.New(bootCtx, pgsink.Config{DSN: cfg.PGDSN})
-		if err != nil {
-			slog.Error("usagelog: postgres backend init failed", "err", err)
-			os.Exit(1)
-		}
-		usageSink, usageReader = pg, pg
-		slog.Info("usagelog: backend postgres")
-	default: // "file"
-		if fs, err := file.NewSink(usagePath); err != nil {
-			slog.Error("usagelog: file sink failed; using stdout", "err", err, "path", usagePath)
-			usageSink = file.Stdout()
-		} else {
-			usageSink = fs
-		}
-		usageReader = file.NewReader(usagePath)
-		slog.Info("usagelog: backend file", "path", usagePath)
+	usageWALDir := cfg.EventlogDir
+	if usageWALDir == "" {
+		usageWALDir = "relay-usage-wal"
 	}
-
-	usageEmitter := usagelog.NewEmitter(usagelog.EmitterOptions{}, usageSink)
-	defer usageEmitter.Close()
+	usageCtl := usagelog.NewController(cat, usageBackendBuilder(usageBackendBoot{
+		EnvBackend:      cfg.EventlogBackend,
+		CHDSN:           cfg.CHDSN,
+		PGDSN:           cfg.PGDSN,
+		KV:              kvStore,
+		FilePath:        usagePath,
+		WALDir:          usageWALDir,
+		CHRetentionDays: cfg.CHRetentionDays,
+	}), slog.Default())
+	defer usageCtl.Close()
+	usageReader := usageCtl.Reader()
 	lifecycleReg.RegisterHook(usagelog.NewUsageHook())
-	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageEmitter))
+	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageCtl.Emitter()))
 	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory())
-	slog.Info("usagelog: wired", "backend", cfg.EventlogBackend,
-		"hooks", lifecycleReg.HookCount(), "collectors", lifecycleReg.CollectorCount(),
-		"stream_observers", lifecycleReg.StreamObserverCount())
+	usageCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
+	go usageCtl.Run(listenerCtx)
+	slog.Info("usagelog: observer wired (backend via settings: usage-logging)")
 
 	// Payload logging: the second lifecycle observer. Always wired; its
 	// runtime config lives in the "payload-logging" settings section, so it
