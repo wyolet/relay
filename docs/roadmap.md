@@ -80,20 +80,22 @@ waiting to be written; the path under `docs/` is the placeholder.
   `-tags minimal` build seam — minio-go excluded from minimal builds);
   `app/payloadlog` observer. Runtime config lives in the `payload-logging`
   settings section, hot-swapped by a reconcile-loop `Controller` (toggle /
-  backend / bucket / creds, no restart). **Read side + ClickHouse backend
-  shipped** — control-plane `GET /payloads` (filtered + keyset-paginated
-  metadata list, bodies stripped via column projection) + `GET
-  /payloads/{request_id}` (full bodies) over a `payload.Reader` seam, the
-  source for the frontend Logs page. New **`clickhouse` backend** (Langfuse
-  model: text bodies as ZSTD `String` columns, queryable; near-identical
-  multi-turn resends block-compress to ~O(N)); reuses `RELAY_CH_DSN` (separate
-  `payload_logs` table), WAL-segment durability with byte-based rotation,
-  bloom-index `Get`, 30-day default TTL. file/s3 readers are the
-  dogfood/fallback path. Reader tracks the hot-swappable settings
-  (`payloadReaderResolver`, conn-only CH reader); session/admin auth via
-  `Authz`. Full design: `docs/payload-logging.md`. Remaining: media spill to
-  object storage + content-addressed message dedup (see doc + roadmap "Media
-  offload").
+  backend / bucket / creds, no restart). **Unified log/payload model + read
+  side shipped** — one log event per request (`usage.Event`); `/usage` is the
+  metrics projection, **`GET /logs`** is the full record (via the log/usage
+  reader) and **`GET /logs/{request_id}`** attaches the captured bodies
+  (joined by `request_id`, null if not opted in). Payload storage is now
+  **body-only** (no duplicated metadata — that all lives on the log event);
+  `payload.Reader` is `Get`-only, the Logs list reads the log store. New
+  **`clickhouse` body backend** (Langfuse model: text bodies as ZSTD `String`
+  columns; near-identical multi-turn resends block-compress to ~O(N)); reuses
+  `RELAY_CH_DSN` (separate body-only `payload_logs` table, validated on live
+  CH), WAL-segment durability with byte-based rotation, bloom-index `Get`,
+  30-day TTL. Two lifecycle observers on separate emitters (log constant,
+  payload opt-in); runtime only sets `lc.PayloadLog`. Full design:
+  `docs/payload-logging.md`. **Remaining**: log/usage backend via settings +
+  hot-swap (roadmap "Next"); media spill to object storage +
+  content-addressed dedup ("Media offload").
 - **`pkg/secret` unified resolver** (PR #226, 2026-05-26) — **the seam half
   of Now #1, done.** `Ref{Kind,Env,ID}` + `Resolver`/`Registry`/`Writer`;
   built-in `env` + `stored` (AES-GCM, `secret_values` table, transactional

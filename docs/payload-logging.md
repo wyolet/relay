@@ -1,12 +1,34 @@
-# Payload logging — request/response body capture + the Logs view
+# Logs + payload — the unified per-request record
 
-Payload logging captures the full request and response **bodies** of
-opted-in requests, off the hot path, for debugging and audit. It's the
-second `lifecycle` observer (after usage) and the data source for the
-frontend **Logs** page.
+There is **one logical event per request** — the *log* (what happened:
+routing, status, timing, tokens, errors, identity). It's the `usage.Event`,
+produced by the constant log observer for every request. **Payload logging**
+adds exactly one optional thing to it: the captured request/response
+**bodies**, for opted-in requests.
 
-This doc covers both halves: the write side (capture → sink) that shipped
-with PRs #225/#227, and the read side (the Logs API) added on top.
+Two API projections over that one record:
+
+- **`/usage`** — the narrow token/consumption metrics (billing).
+- **`/logs`** — the full record, with the captured bodies attached when
+  payload logging was opted in (`payload: null` / "(not logged)" otherwise).
+
+Storage is **two independent knobs**, joined by `request_id`:
+
+- the **log/usage store** (file / clickhouse / postgres / valkey) — all the
+  metadata;
+- the **payload body store** (file / s3 / clickhouse) — **body-only**: the
+  request/response bytes keyed by `request_id`, plus a timestamp (for
+  partition/TTL) and truncation flags. **No metadata is duplicated here** —
+  there is no separate payload-metadata schema, because every metadata field
+  already lives on the log event.
+
+The two observers attach to the lifecycle `Registry` on **separate emitters**
+(big bodies must not starve log metrics); nothing else connects logging to
+the runtime — the hot path only mints the `Context` and sets
+`lc.PayloadLog`.
+
+This doc covers the write side (capture → sink, shipped PRs #225/#227) and
+the read side (the `/logs` Logs API).
 
 ## Opt-in + gating
 
@@ -39,11 +61,12 @@ single noisy policy without logging everything.
 
 ### Record shape
 
-`pkg/payload.Record` carries identity fields that **mirror
-`usage.Event`** (so a record joins its usage row by `request_id`):
-`RequestID, Timestamp, Source, Status, Streamed, RelayKeyHash, PolicyID,
-ModelID, HostID, ErrorKind` + the `RequestBody`/`ResponseBody` bytes +
-`RequestTruncated`/`ResponseTruncated` flags.
+`pkg/payload.Record` is **body-only**: `RequestID`, `Timestamp` (for
+partition/TTL/keying), the `RequestBody`/`ResponseBody` bytes, and the
+`RequestTruncated`/`ResponseTruncated` flags. Nothing else — every
+per-request metadata field lives on the log event (`usage.Event`) and is
+read via `/logs`, joined by `request_id`. The body store carries no
+duplicate of it.
 
 ## Backends
 
@@ -53,7 +76,7 @@ Selected by `payload-logging.backend`:
 |---|---|---|
 | `file` (default) | one JSONL file, bodies base64 | dogfood / single node |
 | `s3` | one object per record, `<prefix>/YYYY/MM/DD/<request_id>.json` | build-tagged out of `-tags minimal` (minio-go) |
-| `clickhouse` | one `payload_logs` MergeTree row, bodies as ZSTD `String` columns | production; reuses the relay's CH cluster (`RELAY_CH_DSN`) |
+| `clickhouse` | one body-only `payload_logs` MergeTree row, bodies as ZSTD `String` columns | production; reuses the relay's CH cluster (`RELAY_CH_DSN`) |
 
 ### Why ClickHouse for bodies (the Langfuse model)
 
@@ -76,13 +99,14 @@ shares the content-hash primitive).
 
 ### CH backend internals
 
-- **Schema** (`payload_logs`): `MergeTree`, `PARTITION BY toYYYYMMDD(ts)`,
-  `ORDER BY (ts, request_id)`, `TTL ... INTERVAL <retention> DAY`. Bodies
-  are `String CODEC(ZSTD(3))`. A `bloom_filter` skip index on `request_id`
-  keeps `Get` (a point lookup with no time bound → no partition pruning)
-  from scanning the whole table. `CREATE TABLE IF NOT EXISTS` + a
-  `system.columns` check fails fast on a pre-existing incompatible table
-  rather than auto-dropping.
+- **Schema** (`payload_logs`): body-only — `request_id`, `ts`,
+  `request_body`/`response_body` (`String CODEC(ZSTD(3))`), and the two
+  truncation flags. `MergeTree`, `PARTITION BY toYYYYMMDD(ts)`, `ORDER BY
+  (ts, request_id)`, `TTL ... INTERVAL <retention> DAY`. A `bloom_filter`
+  skip index on `request_id` keeps `Get` (a point lookup with no time bound
+  → no partition pruning) from scanning the whole table. `CREATE TABLE IF
+  NOT EXISTS` + a `system.columns` check fails fast on a pre-existing
+  incompatible table rather than auto-dropping.
 - **Durability**: a WAL-segment queue (mirrors the usage CH sink) — records
   append to an active segment; full segments rotate and flush to CH; a
   segment is deleted only after CH confirms; leftover segments replay on
@@ -95,45 +119,46 @@ shares the content-hash primitive).
   hot-swappable settings overrides. Default retention is 30 days (shorter
   than usage's 90 — bodies are bulky and short-lived).
 
-## Read side — the Logs API
+## Read side — the `/logs` API
 
-A `payload.Reader` seam serves two control-plane endpoints (session/admin
-auth via `Authz`, nil-guarded like `/usage/*`):
+The Logs page reads the **log store**, not the body store — the list never
+needs the bodies, and the log store already has all the metadata. Two
+control-plane endpoints (session/admin auth via `Authz`):
 
 ```
-GET /payloads                filtered + keyset-paginated metadata list
-GET /payloads/{request_id}   full request + response bodies for one request
+GET /logs                full lifecycle records, filtered + keyset-paginated
+GET /logs/{request_id}   one record + its captured bodies (payload null if not logged)
 ```
 
-The split is deliberate and is the whole performance story:
+- **`GET /logs`** is served by the **log (usage) reader** — filters (time
+  window, `relay_key_hash`/`policy_id`/`model_id`/`host_id`/`source`/
+  `error_kind`, status range) and keyset cursor on `(ts DESC, request_id
+  DESC)` all run against the log store. No body store touched.
+- **`GET /logs/{request_id}`** fetches the log record (log reader) and, if
+  payload logging was opted in, attaches the bodies via the **body store
+  `Get(request_id)`** (`payload.Reader`). Body absence is normal (opt-in),
+  not an error — `payload` is simply null.
 
-- **`List` never returns bodies.** It's the Logs table. Filters mirror
-  `/usage/events` (time window, `relay_key_hash`/`policy_id`/`model_id`/
-  `host_id`/`source`/`error_kind`, status range), keyset cursor on
-  `(ts DESC, request_id DESC)`. On the CH backend it **projects only the
-  metadata columns** — the body columns are never read off disk.
-- **`Get` returns the bodies** for one request, for the detail view.
+`/usage/*` stays the narrow metrics projection over the same log store.
 
-### Backend read characteristics
+### Body store read characteristics (Get only)
 
-| Backend | List | Get |
-|---|---|---|
-| `clickhouse` | SQL filter + LIMIT pushed into CH; metadata columns only | indexed point lookup (bloom filter); bodies decompressed |
-| `file` | linear JSONL scan, filter in Go (dogfood scale) | linear scan for the id |
-| `s3` | date-partition-narrowed `ListObjects` + per-object fetch to filter (scan-heavy — use CH in production) | object fetch by date-partitioned key |
+The body store is fetched **by request_id only** — there is no list/filter
+on it (that's the log store's job). `Get`:
 
-The flat `file`/`s3` readers must read whole records to filter (their
-metadata is inline with the body), so they don't scale — they're the
-dogfood/fallback path. The `clickhouse` backend is the production read
-path: column projection makes `List` cheap regardless of body size.
+| Backend | Get |
+|---|---|
+| `clickhouse` | indexed point lookup (bloom filter on `request_id`); bodies decompressed |
+| `file` | linear JSONL scan for the id (dogfood scale) |
+| `s3` | recursive `ListObjects` for the `<request_id>.json` suffix, then fetch |
 
 ### Wiring
 
-The sink (write) and reader (read) are **separate lifecycles** in this
-subsystem: the `Controller` builds and hot-swaps the sink from settings;
-the `payloadReaderResolver` (cmd/relay) builds the reader lazily, rebuilding
-when the live backend config changes and closing the previous reader (the
-CH reader holds a connection pool). For CH the read path uses a
+The sink (write) and reader (read) are **separate lifecycles**: the
+`Controller` builds and hot-swaps the sink from settings; the
+`payloadReaderResolver` (cmd/relay) builds the `Get`-only reader lazily,
+rebuilding when the live backend config changes and closing the previous
+reader (the CH reader holds a connection pool). For CH the read path uses a
 **connection-only `NewReader`** — no WAL, since it only queries.
 
 ## Roadmap
