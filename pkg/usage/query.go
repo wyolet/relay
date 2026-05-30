@@ -76,6 +76,36 @@ type EventQuery struct {
 	// StatusMin=200, StatusMax=299 picks successes only.
 	StatusMin int
 	StatusMax int
+	// Status matches exact HTTP status codes (IN). Empty = no filter.
+	// Composes with StatusMin/Max (AND).
+	Status []int
+
+	// More categorical filters (set membership; empty = no filter).
+	HostKeyID      []string
+	RequestedModel []string
+
+	// Streamed / ErrorsOnly are tri-state: nil = no filter, else match the
+	// bool. ErrorsOnly true matches status>=400 OR error_kind!="" (false
+	// matches the complement — "successes only").
+	Streamed   *bool
+	ErrorsOnly *bool
+
+	// AttemptsMin filters by upstream try count (failover). 0 = no filter.
+	AttemptsMin int
+
+	// DurationMsMin / DurationMsMax bound total request duration (ms).
+	DurationMsMin int64
+	DurationMsMax int64
+
+	// TTFTMsMin / TTFTMsMax bound upstream time-to-first-byte (ms), derived
+	// from Upstream.ResponseStart (µs from start). Events with no upstream
+	// timing are excluded when either bound is set.
+	TTFTMsMin int64
+	TTFTMsMax int64
+
+	// Q is a free-text needle matched (case-insensitive substring) against
+	// request_id, model_id, requested_model, and source.
+	Q string
 
 	// Limit caps the number of events returned. <=0 → DefaultEventLimit.
 	Limit int

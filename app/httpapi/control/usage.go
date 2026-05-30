@@ -37,6 +37,19 @@ type usageFilterInput struct {
 	ErrorKind    []string `query:"error_kind" doc:"Match any of the given error_kind values."`
 	StatusMin    int      `query:"status_min" doc:"Minimum HTTP status to include."`
 	StatusMax    int      `query:"status_max" doc:"Maximum HTTP status to include."`
+
+	HostKeyID      []string `query:"host_key_id" doc:"Match any of the given HostKey.metadata.id values."`
+	RequestedModel []string `query:"requested_model" doc:"Match any of the model strings as the caller sent them."`
+	Status         []int    `query:"status" doc:"Match any of these exact HTTP status codes."`
+	StatusClass    string   `query:"status_class" doc:"Convenience status band: \"2xx\" | \"4xx\" | \"5xx\". Sets status_min/max."`
+	Streamed       *bool    `query:"streamed" doc:"true = only streamed responses, false = only non-streamed."`
+	Error          *bool    `query:"error" doc:"true = only errors (status>=400 or error_kind set), false = only successes."`
+	AttemptsMin    int      `query:"attempts_min" doc:"Minimum upstream try count (failover) — finds retried requests."`
+	DurationMsMin  int64    `query:"duration_ms_min" doc:"Minimum total duration in ms (slow-request filter)."`
+	DurationMsMax  int64    `query:"duration_ms_max" doc:"Maximum total duration in ms."`
+	TTFTMsMin      int64    `query:"ttft_ms_min" doc:"Minimum upstream time-to-first-byte (ms); excludes requests with no upstream timing."`
+	TTFTMsMax      int64    `query:"ttft_ms_max" doc:"Maximum upstream time-to-first-byte (ms)."`
+	Q              string   `query:"q" doc:"Free-text substring across request_id, model_id, requested_model, source."`
 }
 
 func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
@@ -55,20 +68,46 @@ func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 	if !from.IsZero() && !to.IsZero() && to.Before(from) {
 		return usagelog.EventQuery{}, huma.Error400BadRequest("`to` must not be before `from`")
 	}
+
+	statusMin, statusMax := f.StatusMin, f.StatusMax
+	switch f.StatusClass {
+	case "":
+		// no band
+	case "2xx":
+		statusMin, statusMax = 200, 299
+	case "4xx":
+		statusMin, statusMax = 400, 499
+	case "5xx":
+		statusMin, statusMax = 500, 599
+	default:
+		return usagelog.EventQuery{}, huma.Error400BadRequest("`status_class` must be 2xx, 4xx, or 5xx")
+	}
+
 	return usagelog.EventQuery{
-		Since:        since,
-		From:         from,
-		To:           to,
-		RequestID:    f.RequestID,
-		RelayKeyHash: f.RelayKeyHash,
-		PolicyID:     f.PolicyID,
-		ModelID:      f.ModelID,
-		HostID:       f.HostID,
-		Source:       f.Source,
-		FinishReason: f.FinishReason,
-		ErrorKind:    f.ErrorKind,
-		StatusMin:    f.StatusMin,
-		StatusMax:    f.StatusMax,
+		Since:          since,
+		From:           from,
+		To:             to,
+		RequestID:      f.RequestID,
+		RelayKeyHash:   f.RelayKeyHash,
+		PolicyID:       f.PolicyID,
+		ModelID:        f.ModelID,
+		HostID:         f.HostID,
+		Source:         f.Source,
+		FinishReason:   f.FinishReason,
+		ErrorKind:      f.ErrorKind,
+		StatusMin:      statusMin,
+		StatusMax:      statusMax,
+		Status:         f.Status,
+		HostKeyID:      f.HostKeyID,
+		RequestedModel: f.RequestedModel,
+		Streamed:       f.Streamed,
+		ErrorsOnly:     f.Error,
+		AttemptsMin:    f.AttemptsMin,
+		DurationMsMin:  f.DurationMsMin,
+		DurationMsMax:  f.DurationMsMax,
+		TTFTMsMin:      f.TTFTMsMin,
+		TTFTMsMax:      f.TTFTMsMax,
+		Q:              f.Q,
 	}, nil
 }
 

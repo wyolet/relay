@@ -603,6 +603,60 @@ func buildWhere(q usage.EventQuery, _ bool) (string, []any) {
 		clauses = append(clauses, "status <= ?")
 		args = append(args, uint16(q.StatusMax))
 	}
+	if len(q.Status) > 0 {
+		ph := make([]string, len(q.Status))
+		for i, v := range q.Status {
+			ph[i] = "?"
+			args = append(args, uint16(v))
+		}
+		clauses = append(clauses, "status IN ("+strings.Join(ph, ",")+")")
+	}
+	in("host_key_id", q.HostKeyID)
+	in("requested_model", q.RequestedModel)
+	if q.Streamed != nil {
+		v := uint8(0)
+		if *q.Streamed {
+			v = 1
+		}
+		clauses = append(clauses, "streamed = ?")
+		args = append(args, v)
+	}
+	if q.ErrorsOnly != nil {
+		if *q.ErrorsOnly {
+			clauses = append(clauses, "(status >= 400 OR error_kind != '')")
+		} else {
+			clauses = append(clauses, "(status < 400 AND error_kind = '')")
+		}
+	}
+	if q.AttemptsMin > 0 {
+		clauses = append(clauses, "attempts >= ?")
+		args = append(args, uint16(q.AttemptsMin))
+	}
+	if q.DurationMsMin > 0 {
+		clauses = append(clauses, "duration_ms >= ?")
+		args = append(args, q.DurationMsMin)
+	}
+	if q.DurationMsMax > 0 {
+		clauses = append(clauses, "duration_ms <= ?")
+		args = append(args, q.DurationMsMax)
+	}
+	if q.TTFTMsMin > 0 || q.TTFTMsMax > 0 {
+		// Sentinel -1 means no upstream timing; exclude those rows.
+		clauses = append(clauses, "upstream_response_start >= 0")
+		if q.TTFTMsMin > 0 {
+			clauses = append(clauses, "intDiv(upstream_response_start, 1000) >= ?")
+			args = append(args, q.TTFTMsMin)
+		}
+		if q.TTFTMsMax > 0 {
+			clauses = append(clauses, "intDiv(upstream_response_start, 1000) <= ?")
+			args = append(args, q.TTFTMsMax)
+		}
+	}
+	if q.Q != "" {
+		needle := "%" + q.Q + "%"
+		clauses = append(clauses, "(request_id ILIKE ? OR model_id ILIKE ? OR requested_model ILIKE ? OR source ILIKE ?)")
+		args = append(args, needle, needle, needle, needle)
+	}
 
 	if len(clauses) == 0 {
 		return "", args

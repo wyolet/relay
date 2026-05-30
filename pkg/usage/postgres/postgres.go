@@ -801,6 +801,54 @@ func buildWhere(q usage.EventQuery) (string, []any) {
 	if q.StatusMax > 0 {
 		add("status <= $%d", int16(q.StatusMax))
 	}
+	if len(q.Status) > 0 {
+		// pgx encodes []int16 as a smallint array; status column is smallint.
+		vals := make([]int16, len(q.Status))
+		for i, v := range q.Status {
+			vals[i] = int16(v)
+		}
+		add("status = ANY($%d)", vals)
+	}
+	any("host_key_id", q.HostKeyID)
+	any("requested_model", q.RequestedModel)
+	if q.Streamed != nil {
+		add("streamed = $%d", *q.Streamed)
+	}
+	if q.ErrorsOnly != nil {
+		if *q.ErrorsOnly {
+			clauses = append(clauses, "(status >= 400 OR error_kind != '')")
+		} else {
+			clauses = append(clauses, "(status < 400 AND error_kind = '')")
+		}
+	}
+	if q.AttemptsMin > 0 {
+		add("attempts >= $%d", int16(q.AttemptsMin))
+	}
+	if q.DurationMsMin > 0 {
+		add("duration_ms >= $%d", q.DurationMsMin)
+	}
+	if q.DurationMsMax > 0 {
+		add("duration_ms <= $%d", q.DurationMsMax)
+	}
+	if q.TTFTMsMin > 0 || q.TTFTMsMax > 0 {
+		// upstream_response_start is NULL when Upstream==nil; exclude NULLs.
+		clauses = append(clauses, "upstream_response_start IS NOT NULL")
+		if q.TTFTMsMin > 0 {
+			add("(upstream_response_start / 1000) >= $%d", q.TTFTMsMin)
+		}
+		if q.TTFTMsMax > 0 {
+			add("(upstream_response_start / 1000) <= $%d", q.TTFTMsMax)
+		}
+	}
+	if q.Q != "" {
+		needle := "%" + q.Q + "%"
+		n++
+		clauses = append(clauses, fmt.Sprintf(
+			"(request_id ILIKE $%d OR model_id ILIKE $%d OR requested_model ILIKE $%d OR source ILIKE $%d)",
+			n, n, n, n,
+		))
+		args = append(args, needle)
+	}
 
 	if len(clauses) == 0 {
 		return "", args

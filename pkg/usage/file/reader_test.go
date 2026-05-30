@@ -29,6 +29,69 @@ func writeFixture(t *testing.T, events []usage.Event) string {
 	return path
 }
 
+func TestReader_Events_NewFilters(t *testing.T) {
+	now := time.Now()
+	bt := true
+	path := writeFixture(t, []usage.Event{
+		{RequestID: "fast", Timestamp: now.Add(-3 * time.Minute), Status: 200, Streamed: true, DurationMs: 50, Attempts: 1,
+			HostKeyID: "hk1", RequestedModel: "gpt-4o", Upstream: &sdkusage.UpstreamTiming{ResponseStart: 20_000}}, // 20ms ttft
+		{RequestID: "slow", Timestamp: now.Add(-2 * time.Minute), Status: 200, DurationMs: 5000, Attempts: 3,
+			HostKeyID: "hk2", RequestedModel: "claude", Upstream: &sdkusage.UpstreamTiming{ResponseStart: 900_000}}, // 900ms ttft
+		{RequestID: "err", Timestamp: now.Add(-1 * time.Minute), Status: 503, ErrorKind: "upstream_5xx", DurationMs: 10},
+	})
+	r := NewReader(path)
+	ctx := context.Background()
+
+	ids := func(q usage.EventQuery) []string {
+		q.Since = time.Hour
+		evs, err := r.Events(ctx, q)
+		if err != nil {
+			t.Fatalf("Events: %v", err)
+		}
+		out := make([]string, len(evs))
+		for i, e := range evs {
+			out[i] = e.RequestID
+		}
+		return out
+	}
+	eq := func(got, want []string) bool {
+		if len(got) != len(want) {
+			return false
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				return false
+			}
+		}
+		return true
+	}
+
+	if got := ids(usage.EventQuery{Streamed: &bt}); !eq(got, []string{"fast"}) {
+		t.Errorf("streamed=true => %v, want [fast]", got)
+	}
+	if got := ids(usage.EventQuery{ErrorsOnly: &bt}); !eq(got, []string{"err"}) {
+		t.Errorf("error=true => %v, want [err]", got)
+	}
+	if got := ids(usage.EventQuery{AttemptsMin: 2}); !eq(got, []string{"slow"}) {
+		t.Errorf("attempts_min=2 => %v, want [slow]", got)
+	}
+	if got := ids(usage.EventQuery{DurationMsMin: 1000}); !eq(got, []string{"slow"}) {
+		t.Errorf("duration_ms_min=1000 => %v, want [slow]", got)
+	}
+	if got := ids(usage.EventQuery{TTFTMsMax: 100}); !eq(got, []string{"fast"}) {
+		t.Errorf("ttft_ms_max=100 => %v, want [fast] (slow=900ms out, err no upstream)", got)
+	}
+	if got := ids(usage.EventQuery{Status: []int{503}}); !eq(got, []string{"err"}) {
+		t.Errorf("status=503 => %v, want [err]", got)
+	}
+	if got := ids(usage.EventQuery{HostKeyID: []string{"hk2"}}); !eq(got, []string{"slow"}) {
+		t.Errorf("host_key_id=hk2 => %v, want [slow]", got)
+	}
+	if got := ids(usage.EventQuery{Q: "CLAUDE"}); !eq(got, []string{"slow"}) {
+		t.Errorf("q=CLAUDE (requested_model, case-insensitive) => %v, want [slow]", got)
+	}
+}
+
 func TestReader_Events_FiltersAndLimit(t *testing.T) {
 	now := time.Now()
 	path := writeFixture(t, []usage.Event{
