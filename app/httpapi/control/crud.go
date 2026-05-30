@@ -718,7 +718,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		true, // catalog-managed; disable instead of delete
 		false,
 		protect,
-		nil,
+		&providerFilter,
 	)
 
 	registerKind[host.Host](
@@ -763,7 +763,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
-		nil,
+		&hostKeyFilter,
 	)
 
 	registerKind[ratelimit.RateLimit](
@@ -808,7 +808,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
-		nil,
+		&pricingFilter,
 	)
 
 	// relay-keys uses a custom POST handler (registerRelayKeyCreate) that

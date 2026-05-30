@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/pkg/filter"
 )
@@ -93,6 +95,87 @@ func TestModelFilter_Timestamps(t *testing.T) {
 	}
 }
 
+func TestModelFilter_CapabilityAndModality(t *testing.T) {
+	vt := model.Capabilities{Vision: true, Tools: true, Chat: true}
+	v := model.Capabilities{Vision: true, Chat: true}
+	items := []*model.Model{
+		{Meta: meta.Metadata{Name: "both"}, Spec: model.Spec{Capabilities: vt, Modalities: model.Modalities{Input: []string{"text", "image"}}}},
+		{Meta: meta.Metadata{Name: "visiononly"}, Spec: model.Spec{Capabilities: v, Modalities: model.Modalities{Input: []string{"text"}}}},
+	}
+	// AND-membership: must support BOTH vision and tools.
+	got, _ := applyQ(t, modelFilter, "capability=vision&capability=tools", items)
+	if len(got) != 1 || got[0].Meta.Name != "both" {
+		t.Fatalf("capability=vision,tools (AND) => %v, want [both]", names(got))
+	}
+	got, _ = applyQ(t, modelFilter, "modality=image", items)
+	if len(got) != 1 || got[0].Meta.Name != "both" {
+		t.Fatalf("modality=image => %v, want [both]", names(got))
+	}
+	if _, err := modelFilter.Parse(url.Values{"capability": {"telepathy"}}); err == nil {
+		t.Fatal("unknown capability must 400")
+	}
+}
+
+func TestModelFilter_HostIDAndProvider(t *testing.T) {
+	items := []*model.Model{
+		{Meta: meta.Metadata{Name: "a", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "prov1"}}, Spec: model.Spec{Hosts: []model.HostBinding{{HostID: "h1"}, {HostID: "h2"}}}},
+		{Meta: meta.Metadata{Name: "b", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "prov2"}}, Spec: model.Spec{Hosts: []model.HostBinding{{HostID: "h3"}}}},
+	}
+	got, _ := applyQ(t, modelFilter, "host_id=h2", items)
+	if len(got) != 1 || got[0].Meta.Name != "a" {
+		t.Fatalf("host_id=h2 => %v, want [a]", names(got))
+	}
+	got, _ = applyQ(t, modelFilter, "provider_id=prov2", items)
+	if len(got) != 1 || got[0].Meta.Name != "b" {
+		t.Fatalf("provider_id=prov2 => %v, want [b]", names(got))
+	}
+}
+
+func TestHostKeyFilter(t *testing.T) {
+	items := []*hostkey.HostKey{
+		{Meta: meta.Metadata{Name: "envkey"}, Spec: hostkey.Spec{HostID: "h1", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv}}},
+		{Meta: meta.Metadata{Name: "storedkey"}, Spec: hostkey.Spec{HostID: "h2", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}},
+	}
+	got, _ := applyQ(t, hostKeyFilter, "value_kind=stored", items)
+	if len(got) != 1 || got[0].Meta.Name != "storedkey" {
+		t.Fatalf("value_kind=stored => %v, want [storedkey]", names(got))
+	}
+	got, _ = applyQ(t, hostKeyFilter, "host_id=h1", items)
+	if len(got) != 1 || got[0].Meta.Name != "envkey" {
+		t.Fatalf("host_id=h1 => %v, want [envkey]", names(got))
+	}
+	if _, err := hostKeyFilter.Parse(url.Values{"value_kind": {"bogus"}}); err == nil {
+		t.Fatal("bad value_kind must 400")
+	}
+}
+
+func TestPricingFilter(t *testing.T) {
+	items := []*pricing.Pricing{
+		{Meta: meta.Metadata{Name: "flat"}, Spec: pricing.Spec{Currency: "USD", TargetModelIDs: []string{"m1"}, Rates: []pricing.Rate{{Meter: "tokens.input"}}}},
+		{Meta: meta.Metadata{Name: "tiered"}, Spec: pricing.Spec{Currency: "USD", TargetModelIDs: []string{"m2"}, Rates: []pricing.Rate{{Meter: "tokens.input", AboveTokens: 1000}}}},
+	}
+	got, _ := applyQ(t, pricingFilter, "has_tiers=true", items)
+	if len(got) != 1 || got[0].Meta.Name != "tiered" {
+		t.Fatalf("has_tiers=true => %v, want [tiered]", names(got))
+	}
+	got, _ = applyQ(t, pricingFilter, "target_model_id=m1", items)
+	if len(got) != 1 || got[0].Meta.Name != "flat" {
+		t.Fatalf("target_model_id=m1 => %v, want [flat]", names(got))
+	}
+}
+
+func TestLabelAcrossKinds(t *testing.T) {
+	on := true
+	items := []*policy.Policy{
+		{Meta: meta.Metadata{Name: "a", Labels: map[string]string{"team": "infra"}}, Spec: policy.Spec{Enabled: &on}},
+		{Meta: meta.Metadata{Name: "b", Labels: map[string]string{"team": "data"}}, Spec: policy.Spec{Enabled: &on}},
+	}
+	got, _ := applyQ(t, policyFilter, "label=team=infra", items)
+	if len(got) != 1 || got[0].Meta.Name != "a" {
+		t.Fatalf("label=team=infra => %v, want [a]", names(got))
+	}
+}
+
 func TestHostFilter(t *testing.T) {
 	items := []*host.Host{
 		{Meta: meta.Metadata{Name: "openai"}, Spec: host.Spec{BaseURL: "https://api.openai.com", Policies: []string{"p1", "p2"}}},
@@ -138,6 +221,10 @@ func names[T any](rows []*T) []string {
 		case *host.Host:
 			out[i] = v.Meta.Name
 		case *relaykey.RelayKey:
+			out[i] = v.Meta.Name
+		case *hostkey.HostKey:
+			out[i] = v.Meta.Name
+		case *pricing.Pricing:
 			out[i] = v.Meta.Name
 		}
 	}
