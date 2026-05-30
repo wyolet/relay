@@ -80,8 +80,20 @@ waiting to be written; the path under `docs/` is the placeholder.
   `-tags minimal` build seam — minio-go excluded from minimal builds);
   `app/payloadlog` observer. Runtime config lives in the `payload-logging`
   settings section, hot-swapped by a reconcile-loop `Controller` (toggle /
-  backend / bucket / creds, no restart). No read endpoint (offline artifact,
-  joins to usage by request_id).
+  backend / bucket / creds, no restart). **Read side + ClickHouse backend
+  shipped** — control-plane `GET /payloads` (filtered + keyset-paginated
+  metadata list, bodies stripped via column projection) + `GET
+  /payloads/{request_id}` (full bodies) over a `payload.Reader` seam, the
+  source for the frontend Logs page. New **`clickhouse` backend** (Langfuse
+  model: text bodies as ZSTD `String` columns, queryable; near-identical
+  multi-turn resends block-compress to ~O(N)); reuses `RELAY_CH_DSN` (separate
+  `payload_logs` table), WAL-segment durability with byte-based rotation,
+  bloom-index `Get`, 30-day default TTL. file/s3 readers are the
+  dogfood/fallback path. Reader tracks the hot-swappable settings
+  (`payloadReaderResolver`, conn-only CH reader); session/admin auth via
+  `Authz`. Full design: `docs/payload-logging.md`. Remaining: media spill to
+  object storage + content-addressed message dedup (see doc + roadmap "Media
+  offload").
 - **`pkg/secret` unified resolver** (PR #226, 2026-05-26) — **the seam half
   of Now #1, done.** `Ref{Kind,Env,ID}` + `Resolver`/`Registry`/`Writer`;
   built-in `env` + `stored` (AES-GCM, `secret_values` table, transactional
@@ -330,6 +342,38 @@ The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
   warning emission, which needs a drop-sink threaded through the
   translator call signature (translators are pure, no logger today).
   ~1 day when picked up.
+
+### Media offload — provider-side file references
+
+- **Provider file-API media offload**. For large media (images/audio/
+  video/docs), upload once to the chosen host's **own** file API and
+  reference by `file_id` on resends — turning O(N) re-uploads of the same
+  blob across a multi-turn session into O(1). Media-only (text stays
+  inline), opt-in per host capability, never a silent strip. Rejected the
+  relay-hosted-URL variant (privacy / availability-inversion / no uniform
+  provider mechanism). Cache is `(credential-scope, content-hash) →
+  file_id` in kv (TTL ≤ provider retention); a stale/expired/cross-scope
+  ref 404s pre-first-byte and **rides the existing KeyAgent self-heal loop**
+  (re-upload → rewrite → retry). Pre-flight pipeline stage gated by a `Spec`
+  capability — translators stay pure (rule 6). Shares the content-hash
+  primitive with the storage-side content-addressed blob store. Full design:
+  `docs/media-offload.md`.
+
+### Real-time log streaming (live tail)
+
+- **Live tail of the log event stream**. The CH query store is batched
+  (~10s flush) — history, not a live feed. Live tail is an *additional
+  consumer* of the lifecycle event stream, not a schema change. Three
+  tiers by cost: (a) **live tail of completed events** — cheap, a
+  real-time fanout observer (Redis stream / SSE) next to the batch sink,
+  re-broadcast by the control plane; (b) **in-flight visibility** (watch a
+  request mid-stream) — needs a separate in-flight/span registry since the
+  log event only finalizes at post-flight; (c) CH-for-real-time is
+  explicitly out of scope. WS already produces a per-request log event per
+  frame; the only capture wrinkle is accumulating response frames per
+  correlation-id. Full notes: `docs/payload-logging.md` "Real-time log
+  streaming". Tie-in: pairs with the unified usage/logs model (one event
+  stream, `/usage` = metrics projection, `/logs` = full + optional body).
 
 ### Misc product features
 
