@@ -126,7 +126,7 @@ func TestHook_Gating(t *testing.T) {
 		t.Fatalf("enabled: %v", err)
 	}
 	r := v.(*Record)
-	if string(r.RequestBody) != `{"in":1}` || string(r.ResponseBody) != `{"out":2}` || r.PolicyID != "pol-1" {
+	if string(r.RequestBody) != `{"in":1}` || string(r.ResponseBody) != `{"out":2}` {
 		t.Fatalf("record: %+v", r)
 	}
 }

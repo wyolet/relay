@@ -72,6 +72,20 @@ func (s *Store) Upsert(ctx context.Context, section string, raw json.RawMessage)
 	return &Row{Section: section, Value: v, UpdatedAt: time.Now()}, nil
 }
 
+// existingSections returns the set of section names that have a DB row.
+// Used by SeedDir to skip already-configured sections (seed-if-absent).
+func (s *Store) existingSections(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.q.ListSettings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("settings.existingSections: %w", err)
+	}
+	out := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		out[r.Section] = true
+	}
+	return out, nil
+}
+
 // List returns one Row per registered section, falling back to
 // Defaults for sections without a DB row.
 func (s *Store) List(ctx context.Context) ([]*Row, error) {

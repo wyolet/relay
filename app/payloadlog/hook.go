@@ -27,14 +27,15 @@ func (h *PayloadHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent)
 	if lc == nil || !lc.PayloadLog || !h.c.Enabled() {
 		return nil, nil
 	}
-	return buildRecord(lc, ev.Status, ev.ErrorKind, ev.ResponseBody, h.c.MaxBytes()), nil
+	return buildRecord(lc, ev.ResponseBody, h.c.MaxBytes()), nil
 }
 
-// buildRecord assembles a Record from the per-request Context plus this
-// request's outcome. Shared by the buffered hook and the streaming
-// observer (which passes the accumulated stream bytes as body). Callers
-// must have checked lc.PayloadLog.
-func buildRecord(lc *lifecycle.Context, status int, errKind string, respBody []byte, maxBytes int) *Record {
+// buildRecord assembles the body-only Record (request_id + ts + bodies +
+// truncation flags) — all per-request metadata lives on the log event, not
+// here. Shared by the buffered hook and the streaming observer (which passes
+// the accumulated stream bytes as body). Callers must have checked
+// lc.PayloadLog.
+func buildRecord(lc *lifecycle.Context, respBody []byte, maxBytes int) *Record {
 	ts := lc.Timing.Start
 	if ts.IsZero() {
 		ts = time.Now()
@@ -44,14 +45,6 @@ func buildRecord(lc *lifecycle.Context, status int, errKind string, respBody []b
 	return &Record{
 		RequestID:         lc.RequestID,
 		Timestamp:         ts,
-		Source:            lc.Source,
-		Status:            status,
-		Streamed:          lc.Streamed,
-		RelayKeyHash:      lc.RelayKeyHash,
-		PolicyID:          lc.PolicyID,
-		ModelID:           lc.ModelID,
-		HostID:            lc.HostID,
-		ErrorKind:         errKind,
 		RequestBody:       reqBody,
 		ResponseBody:      respBody,
 		RequestTruncated:  reqTrunc,

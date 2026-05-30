@@ -22,14 +22,15 @@ type PayloadLogging struct {
 	// produces nothing regardless of per-request opt-in.
 	Enabled bool `json:"enabled"`
 
-	// Backend selects the sink: "file" (default) or "s3".
+	// Backend selects the sink: "file" (default), "s3", or "clickhouse".
 	Backend string `json:"backend"`
 
 	// MaxBytes caps each stored body; 0 = unlimited.
 	MaxBytes int `json:"maxBytes"`
 
-	File PayloadFile `json:"file"`
-	S3   PayloadS3   `json:"s3"`
+	File PayloadFile       `json:"file"`
+	S3   PayloadS3         `json:"s3"`
+	CH   PayloadClickHouse `json:"clickhouse"`
 }
 
 // PayloadFile configures the JSONL file backend.
@@ -47,6 +48,19 @@ type PayloadS3 struct {
 	UseSSL    bool       `json:"useSSL"`
 	AccessKey secret.Ref `json:"accessKey"`
 	SecretKey secret.Ref `json:"secretKey"`
+}
+
+// PayloadClickHouse configures the ClickHouse backend (Langfuse-style: text
+// bodies as ZSTD String columns, queryable). The DSN is NOT stored here — it
+// reuses the relay's boot CH connection (RELAY_CH_DSN, the same cluster the
+// usage sink uses), so no credentials live in this row. Only the per-backend
+// knobs that are safe to hot-swap live here.
+type PayloadClickHouse struct {
+	// RetentionDays overrides the MergeTree TTL; 0 uses the backend default.
+	RetentionDays int `json:"retentionDays,omitempty"`
+	// WALDir overrides the local WAL segment directory; empty uses the
+	// boot default.
+	WALDir string `json:"walDir,omitempty"`
 }
 
 // Validate is enforced before any write. Only meaningful when Enabled —
@@ -69,8 +83,15 @@ func (p *PayloadLogging) Validate() error {
 		if err := validateOptionalRef("s3.secretKey", p.S3.SecretKey); err != nil {
 			return err
 		}
+	case "clickhouse":
+		// DSN comes from the boot CH config (RELAY_CH_DSN), validated there;
+		// the operator is responsible for ensuring it's set. RetentionDays/
+		// WALDir are optional overrides with backend defaults.
+		if p.CH.RetentionDays < 0 {
+			return fmt.Errorf("payload-logging: clickhouse.retentionDays must be >= 0")
+		}
 	default:
-		return fmt.Errorf("payload-logging: backend must be \"file\" or \"s3\", got %q", p.Backend)
+		return fmt.Errorf("payload-logging: backend must be \"file\", \"s3\", or \"clickhouse\", got %q", p.Backend)
 	}
 	if p.MaxBytes < 0 {
 		return fmt.Errorf("payload-logging: maxBytes must be >= 0")
@@ -94,7 +115,7 @@ func validateOptionalRef(field string, r secret.Ref) error {
 func init() {
 	Register(Section{
 		Name:        SectionPayloadLogging,
-		Description: "Request/response body capture sink config (toggle, backend file|s3, size cap, S3 settings with secret-ref credentials). Hot-reloaded — changes take effect without a restart.",
+		Description: "Request/response body capture sink config (toggle, backend file|s3|clickhouse, size cap, S3 settings with secret-ref credentials, ClickHouse retention/WAL overrides). Hot-reloaded — changes take effect without a restart.",
 		Defaults: func() any {
 			return &PayloadLogging{Backend: "file", MaxBytes: 1 << 20, File: PayloadFile{Path: "relay-payloads.jsonl"}}
 		},
