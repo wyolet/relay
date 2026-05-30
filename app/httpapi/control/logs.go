@@ -27,7 +27,7 @@ import (
 // --- GET /logs ---
 
 type logsListInput struct {
-	usageFilterInput
+	UsageFilterInput
 	Limit  int    `query:"limit" doc:"Cap on returned records (page size). Default 100, max 10000."`
 	Cursor string `query:"cursor" doc:"Opaque pagination cursor from a previous response's next_cursor. Returns the next (older) page."`
 }

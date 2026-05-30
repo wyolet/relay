@@ -54,6 +54,32 @@ func TestFilterParamsReachOpenAPI(t *testing.T) {
 	}
 }
 
+// TestUsageFilterParamsReachOpenAPI guards against the embedded-struct
+// regression: huma skips UNEXPORTED fields, so an unexported embedded filter
+// input would silently expose zero params (no docs, no runtime binding). The
+// embed must stay exported (UsageFilterInput) for the logs/usage filter
+// surface to work at all.
+func TestUsageFilterParamsReachOpenAPI(t *testing.T) {
+	api := humachi.New(chi.NewMux(), huma.DefaultConfig("t", "1.0.0"))
+	huma.Register(api, huma.Operation{OperationID: "logs_list", Method: "GET", Path: "/logs"},
+		func(ctx context.Context, _ *logsListInput) (*logsListOutput, error) { return nil, nil })
+
+	spec, err := json.Marshal(api.OpenAPI())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	doc := string(spec)
+	for _, want := range []string{
+		`"name":"from"`, `"name":"to"`, `"name":"model_id"`, `"name":"host_id"`,
+		`"name":"policy_id"`, `"name":"status_class"`, `"name":"duration_ms_min"`,
+		`"name":"ttft_ms_min"`, `"name":"host_key_id"`, `"name":"q"`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("/logs openapi missing filter param %s (embedded UsageFilterInput not flattened?)", want)
+		}
+	}
+}
+
 func TestSchemaParamsExpansion(t *testing.T) {
 	ps := policyFilter.Params()
 	byName := map[string]filter.Param{}

@@ -23,7 +23,7 @@ import (
 
 // --- shared input filters ---
 
-type usageFilterInput struct {
+type UsageFilterInput struct {
 	Since        string   `query:"since" doc:"Relative window (e.g. \"1h\", \"24h\", \"7d\"). Default \"1h\". Ignored when from is set."`
 	From         string   `query:"from" doc:"Absolute lower bound (RFC3339). Overrides since."`
 	To           string   `query:"to" doc:"Absolute upper bound (RFC3339)."`
@@ -42,8 +42,8 @@ type usageFilterInput struct {
 	RequestedModel []string `query:"requested_model" doc:"Match any of the model strings as the caller sent them."`
 	Status         []int    `query:"status" doc:"Match any of these exact HTTP status codes."`
 	StatusClass    string   `query:"status_class" doc:"Convenience status band: \"2xx\" | \"4xx\" | \"5xx\". Sets status_min/max."`
-	Streamed       *bool    `query:"streamed" doc:"true = only streamed responses, false = only non-streamed."`
-	Error          *bool    `query:"error" doc:"true = only errors (status>=400 or error_kind set), false = only successes."`
+	Streamed       string   `query:"streamed" enum:"true,false" doc:"true = only streamed responses, false = only non-streamed."`
+	Error          string   `query:"error" enum:"true,false" doc:"true = only errors (status>=400 or error_kind set), false = only successes."`
 	AttemptsMin    int      `query:"attempts_min" doc:"Minimum upstream try count (failover) — finds retried requests."`
 	DurationMsMin  int64    `query:"duration_ms_min" doc:"Minimum total duration in ms (slow-request filter)."`
 	DurationMsMax  int64    `query:"duration_ms_max" doc:"Maximum total duration in ms."`
@@ -52,7 +52,7 @@ type usageFilterInput struct {
 	Q              string   `query:"q" doc:"Free-text substring across request_id, model_id, requested_model, source."`
 }
 
-func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
+func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 	since, err := parseSince(f.Since)
 	if err != nil {
 		return usagelog.EventQuery{}, err
@@ -83,6 +83,15 @@ func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		return usagelog.EventQuery{}, huma.Error400BadRequest("`status_class` must be 2xx, 4xx, or 5xx")
 	}
 
+	streamed, err := parseTriBool("streamed", f.Streamed)
+	if err != nil {
+		return usagelog.EventQuery{}, err
+	}
+	errorsOnly, err := parseTriBool("error", f.Error)
+	if err != nil {
+		return usagelog.EventQuery{}, err
+	}
+
 	return usagelog.EventQuery{
 		Since:          since,
 		From:           from,
@@ -100,8 +109,8 @@ func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		Status:         f.Status,
 		HostKeyID:      f.HostKeyID,
 		RequestedModel: f.RequestedModel,
-		Streamed:       f.Streamed,
-		ErrorsOnly:     f.Error,
+		Streamed:       streamed,
+		ErrorsOnly:     errorsOnly,
 		AttemptsMin:    f.AttemptsMin,
 		DurationMsMin:  f.DurationMsMin,
 		DurationMsMax:  f.DurationMsMax,
@@ -109,6 +118,24 @@ func (f usageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		TTFTMsMax:      f.TTFTMsMax,
 		Q:              f.Q,
 	}, nil
+}
+
+// parseTriBool maps an optional "true"/"false" query value to a *bool:
+// empty → nil (no filter). huma rejects pointer query params, so tri-state
+// bools cross the wire as a string and resolve here.
+func parseTriBool(name, v string) (*bool, error) {
+	switch v {
+	case "":
+		return nil, nil
+	case "true":
+		b := true
+		return &b, nil
+	case "false":
+		b := false
+		return &b, nil
+	default:
+		return nil, huma.Error400BadRequest("`" + name + "` must be true or false")
+	}
 }
 
 // effectiveWindow returns the wall-clock span the query covers, used to
@@ -127,7 +154,7 @@ func effectiveWindow(q usagelog.EventQuery) time.Duration {
 // --- /usage/events ---
 
 type usageEventsInput struct {
-	usageFilterInput
+	UsageFilterInput
 	Limit  int    `query:"limit" doc:"Cap on returned events (page size). Default 100, max 10000."`
 	Cursor string `query:"cursor" doc:"Opaque pagination cursor from a previous response's next_cursor. Returns the next (older) page."`
 }
@@ -145,7 +172,7 @@ type usageEventsOutput struct {
 // --- /usage/summary ---
 
 type usageSummaryInput struct {
-	usageFilterInput
+	UsageFilterInput
 	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\"."`
 }
 
@@ -156,7 +183,7 @@ type usageSummaryOutput struct {
 // --- /usage/timeseries ---
 
 type usageTimeSeriesInput struct {
-	usageFilterInput
+	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
 	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\". Empty returns a single series."`
 }
