@@ -77,6 +77,37 @@ func TestRecordSuccess(t *testing.T) {
 	}
 }
 
+// TestReadCircuit — found flag is false before any record exists and true
+// after a failure writes one; the returned record reflects the stored state.
+func TestReadCircuit(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	k := "hash-read"
+
+	rec, found := sel.ReadCircuit(ctx, k)
+	if found {
+		t.Fatal("want found=false for a key with no record")
+	}
+	if rec.State != CircuitClosed {
+		t.Fatalf("want default closed, got %v", rec.State)
+	}
+
+	sel.RecordFailure(ctx, k, FailureAuth, 0)
+	rec, found = sel.ReadCircuit(ctx, k)
+	if !found {
+		t.Fatal("want found=true after a failure wrote a record")
+	}
+	if rec.State != CircuitOpen || !rec.Indefinite {
+		t.Fatalf("want open+indefinite, got state=%v indefinite=%v", rec.State, rec.Indefinite)
+	}
+	if rec.State.String() != "open" {
+		t.Fatalf("want state string \"open\", got %q", rec.State.String())
+	}
+	if rec.Reason != ReasonUpstreamAuthFailed {
+		t.Fatalf("want reason %q, got %q", ReasonUpstreamAuthFailed, rec.Reason)
+	}
+}
+
 // TestAuthFailureIsIndefinite — auth failure → open+indefinite; Pick returns ErrNoHealthyKeys.
 func TestAuthFailureIsIndefinite(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))

@@ -385,6 +385,7 @@ func main() {
 			CookieSecure:  cookieSecure,
 			UsageReader:   usageReader,
 			PayloadReader: payloadReader,
+			Selector:      selector,
 		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
