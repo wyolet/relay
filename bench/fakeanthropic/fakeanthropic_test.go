@@ -122,7 +122,10 @@ func TestStreaming_SSEWellFormed(t *testing.T) {
 	// Re-read to check data lines are valid JSON.
 	req2, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/messages", strings.NewReader(`{"stream":true}`))
 	req2.Header.Set("x-api-key", "test-key")
-	resp2, _ := http.DefaultClient.Do(req2)
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatalf("stream request failed: %v", err)
+	}
 	defer resp2.Body.Close()
 
 	sc3 := bufio.NewScanner(resp2.Body)
