@@ -144,9 +144,11 @@ func registerKind[T any](
 	// everything.
 	listErrors := []int{401, 500}
 	listMW := protect
+	var listParams []*huma.Param
 	if filterSchema != nil {
 		listErrors = []int{400, 401, 500}
 		listMW = withRawQuery(protect)
+		listParams = filterParams(filterSchema)
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
@@ -155,6 +157,7 @@ func registerKind[T any](
 		Summary:     "List " + plural,
 		Tags:        []string{tag},
 		Middlewares: listMW,
+		Parameters:  listParams,
 		Errors:      listErrors,
 	}, func(ctx context.Context, _ *struct{}) (*listResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".list", authz.Resource{Kind: singular}); err != nil {
