@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -105,6 +106,22 @@ func main() {
 	if err != nil {
 		slog.Error("catalog stores init failed", "err", err)
 		os.Exit(1)
+	}
+
+	// First-boot / airgapped settings seed: upsert any <section>.yaml from the
+	// settings dir that has no DB row yet (seed-if-absent — never clobbers a
+	// runtime change). Managed deployments configure at runtime via the
+	// settings API instead; this just bootstraps a fresh instance. Runs before
+	// hydrate so the seeded values land in the snapshot's first reload.
+	settingsDir := os.Getenv("RELAY_SETTINGS_DIR")
+	if settingsDir == "" {
+		settingsDir = filepath.Join(cfg.ConfigDir, "settings")
+	}
+	if seeded, err := settings.SeedDir(bootCtx, stores.Settings, settingsDir); err != nil {
+		slog.Error("settings seed failed", "err", err, "dir", settingsDir)
+		os.Exit(1)
+	} else if len(seeded) > 0 {
+		slog.Info("settings: seeded from YAML", "dir", settingsDir, "sections", seeded)
 	}
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
