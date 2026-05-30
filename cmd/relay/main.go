@@ -335,7 +335,12 @@ func main() {
 	// restart. Per-request capture is still gated by the Policy/RelayKey
 	// opt-in resolved at the inference entry. S3 credentials resolve through
 	// the shared secret registry.
-	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets), slog.Default())
+	payloadCHBootCfg := payloadCHBoot{
+		DSN:           cfg.CHDSN,
+		RetentionDays: 30, // payload bodies are bulkier + shorter-lived than usage rows
+		WALDir:        "relay-payload-wal",
+	}
+	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets, payloadCHBootCfg), slog.Default())
 	defer payloadCtl.Close()
 	lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(payloadCtl))
 	lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadCtl.Emitter()))
@@ -343,6 +348,11 @@ func main() {
 	payloadCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go payloadCtl.Run(listenerCtx)
 	slog.Info("payloadlog: observer wired (config via settings: payload-logging)")
+
+	// Read side of payload logging: serves the /payloads/* Logs endpoints
+	// over whatever backend the live settings name, rebuilt lazily on config
+	// change (mirrors the sink Controller).
+	payloadReader := newPayloadReaderResolver(cat, stores.Secrets, payloadCHBootCfg, slog.Default())
 
 	// Request-parsing depth lives in the "parsing" settings section and
 	// hot-swaps the openai adapter's rich-parse toggle. The vendor setter
@@ -390,14 +400,15 @@ func main() {
 			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 		}
 		control.Mount(ctrlRouter, control.Deps{
-			Identity:     idStore,
-			Sessions:     sessMgr,
-			AdminToken:   cfg.AdminToken,
-			Authz:        authz.AlwaysAllowAuthenticated{},
-			Catalog:      cat,
-			Stores:       stores,
-			CookieSecure: cookieSecure,
-			UsageReader:  usageReader,
+			Identity:      idStore,
+			Sessions:      sessMgr,
+			AdminToken:    cfg.AdminToken,
+			Authz:         authz.AlwaysAllowAuthenticated{},
+			Catalog:       cat,
+			Stores:        stores,
+			CookieSecure:  cookieSecure,
+			UsageReader:   usageReader,
+			PayloadReader: payloadReader,
 		})
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
