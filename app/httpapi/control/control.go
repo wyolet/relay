@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/internal/identity"
@@ -52,6 +53,11 @@ type Deps struct {
 	// them — useful for deployments where usage events are consumed
 	// from a separate store.
 	UsageReader usagelog.Reader
+
+	// PayloadReader serves /payloads/* read-side endpoints (the Logs view).
+	// nil disables them — e.g. minimal builds or deployments where captured
+	// bodies are consumed from a separate store.
+	PayloadReader payloadlog.Reader
 }
 
 // Mount installs the control-plane huma API on r and registers all
@@ -100,6 +106,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerCatalogGraph(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
+	registerPayloads(api, d, protect)
 
 	return api
 }
