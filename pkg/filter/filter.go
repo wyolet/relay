@@ -65,6 +65,7 @@ type Field[T any] struct {
 	Name     string // query-param name == JSON field == the allowlist key
 	Kind     Kind
 	Repeat   bool     // String: accept repeated keys, OR within the field
+	MatchAll bool     // String+GetMulti+Repeat: require the item's set to contain ALL requested values (AND) instead of any (OR). For "supports both" filters like capability=.
 	Enum     []string // String: if set, values must be one of these (else 400)
 	Sortable bool     // may appear in ?sort=
 
@@ -84,6 +85,10 @@ type Schema[T any] struct {
 	// any corpus string contains the query (case-insensitive). Nil disables
 	// the q param.
 	Q func(*T) []string
+	// Labels returns the item's label map; ?label=k=v (repeatable) matches
+	// when every selector's key equals the given value (AND, like a k8s
+	// label selector). Nil disables the label param.
+	Labels func(*T) map[string]string
 	// DefaultSort is the sort applied when ?sort= is absent, e.g. "name" or
 	// "-created_at". Must reference a Sortable field; empty leaves input
 	// order untouched.
@@ -111,7 +116,8 @@ const MaxLimit = 10_000
 type Query[T any] struct {
 	schema    Schema[T]
 	preds     []func(*T) bool
-	q         string // lower-cased free-text needle; "" = no text filter
+	q         string            // lower-cased free-text needle; "" = no text filter
+	labels    map[string]string // label selectors (k=v); all must match (AND)
 	sortField *Field[T]
 	sortDesc  bool
 	limit     int // 0 = no limit
@@ -119,7 +125,7 @@ type Query[T any] struct {
 }
 
 // reserved (non-field) query params the engine owns.
-var reserved = map[string]bool{"q": true, "sort": true, "limit": true, "offset": true}
+var reserved = map[string]bool{"q": true, "sort": true, "limit": true, "offset": true, "label": true}
 
 // Parse validates raw against the schema and compiles it into a Query.
 // Unknown keys, malformed values, out-of-enum values, and non-sortable
@@ -157,6 +163,23 @@ func (s Schema[T]) Parse(raw url.Values) (Query[T], error) {
 			return Query[T]{}, &Error{Key: "q", Msg: "free-text search not supported for this resource"}
 		}
 		q.q = strings.ToLower(qs)
+	}
+
+	for _, sel := range raw["label"] {
+		if sel == "" {
+			continue
+		}
+		if s.Labels == nil {
+			return Query[T]{}, &Error{Key: "label", Msg: "label selectors not supported for this resource"}
+		}
+		k, v, ok := strings.Cut(sel, "=")
+		if !ok || k == "" {
+			return Query[T]{}, &Error{Key: "label", Msg: "must be key=value"}
+		}
+		if q.labels == nil {
+			q.labels = map[string]string{}
+		}
+		q.labels[k] = v
 	}
 
 	sortSpec := raw.Get("sort")
@@ -243,6 +266,14 @@ func (q Query[T]) match(it *T) bool {
 			return false
 		}
 	}
+	if len(q.labels) > 0 {
+		have := q.schema.Labels(it)
+		for k, v := range q.labels {
+			if have[k] != v {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -285,6 +316,22 @@ func (f *Field[T]) compile(key, suffix string, vals []string) (func(*T) bool, er
 			set[w] = true
 		}
 		if f.GetMulti != nil {
+			if f.MatchAll {
+				// AND-membership: the item's set must contain every requested
+				// value (e.g. capability=vision&capability=tools → supports both).
+				return func(it *T) bool {
+					have := make(map[string]bool, len(set))
+					for _, h := range f.GetMulti(it) {
+						have[h] = true
+					}
+					for w := range set {
+						if !have[w] {
+							return false
+						}
+					}
+					return true
+				}, nil
+			}
 			return func(it *T) bool {
 				for _, have := range f.GetMulti(it) {
 					if set[have] {

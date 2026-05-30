@@ -193,6 +193,50 @@ func TestComposeAND(t *testing.T) {
 	}
 }
 
+func TestMatchAllMembership(t *testing.T) {
+	caps := Schema[row]{Fields: []Field[row]{
+		{Name: "cap", Kind: String, Repeat: true, MatchAll: true, GetMulti: func(r *row) []string { return r.Models }},
+	}}
+	items := []*row{
+		{Name: "both", Models: []string{"vision", "tools", "x"}},
+		{Name: "one", Models: []string{"vision"}},
+	}
+	v, _ := url.ParseQuery("cap=vision&cap=tools")
+	q, err := caps.Parse(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := q.Apply(items)
+	if len(got) != 1 || got[0].Name != "both" {
+		t.Fatalf("MatchAll cap=vision,tools => %v, want [both]", names(got))
+	}
+}
+
+func TestLabelSelectors(t *testing.T) {
+	s := Schema[row]{
+		Fields: []Field[row]{{Name: "name", Kind: String, Sortable: true, Get: func(r *row) string { return r.Name }}},
+		Labels: func(r *row) map[string]string {
+			if r.Name == "a" {
+				return map[string]string{"team": "infra", "env": "prod"}
+			}
+			return map[string]string{"team": "data"}
+		},
+	}
+	items := []*row{{Name: "a"}, {Name: "b"}}
+	v, _ := url.ParseQuery("label=team=infra&label=env=prod")
+	q, err := s.Parse(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := q.Apply(items)
+	if len(got) != 1 || got[0].Name != "a" {
+		t.Fatalf("label team=infra,env=prod => %v, want [a]", names(got))
+	}
+	if _, err := s.Parse(url.Values{"label": {"bogus"}}); err == nil {
+		t.Fatal("label without = should 400")
+	}
+}
+
 func TestEmptyValueIsNoConstraint(t *testing.T) {
 	got, total := mustParse(t, "name=").Apply(data)
 	if total != 3 || len(got) != 3 {
