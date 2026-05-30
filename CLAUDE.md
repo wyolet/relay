@@ -4,18 +4,11 @@ Guidance for Claude Code working in this repo.
 
 ## Dev workflow
 
-Wyolet dev workflow — read these before any non-trivial change. File
-layout, ports, infra split, build/deploy pipeline live there, not
-duplicated here:
-
-- `~/Documents/Obsidian Vault/Dev Workflow/Development.md` — Mac +
-  dev-stack split, ports rule, Caddy, centralised Postgres
-- `~/Documents/Obsidian Vault/Dev Workflow/ProjectSetup.md` — required
-  files (Makefile, compose, Dockerfile, bake, .env), stack rules
-- `~/Documents/Obsidian Vault/Dev Workflow/BuildDeploy.md` — Harbor +
-  ghcr.io, `kube` buildx context, ArgoCD reconcile
-- `~/Documents/Obsidian Vault/Dev Workflow/PORTS.md` — LAN port
-  allocations
+Before any non-trivial change, read `CONTRIBUTING.md` (build/test, the
+PR workflow, and the load-bearing codebase rules) and the design docs
+under `docs/` (`docs/roadmap.md` for what's next, `docs/canonical-protocol.md`
+for the protocol invariants). The repo layout, ports, and build/deploy
+pipeline are documented in `CONTRIBUTING.md` and the `Makefile`.
 
 ## What this is
 
@@ -24,10 +17,10 @@ k8s-native, BYO provider keys. Competes with OpenRouter and LiteLLM on
 the infrastructure axis (performance, key pooling, batch orchestration,
 observability).
 
-Roadmap and stage breakdown: `docs/roadmap.md`. Full design context
-lives in the user's Obsidian vault at
-`~/Documents/Obsidian Vault/Projects/Relay/` — read before non-trivial
-architectural suggestions.
+Roadmap and stage breakdown: `docs/roadmap.md` (split into per-phase
+docs — see the index). Design context lives in the `docs/` tree
+(`docs/canonical-protocol.md`, `docs/adapters/`, the per-subsystem
+guides) — read before non-trivial architectural suggestions.
 
 ## Wedge — what we are NOT
 
@@ -670,7 +663,7 @@ roadmap A3. We're temporarily flying blind on regressions.
 - Boring choices on the edges, smart choices in the middle. The router
   (chi) is the edge; the pipeline is the middle.
 - "Three similar lines is better than a premature abstraction."
-- Read the Obsidian docs (`~/Documents/Obsidian Vault/Projects/Relay/`)
-  before proposing architecture changes.
+- Read the design docs under `docs/` (`docs/canonical-protocol.md` and
+  the per-subsystem guides) before proposing architecture changes.
 - The roadmap (`docs/roadmap.md`) names every known follow-up — check
   it before opening a new design question.
