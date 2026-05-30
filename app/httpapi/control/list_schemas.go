@@ -12,6 +12,8 @@
 package control
 
 import (
+	"time"
+
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -33,6 +35,8 @@ var policyFilter = filter.Schema[policy.Policy]{
 		{Name: "key_selection", Kind: filter.String, Get: func(p *policy.Policy) string { return string(p.Spec.KeySelection) }},
 		{Name: "model_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.ModelIDs }},
 		{Name: "host_key_id", Kind: filter.String, Repeat: true, GetMulti: func(p *policy.Policy) []string { return p.Spec.HostKeyIDs }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(p *policy.Policy) time.Time { return p.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(p *policy.Policy) time.Time { return p.Meta.UpdatedAt }},
 	},
 	Q:           func(p *policy.Policy) []string { return []string{p.Meta.Name, p.Meta.DisplayName, p.Meta.Description} },
 	DefaultSort: "name",
@@ -47,6 +51,8 @@ var modelFilter = filter.Schema[model.Model]{
 		{Name: "tag", Kind: filter.String, Repeat: true, GetMulti: func(m *model.Model) []string { return m.Spec.Tags }},
 		{Name: "context_window", Kind: filter.Int, Sortable: true, GetInt: func(m *model.Model) int64 { return int64(m.Spec.ContextWindowTotal) }},
 		{Name: "max_output_tokens", Kind: filter.Int, GetInt: func(m *model.Model) int64 { return int64(m.Spec.MaxOutputTokens) }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(m *model.Model) time.Time { return m.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(m *model.Model) time.Time { return m.Meta.UpdatedAt }},
 	},
 	Q: func(m *model.Model) []string {
 		return append([]string{m.Meta.Name, m.Meta.DisplayName, m.Spec.Family}, m.Spec.Tags...)
@@ -60,6 +66,8 @@ var hostFilter = filter.Schema[host.Host]{
 		{Name: "enabled", Kind: filter.Bool, GetBool: func(h *host.Host) bool { return enabledTrue(h.Spec.Enabled) }},
 		{Name: "default_policy", Kind: filter.String, Get: func(h *host.Host) string { return h.Spec.DefaultPolicy }},
 		{Name: "policy_id", Kind: filter.String, Repeat: true, GetMulti: func(h *host.Host) []string { return h.Spec.Policies }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(h *host.Host) time.Time { return h.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(h *host.Host) time.Time { return h.Meta.UpdatedAt }},
 	},
 	Q:           func(h *host.Host) []string { return []string{h.Meta.Name, h.Meta.DisplayName, h.Spec.BaseURL} },
 	DefaultSort: "name",
@@ -74,6 +82,8 @@ var relayKeyFilter = filter.Schema[relaykey.RelayKey]{
 		{Name: "payload_logging", Kind: filter.Bool, GetBool: func(k *relaykey.RelayKey) bool { return k.Spec.PayloadLoggingEnabled }},
 		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(k *relaykey.RelayKey) string { return k.Spec.PolicyID }},
 		{Name: "prefix", Kind: filter.String, Get: func(k *relaykey.RelayKey) string { return k.Spec.Prefix }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(k *relaykey.RelayKey) time.Time { return k.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(k *relaykey.RelayKey) time.Time { return k.Meta.UpdatedAt }},
 	},
 	Q:           func(k *relaykey.RelayKey) []string { return []string{k.Meta.Name, k.Meta.DisplayName, k.Spec.Prefix} },
 	DefaultSort: "name",

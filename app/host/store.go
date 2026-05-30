@@ -66,6 +66,8 @@ func (s *Store) Get(ctx context.Context, id string) (*Host, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.CreatedAt = r.CreatedAt.Time
+	m.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -79,11 +81,13 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteHost(ctx, id)
 }
 
-func fromRow(r gen.ListHostsRow) (*Host, error) {
+func fromRow(r gen.Host) (*Host, error) {
 	m, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
 	}
+	m.CreatedAt = r.CreatedAt.Time
+	m.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)

@@ -1,11 +1,11 @@
 -- name: ListProviders :many
-SELECT id, name, display_name, metadata, spec FROM providers ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers ORDER BY name;
 
 -- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets ORDER BY name;
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name;
 
 -- name: ListStoredSecretsForRotation :many
 SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id;
@@ -19,10 +19,10 @@ SET value_ciphertext  = $2,
 WHERE id = $1 AND value_kind = 'stored';
 
 -- name: ListModels :many
-SELECT id, name, display_name, metadata, spec FROM models ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models ORDER BY name;
 
 -- name: ListRateLimits :many
-SELECT id, name, display_name, metadata, spec FROM rate_limits ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits ORDER BY name;
 
 -- name: UpsertProvider :exec
 INSERT INTO providers (id, name, display_name, metadata, spec, updated_at)
@@ -188,7 +188,7 @@ DELETE FROM models WHERE id = $1;
 DELETE FROM rate_limits WHERE id = $1;
 
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name;
 
 -- name: UpsertRelayKey :exec
 INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec, updated_at)
@@ -207,7 +207,7 @@ DELETE FROM relay_keys WHERE id = $1;
 -- ── app/ arch (migration 0009) ───────────────────────────────────────────────
 
 -- name: ListHosts :many
-SELECT id, name, display_name, metadata, spec FROM hosts ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts ORDER BY name;
 
 -- name: UpsertHost :exec
 INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
@@ -244,12 +244,12 @@ DELETE FROM policy_host_keys WHERE policy_id = $1;
 INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
 
 -- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies ORDER BY name;
 
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
 -- name: ListPricings :many
-SELECT id, name, display_name, host_id, metadata, spec FROM pricings ORDER BY name;
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings ORDER BY name;
 
 -- name: UpsertPricing :exec
 INSERT INTO pricings (id, name, display_name, host_id, metadata, spec, updated_at)
@@ -275,31 +275,31 @@ DELETE FROM pricing_models WHERE pricing_id = $1;
 INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
 
 -- name: GetProvider :one
-SELECT id, name, display_name, metadata, spec FROM providers WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers WHERE id = $1;
 
 -- name: GetHost :one
-SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts WHERE id = $1;
 
 -- name: GetModel :one
-SELECT id, name, display_name, metadata, spec FROM models WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models WHERE id = $1;
 
 -- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1;
 
 -- name: GetRateLimit :one
-SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits WHERE id = $1;
 
 -- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies WHERE id = $1;
 
 -- name: SetPolicyModels :exec
 UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 
 -- name: GetPricing :one
-SELECT id, name, display_name, host_id, metadata, spec FROM pricings WHERE id = $1;
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys WHERE id = $1;
+SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1;
 
 -- name: GetPolicyModels :many
 SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;

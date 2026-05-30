@@ -148,6 +148,8 @@ func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
 		ValueCiphertext: r.ValueCiphertext,
 		ValueNonce:      r.ValueNonce,
 		ValueKeyVersion: r.ValueKeyVersion,
+		CreatedAt:       r.CreatedAt,
+		UpdatedAt:       r.UpdatedAt,
 	}
 	k, err := s.fromRow(ctx, row)
 	if err != nil {
@@ -196,6 +198,8 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 	if err != nil {
 		return nil, err
 	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)

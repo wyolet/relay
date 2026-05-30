@@ -75,6 +75,24 @@ func TestModelFilter(t *testing.T) {
 	}
 }
 
+func TestModelFilter_Timestamps(t *testing.T) {
+	jan := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mar := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	items := []*model.Model{
+		{Meta: meta.Metadata{Name: "old", CreatedAt: jan}},
+		{Meta: meta.Metadata{Name: "new", CreatedAt: mar}},
+		{Meta: meta.Metadata{Name: "unstamped"}}, // zero CreatedAt — excluded by any bound
+	}
+	got, _ := applyQ(t, modelFilter, "created_from=2026-02-01T00:00:00Z", items)
+	if want := []string{"new"}; !eqNames(got, want) {
+		t.Fatalf("created_from=Feb => %v, want [new]", names(got))
+	}
+	got, _ = applyQ(t, modelFilter, "sort=-created", items)
+	if want := []string{"new", "old", "unstamped"}; !eqNames(got, want) {
+		t.Fatalf("sort=-created => %v, want %v", names(got), want)
+	}
+}
+
 func TestHostFilter(t *testing.T) {
 	items := []*host.Host{
 		{Meta: meta.Metadata{Name: "openai"}, Spec: host.Spec{BaseURL: "https://api.openai.com", Policies: []string{"p1", "p2"}}},

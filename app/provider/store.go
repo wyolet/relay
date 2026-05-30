@@ -66,6 +66,8 @@ func (s *Store) Get(ctx context.Context, id string) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.CreatedAt = r.CreatedAt.Time
+	m.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -84,6 +86,8 @@ func fromRow(r gen.ListProvidersRow) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	m.CreatedAt = r.CreatedAt.Time
+	m.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)

@@ -8,6 +8,7 @@ package meta
 
 import (
 	"regexp"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/wyolet/relay/pkg/ids"
@@ -46,6 +47,11 @@ func isDNS1123Slug(fl validator.FieldLevel) bool {
 //   - Description is free text documenting the row.
 //   - Owner identifies provenance.
 //   - Labels are arbitrary k/v selectors.
+//   - CreatedAt/UpdatedAt are server-derived, read-only provenance read
+//     from the row's dedicated columns (NOT the metadata JSONB — see
+//     MarshalJSONB, which serializes only Description/Owner/Labels). They
+//     are omitted from YAML manifests (yaml:"-") since seed/apply must not
+//     set them; the store stamps them on read.
 type Metadata struct {
 	ID          string            `json:"id,omitempty"          yaml:"id,omitempty"          validate:"omitempty,uuid"`
 	Name        string            `json:"name"                  yaml:"name"                  validate:"required,slug"`
@@ -53,6 +59,8 @@ type Metadata struct {
 	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
 	Owner       Owner             `json:"owner,omitempty"       yaml:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
+	CreatedAt   time.Time         `json:"createdAt,omitempty"   yaml:"-"`
+	UpdatedAt   time.Time         `json:"updatedAt,omitempty"   yaml:"-"`
 }
 
 // NewID returns a fresh UUIDv7 string. Centralized so every entity store

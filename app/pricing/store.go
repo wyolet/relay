@@ -69,6 +69,8 @@ func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
 	if err != nil {
 		return nil, err
 	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -124,11 +126,13 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.pool).DeletePricing(ctx, id)
 }
 
-func fromRow(r gen.ListPricingsRow) (*Pricing, error) {
+func fromRow(r gen.Pricing) (*Pricing, error) {
 	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
 	if err != nil {
 		return nil, err
 	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
