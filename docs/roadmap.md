@@ -92,10 +92,14 @@ waiting to be written; the path under `docs/` is the placeholder.
   `RELAY_CH_DSN` (separate body-only `payload_logs` table, validated on live
   CH), WAL-segment durability with byte-based rotation, bloom-index `Get`,
   30-day TTL. Two lifecycle observers on separate emitters (log constant,
-  payload opt-in); runtime only sets `lc.PayloadLog`. Full design:
-  `docs/payload-logging.md`. **Remaining**: log/usage backend via settings +
-  hot-swap (roadmap "Next"); media spill to object storage +
-  content-addressed dedup ("Media offload").
+  payload opt-in); runtime only sets `lc.PayloadLog`. **Log backend is now
+  settings-driven + hot-swappable too** — the `usage-logging` section selects
+  file|clickhouse|postgres|valkey, hot-swapped by a `usagelog.Controller`
+  (reconciles the {sink, reader} pair, reroute = clean break); DSNs stay
+  bootstrap env, legacy `RELAY_EVENTLOG_BACKEND` is an interim fallback until
+  the YAML→DB settings seed lands. Full design: `docs/payload-logging.md`.
+  **Remaining**: YAML→DB settings seed (minimize env — see "Next"); media
+  spill to object storage + content-addressed dedup ("Media offload").
 - **`pkg/secret` unified resolver** (PR #226, 2026-05-26) — **the seam half
   of Now #1, done.** `Ref{Kind,Env,ID}` + `Resolver`/`Registry`/`Writer`;
   built-in `env` + `stored` (AES-GCM, `secret_values` table, transactional
