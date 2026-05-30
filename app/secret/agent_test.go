@@ -19,9 +19,11 @@ type fakeRefresher struct {
 	changed bool
 	err     error
 
-	mu     sync.Mutex
-	calls  int
-	called chan struct{}
+	mu      sync.Mutex
+	calls   int
+	called  chan struct{}
+	entered chan struct{} // signalled once the refresh fn is running
+	block   chan struct{} // when set, the refresh blocks until this is closed
 }
 
 func (f *fakeRefresher) Refresh(_ context.Context, _ string) (string, bool, error) {
@@ -33,6 +35,12 @@ func (f *fakeRefresher) Refresh(_ context.Context, _ string) (string, bool, erro
 		case f.called <- struct{}{}:
 		default:
 		}
+	}
+	if f.entered != nil {
+		f.entered <- struct{}{}
+	}
+	if f.block != nil {
+		<-f.block
 	}
 	return f.value, f.changed, f.err
 }
@@ -104,9 +112,18 @@ func TestAgent_AuthLast_CtxCancelledFails(t *testing.T) {
 }
 
 func TestAgent_SingleFlight(t *testing.T) {
-	// Concurrent last-candidate auth failures for the same key should share
-	// one refresh.
-	f := &fakeRefresher{value: "rotated", changed: true}
+	// Concurrent last-candidate auth failures for the same key must share one
+	// refresh. Coalescing only happens while a call is in-flight, so we block
+	// the leader's refresh: that holds the single-flight slot open while the
+	// other goroutines reach DoChan and join it. (In production the refresh
+	// does real I/O, which provides this overlap window naturally — a
+	// zero-latency fake would let the calls serialize and never coalesce.)
+	f := &fakeRefresher{
+		value:   "rotated",
+		changed: true,
+		entered: make(chan struct{}, 1),
+		block:   make(chan struct{}),
+	}
 	a := NewAgent(f, time.Second, discard())
 
 	var wg sync.WaitGroup
@@ -117,11 +134,18 @@ func TestAgent_SingleFlight(t *testing.T) {
 			a.OnFailure(context.Background(), "samekey", keypool.FailureAuth, false)
 		}()
 	}
+
+	<-f.entered // the leader is in-flight, holding the single-flight slot
+	// The slot stays open until we release, so this is a settle window for the
+	// other 19 goroutines to reach DoChan and coalesce — not a race against the
+	// refresh completing.
+	time.Sleep(100 * time.Millisecond)
+	close(f.block) // let the one refresh finish; all 20 callers unpark
 	wg.Wait()
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.calls == 0 || f.calls >= 20 {
-		t.Fatalf("single-flight: expected far fewer than 20 refreshes, got %d", f.calls)
+	if f.calls != 1 {
+		t.Fatalf("single-flight: expected exactly 1 refresh, got %d", f.calls)
 	}
 }
