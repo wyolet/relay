@@ -23,13 +23,9 @@ official channel).
 ## Reporting
 
 If you experience or witness unacceptable behavior, report it to the
-project maintainers. Reports will be reviewed and investigated promptly
-and fairly, and the reporter's privacy will be respected.
-
-<!-- TODO: add a dedicated conduct-report contact (email or form) before
-public launch. Until then, reach the maintainers privately via the
-repository's Security tab → "Report a vulnerability", or by direct
-message to a maintainer. -->
+project maintainers at **conduct@wyolet.com**. Reports will be reviewed
+and investigated promptly and fairly, and the reporter's privacy will be
+respected.
 
 ## Enforcement
 
