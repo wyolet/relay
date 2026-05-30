@@ -53,13 +53,24 @@ services:
       - "5117:16686"
       - "5118:4317"
 
+  # Build from source: no public image is published yet, so the standalone
+  # stack builds the relay binary locally (tagged relay:local) instead of
+  # pulling. `docker compose up --build` to rebuild after code changes.
   relay-a:
+    image: relay:local
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}
       valkey: {condition: service_healthy}
 
   relay-b:
+    image: relay:local
+    build:
+      context: ../..
+      dockerfile: Dockerfile
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}

@@ -1,16 +1,13 @@
 # Production-shape stack. Pulls images, no `build:` — bake is the only builder.
 # Every value comes from `.env`. Prod-deployable as-is given the right .env.
 #
-# Local dev:        docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.dev.yml up
-# Without dev-stack: docker compose -f deploy/compose/docker-compose.yml up   (auto-merges override.yml)
+# Standalone (default):  docker compose up            (auto-merges override.yml — bundles PG/CH/Jaeger, builds from source)
+# Dev-stack mode:        docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.dev.yml up
+#
+# The dev-stack `dev-net` external network lives in docker-compose.dev.yml so a
+# fresh `docker compose up` doesn't require a network it can't have.
 
 name: wyolet-relay
-
-networks:
-  default:
-  dev-net:
-    name: dev-net
-    external: true
 
 volumes:
   valkey-data:
@@ -48,8 +45,6 @@ services:
     ports:
       - "${RELAY_A_PORT:-5101}:8080"
       - "${RELAY_CONTROL_PORT:-5103}:8081"
-    networks: [default, dev-net]
-
   relay-b:
     image: ${RELAY_IMAGE:-ghcr.io/wyolet/relay:latest}
     container_name: relay-b
@@ -63,8 +58,6 @@ services:
       valkey: {condition: service_healthy}
     ports:
       - "${RELAY_B_PORT:-5102}:8080"
-    networks: [default, dev-net]
-
   nginx:
     image: nginx:alpine
     container_name: relay-nginx
