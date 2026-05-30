@@ -48,11 +48,11 @@ const (
 type FailureKind int
 
 const (
-	FailureAuth            FailureKind = iota // 401/403 → open indefinitely
-	FailureRateLimitShort                     // 429 with Retry-After ≤ 5s → stay closed
-	FailureRateLimitLong                      // 429 with Retry-After > 5s → open for that duration
-	FailureServerError                        // 5xx → exponential backoff
-	FailureNetwork                            // net/timeout → treat as 5xx
+	FailureAuth           FailureKind = iota // 401/403 → open indefinitely
+	FailureRateLimitShort                    // 429 with Retry-After ≤ 5s → stay closed
+	FailureRateLimitLong                     // 429 with Retry-After > 5s → open for that duration
+	FailureServerError                       // 5xx → exponential backoff
+	FailureNetwork                           // net/timeout → treat as 5xx
 )
 
 // CircuitState describes the current health of a key.
@@ -69,7 +69,7 @@ var ErrNoHealthyKeys = errors.New("keypool: no healthy keys in pool")
 // candidate holds a healthy HostKey alongside its circuit record.
 type candidate struct {
 	key     *hostkey.HostKey
-	rec     circuitRecord
+	rec     CircuitRecord
 	promote bool
 }
 
@@ -111,19 +111,36 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time, rng *rand.Rand) *
 	return &Selector{state: s, log: log, clock: clock, rng: rng}
 }
 
-func (s *Selector) readRecord(ctx context.Context, keyHash string) circuitRecord {
+func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord {
 	b, err := s.state.Get(ctx, circuitKey(keyHash))
 	if err != nil || len(b) == 0 {
-		return circuitRecord{State: CircuitClosed}
+		return CircuitRecord{State: CircuitClosed}
 	}
 	r, err := decodeRecord(b)
 	if err != nil {
-		return circuitRecord{State: CircuitClosed}
+		return CircuitRecord{State: CircuitClosed}
 	}
 	return r
 }
 
-func (s *Selector) writeRecord(ctx context.Context, keyHash string, r circuitRecord) {
+// ReadCircuit returns the stored circuit-breaker record for a key and whether
+// a record actually exists in the state store. A missing or undecodable record
+// yields a default-closed record with found=false — i.e. the key has never
+// failed and is assumed healthy. This is a read-only accessor for the admin
+// plane; it does not auto-transition expired-open records the way Pick does.
+func (s *Selector) ReadCircuit(ctx context.Context, keyHash string) (CircuitRecord, bool) {
+	b, err := s.state.Get(ctx, circuitKey(keyHash))
+	if err != nil || len(b) == 0 {
+		return CircuitRecord{State: CircuitClosed}, false
+	}
+	r, err := decodeRecord(b)
+	if err != nil {
+		return CircuitRecord{State: CircuitClosed}, false
+	}
+	return r, true
+}
+
+func (s *Selector) writeRecord(ctx context.Context, keyHash string, r CircuitRecord) {
 	b, err := encodeRecord(r)
 	if err != nil {
 		s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
@@ -315,7 +332,7 @@ func ClearCircuit(ctx context.Context, store kv.Store, keyHash string) error {
 func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 	now := s.clock()
 	prior := s.readRecord(ctx, keyHash)
-	rec := circuitRecord{
+	rec := CircuitRecord{
 		State:          CircuitClosed,
 		BackoffStep:    0,
 		LastTransition: now,

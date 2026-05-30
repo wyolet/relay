@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
@@ -58,6 +59,11 @@ type Deps struct {
 	// nil disables them — e.g. minimal builds or deployments where captured
 	// bodies are consumed from a separate store.
 	PayloadReader payloadlog.Reader
+
+	// Selector is the keypool circuit-breaker owner, shared with the data
+	// plane. The host-key health endpoint reads per-key breaker state through
+	// it. nil disables that endpoint.
+	Selector *keypool.Selector
 }
 
 // Mount installs the control-plane huma API on r and registers all
@@ -99,6 +105,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerMisc(api, d, protect) // /master-key/generate, /reload
 	registerCRUD(api, d, protect) // 8 kinds × CRUD
 	registerHostKeyRotate(api, d, protect)
+	registerHostKeyHealth(api, d, protect)
 	registerReferences(api, d, protect)
 	registerPolicyRelayKeys(api, d, protect)
 	registerSettings(api, d, protect)

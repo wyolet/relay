@@ -17,9 +17,9 @@ const (
 	ReasonLocalRateLimited     CooldownReason = "local_rl_exhausted"
 )
 
-// circuitRecord is the per-key circuit-breaker state stored under
+// CircuitRecord is the per-key circuit-breaker state stored under
 // "secret_health:<keyHash>" in pkg/state.
-type circuitRecord struct {
+type CircuitRecord struct {
 	State          CircuitState   `json:"state"`
 	OpenUntil      time.Time      `json:"open_until,omitempty"`
 	BackoffStep    int            `json:"backoff_step"`
@@ -28,12 +28,12 @@ type circuitRecord struct {
 	Reason         CooldownReason `json:"reason,omitempty"`
 }
 
-func encodeRecord(r circuitRecord) ([]byte, error) {
+func encodeRecord(r CircuitRecord) ([]byte, error) {
 	return json.Marshal(r)
 }
 
-func decodeRecord(b []byte) (circuitRecord, error) {
-	var r circuitRecord
+func decodeRecord(b []byte) (CircuitRecord, error) {
+	var r CircuitRecord
 	err := json.Unmarshal(b, &r)
 	return r, err
 }
@@ -51,3 +51,7 @@ func stateName(s CircuitState) string {
 		return "unknown"
 	}
 }
+
+// String returns a stable lower-snake label for the circuit state, suitable
+// for logs and API responses.
+func (s CircuitState) String() string { return stateName(s) }
