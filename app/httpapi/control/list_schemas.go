@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/pkg/filter"
 )
@@ -210,6 +211,20 @@ var pricingFilter = filter.Schema[pricing.Pricing]{
 	},
 	Q:           func(p *pricing.Pricing) []string { return []string{p.Meta.Name, p.Meta.DisplayName} },
 	Labels:      func(p *pricing.Pricing) map[string]string { return labelsOf(p.Meta) },
+	DefaultSort: "name",
+}
+
+var rateLimitFilter = filter.Schema[ratelimit.RateLimit]{
+	Fields: []filter.Field[ratelimit.RateLimit]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(r *ratelimit.RateLimit) string { return r.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(r *ratelimit.RateLimit) bool { return enabledTrue(r.Spec.Enabled) }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(r *ratelimit.RateLimit) time.Time { return r.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(r *ratelimit.RateLimit) time.Time { return r.Meta.UpdatedAt }},
+	},
+	Q: func(r *ratelimit.RateLimit) []string {
+		return []string{r.Meta.Name, r.Meta.DisplayName, r.Meta.Description}
+	},
+	Labels:      func(r *ratelimit.RateLimit) map[string]string { return labelsOf(r.Meta) },
 	DefaultSort: "name",
 }
 

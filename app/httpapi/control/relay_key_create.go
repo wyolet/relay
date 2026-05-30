@@ -25,9 +25,10 @@ type createRelayKeyInput struct {
 			DisplayName string `json:"displayName,omitempty"`
 		} `json:"metadata"`
 		Spec struct {
-			PolicyID           string `json:"policyId,omitempty"`
-			Enabled            *bool  `json:"enabled,omitempty"`
-			PassthroughAllowed bool   `json:"passthroughAllowed,omitempty"`
+			PolicyID              string `json:"policyId,omitempty"`
+			Enabled               *bool  `json:"enabled,omitempty"`
+			PassthroughAllowed    bool   `json:"passthroughAllowed,omitempty"`
+			PayloadLoggingEnabled bool   `json:"payloadLoggingEnabled,omitempty"`
 		} `json:"spec"`
 	} `json:"body"`
 }
@@ -82,6 +83,7 @@ func registerRelayKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		k.Spec.PolicyID = in.Body.Spec.PolicyID
 		k.Spec.Enabled = in.Body.Spec.Enabled
 		k.Spec.PassthroughAllowed = in.Body.Spec.PassthroughAllowed
+		k.Spec.PayloadLoggingEnabled = in.Body.Spec.PayloadLoggingEnabled
 		k.Spec.KeyHash = gen.KeyHash
 		k.Spec.Prefix = gen.Prefix
 
