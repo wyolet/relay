@@ -83,9 +83,13 @@ pkg/                       — server-internal shared libs (NOT the SDK)
                              PostFlightHook + Registry. The observability
                              spine: runners build a Context, observers
                              register hooks, FirePostFlight fans out.
-  usage/{clickhouse,file,
-    postgres,valkey}/      — usage sinks (heavy deps: ch/pgx/redis). Stay
-                             server-side; the PURE usage root is in sdk/usage.
+  usage/                   — usage event record (Event) + query/eval engine
+                             (filter/summarize/bucketize) + Sink/Reader. The
+                             server-side root; backends live in subpackages.
+    {clickhouse,file,
+     postgres,valkey}/     — usage sinks (heavy deps: ch/pgx/redis). Stay
+                             server-side. (Pure wire shapes — Tokens, timing —
+                             live in sdk/usage; pkg/usage.Event embeds them.)
   crypto/                  — AES-GCM helpers (master-key)
   secret/                  — unified secret resolution: Ref{Kind,Env,ID,Path}
                              + Resolver/Registry/Writer. Built-in env + stored
@@ -116,7 +120,10 @@ sdk/                       — SEPARATE Go module (github.com/wyolet/relay/sdk):
   adapters/anthropic/      — Anthropic vendor adapter: parse, content, stream,
                              tokens, types, transform, translator_canonical.go.
   adapters/gemini/         — Gemini native generateContent adapter.
-  usage/                   — Tokens + per-request timing types (the pure root).
+  usage/                   — pure wire shapes only: Tokens + per-request
+                             timing (Upstream/ReasoningTiming). The Event
+                             record + filter/aggregate engine live server-side
+                             in pkg/usage (consumed by no SDK client).
   catalog/                 — go:embed'd flattened catalog (hosts/bindings/
                              pricing) + model-ref resolver + per-binding Cost.
                              catalog.json is generated; see cmd/catalog-embed.

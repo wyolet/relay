@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/sdk/usage"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))

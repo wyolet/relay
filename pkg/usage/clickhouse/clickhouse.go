@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/wyolet/relay/sdk/usage"
+	"github.com/wyolet/relay/pkg/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // Compile-time interface assertions.
@@ -360,10 +361,10 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		ev.Status = int(status)
 		ev.Streamed = streamed == 1
 		ev.Attempts = int(attempts)
-		ev.Tokens = usage.Tokens(tokens)
+		ev.Tokens = sdkusage.Tokens(tokens)
 		ev.Extras = extras
 		if upStart != -1 {
-			ev.Upstream = &usage.UpstreamTiming{
+			ev.Upstream = &sdkusage.UpstreamTiming{
 				Start:         upStart,
 				ResponseStart: upRespStart,
 				ResponseEnd:   upRespEnd,

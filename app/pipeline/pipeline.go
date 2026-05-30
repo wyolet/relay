@@ -27,7 +27,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgusage "github.com/wyolet/relay/sdk/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // Adapter is the wire-shape seam, implemented by app/adapter.specAdapter.
@@ -39,7 +39,7 @@ import (
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
 	Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream bool) (*http.Response, error)
-	ExtractTokens(body []byte) pkgusage.Tokens
+	ExtractTokens(body []byte) sdkusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
 }
 

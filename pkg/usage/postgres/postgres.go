@@ -22,7 +22,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/wyolet/relay/sdk/usage"
+	"github.com/wyolet/relay/pkg/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // Compile-time interface assertions.
@@ -323,7 +324,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 		// Nil maps marshal as JSON null; default to {} so jsonb_each_text is safe.
 		tokens := ev.Tokens
 		if tokens == nil {
-			tokens = usage.Tokens{}
+			tokens = sdkusage.Tokens{}
 		}
 		extras := ev.Extras
 		if extras == nil {
@@ -449,7 +450,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		ev.Attempts = int(attempts)
 
 		if upStart != nil {
-			ev.Upstream = &usage.UpstreamTiming{
+			ev.Upstream = &sdkusage.UpstreamTiming{
 				Start:         *upStart,
 				ResponseStart: *upRespStart,
 				ResponseEnd:   *upRespEnd,
@@ -459,7 +460,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		if len(tokensJSON) > 0 {
 			var tokens map[string]int64
 			_ = json.Unmarshal(tokensJSON, &tokens)
-			ev.Tokens = usage.Tokens(tokens)
+			ev.Tokens = sdkusage.Tokens(tokens)
 		}
 		if len(extrasJSON) > 0 {
 			var extras map[string]string

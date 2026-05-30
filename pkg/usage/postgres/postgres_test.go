@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/sdk/usage"
+	"github.com/wyolet/relay/pkg/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 func TestIntegration_RoundTrip(t *testing.T) {
@@ -48,8 +49,8 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			RequestID: marker + "-1", Source: "pipeline", Timestamp: now,
 			Status: 200, DurationMs: 123, Streamed: true, FinishReason: "stop",
 			Attempts: 1, ModelID: marker, PolicyID: "p1",
-			Upstream: &usage.UpstreamTiming{Start: 100, ResponseStart: 200, ResponseEnd: 300},
-			Tokens:   usage.Tokens{"input": 10, "output": 5},
+			Upstream: &sdkusage.UpstreamTiming{Start: 100, ResponseStart: 200, ResponseEnd: 300},
+			Tokens:   sdkusage.Tokens{"input": 10, "output": 5},
 			Extras:   map[string]string{"client_ip": "1.2.3.4"},
 		},
 		{
