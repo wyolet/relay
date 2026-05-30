@@ -222,6 +222,25 @@ model is text-only. Design-doc-first. (Mode-tier pricing — batch/priority/
 flex tiers — is a billing concern and lives in `roadmap-saas.md`, though
 it shares the multi-row-Pricing shape with this.)
 
+### A21. List filtering — control-plane query contract
+
+**Shipped:** the `pkg/filter` engine + config-list wiring + Metadata
+timestamps (#262–#264) — policies/models/hosts/relay-keys filter, sort,
+and window server-side with `total` and 400-on-typo.
+
+**Open follow-ups** (each its own PR, see [`filtering.md`](filtering.md)):
+- **F1. Model capability filter** (`?capability=`) — standalone, do first;
+  needs an AND-membership decision in `pkg/filter` (`MatchAll`). Size S.
+- **F2.** Remaining allowlists (provider_id/modality/dates on models;
+  host-keys `value_kind`; providers/pricing schemas; uniform `label=k=v`).
+- **F3.** Host-key breaker-state filter (`?health=`) — snapshot+kv join,
+  design-first.
+- **F4.** Logs/Usage filter gap-fill (`status_class`, `ttft_ms`,
+  `has_payload`, `host_key_id`, `q`, `sort`, …) — highest UI impact.
+
+**Driven by:** the relay-ui filter convention; F4 deletes the most mock
+data from the live dashboard.
+
 ---
 
 ## Part 2 — Launch readiness
