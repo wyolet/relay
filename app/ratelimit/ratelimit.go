@@ -47,16 +47,16 @@ type Meter string
 // Closed set of recognised meters. Bare "tokens" sums every token sub-meter;
 // "tokens.<key>" targets one. "concurrency" ignores Strategy.
 const (
-	MeterRequests                Meter = "requests"
-	MeterConcurrency             Meter = "concurrency"
-	MeterTokens                  Meter = "tokens"
-	MeterTokensInput             Meter = "tokens.input"
-	MeterTokensOutput            Meter = "tokens.output"
-	MeterTokensCacheRead         Meter = "tokens.cache_read"
-	MeterTokensCacheCreation     Meter = "tokens.cache_creation"
-	MeterTokensReasoning         Meter = "tokens.reasoning"
-	MeterTokensServerToolUseIn   Meter = "tokens.server_tool_use_input"
-	MeterTokensServerToolUseOut  Meter = "tokens.server_tool_use_output"
+	MeterRequests               Meter = "requests"
+	MeterConcurrency            Meter = "concurrency"
+	MeterTokens                 Meter = "tokens"
+	MeterTokensInput            Meter = "tokens.input"
+	MeterTokensOutput           Meter = "tokens.output"
+	MeterTokensCacheRead        Meter = "tokens.cache_read"
+	MeterTokensCacheCreation    Meter = "tokens.cache_creation"
+	MeterTokensReasoning        Meter = "tokens.reasoning"
+	MeterTokensServerToolUseIn  Meter = "tokens.server_tool_use_input"
+	MeterTokensServerToolUseOut Meter = "tokens.server_tool_use_output"
 )
 
 // Strategy is the algorithm used to enforce a Rule.
@@ -102,4 +102,3 @@ func (r *RateLimit) Validate() error {
 	}
 	return nil
 }
-

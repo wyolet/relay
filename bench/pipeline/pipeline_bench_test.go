@@ -92,8 +92,8 @@ var silentLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 // the limiter is never invoked from the policy.Service path.
 type benchSnap struct{}
 
-func (benchSnap) Policy(string) (*policy.Policy, bool)              { return nil, false }
-func (benchSnap) RateLimit(string) (*ratelimit.RateLimit, bool)     { return nil, false }
+func (benchSnap) Policy(string) (*policy.Policy, bool)          { return nil, false }
+func (benchSnap) RateLimit(string) (*ratelimit.RateLimit, bool) { return nil, false }
 
 func newFixture(withLimiter bool) *fixture {
 	kvStore := kv.NewMem()

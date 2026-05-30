@@ -60,10 +60,10 @@ type turn struct {
 
 // request is the body we POST to /v1/messages.
 type request struct {
-	Model     string            `json:"model"`
-	MaxTokens int               `json:"max_tokens"`
-	Messages  []map[string]any  `json:"messages"`
-	Stream    bool              `json:"stream,omitempty"`
+	Model     string           `json:"model"`
+	MaxTokens int              `json:"max_tokens"`
+	Messages  []map[string]any `json:"messages"`
+	Stream    bool             `json:"stream,omitempty"`
 }
 
 func main() {
@@ -187,7 +187,7 @@ func main() {
 		useStream := i%4 == 3 // 25% streaming turns
 
 		body := request{
-			Model:    t.model,
+			Model:     t.model,
 			MaxTokens: 4096, // JSONL doesn't capture original max_tokens; 4096 is Claude Code's default
 			Messages:  t.messages,
 			Stream:    useStream,

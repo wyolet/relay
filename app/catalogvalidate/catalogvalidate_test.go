@@ -111,8 +111,8 @@ func TestValidateGraph_HostKeyOwnerMismatch(t *testing.T) {
 		manifest.Document{HostKey: &manifest.HostKeyDTO{
 			Metadata: manifest.WireMeta{Name: "bad-hostkey"},
 			Spec: manifest.HostKeySpec{
-				HostID:    "openai-host",       // claims openai-host
-				PolicyID:  "anthropic-tier-1",  // but uses anthropic policy
+				HostID:    "openai-host",      // claims openai-host
+				PolicyID:  "anthropic-tier-1", // but uses anthropic policy
 				ValueFrom: manifest.HostKeyValueFrom{Kind: "env", Env: "X"},
 			},
 		}},

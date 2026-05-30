@@ -162,7 +162,7 @@ func (s *Server) streamResponse(w http.ResponseWriter, raw json.RawMessage) {
 
 	// message_start: envelope without content
 	envelope := map[string]any{
-		"type":          "message_start",
+		"type": "message_start",
 		"message": map[string]any{
 			"id":            msg.ID,
 			"type":          "message",

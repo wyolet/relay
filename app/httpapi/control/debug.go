@@ -4,9 +4,12 @@
 // fastest way to spot what sanitize dropped.
 //
 // detail=counts (default): per-kind row counts + per-policy reverse-join
-//                          sizes. Tiny payload, scans nothing.
+//
+//	sizes. Tiny payload, scans nothing.
+//
 // detail=full:             every entity in stable slug order, sanitized
-//                          spec included. Bigger; admin-only, no SLO.
+//
+//	spec included. Bigger; admin-only, no SLO.
 package control
 
 import (
@@ -49,16 +52,16 @@ type debugPolicyJoin struct {
 }
 
 type debugSnapshotBody struct {
-	Counts       debugSnapshotCounts `json:"counts"`
-	PolicyJoins  []debugPolicyJoin   `json:"policyJoins,omitempty"`
-	Providers    []*provider.Provider `json:"providers,omitempty"`
-	Hosts        []*host.Host         `json:"hosts,omitempty"`
-	Models       []*model.Model       `json:"models,omitempty"`
-	Policies     []*policy.Policy     `json:"policies,omitempty"`
-	HostKeys     []*hostkey.HostKey   `json:"hostKeys,omitempty"`
-	RelayKeys    []*relaykey.RelayKey `json:"relayKeys,omitempty"`
-	RateLimits   []*ratelimit.RateLimit `json:"rateLimits,omitempty"`
-	Pricings     []*pricing.Pricing   `json:"pricings,omitempty"`
+	Counts      debugSnapshotCounts    `json:"counts"`
+	PolicyJoins []debugPolicyJoin      `json:"policyJoins,omitempty"`
+	Providers   []*provider.Provider   `json:"providers,omitempty"`
+	Hosts       []*host.Host           `json:"hosts,omitempty"`
+	Models      []*model.Model         `json:"models,omitempty"`
+	Policies    []*policy.Policy       `json:"policies,omitempty"`
+	HostKeys    []*hostkey.HostKey     `json:"hostKeys,omitempty"`
+	RelayKeys   []*relaykey.RelayKey   `json:"relayKeys,omitempty"`
+	RateLimits  []*ratelimit.RateLimit `json:"rateLimits,omitempty"`
+	Pricings    []*pricing.Pricing     `json:"pricings,omitempty"`
 }
 
 type debugSnapshotOutput struct {

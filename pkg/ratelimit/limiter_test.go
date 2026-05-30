@@ -371,7 +371,6 @@ func TestSlidingWindow_BoundaryAccuracy(t *testing.T) {
 	}
 }
 
-
 // TestReserve_ContextCancel
 func TestReserve_ContextCancel(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)

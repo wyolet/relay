@@ -103,9 +103,9 @@ func TestTokenBucket_FullBurstFromIdle(t *testing.T) {
 // Checks t={6s, 12s, 30s, 60s, 120s} — each gives floor(elapsed*amount/window) tokens.
 func TestTokenBucket_RefillAccuracy(t *testing.T) {
 	cases := []struct {
-		advance  time.Duration
-		wantMin  int // min tokens refilled (floor)
-		wantMax  int // max tokens (capped at amount)
+		advance time.Duration
+		wantMin int // min tokens refilled (floor)
+		wantMax int // max tokens (capped at amount)
 	}{
 		{6 * time.Second, 1, 1},
 		{12 * time.Second, 2, 2},
@@ -1026,10 +1026,10 @@ func TestMultiRule_RollbackOnLaterFailure(t *testing.T) {
 // Each tick uses the same Limiter+store, advancing time 1s.
 func TestSteadyState_AllStrategies(t *testing.T) {
 	type stratCase struct {
-		strategy        Strategy
-		expectedMin     int
-		expectedMax     int
-		note            string
+		strategy    Strategy
+		expectedMin int
+		expectedMax int
+		note        string
 	}
 	cases := []stratCase{
 		{

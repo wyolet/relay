@@ -259,7 +259,7 @@ func TestResolver_ManagedIdentity(t *testing.T) {
 	res := New(Config{
 		VaultURL:           vaultSrv.URL,
 		UseManagedIdentity: true,
-		IMDSEndpoint: imdsSrv.URL + "?api-version=2019-08-01&resource=" + url.QueryEscape(vaultResource),
+		IMDSEndpoint:       imdsSrv.URL + "?api-version=2019-08-01&resource=" + url.QueryEscape(vaultResource),
 		HTTPClient:         http.DefaultClient,
 	})
 	got, err := res.Resolve(context.Background(), secret.Ref{Kind: secret.KindAzure, Path: "key"})

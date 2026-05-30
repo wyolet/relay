@@ -35,12 +35,15 @@ type MapResolver struct {
 	RateLimits map[string]string
 }
 
-func (m MapResolver) ProviderID(name string) (string, bool)  { v, ok := m.Providers[name]; return v, ok }
-func (m MapResolver) HostID(name string) (string, bool)      { v, ok := m.Hosts[name]; return v, ok }
-func (m MapResolver) PolicyID(name string) (string, bool)    { v, ok := m.Policies[name]; return v, ok }
-func (m MapResolver) ModelID(name string) (string, bool)     { v, ok := m.Models[name]; return v, ok }
-func (m MapResolver) HostKeyID(name string) (string, bool)   { v, ok := m.HostKeys[name]; return v, ok }
-func (m MapResolver) RateLimitID(name string) (string, bool) { v, ok := m.RateLimits[name]; return v, ok }
+func (m MapResolver) ProviderID(name string) (string, bool) { v, ok := m.Providers[name]; return v, ok }
+func (m MapResolver) HostID(name string) (string, bool)     { v, ok := m.Hosts[name]; return v, ok }
+func (m MapResolver) PolicyID(name string) (string, bool)   { v, ok := m.Policies[name]; return v, ok }
+func (m MapResolver) ModelID(name string) (string, bool)    { v, ok := m.Models[name]; return v, ok }
+func (m MapResolver) HostKeyID(name string) (string, bool)  { v, ok := m.HostKeys[name]; return v, ok }
+func (m MapResolver) RateLimitID(name string) (string, bool) {
+	v, ok := m.RateLimits[name]
+	return v, ok
+}
 
 // MapReverseResolver is a convenience implementation of ReverseResolver backed
 // by plain maps.
@@ -53,9 +56,21 @@ type MapReverseResolver struct {
 	RateLimits map[string]string
 }
 
-func (m MapReverseResolver) ProviderName(id string) (string, bool)  { v, ok := m.Providers[id]; return v, ok }
-func (m MapReverseResolver) HostName(id string) (string, bool)      { v, ok := m.Hosts[id]; return v, ok }
-func (m MapReverseResolver) PolicyName(id string) (string, bool)    { v, ok := m.Policies[id]; return v, ok }
-func (m MapReverseResolver) ModelName(id string) (string, bool)     { v, ok := m.Models[id]; return v, ok }
-func (m MapReverseResolver) HostKeyName(id string) (string, bool)   { v, ok := m.HostKeys[id]; return v, ok }
-func (m MapReverseResolver) RateLimitName(id string) (string, bool) { v, ok := m.RateLimits[id]; return v, ok }
+func (m MapReverseResolver) ProviderName(id string) (string, bool) {
+	v, ok := m.Providers[id]
+	return v, ok
+}
+func (m MapReverseResolver) HostName(id string) (string, bool) { v, ok := m.Hosts[id]; return v, ok }
+func (m MapReverseResolver) PolicyName(id string) (string, bool) {
+	v, ok := m.Policies[id]
+	return v, ok
+}
+func (m MapReverseResolver) ModelName(id string) (string, bool) { v, ok := m.Models[id]; return v, ok }
+func (m MapReverseResolver) HostKeyName(id string) (string, bool) {
+	v, ok := m.HostKeys[id]
+	return v, ok
+}
+func (m MapReverseResolver) RateLimitName(id string) (string, bool) {
+	v, ok := m.RateLimits[id]
+	return v, ok
+}

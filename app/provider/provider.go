@@ -25,9 +25,9 @@ type Spec struct {
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
 
 	// Display metadata — operator-set, optional.
-	HomepageURL   string `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url"`
-	DocsURL       string `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url"`
-	StatusPageURL string `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url"`
+	HomepageURL   string     `json:"homepageURL,omitempty"   yaml:"homepageURL,omitempty"   validate:"omitempty,http_url"`
+	DocsURL       string     `json:"docsURL,omitempty"       yaml:"docsURL,omitempty"       validate:"omitempty,http_url"`
+	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty" validate:"omitempty,http_url"`
 	Icon          *meta.Icon `json:"icon,omitempty"          yaml:"icon,omitempty"`
 }
 
