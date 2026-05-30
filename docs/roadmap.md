@@ -1,500 +1,87 @@
-# Roadmap
+# Roadmap — index
 
-This doc tracks what comes next, in **priority order**.
+Wyolet Relay's roadmap is split by **product phase**. Each phase is a
+separate doc; this file is the map + the shared state.
+
+| Phase | Doc | Goal |
+|---|---|---|
+| **OSS** | [`roadmap-oss.md`](roadmap-oss.md) | Open-source the infra-grade core. The wedge: BYO-key, no-reseller, Go-fast router that out-performs OpenRouter/LiteLLM on the infrastructure axis. |
+| **Enterprise** | [`roadmap-enterprise.md`](roadmap-enterprise.md) | The hardened on-prem build — real authN/authz, audit, SSO, HA, air-gap, security-review readiness, license gating. Sold to a single org running its own deployment. |
+| **SaaS** | [`roadmap-saas.md`](roadmap-saas.md) | The hosted multi-tenant product — signup, billing, quotas, tenant isolation, compliance, the customer dashboard. |
+| **Beyond v1** | [`roadmap-v2.md`](roadmap-v2.md) | Tool Gateway (a separate product line) + the Icebox of deferred-indefinitely ideas. Off the v1 critical path. |
+
+The three v1 phases are **sequential as products** (OSS → Enterprise →
+SaaS) but their engineering tracks overlap: enterprise authN reuses the
+OSS auth seams; SaaS multi-tenancy reuses enterprise org scoping. Each
+doc lists its own dependencies on the others.
 
 Items list **what / why / rough size / where it lives**. When "where"
-would take more than a sentence, the item is its own design doc
-waiting to be written; the path under `docs/` is the placeholder.
+would take more than a sentence, the item is its own design doc waiting
+to be written; the path under `docs/` is the placeholder.
 
-## Recently shipped
+## How to pick
 
-- **`app/` architecture cutover** (PRs #110–#115) — done.
+Default move: take the top open item from **`roadmap-oss.md`** — the OSS
+core is the critical path and everything else builds on it. The order
+within each doc is intentional so each item unblocks the next without
+orphan work.
+
+When in doubt about a backlog/design-first item, write the design doc
+first (`docs/<topic>.md`) — surfacing the open questions usually flips
+"backlog" to "now" or "icebox." Icebox items (`roadmap-v2.md`) don't
+move without a specific external signal; don't casually promote them.
+
+---
+
+## Recently shipped (shared history)
+
+The foundation every track builds on. Track-specific shipped notes live
+in each phase doc.
+
+- **`app/` architecture cutover** (PRs #110–#115).
 - **v1alpha2 catalog** (PRs #156–#172, catalog PRs #4–#7) — embedded
   Snapshots, HostBinding.Snapshots filter, Aliases removed, owner
   defaults at translate.
 - **OpenAI Responses inbound + cross-shape (Phase 1/1.5)** (PRs #175–#183).
-- **Canonical Phase 2** (PRs #185–#189, 2026-05-22):
-  - `sdk/v1/` canonical protocol package (narrowed Responses;
-    stateless; `extensions` envelope; `provider_data` opaque field).
-  - OpenAI + Anthropic vendor adapters target canonical via
-    `v1.Translator`. Pairwise translator packages deleted.
-  - Generic `app/adapter/` framework (`Spec` + `Registry`). Per-vendor
-    `app/adapters/<vendor>/` packages deleted. Dispatch is shape-
-    agnostic. `Deps.CrossShapeHandlers` deleted.
-  - Verified via `make smoke-mock` + live Claude Code →
-    ollama-self/gpt-oss-120b tool-use round-trip.
+- **Canonical Phase 2** (PRs #185–#189, 2026-05-22) — `sdk/v1/` canonical
+  protocol package (narrowed Responses; stateless; `extensions` envelope;
+  `provider_data` opaque field); OpenAI + Anthropic vendor adapters target
+  canonical via `v1.Translator` (pairwise translators deleted); generic
+  `app/adapter/` framework (`Spec` + `Registry`); shape-agnostic dispatch
+  (`Deps.CrossShapeHandlers` deleted). Verified via `make smoke-mock` +
+  live Claude Code → ollama-self/gpt-oss-120b tool-use round-trip.
 - **Canonical client + `/v1/generate`** (PR #195) — transport-agnostic
-  client (`sdk/client`), canonical served at `/v1/generate`,
-  vendor-neutral `cache_config` anchors.
-- **Gemini native adapter** (PRs #201 base / #203 fixes, 2026-05-25) —
-  `sdk/adapters/gemini/` implements `v1.Translator` for the
-  `generateContent` shape. **Upstream-only** (registered as a Spec with
-  no `InboundPaths`; reachable via canonical/OpenAI/Anthropic inbound
-  through the cross-shape chain). Introduced `Spec.UpstreamPathFn` +
-  widened `pipeline.Adapter.Call(...,upstreamModel,stream)` for shapes
-  that encode model + stream in the URL path. Follow-ups: native inbound
-  Gemini route (needs URL-path `{model}` extraction), catalog host/model
-  wiring, fake-Gemini integration test.
-- **Adapter fidelity audits + fixes** (PRs #201/#202/#203, 2026-05-25) —
-  per-adapter "what maps / silently drops / hardcodes" audits in
-  `docs/adapters/`, plus a batch of real P0/P1 fixes the audits surfaced
-  (CC `NewFromCanonicalStream` nil-panic, Responses encrypted_content +
-  streaming refusal/`failed` + func-call streaming ids, Anthropic
-  streaming thinking-signature loss + `Parallel` dead code, Gemini safety
-  finishReasons + CallID collisions + structured output + stream args).
-  Documented gaps left open: Anthropic `max_tokens` default, Anthropic
-  `Output.Format`. Proposed contract: no silent drops (emit / log /
-  error) — see `docs/adapters/README.md`.
+  client (`sdk/client`), canonical served at `/v1/generate`, vendor-neutral
+  `cache_config` anchors.
+- **Gemini native adapter** (PRs #201/#203, 2026-05-25) — upstream-only
+  `generateContent` Translator; introduced `Spec.UpstreamPathFn` + widened
+  `pipeline.Adapter.Call(...,upstreamModel,stream)`.
+- **Adapter fidelity audits + fixes** (PRs #201/#202/#203) — per-adapter
+  audits in `docs/adapters/` + a batch of P0/P1 fixes; proposed the
+  no-silent-drops contract (now canonical rule 11).
 - **WebSocket transport** (PRs #196 server, #198 client) — `/v1/ws`
-  serves the canonical shape over one long-lived connection,
-  multiplexing requests by caller-chosen id. Auth + classification
-  happen once on the upgrade request (reuses the HTTP middleware chain);
-  each frame dispatches through the unchanged `handleShape`/`Dispatch`
-  via a synthetic `http.ResponseWriter` (`app/transport/ws`), so
-  pipeline + dispatch are untouched. The canonical client
-  (`sdk/client`) speaks it via `RelayWS(...)` — a pluggable
-  `transport` seam (HTTP default, WS new) under the translator;
-  sequential per connection (one in-flight request, conn reused across
-  turns). Library: `coder/websocket`. Follow-ups: anthropic/openai WS
-  endpoints, concurrent multiplexing from a single client, per-frame
-  request-id + OTel span, browser subprotocol auth, in-flight cap as
-  env config.
-- **Lifecycle hook system + usage emit** — `pkg/lifecycle` (per-request
-  `Context`, `PreFlightMiddleware`, `PostFlightHook`, `Registry`) is the
-  observability spine, wired into both the pipeline and proxy post-flight
-  goroutines. `app/usagelog` is the first live observer (PostFlight hook
-  → bounded drop-on-full `Emitter` → JSONL `Sink`). The pre-cutover
-  generation it replaced — `internal/usage`, `pkg/eventlog`,
-  `Request.OnSuccess`, the no-op `reqid` OTel span, and the
-  `X-Relay-Metadata` header — was deleted (PR purge-precutover-observability).
-- **Usage read API** (PRs #221/#224/#223, 2026-05-26) — control-plane
-  `/usage/{events,summary,timeseries}` over the `usage.Reader` seam (file/
-  CH/PG/valkey). Timeseries (epoch-aligned buckets + optional group_by),
-  absolute `from`/`to` + multi-value + finish_reason/error_kind/request_id
-  filters, and keyset cursor pagination on `/usage/events`. Session/admin
-  auth; cost still derived in the sink (events stay pricing-free).
-- **Payload logging** (PR #225, config→settings #227, 2026-05-26) — second
-  lifecycle observer: full request/response **body** capture for opted-in
-  requests (per-policy/relaykey `PayloadLoggingEnabled`), off the hot path.
-  `pkg/payload` contract + `pkg/payload/{file,s3}` drivers (s3 behind a
-  `-tags minimal` build seam — minio-go excluded from minimal builds);
-  `app/payloadlog` observer. Runtime config lives in the `payload-logging`
-  settings section, hot-swapped by a reconcile-loop `Controller` (toggle /
-  backend / bucket / creds, no restart). **Unified log/payload model + read
-  side shipped** — one log event per request (`usage.Event`); `/usage` is the
-  metrics projection, **`GET /logs`** is the full record (via the log/usage
-  reader) and **`GET /logs/{request_id}`** attaches the captured bodies
-  (joined by `request_id`, null if not opted in). Payload storage is now
-  **body-only** (no duplicated metadata — that all lives on the log event);
-  `payload.Reader` is `Get`-only, the Logs list reads the log store. New
-  **`clickhouse` body backend** (Langfuse model: text bodies as ZSTD `String`
-  columns; near-identical multi-turn resends block-compress to ~O(N)); reuses
-  `RELAY_CH_DSN` (separate body-only `payload_logs` table, validated on live
-  CH), WAL-segment durability with byte-based rotation, bloom-index `Get`,
-  30-day TTL. Two lifecycle observers on separate emitters (log constant,
-  payload opt-in); runtime only sets `lc.PayloadLog`. **Log backend is now
-  settings-driven + hot-swappable too** — the `usage-logging` section selects
-  file|clickhouse|postgres|valkey, hot-swapped by a `usagelog.Controller`
-  (reconciles the {sink, reader} pair, reroute = clean break); DSNs stay
-  bootstrap env, legacy `RELAY_EVENTLOG_BACKEND` is an interim fallback until
-  the YAML→DB settings seed lands. Full design: `docs/payload-logging.md`.
-  **Remaining**: YAML→DB settings seed (minimize env — see "Next"); media
-  spill to object storage + content-addressed dedup ("Media offload").
-- **`pkg/secret` unified resolver** (PR #226, 2026-05-26) — **the seam half
-  of Now #1, done.** `Ref{Kind,Env,ID}` + `Resolver`/`Registry`/`Writer`;
-  built-in `env` + `stored` (AES-GCM, `secret_values` table, transactional
-  rotation). HostKey resolves through it; the relay's own secrets (payload
-  S3 creds) do too. RelayKey deliberately excluded (hash-only). Integration-
-  validated incl. stored-key rotation against real PG.
-
-## Now — priority queue
-
-Three active items, in this order. Order is intentional: batch is the
-heaviest build and the headline differentiator; webhooks unlock async UX
-once batch lands; new adapters broaden the upstream surface. (The former
-#1, pluggable secret backends, is **DONE** — see below.)
-
-### 1. Pluggable secret backends — external resolvers (DONE)
-
-**Shipped** (foundation PRs #242/#243; backends #244–#248): the
-`Ref.Path` locator + five fetch-only external resolvers as
-`pkg/secret/<kind>` subpackages —
-- `pkg/secret/aws` — AWS Secrets Manager (stdlib SigV4, no SDK)
-- `pkg/secret/azure` — Azure Key Vault (stdlib client-creds, no SDK)
-- `pkg/secret/gcp` — GCP Secret Manager (stdlib SA-JWT, no SDK)
-- `pkg/secret/bitwarden` — Bitwarden/Vaultwarden (pure-Go client-side
-  crypto; no `bw` CLI, no sidecar, no CGO)
-- `pkg/secret/onepassword` — 1Password (official SDK + service-account
-  token; in-process, no sidecar)
-
-All are fetch-only and in-memory: they resolve a `Ref` to plaintext at
-load time and never persist (no PG, no `Store`, no master key). Each
-registers a `Kind` in `app/secret.Wire`, gated on its env config. Only
-1Password pulls a heavy dep (its SDK), isolated to its subpackage by Go
-module pruning.
-
-**On demand (not built):** Vault, AWS KMS, Kubernetes Secrets — same
-additive pattern (a new `Kind` + a `pkg/secret/<kind>` resolver), add
-when a deployment needs one.
-
-### 2. Batch processing (relay-native)
-
-What: relay primitive for fire-and-forget bulk submissions, **working
-for any upstream regardless of whether the provider exposes a batch
-API**. Customer posts a batch, gets an ID, polls or receives a webhook
-on completion, fetches results from S3 or relay storage. Worker pool
-drains jobs through the existing `app/pipeline` (which already handles
-retries / key selection / breakers). When the chosen Host's adapter
-exposes a native batch API, pass through (50% discount); otherwise
-simulate via concurrent pipeline calls.
-
-Why: documented as the "third pillar" / infra-grade differentiator.
-Relay-native batch means a customer can flip "run as batch" on any
-model and get cost/throughput benefits even on providers that don't
-ship a batch API.
-
-Schema: `batches(id, policy_id, status, created_at, completed_at,
-result_uri, error)` + `batch_items(batch_id, idx, input, output,
-status, error)`. Customer API: `POST /v1/batches`,
-`GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`.
-
-Size: ~2 weeks. Schema + API + worker + provider-batch dispatch +
-result storage.
-
-Where: `app/batch/` (new), `app/httpapi/inference/batches.go`, new
-migrations, possibly `cmd/relay-batch-worker/` if the worker becomes
-a separate binary.
-
-Dependencies: lands cleaner once (3) exists so batch completion can
-emit a webhook instead of forcing customer polling.
-
-### 3. Webhooks per request-authoring unit
-
-What: configurable outbound webhooks fired on terminal request /
-batch events (completion, failure, rate-limit, breaker trip). Open
-design question: **what level does the webhook attach to** — per
-RelayKey, per Policy, per User, or all three with precedence rules.
-Most likely answer: per RelayKey (finest grain that always exists),
-falling back to per Policy (operator default), with per-User reserved
-for SaaS-mode tenant defaults once B2 lands.
-
-Schema: `webhooks(id, owner_kind, owner_id, url, events, secret_id,
-status, created_at)` + delivery log. HMAC signing via stored secret.
-Retry policy + DLQ.
-
-Why: every async flow (batch first, long-running stream second) needs
-push-style notification or customers eat polling cost. Also a
-foundational SaaS feature.
-
-Size: ~1 week. Includes a short design doc to pin the owner-kind
-question before code.
-
-Where: `app/webhook/` (new), `app/httpapi/control/webhooks.go`, new
-migration. Delivery worker likely reuses the batch worker pool.
-
-Dependencies: write the design doc first (`docs/webhooks.md`) to
-resolve the owner-kind question.
-
-### 4. Expanded adapter support
-
-What: add new wire-shape adapters beyond `openai` and `anthropic`.
-**Gemini native is done** (upstream-only, see Recently shipped). Remaining
-candidates (rough order of demand): native inbound Gemini (URL-path model
-extraction), AWS Bedrock Converse API, Cohere, Mistral native (currently
-OpenAI-compatible so usable via `openai` adapter, but native unlocks
-features).
-
-Why: every new adapter widens the addressable upstream set. The adapter
-seam is already in place — adding one is a contained slice.
-
-Size: ~3-5 days per adapter (shape parser, Call, ExtractTokens,
-streaming, tests).
-
-Where: `sdk/adapters/<vendor>/` implementing `v1.Translator` + a `Spec`
-literal in `cmd/relay/main.go` (see `sdk/adapters/gemini/` as the
-reference for a shape with a URL-path model via `Spec.UpstreamPathFn`).
-
----
-
-## Next — known follow-ups, not yet in flight
-
-Not blocked, not prioritised above. Pick when one of the priority
-queue items lands or when you want a parallel slice.
-
-### SaaS path (multi-tenancy)
-
-The order is fixed: B1 → B2 → B3 → B4. Each is a separate PR.
-
-- **B1 — Users in Postgres + signup**. Replace YAML-backed
-  `internal/identity`. Add `users` table, bcrypt passwords, signup
-  endpoint, CLI bootstrap for the first admin. ~3-4 days. Where:
-  `app/user/` (new package), migration, `app/httpapi/control/users.go`.
-- **B2 — Org → Workspace → Project hierarchy**. Every catalog row
-  gains an Org owner; session payload grows an `active_org_id`;
-  RelayKey scopes to a Project. ~2 weeks. Where: `app/org`,
-  `app/workspace`, `app/project`; backfill migration; snapshot
-  restructuring.
-- **B3 — Real authz behind `Authorizer`**. Casbin first; OpenFGA
-  later only if/when fine-grained sharing matters. The handler-side
-  seam (every CRUD/mutation routes through `d.Authz.Authorize`) is
-  already in place. ~3 days. Where: `app/authz/casbin.go`, policy
-  YAML/CSV in `config/authz/`.
-- **B4 — JWT for programmatic control-API access**. A third caller
-  type alongside cookies + relay keys: signed JWT for CLI/CI/customer
-  scripts. Mint endpoint, revocation list, middleware. ~2 days.
-  Where: `app/jwt/`, `app/httpapi/control/tokens.go`, new migration.
-
-### Operator surface
-
-- **UI re-mount**. Stage 5 deleted the legacy embedded console. Decide:
-  re-mount the existing assets (if they're fit) or build a fresh UI
-  against the typed OpenAPI spec. Size: ~1 day (re-mount) to ~2-4
-  weeks (rewrite). Where: `app/httpapi/control/ui.go`, possibly a
-  separate UI repo if rewriting.
-- **Keypool admin observability**. `GET /host-keys/by-id/{id}/health`
-  returning current breaker state (circuit, failure counter, cooldown
-  deadline, last failure kind, last success time). ~half day. Where:
-  `app/httpapi/control/host_keys.go` extension; `app/keypool` exposes
-  a snapshot accessor.
-- **Slug edit + referencing-rewriter**. Operators can't rename catalog
-  rows today. Adding the UPDATE path requires walking every spec
-  field that carries a slug ref. ~3 days. Where:
-  `app/manifest/translate.go`, `app/httpapi/control/crud.go`.
-- **CI/CD + deploy stack**. GitHub Actions workflow, Harbor push,
-  Argo apply on merge to main. The Obsidian dev-workflow doc has the
-  shape. ~1 day. Where: `.github/workflows/`, `Makefile`, `deploy/`.
-
-### Cutover tech debt
-
-- **Settings hot-swap follow-ups** (both shipped). (a) ~~The
-  payload-logging `Controller` reconciles via a 2s poll~~ — **done.**
-  `app/catalog`'s `settingsHolder` now has a change-callback seam
-  (`Catalog.OnSettingsChange(section, fn)`); `applyUpsert`/`applyDelete`
-  and the boot `reload` fire registered callbacks. Both consumers are
-  event-driven: `settingswatch.Watcher` applies inline on the callback
-  (cheap setter), and `payloadlog.Controller` has the callback signal a
-  kick channel so its sink rebuild stays off the catalog's serial NOTIFY
-  goroutine. No poll, no fixed-interval lag. Wiring registers subscribers
-  before `Hydrate` so the boot `reload`'s one-shot notification lands.
-  (b) ~~Apply the same settings-section treatment to other env
-  knobs~~ — **partially done.** `RELAY_RICH_PARSING` moved to the
-  `parsing` settings section, hot-swapped via the new generic
-  `app/settingswatch.Watcher[T]` (a value-applier counterpart to
-  `payloadlog.Controller`, which owns sink lifecycle); the openai toggle
-  is now an `atomic.Bool`. `RELAY_ADMIN_RELOAD_RPM` was **dropped** — it
-  was dead (no rate limiter ever existed on `/reload`; the runbook claim
-  was fiction, now corrected). `RELAY_CH_RETENTION_DAYS` **stays on env**:
-  it feeds the ClickHouse MergeTree TTL inside the `CREATE TABLE` DDL, so
-  runtime hot-swap would require issuing `ALTER TABLE ... MODIFY TTL` at
-  reconcile — deferred until that's worth the complexity.
-- **A2 — Observability observers**. The lifecycle spine + usage emit
-  shipped; the **ClickHouse usage sink shipped** too (`pkg/usage/clickhouse`,
-  PRs #218/#220 — also Postgres + valkey backends). Remaining observers:
-  (a) **OTel tracing** — a span on the lifecycle `Context`,
-  started at entry, ended in post-flight with routing attributes
-  (replaces the deleted no-op `reqid` span); (c) **Prometheus** — wire
-  `pkg/metrics` request counters/histograms +
-  `relay_pipeline_post_flight_duration_seconds` onto the post-flight
-  hook. Each is additive — register at boot, no pipeline change. ~1-2
-  days each.
-- **A2b — Per-request capture gaps**. The capture *fields* on the
-  lifecycle event, researched against OpenRouter + LiteLLM. **Done:**
-  (1) timing breakdown (`lifecycle.Timing` — anchor + upstream
-  handoff/first-byte/done marks, µs offsets all anchored to start, never
-  chained) giving TTFT + relay-overhead split, plus a `streamed` flag;
-  (2) **failure events** — `pipeline.Run`/`proxy.Run` now fire a
-  post-flight observer event on every error return via a defer, with a
-  classified `ErrorKind` (`no_keys`, `keys_exhausted`, `upstream_error`
-  +surfaced status, `rate_limited`, `client_canceled`, `timeout`, …) and
-  `ErrorMessage`, so failed requests are no longer invisible to usage
-  tracking; (3) **unified Context at entry + routing-failure capture** —
-  the lifecycle `Context` is now minted once at the inference entry
-  (`Dispatch`), stashed on ctx (`lifecycle.ContextWith`/`FromContext`),
-  and every downstream phase (routing, runner, proxy, observers) enriches
-  that one object. Routing rejections (`model_not_found`,
-  `no_host_binding`, disabled policy, …) and proxy gating
-  (`proxy_disabled`, `unknown_upstream_host`, …) now fire a failure event
-  via `Deps.fireUsageFailure` — every failure stage is covered; (4)
-  **enrichment fields** — `finish_reason` (via new `v1.ExtractSummary`,
-  tokens+finish in one decode), `requested_model` (caller's wire model
-  string, set at entry), and `attempts` (pipeline failover count). **Done.**
-  **Also done since:** the **echo-usage-in-response** feature shipped
-  (`X-WR-Usage: full` → inline `relay_usage` block, PRs #216/#217), and
-  **request/response content capture** shipped as the payload-logging
-  observer (PR #225/#227 — see Recently shipped; the "S3 payload path" is
-  now real). **Remaining:** (b) the pure server-misconfig 500 guards (no
-  spec/adapter/translator registered) are not fired — they signal a
-  boot-config bug, not request telemetry; (c) per-shape parse failures
-  *before* `Dispatch` (malformed body that can't yield a model name) are at
-  the route edge, before the Context is minted. **Out of scope by design**:
-  cost (derive in the sink from tokens × pricing, keep the event
-  pricing-free), SaaS attribution (session/app/end-user — B-track).
-- **A3 — Perf bench harness**. A `bench/pipeline/` harness against
-  `app/pipeline.Pipeline.Run` **already exists** (and `bench/fakeanthropic`).
-  Remaining: wire it into CI as a regression gate and document the
-  baseline numbers. ~half day. (The "flying blind" framing was stale.)
-- **A4 — Security leakage test** — DONE, and it found a real leak: normal
-  -mode dispatch forwarded raw inbound headers to the upstream, so the
-  relay key (`Authorization`/`X-Api-Key`) and `X-WR-*` control headers
-  leaked to providers whose auth header isn't `Authorization`
-  (Anthropic/Gemini). Fixed by stripping the denylist on a cloned header
-  set in dispatch (mirrors the proxy path) + adding `X-Api-Key` to
-  `StripDenylist`; regression test in `header_leakage_test.go`.
-- **No-silent-drops adapter contract**. Codified as canonical-protocol
-  **rule 11** (+ mirrored in CLAUDE.md): emit / carry in
-  `provider_data`/`extensions` / annotate with a greppable
-  `// canonical:` comment / surface safety-relevant signals — never
-  accept-and-discard. **Remaining:** automated runtime `adapter_drop`
-  warning emission, which needs a drop-sink threaded through the
-  translator call signature (translators are pure, no logger today).
-  ~1 day when picked up.
-
-### Media offload — provider-side file references
-
-- **Provider file-API media offload**. For large media (images/audio/
-  video/docs), upload once to the chosen host's **own** file API and
-  reference by `file_id` on resends — turning O(N) re-uploads of the same
-  blob across a multi-turn session into O(1). Media-only (text stays
-  inline), opt-in per host capability, never a silent strip. Rejected the
-  relay-hosted-URL variant (privacy / availability-inversion / no uniform
-  provider mechanism). Cache is `(credential-scope, content-hash) →
-  file_id` in kv (TTL ≤ provider retention); a stale/expired/cross-scope
-  ref 404s pre-first-byte and **rides the existing KeyAgent self-heal loop**
-  (re-upload → rewrite → retry). Pre-flight pipeline stage gated by a `Spec`
-  capability — translators stay pure (rule 6). Shares the content-hash
-  primitive with the storage-side content-addressed blob store. Full design:
-  `docs/media-offload.md`.
-
-### Real-time log streaming (live tail)
-
-- **Live tail of the log event stream**. The CH query store is batched
-  (~10s flush) — history, not a live feed. Live tail is an *additional
-  consumer* of the lifecycle event stream, not a schema change. Three
-  tiers by cost: (a) **live tail of completed events** — cheap, a
-  real-time fanout observer (Redis stream / SSE) next to the batch sink,
-  re-broadcast by the control plane; (b) **in-flight visibility** (watch a
-  request mid-stream) — needs a separate in-flight/span registry since the
-  log event only finalizes at post-flight; (c) CH-for-real-time is
-  explicitly out of scope. WS already produces a per-request log event per
-  frame; the only capture wrinkle is accumulating response frames per
-  correlation-id. Full notes: `docs/payload-logging.md` "Real-time log
-  streaming". Tie-in: pairs with the unified usage/logs model (one event
-  stream, `/usage` = metrics projection, `/logs` = full + optional body).
-
-### Misc product features
-
-- **MFA / password reset / SSO**. When SaaS launches with self-serve.
-  Either DIY (TOTP, email link) or adopt SuperTokens / Kratos.
-- **Per-org cluster isolation**. When a single tenant's traffic
-  starts dominating, give them a dedicated pod group. Pure deployment
-  story; no code changes.
-
----
-
-## Backlog — needs design
-
-Worth doing but not until the shape is settled. Drafting a design
-doc in `docs/` is the first move for each.
-
-### Mode-tier pricing (batch / priority / flex)
-
-The shape: multiple Pricing rows per Model, distinguished by a
-`metadata.labels.tier` (or a new `Pricing.Spec.Tier` field). Request-
-side picker reads a header (`X-Relay-Tier: batch`) or infers from the
-caller context (batch flow → batch tier automatically). Cost
-computation reads the matched tier's rates.
-
-Open design questions:
-- Field on Pricing vs label on metadata vs separate join?
-- How does a Policy declare which tiers it allows?
-- What's the default-tier fallback rule?
-- Does pricing-by-tier survive a re-import from LiteLLM?
-
-Driven by: batch subsystem (Now #2) needs this to honour the 50%
-discount of provider batch APIs. Could ship inline with batch or
-right after — flag during design.
-
-### Non-token pricing meters
-
-Today's meters: 5 token sub-meters. Real LiteLLM coverage:
-audio (per-second), images (per-image), video, web_search,
-code_interpreter, file_search, character/pixel/query. Each is a new
-`Meter` constant + a `Rate.Unit` value + a Cost() path that knows how
-to count the dimension.
-
-Open design questions:
-- Where does the count come from when the upstream doesn't return it
-  in the response? (Adapter pre-counts? Request-time inference?)
-- How does a Model declare which meters apply? Today it's implicit
-  per Pricing row.
-- Does this need a new `Modality` → `Meter` mapping?
-
-Driven by: when we actually proxy non-text shapes. Today every model
-in seeded config is text-only.
-
----
-
-## V2 — beyond the wedge
-
-Bigger than a feature; its own product line. Off the v1 critical path —
-finish the infra story (Now #1–4) before this competes for priority.
-
-### Tool Gateway (capability parity layer)
-
-A separate service that canonicalizes *tool* I/O the way Relay
-canonicalizes *LLM wire* I/O — one tool contract, many backends (Brave /
-Serper / SearXNG for search, a sandbox for code-exec, a guarded fetcher
-for `web_fetch`), hosted or self-hosted, **in its own pods, never on the
-hot path**. Goal: give Ollama and other non-frontier models the
-server-side tools only frontier closed models ship today. Out-positions
-OpenRouter on an axis they don't compete on. Full proposal — subsystem
-boundary, canonical surface, SSRF threat model, open questions — in
-`docs/v2-tool-gateway.md`.
-
-## Icebox — deferred indefinitely
-
-These were considered, found not to clear the bar, and parked. Touch
-only if a concrete external signal flips the call.
-
-### Cross-shape translation
-
-`/v1/chat/completions` for a model whose binding declares
-`adapter: anthropic`, with relay translating shapes via an OpenAI
-canonical hub. Currently returns 400. Per CLAUDE.md: "same-format
-passthrough is the 95% case." Unblock signal: real customer traffic
-where wrong-shape requests are >5% of a meaningful tenant's load.
-
-### Quota-aware key selection
-
-CLAUDE.md aspirationally mentioned "weighted random by remaining
-quota." Concretely: a per-key budget tracker, fed by usage observations,
-that biases `Selector.Pick` toward keys with headroom. Existing algos
-(prioritized / round-robin / LRU) already cover "drain key #1 first
-then fall over." Adding quota-awareness adds complexity (observations
-feedback loop) without a clear demand — operators reach for it when
-they explicitly hit "cheap key first" and the prioritized algo isn't
-expressive enough. Unblock signal: real operator request with a
-specific scenario we can't model.
-
-### Pluggable selection strategies
-
-Plugin-style registry for custom selection algos (cost-tier-aware,
-sticky-per-user, latency-aware). Today `KeySelection` is a closed
-enum. The hardcoded set covers known use cases; adding plugin
-infrastructure before there's a concrete second-party algo is over-
-engineering. Unblock signal: a customer who can articulate "I want
-this specific algo and we will fork to add it."
-
----
-
-## How to pick
-
-Default move: take the top item from **Now**. The order is chosen so
-each unblocks the next without orphan work.
-
-When in doubt about a Backlog item, write the design doc first
-(`docs/<topic>.md`) — surfacing the open questions usually flips
-"backlog" to "now" or "icebox."
-
-Icebox items don't move without a specific external signal; don't
-casually promote them.
+  canonical shape over one long-lived connection, multiplexed by id.
+- **Lifecycle hook system + usage emit** — `pkg/lifecycle` observability
+  spine wired into pipeline + proxy post-flight; `app/usagelog` first live
+  observer (PostFlight → bounded drop-on-full Emitter → JSONL Sink).
+  Pre-cutover generation (`internal/usage`, `pkg/eventlog`,
+  `Request.OnSuccess`, no-op `reqid` span, `X-Relay-Metadata`) deleted.
+- **Usage read API** (PRs #221/#224/#223, 2026-05-26) —
+  `/usage/{events,summary,timeseries}` over the `usage.Reader` seam.
+- **ClickHouse usage sink** (PRs #218/#220) — also Postgres + valkey backends.
+- **Echo-usage-in-response** (PRs #216/#217) — `X-WR-Usage: full` → inline
+  `relay_usage` block (canonical-inbound only).
+- **Payload logging** (PR #225, settings #227, 2026-05-26) — second
+  lifecycle observer: full request/response body capture, per-policy/relaykey
+  opt-in, off the hot path. Unified log/payload model: `GET /logs` +
+  `GET /logs/{request_id}`; file/s3/clickhouse body backends; settings-driven
+  hot-swap for both payload and log backends. Full design:
+  `docs/payload-logging.md`.
+- **`pkg/secret` unified resolver** (PR #226) + **five external fetch-only
+  backends** (PRs #242–#248: aws/azure/gcp/bitwarden/onepassword; 1Password
+  behind `cgo` tag, PR #251).
+- **KeyAgent secret failover/heal** (PR #252) — out-of-band re-resolve/heal
+  on upstream auth failure; value-hash circuit breaker.
+- **Boot YAML→DB settings seed** (PR #254) — seed-if-absent.
+- **Per-request timing + reasoning span** — `lifecycle.Timing` (µs offsets
+  anchored to start) + reasoning span for canonical-inbound streams (#232).
