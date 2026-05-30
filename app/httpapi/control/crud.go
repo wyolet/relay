@@ -781,7 +781,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
-		nil,
+		&rateLimitFilter,
 	)
 
 	registerKind[policy.Policy](
