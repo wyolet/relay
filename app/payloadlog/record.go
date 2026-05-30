@@ -16,7 +16,16 @@ type (
 	Record = payload.Record
 	Sink   = payload.Sink
 	Closer = payload.Closer
+
+	// Reader / Query are the read-side contract, re-exported so the control
+	// plane imports just payloadlog.
+	Reader = payload.Reader
+	Query  = payload.Query
 )
+
+// ErrNotFound is re-exported so control handlers can map an absent capture
+// to 404 without importing pkg/payload directly.
+var ErrNotFound = payload.ErrNotFound
 
 // clip truncates b to max bytes, reporting whether it was cut. max <= 0
 // means no cap. The returned slice aliases b (no copy) — callers must not
