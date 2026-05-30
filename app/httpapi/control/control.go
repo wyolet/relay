@@ -106,6 +106,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerCatalogGraph(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
+	registerLogs(api, d, protect)
 	registerPayloads(api, d, protect)
 
 	return api
