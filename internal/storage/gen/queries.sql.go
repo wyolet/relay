@@ -129,40 +129,36 @@ func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 }
 
 const getHost = `-- name: GetHost :one
-SELECT id, name, display_name, metadata, spec FROM hosts WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts WHERE id = $1
 `
 
-type GetHostRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) GetHost(ctx context.Context, id string) (GetHostRow, error) {
+func (q *Queries) GetHost(ctx context.Context, id string) (Host, error) {
 	row := q.db.QueryRow(ctx, getHost, id)
-	var i GetHostRow
+	var i Host
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.DisplayName,
 		&i.Metadata,
 		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getModel = `-- name: GetModel :one
-SELECT id, name, display_name, metadata, spec FROM models WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models WHERE id = $1
 `
 
 type GetModelRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) {
@@ -174,22 +170,26 @@ func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) 
 		&i.DisplayName,
 		&i.Metadata,
 		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getPolicy = `-- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies WHERE id = $1
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies WHERE id = $1
 `
 
 type GetPolicyRow struct {
-	ID          string      `db:"id" json:"id"`
-	Name        string      `db:"name" json:"name"`
-	DisplayName string      `db:"display_name" json:"display_name"`
-	Metadata    []byte      `db:"metadata" json:"metadata"`
-	Spec        []byte      `db:"spec" json:"spec"`
-	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
-	Models      []byte      `db:"models" json:"models"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte             `db:"models" json:"models"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error) {
@@ -203,6 +203,8 @@ func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error
 		&i.Spec,
 		&i.RateLimitID,
 		&i.Models,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -256,21 +258,12 @@ func (q *Queries) GetPolicyModels(ctx context.Context, policyID string) ([]Polic
 }
 
 const getPricing = `-- name: GetPricing :one
-SELECT id, name, display_name, host_id, metadata, spec FROM pricings WHERE id = $1
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings WHERE id = $1
 `
 
-type GetPricingRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	HostID      string `db:"host_id" json:"host_id"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-}
-
-func (q *Queries) GetPricing(ctx context.Context, id string) (GetPricingRow, error) {
+func (q *Queries) GetPricing(ctx context.Context, id string) (Pricing, error) {
 	row := q.db.QueryRow(ctx, getPricing, id)
-	var i GetPricingRow
+	var i Pricing
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
@@ -278,6 +271,8 @@ func (q *Queries) GetPricing(ctx context.Context, id string) (GetPricingRow, err
 		&i.HostID,
 		&i.Metadata,
 		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -307,15 +302,17 @@ func (q *Queries) GetPricingModels(ctx context.Context, pricingID string) ([]Pri
 }
 
 const getProvider = `-- name: GetProvider :one
-SELECT id, name, display_name, metadata, spec FROM providers WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers WHERE id = $1
 `
 
 type GetProviderRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetProvider(ctx context.Context, id string) (GetProviderRow, error) {
@@ -327,20 +324,24 @@ func (q *Queries) GetProvider(ctx context.Context, id string) (GetProviderRow, e
 		&i.DisplayName,
 		&i.Metadata,
 		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getRateLimit = `-- name: GetRateLimit :one
-SELECT id, name, display_name, metadata, spec FROM rate_limits WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits WHERE id = $1
 `
 
 type GetRateLimitRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow, error) {
@@ -352,21 +353,25 @@ func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow,
 		&i.DisplayName,
 		&i.Metadata,
 		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getRelayKey = `-- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys WHERE id = $1
+SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1
 `
 
 type GetRelayKeyRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	KeyHash     string `db:"key_hash" json:"key_hash"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	KeyHash     string             `db:"key_hash" json:"key_hash"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, error) {
@@ -379,25 +384,29 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 		&i.KeyHash,
 		&i.Metadata,
 		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getSecret = `-- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE id = $1
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1
 `
 
 type GetSecretRow struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ValueKind       string      `db:"value_kind" json:"value_kind"`
-	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
-	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
-	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
-	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	ValueKind       string             `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text        `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte             `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte             `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error) {
@@ -414,6 +423,8 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 		&i.ValueCiphertext,
 		&i.ValueNonce,
 		&i.ValueKeyVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -692,33 +703,27 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 
 const listHosts = `-- name: ListHosts :many
 
-SELECT id, name, display_name, metadata, spec FROM hosts ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts ORDER BY name
 `
 
-type ListHostsRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-}
-
 // ── app/ arch (migration 0009) ───────────────────────────────────────────────
-func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
+func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
 	rows, err := q.db.Query(ctx, listHosts)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListHostsRow
+	var items []Host
 	for rows.Next() {
-		var i ListHostsRow
+		var i Host
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -731,15 +736,17 @@ func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
 }
 
 const listModels = `-- name: ListModels :many
-SELECT id, name, display_name, metadata, spec FROM models ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models ORDER BY name
 `
 
 type ListModelsRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
@@ -757,6 +764,8 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -769,15 +778,17 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 }
 
 const listPolicies = `-- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM policies ORDER BY name
 `
 
 type ListPoliciesRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
@@ -795,6 +806,8 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -807,17 +820,19 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 }
 
 const listPoliciesWithRateLimit = `-- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies ORDER BY name
 `
 
 type ListPoliciesWithRateLimitRow struct {
-	ID          string      `db:"id" json:"id"`
-	Name        string      `db:"name" json:"name"`
-	DisplayName string      `db:"display_name" json:"display_name"`
-	Metadata    []byte      `db:"metadata" json:"metadata"`
-	Spec        []byte      `db:"spec" json:"spec"`
-	RateLimitID pgtype.Text `db:"rate_limit_id" json:"rate_limit_id"`
-	Models      []byte      `db:"models" json:"models"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+	Models      []byte             `db:"models" json:"models"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPoliciesWithRateLimitRow, error) {
@@ -837,6 +852,8 @@ func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPolicies
 			&i.Spec,
 			&i.RateLimitID,
 			&i.Models,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -922,28 +939,19 @@ func (q *Queries) ListPricingModels(ctx context.Context) ([]PricingModel, error)
 
 const listPricings = `-- name: ListPricings :many
 
-SELECT id, name, display_name, host_id, metadata, spec FROM pricings ORDER BY name
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings ORDER BY name
 `
 
-type ListPricingsRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	HostID      string `db:"host_id" json:"host_id"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-}
-
 // ── pricing (migration 0010) ─────────────────────────────────────────────────
-func (q *Queries) ListPricings(ctx context.Context) ([]ListPricingsRow, error) {
+func (q *Queries) ListPricings(ctx context.Context) ([]Pricing, error) {
 	rows, err := q.db.Query(ctx, listPricings)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListPricingsRow
+	var items []Pricing
 	for rows.Next() {
-		var i ListPricingsRow
+		var i Pricing
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
@@ -951,6 +959,8 @@ func (q *Queries) ListPricings(ctx context.Context) ([]ListPricingsRow, error) {
 			&i.HostID,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -963,15 +973,17 @@ func (q *Queries) ListPricings(ctx context.Context) ([]ListPricingsRow, error) {
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, name, display_name, metadata, spec FROM providers ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers ORDER BY name
 `
 
 type ListProvidersRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error) {
@@ -989,6 +1001,8 @@ func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error)
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1001,15 +1015,17 @@ func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error)
 }
 
 const listRateLimits = `-- name: ListRateLimits :many
-SELECT id, name, display_name, metadata, spec FROM rate_limits ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits ORDER BY name
 `
 
 type ListRateLimitsRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, error) {
@@ -1027,6 +1043,8 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1039,16 +1057,18 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 }
 
 const listRelayKeys = `-- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, metadata, spec FROM relay_keys ORDER BY name
+SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name
 `
 
 type ListRelayKeysRow struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	KeyHash     string `db:"key_hash" json:"key_hash"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	KeyHash     string             `db:"key_hash" json:"key_hash"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
@@ -1067,6 +1087,8 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 			&i.KeyHash,
 			&i.Metadata,
 			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1115,20 +1137,22 @@ func (q *Queries) ListSecretValuesForRotation(ctx context.Context) ([]ListSecret
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version FROM secrets ORDER BY name
+SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
-	ID              string      `db:"id" json:"id"`
-	Name            string      `db:"name" json:"name"`
-	DisplayName     string      `db:"display_name" json:"display_name"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	ValueKind       string      `db:"value_kind" json:"value_kind"`
-	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
-	ValueCiphertext []byte      `db:"value_ciphertext" json:"value_ciphertext"`
-	ValueNonce      []byte      `db:"value_nonce" json:"value_nonce"`
-	ValueKeyVersion pgtype.Int4 `db:"value_key_version" json:"value_key_version"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	ValueKind       string             `db:"value_kind" json:"value_kind"`
+	ValueFromEnv    pgtype.Text        `db:"value_from_env" json:"value_from_env"`
+	ValueCiphertext []byte             `db:"value_ciphertext" json:"value_ciphertext"`
+	ValueNonce      []byte             `db:"value_nonce" json:"value_nonce"`
+	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
@@ -1151,6 +1175,8 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 			&i.ValueCiphertext,
 			&i.ValueNonce,
 			&i.ValueKeyVersion,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

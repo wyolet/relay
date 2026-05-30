@@ -82,6 +82,8 @@ func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
 	if err != nil {
 		return nil, err
 	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -177,6 +179,8 @@ func fromRow(r gen.ListPoliciesWithRateLimitRow) (*Policy, error) {
 	if err != nil {
 		return nil, err
 	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
