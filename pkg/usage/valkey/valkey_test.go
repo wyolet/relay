@@ -6,8 +6,9 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/usage"
 	"github.com/wyolet/relay/pkg/usage/valkey"
-	"github.com/wyolet/relay/sdk/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 func newSink(t *testing.T) *valkey.Sink {
@@ -83,10 +84,10 @@ func TestTimeSeries(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Hour)
 
 	evs := []usage.Event{
-		{RequestID: "a", Timestamp: base, Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 10}},
-		{RequestID: "b", Timestamp: base.Add(5 * time.Minute), Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 20}},
+		{RequestID: "a", Timestamp: base, Status: 200, ModelID: "m1", Tokens: sdkusage.Tokens{"input": 10}},
+		{RequestID: "b", Timestamp: base.Add(5 * time.Minute), Status: 200, ModelID: "m1", Tokens: sdkusage.Tokens{"input": 20}},
 		{RequestID: "c", Timestamp: base.Add(2 * time.Hour), Status: 500, ModelID: "m1"},
-		{RequestID: "d", Timestamp: base.Add(time.Minute), Status: 200, ModelID: "m2", Tokens: usage.Tokens{"input": 5}},
+		{RequestID: "d", Timestamp: base.Add(time.Minute), Status: 200, ModelID: "m2", Tokens: sdkusage.Tokens{"input": 5}},
 	}
 	for _, ev := range evs {
 		if err := sk.Write(ev); err != nil {

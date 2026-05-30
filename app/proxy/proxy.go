@@ -35,7 +35,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	pkgusage "github.com/wyolet/relay/sdk/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // TokenExtractor extracts upstream usage from a response body. The
@@ -43,7 +43,7 @@ import (
 // (OpenAI shape for /v1/chat/completions, Anthropic shape for
 // /v1/messages) and passes it in.
 type TokenExtractor interface {
-	ExtractTokens(body []byte) pkgusage.Tokens
+	ExtractTokens(body []byte) sdkusage.Tokens
 }
 
 // Request is the pre-resolved input to Run.
@@ -220,7 +220,7 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 		)
 	}
 
-	var tokens pkgusage.Tokens
+	var tokens sdkusage.Tokens
 	if req.Extractor != nil {
 		tokens = req.Extractor.ExtractTokens(body)
 	}

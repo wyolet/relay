@@ -1,6 +1,9 @@
 package usagelog
 
-import "github.com/wyolet/relay/sdk/usage"
+import (
+	"github.com/wyolet/relay/pkg/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
+)
 
 // Event is the canonical per-request usage record. The canonical type
 // lives in pkg/usage so every backend (file, ClickHouse, valkey,
@@ -10,7 +13,7 @@ type Event = usage.Event
 
 // UpstreamTiming is the upstream-leg timing breakdown — see
 // pkg/usage.UpstreamTiming.
-type UpstreamTiming = usage.UpstreamTiming
+type UpstreamTiming = sdkusage.UpstreamTiming
 
 // ReasoningTiming is the reasoning span — see pkg/usage.ReasoningTiming.
-type ReasoningTiming = usage.ReasoningTiming
+type ReasoningTiming = sdkusage.ReasoningTiming

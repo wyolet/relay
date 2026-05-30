@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wyolet/relay/sdk/usage"
+	"github.com/wyolet/relay/pkg/usage"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
 // writeFixture writes a few representative events to a tmp file and
@@ -72,8 +73,8 @@ func TestReader_Events_FiltersAndLimit(t *testing.T) {
 func TestReader_Summary_GroupAggregation(t *testing.T) {
 	now := time.Now()
 	path := writeFixture(t, []usage.Event{
-		{Timestamp: now, Source: "pipeline", Status: 200, ModelID: "m1", DurationMs: 100, Tokens: usage.Tokens{"input": 10, "output": 5}},
-		{Timestamp: now, Source: "pipeline", Status: 200, ModelID: "m1", DurationMs: 200, Tokens: usage.Tokens{"input": 20, "output": 10}},
+		{Timestamp: now, Source: "pipeline", Status: 200, ModelID: "m1", DurationMs: 100, Tokens: sdkusage.Tokens{"input": 10, "output": 5}},
+		{Timestamp: now, Source: "pipeline", Status: 200, ModelID: "m1", DurationMs: 200, Tokens: sdkusage.Tokens{"input": 20, "output": 10}},
 		{Timestamp: now, Source: "pipeline", Status: 500, ModelID: "m2", DurationMs: 50, Tokens: nil},
 	})
 	r := NewReader(path)
@@ -203,10 +204,10 @@ func TestReader_TimeSeries_Bucketing(t *testing.T) {
 	// Fixed epoch-aligned base so bucket boundaries are deterministic.
 	base := time.Unix(1_700_000_000, 0).UTC().Truncate(time.Hour)
 	path := writeFixture(t, []usage.Event{
-		{Timestamp: base, Source: "pipeline", Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 10}},
-		{Timestamp: base.Add(5 * time.Minute), Source: "pipeline", Status: 200, ModelID: "m1", Tokens: usage.Tokens{"input": 20}},
+		{Timestamp: base, Source: "pipeline", Status: 200, ModelID: "m1", Tokens: sdkusage.Tokens{"input": 10}},
+		{Timestamp: base.Add(5 * time.Minute), Source: "pipeline", Status: 200, ModelID: "m1", Tokens: sdkusage.Tokens{"input": 20}},
 		{Timestamp: base.Add(2 * time.Hour), Source: "pipeline", Status: 500, ModelID: "m1"},
-		{Timestamp: base.Add(3 * time.Minute), Source: "proxy", Status: 200, ModelID: "m2", Tokens: usage.Tokens{"input": 5}},
+		{Timestamp: base.Add(3 * time.Minute), Source: "proxy", Status: 200, ModelID: "m2", Tokens: sdkusage.Tokens{"input": 5}},
 	})
 	r := NewReader(path)
 	all := usage.EventQuery{} // Since:0 → no lower bound

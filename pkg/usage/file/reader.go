@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/wyolet/relay/sdk/usage"
+	"github.com/wyolet/relay/pkg/usage"
 )
 
 var _ usage.Reader = (*Reader)(nil)
