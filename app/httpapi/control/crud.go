@@ -31,6 +31,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -53,6 +54,9 @@ type entityStore[T any] interface {
 // unstable, breaking $ref resolution for downstream codegen tools.
 type listBody[T any] struct {
 	Items []*T `json:"items"`
+	// Total is the match count before any limit/offset window — for "N of M"
+	// displays. Equals len(Items) when the list isn't paginated.
+	Total int `json:"total"`
 }
 type listResponse[T any] struct {
 	Body listBody[T]
@@ -129,19 +133,29 @@ func registerKind[T any](
 	disallowDelete bool,
 	skipCreate bool,
 	protect huma.Middlewares,
+	filterSchema *filter.Schema[T],
 ) {
 	base := "/" + plural
 	tag := plural
 
-	// List
+	// List. When a filterSchema is supplied the route also parses the raw
+	// query (stashed by withRawQuery) into a validated filter/sort/window;
+	// unknown or malformed params become a 400 rather than silently matching
+	// everything.
+	listErrors := []int{401, 500}
+	listMW := protect
+	if filterSchema != nil {
+		listErrors = []int{400, 401, 500}
+		listMW = withRawQuery(protect)
+	}
 	huma.Register(api, huma.Operation{
 		OperationID: "list_" + plural,
 		Method:      http.MethodGet,
 		Path:        base,
 		Summary:     "List " + plural,
 		Tags:        []string{tag},
-		Middlewares: protect,
-		Errors:      []int{401, 500},
+		Middlewares: listMW,
+		Errors:      listErrors,
 	}, func(ctx context.Context, _ *struct{}) (*listResponse[T], error) {
 		if err := authzr.Authorize(ctx, plural+".list", authz.Resource{Kind: singular}); err != nil {
 			return nil, mapAuthzErr(err)
@@ -159,7 +173,25 @@ func registerKind[T any](
 			}
 		}
 		out := &listResponse[T]{}
-		out.Body.Items = items
+		if filterSchema != nil {
+			q, err := filterSchema.Parse(rawQueryFrom(ctx))
+			if err != nil {
+				var fe *filter.Error
+				if errors.As(err, &fe) {
+					return nil, huma.Error400BadRequest(fe.Error())
+				}
+				return nil, huma.Error400BadRequest(err.Error())
+			}
+			page, total := q.Apply(items)
+			if page == nil {
+				page = []*T{}
+			}
+			out.Body.Items = page
+			out.Body.Total = total
+		} else {
+			out.Body.Items = items
+			out.Body.Total = len(items)
+		}
 		return out, nil
 	})
 
@@ -686,6 +718,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		true, // catalog-managed; disable instead of delete
 		false,
 		protect,
+		nil,
 	)
 
 	registerKind[host.Host](
@@ -700,6 +733,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		true, // catalog-managed; disable instead of delete
 		false,
 		protect,
+		&hostFilter,
 	)
 
 	registerKind[model.Model](
@@ -714,6 +748,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		true, // catalog-managed; disable instead of delete
 		false,
 		protect,
+		&modelFilter,
 	)
 
 	registerKind[hostkey.HostKey](
@@ -728,6 +763,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
+		nil,
 	)
 
 	registerKind[ratelimit.RateLimit](
@@ -742,6 +778,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
+		nil,
 	)
 
 	registerKind[policy.Policy](
@@ -756,6 +793,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
+		&policyFilter,
 	)
 
 	registerKind[pricing.Pricing](
@@ -770,6 +808,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		false,
 		protect,
+		nil,
 	)
 
 	// relay-keys uses a custom POST handler (registerRelayKeyCreate) that
@@ -787,6 +826,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		true, // skipCreate
 		protect,
+		&relayKeyFilter,
 	)
 	registerRelayKeyCreate(api, d, protect)
 }
