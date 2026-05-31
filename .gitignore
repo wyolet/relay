@@ -41,3 +41,6 @@ error.log
 
 # symbol MCP plugin local index cache
 .symbol/
+
+# Local batch payload store (jobq FileStore default dir)
+relay-batch-payloads/
