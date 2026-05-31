@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS batch_items;
+DROP TABLE IF EXISTS batches;
