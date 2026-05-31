@@ -35,6 +35,10 @@ echo "Rule 4 — app/ never imports a concrete vendor adapter (composition root 
 hits=$(grep -rnE 'wyolet/relay/sdk/adapters/(openai|anthropic|gemini)' app/ --include='*.go' | grep -v '_test.go' || true)
 if [ -n "$hits" ]; then note "app/ imports a vendor adapter (should go through the Registry):"; echo "$hits"; else ok "clean"; fi
 
+echo "jobq purity — the jobq module imports nothing from app/, internal/, or sdk/:"
+hits=$(grep -rnE 'wyolet/relay/(app|internal|sdk)/' jobq/ --include='*.go' || true)
+if [ -n "$hits" ]; then note "jobq imports relay server code (must stay standalone):"; echo "$hits"; else ok "clean"; fi
+
 if [ $fail -ne 0 ]; then
   echo
   echo "Codebase-rule check FAILED — see docs/canonical-protocol.md \"Codebase rules\"."

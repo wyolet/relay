@@ -30,13 +30,16 @@ jobs:
         run: |
           go vet ./...
           (cd sdk && go vet ./...)
+          (cd jobq && go vet ./...)
 
       - name: Build
         run: |
           go build ./...
           (cd sdk && go build ./...)
+          (cd jobq && go build ./...)
 
       - name: Test
         run: |
           go test ./...
           (cd sdk && go test ./...)
+          (cd jobq && go test ./...)

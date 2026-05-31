@@ -314,9 +314,10 @@ clean: ## drop UI dist + binary
 	rm -rf $(UI_DIST_DIR)
 	rm -f relay
 
-test: ## go test ./... (both modules)
+test: ## go test ./... (all modules)
 	go test ./...
 	cd sdk && go test ./...
+	cd jobq && go test ./...
 
 lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
 	./scripts/check-codebase-rules.sh
@@ -337,6 +338,7 @@ test-integration: ## spin up ephemeral pg, run integration-tagged tests with -ra
 	docker compose -f $(COMPOSE_TEST) up -d --wait
 	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race ./... ; \
 		status=$$?; \
+		RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' sh -c 'cd jobq && go test -tags=integration -race ./...' || status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status
 
