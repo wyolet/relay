@@ -272,6 +272,10 @@ func main() {
 		}).Build(),
 	}
 	specRegistry := adapter.NewRegistry(specs...)
+	if err := specRegistry.AssertWired(); err != nil {
+		slog.Error("adapter registry mis-wired", "err", err)
+		os.Exit(1)
+	}
 
 	// Log (usage) emit: the constant PostFlight observer (one event per
 	// request). Backend selection lives in the "usage-logging" settings

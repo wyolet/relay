@@ -1,6 +1,8 @@
 package adapter
 
 import (
+	"fmt"
+
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/pipeline"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -75,4 +77,34 @@ func (r *Registry) TranslatorMap() v1.Registry {
 // Specs returns all registered specs in registration order.
 func (r *Registry) Specs() []*Spec {
 	return r.specs
+}
+
+// AssertWired verifies the composition root registered a coherent set of
+// specs, so the defensive "no spec / no adapter / no translator" 500s in
+// the dispatch path are structurally unreachable. The composition root
+// calls this at boot and fails fast on a violation — a wiring bug must
+// crash the binary, never surface as a runtime request error.
+//
+// It enforces two invariants:
+//   - Every upstream-binding adapter (the allow-set HostBinding.Adapter is
+//     validated against) has a registered spec with a non-nil pipeline
+//     adapter to dispatch to.
+//   - Every inbound, non-byte-pass spec has a canonical Translator, so a
+//     cross-shape route can always translate.
+func (r *Registry) AssertWired() error {
+	for _, n := range adapters.UpstreamBindingNames() {
+		s := r.byName[n]
+		if s == nil {
+			return fmt.Errorf("adapter.Registry: upstream binding %q has no registered spec", n)
+		}
+		if r.adapters[n] == nil {
+			return fmt.Errorf("adapter.Registry: upstream binding %q has no pipeline adapter", n)
+		}
+	}
+	for _, s := range r.specs {
+		if len(s.InboundPaths) > 0 && !s.BytePass && s.Translator == nil {
+			return fmt.Errorf("adapter.Registry: inbound spec %q has no canonical translator", s.Name)
+		}
+	}
+	return nil
 }

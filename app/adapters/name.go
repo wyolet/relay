@@ -65,3 +65,28 @@ func (n Name) Valid() bool {
 func All() []Name {
 	return []Name{OpenAI, Anthropic, Gemini, OpenAIResponses, OpenAIEmbeddings}
 }
+
+// UpstreamBinding reports whether n may appear as a HostBinding.Adapter —
+// i.e. it names an upstream wire shape relay can dispatch a request to.
+// The inbound-only shapes are excluded: Canonical has no upstream, and
+// OpenAIResponses/OpenAIEmbeddings are inbound request variants dispatched
+// via their own specs (their bindings carry the base OpenAI adapter).
+// This is the authoritative allow-set for HostBinding.Adapter; the catalog
+// validator and model.Validate both gate on it, and the composition root's
+// registry assertion guarantees each one has a registered spec.
+func (n Name) UpstreamBinding() bool {
+	switch n {
+	case OpenAI, Anthropic, Gemini:
+		return true
+	}
+	return false
+}
+
+// UpstreamBindingNames returns every Name valid as a HostBinding.Adapter,
+// in stable order. The single source of truth behind UpstreamBinding.
+func UpstreamBindingNames() []Name {
+	return []Name{OpenAI, Anthropic, Gemini}
+}
+
+// DefaultBinding is the adapter assumed when a HostBinding omits one.
+const DefaultBinding = OpenAI
