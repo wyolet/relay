@@ -33,8 +33,8 @@ const (
 	systemRLProxyAnon   = "inference-api-proxy-anonymous"
 )
 
-// handleProxy is the shared proxy-mode flow called by /v1/chat/completions
-// and /v1/messages. adapterKind pins the token extractor (and is used in
+// handleProxy is the shared proxy-mode flow called by /openai/v1/chat/completions
+// and /anthropic/v1/messages. adapterKind pins the token extractor (and is used in
 // future per-host adapter-mismatch checks).
 func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
 	ctx := r.Context()
