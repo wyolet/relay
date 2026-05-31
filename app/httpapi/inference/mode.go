@@ -100,7 +100,7 @@ func Classify(r *http.Request) (Classification, error) {
 
 	// Normal mode: relay key lookup order — X-WR-API-Key, then
 	// Authorization Bearer, then x-api-key (Anthropic-SDK convention so
-	// clients pointed at /v1/messages with stock SDK auth Just Work).
+	// clients pointed at /anthropic/v1/messages with stock SDK auth Just Work).
 	relay := r.Header.Get(httpheader.HeaderRelayAPIKey)
 	if relay == "" {
 		relay = bearer(r.Header.Get("Authorization"))
