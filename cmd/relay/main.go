@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/control"
@@ -42,6 +43,8 @@ import (
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/jobq"
+	"github.com/wyolet/relay/jobq/payload"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -347,6 +350,36 @@ func main() {
 	// the stored values (the data plane gates on IsReady until it completes).
 	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
 
+	// Batch subsystem: jobq-backed background execution of bulk inference
+	// submissions. jobq owns durable per-item execution + payload storage;
+	// app/batch owns the batch record and the customer API. The per-item
+	// handler reuses the same routing + pipeline as the realtime path.
+	if err := jobq.Migrate(bootCtx, st.Pool()); err != nil {
+		slog.Error("jobq migrate failed", "err", err)
+		os.Exit(1)
+	}
+	batchPayloadDir := os.Getenv("RELAY_BATCH_PAYLOAD_DIR")
+	if batchPayloadDir == "" {
+		batchPayloadDir = "relay-batch-payloads"
+	}
+	batchPayloads, err := payload.NewFileStore(batchPayloadDir)
+	if err != nil {
+		slog.Error("batch payload store init failed", "err", err)
+		os.Exit(1)
+	}
+	batchQueue := jobq.New(st.Pool(), batchPayloads, jobq.Options{})
+	batchSvc := batch.NewService(
+		batch.NewStore(st.Pool()),
+		batchQueue,
+		&batch.Runner{Resolver: routing.New(cat), Pipeline: pl, Specs: specRegistry, Catalog: cat},
+	)
+	batchQueue.Register(batch.Queue, batchSvc.Handler())
+	if err := batchQueue.Start(listenerCtx); err != nil {
+		slog.Error("batch queue start failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("batch: subsystem started", "payload_dir", batchPayloadDir)
+
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
@@ -361,6 +394,15 @@ func main() {
 		Specs:         specRegistry,
 		RouteMounters: []inference.RouteMounter{inference.MountRegistry(specRegistry)},
 	})
+
+	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →
+	// relay-key auth), mounted directly on chi like /v1/ws since it isn't a
+	// huma operation.
+	inferRouter.With(
+		inference.ReadinessMiddleware(cat),
+		inference.ClassifyMiddleware(),
+		inference.RelayKeyAuthMiddleware(cat),
+	).Mount("/v1/batches", batchSvc.Routes())
 
 	inferAddr := ":8080"
 	if p := os.Getenv("RELAY_PORT"); p != "" {
