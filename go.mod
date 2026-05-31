@@ -4,7 +4,10 @@ go 1.25.6
 
 replace github.com/wyolet/relay/sdk => ./sdk
 
+replace github.com/wyolet/relay/jobq => ./jobq
+
 require (
+	github.com/1password/onepassword-sdk-go v0.4.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/alexedwards/scs/v2 v2.9.0
 	github.com/coder/websocket v1.8.14
@@ -19,14 +22,15 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/testcontainers/testcontainers-go v0.42.0
+	github.com/wyolet/relay/jobq v0.0.0
 	github.com/wyolet/relay/sdk v0.0.0
 	golang.org/x/crypto v0.49.0
+	golang.org/x/sync v0.20.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/1password/onepassword-sdk-go v0.4.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/ClickHouse/ch-go v0.71.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
@@ -116,7 +120,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
