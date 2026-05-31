@@ -277,9 +277,9 @@ control-rebuild: ## rebuild relay-a (control listener)
 control-logs: ## tail relay-a logs
 	docker compose $(COMPOSE_DEV_ARGS) logs -f relay-a
 
-control-login: ## POST /control/login using .env creds
-	@test -f .env || (echo "no .env; create one with RELAY_ADMIN_USERNAME and RELAY_ADMIN_PASSWORD" && exit 1)
-	@USERNAME=$$(grep '^RELAY_ADMIN_USERNAME=' .env | cut -d= -f2-); \
+control-login: ## POST /control/login (username from users YAML, password from .env)
+	@test -f .env || (echo "no .env; create one with RELAY_ADMIN_PASSWORD" && exit 1)
+	@USERNAME=$$(grep -hm1 '^[[:space:]]*username:' deploy/compose/config/users/*.yaml 2>/dev/null | sed -E 's/.*username:[[:space:]]*//'); \
 	 PASSWORD=$$(grep '^RELAY_ADMIN_PASSWORD=' .env | cut -d= -f2-); \
 	 if [ -z "$$USERNAME" ]; then USERNAME=admin; fi; \
 	 rm -f $(COOKIE_JAR); \
