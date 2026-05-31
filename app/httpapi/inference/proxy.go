@@ -113,6 +113,17 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	forwardHdr := r.Header.Clone()
 	httpheader.Strip(forwardHdr)
 
+	// Forward to the upstream's native path, not the inbound vendor-
+	// namespaced path. Post-#195 inbound paths carry a /openai or
+	// /anthropic prefix (e.g. /anthropic/v1/messages) that the upstream
+	// does not expect; the spec's UpstreamPath is the un-prefixed target
+	// (e.g. /v1/messages). Falls back to the raw path when no spec maps it.
+	spec := d.Specs.Spec(adapterKind)
+	upstreamPath := r.URL.Path
+	if spec != nil && spec.UpstreamPath != "" {
+		upstreamPath = spec.UpstreamPath
+	}
+
 	lc := lifecycle.FromContext(ctx)
 	if lc != nil {
 		if host != nil {
@@ -122,13 +133,13 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 			lc.PolicyID = rk.Spec.PolicyID
 		}
 		applyPlanIdentity(lc, resolvedPlan) // Plan overrides when present
-		if spec := d.Specs.Spec(adapterKind); spec != nil {
+		if spec != nil {
 			lc.Translator = spec.Translator
 		}
 	}
 	preq := &proxy.Request{
 		Method:       r.Method,
-		Path:         r.URL.Path,
+		Path:         upstreamPath,
 		Body:         r.Body,
 		Headers:      forwardHdr,
 		HostBaseURL:  host.Spec.BaseURL,
@@ -143,7 +154,8 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"request_id", reqid.From(ctx),
 		"host", host.Meta.Name,
 		"base_url", host.Spec.BaseURL,
-		"path", r.URL.Path,
+		"inbound_path", r.URL.Path,
+		"upstream_path", upstreamPath,
 	)
 	result, err := d.Proxy.Run(ctx, preq)
 	if err != nil {
