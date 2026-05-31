@@ -125,7 +125,7 @@ type Modalities struct {
 // -cloud-tagged variants; ollama-self serves the bare-tagged ones).
 type HostBinding struct {
 	HostID    string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
-	Adapter   adapters.Name `json:"adapter"            yaml:"adapter"            validate:"required,oneof=openai anthropic gemini"`
+	Adapter   adapters.Name `json:"adapter"            yaml:"adapter"`
 	Enabled   *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
 	Snapshots []string      `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
 }
@@ -179,6 +179,14 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 // Replacement resolves to a real Model; snapshot-name uniqueness across
 // the catalog) live in the composition layer.
 func (m *Model) Validate() error {
+	// A binding without an explicit adapter defaults to OpenAI (the most
+	// common OpenAI-compatible upstream). Fill before validation so the
+	// allow-set check below always sees a concrete value.
+	for i := range m.Spec.Hosts {
+		if m.Spec.Hosts[i].Adapter == "" {
+			m.Spec.Hosts[i].Adapter = adapters.DefaultBinding
+		}
+	}
 	if err := meta.Validator.Struct(m); err != nil {
 		return err
 	}
@@ -189,7 +197,11 @@ func (m *Model) Validate() error {
 		return fmt.Errorf("model %q: owner.id is required (provider id)", m.Meta.Name)
 	}
 	hosts := make(map[string]struct{}, len(m.Spec.Hosts))
-	for _, b := range m.Spec.Hosts {
+	for i, b := range m.Spec.Hosts {
+		if !b.Adapter.UpstreamBinding() {
+			return fmt.Errorf("model %q: hosts[%d] adapter %q is not a valid upstream binding (want one of %v)",
+				m.Meta.Name, i, b.Adapter, adapters.UpstreamBindingNames())
+		}
 		if _, dup := hosts[b.HostID]; dup {
 			return fmt.Errorf("model %q: duplicate host binding %q", m.Meta.Name, b.HostID)
 		}
