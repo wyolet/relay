@@ -40,6 +40,12 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionParsing,
 		Description: "Inbound request-body parsing depth. RichParsing extracts per-request metadata + messages for attribution/observability; off reads only routing fields. Default on. Hot-reloaded.",
 	})
+	for _, gs := range settings.GovernanceSections {
+		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
+			Name:        gs,
+			Description: "Mutation guardrail for catalog-managed " + gs[len("governance:"):] + " rows. allowEdit/allowDelete gate generic-CRUD edit/delete; editing defaults on (rare but safe), deleting off (the accidental-click guard). System-owned rows are protected in code regardless; user-owned rows bypass this. Not per-user authz — that arrives with multi-tenant RBAC. Hot-reloaded.",
+		})
+	}
 	registerSettingsList(api, d, protect)
 	registerSettingsSectionsCatalog(api, d, protect)
 }
@@ -162,9 +168,12 @@ type sectionUpdateRequest[T any] struct {
 func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewares, sec settings.Section) {
 	section := sec.Name
 	path := "/settings/" + section
+	// Colons are valid in the section key + URL path but break many OpenAPI
+	// client generators when they land in an operationId, so flatten them.
+	opID := strings.ReplaceAll(section, ":", "_")
 
 	huma.Register(api, huma.Operation{
-		OperationID: "get_settings_" + section,
+		OperationID: "get_settings_" + opID,
 		Method:      "GET",
 		Path:        path,
 		Summary:     "Get settings section: " + section,
@@ -189,7 +198,7 @@ func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewar
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "update_settings_" + section,
+		OperationID: "update_settings_" + opID,
 		Method:      "PUT",
 		Path:        path,
 		Summary:     "Update settings section: " + section,
