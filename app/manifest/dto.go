@@ -1,6 +1,10 @@
 package manifest
 
 import (
+	"encoding/json"
+
+	"gopkg.in/yaml.v3"
+
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 )
@@ -269,4 +273,27 @@ type PricingRateDTO struct {
 	Unit        string  `json:"unit"                  yaml:"unit"`
 	Amount      float64 `json:"amount"                yaml:"amount"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty"`
+}
+
+// SettingDTO is the wire form of a settings section. Unlike the catalog kinds
+// the spec shape is not fixed — it varies per section, with metadata.name
+// selecting the registered settings.Section whose typed value the spec must
+// match. The spec is therefore carried as a raw node and validated downstream
+// by that section's Decode. Settings are singletons keyed by name, so the
+// owner/id/label metadata fields are unused.
+type SettingDTO struct {
+	APIVersion string    `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string    `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta  `json:"metadata"   yaml:"metadata"`
+	Spec       yaml.Node `json:"-"          yaml:"spec"`
+}
+
+// SpecJSON renders the raw spec node as JSON for the settings store, which
+// validates it against the section's typed value via the section's Decode.
+func (d *SettingDTO) SpecJSON() (json.RawMessage, error) {
+	var v any
+	if err := d.Spec.Decode(&v); err != nil {
+		return nil, err
+	}
+	return json.Marshal(v)
 }
