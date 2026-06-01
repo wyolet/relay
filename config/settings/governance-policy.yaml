@@ -1,0 +1,12 @@
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Setting
+metadata:
+  name: governance:policy
+spec:
+  # Speed-bump against accidental mutation of catalog-managed policy rows, not a
+  # wall: editing is rare but safe so it stays open; deleting is the
+  # accidental-click risk so it's off until you mean it. system-owned rows are
+  # protected in code regardless; user-owned rows bypass this. Seed-if-absent
+  # — a live PUT /settings/governance:policy is authoritative thereafter.
+  allowEdit: true
+  allowDelete: false

@@ -23,6 +23,7 @@ type Document struct {
 	RateLimit *RateLimitDTO
 	RelayKey  *RelayKeyDTO
 	Pricing   *PricingDTO
+	Setting   *SettingDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -44,6 +45,8 @@ func (d Document) Kind() string {
 		return "RelayKey"
 	case d.Pricing != nil:
 		return "Pricing"
+	case d.Setting != nil:
+		return "Setting"
 	default:
 		return ""
 	}
@@ -205,6 +208,11 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 			return Document{}, err
 		}
 		return Document{Pricing: &PricingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "Setting":
+		// Spec stays a raw node — its shape is per-section and is validated
+		// when the settings store decodes it against the named section.
+		return Document{Setting: &SettingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: env.Spec}}, nil
 
 	default:
 		return Document{}, fmt.Errorf("unknown kind %q", env.Kind)

@@ -31,6 +31,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
@@ -130,7 +131,7 @@ func registerKind[T any](
 	enrich enrichFn[T],
 	cascade cascadeFn[T],
 	mergeUpdate mergeOnUpdateFn[T],
-	disallowDelete bool,
+	gov settings.Reader,
 	skipCreate bool,
 	protect huma.Middlewares,
 	filterSchema *filter.Schema[T],
@@ -314,6 +315,12 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
+		// TODO(rbac): when multi-tenant RBAC lands, also enforce owner.id ==
+		// caller for user-owned rows. Today the relay is single-user, so the
+		// Authorizer above is permissive and Governs is the only guardrail.
+		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).Owner.Kind)); err != nil {
+			return nil, huma.Error403Forbidden(err.Error())
+		}
 		v := &in.Body
 		m := metaOf(v)
 		m.ID = in.ID // path id wins over body id
@@ -343,15 +350,10 @@ func registerKind[T any](
 		return &itemResponse[T]{Body: updated}, nil
 	})
 
-	if disallowDelete {
-		// Catalog-managed kinds (provider, host, model) aren't user-
-		// deletable through the API; they're seeded and the right move is
-		// to disable. Skip wiring the DELETE handler entirely so the
-		// router returns 405 Method Not Allowed.
-		return
-	}
-
-	// Delete by id
+	// Delete by id. The route is always registered so the OpenAPI doc
+	// advertises it for every kind (no `delete?: never` gaps in the
+	// generated client); whether a delete actually succeeds is decided at
+	// request time by settings.Governs + the Authorizer, not the spec shape.
 	huma.Register(api, huma.Operation{
 		OperationID:   "delete_" + singular,
 		Method:        http.MethodDelete,
@@ -360,7 +362,7 @@ func registerKind[T any](
 		Tags:          []string{tag},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusNoContent,
-		Errors:        []int{401, 404, 500},
+		Errors:        []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
 		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
@@ -368,6 +370,12 @@ func registerKind[T any](
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
+		}
+		// TODO(rbac): when multi-tenant RBAC lands, also enforce owner.id ==
+		// caller for user-owned rows. Today the relay is single-user, so the
+		// Authorizer above is permissive and Governs is the only guardrail.
+		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).Owner.Kind)); err != nil {
+			return nil, huma.Error403Forbidden(err.Error())
 		}
 		if guard != nil {
 			if err := guard("delete", existing, nil); err != nil {
@@ -718,7 +726,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
-		true, // catalog-managed; disable instead of delete
+		d.Catalog,
 		false,
 		protect,
 		&providerFilter,
@@ -733,7 +741,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
-		true, // catalog-managed; disable instead of delete
+		d.Catalog,
 		false,
 		protect,
 		&hostFilter,
@@ -748,7 +756,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
-		true, // catalog-managed; disable instead of delete
+		d.Catalog,
 		false,
 		protect,
 		&modelFilter,
@@ -763,7 +771,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		enrichHostKeyPolicies(d),
 		cascadeHostKeyDetach(d),
 		mergeHostKeyPreserveValue,
-		false,
+		d.Catalog,
 		false,
 		protect,
 		&hostKeyFilter,
@@ -778,7 +786,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		cascadeRateLimitDetach(d),
 		nil,
-		false,
+		d.Catalog,
 		false,
 		protect,
 		&rateLimitFilter,
@@ -793,7 +801,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		cascadePolicyDetach(d),
 		nil,
-		false,
+		d.Catalog,
 		false,
 		protect,
 		&policyFilter,
@@ -808,7 +816,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
-		false,
+		d.Catalog,
 		false,
 		protect,
 		&pricingFilter,
@@ -826,7 +834,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
-		false,
+		d.Catalog,
 		true, // skipCreate
 		protect,
 		&relayKeyFilter,

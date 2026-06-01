@@ -5,29 +5,39 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/wyolet/relay/app/manifest"
 )
 
-// SeedDir loads settings-section YAML from dir and upserts each section that
-// has NO existing DB row — **seed-if-absent**. It never clobbers a runtime
-// change or a prior seed, so the bootstrap tool's live `PUT /settings/...`
-// stays authoritative. This is the first-boot / airgapped path; managed
-// deployments are configured at runtime via the settings API.
+// SeedDir loads settings from manifest YAML in dir and upserts each section
+// that has NO existing DB row — **seed-if-absent**. It never clobbers a
+// runtime change or a prior seed, so a live `PUT /settings/...` stays
+// authoritative. This is the first-boot / airgapped path; managed deployments
+// are configured at runtime via the settings API.
 //
-// Each file is named `<section>.yaml` (e.g. `usage-logging.yaml`) and its
-// body is the section value. Unknown sections and invalid values are hard
-// errors (fail fast on a typo). A missing dir is a no-op, not an error.
+// Settings use the same Kubernetes-style manifest envelope as every other
+// catalog resource — `apiVersion` + `kind: Setting` + `metadata.name` (the
+// section key) + `spec` (the section's typed value). Files may hold multiple
+// `---`-separated docs. metadata.name selecting an unregistered section, a
+// spec that fails the section's Decode, or a non-Setting kind in the tree are
+// all hard errors (fail fast on a typo). A missing dir is a no-op.
+//
 // Returns the section names actually seeded, lexically sorted.
 func SeedDir(ctx context.Context, store *Store, dir string) ([]string, error) {
-	files, err := loadSectionFiles(dir)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	docs, err := manifest.LoadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("settings.SeedDir: %w", err)
+	}
+	sections, err := sectionsFromDocs(docs)
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
+	if len(sections) == 0 {
 		return nil, nil
 	}
 
@@ -37,7 +47,7 @@ func SeedDir(ctx context.Context, store *Store, dir string) ([]string, error) {
 	}
 
 	var seeded []string
-	for section, raw := range files {
+	for section, raw := range sections {
 		if existing[section] {
 			continue // already configured — don't clobber
 		}
@@ -50,56 +60,32 @@ func SeedDir(ctx context.Context, store *Store, dir string) ([]string, error) {
 	return seeded, nil
 }
 
-// loadSectionFiles reads <section>.yaml/.yml files from dir, validates each
-// names a registered section, and converts each body to JSON the section's
-// Decode can parse. Pure (filesystem + registry, no DB) so it's unit-testable.
-// A missing dir yields an empty map.
-func loadSectionFiles(dir string) (map[string]json.RawMessage, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+// sectionsFromDocs extracts Setting docs into a section→spec-JSON map. Every
+// doc must be a Setting naming a registered section; anything else is an
+// error (the settings tree is settings-only — a stray kind is a misplaced
+// file, not something to skip silently). Pure (registry only, no DB) so it's
+// unit-testable.
+func sectionsFromDocs(docs []manifest.Document) (map[string]json.RawMessage, error) {
+	out := make(map[string]json.RawMessage, len(docs))
+	for _, d := range docs {
+		if d.Setting == nil {
+			return nil, fmt.Errorf("settings.SeedDir: unexpected kind %q (settings tree accepts only kind: Setting)", d.Kind())
 		}
-		return nil, fmt.Errorf("settings.loadSectionFiles: %w", err)
-	}
-
-	out := map[string]json.RawMessage{}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if ext != ".yaml" && ext != ".yml" {
-			continue
-		}
-		section := strings.TrimSuffix(e.Name(), filepath.Ext(e.Name()))
+		section := d.Setting.Metadata.Name
 		if _, ok := Lookup(section); !ok {
-			return nil, fmt.Errorf("settings.SeedDir: %s names unknown section %q", e.Name(), section)
+			return nil, fmt.Errorf("settings.SeedDir: %q names unknown settings section", section)
 		}
-		raw, err := yamlFileToJSON(filepath.Join(dir, e.Name()))
+		raw, err := d.Setting.SpecJSON()
 		if err != nil {
-			return nil, fmt.Errorf("settings.SeedDir %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("settings.SeedDir %s: spec: %w", section, err)
+		}
+		// Validate the spec against the section's typed value now, so a bad
+		// manifest fails at load rather than at Upsert.
+		sec, _ := Lookup(section)
+		if _, err := sec.Decode(raw); err != nil {
+			return nil, fmt.Errorf("settings.SeedDir %s: %w", section, err)
 		}
 		out[section] = raw
 	}
 	return out, nil
-}
-
-// yamlFileToJSON reads a YAML file and converts its mapping to JSON bytes.
-// yaml.v3 decodes mappings into map[string]any, so json.Marshal round-trips
-// cleanly into the section's JSON-tagged struct.
-func yamlFileToJSON(path string) (json.RawMessage, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var v any
-	if err := yaml.Unmarshal(b, &v); err != nil {
-		return nil, fmt.Errorf("yaml: %w", err)
-	}
-	j, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("to json: %w", err)
-	}
-	return j, nil
 }

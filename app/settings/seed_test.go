@@ -2,31 +2,39 @@ package settings
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/wyolet/relay/app/manifest"
 )
 
-func TestLoadSectionFiles(t *testing.T) {
-	dir := t.TempDir()
-	write := func(name, body string) {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// usage-logging is a registered section.
-	write("usage-logging.yaml", "backend: clickhouse\nclickhouse:\n  retentionDays: 14\n")
-	write("notes.txt", "ignored") // non-yaml skipped
-
-	got, err := loadSectionFiles(dir)
+func parseDocs(t *testing.T, yaml string) []manifest.Document {
+	t.Helper()
+	docs, err := manifest.Parse(strings.NewReader(yaml))
 	if err != nil {
-		t.Fatalf("loadSectionFiles: %v", err)
+		t.Fatalf("manifest.Parse: %v", err)
 	}
-	raw, ok := got["usage-logging"]
+	return docs
+}
+
+func TestSectionsFromDocs(t *testing.T) {
+	const y = `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Setting
+metadata:
+  name: usage-logging
+spec:
+  backend: clickhouse
+  clickhouse:
+    retentionDays: 14
+`
+	got, err := sectionsFromDocs(parseDocs(t, y))
+	if err != nil {
+		t.Fatalf("sectionsFromDocs: %v", err)
+	}
+	raw, ok := got[SectionUsageLogging]
 	if !ok {
 		t.Fatalf("usage-logging not loaded: %v", got)
 	}
-	// The JSON must Decode+validate through the section.
 	v, err := UsageLoggingDecodeForTest(raw)
 	if err != nil {
 		t.Fatalf("decode seeded value: %v", err)
@@ -36,20 +44,28 @@ func TestLoadSectionFiles(t *testing.T) {
 	}
 }
 
-func TestLoadSectionFiles_UnknownSection(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "nope-section.yaml"), []byte("a: 1"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadSectionFiles(dir); err == nil {
+func TestSectionsFromDocs_UnknownSection(t *testing.T) {
+	const y = `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Setting
+metadata:
+  name: nope-section
+spec:
+  a: 1
+`
+	if _, err := sectionsFromDocs(parseDocs(t, y)); err == nil {
 		t.Fatal("want error for unknown section")
 	}
 }
 
-func TestLoadSectionFiles_MissingDirIsEmpty(t *testing.T) {
-	got, err := loadSectionFiles(filepath.Join(t.TempDir(), "absent"))
-	if err != nil || len(got) != 0 {
-		t.Fatalf("missing dir: err=%v got=%v", err, got)
+func TestSectionsFromDocs_NonSettingKind(t *testing.T) {
+	const y = `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Provider
+metadata:
+  name: openai
+spec: {}
+`
+	if _, err := sectionsFromDocs(parseDocs(t, y)); err == nil {
+		t.Fatal("want error for non-Setting kind in settings tree")
 	}
 }
 
