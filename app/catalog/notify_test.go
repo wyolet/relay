@@ -24,14 +24,25 @@ func TestParseEvent_HappyPath(t *testing.T) {
 	}
 }
 
+// Settings section keys are colon-namespaced (governance:policy), so the id
+// segment is everything after "kind:op:" — colons included.
+func TestParseEvent_ColonNamespacedID(t *testing.T) {
+	ev, ok := parseEvent("settings:upsert:governance:policy")
+	if !ok {
+		t.Fatal("parseEvent returned false for settings:upsert:governance:policy")
+	}
+	if ev.Kind != "settings" || ev.Op != "upsert" || ev.ID != "governance:policy" {
+		t.Errorf("got %+v, want {settings upsert governance:policy}", ev)
+	}
+}
+
 func TestParseEvent_Malformed(t *testing.T) {
 	cases := []string{
 		"",
-		"provider:upsert",          // too few segments
-		"provider:upsert:id:extra", // too many segments (4 parts after SplitN(4))
-		"badkind:upsert:id",        // unknown kind
-		"provider:badop:id",        // unknown op
-		"provider:upsert:",         // empty id
+		"provider:upsert",   // too few segments
+		"badkind:upsert:id", // unknown kind
+		"provider:badop:id", // unknown op
+		"provider:upsert:",  // empty id
 	}
 	for _, payload := range cases {
 		_, ok := parseEvent(payload)

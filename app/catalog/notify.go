@@ -44,9 +44,13 @@ var validKinds = map[string]struct{}{
 	"settings": {},
 }
 
-// parseEvent splits "kind:op:id". Returns false on any malformed input.
+// parseEvent splits "kind:op:id". The id is the remainder after the second
+// colon and may itself contain colons — settings section keys are
+// colon-namespaced (e.g. "governance:policy"), so the payload
+// "settings:upsert:governance:policy" yields id "governance:policy". Returns
+// false on any malformed input.
 func parseEvent(payload string) (notifyEvent, bool) {
-	parts := strings.SplitN(payload, ":", 4)
+	parts := strings.SplitN(payload, ":", 3)
 	if len(parts) != 3 {
 		return notifyEvent{}, false
 	}
