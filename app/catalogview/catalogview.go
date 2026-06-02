@@ -84,6 +84,13 @@ type HostRef struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName,omitempty"`
 	BaseURL     string `json:"baseURL,omitempty"`
+	// Enabled + Icon are intrinsic host properties, carried on every HostRef
+	// so "host off" flags and real logos render everywhere a host appears.
+	Enabled bool      `json:"enabled"`
+	Icon    *IconView `json:"icon,omitempty"`
+}
+type IconView struct {
+	Path string `json:"path,omitempty"`
 }
 type ModelRef struct {
 	ID          string `json:"id"`
