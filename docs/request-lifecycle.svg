@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="1280" viewBox="0 0 980 1280" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a" markerWidth="11" markerHeight="11" refX="8" refY="3.2" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3.2 L0,6.4 z" fill="#64748b"/>
+    </marker>
+    <marker id="aP" markerWidth="11" markerHeight="11" refX="8" refY="3.2" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3.2 L0,6.4 z" fill="#c084fc"/>
+    </marker>
+    <style>
+      .title { font-size:26px; font-weight:700; fill:#f1f5f9; }
+      .sub   { font-size:13.5px; fill:#94a3b8; }
+      .num   { font-size:15px; font-weight:700; fill:#0b1120; }
+      .step  { font-size:16px; font-weight:700; fill:#e2e8f0; }
+      .desc  { font-size:12.5px; fill:#cbd5e1; }
+      .mono  { font-size:11.5px; fill:#93a4c4; font-family:"SF Mono",Menlo,Consolas,monospace; }
+      .edge  { font-size:11px; fill:#94a3b8; font-style:italic; }
+      .tag   { font-size:11px; font-weight:700; }
+    </style>
+  </defs>
+
+  <rect width="980" height="1280" fill="#0b1120"/>
+  <text x="40" y="46" class="title">Request Lifecycle — one /v1 call, end to end</text>
+  <text x="40" y="70" class="sub">Stateless hot path. The response never waits on anything async — post-flight is detached.</text>
+
+  <!-- vertical spine line -->
+  <line x1="120" y1="110" x2="120" y2="980" stroke="#1e293b" stroke-width="2"/>
+
+  <!-- helper: each step is a numbered node + a card -->
+  <!-- STEP 1 -->
+  <circle cx="120" cy="135" r="17" fill="#60a5fa"/><text x="120" y="141" text-anchor="middle" class="num">1</text>
+  <rect x="160" y="108" width="780" height="56" rx="9" fill="#16233f" stroke="#60a5fa" stroke-width="1.3"/>
+  <text x="180" y="132" class="step">Inbound  —  httpapi/inference edge</text>
+  <text x="180" y="152" class="desc">Customer POSTs /v1/chat/completions with a relay-key bearer. Route is mounted generically; dispatch is shape-agnostic.</text>
+
+  <!-- STEP 2 -->
+  <circle cx="120" cy="215" r="17" fill="#60a5fa"/><text x="120" y="221" text-anchor="middle" class="num">2</text>
+  <rect x="160" y="188" width="780" height="56" rx="9" fill="#111a2e" stroke="#334155" stroke-width="1.3"/>
+  <text x="180" y="212" class="step">Authenticate  —  relay-key → Policy</text>
+  <text x="180" y="232" class="desc">Bearer hashed → snapshot.RelayKeyByHash → resolves the customer's Policy. In-memory only; no DB.</text>
+
+  <!-- STEP 3 -->
+  <circle cx="120" cy="295" r="17" fill="#60a5fa"/><text x="120" y="301" text-anchor="middle" class="num">3</text>
+  <rect x="160" y="268" width="780" height="56" rx="9" fill="#2a1c10" stroke="#fb923c" stroke-width="1.3"/>
+  <text x="180" y="292" class="step">Route  —  routing/ builds the Plan</text>
+  <text x="180" y="312" class="desc">Snapshot lookup → Plan{Model, Policy, HostBinding, Host, Keys, Rules}. Picks the Adapter from the HostBinding.</text>
+
+  <!-- STEP 4 -->
+  <circle cx="120" cy="375" r="17" fill="#34d399"/><text x="120" y="381" text-anchor="middle" class="num">4</text>
+  <rect x="160" y="348" width="780" height="56" rx="9" fill="#0e2a20" stroke="#34d399" stroke-width="1.3"/>
+  <text x="180" y="372" class="step">Reserve  —  ratelimit/  (one Redis Lua call)</text>
+  <text x="180" y="392" class="desc">Single atomic reserve against the policy's rules. Over limit → 429 here, before any upstream work.</text>
+
+  <!-- STEP 5 -->
+  <circle cx="120" cy="455" r="17" fill="#34d399"/><text x="120" y="461" text-anchor="middle" class="num">5</text>
+  <rect x="160" y="428" width="780" height="56" rx="9" fill="#0e2a20" stroke="#34d399" stroke-width="1.3"/>
+  <text x="180" y="452" class="step">Pick key  —  keypool/ Selector + circuit breaker</text>
+  <text x="180" y="472" class="desc">Healthy upstream key chosen (prioritized / round-robin / LRU). Breaker keyed by value-hash; tripped keys skipped.</text>
+
+  <!-- STEP 6 — translate branch -->
+  <circle cx="120" cy="535" r="17" fill="#2dd4bf"/><text x="120" y="541" text-anchor="middle" class="num">6</text>
+  <rect x="160" y="508" width="780" height="92" rx="9" fill="#0d2925" stroke="#2dd4bf" stroke-width="1.3"/>
+  <text x="180" y="532" class="step">Translate request  —  inbound shape → upstream shape</text>
+  <text x="180" y="554" class="mono">same-shape  OR  Spec.IsNativePath  OR  BytePass  →  byte-pass via io.Copy   (the 95% case)</text>
+  <text x="180" y="574" class="mono">otherwise  →  parse to sdk/v1 canonical  →  serialize to upstream  (per-SSE-chunk on streams)</text>
+  <text x="180" y="592" class="edge">Failover (try the next key) can still happen here — it is always PRE-first-byte.</text>
+
+  <!-- STEP 7 — upstream -->
+  <circle cx="120" cy="655" r="17" fill="#fb923c"/><text x="120" y="661" text-anchor="middle" class="num">7</text>
+  <rect x="160" y="628" width="780" height="56" rx="9" fill="#2a1c10" stroke="#fb923c" stroke-width="1.3"/>
+  <text x="180" y="652" class="step">Call upstream  —  app/adapter specAdapter</text>
+  <text x="180" y="672" class="desc">HTTP to the provider using the Spec's upstream URL + auth strategy and the selected key. First byte arrives.</text>
+
+  <!-- STEP 8 — stream back -->
+  <circle cx="120" cy="735" r="17" fill="#fbbf24"/><text x="120" y="741" text-anchor="middle" class="num">8</text>
+  <rect x="160" y="708" width="780" height="72" rx="9" fill="#2a2310" stroke="#fbbf24" stroke-width="1.3"/>
+  <text x="180" y="732" class="step">Stream back  —  io.TeeReader</text>
+  <text x="180" y="752" class="desc">Bytes pass straight through to the caller, translated back per-chunk if cross-shape. A buffered copy is teed</text>
+  <text x="180" y="769" class="desc">aside for post-flight. After bytes flow, errors stop being relay's problem — no mid-stream failover.</text>
+
+  <!-- STEP 9 — caller done -->
+  <circle cx="120" cy="815" r="17" fill="#fbbf24"/><text x="120" y="821" text-anchor="middle" class="num">9</text>
+  <rect x="160" y="800" width="780" height="40" rx="9" fill="#111a2e" stroke="#334155" stroke-width="1.3"/>
+  <text x="180" y="825" class="step">Caller receives full response  →  Body.Close()</text>
+
+  <!-- arrows between steps along spine -->
+  <g stroke="#64748b" stroke-width="1.6" marker-end="url(#a)">
+    <line x1="120" y1="152" x2="120" y2="196"/>
+    <line x1="120" y1="232" x2="120" y2="276"/>
+    <line x1="120" y1="312" x2="120" y2="356"/>
+    <line x1="120" y1="392" x2="120" y2="436"/>
+    <line x1="120" y1="472" x2="120" y2="516"/>
+    <line x1="120" y1="552" x2="120" y2="636"/>
+    <line x1="120" y1="672" x2="120" y2="716"/>
+    <line x1="120" y1="752" x2="120" y2="798"/>
+  </g>
+
+  <!-- DETACHED POST-FLIGHT -->
+  <path d="M120 840 L120 905 L160 905" fill="none" stroke="#c084fc" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#aP)"/>
+  <text x="132" y="884" class="tag" fill="#c084fc">detached goroutine — never blocks the response</text>
+
+  <rect x="160" y="876" width="780" height="98" rx="9" fill="#241432" stroke="#c084fc" stroke-width="1.4" stroke-dasharray="6,4"/>
+  <text x="180" y="900" class="step" fill="#c084fc">10  ·  Post-flight  (fires on Body.Close)</text>
+  <text x="180" y="922" class="mono">Limiter.Commit  →  Selector.RecordSuccess  →  Lifecycle.FirePostFlight (fan-out, per-hook panic recovery)</text>
+  <text x="180" y="942" class="desc">Observers read the request Context + event; they never mutate. All emits are async over bounded channels</text>
+  <text x="180" y="959" class="desc">with drop-on-full + a drop counter:  usage → JSONL/ClickHouse · OTel span (TODO) · Prometheus (TODO).</text>
+
+  <!-- failure / fast-exit callout -->
+  <rect x="40" y="1010" width="900" height="230" rx="12" fill="#111a2e" stroke="#334155" stroke-width="1.4"/>
+  <text x="64" y="1040" class="step" fill="#e2e8f0">Where it can exit early (all before first byte)</text>
+  <g>
+    <text x="64" y="1070" class="desc"><tspan class="tag" fill="#60a5fa">401</tspan>  step 2  — relay-key not found / not mapped to a Policy</text>
+    <text x="64" y="1096" class="desc"><tspan class="tag" fill="#fb923c">403</tspan>  step 3  — Policy doesn't allow the requested model</text>
+    <text x="64" y="1122" class="desc"><tspan class="tag" fill="#34d399">429</tspan>  step 4  — rate-limit reservation rejected</text>
+    <text x="64" y="1148" class="desc"><tspan class="tag" fill="#34d399">503</tspan>  step 5  — no healthy key in the pool (all breakers open)</text>
+    <text x="64" y="1174" class="desc"><tspan class="tag" fill="#2dd4bf">heal</tspan>  step 7  — upstream FailureAuth → KeyAgent fails over to next key + heals in background</text>
+    <text x="64" y="1206" class="edge">Once the first response byte is forwarded (step 8), the request is committed — failover stops, errors belong to the caller.</text>
+  </g>
+</svg>
