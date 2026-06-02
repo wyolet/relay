@@ -198,7 +198,6 @@ func MarshalJSON(c *sdkcatalog.Catalog) ([]byte, error) {
 
 type embedIndex struct {
 	manifest.MapResolver
-	Pricings map[string]string
 }
 
 func newIndex() *embedIndex {
@@ -210,14 +209,10 @@ func newIndex() *embedIndex {
 			Models:     map[string]string{},
 			HostKeys:   map[string]string{},
 			RateLimits: map[string]string{},
+			Pricings:   map[string]string{},
+			Bindings:   map[string]string{},
 		},
-		Pricings: map[string]string{},
 	}
-}
-
-func (i *embedIndex) PricingID(name string) (string, bool) {
-	v, ok := i.Pricings[name]
-	return v, ok
 }
 
 func mintIDs[T any](into map[string]string, docs []T, name func(T) string) {

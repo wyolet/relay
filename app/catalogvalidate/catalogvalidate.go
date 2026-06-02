@@ -120,6 +120,7 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 	issues = append(issues, checkHostKeyRefs(g)...)
 	issues = append(issues, checkPolicyRefs(g)...)
 	issues = append(issues, checkPricingRefs(g)...)
+	issues = append(issues, checkBindingRefs(g)...)
 	issues = append(issues, checkRelayKeyRefs(g)...)
 	issues = append(issues, checkOrphans(g)...)
 
@@ -131,14 +132,15 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 // Slices of issues are intentionally separate from the lookup index so
 // checks can be added without touching the indexing code.
 type graph struct {
-	Providers  map[string]*manifest.ProviderDTO
-	Hosts      map[string]*manifest.HostDTO
-	Models     map[string]*manifest.ModelDTO
-	HostKeys   map[string]*manifest.HostKeyDTO
-	Policies   map[string]*manifest.PolicyDTO
-	RateLimits map[string]*manifest.RateLimitDTO
-	RelayKeys  map[string]*manifest.RelayKeyDTO
-	Pricings   map[string]*manifest.PricingDTO
+	Providers    map[string]*manifest.ProviderDTO
+	Hosts        map[string]*manifest.HostDTO
+	Models       map[string]*manifest.ModelDTO
+	HostKeys     map[string]*manifest.HostKeyDTO
+	Policies     map[string]*manifest.PolicyDTO
+	RateLimits   map[string]*manifest.RateLimitDTO
+	RelayKeys    map[string]*manifest.RelayKeyDTO
+	Pricings     map[string]*manifest.PricingDTO
+	HostBindings map[string]*manifest.HostBindingDTO
 
 	// duplicates tracks names that appeared more than once within a kind.
 	// Each entry holds the kind + name; checkDuplicateNames emits issues.
@@ -147,14 +149,15 @@ type graph struct {
 
 func buildGraph(docs []manifest.Document) *graph {
 	g := &graph{
-		Providers:  map[string]*manifest.ProviderDTO{},
-		Hosts:      map[string]*manifest.HostDTO{},
-		Models:     map[string]*manifest.ModelDTO{},
-		HostKeys:   map[string]*manifest.HostKeyDTO{},
-		Policies:   map[string]*manifest.PolicyDTO{},
-		RateLimits: map[string]*manifest.RateLimitDTO{},
-		RelayKeys:  map[string]*manifest.RelayKeyDTO{},
-		Pricings:   map[string]*manifest.PricingDTO{},
+		Providers:    map[string]*manifest.ProviderDTO{},
+		Hosts:        map[string]*manifest.HostDTO{},
+		Models:       map[string]*manifest.ModelDTO{},
+		HostKeys:     map[string]*manifest.HostKeyDTO{},
+		Policies:     map[string]*manifest.PolicyDTO{},
+		RateLimits:   map[string]*manifest.RateLimitDTO{},
+		RelayKeys:    map[string]*manifest.RelayKeyDTO{},
+		Pricings:     map[string]*manifest.PricingDTO{},
+		HostBindings: map[string]*manifest.HostBindingDTO{},
 	}
 	for i := range docs {
 		d := &docs[i]
@@ -205,6 +208,12 @@ func buildGraph(docs []manifest.Document) *graph {
 			indexOne(g, "Pricing", d.Pricing.Metadata.Name, func() bool {
 				_, dup := g.Pricings[d.Pricing.Metadata.Name]
 				g.Pricings[d.Pricing.Metadata.Name] = d.Pricing
+				return dup
+			})
+		case d.HostBinding != nil:
+			indexOne(g, "HostBinding", d.HostBinding.Metadata.Name, func() bool {
+				_, dup := g.HostBindings[d.HostBinding.Metadata.Name]
+				g.HostBindings[d.HostBinding.Metadata.Name] = d.HostBinding
 				return dup
 			})
 		}

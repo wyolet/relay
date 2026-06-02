@@ -29,7 +29,7 @@ func fixture() []manifest.Document {
 			Kind:       "Model",
 			Metadata:   manifest.WireMeta{Name: "gpt-x", Owner: manifest.WireOwner{Kind: "provider", Name: "openai"}},
 			Spec: manifest.ModelSpec{
-				Hosts: []manifest.HostBindingDTO{
+				Hosts: []manifest.ModelHostBindingDTO{
 					{Host: "openai-host", Adapter: "openai"},
 				},
 				Snapshots: []model.Snapshot{{Name: "gpt-x", OriginalName: "gpt-x"}},

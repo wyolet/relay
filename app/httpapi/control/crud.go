@@ -22,6 +22,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -715,6 +716,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	rlmeta := func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }
 	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
 	prmeta := func(p *pricing.Pricing) *meta.Metadata { return &p.Meta }
+	bmeta := func(b *binding.Binding) *meta.Metadata { return &b.Meta }
 	rkmeta := func(k *relaykey.RelayKey) *meta.Metadata { return &k.Meta }
 
 	registerKind[provider.Provider](
@@ -820,6 +822,21 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&pricingFilter,
+	)
+
+	registerKind[binding.Binding](
+		api, "host-bindings", "host-binding", d.Stores.Binding, d.Authz, bmeta,
+		func(b *binding.Binding) error { return b.Validate() },
+		"",
+		listScanResolver(d.Stores.Binding, bmeta),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&bindingFilter,
 	)
 
 	// relay-keys uses a custom POST handler (registerRelayKeyCreate) that

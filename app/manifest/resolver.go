@@ -11,6 +11,8 @@ type Resolver interface {
 	ModelID(name string) (string, bool)
 	HostKeyID(name string) (string, bool)
 	RateLimitID(name string) (string, bool)
+	PricingID(name string) (string, bool)
+	BindingID(name string) (string, bool)
 }
 
 // ReverseResolver resolves entity ids to names. Used to render domain structs
@@ -22,6 +24,8 @@ type ReverseResolver interface {
 	ModelName(id string) (string, bool)
 	HostKeyName(id string) (string, bool)
 	RateLimitName(id string) (string, bool)
+	PricingName(id string) (string, bool)
+	BindingName(id string) (string, bool)
 }
 
 // MapResolver is a convenience implementation of Resolver backed by plain
@@ -33,6 +37,8 @@ type MapResolver struct {
 	Models     map[string]string
 	HostKeys   map[string]string
 	RateLimits map[string]string
+	Pricings   map[string]string
+	Bindings   map[string]string
 }
 
 func (m MapResolver) ProviderID(name string) (string, bool) { v, ok := m.Providers[name]; return v, ok }
@@ -44,6 +50,8 @@ func (m MapResolver) RateLimitID(name string) (string, bool) {
 	v, ok := m.RateLimits[name]
 	return v, ok
 }
+func (m MapResolver) PricingID(name string) (string, bool) { v, ok := m.Pricings[name]; return v, ok }
+func (m MapResolver) BindingID(name string) (string, bool) { v, ok := m.Bindings[name]; return v, ok }
 
 // MapReverseResolver is a convenience implementation of ReverseResolver backed
 // by plain maps.
@@ -54,6 +62,8 @@ type MapReverseResolver struct {
 	Models     map[string]string
 	HostKeys   map[string]string
 	RateLimits map[string]string
+	Pricings   map[string]string
+	Bindings   map[string]string
 }
 
 func (m MapReverseResolver) ProviderName(id string) (string, bool) {
@@ -72,5 +82,13 @@ func (m MapReverseResolver) HostKeyName(id string) (string, bool) {
 }
 func (m MapReverseResolver) RateLimitName(id string) (string, bool) {
 	v, ok := m.RateLimits[id]
+	return v, ok
+}
+func (m MapReverseResolver) PricingName(id string) (string, bool) {
+	v, ok := m.Pricings[id]
+	return v, ok
+}
+func (m MapReverseResolver) BindingName(id string) (string, bool) {
+	v, ok := m.Bindings[id]
 	return v, ok
 }

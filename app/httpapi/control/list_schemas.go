@@ -16,6 +16,7 @@ package control
 import (
 	"time"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -211,6 +212,22 @@ var pricingFilter = filter.Schema[pricing.Pricing]{
 	},
 	Q:           func(p *pricing.Pricing) []string { return []string{p.Meta.Name, p.Meta.DisplayName} },
 	Labels:      func(p *pricing.Pricing) map[string]string { return labelsOf(p.Meta) },
+	DefaultSort: "name",
+}
+
+var bindingFilter = filter.Schema[binding.Binding]{
+	Fields: []filter.Field[binding.Binding]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *binding.Binding) string { return b.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *binding.Binding) bool { return enabledTrue(b.Spec.Enabled) }},
+		{Name: "model_id", Kind: filter.String, Get: func(b *binding.Binding) string { return b.Spec.ModelID }},
+		{Name: "host_id", Kind: filter.String, Get: func(b *binding.Binding) string { return b.Spec.HostID }},
+		{Name: "pricing_id", Kind: filter.String, Get: func(b *binding.Binding) string { return b.Spec.PricingID }},
+		{Name: "adapter", Kind: filter.String, Get: func(b *binding.Binding) string { return string(b.Spec.Adapter) }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(b *binding.Binding) time.Time { return b.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(b *binding.Binding) time.Time { return b.Meta.UpdatedAt }},
+	},
+	Q:           func(b *binding.Binding) []string { return []string{b.Meta.Name, b.Meta.DisplayName} },
+	Labels:      func(b *binding.Binding) map[string]string { return labelsOf(b.Meta) },
 	DefaultSort: "name",
 }
 

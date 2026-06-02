@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -198,13 +199,13 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 }
 
 func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
-	bindings := make([]HostBindingDTO, 0, len(m.Spec.Hosts))
+	bindings := make([]ModelHostBindingDTO, 0, len(m.Spec.Hosts))
 	for _, b := range m.Spec.Hosts {
 		name, _ := rev.HostName(b.HostID)
 		if name == "" {
 			name = b.HostID // fallback to id
 		}
-		bindings = append(bindings, HostBindingDTO{
+		bindings = append(bindings, ModelHostBindingDTO{
 			Host:      name,
 			Adapter:   string(b.Adapter),
 			Enabled:   b.Enabled,
@@ -604,6 +605,79 @@ func parseDuration(v interface{}) (time.Duration, error) {
 		return time.Duration(int64(val)), nil
 	default:
 		return 0, fmt.Errorf("unsupported window type %T", v)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HostBinding
+// ---------------------------------------------------------------------------
+
+// ToHostBinding resolves model, host, and (optional) pricing names to ids.
+func ToHostBinding(d HostBindingDTO, idx Resolver) (*binding.Binding, error) {
+	modelID, ok := idx.ModelID(d.Spec.Model)
+	if !ok {
+		return nil, fmt.Errorf("hostbinding %q: model %q not found", d.Metadata.Name, d.Spec.Model)
+	}
+	hostID, ok := idx.HostID(d.Spec.Host)
+	if !ok {
+		return nil, fmt.Errorf("hostbinding %q: host %q not found", d.Metadata.Name, d.Spec.Host)
+	}
+	var pricingID string
+	if d.Spec.Pricing != "" {
+		pid, ok := idx.PricingID(d.Spec.Pricing)
+		if !ok {
+			return nil, fmt.Errorf("hostbinding %q: pricing %q not found", d.Metadata.Name, d.Spec.Pricing)
+		}
+		pricingID = pid
+	}
+	m := d.Metadata.toMeta()
+	if m.Owner.Kind == "" {
+		m.Owner.Kind = meta.OwnerSystem
+	}
+	return &binding.Binding{
+		Meta: m,
+		Spec: binding.Spec{
+			ModelID:      modelID,
+			HostID:       hostID,
+			Adapter:      adapters.Name(d.Spec.Adapter),
+			UpstreamName: d.Spec.UpstreamName,
+			PricingID:    pricingID,
+			Enabled:      d.Spec.Enabled,
+			Snapshots:    d.Spec.Snapshots,
+		},
+	}, nil
+}
+
+func FromHostBinding(b *binding.Binding, rev ReverseResolver) HostBindingDTO {
+	modelName, _ := rev.ModelName(b.Spec.ModelID)
+	if modelName == "" {
+		modelName = b.Spec.ModelID
+	}
+	hostName, _ := rev.HostName(b.Spec.HostID)
+	if hostName == "" {
+		hostName = b.Spec.HostID
+	}
+	pricingName := ""
+	if b.Spec.PricingID != "" {
+		n, _ := rev.PricingName(b.Spec.PricingID)
+		if n == "" {
+			n = b.Spec.PricingID
+		}
+		pricingName = n
+	}
+	return HostBindingDTO{
+		APIVersion: APIVersion,
+		Kind:       "HostBinding",
+		Metadata:   metaToWire(b.Meta),
+		Spec: HostBindingSpec{
+			Model:        modelName,
+			Host:         hostName,
+			Adapter:      string(b.Spec.Adapter),
+			UpstreamName: b.Spec.UpstreamName,
+			Pricing:      pricingName,
+			Enabled:      b.Spec.Enabled,
+			Snapshots:    b.Spec.Snapshots,
+		},
 	}
 }
 

@@ -15,15 +15,16 @@ import (
 // Document is a discriminated union over all supported wire kinds. Exactly one
 // of the fields below is non-nil after successful parsing.
 type Document struct {
-	Provider  *ProviderDTO
-	Host      *HostDTO
-	Model     *ModelDTO
-	HostKey   *HostKeyDTO
-	Policy    *PolicyDTO
-	RateLimit *RateLimitDTO
-	RelayKey  *RelayKeyDTO
-	Pricing   *PricingDTO
-	Setting   *SettingDTO
+	Provider    *ProviderDTO
+	Host        *HostDTO
+	Model       *ModelDTO
+	HostKey     *HostKeyDTO
+	Policy      *PolicyDTO
+	RateLimit   *RateLimitDTO
+	RelayKey    *RelayKeyDTO
+	Pricing     *PricingDTO
+	HostBinding *HostBindingDTO
+	Setting     *SettingDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -45,6 +46,8 @@ func (d Document) Kind() string {
 		return "RelayKey"
 	case d.Pricing != nil:
 		return "Pricing"
+	case d.HostBinding != nil:
+		return "HostBinding"
 	case d.Setting != nil:
 		return "Setting"
 	default:
@@ -208,6 +211,13 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 			return Document{}, err
 		}
 		return Document{Pricing: &PricingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "HostBinding":
+		var spec HostBindingSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{HostBinding: &HostBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
 	case "Setting":
 		// Spec stays a raw node — its shape is per-section and is validated
