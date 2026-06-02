@@ -1,0 +1,7 @@
+# Auto-loaded by `docker compose up` from the repo root. Re-exports the
+# canonical override under deploy/compose/ — bundles Postgres/ClickHouse/Jaeger
+# and builds the relay image from source (relay:local) so the stack boots on a
+# fresh machine with no published image. Drop this file (or run the base
+# docker-compose.yml alone) to pull a published image instead.
+include:
+  - deploy/compose/docker-compose.override.yml
