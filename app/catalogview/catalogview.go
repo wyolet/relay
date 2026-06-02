@@ -226,7 +226,7 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 
 	rows := []ModelPolicyRow{}
 	for _, p := range idx.policies {
-		hostSlug, granted := idx.policyGrantsModel(p, m, provSlug, modelHosts)
+		hostSlug, granted, _ := idx.policyGrantsModel(p, m, provSlug, modelHosts)
 		if !granted {
 			continue
 		}
@@ -251,23 +251,13 @@ type HostModelRow struct {
 
 // HostModels returns the models a host serves (by id or slug).
 func (s *Service) HostModels(ctx context.Context, ref string) (HostRef, []HostModelRow, error) {
-	idx, err := s.buildIndex(ctx)
+	h, idx, err := s.loadHost(ctx, ref)
 	if err != nil {
 		return HostRef{}, nil, err
 	}
 	models, err := s.Models.List(ctx)
 	if err != nil {
 		return HostRef{}, nil, err
-	}
-	var h *host.Host
-	for _, x := range idx.hostByID {
-		if x.Meta.ID == ref || x.Meta.Name == ref {
-			h = x
-			break
-		}
-	}
-	if h == nil {
-		return HostRef{}, nil, ErrNotFound
 	}
 	modelByID := make(map[string]*model.Model, len(models))
 	for _, m := range models {
@@ -302,12 +292,13 @@ func (s *Service) HostModels(ctx context.Context, ref string) (HostRef, []HostMo
 //     candidate host (deprecated unless IncludeDeprecated); otherwise the
 //     Models DSL must match (provider, model, host).
 //
-// Returns the host slug that satisfied the grant (for per-model RL selection).
-func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug string, modelHosts map[string]string) (string, bool) {
+// Returns the host slug that satisfied the grant (for per-model RL selection)
+// and, when the grant fails, a human-readable reason (for the ?debug view).
+func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug string, modelHosts map[string]string) (string, bool, string) {
 	// Explicit literal grant — no host/coverage needed (matches PolicyAllows).
 	for _, id := range p.Spec.ModelIDs {
 		if id == m.Meta.ID {
-			return "", true
+			return "", true, ""
 		}
 	}
 
@@ -331,18 +322,28 @@ func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug s
 		}
 	}
 
+	if len(candidates) == 0 {
+		if p.Meta.Owner.Kind == meta.OwnerHost {
+			return "", false, "host-tier policy's host has no binding for this model"
+		}
+		return "", false, "policy's host-keys reach no host that binds this model"
+	}
+
 	for _, slug := range candidates {
 		if wildcard {
 			if !hideDeprecated {
-				return slug, true
+				return slug, true, ""
 			}
 			continue
 		}
 		if modelref.MatchAny(p.Spec.Models, provSlug, m.Meta.Name, slug) {
-			return slug, true
+			return slug, true, ""
 		}
 	}
-	return "", false
+	if wildcard { // every candidate was filtered by the deprecation gate
+		return "", false, "model is deprecated and policy lacks includeDeprecated"
+	}
+	return "", false, "policy's Models grant matches this model on no reachable host"
 }
 
 // modelDeprecated mirrors routing.isDeprecated — deprecated/sunset models are
