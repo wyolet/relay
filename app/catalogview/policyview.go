@@ -5,10 +5,13 @@ import (
 
 	"context"
 
+	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/provider"
 )
 
 // policyview.go is the policy-detail mirror of the model-detail projections:
@@ -34,8 +37,10 @@ type PolicyRef struct {
 }
 
 type HostKeyRef struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Enabled               bool   `json:"enabled"`
+	SharedWithPolicyCount int    `json:"sharedWithPolicyCount"` // # of OTHER policies referencing this key
 }
 
 // PolicyBindingRow — one concrete (provider, model, host) binding this policy
@@ -64,9 +69,13 @@ type PolicyModelExclusion struct {
 
 // PolicyHostRow — a host this policy can reach, with the host-keys that reach
 // it (empty for a host-tier policy's own host, which needs no key to qualify).
+// Requirement is "required" when this host uniquely serves at least one model
+// the policy grants (losing its key would drop that model), else "optional" —
+// a sibling reachable host covers everything it does.
 type PolicyHostRow struct {
-	Host     HostRef      `json:"host"`
-	HostKeys []HostKeyRef `json:"hostKeys"`
+	Host        HostRef      `json:"host"`
+	HostKeys    []HostKeyRef `json:"hostKeys"`
+	Requirement string       `json:"requirement"` // "required" | "optional"
 }
 
 // PolicyRateLimitRow — one rate-limit rule set the policy references. Default
@@ -109,6 +118,41 @@ func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []Po
 		return PolicyRef{}, nil, err
 	}
 	rows := []PolicyBindingRow{}
+	for _, gb := range idx.grantedBindings(p, models) {
+		rlID := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
+		rows = append(rows, PolicyBindingRow{
+			Provider:  providerRefOf(gb.prov),
+			Host:      hostRefOf(gb.host),
+			Model:     modelRefOf(gb.model),
+			Binding:   bindingViewOf(gb.binding),
+			MatchedBy: gb.matchedBy,
+			Limits:    idx.limitsOf(rlID),
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Model.Name != rows[j].Model.Name {
+			return rows[i].Model.Name < rows[j].Model.Name
+		}
+		return rows[i].Host.Name < rows[j].Host.Name
+	})
+	return policyRefOf(p, idx), rows, nil
+}
+
+// grantedBinding is one (provider, model, host) binding a policy grants, with
+// the grant ref(s) that produced it. Shared by the models / hosts / rate-limits
+// projections so all three resolve grants identically.
+type grantedBinding struct {
+	prov      *provider.Provider
+	provSlug  string
+	model     *model.Model
+	host      *host.Host
+	binding   *binding.Binding
+	matchedBy []string
+}
+
+// grantedBindings enumerates every (model, host) binding the policy grants.
+func (idx *index) grantedBindings(p *policy.Policy, models []*model.Model) []grantedBinding {
+	out := []grantedBinding{}
 	for _, m := range models {
 		prov := idx.providerByID[m.Meta.Owner.ID]
 		provSlug := ""
@@ -124,24 +168,10 @@ func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []Po
 			if len(matched) == 0 {
 				continue
 			}
-			rlID := p.SelectRateLimitID(provSlug, m.Meta.Name, h.Meta.Name)
-			rows = append(rows, PolicyBindingRow{
-				Provider:  providerRefOf(prov),
-				Host:      hostRefOf(h),
-				Model:     modelRefOf(m),
-				Binding:   bindingViewOf(b),
-				MatchedBy: matched,
-				Limits:    idx.limitsOf(rlID),
-			})
+			out = append(out, grantedBinding{prov: prov, provSlug: provSlug, model: m, host: h, binding: b, matchedBy: matched})
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Model.Name != rows[j].Model.Name {
-			return rows[i].Model.Name < rows[j].Model.Name
-		}
-		return rows[i].Host.Name < rows[j].Host.Name
-	})
-	return policyRefOf(p, idx), rows, nil
+	return out
 }
 
 // bindingGrantRefs returns the grant ref(s) by which the policy grants this
@@ -230,6 +260,25 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 	if err != nil {
 		return PolicyRef{}, nil, err
 	}
+	models, err := s.Models.List(ctx)
+	if err != nil {
+		return PolicyRef{}, nil, err
+	}
+
+	// Coverage map: which granted models each host uniquely serves, for the
+	// required/optional verdict.
+	hostModels := map[string]map[string]struct{}{} // hostID → set(modelID)
+	modelHostCount := map[string]int{}             // modelID → # of granting hosts
+	for _, gb := range idx.grantedBindings(p, models) {
+		if hostModels[gb.host.Meta.ID] == nil {
+			hostModels[gb.host.Meta.ID] = map[string]struct{}{}
+		}
+		if _, seen := hostModels[gb.host.Meta.ID][gb.model.Meta.ID]; !seen {
+			hostModels[gb.host.Meta.ID][gb.model.Meta.ID] = struct{}{}
+			modelHostCount[gb.model.Meta.ID]++
+		}
+	}
+
 	keysByHost := map[string][]HostKeyRef{}
 	hostIDs := map[string]struct{}{}
 	for _, id := range p.Spec.HostKeyIDs {
@@ -238,7 +287,12 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 			continue
 		}
 		hostIDs[k.Spec.HostID] = struct{}{}
-		keysByHost[k.Spec.HostID] = append(keysByHost[k.Spec.HostID], HostKeyRef{ID: k.Meta.ID, Name: k.Meta.Name})
+		keysByHost[k.Spec.HostID] = append(keysByHost[k.Spec.HostID], HostKeyRef{
+			ID:                    k.Meta.ID,
+			Name:                  k.Meta.Name,
+			Enabled:               hostKeyEnabled(k),
+			SharedWithPolicyCount: idx.keyShareCount(k.Meta.ID, p.Meta.ID),
+		})
 	}
 	if p.Meta.Owner.Kind == meta.OwnerHost {
 		hostIDs[p.Meta.Owner.ID] = struct{}{}
@@ -253,10 +307,43 @@ func (s *Service) PolicyHosts(ctx context.Context, ref string) (PolicyRef, []Pol
 		if keys == nil {
 			keys = []HostKeyRef{}
 		}
-		rows = append(rows, PolicyHostRow{Host: hostRefOf(h), HostKeys: keys})
+		rows = append(rows, PolicyHostRow{
+			Host:        hostRefOf(h),
+			HostKeys:    keys,
+			Requirement: requirementOf(hostModels[hid], modelHostCount),
+		})
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Host.Name < rows[j].Host.Name })
 	return policyRefOf(p, idx), rows, nil
+}
+
+// requirementOf is "required" when the host uniquely serves at least one
+// granted model (cover count 1), else "optional".
+func requirementOf(served map[string]struct{}, modelHostCount map[string]int) string {
+	for modelID := range served {
+		if modelHostCount[modelID] <= 1 {
+			return "required"
+		}
+	}
+	return "optional"
+}
+
+// keyShareCount counts policies OTHER than excludeID whose HostKeyIDs include
+// the given key.
+func (idx *index) keyShareCount(keyID, excludeID string) int {
+	n := 0
+	for _, p := range idx.policies {
+		if p.Meta.ID == excludeID {
+			continue
+		}
+		for _, id := range p.Spec.HostKeyIDs {
+			if id == keyID {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 // PolicyRateLimits returns the rate-limit rule sets the policy references — each
