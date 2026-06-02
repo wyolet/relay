@@ -108,5 +108,8 @@ ENV RELAY_CATALOG_DIR=/catalog \
     POSTGRES_DB=relay \
     PGDATA=/var/lib/postgresql/data \
     RELAY_PG_DSN=postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
-EXPOSE 8080 8081 5432
+# Only relay's two HTTP planes. Postgres is internal (relay reaches it on
+# 127.0.0.1) — deliberately not exposed; publishing it would surface a
+# default-credentialed DB. Use `docker exec` if you need to poke at it.
+EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/relay-allinone-entrypoint.sh"]
