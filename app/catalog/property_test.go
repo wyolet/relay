@@ -55,7 +55,7 @@ func runProperty(t *testing.T, seed int64, events int) {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr0})
+	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr0}, bndList{})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("initial reload: %v", err)
 	}

@@ -3,6 +3,7 @@ package catalog
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -32,6 +33,7 @@ func validateCross(
 	_ []*hostkey.HostKey,
 	_ []*ratelimit.RateLimit,
 	enabledPricings []*pricing.Pricing,
+	_ []*binding.Binding, // cross-validated via DB UNIQUE + catalogvalidate, not here
 ) error {
 	modelByID := indexBy(enabledModels, func(m *model.Model) string { return m.Meta.ID })
 

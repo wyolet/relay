@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -28,7 +29,9 @@ type keyListR []*hostkey.HostKey
 type rlListR []*ratelimit.RateLimit
 type rkListR []*relaykey.RelayKey
 type rcListR []*pricing.Pricing
+type bndListR []*binding.Binding
 
+func (l bndListR) List(context.Context) ([]*binding.Binding, error)    { return l, nil }
 func (l provListR) List(context.Context) ([]*provider.Provider, error) { return l, nil }
 func (l hostListR) List(context.Context) ([]*host.Host, error)         { return l, nil }
 func (l polListR) List(context.Context) ([]*policy.Policy, error)      { return l, nil }
@@ -98,6 +101,7 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 		rlListR{},
 		rkListR{rk},
 		rcListR{},
+		bndListR{},
 	)
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
@@ -188,7 +192,7 @@ func TestResolve_HostPinIndex(t *testing.T) {
 		},
 	}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{})
+	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{}, bndListR{})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -251,7 +255,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	keyB := &hostkey.HostKey{Meta: meta.Metadata{ID: hkB, Name: "kb", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: hostkey.Spec{HostID: hostB, PolicyID: tierBID, Value: "sk-b", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
 	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: custPolID, KeyHash: "h"}}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{})
+	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -46,7 +47,9 @@ type keyListD []*hostkey.HostKey
 type rlListD []*ratelimit.RateLimit
 type rkListD []*relaykey.RelayKey
 type rcListD []*pricing.Pricing
+type bndListD []*binding.Binding
 
+func (l bndListD) List(context.Context) ([]*binding.Binding, error)    { return l, nil }
 func (l provListD) List(context.Context) ([]*provider.Provider, error) { return l, nil }
 func (l hostListD) List(context.Context) ([]*host.Host, error)         { return l, nil }
 func (l polListD) List(context.Context) ([]*policy.Policy, error)      { return l, nil }
@@ -106,6 +109,7 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 		rlListD{},
 		rkListD{rk},
 		rcListD{},
+		bndListD{},
 	)
 	if err := cat.Reload(t.Context()); err != nil {
 		t.Fatalf("catalog reload: %v", err)

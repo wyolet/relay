@@ -93,7 +93,7 @@ func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catal
 		pricings = append(pricings, p)
 	}
 
-	snap := catalog.Build(provs, hosts, nil, nil, models, nil, nil, pricings)
+	snap := catalog.Build(provs, hosts, nil, nil, models, nil, nil, pricings, nil)
 	return flatten(snap, generatedAt), nil
 }
 

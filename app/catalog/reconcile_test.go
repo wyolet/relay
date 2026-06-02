@@ -21,7 +21,7 @@ import (
 func catalogFromFixture(t *testing.T) *Catalog {
 	t.Helper()
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -29,7 +29,7 @@ func catalogFromFixture(t *testing.T) *Catalog {
 }
 
 func TestApply_UpsertNew(t *testing.T) {
-	c := New(provList{}, hostList{}, polList{}, modList{}, keyList{}, rlList{}, rkList{}, rcList{})
+	c := New(provList{}, hostList{}, polList{}, modList{}, keyList{}, rlList{}, rkList{}, rcList{}, bndList{})
 	c.snap.Store(emptySnap())
 
 	provID := meta.NewID()
@@ -172,7 +172,7 @@ func TestApply_DeleteCascadesToPricing(t *testing.T) {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

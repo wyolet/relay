@@ -14,6 +14,7 @@ package catalog
 import (
 	"sort"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -85,6 +86,13 @@ type Snapshot struct {
 	pricingsByID map[string]*pricing.Pricing
 	// pricingByModelHost keys on modelID+"|"+hostID for O(1) hot-path lookup.
 	pricingByModelHost map[string]*pricing.Pricing
+
+	bindingsByID map[string]*binding.Binding
+	// bindingsByModelHost keys on modelID+"|"+hostID for O(1) routing lookup.
+	bindingsByModelHost map[string]*binding.Binding
+	// bindingsByModel groups a model's bindings (sorted by name) for
+	// snapshot-alias generation and per-model enumeration.
+	bindingsByModel map[string][]*binding.Binding
 
 	// Reverse-dependency indices: refsByX[X-id] = set of child refKeys that
 	// reference this row. Used by the COW reconciler to enumerate dependents
@@ -448,4 +456,34 @@ func (s *Snapshot) Pricing(id string) (*pricing.Pricing, bool) {
 func (s *Snapshot) PriceByModelHost(modelID, hostID string) (*pricing.Pricing, bool) {
 	p, ok := s.pricingByModelHost[modelID+"|"+hostID]
 	return p, ok
+}
+
+// Binding returns the enabled HostBinding with this id, or false.
+func (s *Snapshot) Binding(id string) (*binding.Binding, bool) {
+	b, ok := s.bindingsByID[id]
+	return b, ok
+}
+
+// BindingForModelHost returns the binding for (modelID, hostID), or false.
+// O(1) — the routing hot-path lookup.
+func (s *Snapshot) BindingForModelHost(modelID, hostID string) (*binding.Binding, bool) {
+	b, ok := s.bindingsByModelHost[modelID+"|"+hostID]
+	return b, ok
+}
+
+// BindingsForModel returns the bindings declared for a model, sorted by
+// binding name. Empty slice when none. The returned slice is the snapshot's
+// own — callers must not mutate it.
+func (s *Snapshot) BindingsForModel(modelID string) []*binding.Binding {
+	return s.bindingsByModel[modelID]
+}
+
+// AllBindings returns every binding in the snapshot, sorted by name.
+func (s *Snapshot) AllBindings() []*binding.Binding {
+	out := make([]*binding.Binding, 0, len(s.bindingsByID))
+	for _, b := range s.bindingsByID {
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
 }

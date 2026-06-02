@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -51,6 +52,10 @@ func (l rkList) List(context.Context) ([]*relaykey.RelayKey, error) { return l, 
 type rcList []*pricing.Pricing
 
 func (l rcList) List(context.Context) ([]*pricing.Pricing, error) { return l, nil }
+
+type bndList []*binding.Binding
+
+func (l bndList) List(context.Context) ([]*binding.Binding, error) { return l, nil }
 
 // fixture builds a coherent set: 1 provider (vendor), 1 host (serving
 // endpoint), 2 models served by that host, 2 keys for that host, 1
@@ -168,7 +173,7 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 
 func TestReload_HappyPath(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks := fixture()
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -210,7 +215,7 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 	// the relaykey too so cross-entity validation passes.
 	rks[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -236,7 +241,7 @@ func TestReload_DisabledModelDropsFromPolicyRefs(t *testing.T) {
 	models[0].Spec.Enabled = &fls
 	disabledID := models[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -261,7 +266,7 @@ func TestReload_RelayKeyToDisabledPolicyDrops(t *testing.T) {
 	// disappear from the snapshot.
 	rks[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -285,7 +290,7 @@ func TestReload_PricingResolves(t *testing.T) {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -318,7 +323,7 @@ func TestReload_DuplicatePricingFails(t *testing.T) {
 			},
 		}
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{mkPricing("p1"), mkPricing("p2")})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{mkPricing("p1"), mkPricing("p2")}, bndList{})
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "duplicate pricing") {
 		t.Fatalf("expected duplicate pricing error, got %v", err)
@@ -346,7 +351,7 @@ func TestReload_HostPoliciesMenu_OK(t *testing.T) {
 	hosts[0].Spec.DefaultPolicy = tier.Meta.ID
 	pols = append(pols, tier)
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -359,7 +364,7 @@ func TestReload_HostPoliciesMenu_UnknownPolicyDrops(t *testing.T) {
 	bad := meta.NewID()
 	hosts[0].Spec.Policies = []string{bad}
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -378,7 +383,7 @@ func TestReload_HostPoliciesMenu_WrongOwnerDrops(t *testing.T) {
 	hosts[0].Spec.Policies = []string{stray.Meta.ID}
 	pols = append(pols, stray)
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -397,7 +402,7 @@ func TestReload_HostKeyPolicy_UnknownDrops(t *testing.T) {
 	keys[0].Spec.PolicyID = meta.NewID()
 	bad := keys[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -422,7 +427,7 @@ func TestReload_HostKeyPolicy_WrongHostDrops(t *testing.T) {
 	keys[0].Spec.PolicyID = strayTier.Meta.ID
 	bad := keys[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -437,7 +442,7 @@ func TestReload_HostKeyPolicy_UserOwnedDrops(t *testing.T) {
 	keys[0].Spec.PolicyID = pols[0].Meta.ID // user-owned cheap-tier
 	bad := keys[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -455,7 +460,7 @@ func TestReload_HostPoliciesMenu_DefaultNotInMenuClears(t *testing.T) {
 	hosts[0].Spec.DefaultPolicy = other.Meta.ID
 	pols = append(pols, tier, other)
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}

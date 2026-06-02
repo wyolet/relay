@@ -35,7 +35,7 @@ func snapshotFromFixture(t *testing.T) *Snapshot {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr})
+	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr}, bndList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
