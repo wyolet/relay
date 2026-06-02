@@ -60,6 +60,11 @@ type Config struct {
 	// separated list of exact origin strings (no wildcards — credentialed
 	// CORS forbids them). Empty disables CORS entirely.
 	ControlAllowOrigins []string
+
+	// UIDisable suppresses serving the embedded admin UI on the control
+	// listener (RELAY_UI_DISABLE=1). Off by default; the UI is same-origin
+	// and adds no surface beyond the control API it already fronts.
+	UIDisable bool
 }
 
 // Load reads every RELAY_* environment variable, validates them, and returns
@@ -144,6 +149,7 @@ func Load() (*Config, error) {
 	cfg.HealthzDeadlineMS = envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
 	cfg.ShutdownDeadlineS = envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)
 
+	cfg.UIDisable = os.Getenv("RELAY_UI_DISABLE") == "1"
 	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
 	if cfg.ControlPort == "" {
 		cfg.ControlPort = "8081"
