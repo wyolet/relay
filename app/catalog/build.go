@@ -72,9 +72,14 @@ func build(
 	s.addHostKeys(keys, hostIDs, polByID)
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()
-	s.rebuildPolicyAllowSets()
 	s.addPricings(pricings, hostIDs, modelIDs)
 	s.addBindings(bindings, modelIDs, hostIDs)
+	// Aliases + policy allow-sets read bindings (BindingsForModel), so they
+	// must run after bindings are indexed.
+	for _, m := range s.modelsByID {
+		s.indexModelSnapshots(m)
+	}
+	s.rebuildPolicyAllowSets()
 
 	return s
 }

@@ -32,12 +32,11 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model)
 		keyHosts[k.Spec.HostID] = struct{}{}
 	}
 
-	for i := range m.Spec.Hosts {
-		hb := &m.Spec.Hosts[i]
+	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
 		if !hb.IsEnabled() {
 			continue
 		}
-		if _, ok := keyHosts[hb.HostID]; !ok {
+		if _, ok := keyHosts[hb.Spec.HostID]; !ok {
 			continue
 		}
 		// Explicit policies consult the precomputed allow-set; implicit
@@ -46,7 +45,7 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model)
 			if !deprecated || pol.Spec.IncludeDeprecated {
 				return true
 			}
-		} else if snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.HostID) {
+		} else if snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.Spec.HostID) {
 			return true
 		}
 	}

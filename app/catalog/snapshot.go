@@ -142,19 +142,18 @@ func (s *Snapshot) indexModelSnapshots(m *model.Model) {
 		if provSlug != "" {
 			s.snapshotAliases[slug.From(provSlug+"/"+snap.Name)] = base
 		}
-		for j := range m.Spec.Hosts {
-			hb := &m.Spec.Hosts[j]
+		for _, hb := range s.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
 				continue
 			}
-			h, ok := s.hostsByID[hb.HostID]
+			h, ok := s.hostsByID[hb.Spec.HostID]
 			if !ok {
 				continue
 			}
 			if _, skip := hostPinSkip[h.Meta.Name]; skip {
 				continue
 			}
-			pinned := snapshotRef{Model: m, Snapshot: snap, HostID: hb.HostID}
+			pinned := snapshotRef{Model: m, Snapshot: snap, HostID: hb.Spec.HostID}
 			s.snapshotAliases[slug.From(snap.Name+"@"+h.Meta.Name)] = pinned
 			if provSlug != "" {
 				s.snapshotAliases[slug.From(provSlug+"/"+snap.Name+"@"+h.Meta.Name)] = pinned
@@ -472,10 +471,18 @@ func (s *Snapshot) BindingForModelHost(modelID, hostID string) (*binding.Binding
 }
 
 // BindingsForModel returns the bindings declared for a model, sorted by
-// binding name. Empty slice when none. The returned slice is the snapshot's
-// own — callers must not mutate it.
+// binding name. When the model has no standalone HostBinding rows, it falls
+// back to bindings synthesized from the model's embedded Spec.Hosts (the
+// migration bridge — see syntheticBindings). The returned slice must not be
+// mutated.
 func (s *Snapshot) BindingsForModel(modelID string) []*binding.Binding {
-	return s.bindingsByModel[modelID]
+	if b := s.bindingsByModel[modelID]; len(b) > 0 {
+		return b
+	}
+	if m, ok := s.modelsByID[modelID]; ok {
+		return syntheticBindings(m)
+	}
+	return nil
 }
 
 // AllBindings returns every binding in the snapshot, sorted by name.

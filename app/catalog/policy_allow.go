@@ -66,18 +66,17 @@ func (s *Snapshot) rebuildPolicyAllowSets() {
 			_, isLegacy := legacy[m.Meta.ID]
 			provSlug, _ := s.ProviderSlug(m.Meta.Owner.ID)
 			hideDeprecated := modelDeprecated(m) && !p.Spec.IncludeDeprecated
-			for j := range m.Spec.Hosts {
-				hb := &m.Spec.Hosts[j]
+			for _, hb := range s.BindingsForModel(m.Meta.ID) {
 				if !hb.IsEnabled() {
 					continue
 				}
-				h, ok := s.hostsByID[hb.HostID]
+				h, ok := s.hostsByID[hb.Spec.HostID]
 				if !ok {
 					continue
 				}
 				granted := isLegacy || refsGrant(refs, provSlug, m.Meta.Name, h.Meta.Name, hideDeprecated)
 				if granted {
-					set[comboKey{ModelID: m.Meta.ID, HostID: hb.HostID}] = struct{}{}
+					set[comboKey{ModelID: m.Meta.ID, HostID: hb.Spec.HostID}] = struct{}{}
 				}
 			}
 		}

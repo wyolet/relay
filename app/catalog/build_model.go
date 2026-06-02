@@ -10,7 +10,8 @@ func (s *Snapshot) addModels(models []*model.Model, providers, hosts idSet) {
 		}
 		s.modelsByID[clean.Meta.ID] = clean
 		s.modelsByName[clean.Meta.Name] = append(s.modelsByName[clean.Meta.Name], clean)
-		s.indexModelSnapshots(clean)
+		// indexModelSnapshots is deferred to after bindings are added (build.go)
+		// — host-pinned aliases read BindingsForModel, which needs bindings.
 		s.registerRefs(refKey{Kind: refModel, ID: clean.Meta.ID}, outboundModelRefs(m))
 	}
 }

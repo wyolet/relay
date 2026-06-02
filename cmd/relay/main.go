@@ -228,7 +228,7 @@ func main() {
 			ExtractTokens: pkgopenai.ExtractTokens,
 			UseHTTP1:      true,
 			IsNativePath: func(plan *routing.Plan) bool {
-				return plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+				return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
 			},
 		}).Build(),
 		(&adapter.Spec{

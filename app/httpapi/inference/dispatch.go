@@ -149,11 +149,11 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		// Embeddings inbound requires an OpenAI-compatible upstream adapter.
 		// Anthropic hosts don't expose /v1/embeddings. This guard is permanent
 		// (Anthropic has no embeddings API to translate to).
-		if plan.HostBinding.Adapter != adapters.OpenAI {
+		if plan.HostBinding.Spec.Adapter != adapters.OpenAI {
 			d.fireUsageFailure(ctx, "embeddings_unsupported_host", "host does not support OpenAI-compatible embeddings")
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "embeddings_unsupported_host",
 				"model "+in.ModelName+" is on host "+plan.Host.Meta.Name+
-					" (adapter="+string(plan.HostBinding.Adapter)+") which does not support OpenAI-compatible embeddings")
+					" (adapter="+string(plan.HostBinding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
 		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator)
@@ -177,20 +177,20 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Standard dispatch: look up the upstream spec and determine whether
 	// this is a same-shape pass (inbound == upstream adapter) or a cross-
 	// shape canonical translation.
-	upstreamSpec := d.Specs.Spec(plan.HostBinding.Adapter)
+	upstreamSpec := d.Specs.Spec(plan.HostBinding.Spec.Adapter)
 	if upstreamSpec == nil {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_spec",
-			"no adapter spec registered for upstream "+string(plan.HostBinding.Adapter))
+			"no adapter spec registered for upstream "+string(plan.HostBinding.Spec.Adapter))
 		return
 	}
-	upstreamAdapter := d.Specs.PipelineAdapter(plan.HostBinding.Adapter)
+	upstreamAdapter := d.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter)
 	if upstreamAdapter == nil {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
-			"no adapter registered for "+string(plan.HostBinding.Adapter))
+			"no adapter registered for "+string(plan.HostBinding.Spec.Adapter))
 		return
 	}
 
-	sameShape := in.Inbound == plan.HostBinding.Adapter
+	sameShape := in.Inbound == plan.HostBinding.Spec.Adapter
 
 	if sameShape {
 		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator)
@@ -202,7 +202,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	upstreamV1 := upstreamSpec.Translator
 	if inboundV1 == nil || upstreamV1 == nil {
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_translator",
-			"missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Adapter))
+			"missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Spec.Adapter))
 		return
 	}
 
