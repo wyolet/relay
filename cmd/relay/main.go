@@ -41,6 +41,7 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
 	"github.com/wyolet/relay/app/usagelog"
+	relayweb "github.com/wyolet/relay/cmd/relay/web"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
@@ -443,6 +444,13 @@ func main() {
 			Selector:      selector,
 		})
 		ctrlRouter.Handle("/metrics", metrics.Handler())
+		// Embedded admin UI: same-origin SPA served as the fallback after all
+		// API operations. Only mounted when a real dist was baked in (image
+		// build) and not explicitly disabled.
+		if !cfg.UIDisable && relayweb.Present() {
+			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
+			slog.Info("relay control: serving embedded UI")
+		}
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
 		go func() {
