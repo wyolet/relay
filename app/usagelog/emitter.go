@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // DefaultQueueSize is the default bounded-channel capacity if
@@ -68,6 +70,7 @@ func (e *Emitter) Emit(ev Event) {
 	select {
 	case e.queue <- ev:
 	default:
+		metrics.RecordLost("usage")
 		n := e.dropped.Add(1)
 		// Warn once per power-of-2 to avoid log spam under sustained drop.
 		if n == 1 || n&(n-1) == 0 {
