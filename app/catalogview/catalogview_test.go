@@ -346,3 +346,56 @@ func TestPolicyModels_DSLMatchedByAndCaps(t *testing.T) {
 		t.Errorf("model caps/context = %+v / %d", caps, rows[0].Model.ContextWindowTotal)
 	}
 }
+
+func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
+	provID, hostA, hostB := meta.NewID(), meta.NewID(), meta.NewID()
+	modSolo, modDual := meta.NewID(), meta.NewID()
+	keyA, keyB := meta.NewID(), meta.NewID()
+	disabled := false
+	svc := &Service{
+		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
+		Hosts: fHosts{
+			{Meta: meta.Metadata{ID: hostA, Name: "host-a"}},
+			{Meta: meta.Metadata{ID: hostB, Name: "host-b"}},
+		},
+		Models: fModels{
+			{Meta: meta.Metadata{ID: modSolo, Name: "solo", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+			{Meta: meta.Metadata{ID: modDual, Name: "dual", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+		},
+		// solo served only on host-a; dual served on both
+		Bindings: fBindings{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}, Spec: binding.Spec{ModelID: modSolo, HostID: hostA, Adapter: adapters.OpenAI}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b2"}, Spec: binding.Spec{ModelID: modDual, HostID: hostA, Adapter: adapters.OpenAI}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b3"}, Spec: binding.Spec{ModelID: modDual, HostID: hostB, Adapter: adapters.OpenAI}},
+		},
+		Pricings: fPricings{},
+		HostKeys: fHostKeys{
+			{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA, Enabled: &disabled}},
+			{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}},
+		},
+		Policies: fPolicies{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA, keyB}}},
+			// a second policy that also uses keyA → sharedWithPolicyCount = 1
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA}}},
+		},
+		RateLimits: fRLs{},
+	}
+	_, rows, err := svc.PolicyHosts(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHost := map[string]PolicyHostRow{}
+	for _, r := range rows {
+		byHost[r.Host.Name] = r
+	}
+	a, b := byHost["host-a"], byHost["host-b"]
+	if a.Requirement != "required" { // solo is only on host-a
+		t.Errorf("host-a requirement = %q, want required", a.Requirement)
+	}
+	if b.Requirement != "optional" { // dual is also on host-a
+		t.Errorf("host-b requirement = %q, want optional", b.Requirement)
+	}
+	if len(a.HostKeys) != 1 || a.HostKeys[0].Enabled || a.HostKeys[0].SharedWithPolicyCount != 1 {
+		t.Errorf("host-a key = %+v (want disabled, shared=1)", a.HostKeys)
+	}
+}
