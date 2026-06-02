@@ -21,6 +21,8 @@ import (
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 	"github.com/wyolet/relay/app/policy"
@@ -57,6 +59,9 @@ type (
 	providerStore interface {
 		List(context.Context) ([]*provider.Provider, error)
 	}
+	hostKeyStore interface {
+		List(context.Context) ([]*hostkey.HostKey, error)
+	}
 )
 
 // Service composes the store reads into views. Construct once with the
@@ -69,6 +74,7 @@ type Service struct {
 	Policies   policyStore
 	RateLimits rateLimitStore
 	Providers  providerStore
+	HostKeys   hostKeyStore
 }
 
 // ── view shapes ─────────────────────────────────────────────────────────────
@@ -199,11 +205,11 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 		return ModelRef{}, nil, err
 	}
 	provSlug := idx.providerSlug // best-effort; "" when owner unknown
-	hostSlugs := idx.modelHostSlugs(m.Meta.ID)
+	modelHosts := idx.modelHostSet(m.Meta.ID)
 
 	rows := []ModelPolicyRow{}
 	for _, p := range idx.policies {
-		hostSlug, granted := grants(p, m, provSlug, hostSlugs)
+		hostSlug, granted := idx.policyGrantsModel(p, m, provSlug, modelHosts)
 		if !granted {
 			continue
 		}
@@ -267,25 +273,70 @@ func (s *Service) HostModels(ctx context.Context, ref string) (HostRef, []HostMo
 	return hostRefOf(h), rows, nil
 }
 
-// grants reports whether p grants m, and the host slug that satisfied a DSL
-// ref (empty for ModelIDs/wildcard grants, used for RL selection).
-func grants(p *policy.Policy, m *model.Model, provSlug string, hostSlugs []string) (string, bool) {
+// policyGrantsModel mirrors routing's reachability rules so the view shows
+// exactly the policies that could serve this model — not every wildcard.
+//
+//   - explicit ModelIDs grant short-circuits (binding/coverage-agnostic).
+//   - host-tier policies (Owner.Kind=host) apply only to their own host, and
+//     only when that host serves the model.
+//   - customer policies apply only on hosts their hostkeys actually reach
+//     (the coverage gate routing.PolicyAllows enforces).
+//   - wildcard (no ModelIDs/Models) grants non-deprecated models on a
+//     candidate host (deprecated unless IncludeDeprecated); otherwise the
+//     Models DSL must match (provider, model, host).
+//
+// Returns the host slug that satisfied the grant (for per-model RL selection).
+func (idx *index) policyGrantsModel(p *policy.Policy, m *model.Model, provSlug string, modelHosts map[string]string) (string, bool) {
+	// Explicit literal grant — no host/coverage needed (matches PolicyAllows).
 	for _, id := range p.Spec.ModelIDs {
 		if id == m.Meta.ID {
 			return "", true
 		}
 	}
-	if len(p.Spec.ModelIDs) == 0 && len(p.Spec.Models) == 0 {
-		return "", true // implicit wildcard
-	}
-	// Models DSL: match on any host the model is bound to (so @host refs work).
-	for _, hs := range hostSlugs {
-		if modelref.MatchAny(p.Spec.Models, provSlug, m.Meta.Name, hs) {
-			return hs, true
+
+	wildcard := len(p.Spec.ModelIDs) == 0 && len(p.Spec.Models) == 0
+	hideDeprecated := modelDeprecated(m) && !p.Spec.IncludeDeprecated
+
+	// Candidate (host id → slug) set this policy is even allowed to serve on.
+	candidates := map[string]string{}
+	if p.Meta.Owner.Kind == meta.OwnerHost {
+		// Host-tier policy: only its own host, and only if it serves the model.
+		if slug, ok := modelHosts[p.Meta.Owner.ID]; ok {
+			candidates[p.Meta.Owner.ID] = slug
+		}
+	} else {
+		// Customer policy: hosts the model is bound to AND the policy's keys reach.
+		keyHosts := idx.policyKeyHosts(p)
+		for hostID, slug := range modelHosts {
+			if _, ok := keyHosts[hostID]; ok {
+				candidates[hostID] = slug
+			}
 		}
 	}
-	if modelref.MatchAny(p.Spec.Models, provSlug, m.Meta.Name, "") {
-		return "", true
+
+	for _, slug := range candidates {
+		if wildcard {
+			if !hideDeprecated {
+				return slug, true
+			}
+			continue
+		}
+		if modelref.MatchAny(p.Spec.Models, provSlug, m.Meta.Name, slug) {
+			return slug, true
+		}
 	}
 	return "", false
+}
+
+// modelDeprecated mirrors routing.isDeprecated — deprecated/sunset models are
+// hidden from wildcard grants.
+func modelDeprecated(m *model.Model) bool {
+	if m.Spec.Deprecation == nil {
+		return false
+	}
+	switch m.Spec.Deprecation.Status {
+	case model.DeprecationDeprecated, model.DeprecationSunset:
+		return true
+	}
+	return false
 }

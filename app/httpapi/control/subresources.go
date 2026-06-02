@@ -29,6 +29,7 @@ func viewService(d Deps) *catalogview.Service {
 		Policies:   d.Stores.Policy,
 		RateLimits: d.Stores.RateLimit,
 		Providers:  d.Stores.Provider,
+		HostKeys:   d.Stores.HostKey,
 	}
 }
 
