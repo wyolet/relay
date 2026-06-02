@@ -60,8 +60,9 @@ relay-canonical protocol design.
 
 ### Docker (standalone — one command)
 
-Requires Docker. Bundles its own Postgres, ClickHouse, Valkey, and Jaeger;
-builds the relay image from source (no published image yet).
+Requires Docker. Bundles its own Postgres, ClickHouse, Valkey, and Jaeger,
+and builds the relay image from source (no published image yet). Run it from
+the repo root — the root `docker-compose.yml` wires the whole stack:
 
 ```bash
 cp .env.example .env
@@ -70,19 +71,30 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Data plane: `http://localhost:5100` · control plane: `http://localhost:5103`.
+Data plane: `http://localhost:5100` · control plane + **admin UI**:
+`http://localhost:5103`. The image bakes in the catalog and seeds it into the
+bundled Postgres on first boot — no extra steps to get a populated catalog.
+(You still add your own host keys + a relay key to serve traffic, via the UI
+or the control API.)
 
 ### Run from source (dev)
 
 Requires Go 1.25+, Docker, and `make`. Ephemeral Postgres via compose.
+Seeding from source needs a local clone of the catalog data — the
+[`wyolet/relay-catalog`](https://github.com/wyolet/relay-catalog) repo's
+`data/` tree (cloned alongside this repo below):
 
 ```bash
+# Catalog data, cloned next to this repo.
+git clone https://github.com/wyolet/relay-catalog ../relay-catalog
+
 # Bring the test PG up.
 docker compose -f deploy/compose/docker-compose.test.yml up -d --wait
 
 # Run the binary.
 RELAY_PG_DSN='postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable' \
   RELAY_AUTO_SEED_IF_EMPTY=1 \
+  RELAY_CATALOG_DIR=../relay-catalog/data \
   RELAY_CONFIG_DIR=./config \
   RELAY_PORT=5199 \
   RELAY_CONTROL_PORT=5198 \
@@ -93,8 +105,10 @@ RELAY_PG_DSN='postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable' 
   go run ./cmd/relay
 ```
 
-On first boot the relay auto-seeds 3 providers, 3 hosts, 132 models,
-and 110 pricings from `./config/`.
+On first boot the relay auto-seeds the catalog from `RELAY_CATALOG_DIR` into the
+empty Postgres (providers, hosts, models, bindings, pricing, policies). Omit
+`RELAY_CATALOG_DIR` to start with an empty catalog and populate it via the
+control API. (The Docker image above bakes the catalog in, so it needs no clone.)
 
 Verify:
 
