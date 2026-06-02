@@ -26,7 +26,7 @@ on:
       ui_version:
         description: 'relay-ui release tag to embed'
         required: false
-        default: 'v0.0.1'
+        default: 'v0.1.0'
       catalog_ref:
         description: 'relay-catalog ref to seed'
         required: false
@@ -80,7 +80,7 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           GH_TOKEN: ${{ secrets.UI_FETCH_TOKEN }}
-          UI_VERSION: ${{ github.event.inputs.ui_version || 'v0.0.1' }}
+          UI_VERSION: ${{ github.event.inputs.ui_version || 'v0.1.0' }}
           CATALOG_REF: ${{ github.event.inputs.catalog_ref || 'main' }}
         run: |
           # Args, the gh_token secret, dual-registry tags, and no-cache-filter

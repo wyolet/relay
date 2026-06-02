@@ -13,7 +13,7 @@
 #                is private. Omit once relay-ui is public.
 #     docker buildx build --secret id=gh_token,env=GH_TOKEN ...
 
-ARG UI_VERSION=v0.0.1
+ARG UI_VERSION=v0.1.0
 ARG CATALOG_REF=main
 
 # --- assets: fetch pinned UI dist + catalog data; no toolchain reaches final ---
