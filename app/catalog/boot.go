@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -49,6 +50,7 @@ type Stores struct {
 	RateLimit *ratelimit.Store
 	Policy    *policy.Store
 	Pricing   *pricing.Store
+	Binding   *binding.Store
 	RelayKey  *relaykey.Store
 	Settings  *settings.Store
 
@@ -76,6 +78,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		RateLimit: ratelimit.NewStore(q),
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),
+		Binding:   binding.NewStore(opts.Pool),
 		RelayKey:  relaykey.NewStore(q),
 		Settings:  settings.NewStore(q),
 		Secrets:   secReg,
@@ -83,6 +86,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
 		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
+		stores.Binding,
 	)
 	cat.settings.store = stores.Settings
 	return cat, stores, nil

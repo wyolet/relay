@@ -15,10 +15,10 @@
 //     OR — when both grant fields are empty — the policy is an implicit
 //     wildcard: any model reachable via its hostkeys is allowed. The
 //     hostkey-coverage check below is the real gate in that case.
-//  4. HostBinding: pick one Host from Model.Spec.Hosts the operator has
-//     bound. v1 picks the first enabled binding; multi-host failover is
-//     a future feature.
-//  5. Host: lookup by binding.HostID for BaseURL.
+//  4. HostBinding: pick one of the model's HostBindings (snapshot.
+//     BindingsForModel) the operator has configured. v1 picks the first
+//     enabled binding; multi-host failover is a future feature.
+//  5. Host: lookup by binding.Spec.HostID for BaseURL.
 //  6. Keys: Policy.Spec.HostKeyIDs filtered to those whose Owner.ID is
 //     the chosen Host (a key authenticates against one host).
 //  7. RateLimit: Policy.Spec.RateLimitID, resolved to []pkgratelimit.Rule.
@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -88,7 +89,7 @@ type Plan struct {
 	Model       *model.Model
 	Snapshot    *model.Snapshot
 	Policy      *policy.Policy
-	HostBinding *model.HostBinding
+	HostBinding *binding.Binding
 	Host        *host.Host
 	Provider    string
 	Keys        []*hostkey.HostKey
@@ -160,7 +161,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	// allowed it — drives the disabled-vs-not-in-policy diagnosis.
 	var (
 		chosen        *model.Model
-		binding       *model.HostBinding
+		chosenBnd     *binding.Binding
 		chosenHost    *host.Host
 		anyEnabledMod bool
 		anyEnabledBnd bool
@@ -178,18 +179,17 @@ candidates:
 		}
 		anyEnabledMod = true
 		deprecated := isDeprecated(m)
-		for i := range m.Spec.Hosts {
-			hb := &m.Spec.Hosts[i]
+		for _, hb := range snap.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
 				continue
 			}
-			if pinHostID != "" && hb.HostID != pinHostID {
+			if pinHostID != "" && hb.Spec.HostID != pinHostID {
 				continue
 			}
 			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
 				continue
 			}
-			h, ok := snap.Host(hb.HostID)
+			h, ok := snap.Host(hb.Spec.HostID)
 			if !ok {
 				continue
 			}
@@ -203,13 +203,13 @@ candidates:
 			if wildcardGrant {
 				allowed = !deprecated || pol.Spec.IncludeDeprecated
 			} else {
-				allowed = snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.HostID)
+				allowed = snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.Spec.HostID)
 			}
 			if !allowed {
 				continue
 			}
 			chosen = m
-			binding = hb
+			chosenBnd = hb
 			chosenHost = h
 			break candidates
 		}
@@ -245,7 +245,7 @@ candidates:
 		Model:       chosen,
 		Snapshot:    snapMatch,
 		Policy:      pol,
-		HostBinding: binding,
+		HostBinding: chosenBnd,
 		Host:        h,
 		Provider:    providerSlug,
 		Keys:        keys,
@@ -334,18 +334,17 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 		if isDeprecated(m) {
 			continue
 		}
-		for i := range m.Spec.Hosts {
-			hb := &m.Spec.Hosts[i]
+		for _, hb := range snap.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
 				continue
 			}
-			if pinHostID != "" && hb.HostID != pinHostID {
+			if pinHostID != "" && hb.Spec.HostID != pinHostID {
 				continue
 			}
 			if snapMatch != nil && !hb.Serves(snapMatch.Name) {
 				continue
 			}
-			h, ok := snap.Host(hb.HostID)
+			h, ok := snap.Host(hb.Spec.HostID)
 			if !ok {
 				continue
 			}

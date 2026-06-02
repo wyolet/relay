@@ -56,17 +56,17 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 	}
 
 	inboundSpec := rn.Specs.Spec(inbound)
-	upstreamSpec := rn.Specs.Spec(plan.HostBinding.Adapter)
-	upstreamAdapter := rn.Specs.PipelineAdapter(plan.HostBinding.Adapter)
+	upstreamSpec := rn.Specs.Spec(plan.HostBinding.Spec.Adapter)
+	upstreamAdapter := rn.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter)
 	if inboundSpec == nil || upstreamSpec == nil || upstreamAdapter == nil {
-		return 0, nil, fmt.Errorf("batch: adapter not registered for %s/%s", inbound, plan.HostBinding.Adapter)
+		return 0, nil, fmt.Errorf("batch: adapter not registered for %s/%s", inbound, plan.HostBinding.Spec.Adapter)
 	}
 
-	sameShape := inbound == plan.HostBinding.Adapter ||
+	sameShape := inbound == plan.HostBinding.Spec.Adapter ||
 		inboundSpec.BytePass ||
 		(inboundSpec.IsNativePath != nil && inboundSpec.IsNativePath(plan))
 	if !sameShape {
-		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, plan.HostBinding.Adapter)
+		return 0, nil, fmt.Errorf("%w (%s→%s)", ErrCrossShape, inbound, plan.HostBinding.Spec.Adapter)
 	}
 
 	lc := lifecycle.NewContext(requestID, "batch", time.Now())

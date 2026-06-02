@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -28,7 +29,9 @@ type keyListR []*hostkey.HostKey
 type rlListR []*ratelimit.RateLimit
 type rkListR []*relaykey.RelayKey
 type rcListR []*pricing.Pricing
+type bndListR []*binding.Binding
 
+func (l bndListR) List(context.Context) ([]*binding.Binding, error)    { return l, nil }
 func (l provListR) List(context.Context) ([]*provider.Provider, error) { return l, nil }
 func (l hostListR) List(context.Context) ([]*host.Host, error)         { return l, nil }
 func (l polListR) List(context.Context) ([]*policy.Policy, error)      { return l, nil }
@@ -69,7 +72,6 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{
 				mkSnap("gpt-5.5"),
 				mkSnap("gpt-5.5-2026-04-23"),
@@ -79,6 +81,10 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 			},
 			Pointer: slug.From("gpt-5.5"),
 		},
+	}
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-on-openai-rc", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
 	}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
@@ -98,6 +104,7 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 		rlListR{},
 		rkListR{rk},
 		rcListR{},
+		bndListR{b},
 	)
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
@@ -182,13 +189,20 @@ func TestResolve_HostPinIndex(t *testing.T) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostA, Adapter: adapters.OpenAI}, {HostID: hostB, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{mkSnap("gpt-5.5")},
 			Pointer:   slug.From("gpt-5.5"),
 		},
 	}
+	bA := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI},
+	}
+	bB := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-azure", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostB, Adapter: adapters.OpenAI},
+	}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{})
+	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{}, bndListR{bA, bB})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -221,6 +235,59 @@ func TestResolve_HostPinIndex(t *testing.T) {
 	}
 }
 
+// TestResolve_ViaStandaloneBinding proves routing resolves through a real
+// HostBinding row even when the model carries NO embedded spec.Hosts — i.e.
+// bindings are the source of truth after the cutover, not the synthesized
+// fallback. The model has empty Hosts; a standalone binding supplies the
+// (model, host) link.
+func TestResolve_ViaStandaloneBinding(t *testing.T) {
+	provID, hostID := meta.NewID(), meta.NewID()
+	hkID, modID, polID := meta.NewID(), meta.NewID(), meta.NewID()
+
+	prov := &provider.Provider{Meta: meta.Metadata{ID: provID, Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	h := &host.Host{Meta: meta.Metadata{ID: hostID, Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "http://up.example"}}
+	hk := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: hkID, Name: "k", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
+		Spec: hostkey.Spec{HostID: hostID, PolicyID: polID, Value: "sk", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}},
+	}
+	// Model with NO embedded hosts — only a standalone binding links it.
+	m := &model.Model{
+		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
+		Spec: model.Spec{
+			Snapshots: []model.Snapshot{mkSnap("gpt-5.5")},
+			Pointer:   slug.From("gpt-5.5"),
+		},
+	}
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-on-openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
+	}
+	pol := &policy.Policy{
+		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
+		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
+	}
+	rk := &relaykey.RelayKey{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"},
+	}
+
+	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m},
+		keyListR{hk}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b})
+	if err := c.Reload(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5", RelayKey: rk})
+	if err != nil {
+		t.Fatalf("Resolve via standalone binding: %v", err)
+	}
+	if plan.HostBinding == nil || plan.HostBinding.Meta.Name != "gpt-5-5-on-openai" {
+		t.Fatalf("expected standalone binding 'gpt-5-5-on-openai', got %+v", plan.HostBinding)
+	}
+	if plan.Host.Meta.ID != hostID {
+		t.Errorf("host = %q, want %q", plan.Host.Meta.ID, hostID)
+	}
+}
+
 // TestResolve_TierPolicyGate proves a hostkey is dropped when its own
 // (host-owned) tier policy doesn't grant the (model, host), while the customer
 // policy does. Model M is served on openai + azure; the customer policy grants
@@ -237,10 +304,17 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostA, Adapter: adapters.OpenAI}, {HostID: hostB, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{mkSnap("gpt-5.5")},
 			Pointer:   slug.From("gpt-5.5"),
 		},
+	}
+	bA := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-tp-openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI},
+	}
+	bB := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-tp-azure", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostB, Adapter: adapters.OpenAI},
 	}
 	// Customer policy (host-owned by openai for sanitize) grants all openai
 	// models; references both keys.
@@ -251,7 +325,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	keyB := &hostkey.HostKey{Meta: meta.Metadata{ID: hkB, Name: "kb", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: hostkey.Spec{HostID: hostB, PolicyID: tierBID, Value: "sk-b", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
 	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: custPolID, KeyHash: "h"}}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{})
+	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{bA, bB})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

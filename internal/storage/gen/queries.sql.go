@@ -63,6 +63,15 @@ func (q *Queries) DeleteHost(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteHostBinding = `-- name: DeleteHostBinding :exec
+DELETE FROM host_bindings WHERE id = $1
+`
+
+func (q *Queries) DeleteHostBinding(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteHostBinding, id)
+	return err
+}
+
 const deleteModel = `-- name: DeleteModel :exec
 DELETE FROM models WHERE id = $1
 `
@@ -203,6 +212,28 @@ func (q *Queries) GetHost(ctx context.Context, id string) (Host, error) {
 		&i.ID,
 		&i.Name,
 		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getHostBinding = `-- name: GetHostBinding :one
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings WHERE id = $1
+`
+
+func (q *Queries) GetHostBinding(ctx context.Context, id string) (HostBinding, error) {
+	row := q.db.QueryRow(ctx, getHostBinding, id)
+	var i HostBinding
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.ModelID,
+		&i.HostID,
+		&i.PricingID,
 		&i.Metadata,
 		&i.Spec,
 		&i.CreatedAt,
@@ -812,6 +843,43 @@ func (q *Queries) ListBatchesByRelayKey(ctx context.Context, relayKeyHash string
 			&i.TotalItems,
 			&i.CreatedAt,
 			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHostBindings = `-- name: ListHostBindings :many
+
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings ORDER BY name
+`
+
+// ── host_bindings (migration 0020) ───────────────────────────────────────────
+func (q *Queries) ListHostBindings(ctx context.Context) ([]HostBinding, error) {
+	rows, err := q.db.Query(ctx, listHostBindings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []HostBinding
+	for rows.Next() {
+		var i HostBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.ModelID,
+			&i.HostID,
+			&i.PricingID,
+			&i.Metadata,
+			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1590,6 +1658,45 @@ func (q *Queries) UpsertHost(ctx context.Context, arg UpsertHostParams) error {
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
+	return err
+}
+
+const upsertHostBinding = `-- name: UpsertHostBinding :exec
+INSERT INTO host_bindings (id, name, display_name, model_id, host_id, pricing_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    model_id = EXCLUDED.model_id,
+    host_id = EXCLUDED.host_id,
+    pricing_id = EXCLUDED.pricing_id,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW()
+`
+
+type UpsertHostBindingParams struct {
+	ID          string      `db:"id" json:"id"`
+	Name        string      `db:"name" json:"name"`
+	DisplayName string      `db:"display_name" json:"display_name"`
+	ModelID     string      `db:"model_id" json:"model_id"`
+	HostID      string      `db:"host_id" json:"host_id"`
+	PricingID   pgtype.Text `db:"pricing_id" json:"pricing_id"`
+	Metadata    []byte      `db:"metadata" json:"metadata"`
+	Spec        []byte      `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertHostBinding(ctx context.Context, arg UpsertHostBindingParams) error {
+	_, err := q.db.Exec(ctx, upsertHostBinding,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.ModelID,
+		arg.HostID,
+		arg.PricingID,
 		arg.Metadata,
 		arg.Spec,
 	)

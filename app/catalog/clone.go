@@ -40,6 +40,10 @@ func (s *Snapshot) clone() *Snapshot {
 		pricingsByID:       shallowMap(s.pricingsByID),
 		pricingByModelHost: shallowMap(s.pricingByModelHost),
 
+		bindingsByID:        shallowMap(s.bindingsByID),
+		bindingsByModelHost: shallowMap(s.bindingsByModelHost),
+		bindingsByModel:     copySliceMap(s.bindingsByModel),
+
 		refsByProvider:  copyRefMap(s.refsByProvider),
 		refsByHost:      copyRefMap(s.refsByHost),
 		refsByModel:     copyRefMap(s.refsByModel),

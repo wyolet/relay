@@ -11,6 +11,7 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -33,8 +34,9 @@ func Build(
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
+	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings)
+	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings)
 }
 
 func build(
@@ -46,8 +48,9 @@ func build(
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
+	bindings []*binding.Binding,
 ) *Snapshot {
-	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings))
+	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings))
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
@@ -65,17 +68,23 @@ func build(
 	s.addRateLimits(rls)
 	s.addHosts(hosts, polByID)
 	s.addPolicies(pols, modelIDs, keyIDs, rlIDs)
-	s.addModels(models, providerIDs, hostIDs)
+	s.addModels(models, providerIDs)
 	s.addHostKeys(keys, hostIDs, polByID)
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()
-	s.rebuildPolicyAllowSets()
 	s.addPricings(pricings, hostIDs, modelIDs)
+	s.addBindings(bindings, modelIDs, hostIDs)
+	// Aliases + policy allow-sets read bindings (BindingsForModel), so they
+	// must run after bindings are indexed.
+	for _, m := range s.modelsByID {
+		s.indexModelSnapshots(m)
+	}
+	s.rebuildPolicyAllowSets()
 
 	return s
 }
 
-func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings int) *Snapshot {
+func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings int) *Snapshot {
 	return &Snapshot{
 		providersByID:         make(map[string]*provider.Provider, nProvs),
 		providersByName:       make(map[string]*provider.Provider, nProvs),
@@ -98,6 +107,9 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		allowedCombosByPolicy: map[string]map[comboKey]struct{}{},
 		pricingsByID:          make(map[string]*pricing.Pricing, nPricings),
 		pricingByModelHost:    map[string]*pricing.Pricing{},
+		bindingsByID:          make(map[string]*binding.Binding, nBindings),
+		bindingsByModelHost:   make(map[string]*binding.Binding, nBindings),
+		bindingsByModel:       map[string][]*binding.Binding{},
 		refsByProvider:        map[string]refSet{},
 		refsByHost:            map[string]refSet{},
 		refsByModel:           map[string]refSet{},

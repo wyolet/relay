@@ -41,7 +41,7 @@ type notifyEvent struct {
 var validKinds = map[string]struct{}{
 	"provider": {}, "host": {}, "model": {}, "hostkey": {},
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
-	"settings": {},
+	"hostbinding": {}, "settings": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -263,15 +263,16 @@ func (l *Listener) applyDrained(ctx context.Context) {
 }
 
 var kindOrder = map[string]int{
-	"provider":  0,
-	"host":      1,
-	"ratelimit": 2,
-	"model":     3,
-	"hostkey":   4,
-	"policy":    5,
-	"pricing":   6,
-	"relaykey":  7,
-	"settings":  8,
+	"provider":    0,
+	"host":        1,
+	"ratelimit":   2,
+	"model":       3,
+	"hostkey":     4,
+	"policy":      5,
+	"pricing":     6,
+	"hostbinding": 7,
+	"relaykey":    8,
+	"settings":    9,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -380,6 +381,14 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return l.cat.ApplyRelayKeyDelete(e.ID)
 		}
 		return l.cat.ApplyRelayKeyUpsert(k)
+
+	case "hostbinding":
+		// PR1: bindings aren't consumed by routing yet, and the COW
+		// incremental reconciler doesn't know this kind. Fall back to a
+		// full reload — bindings change rarely (catalog edits), so the
+		// cost is acceptable. PR2 adds incremental ApplyHostBinding* when
+		// routing reads bindings.
+		return l.cat.Reload(ctx)
 
 	case "settings":
 		if e.Op == "delete" {

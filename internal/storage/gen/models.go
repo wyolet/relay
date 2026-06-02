@@ -35,6 +35,19 @@ type Host struct {
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type HostBinding struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	ModelID     string             `db:"model_id" json:"model_id"`
+	HostID      string             `db:"host_id" json:"host_id"`
+	PricingID   pgtype.Text        `db:"pricing_id" json:"pricing_id"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Model struct {
 	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`

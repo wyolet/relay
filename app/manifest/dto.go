@@ -104,7 +104,7 @@ type HostSpec struct {
 	Icon          *meta.Icon `json:"icon,omitempty"        yaml:"icon,omitempty"`
 }
 
-// ModelDTO is the wire form of a Model. Hosts[].host is a name, not an id.
+// ModelDTO is the wire form of a Model.
 // Owner.ID in the wire form should be the provider *name*; translate resolves it.
 type ModelDTO struct {
 	APIVersion string    `json:"apiVersion" yaml:"apiVersion"`
@@ -114,9 +114,6 @@ type ModelDTO struct {
 }
 
 type ModelSpec struct {
-	// Hosts carries host names (not ids) in the wire form.
-	Hosts []HostBindingDTO `json:"hosts" yaml:"hosts"`
-
 	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 
@@ -144,11 +141,26 @@ type ModelSpec struct {
 	Pointer   string           `json:"pointer"   yaml:"pointer"`
 }
 
-// HostBindingDTO is one host binding in the wire form. Host is a name string.
+// HostBindingDTO is the top-level wire form of a standalone HostBinding entity.
+// Model and Host carry *names* (wire form); translate resolves them to ids.
 type HostBindingDTO struct {
-	Host      string   `json:"host"                yaml:"host"`
-	Adapter   string   `json:"adapter"             yaml:"adapter"`
-	Enabled   *bool    `json:"enabled,omitempty"   yaml:"enabled,omitempty"`
+	APIVersion string          `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string          `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta        `json:"metadata"   yaml:"metadata"`
+	Spec       HostBindingSpec `json:"spec"       yaml:"spec"`
+}
+
+// HostBindingSpec is the spec block of a standalone HostBinding.
+type HostBindingSpec struct {
+	// Model is the model *name* (wire form).
+	Model string `json:"model" yaml:"model"`
+	// Host is the host *name* (wire form).
+	Host         string `json:"host"                   yaml:"host"`
+	Adapter      string `json:"adapter"                yaml:"adapter"`
+	UpstreamName string `json:"upstreamName,omitempty" yaml:"upstreamName,omitempty"`
+	// Pricing is an optional pricing *name* (wire form).
+	Pricing   string   `json:"pricing,omitempty"  yaml:"pricing,omitempty"`
+	Enabled   *bool    `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
 	Snapshots []string `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
 }
 

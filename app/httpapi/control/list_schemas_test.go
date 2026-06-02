@@ -116,16 +116,12 @@ func TestModelFilter_CapabilityAndModality(t *testing.T) {
 	}
 }
 
-func TestModelFilter_HostIDAndProvider(t *testing.T) {
+func TestModelFilter_Provider(t *testing.T) {
 	items := []*model.Model{
-		{Meta: meta.Metadata{Name: "a", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "prov1"}}, Spec: model.Spec{Hosts: []model.HostBinding{{HostID: "h1"}, {HostID: "h2"}}}},
-		{Meta: meta.Metadata{Name: "b", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "prov2"}}, Spec: model.Spec{Hosts: []model.HostBinding{{HostID: "h3"}}}},
+		{Meta: meta.Metadata{Name: "a", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "prov1"}}},
+		{Meta: meta.Metadata{Name: "b", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "prov2"}}},
 	}
-	got, _ := applyQ(t, modelFilter, "host_id=h2", items)
-	if len(got) != 1 || got[0].Meta.Name != "a" {
-		t.Fatalf("host_id=h2 => %v, want [a]", names(got))
-	}
-	got, _ = applyQ(t, modelFilter, "provider_id=prov2", items)
+	got, _ := applyQ(t, modelFilter, "provider_id=prov2", items)
 	if len(got) != 1 || got[0].Meta.Name != "b" {
 		t.Fatalf("provider_id=prov2 => %v, want [b]", names(got))
 	}

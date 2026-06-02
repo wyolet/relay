@@ -20,7 +20,7 @@ type Provider struct {
 // Spec is display-only. There is no BaseURL on Provider — that lives on
 // Host, since the same Provider (e.g. Anthropic) is served by multiple
 // Hosts (Anthropic direct, Bedrock, Vertex). Per-Host serving info lives
-// on Model.Spec.Hosts[].
+// on standalone HostBinding entities (app/binding).
 type Spec struct {
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
 

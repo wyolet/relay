@@ -43,9 +43,17 @@ spec:
   pointer: snap
   snapshots:
     - name: snap
-  hosts:
-    - host: test-host
-      adapter: openai
+`
+	binding := `apiVersion: relay.wyolet.dev/v1alpha2
+kind: HostBinding
+metadata:
+  name: live-model-test-host
+  owner:
+    kind: system
+spec:
+  model: live-model
+  host: test-host
+  adapter: openai
 `
 	draftModel := `apiVersion: relay.wyolet.dev/v1alpha2
 kind: Model
@@ -60,9 +68,6 @@ spec:
   pointer: snap
   snapshots:
     - name: snap
-  hosts:
-    - host: test-host
-      adapter: openai
 `
 	write := func(path, body string) {
 		t.Helper()
@@ -76,6 +81,7 @@ spec:
 	write(filepath.Join(dir, "providers", "live", "provider.yaml"), prov)
 	write(filepath.Join(dir, "hosts", "test-host", "host.yaml"), host)
 	write(filepath.Join(dir, "models", "live-model.yaml"), model)
+	write(filepath.Join(dir, "bindings", "live-model-test-host.yaml"), binding)
 	write(filepath.Join(dir, "drafts", "models", "draft-model.yaml"), draftModel)
 
 	docs, err := manifest.LoadDir(dir)

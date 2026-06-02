@@ -3,6 +3,7 @@ package catalog
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -119,7 +120,7 @@ func (c *Catalog) ApplyModelUpsert(m *model.Model) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeModel(m, snapIDs(s.providersByID), snapIDs(s.hostsByID))
+	clean, keep := sanitizeModel(m, snapIDs(s.providersByID))
 	if !keep {
 		deleteModel(s, m.Meta.ID)
 		c.commitWithGrants(s)
@@ -496,6 +497,31 @@ func deleteRelayKey(s *Snapshot, id string) {
 	delete(s.relayKeysByID, id)
 }
 
+// ── Binding ───────────────────────────────────────────────────────────────
+
+func deleteBinding(s *Snapshot, id string) {
+	b, ok := s.bindingsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refBinding, ID: id}, outboundBindingRefs(b))
+	delete(s.bindingsByID, id)
+	delete(s.bindingsByModelHost, b.Spec.ModelID+"|"+b.Spec.HostID)
+	// Remove from the per-model list.
+	list := s.bindingsByModel[b.Spec.ModelID]
+	newList := make([]*binding.Binding, 0, len(list))
+	for _, bnd := range list {
+		if bnd.Meta.ID != id {
+			newList = append(newList, bnd)
+		}
+	}
+	if len(newList) == 0 {
+		delete(s.bindingsByModel, b.Spec.ModelID)
+	} else {
+		s.bindingsByModel[b.Spec.ModelID] = newList
+	}
+}
+
 // ── Cascade helpers ───────────────────────────────────────────────────────
 
 // cascadeDelete uses an explicit worklist to avoid deep recursion. For each
@@ -565,6 +591,14 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 			return true
 		}
 		return validateRelayKeyInSnap(rk, s) == nil
+	case refBinding:
+		b, ok := s.bindingsByID[k.ID]
+		if !ok {
+			return true
+		}
+		_, modelOK := s.modelsByID[b.Spec.ModelID]
+		_, hostOK := s.hostsByID[b.Spec.HostID]
+		return modelOK && hostOK
 	}
 	return true
 }
@@ -596,6 +630,9 @@ func rowPresent(s *Snapshot, k refKey) bool {
 	case refRelayKey:
 		_, ok := s.relayKeysByID[k.ID]
 		return ok
+	case refBinding:
+		_, ok := s.bindingsByID[k.ID]
+		return ok
 	}
 	return false
 }
@@ -619,6 +656,8 @@ func deleteDirect(s *Snapshot, k refKey) {
 		deleteProvider(s, k.ID)
 	case refHost:
 		deleteHost(s, k.ID)
+	case refBinding:
+		deleteBinding(s, k.ID)
 	}
 }
 

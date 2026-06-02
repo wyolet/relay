@@ -20,7 +20,7 @@ import (
 // invariant test operates over.
 func snapshotFromFixture(t *testing.T) *Snapshot {
 	t.Helper()
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	// Build a Pricing covering both fixture models.
 	pr := &pricing.Pricing{
 		Meta: meta.Metadata{
@@ -35,7 +35,7 @@ func snapshotFromFixture(t *testing.T) *Snapshot {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr})
+	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -127,6 +127,9 @@ func TestRefs_RegisterUnregisterNetsZero(t *testing.T) {
 	for _, k := range s.relayKeysByID {
 		ops = append(ops, op{refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k)})
 	}
+	for _, b := range s.bindingsByID {
+		ops = append(ops, op{refKey{Kind: refBinding, ID: b.Meta.ID}, outboundBindingRefs(b)})
+	}
 
 	// Currently every op is already registered. Unregister all → every
 	// refsBy* set should be empty.
@@ -192,6 +195,9 @@ func (s *Snapshot) rowExists(k refKey) bool {
 		return ok
 	case refRelayKey:
 		_, ok := s.relayKeysByID[k.ID]
+		return ok
+	case refBinding:
+		_, ok := s.bindingsByID[k.ID]
 		return ok
 	}
 	return false

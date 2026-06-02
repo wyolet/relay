@@ -9,8 +9,8 @@ import (
 )
 
 // fixture is a tiny in-memory catalog scaffold; tests start from a clean
-// 1-provider/1-host/1-model graph and mutate from there. Avoids YAML
-// loading noise; the loader's own tests cover that.
+// 1-provider/1-host/1-model/1-hostbinding graph and mutate from there.
+// Avoids YAML loading noise; the loader's own tests cover that.
 func fixture() []manifest.Document {
 	return []manifest.Document{
 		{Provider: &manifest.ProviderDTO{
@@ -29,12 +29,15 @@ func fixture() []manifest.Document {
 			Kind:       "Model",
 			Metadata:   manifest.WireMeta{Name: "gpt-x", Owner: manifest.WireOwner{Kind: "provider", Name: "openai"}},
 			Spec: manifest.ModelSpec{
-				Hosts: []manifest.HostBindingDTO{
-					{Host: "openai-host", Adapter: "openai"},
-				},
 				Snapshots: []model.Snapshot{{Name: "gpt-x", OriginalName: "gpt-x"}},
 				Pointer:   "gpt-x",
 			},
+		}},
+		{HostBinding: &manifest.HostBindingDTO{
+			APIVersion: "v1alpha2",
+			Kind:       "HostBinding",
+			Metadata:   manifest.WireMeta{Name: "gpt-x-openai-host", Owner: manifest.WireOwner{Kind: "system"}},
+			Spec:       manifest.HostBindingSpec{Model: "gpt-x", Host: "openai-host", Adapter: "openai"},
 		}},
 	}
 }
@@ -67,20 +70,20 @@ func TestValidateGraph_DuplicateModelName(t *testing.T) {
 	}
 }
 
-func TestValidateGraph_ModelMissingHost(t *testing.T) {
+func TestValidateGraph_BindingMissingHost(t *testing.T) {
 	docs := fixture()
-	// Re-point the model's host binding at a host that doesn't exist.
-	docs[2].Model.Spec.Hosts[0].Host = "no-such-host"
+	// Re-point the standalone binding at a host that doesn't exist.
+	docs[3].HostBinding.Spec.Host = "no-such-host"
 	issues := ValidateGraph(docs)
 	if !hasRefMissing(issues, "Host", "no-such-host") {
 		t.Fatalf("expected ref_missing → Host/no-such-host, got:\n%s", Format(issues))
 	}
 }
 
-func TestValidateGraph_HostBindingSnapshotNotInModel(t *testing.T) {
+func TestValidateGraph_BindingSnapshotNotInModel(t *testing.T) {
 	docs := fixture()
-	// Host binding references a snapshot the Model doesn't declare.
-	docs[2].Model.Spec.Hosts[0].Snapshots = []string{"gpt-x-typo"}
+	// Standalone binding references a snapshot the Model doesn't declare.
+	docs[3].HostBinding.Spec.Snapshots = []string{"gpt-x-typo"}
 	issues := ValidateGraph(docs)
 	if !hasIssue(issues, KindSnapshotMissing) {
 		t.Fatalf("expected snapshot_missing, got:\n%s", Format(issues))

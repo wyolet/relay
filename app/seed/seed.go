@@ -22,6 +22,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/manifest"
@@ -45,14 +46,15 @@ type Options struct {
 
 // Result summarises a seed run.
 type Result struct {
-	Providers  int
-	Hosts      int
-	RateLimits int
-	HostKeys   int
-	Models     int
-	Pricings   int
-	Policies   int
-	RelayKeys  int
+	Providers    int
+	Hosts        int
+	RateLimits   int
+	HostKeys     int
+	Models       int
+	Pricings     int
+	HostBindings int
+	Policies     int
+	RelayKeys    int
 }
 
 // Run executes the seed pipeline end-to-end.
@@ -72,14 +74,15 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	q := gen.New(opts.Pool)
 	secReg, secStored := appsecret.Wire(q, opts.Pool, opts.MasterKey)
 	stores := storeSet{
-		provider:  provider.NewStore(q),
-		host:      host.NewStore(q),
-		ratelimit: ratelimit.NewStore(q),
-		hostkey:   hostkey.NewStore(q, secReg, secStored),
-		model:     model.NewStore(q),
-		policy:    policy.NewStore(opts.Pool),
-		pricing:   pricing.NewStore(opts.Pool),
-		relaykey:  relaykey.NewStore(q),
+		provider:    provider.NewStore(q),
+		host:        host.NewStore(q),
+		ratelimit:   ratelimit.NewStore(q),
+		hostkey:     hostkey.NewStore(q, secReg, secStored),
+		model:       model.NewStore(q),
+		policy:      policy.NewStore(opts.Pool),
+		pricing:     pricing.NewStore(opts.Pool),
+		hostbinding: binding.NewStore(opts.Pool),
+		relaykey:    relaykey.NewStore(q),
 	}
 
 	resolver, err := buildResolver(ctx, stores)
@@ -95,6 +98,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		hkDocs   []*manifest.HostKeyDTO
 		mDocs    []*manifest.ModelDTO
 		prDocs   []*manifest.PricingDTO
+		bndDocs  []*manifest.HostBindingDTO
 		polDocs  []*manifest.PolicyDTO
 		rkDocs   []*manifest.RelayKeyDTO
 	)
@@ -112,6 +116,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			mDocs = append(mDocs, d.Model)
 		case d.Pricing != nil:
 			prDocs = append(prDocs, d.Pricing)
+		case d.HostBinding != nil:
+			bndDocs = append(bndDocs, d.HostBinding)
 		case d.Policy != nil:
 			polDocs = append(polDocs, d.Policy)
 		case d.RelayKey != nil:
@@ -127,6 +133,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	mintIDs(resolver.HostKeys, hkDocs, func(d *manifest.HostKeyDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Models, mDocs, func(d *manifest.ModelDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Pricings, prDocs, func(d *manifest.PricingDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.Bindings, bndDocs, func(d *manifest.HostBindingDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Policies, polDocs, func(d *manifest.PolicyDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.RelayKeys, rkDocs, func(d *manifest.RelayKeyDTO) string { return d.Metadata.Name })
 
@@ -198,6 +205,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		res.Pricings++
 	}
+	for _, d := range bndDocs {
+		b, err := manifest.ToHostBinding(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: hostbinding %q: %w", d.Metadata.Name, err)
+		}
+		b.Meta.ID = resolver.Bindings[d.Metadata.Name]
+		if err := stores.hostbinding.Upsert(ctx, b); err != nil {
+			return nil, fmt.Errorf("seed: upsert hostbinding %q: %w", d.Metadata.Name, err)
+		}
+		res.HostBindings++
+	}
 	for _, d := range polDocs {
 		p, err := manifest.ToPolicy(*d, resolver)
 		if err != nil {
@@ -224,17 +242,18 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	return res, nil
 }
 
-// storeSet bundles the seven entity stores so the orchestration code
+// storeSet bundles the entity stores so the orchestration code
 // doesn't need to thread each individually.
 type storeSet struct {
-	provider  *provider.Store
-	host      *host.Store
-	ratelimit *ratelimit.Store
-	hostkey   *hostkey.Store
-	model     *model.Store
-	policy    *policy.Store
-	pricing   *pricing.Store
-	relaykey  *relaykey.Store
+	provider    *provider.Store
+	host        *host.Store
+	ratelimit   *ratelimit.Store
+	hostkey     *hostkey.Store
+	model       *model.Store
+	policy      *policy.Store
+	pricing     *pricing.Store
+	hostbinding *binding.Store
+	relaykey    *relaykey.Store
 }
 
 // indexBuilder is a mutable resolver populated from PG + freshly minted ids.
@@ -246,6 +265,7 @@ type indexBuilder struct {
 	HostKeys   map[string]string
 	Models     map[string]string
 	Pricings   map[string]string
+	Bindings   map[string]string
 	Policies   map[string]string
 	RelayKeys  map[string]string
 }
@@ -257,6 +277,7 @@ func (i *indexBuilder) ModelID(n string) (string, bool)     { v, ok := i.Models[
 func (i *indexBuilder) HostKeyID(n string) (string, bool)   { v, ok := i.HostKeys[n]; return v, ok }
 func (i *indexBuilder) RateLimitID(n string) (string, bool) { v, ok := i.RateLimits[n]; return v, ok }
 func (i *indexBuilder) PricingID(n string) (string, bool)   { v, ok := i.Pricings[n]; return v, ok }
+func (i *indexBuilder) BindingID(n string) (string, bool)   { v, ok := i.Bindings[n]; return v, ok }
 
 func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	idx := &indexBuilder{
@@ -266,6 +287,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 		HostKeys:   map[string]string{},
 		Models:     map[string]string{},
 		Pricings:   map[string]string{},
+		Bindings:   map[string]string{},
 		Policies:   map[string]string{},
 		RelayKeys:  map[string]string{},
 	}
@@ -310,6 +332,13 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, p := range prs {
 		idx.Pricings[p.Meta.Name] = p.Meta.ID
+	}
+	bnds, err := s.hostbinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list hostbindings: %w", err)
+	}
+	for _, b := range bnds {
+		idx.Bindings[b.Meta.Name] = b.Meta.ID
 	}
 	pols, err := s.policy.List(ctx)
 	if err != nil {

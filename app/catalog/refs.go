@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -23,6 +24,7 @@ const (
 	refPolicy    refKind = "policy"
 	refPricing   refKind = "pricing"
 	refRelayKey  refKind = "relaykey"
+	refBinding   refKind = "binding"
 )
 
 // refKey identifies one row by (kind, id). Used as the value type in
@@ -44,17 +46,10 @@ func (r refSet) remove(k refKey) { delete(r, k) }
 // parent id) tuples it depends on.
 
 func outboundModelRefs(m *model.Model) []refKey {
-	refs := make([]refKey, 0, 1+len(m.Spec.Hosts))
 	if m.Meta.Owner.Kind == meta.OwnerProvider && m.Meta.Owner.ID != "" {
-		refs = append(refs, refKey{Kind: refProvider, ID: m.Meta.Owner.ID})
+		return []refKey{{Kind: refProvider, ID: m.Meta.Owner.ID}}
 	}
-	for _, b := range m.Spec.Hosts {
-		if b.HostID == "" {
-			continue
-		}
-		refs = append(refs, refKey{Kind: refHost, ID: b.HostID})
-	}
-	return refs
+	return nil
 }
 
 func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {
@@ -85,6 +80,21 @@ func outboundPricingRefs(p *pricing.Pricing) []refKey {
 	}
 	for _, id := range p.Spec.TargetModelIDs {
 		refs = append(refs, refKey{Kind: refModel, ID: id})
+	}
+	return refs
+}
+
+// outboundBindingRefs returns the parents a binding depends on: its Model
+// and Host (both ref-parent kinds). PricingID is not a ref-parent kind —
+// pricing is itself a child of host+model — so a dropped pricing is handled
+// by sanitizeBinding clearing the ref, not by reverse-ref eviction.
+func outboundBindingRefs(b *binding.Binding) []refKey {
+	refs := make([]refKey, 0, 2)
+	if b.Spec.ModelID != "" {
+		refs = append(refs, refKey{Kind: refModel, ID: b.Spec.ModelID})
+	}
+	if b.Spec.HostID != "" {
+		refs = append(refs, refKey{Kind: refHost, ID: b.Spec.HostID})
 	}
 	return refs
 }

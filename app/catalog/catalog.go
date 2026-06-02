@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -28,6 +29,7 @@ type Catalog struct {
 	rateLimits RateLimitLister
 	relayKeys  RelayKeyLister
 	pricings   PricingLister
+	bindings   BindingLister
 
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
@@ -64,6 +66,9 @@ type RelayKeyLister interface {
 type PricingLister interface {
 	List(ctx context.Context) ([]*pricing.Pricing, error)
 }
+type BindingLister interface {
+	List(ctx context.Context) ([]*binding.Binding, error)
+}
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
@@ -76,6 +81,7 @@ func New(
 	rateLimits RateLimitLister,
 	relayKeys RelayKeyLister,
 	pricings PricingLister,
+	bindings BindingLister,
 ) *Catalog {
 	c := &Catalog{
 		providers:  providers,
@@ -86,6 +92,7 @@ func New(
 		rateLimits: rateLimits,
 		relayKeys:  relayKeys,
 		pricings:   pricings,
+		bindings:   bindings,
 	}
 	c.snap.Store(&Snapshot{})
 	return c
@@ -144,6 +151,10 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: pricings: %w", err)
 	}
+	bindingsAll, err := c.bindings.List(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog reload: bindings: %w", err)
+	}
 
 	enabledProvs := filter(provs, (*provider.Provider).IsEnabled)
 	enabledHosts := filter(hosts, (*host.Host).IsEnabled)
@@ -153,6 +164,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	enabledKeys := filter(keys, (*hostkey.HostKey).IsEnabled)
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 	enabledPricings := filter(pricingsAll, (*pricing.Pricing).IsEnabled)
+	enabledBindings := filter(bindingsAll, (*binding.Binding).IsEnabled)
 
 	providerIDs := make(map[string]struct{}, len(enabledProvs))
 	for _, p := range enabledProvs {
@@ -163,11 +175,11 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		hostIDs[h.Meta.ID] = struct{}{}
 	}
 
-	if err := validateCross(providerIDs, hostIDs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings); err != nil {
+	if err := validateCross(providerIDs, hostIDs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings); err != nil {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings)
+	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings)
 	c.snap.Store(snap)
 	c.markReady()
 	return nil

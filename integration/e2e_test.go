@@ -41,6 +41,7 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -156,7 +157,7 @@ func newStack(t *testing.T) *stack {
 			ExtractTokens: pkgopenai.ExtractTokens,
 			UseHTTP1:      true,
 			IsNativePath: func(plan *routing.Plan) bool {
-				return plan.HostBinding.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
+				return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
 			},
 		}).Build(),
 		(&adapter.Spec{
@@ -262,15 +263,16 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	mdl := &model.Model{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{
-				HostID:  hst.Meta.ID,
-				Adapter: adapters.OpenAI,
-			}},
 			Snapshots: []model.Snapshot{{Name: "test-model"}},
 			Pointer:   "test-model",
 		},
 	}
 	mustUpsert(s.t, s.stores.Model.Upsert(ctx, mdl), "model")
+	bnd := &binding.Binding{
+		Meta: meta.Metadata{ID: ids.New(), Name: "test-model-on-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: mdl.Meta.ID, HostID: hst.Meta.ID, Adapter: adapters.OpenAI},
+	}
+	mustUpsert(s.t, s.stores.Binding.Upsert(ctx, bnd), "binding")
 
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}},
@@ -464,15 +466,16 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 	mdl := &model.Model{
 		Meta: meta.Metadata{ID: ids.New(), Name: "anthrop-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{
-				HostID:  hst.Meta.ID,
-				Adapter: adapters.Anthropic, // mismatched for /v1/chat/completions
-			}},
 			Snapshots: []model.Snapshot{{Name: "anthrop-model"}},
 			Pointer:   "anthrop-model",
 		},
 	}
 	mustUpsert(t, st.stores.Model.Upsert(ctx, mdl), "model")
+	bnd := &binding.Binding{
+		Meta: meta.Metadata{ID: ids.New(), Name: "anthrop-model-on-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: mdl.Meta.ID, HostID: hst.Meta.ID, Adapter: adapters.Anthropic}, // mismatched for /v1/chat/completions
+	}
+	mustUpsert(t, st.stores.Binding.Upsert(ctx, bnd), "binding")
 
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "pol1", Owner: meta.Owner{Kind: meta.OwnerSystem}},

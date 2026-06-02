@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -52,11 +53,15 @@ type rcList []*pricing.Pricing
 
 func (l rcList) List(context.Context) ([]*pricing.Pricing, error) { return l, nil }
 
+type bndList []*binding.Binding
+
+func (l bndList) List(context.Context) ([]*binding.Binding, error) { return l, nil }
+
 // fixture builds a coherent set: 1 provider (vendor), 1 host (serving
 // endpoint), 2 models served by that host, 2 keys for that host, 1
 // ratelimit, 1 policy referencing all of those, 1 relaykey pointing at
 // the policy.
-func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
+func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList, bndList) {
 	provID := meta.NewID()
 	hostID := meta.NewID()
 
@@ -66,7 +71,6 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "gpt-4o-2025-01-01", OriginalName: "gpt-4o-2025-01-01"}},
 			Pointer:   "gpt-4o-2025-01-01",
 		},
@@ -77,10 +81,17 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "gpt-4o-mini-2025-01-01", OriginalName: "gpt-4o-mini-2025-01-01"}},
 			Pointer:   "gpt-4o-mini-2025-01-01",
 		},
+	}
+	b1 := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-4o-openai-direct", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: m1.Meta.ID, HostID: hostID, Adapter: adapters.OpenAI},
+	}
+	b2 := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-4o-mini-openai-direct", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: m2.Meta.ID, HostID: hostID, Adapter: adapters.OpenAI},
 	}
 
 	// Host-owned tier policy the hostkeys mirror.
@@ -163,12 +174,12 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList) {
 		Spec: host.Spec{BaseURL: "https://api.openai.com"},
 	}
 
-	return provList{prov}, hostList{h}, polList{pol, hostTier}, modList{m1, m2}, keyList{k1, k2}, rlList{rl}, rkList{rk}
+	return provList{prov}, hostList{h}, polList{pol, hostTier}, modList{m1, m2}, keyList{k1, k2}, rlList{rl}, rkList{rk}, bndList{b1, b2}
 }
 
 func TestReload_HappyPath(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -203,14 +214,14 @@ func TestReload_HappyPath(t *testing.T) {
 // referenced Models / HostKeys / RateLimits stay (they're independently
 // enabled). The reachability filter is gone.
 func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
 	// Disabling the policy strands the relaykey pointing at it; disable
 	// the relaykey too so cross-entity validation passes.
 	rks[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -231,12 +242,12 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 // Now Reload succeeds and the policy's snapshot copy has the dead id
 // silently stripped from Spec.ModelIDs.
 func TestReload_DisabledModelDropsFromPolicyRefs(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	fls := false
 	models[0].Spec.Enabled = &fls
 	disabledID := models[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -252,7 +263,7 @@ func TestReload_DisabledModelDropsFromPolicyRefs(t *testing.T) {
 // Now Reload succeeds and the RelayKey is silently dropped from the
 // snapshot (its required ref is gone).
 func TestReload_RelayKeyToDisabledPolicyDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
 	// rks[0] points at pols[0]; disable rks[0] too so an explicit "I want
@@ -261,14 +272,14 @@ func TestReload_RelayKeyToDisabledPolicyDrops(t *testing.T) {
 	// disappear from the snapshot.
 	rks[0].Spec.Enabled = &fls
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
 }
 
 func TestReload_PricingResolves(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	hostID := hosts[0].Meta.ID
 	modelID := models[0].Meta.ID
 	pr := &pricing.Pricing{
@@ -285,7 +296,7 @@ func TestReload_PricingResolves(t *testing.T) {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -299,7 +310,7 @@ func TestReload_PricingResolves(t *testing.T) {
 }
 
 func TestReload_DuplicatePricingFails(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	hostID := hosts[0].Meta.ID
 	modelID := models[0].Meta.ID
 	mkPricing := func(name string) *pricing.Pricing {
@@ -318,7 +329,7 @@ func TestReload_DuplicatePricingFails(t *testing.T) {
 			},
 		}
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{mkPricing("p1"), mkPricing("p2")})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{mkPricing("p1"), mkPricing("p2")}, bnds)
 	err := c.Reload(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "duplicate pricing") {
 		t.Fatalf("expected duplicate pricing error, got %v", err)
@@ -340,13 +351,13 @@ func hostOwnedPolicy(name, hostID string) *policy.Policy {
 // resolve to host-owned policies of that same host, with DefaultPolicy
 // in the menu.
 func TestReload_HostPoliciesMenu_OK(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
 	hosts[0].Spec.Policies = []string{tier.Meta.ID}
 	hosts[0].Spec.DefaultPolicy = tier.Meta.ID
 	pols = append(pols, tier)
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -355,11 +366,11 @@ func TestReload_HostPoliciesMenu_OK(t *testing.T) {
 // Unknown policy ids in a Host's menu are silently dropped from the
 // snapshot copy. PG retains the full list.
 func TestReload_HostPoliciesMenu_UnknownPolicyDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	bad := meta.NewID()
 	hosts[0].Spec.Policies = []string{bad}
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -373,12 +384,12 @@ func TestReload_HostPoliciesMenu_UnknownPolicyDrops(t *testing.T) {
 
 // A menu entry whose Policy is owned by a different host is also dropped.
 func TestReload_HostPoliciesMenu_WrongOwnerDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	stray := hostOwnedPolicy("stray-tier", meta.NewID())
 	hosts[0].Spec.Policies = []string{stray.Meta.ID}
 	pols = append(pols, stray)
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -393,11 +404,11 @@ func TestReload_HostPoliciesMenu_WrongOwnerDrops(t *testing.T) {
 // A HostKey whose Spec.PolicyID doesn't resolve is dropped from the
 // snapshot (the ref is required to function).
 func TestReload_HostKeyPolicy_UnknownDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	keys[0].Spec.PolicyID = meta.NewID()
 	bad := keys[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -409,7 +420,7 @@ func TestReload_HostKeyPolicy_UnknownDrops(t *testing.T) {
 // A HostKey whose Policy resolves but is owned by a different host is
 // also dropped.
 func TestReload_HostKeyPolicy_WrongHostDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	otherHost := meta.NewID()
 	strayTier := &policy.Policy{
 		Meta: meta.Metadata{
@@ -422,7 +433,7 @@ func TestReload_HostKeyPolicy_WrongHostDrops(t *testing.T) {
 	keys[0].Spec.PolicyID = strayTier.Meta.ID
 	bad := keys[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -433,11 +444,11 @@ func TestReload_HostKeyPolicy_WrongHostDrops(t *testing.T) {
 
 // Pointing a HostKey at a user-owned Policy is also a soft drop.
 func TestReload_HostKeyPolicy_UserOwnedDrops(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	keys[0].Spec.PolicyID = pols[0].Meta.ID // user-owned cheap-tier
 	bad := keys[0].Meta.ID
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}
@@ -448,14 +459,14 @@ func TestReload_HostKeyPolicy_UserOwnedDrops(t *testing.T) {
 
 // DefaultPolicy outside the menu is silently cleared in the snapshot copy.
 func TestReload_HostPoliciesMenu_DefaultNotInMenuClears(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	tier := hostOwnedPolicy("openai-tier-x", hosts[0].Meta.ID)
 	other := hostOwnedPolicy("openai-tier-y", hosts[0].Meta.ID)
 	hosts[0].Spec.Policies = []string{tier.Meta.ID}
 	hosts[0].Spec.DefaultPolicy = other.Meta.ID
 	pols = append(pols, tier, other)
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
 	}

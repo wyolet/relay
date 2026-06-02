@@ -118,16 +118,13 @@ func scanHostRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.hostId"})
 		}
 	}
-	models, err := d.Stores.Model.List(ctx)
+	bindings, err := d.Stores.Binding.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list models: %w", err)
+		return nil, fmt.Errorf("list bindings: %w", err)
 	}
-	for _, m := range models {
-		for _, b := range m.Spec.Hosts {
-			if b.HostID == id {
-				out = append(out, referenceItem{Kind: "model", ID: m.Meta.ID, Name: m.Meta.Name, Via: "spec.hosts[].hostId"})
-				break
-			}
+	for _, b := range bindings {
+		if b.Spec.HostID == id {
+			out = append(out, referenceItem{Kind: "host-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.hostId"})
 		}
 	}
 	pricings, err := d.Stores.Pricing.List(ctx)

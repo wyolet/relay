@@ -29,9 +29,8 @@ func resanitizeHostsAfterPolicyChange(s *Snapshot) {
 
 func resanitizeModelsAfterHostChange(s *Snapshot) {
 	providers := snapIDs(s.providersByID)
-	hosts := snapIDs(s.hostsByID)
 	for id, m := range s.modelsByID {
-		clean, keep := sanitizeModel(m, providers, hosts)
+		clean, keep := sanitizeModel(m, providers)
 		if !keep {
 			// The model itself becomes unusable — provider is gone. Fall
 			// through; the cascade handler will evict it.
