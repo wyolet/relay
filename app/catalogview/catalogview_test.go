@@ -184,10 +184,11 @@ func TestPolicyModels_GrantAndLimits(t *testing.T) {
 
 func TestPolicyRateLimits_FlatDefault(t *testing.T) {
 	svc, _ := fixture()
-	_, rows, err := svc.PolicyRateLimits(context.Background(), "tier-1")
+	_, view, err := svc.PolicyRateLimits(context.Background(), "tier-1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows := view.RateLimits
 	if len(rows) != 1 || rows[0].Name != "rpm" || !rows[0].Default {
 		t.Fatalf("rows = %+v", rows)
 	}
@@ -344,5 +345,108 @@ func TestPolicyModels_DSLMatchedByAndCaps(t *testing.T) {
 	caps := rows[0].Model.Capabilities
 	if len(caps) != 2 || rows[0].Model.ContextWindowTotal != 128000 {
 		t.Errorf("model caps/context = %+v / %d", caps, rows[0].Model.ContextWindowTotal)
+	}
+}
+
+func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
+	provID, hostA, hostB := meta.NewID(), meta.NewID(), meta.NewID()
+	modSolo, modDual := meta.NewID(), meta.NewID()
+	keyA, keyB := meta.NewID(), meta.NewID()
+	disabled := false
+	svc := &Service{
+		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
+		Hosts: fHosts{
+			{Meta: meta.Metadata{ID: hostA, Name: "host-a"}},
+			{Meta: meta.Metadata{ID: hostB, Name: "host-b"}},
+		},
+		Models: fModels{
+			{Meta: meta.Metadata{ID: modSolo, Name: "solo", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+			{Meta: meta.Metadata{ID: modDual, Name: "dual", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+		},
+		// solo served only on host-a; dual served on both
+		Bindings: fBindings{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}, Spec: binding.Spec{ModelID: modSolo, HostID: hostA, Adapter: adapters.OpenAI}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b2"}, Spec: binding.Spec{ModelID: modDual, HostID: hostA, Adapter: adapters.OpenAI}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b3"}, Spec: binding.Spec{ModelID: modDual, HostID: hostB, Adapter: adapters.OpenAI}},
+		},
+		Pricings: fPricings{},
+		HostKeys: fHostKeys{
+			{Meta: meta.Metadata{ID: keyA, Name: "ka"}, Spec: hostkey.Spec{HostID: hostA, Enabled: &disabled}},
+			{Meta: meta.Metadata{ID: keyB, Name: "kb"}, Spec: hostkey.Spec{HostID: hostB}},
+		},
+		Policies: fPolicies{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA, keyB}}},
+			// a second policy that also uses keyA → sharedWithPolicyCount = 1
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "p2", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{HostKeyIDs: []string{keyA}}},
+		},
+		RateLimits: fRLs{},
+	}
+	_, rows, err := svc.PolicyHosts(context.Background(), "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHost := map[string]PolicyHostRow{}
+	for _, r := range rows {
+		byHost[r.Host.Name] = r
+	}
+	a, b := byHost["host-a"], byHost["host-b"]
+	if a.Requirement != "required" { // solo is only on host-a
+		t.Errorf("host-a requirement = %q, want required", a.Requirement)
+	}
+	if b.Requirement != "optional" { // dual is also on host-a
+		t.Errorf("host-b requirement = %q, want optional", b.Requirement)
+	}
+	if len(a.HostKeys) != 1 || a.HostKeys[0].Enabled || a.HostKeys[0].SharedWithPolicyCount != 1 {
+		t.Errorf("host-a key = %+v (want disabled, shared=1)", a.HostKeys)
+	}
+}
+
+func TestPolicyRateLimits_OverlapsAndUnthrottled(t *testing.T) {
+	provID, hostID := meta.NewID(), meta.NewID()
+	modA, modFree := meta.NewID(), meta.NewID()
+	keyID := meta.NewID()
+	rl1, rl2 := meta.NewID(), meta.NewID()
+	svc := &Service{
+		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
+		Hosts:     fHosts{{Meta: meta.Metadata{ID: hostID, Name: "openai"}}},
+		Models: fModels{
+			{Meta: meta.Metadata{ID: modA, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+			{Meta: meta.Metadata{ID: modFree, Name: "free-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+		},
+		Bindings: fBindings{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}, Spec: binding.Spec{ModelID: modA, HostID: hostID, Adapter: adapters.OpenAI}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b2"}, Spec: binding.Spec{ModelID: modFree, HostID: hostID, Adapter: adapters.OpenAI}},
+		},
+		Pricings: fPricings{},
+		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
+		RateLimits: fRLs{
+			{Meta: meta.Metadata{ID: rl1, Name: "rl1"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}},
+			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}},
+		},
+		// two RLBindings both matching gpt-4o (overlap); free-model matched by neither (unthrottled)
+		Policies: fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{
+			HostKeyIDs: []string{keyID},
+			RLBindings: []policy.RLBinding{
+				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl1},
+				{Models: []string{"openai"}, RateLimitID: rl2},
+			},
+		}}},
+	}
+	_, view, err := svc.PolicyRateLimits(context.Background(), "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Overlaps) != 1 {
+		t.Fatalf("overlaps = %+v", view.Overlaps)
+	}
+	o := view.Overlaps[0]
+	if o.Model != "gpt-4o" || o.Winner != rl1 || len(o.Losers) != 1 || o.Losers[0] != rl2 {
+		t.Errorf("overlap = %+v", o)
+	}
+	// free-model is matched by the "openai" RLBinding too, so it's capped — NOT unthrottled.
+	for _, u := range view.Unthrottled {
+		if u.Model.Name == "gpt-4o" {
+			t.Errorf("gpt-4o should be capped, not unthrottled")
+		}
 	}
 }
