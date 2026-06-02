@@ -110,6 +110,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerPolicyRelayKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
+	registerSubresources(api, d, protect) // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
 	registerCatalogGraph(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
