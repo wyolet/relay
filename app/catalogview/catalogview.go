@@ -89,6 +89,23 @@ type ModelRef struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName,omitempty"`
+	// Capabilities/context/deprecation are intrinsic model properties, so
+	// they ride along on every ModelRef — the policy, host, and model tabs
+	// all render the same capability icons + context window from one shape.
+	Capabilities       []string         `json:"capabilities,omitempty"`
+	ContextWindowTotal int              `json:"contextWindowTotal,omitempty"`
+	ContextWindowInput int              `json:"contextWindowInput,omitempty"`
+	Deprecation        *DeprecationView `json:"deprecation,omitempty"`
+}
+type ProviderRef struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName,omitempty"`
+}
+type DeprecationView struct {
+	Status      string `json:"status"`
+	SunsetDate  string `json:"sunsetDate,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
 }
 type OwnerRef struct {
 	Kind string `json:"kind"`         // "user" | "host" | "system" | …

@@ -193,7 +193,58 @@ func hostRefOf(h *host.Host) HostRef {
 	return HostRef{ID: h.Meta.ID, Name: h.Meta.Name, DisplayName: h.Meta.DisplayName, BaseURL: h.Spec.BaseURL}
 }
 func modelRefOf(m *model.Model) ModelRef {
-	return ModelRef{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
+	ref := ModelRef{
+		ID:                 m.Meta.ID,
+		Name:               m.Meta.Name,
+		DisplayName:        m.Meta.DisplayName,
+		Capabilities:       enabledCaps(m.Spec.Capabilities),
+		ContextWindowTotal: m.Spec.ContextWindowTotal,
+		ContextWindowInput: m.Spec.ContextWindowInput,
+	}
+	if d := m.Spec.Deprecation; d != nil {
+		ref.Deprecation = &DeprecationView{Status: string(d.Status), SunsetDate: d.SunsetDate, Replacement: d.Replacement}
+	}
+	return ref
+}
+
+func providerRefOf(p *provider.Provider) ProviderRef {
+	if p == nil {
+		return ProviderRef{}
+	}
+	return ProviderRef{ID: p.Meta.ID, Name: p.Meta.Name, DisplayName: p.Meta.DisplayName}
+}
+
+// enabledCaps flattens the capability bag to the json names of the set flags.
+func enabledCaps(c model.Capabilities) []string {
+	out := []string{}
+	add := func(b bool, name string) {
+		if b {
+			out = append(out, name)
+		}
+	}
+	add(c.Chat, "chat")
+	add(c.Embeddings, "embeddings")
+	add(c.Streaming, "streaming")
+	add(c.Tools, "tools")
+	add(c.ParallelTools, "parallelTools")
+	add(c.Vision, "vision")
+	add(c.Audio, "audio")
+	add(c.PromptCache, "promptCache")
+	add(c.Reasoning, "reasoning")
+	add(c.JSONMode, "jsonMode")
+	add(c.StructuredOutputs, "structuredOutputs")
+	add(c.Batch, "batch")
+	add(c.ComputerUse, "computerUse")
+	add(c.WebSearch, "webSearch")
+	add(c.FileInput, "fileInput")
+	add(c.AudioInput, "audioInput")
+	add(c.AudioOutput, "audioOutput")
+	add(c.SystemMessages, "systemMessages")
+	add(c.AssistantPrefill, "assistantPrefill")
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 func bindingViewOf(b *binding.Binding) BindingView {
 	return BindingView{ID: b.Meta.ID, Adapter: string(b.Spec.Adapter), UpstreamName: b.Spec.UpstreamName, Enabled: b.IsEnabled(), Snapshots: b.Spec.Snapshots}
