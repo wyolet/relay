@@ -274,6 +274,30 @@ DELETE FROM pricing_models WHERE pricing_id = $1;
 -- name: InsertPricingModel :exec
 INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
 
+-- ── host_bindings (migration 0020) ───────────────────────────────────────────
+
+-- name: ListHostBindings :many
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings ORDER BY name;
+
+-- name: GetHostBinding :one
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings WHERE id = $1;
+
+-- name: UpsertHostBinding :exec
+INSERT INTO host_bindings (id, name, display_name, model_id, host_id, pricing_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    model_id = EXCLUDED.model_id,
+    host_id = EXCLUDED.host_id,
+    pricing_id = EXCLUDED.pricing_id,
+    metadata = EXCLUDED.metadata,
+    spec = EXCLUDED.spec,
+    updated_at = NOW();
+
+-- name: DeleteHostBinding :exec
+DELETE FROM host_bindings WHERE id = $1;
+
 -- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers WHERE id = $1;
 
