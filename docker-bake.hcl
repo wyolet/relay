@@ -1,6 +1,7 @@
 // wyolet relay — docker buildx bake config
 
 variable "REGISTRY"     { default = "ghcr.io/wyolet" }
+variable "DOCKERHUB"    { default = "docker.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
@@ -20,16 +21,24 @@ target "_common" {
   // Optional in the Dockerfile (required=false) — unset env yields an empty
   // secret and a UI-less build; CI sets it to embed the UI.
   secret = ["id=gh_token,env=GH_TOKEN"]
+  // Always rebuild the asset-fetch stage: BuildKit excludes secret VALUES from
+  // the cache key, so a cached `assets` layer could reuse a stale (e.g. UI-less)
+  // fetch. This also guarantees the pinned UI/catalog are re-pulled each build.
+  no-cache-filter = ["assets"]
 }
 
-// Production: pushes :$(VERSION) + :latest + :$(GIT_REVISION) to the registry.
+// Production: pushes the lean image as :VERSION + :latest + :sha to both
+// registries (ghcr + Docker Hub).
 target "prod" {
   inherits    = ["_common"]
-  description  = "Lean multi-arch production image (external Postgres); pushes :VERSION + :latest + :sha"
+  description = "Lean multi-arch production image (external Postgres); pushes :VERSION + :latest + :sha to ghcr + Docker Hub"
   tags = compact([
     "${REGISTRY}/${IMAGE_NAME}:${VERSION}",
     "${REGISTRY}/${IMAGE_NAME}:latest",
     notequal("", GIT_REVISION) ? "${REGISTRY}/${IMAGE_NAME}:${GIT_REVISION}" : "",
+    "${DOCKERHUB}/${IMAGE_NAME}:${VERSION}",
+    "${DOCKERHUB}/${IMAGE_NAME}:latest",
+    notequal("", GIT_REVISION) ? "${DOCKERHUB}/${IMAGE_NAME}:${GIT_REVISION}" : "",
   ])
 }
 
@@ -47,11 +56,13 @@ target "dev" {
 // `docker run` image, published as :standalone (+ :VERSION-standalone).
 target "allinone" {
   inherits    = ["_common"]
-  description = "All-in-one image (relay + embedded Postgres) for `docker run`; pushes :standalone + :VERSION-standalone"
+  description = "All-in-one image (relay + embedded Postgres) for `docker run`; pushes :standalone + :VERSION-standalone to ghcr + Docker Hub"
   target      = "allinone"
   tags = compact([
     "${REGISTRY}/${IMAGE_NAME}:standalone",
     notequal("latest", VERSION) ? "${REGISTRY}/${IMAGE_NAME}:${VERSION}-standalone" : "",
+    "${DOCKERHUB}/${IMAGE_NAME}:standalone",
+    notequal("latest", VERSION) ? "${DOCKERHUB}/${IMAGE_NAME}:${VERSION}-standalone" : "",
   ])
 }
 

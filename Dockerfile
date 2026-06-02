@@ -93,10 +93,15 @@ ENTRYPOINT ["/relay"]
 
 # --- allinone: relay + embedded Postgres in one container — `docker run` demo ---
 # Single-node convenience image. Boots a local Postgres (initdb on first run)
-# then relay against it, so no external services are needed. Heavier and
-# single-node only — production uses the lean image above against managed PG.
-FROM postgres:16-alpine AS allinone
+# then relay against it, so no external services are needed. Built on alpine +
+# the apk postgresql16 package (no LLVM JIT) — a fraction of the official
+# postgres image's size. Single-node only; production uses the lean image above
+# against managed PG.
+FROM alpine:3.20 AS allinone
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
+RUN apk add --no-cache postgresql16 postgresql16-client tzdata \
+    && mkdir -p /var/lib/postgresql/data /run/postgresql \
+    && chown -R postgres:postgres /var/lib/postgresql /run/postgresql
 COPY --from=builder /relay /relay
 COPY --from=assets /assets/catalog /catalog
 COPY deploy/allinone-entrypoint.sh /usr/local/bin/relay-allinone-entrypoint.sh
@@ -104,12 +109,10 @@ RUN chmod +x /usr/local/bin/relay-allinone-entrypoint.sh
 ENV RELAY_CATALOG_DIR=/catalog \
     RELAY_AUTO_SEED_IF_EMPTY=1 \
     POSTGRES_USER=relay \
-    POSTGRES_PASSWORD=relay \
     POSTGRES_DB=relay \
     PGDATA=/var/lib/postgresql/data \
     RELAY_PG_DSN=postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
-# Only relay's two HTTP planes. Postgres is internal (relay reaches it on
-# 127.0.0.1) — deliberately not exposed; publishing it would surface a
-# default-credentialed DB. Use `docker exec` if you need to poke at it.
+# Only relay's two HTTP planes. Postgres is internal (loopback only) and never
+# exposed — use `docker exec` if you need to poke at it.
 EXPOSE 8080 8081
 ENTRYPOINT ["/usr/local/bin/relay-allinone-entrypoint.sh"]

@@ -66,12 +66,13 @@ container and seeds the catalog on first boot — nothing external to wire up:
 ```bash
 docker run -p 8080:8080 -p 8081:8081 \
   -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
-  ghcr.io/wyolet/relay:standalone
+  wyolet/relay:standalone
 ```
 
 Data plane: `http://localhost:8080` · control plane + **admin UI**:
 `http://localhost:8081`. Single-node and embedded-PG — great for a try-out, not
 for production (use the lean image + a managed Postgres for that; see below).
+Also available from GitHub Container Registry as `ghcr.io/wyolet/relay:standalone`.
 _(Published image pending — until then, `docker compose up --build` below builds
 it from source.)_
 
