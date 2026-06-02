@@ -190,7 +190,11 @@ func (idx *index) limitsOf(rlID string) []Limit {
 }
 
 func hostRefOf(h *host.Host) HostRef {
-	return HostRef{ID: h.Meta.ID, Name: h.Meta.Name, DisplayName: h.Meta.DisplayName, BaseURL: h.Spec.BaseURL}
+	ref := HostRef{ID: h.Meta.ID, Name: h.Meta.Name, DisplayName: h.Meta.DisplayName, BaseURL: h.Spec.BaseURL, Enabled: h.IsEnabled()}
+	if h.Spec.Icon != nil {
+		ref.Icon = &IconView{Path: h.Spec.Icon.Path}
+	}
+	return ref
 }
 func modelRefOf(m *model.Model) ModelRef {
 	ref := ModelRef{
