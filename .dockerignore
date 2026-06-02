@@ -1,0 +1,26 @@
+# Build context hygiene — keep the image build cache-stable and minimal.
+# The Go build needs source + go.* + the SDK submodule (go.work replace);
+# everything below is irrelevant to it.
+
+.git
+.github
+*.md
+docs/
+deploy/
+integration/
+bench/
+
+# UI dist is fetched inside the image build, never from the context.
+cmd/relay/web/dist/
+
+# Local dev / tooling artifacts
+relay
+*.test
+*.out
+coverage*
+.env
+.env.*
+!.env.example
+/dist/
+node_modules/
+.DS_Store
