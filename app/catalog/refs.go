@@ -46,17 +46,10 @@ func (r refSet) remove(k refKey) { delete(r, k) }
 // parent id) tuples it depends on.
 
 func outboundModelRefs(m *model.Model) []refKey {
-	refs := make([]refKey, 0, 1+len(m.Spec.Hosts))
 	if m.Meta.Owner.Kind == meta.OwnerProvider && m.Meta.Owner.ID != "" {
-		refs = append(refs, refKey{Kind: refProvider, ID: m.Meta.Owner.ID})
+		return []refKey{{Kind: refProvider, ID: m.Meta.Owner.ID}}
 	}
-	for _, b := range m.Spec.Hosts {
-		if b.HostID == "" {
-			continue
-		}
-		refs = append(refs, refKey{Kind: refHost, ID: b.HostID})
-	}
-	return refs
+	return nil
 }
 
 func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {

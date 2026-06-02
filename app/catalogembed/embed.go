@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/manifest"
@@ -31,10 +32,11 @@ var SDKAdapters = map[string]struct{}{
 func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catalog, error) {
 	idx := newIndex()
 	var (
-		provDocs []*manifest.ProviderDTO
-		hostDocs []*manifest.HostDTO
-		mDocs    []*manifest.ModelDTO
-		prDocs   []*manifest.PricingDTO
+		provDocs    []*manifest.ProviderDTO
+		hostDocs    []*manifest.HostDTO
+		mDocs       []*manifest.ModelDTO
+		prDocs      []*manifest.PricingDTO
+		bindingDocs []*manifest.HostBindingDTO
 	)
 	for _, d := range docs {
 		switch {
@@ -46,6 +48,8 @@ func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catal
 			mDocs = append(mDocs, d.Model)
 		case d.Pricing != nil:
 			prDocs = append(prDocs, d.Pricing)
+		case d.HostBinding != nil:
+			bindingDocs = append(bindingDocs, d.HostBinding)
 		}
 	}
 
@@ -53,6 +57,7 @@ func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catal
 	mintIDs(idx.Hosts, hostDocs, func(d *manifest.HostDTO) string { return d.Metadata.Name })
 	mintIDs(idx.Models, mDocs, func(d *manifest.ModelDTO) string { return d.Metadata.Name })
 	mintIDs(idx.Pricings, prDocs, func(d *manifest.PricingDTO) string { return d.Metadata.Name })
+	mintIDs(idx.Bindings, bindingDocs, func(d *manifest.HostBindingDTO) string { return d.Metadata.Name })
 
 	var (
 		provs []*provider.Provider
@@ -92,8 +97,17 @@ func Compose(docs []manifest.Document, generatedAt time.Time) (*sdkcatalog.Catal
 		p.Meta.ID = idx.Pricings[d.Metadata.Name]
 		pricings = append(pricings, p)
 	}
+	var bindings []*binding.Binding
+	for _, d := range bindingDocs {
+		b, err := manifest.ToHostBinding(*d, idx)
+		if err != nil {
+			return nil, fmt.Errorf("hostbinding %q: %w", d.Metadata.Name, err)
+		}
+		b.Meta.ID = idx.Bindings[d.Metadata.Name]
+		bindings = append(bindings, b)
+	}
 
-	snap := catalog.Build(provs, hosts, nil, nil, models, nil, nil, pricings, nil)
+	snap := catalog.Build(provs, hosts, nil, nil, models, nil, nil, pricings, bindings)
 	return flatten(snap, generatedAt), nil
 }
 
@@ -114,8 +128,8 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 			if provSlug != "" {
 				providers = []string{provSlug}
 			}
-			for _, hb := range m.Spec.Hosts {
-				if hb.HostID != h.Meta.ID || !hb.IsEnabled() {
+			for _, hb := range snap.BindingsForModel(m.Meta.ID) {
+				if hb.Spec.HostID != h.Meta.ID || !hb.IsEnabled() {
 					continue
 				}
 				for i := range m.Spec.Snapshots {
@@ -129,7 +143,7 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 					}
 					hostEntry.Models = append(hostEntry.Models, sdkcatalog.Binding{
 						Model:     snapEntry.Name,
-						Adapter:   string(hb.Adapter),
+						Adapter:   string(hb.Spec.Adapter),
 						Upstream:  snapEntry.Upstream(),
 						Providers: providers,
 						Pricing:   rates,

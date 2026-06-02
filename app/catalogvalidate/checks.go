@@ -1,10 +1,6 @@
 package catalogvalidate
 
-import (
-	"fmt"
-
-	"github.com/wyolet/relay/app/manifest"
-)
+import "fmt"
 
 // checkDuplicateNames emits an error for every name that appeared more
 // than once within a kind. The graph index already silently overwrote
@@ -50,8 +46,6 @@ func checkHostRefs(g *graph) []Issue {
 
 // checkModelRefs validates Model outbound refs and intra-model invariants:
 //   - metadata.owner.id / owner.name → Provider must exist when owner.kind = provider
-//   - spec.hosts[].host → Host name must exist
-//   - spec.hosts[].snapshots[] → must be subset of spec.snapshots[].name
 //   - spec.snapshots[] must be non-empty (otherwise nothing addressable)
 func checkModelRefs(g *graph) []Issue {
 	var out []Issue
@@ -85,51 +79,6 @@ func checkModelRefs(g *graph) []Issue {
 				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.snapshots"},
 				Message:  "model has no snapshots; nothing is customer-addressable",
 			})
-		}
-
-		// Build snapshot-name set for subset checks.
-		snapNames := make(map[string]struct{}, len(m.Spec.Snapshots))
-		for _, s := range m.Spec.Snapshots {
-			snapNames[s.Name] = struct{}{}
-		}
-
-		// Host bindings.
-		for i, hb := range m.Spec.Hosts {
-			fieldHost := fmt.Sprintf("spec.hosts[%d].host", i)
-			if hb.Host == "" {
-				out = append(out, Issue{
-					Severity: SeverityError,
-					Kind:     KindIncomplete,
-					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: fieldHost},
-					Message:  "host binding is missing host name",
-				})
-				continue
-			}
-			if _, ok := g.Hosts[hb.Host]; !ok {
-				out = append(out, Issue{
-					Severity: SeverityError,
-					Kind:     KindRefMissing,
-					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: fieldHost},
-					Target:   Ref{Kind: "Host", Name: hb.Host},
-					Message:  fmt.Sprintf("host %q not found", hb.Host),
-				})
-			}
-			// Snapshot subset check — every snapshot listed in the binding
-			// must exist on the Model.
-			for si, sn := range hb.Snapshots {
-				if _, ok := snapNames[sn]; !ok {
-					out = append(out, Issue{
-						Severity: SeverityError,
-						Kind:     KindSnapshotMissing,
-						Source: Ref{
-							Kind:  src.Kind,
-							Name:  src.Name,
-							Field: fmt.Sprintf("spec.hosts[%d].snapshots[%d]", i, si),
-						},
-						Message: fmt.Sprintf("snapshot %q not declared in spec.snapshots", sn),
-					})
-				}
-			}
 		}
 	}
 	return out
@@ -508,15 +457,21 @@ func checkOrphans(g *graph) []Issue {
 		}
 	}
 
-	// Model → at least one enabled host binding.
+	// Model → at least one enabled host binding (from standalone HostBinding docs).
+	modelHasBinding := map[string]bool{}
+	for _, b := range g.HostBindings {
+		if b.Spec.Enabled == nil || *b.Spec.Enabled {
+			modelHasBinding[b.Spec.Model] = true
+		}
+	}
 	for _, m := range g.Models {
-		if hasEnabledBinding(m) {
+		if modelHasBinding[m.Metadata.Name] {
 			continue
 		}
 		out = append(out, Issue{
 			Severity: SeverityWarning,
 			Kind:     KindOrphan,
-			Source:   Ref{Kind: "Model", Name: m.Metadata.Name, Field: "spec.hosts"},
+			Source:   Ref{Kind: "Model", Name: m.Metadata.Name},
 			Message:  "model has no enabled host bindings; not reachable",
 		})
 	}
@@ -566,13 +521,4 @@ func checkOrphans(g *graph) []Issue {
 	}
 
 	return out
-}
-
-func hasEnabledBinding(m *manifest.ModelDTO) bool {
-	for _, hb := range m.Spec.Hosts {
-		if hb.Enabled == nil || *hb.Enabled {
-			return true
-		}
-	}
-	return false
 }

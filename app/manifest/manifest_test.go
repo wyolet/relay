@@ -166,9 +166,6 @@ metadata:
     kind: provider
     id: anthropic
 spec:
-  hosts:
-    - host: anthropic-direct
-      adapter: anthropic
   snapshots:
     - name: claude-3-5-sonnet
       originalName: claude-3-5-sonnet-20241022
@@ -184,14 +181,11 @@ func TestToModel_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToModel: %v", err)
 	}
-	if len(m.Spec.Hosts) != 1 {
-		t.Fatalf("hosts: want 1, got %d", len(m.Spec.Hosts))
-	}
-	if m.Spec.Hosts[0].HostID != "host-bbb" {
-		t.Errorf("hostID: want host-bbb, got %q", m.Spec.Hosts[0].HostID)
-	}
 	if m.Meta.Owner.ID != "provider-aaa" {
 		t.Errorf("owner.id: want provider-aaa, got %q", m.Meta.Owner.ID)
+	}
+	if len(m.Spec.Snapshots) != 1 || m.Spec.Snapshots[0].Name != "claude-3-5-sonnet" {
+		t.Errorf("snapshots: want 1 snapshot 'claude-3-5-sonnet', got %+v", m.Spec.Snapshots)
 	}
 }
 

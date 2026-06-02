@@ -135,9 +135,7 @@ func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
 // Model
 // ---------------------------------------------------------------------------
 
-// ToModel resolves host names to ids. The model's owning provider is expressed
-// as Owner.ID in the wire metadata; if it's a name (not a UUID), the caller
-// should resolve it before calling ToModel or pass it pre-resolved.
+// ToModel resolves the model's owning provider name to an id.
 //
 // Provider owner: the wire form stores the provider *name* in Metadata.Owner.ID
 // when coming from YAML. Callers who need name→id resolution for the owner
@@ -145,21 +143,6 @@ func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
 func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 	m := &model.Model{
 		Meta: d.Metadata.toMeta(),
-	}
-
-	// Resolve host names → ids for each binding.
-	bindings := make([]model.HostBinding, 0, len(d.Spec.Hosts))
-	for i, b := range d.Spec.Hosts {
-		hostID, ok := idx.HostID(b.Host)
-		if !ok {
-			return nil, fmt.Errorf("model %q: hosts[%d]: host %q not found", d.Metadata.Name, i, b.Host)
-		}
-		bindings = append(bindings, model.HostBinding{
-			HostID:    hostID,
-			Adapter:   adapters.Name(b.Adapter),
-			Enabled:   b.Enabled,
-			Snapshots: b.Snapshots,
-		})
 	}
 
 	// Resolve owner provider name → id if the owner kind is provider and the
@@ -174,7 +157,6 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 	}
 
 	m.Spec = model.Spec{
-		Hosts:                bindings,
 		Family:               d.Spec.Family,
 		Version:              d.Spec.Version,
 		Capabilities:         d.Spec.Capabilities,
@@ -199,20 +181,6 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 }
 
 func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
-	bindings := make([]ModelHostBindingDTO, 0, len(m.Spec.Hosts))
-	for _, b := range m.Spec.Hosts {
-		name, _ := rev.HostName(b.HostID)
-		if name == "" {
-			name = b.HostID // fallback to id
-		}
-		bindings = append(bindings, ModelHostBindingDTO{
-			Host:      name,
-			Adapter:   string(b.Adapter),
-			Enabled:   b.Enabled,
-			Snapshots: b.Snapshots,
-		})
-	}
-
 	wm := metaToWire(m.Meta)
 	// Render owner provider id → name
 	if m.Meta.Owner.Kind == meta.OwnerProvider && m.Meta.Owner.ID != "" {
@@ -226,7 +194,6 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 		Kind:       "Model",
 		Metadata:   wm,
 		Spec: ModelSpec{
-			Hosts:                bindings,
 			Family:               m.Spec.Family,
 			Version:              m.Spec.Version,
 			Capabilities:         m.Spec.Capabilities,

@@ -76,14 +76,6 @@ func capabilityNames(c model.Capabilities) []string {
 	return out
 }
 
-func modelHostIDs(m *model.Model) []string {
-	out := make([]string, 0, len(m.Spec.Hosts))
-	for _, b := range m.Spec.Hosts {
-		out = append(out, b.HostID)
-	}
-	return out
-}
-
 var policyFilter = filter.Schema[policy.Policy]{
 	Fields: []filter.Field[policy.Policy]{
 		{Name: "name", Kind: filter.String, Sortable: true, Get: func(p *policy.Policy) string { return p.Meta.Name }},
@@ -113,7 +105,6 @@ var modelFilter = filter.Schema[model.Model]{
 		{Name: "family", Kind: filter.String, Repeat: true, Sortable: true, Get: func(m *model.Model) string { return m.Spec.Family }},
 		{Name: "license", Kind: filter.String, Get: func(m *model.Model) string { return m.Spec.License }},
 		{Name: "provider_id", Kind: filter.String, Repeat: true, Get: func(m *model.Model) string { return m.Meta.Owner.ID }},
-		{Name: "host_id", Kind: filter.String, Repeat: true, GetMulti: modelHostIDs},
 		{Name: "tag", Kind: filter.String, Repeat: true, GetMulti: func(m *model.Model) []string { return m.Spec.Tags }},
 		{Name: "capability", Kind: filter.String, Repeat: true, MatchAll: true, Enum: capabilityEnum,
 			GetMulti: func(m *model.Model) []string { return capabilityNames(m.Spec.Capabilities) }},

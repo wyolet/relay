@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
@@ -265,15 +266,16 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	mdl := &model.Model{
 		Meta: meta.Metadata{ID: ids.New(), Name: modelName, Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{
-				HostID:  hst.Meta.ID,
-				Adapter: adapters.OpenAI,
-			}},
 			Snapshots: []model.Snapshot{{Name: modelName}},
 			Pointer:   modelName,
 		},
 	}
 	mustUpsert(s.t, s.stores.Model.Upsert(ctx, mdl), "model")
+	bnd := &binding.Binding{
+		Meta: meta.Metadata{ID: ids.New(), Name: modelName + "-on-host", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: mdl.Meta.ID, HostID: hst.Meta.ID, Adapter: adapters.OpenAI},
+	}
+	mustUpsert(s.t, s.stores.Binding.Upsert(ctx, bnd), "binding")
 
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-policy", Owner: meta.Owner{Kind: meta.OwnerSystem}},

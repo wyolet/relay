@@ -104,7 +104,7 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 		if !routing.PolicyAllows(snap, pol, m) {
 			continue
 		}
-		if adapterFilter != "" && !modelHasAdapter(m, adapterFilter) {
+		if adapterFilter != "" && !modelHasAdapter(snap, m, adapterFilter) {
 			continue
 		}
 		appendModelRows(&out.Body.Data, snap, m, seen)
@@ -154,15 +154,14 @@ func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
 // enabled host binding to a host with credentials, optionally restricted
 // to a specific adapter kind.
 func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Name) bool {
-	for i := range m.Spec.Hosts {
-		hb := &m.Spec.Hosts[i]
+	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
 		if !hb.IsEnabled() {
 			continue
 		}
-		if adapterFilter != "" && hb.Adapter != adapterFilter {
+		if adapterFilter != "" && hb.Spec.Adapter != adapterFilter {
 			continue
 		}
-		if len(snap.HostKeysForHost(hb.HostID)) == 0 {
+		if len(snap.HostKeysForHost(hb.Spec.HostID)) == 0 {
 			continue
 		}
 		return true
@@ -174,10 +173,9 @@ func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFil
 // binding declaring kind, regardless of credentials. Used for policy-bound
 // keys where the routing layer will surface a no-keys error rather than
 // silently hiding the model.
-func modelHasAdapter(m *model.Model, name adapters.Name) bool {
-	for i := range m.Spec.Hosts {
-		hb := &m.Spec.Hosts[i]
-		if hb.IsEnabled() && hb.Adapter == name {
+func modelHasAdapter(snap *catalog.Snapshot, m *model.Model, name adapters.Name) bool {
+	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
+		if hb.IsEnabled() && hb.Spec.Adapter == name {
 			return true
 		}
 	}

@@ -72,7 +72,6 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts: []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{
 				mkSnap("gpt-5.5"),
 				mkSnap("gpt-5.5-2026-04-23"),
@@ -82,6 +81,10 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 			},
 			Pointer: slug.From("gpt-5.5"),
 		},
+	}
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-on-openai-rc", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
 	}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
@@ -101,7 +104,7 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 		rlListR{},
 		rkListR{rk},
 		rcListR{},
-		bndListR{},
+		bndListR{b},
 	)
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
@@ -186,13 +189,20 @@ func TestResolve_HostPinIndex(t *testing.T) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostA, Adapter: adapters.OpenAI}, {HostID: hostB, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{mkSnap("gpt-5.5")},
 			Pointer:   slug.From("gpt-5.5"),
 		},
 	}
+	bA := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI},
+	}
+	bB := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-azure", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostB, Adapter: adapters.OpenAI},
+	}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{}, bndListR{})
+	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{}, modListR{m}, keyListR{}, rlListR{}, rkListR{}, rcListR{}, bndListR{bA, bB})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -294,10 +304,17 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "gpt-5-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostA, Adapter: adapters.OpenAI}, {HostID: hostB, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{mkSnap("gpt-5.5")},
 			Pointer:   slug.From("gpt-5.5"),
 		},
+	}
+	bA := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-tp-openai", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostA, Adapter: adapters.OpenAI},
+	}
+	bB := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-5-5-tp-azure", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostB, Adapter: adapters.OpenAI},
 	}
 	// Customer policy (host-owned by openai for sanitize) grants all openai
 	// models; references both keys.
@@ -308,7 +325,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	keyB := &hostkey.HostKey{Meta: meta.Metadata{ID: hkB, Name: "kb", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: hostkey.Spec{HostID: hostB, PolicyID: tierBID, Value: "sk-b", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
 	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: custPolID, KeyHash: "h"}}
 
-	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{})
+	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{bA, bB})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

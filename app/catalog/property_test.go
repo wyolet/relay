@@ -41,7 +41,7 @@ func runProperty(t *testing.T, seed int64, events int) {
 
 	// Boot a Catalog from the fixture so the initial snapshot is non-empty
 	// and validating.
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	pr0 := &pricing.Pricing{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "p0",
@@ -55,7 +55,7 @@ func runProperty(t *testing.T, seed int64, events int) {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr0}, bndList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, prList{pr0}, bnds)
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("initial reload: %v", err)
 	}

@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"context"
-	"github.com/wyolet/relay/app/adapters"
 	"strings"
 	"testing"
 
@@ -20,8 +19,8 @@ import (
 // catalogFromFixture returns a *Catalog loaded with the standard fixture.
 func catalogFromFixture(t *testing.T) *Catalog {
 	t.Helper()
-	provs, hosts, pols, models, keys, rls, rks := fixture()
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bndList{})
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -56,7 +55,6 @@ func TestApply_UpsertNew(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "gpt-x-2025-01-01", OriginalName: "gpt-x-2025-01-01"}},
 			Pointer:   "gpt-x-2025-01-01",
 		},
@@ -137,7 +135,6 @@ func TestApply_UpsertExisting(t *testing.T) {
 	updated := &model.Model{
 		Meta: orig.Meta, // same ID
 		Spec: model.Spec{
-			Hosts:     orig.Spec.Hosts,
 			Snapshots: orig.Spec.Snapshots,
 			Pointer:   orig.Spec.Pointer,
 		},
@@ -155,7 +152,7 @@ func TestApply_UpsertExisting(t *testing.T) {
 }
 
 func TestApply_DeleteCascadesToPricing(t *testing.T) {
-	provs, hosts, pols, models, keys, rls, rks := fixture()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	hostID := hosts[0].Meta.ID
 	modelID := models[0].Meta.ID
 	pr := &pricing.Pricing{
@@ -172,7 +169,7 @@ func TestApply_DeleteCascadesToPricing(t *testing.T) {
 			},
 		},
 	}
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr}, bndList{})
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{pr}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -291,13 +288,6 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 		t.Fatalf("ApplyProviderUpsert: %v", err)
 	}
 
-	hostID := c.Current().hostsByID
-	var firstHostID string
-	for id := range hostID {
-		firstHostID = id
-		break
-	}
-
 	m := &model.Model{
 		Meta: meta.Metadata{
 			ID:    meta.NewID(),
@@ -305,7 +295,6 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID},
 		},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: firstHostID, Adapter: adapters.OpenAI}},
 			Snapshots: []model.Snapshot{{Name: "extra-model-2025-01-01", OriginalName: "extra"}},
 			Pointer:   "extra-model-2025-01-01",
 		},

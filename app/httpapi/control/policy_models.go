@@ -130,12 +130,11 @@ func refResolvesEnabled(idx *resolveIndex, ref modelref.Ref) bool {
 		if !ref.ModelWildcard && m.Meta.Name != ref.Model {
 			continue
 		}
-		for i := range m.Spec.Hosts {
-			hb := &m.Spec.Hosts[i]
+		for _, hb := range idx.snap.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
 				continue
 			}
-			h, ok := idx.hostsByID[hb.HostID]
+			h, ok := idx.hostsByID[hb.Spec.HostID]
 			if !ok || !h.IsEnabled() {
 				continue
 			}

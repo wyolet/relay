@@ -144,16 +144,15 @@ func graphModels(idx *resolveIndex, includeDeprecated bool) []graphModel {
 			Capabilities:       m.Spec.Capabilities,
 			ContextWindowTotal: m.Spec.ContextWindowTotal,
 			ContextWindowInput: m.Spec.ContextWindowInput,
-			Bindings:           make([]graphBinding, 0, len(m.Spec.Hosts)),
+			Bindings:           []graphBinding{},
 		}
-		for i := range m.Spec.Hosts {
-			hb := &m.Spec.Hosts[i]
+		for _, hb := range idx.snap.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
 				continue
 			}
 			gm.Bindings = append(gm.Bindings, graphBinding{
-				HostID:  hb.HostID,
-				Adapter: string(hb.Adapter),
+				HostID:  hb.Spec.HostID,
+				Adapter: string(hb.Spec.Adapter),
 			})
 		}
 		out = append(out, gm)

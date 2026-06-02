@@ -1,8 +1,11 @@
 // Package model is the domain layer for the Model entity — a container
-// for a family of dated checkpoints (Snapshots) served via one or more
-// Hosts. Meta.Name is the admin / catalog slug; customers address the
-// model by sending a Snapshot.Name in the request body. Snapshot.Pointer
-// names the default snapshot displayed in /v1/models.
+// for a family of dated checkpoints (Snapshots). Meta.Name is the admin /
+// catalog slug; customers address the model by sending a Snapshot.Name in
+// the request body. Snapshot.Pointer names the default snapshot displayed
+// in /v1/models.
+//
+// Host serving info (which Hosts can serve this Model) lives in standalone
+// HostBinding entities (app/binding), not embedded in the Model spec.
 //
 // Pricing and RateLimit attachments are deferred until those packages land.
 package model
@@ -10,7 +13,6 @@ package model
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/meta"
 )
 
@@ -24,13 +26,9 @@ type Model struct {
 // (vendor) id lives on Meta.Owner.ID (Owner.Kind is always "provider");
 // there is no separate spec.providerId field.
 //
-// Per-Host serving info (which Hosts can serve this Model and what name
-// each one calls the model upstream) lives in Spec.Hosts.
+// Per-Host serving info (which Hosts can serve this Model) lives in
+// standalone HostBinding entities (app/binding), not in Spec.
 type Spec struct {
-	// Hosts is the list of HostBindings — one per Host that serves this
-	// Model. At least one is required for the Model to be callable.
-	Hosts []HostBinding `json:"hosts" yaml:"hosts" validate:"required,min=1,dive"`
-
 	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 
@@ -114,40 +112,6 @@ type Modalities struct {
 	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
 }
 
-// HostBinding declares that a Model is callable via a particular Host
-// using a specific wire-protocol adapter. One Model lists one binding
-// per Host that serves it.
-//
-// Snapshots optionally narrows which of the Model's snapshots this host
-// can serve. Empty/nil means "all snapshots"; a non-empty list filters
-// routing to those names only. Use this when one Host can address only
-// a subset of the Model's snapshots (e.g. ollama-cloud serves the
-// -cloud-tagged variants; ollama-self serves the bare-tagged ones).
-type HostBinding struct {
-	HostID    string        `json:"hostId"             yaml:"hostId"             validate:"required,uuid"`
-	Adapter   adapters.Name `json:"adapter"            yaml:"adapter"`
-	Enabled   *bool         `json:"enabled,omitempty"  yaml:"enabled,omitempty"` // nil = true
-	Snapshots []string      `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
-}
-
-// Serves reports whether this binding is eligible to route requests for
-// the given snapshot name. Empty Snapshots means "all"; otherwise checks
-// membership.
-func (b HostBinding) Serves(snapshotName string) bool {
-	if len(b.Snapshots) == 0 {
-		return true
-	}
-	for _, s := range b.Snapshots {
-		if s == snapshotName {
-			return true
-		}
-	}
-	return false
-}
-
-// IsEnabled returns true when the binding's Enabled is unset or explicitly true.
-func (b HostBinding) IsEnabled() bool { return b.Enabled == nil || *b.Enabled }
-
 // Deprecation describes the lifecycle state of a Model.
 type Deprecation struct {
 	Status      DeprecationStatus `json:"status,omitempty"      yaml:"status,omitempty"      validate:"omitempty,oneof=active deprecated sunset"`
@@ -171,7 +135,6 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 // the Model-specific invariants:
 //   - Owner is required and must be provider-kind with a non-empty ID.
 //     Models always belong to a Provider.
-//   - Host bindings are unique by HostID.
 //   - Snapshot names are unique within the model and Pointer must name
 //     one of them.
 //
@@ -179,14 +142,6 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 // Replacement resolves to a real Model; snapshot-name uniqueness across
 // the catalog) live in the composition layer.
 func (m *Model) Validate() error {
-	// A binding without an explicit adapter defaults to OpenAI (the most
-	// common OpenAI-compatible upstream). Fill before validation so the
-	// allow-set check below always sees a concrete value.
-	for i := range m.Spec.Hosts {
-		if m.Spec.Hosts[i].Adapter == "" {
-			m.Spec.Hosts[i].Adapter = adapters.DefaultBinding
-		}
-	}
 	if err := meta.Validator.Struct(m); err != nil {
 		return err
 	}
@@ -195,17 +150,6 @@ func (m *Model) Validate() error {
 	}
 	if m.Meta.Owner.ID == "" {
 		return fmt.Errorf("model %q: owner.id is required (provider id)", m.Meta.Name)
-	}
-	hosts := make(map[string]struct{}, len(m.Spec.Hosts))
-	for i, b := range m.Spec.Hosts {
-		if !b.Adapter.UpstreamBinding() {
-			return fmt.Errorf("model %q: hosts[%d] adapter %q is not a valid upstream binding (want one of %v)",
-				m.Meta.Name, i, b.Adapter, adapters.UpstreamBindingNames())
-		}
-		if _, dup := hosts[b.HostID]; dup {
-			return fmt.Errorf("model %q: duplicate host binding %q", m.Meta.Name, b.HostID)
-		}
-		hosts[b.HostID] = struct{}{}
 	}
 	snaps := make(map[string]struct{}, len(m.Spec.Snapshots))
 	for _, s := range m.Spec.Snapshots {
@@ -217,13 +161,6 @@ func (m *Model) Validate() error {
 	}
 	if _, ok := snaps[lower(m.Spec.Pointer)]; !ok {
 		return fmt.Errorf("model %q: pointer %q does not match any snapshot", m.Meta.Name, m.Spec.Pointer)
-	}
-	for i, b := range m.Spec.Hosts {
-		for _, sn := range b.Snapshots {
-			if _, ok := snaps[lower(sn)]; !ok {
-				return fmt.Errorf("model %q: hosts[%d] snapshots references unknown snapshot %q", m.Meta.Name, i, sn)
-			}
-		}
 	}
 	return nil
 }

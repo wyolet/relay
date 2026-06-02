@@ -15,10 +15,10 @@
 //     OR — when both grant fields are empty — the policy is an implicit
 //     wildcard: any model reachable via its hostkeys is allowed. The
 //     hostkey-coverage check below is the real gate in that case.
-//  4. HostBinding: pick one Host from Model.Spec.Hosts the operator has
-//     bound. v1 picks the first enabled binding; multi-host failover is
-//     a future feature.
-//  5. Host: lookup by binding.HostID for BaseURL.
+//  4. HostBinding: pick one of the model's HostBindings (snapshot.
+//     BindingsForModel) the operator has configured. v1 picks the first
+//     enabled binding; multi-host failover is a future feature.
+//  5. Host: lookup by binding.Spec.HostID for BaseURL.
 //  6. Keys: Policy.Spec.HostKeyIDs filtered to those whose Owner.ID is
 //     the chosen Host (a key authenticates against one host).
 //  7. RateLimit: Policy.Spec.RateLimitID, resolved to []pkgratelimit.Rule.

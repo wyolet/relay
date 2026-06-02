@@ -471,18 +471,9 @@ func (s *Snapshot) BindingForModelHost(modelID, hostID string) (*binding.Binding
 }
 
 // BindingsForModel returns the bindings declared for a model, sorted by
-// binding name. When the model has no standalone HostBinding rows, it falls
-// back to bindings synthesized from the model's embedded Spec.Hosts (the
-// migration bridge — see syntheticBindings). The returned slice must not be
-// mutated.
+// binding name. The returned slice must not be mutated.
 func (s *Snapshot) BindingsForModel(modelID string) []*binding.Binding {
-	if b := s.bindingsByModel[modelID]; len(b) > 0 {
-		return b
-	}
-	if m, ok := s.modelsByID[modelID]; ok {
-		return syntheticBindings(m)
-	}
-	return nil
+	return s.bindingsByModel[modelID]
 }
 
 // AllBindings returns every binding in the snapshot, sorted by name.

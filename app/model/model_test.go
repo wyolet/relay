@@ -1,7 +1,6 @@
 package model
 
 import (
-	"github.com/wyolet/relay/app/adapters"
 	"strings"
 	"testing"
 
@@ -18,7 +17,6 @@ func fix(name string) *Model {
 			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: validProvID()},
 		},
 		Spec: Spec{
-			Hosts:     []HostBinding{{HostID: meta.NewID(), Adapter: adapters.OpenAI}},
 			Snapshots: []Snapshot{{Name: name + "-snap", OriginalName: name + "-snap"}},
 			Pointer:   name + "-snap",
 		},
@@ -41,39 +39,6 @@ func TestValidate(t *testing.T) {
 			name: "missing name",
 			m:    func() *Model { m := fix("x"); m.Meta.Name = ""; return m }(),
 			want: "Name",
-		},
-		{
-			name: "missing hosts",
-			m:    func() *Model { m := fix("x"); m.Spec.Hosts = nil; return m }(),
-			want: "Hosts",
-		},
-		{
-			name: "host binding snapshot ref unknown",
-			m: func() *Model {
-				m := fix("x")
-				m.Spec.Hosts[0].Snapshots = []string{"nope"}
-				return m
-			}(),
-			want: "unknown snapshot",
-		},
-		{
-			name: "host binding missing hostId",
-			m: func() *Model {
-				m := fix("x")
-				m.Spec.Hosts[0].HostID = ""
-				return m
-			}(),
-			want: "HostID",
-		},
-		{
-			name: "duplicate host binding",
-			m: func() *Model {
-				m := fix("x")
-				dup := m.Spec.Hosts[0].HostID
-				m.Spec.Hosts = append(m.Spec.Hosts, HostBinding{HostID: dup, Adapter: adapters.OpenAI})
-				return m
-			}(),
-			want: "duplicate host binding",
 		},
 		{
 			name: "user owner rejected",

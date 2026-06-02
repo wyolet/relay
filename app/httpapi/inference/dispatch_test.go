@@ -86,10 +86,13 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "test-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{
-			Hosts:     []model.HostBinding{{HostID: hostID, Adapter: hostAdapter}},
 			Snapshots: []model.Snapshot{{Name: slug.From("test-model")}},
 			Pointer:   slug.From("test-model"),
 		},
+	}
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "test-model-binding", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: hostAdapter},
 	}
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
@@ -109,7 +112,7 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 		rlListD{},
 		rkListD{rk},
 		rcListD{},
-		bndListD{},
+		bndListD{b},
 	)
 	if err := cat.Reload(t.Context()); err != nil {
 		t.Fatalf("catalog reload: %v", err)

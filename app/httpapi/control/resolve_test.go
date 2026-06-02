@@ -3,6 +3,9 @@ package control
 import (
 	"testing"
 
+	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -17,18 +20,49 @@ import (
 //	  gpt-3-5  (M2) → binding DISABLED
 //	  legacy   (M3, DEPRECATED) → binding enabled
 func enabledIndex() *resolveIndex {
-	p1 := &provider.Provider{Meta: meta.Metadata{ID: "P1", Name: "openai"}}
-	h1 := &host.Host{Meta: meta.Metadata{ID: "H1", Name: "cloud"}}
+	p1 := &provider.Provider{Meta: meta.Metadata{ID: "P1", Name: "openai", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	h1 := &host.Host{Meta: meta.Metadata{ID: "H1", Name: "cloud", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "http://x.example"}}
 
-	m1 := &model.Model{Meta: meta.Metadata{ID: "M1", Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
-	m1.Spec.Hosts = []model.HostBinding{{HostID: "H1", Adapter: "openai"}}
-	m2 := &model.Model{Meta: meta.Metadata{ID: "M2", Name: "gpt-3-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
-	m2.Spec.Hosts = []model.HostBinding{{HostID: "H1", Adapter: "openai", Enabled: boolPtr(false)}}
-	m3 := &model.Model{Meta: meta.Metadata{ID: "M3", Name: "legacy", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
+	m1 := &model.Model{
+		Meta: meta.Metadata{ID: "M1", Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "gpt-4o"}}, Pointer: "gpt-4o"},
+	}
+	m2 := &model.Model{
+		Meta: meta.Metadata{ID: "M2", Name: "gpt-3-5", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "gpt-3-5"}}, Pointer: "gpt-3-5"},
+	}
+	m3 := &model.Model{
+		Meta: meta.Metadata{ID: "M3", Name: "legacy", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "legacy"}}, Pointer: "legacy"},
+	}
 	m3.Spec.DeprecationDate = "2025-01-01"
-	m3.Spec.Hosts = []model.HostBinding{{HostID: "H1", Adapter: "openai"}}
+
+	enabled := true
+	disabled := false
+	b1 := &binding.Binding{
+		Meta: meta.Metadata{ID: "B1", Name: "b1", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: "M1", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &enabled},
+	}
+	b2 := &binding.Binding{
+		Meta: meta.Metadata{ID: "B2", Name: "b2", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: "M2", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &disabled},
+	}
+	b3 := &binding.Binding{
+		Meta: meta.Metadata{ID: "B3", Name: "b3", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: "M3", HostID: "H1", Adapter: adapters.OpenAI, Enabled: &enabled},
+	}
+
+	snap := catalog.Build(
+		[]*provider.Provider{p1},
+		[]*host.Host{h1},
+		nil, nil,
+		[]*model.Model{m1, m2, m3},
+		nil, nil, nil,
+		[]*binding.Binding{b1, b2, b3},
+	)
 
 	return &resolveIndex{
+		snap:             snap,
 		providersByID:    map[string]*provider.Provider{"P1": p1},
 		providersByName:  map[string]*provider.Provider{"openai": p1},
 		hostsByID:        map[string]*host.Host{"H1": h1},

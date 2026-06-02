@@ -559,10 +559,7 @@ func buildModel(g Group, pm providerMeta, version string, today time.Time) (*man
 			Owner:  manifest.WireOwner{Kind: meta.OwnerProvider, Name: pm.name},
 		},
 		Spec: manifest.ModelSpec{
-			Hosts: []manifest.ModelHostBindingDTO{{
-				Host:    pm.name,
-				Adapter: pm.adapter,
-			}},
+			// TODO: emit standalone HostBinding docs
 			Family:              family,
 			Capabilities:        caps,
 			Modalities:          inferModalities(e),

@@ -68,7 +68,7 @@ func build(
 	s.addRateLimits(rls)
 	s.addHosts(hosts, polByID)
 	s.addPolicies(pols, modelIDs, keyIDs, rlIDs)
-	s.addModels(models, providerIDs, hostIDs)
+	s.addModels(models, providerIDs)
 	s.addHostKeys(keys, hostIDs, polByID)
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()

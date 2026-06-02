@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
@@ -183,6 +184,7 @@ func registerResolve(api huma.API, d Deps, protect huma.Middlewares) {
 // models). Full-list / detail views use the CRUD APIs (PG) instead — they
 // intentionally show disabled rows.
 type resolveIndex struct {
+	snap             *catalog.Snapshot
 	providersByID    map[string]*provider.Provider
 	providersByName  map[string]*provider.Provider
 	hostsByID        map[string]*host.Host
@@ -203,6 +205,7 @@ func loadResolveIndex(d Deps) (*resolveIndex, error) {
 	hosts := snap.Hosts()
 	models := snap.AllModels() // already sorted by slug
 	idx := &resolveIndex{
+		snap:             snap,
 		providersByID:    make(map[string]*provider.Provider, len(provs)),
 		providersByName:  make(map[string]*provider.Provider, len(provs)),
 		hostsByID:        make(map[string]*host.Host, len(hosts)),
@@ -261,12 +264,11 @@ func expandOne(idx *resolveIndex, raw string, ref modelref.Ref, includeDeprecate
 			providerSlug = p.Meta.Name
 		}
 		modelMatched := false
-		for i := range m.Spec.Hosts {
-			hb := &m.Spec.Hosts[i]
+		for _, hb := range idx.snap.BindingsForModel(m.Meta.ID) {
 			if !hb.IsEnabled() {
 				continue
 			}
-			h, ok := idx.hostsByID[hb.HostID]
+			h, ok := idx.hostsByID[hb.Spec.HostID]
 			if !ok {
 				continue
 			}

@@ -104,7 +104,7 @@ type HostSpec struct {
 	Icon          *meta.Icon `json:"icon,omitempty"        yaml:"icon,omitempty"`
 }
 
-// ModelDTO is the wire form of a Model. Hosts[].host is a name, not an id.
+// ModelDTO is the wire form of a Model.
 // Owner.ID in the wire form should be the provider *name*; translate resolves it.
 type ModelDTO struct {
 	APIVersion string    `json:"apiVersion" yaml:"apiVersion"`
@@ -114,9 +114,6 @@ type ModelDTO struct {
 }
 
 type ModelSpec struct {
-	// Hosts carries host names (not ids) in the wire form.
-	Hosts []ModelHostBindingDTO `json:"hosts" yaml:"hosts"`
-
 	Family  string `json:"family,omitempty"  yaml:"family,omitempty"`
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
 
@@ -142,15 +139,6 @@ type ModelSpec struct {
 
 	Snapshots []model.Snapshot `json:"snapshots" yaml:"snapshots"`
 	Pointer   string           `json:"pointer"   yaml:"pointer"`
-}
-
-// ModelHostBindingDTO is one host binding embedded in ModelSpec.Hosts. Host is
-// a name string.
-type ModelHostBindingDTO struct {
-	Host      string   `json:"host"                yaml:"host"`
-	Adapter   string   `json:"adapter"             yaml:"adapter"`
-	Enabled   *bool    `json:"enabled,omitempty"   yaml:"enabled,omitempty"`
-	Snapshots []string `json:"snapshots,omitempty" yaml:"snapshots,omitempty"`
 }
 
 // HostBindingDTO is the top-level wire form of a standalone HostBinding entity.
