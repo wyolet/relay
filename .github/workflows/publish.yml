@@ -9,8 +9,8 @@ name: Publish image
 #                       fetch the UI release asset. Drop it + the guard below
 #                       once relay-ui is public (Dockerfile falls back to the
 #                       public URL).
-#   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN — Docker Hub login (a Docker Hub access
-#                       token, not the account password).
+#   DOCKERHUB_TOKEN   — Docker Hub access token (secret). The username is the
+#                       repo VARIABLE DOCKERHUB_USERNAME (vars.*, not secret).
 #
 # First publish creates each package private; make them public (ghcr: org
 # package settings; Docker Hub: repo settings) so users can pull without auth.
@@ -45,7 +45,7 @@ jobs:
       - name: Require secrets
         env:
           UI_FETCH_TOKEN: ${{ secrets.UI_FETCH_TOKEN }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           # Without a UI token the Dockerfile silently ships a UI-less image
@@ -66,7 +66,7 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Resolve version
