@@ -76,4 +76,4 @@ jobs:
           # fresh or it could reuse a stale (e.g. UI-less) layer.
           docker buildx bake -f docker-bake.hcl --push \
             --no-cache-filter assets \
-            prod
+            prod allinone
