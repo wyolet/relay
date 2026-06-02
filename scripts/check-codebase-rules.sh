@@ -39,6 +39,10 @@ echo "jobq purity — the jobq module imports nothing from app/, internal/, or s
 hits=$(grep -rnE 'wyolet/relay/(app|internal|sdk)/' jobq/ --include='*.go' || true)
 if [ -n "$hits" ]; then note "jobq imports relay server code (must stay standalone):"; echo "$hits"; else ok "clean"; fi
 
+echo "catalogview isolation — the hot path never imports the UX read-model:"
+hits=$(grep -rn 'wyolet/relay/app/catalogview' app/routing/ app/pipeline/ app/keypool/ --include='*.go' || true)
+if [ -n "$hits" ]; then note "routing/pipeline/keypool imports app/catalogview (UX views must stay off the hot path):"; echo "$hits"; else ok "clean"; fi
+
 if [ $fail -ne 0 ]; then
   echo
   echo "Codebase-rule check FAILED — see docs/canonical-protocol.md \"Codebase rules\"."

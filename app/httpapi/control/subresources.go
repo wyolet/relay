@@ -1,263 +1,123 @@
-// subresources.go adds resource-navigation read endpoints — "API UX":
+// subresources.go binds the catalogview read projections to chi/huma as
+// resource-navigation endpoints — "API UX":
 //
 //	GET /models/{ref}/hosts     hosts serving this model (+ binding + pricing)
 //	GET /models/{ref}/pricing   pricing per host for this model
+//	GET /models/{ref}/policies  policies granting this model (+ per-model limits)
 //	GET /hosts/{ref}/models      models this host serves (+ binding + pricing)
 //
-// They answer "to see a model's hosts, GET the model's hosts" so consumers
-// (the admin UI's model-detail tabs, future TUIs) navigate by resource
-// instead of listing /host-bindings and joining client-side. Read-only, served
-// from the in-memory snapshot (same source the data plane routes against, so
-// they reflect the enabled+reconciled set — disabled rows are absent). Rates
-// are embedded inline so a detail page renders pricing with no follow-up call.
-//
-// {ref} is a slug or UUID id (id wins). Pricing for a (model, host) is the
-// binding's explicit PricingID, falling back to the pricing that owns the
-// (model, host) pair.
+// All composition lives in app/catalogview (PG-backed, full state incl.
+// disabled rows). These handlers are thin: build the Service from the stores,
+// call the projection, return its rows. {ref} is a slug or UUID id.
 package control
 
 import (
 	"context"
-	"sort"
+	"errors"
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/catalogview"
 )
 
-// ── shared row shapes ───────────────────────────────────────────────────────
-
-type subHost struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
-	BaseURL     string `json:"baseURL,omitempty"`
+func viewService(d Deps) *catalogview.Service {
+	return &catalogview.Service{
+		Models:     d.Stores.Model,
+		Hosts:      d.Stores.Host,
+		Bindings:   d.Stores.Binding,
+		Pricings:   d.Stores.Pricing,
+		Policies:   d.Stores.Policy,
+		RateLimits: d.Stores.RateLimit,
+		Providers:  d.Stores.Provider,
+	}
 }
 
-type subModel struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"displayName,omitempty"`
+func notFound(err error, msg string) error {
+	if errors.Is(err, catalogview.ErrNotFound) {
+		return huma.Error404NotFound(msg)
+	}
+	return huma.Error500InternalServerError(err.Error())
 }
 
-type subBinding struct {
-	ID           string   `json:"id"`
-	Adapter      string   `json:"adapter"`
-	UpstreamName string   `json:"upstreamName,omitempty"`
-	Enabled      bool     `json:"enabled"`
-	Snapshots    []string `json:"snapshots,omitempty"`
+type modelHostsOut struct {
+	Body struct {
+		Model catalogview.ModelRef       `json:"model"`
+		Hosts []catalogview.ModelHostRow `json:"hosts"`
+	}
 }
-
-type subRate struct {
-	Meter       string  `json:"meter"`
-	Unit        string  `json:"unit"`
-	Amount      float64 `json:"amount"`
-	AboveTokens int     `json:"aboveTokens,omitempty"`
+type modelPricingOut struct {
+	Body struct {
+		Model   catalogview.ModelRef        `json:"model"`
+		Pricing []catalogview.ModelPriceRow `json:"pricing"`
+	}
 }
-
-type subPricing struct {
-	ID       string    `json:"id"`
-	Name     string    `json:"name"`
-	Currency string    `json:"currency"`
-	Rates    []subRate `json:"rates"`
+type modelPoliciesOut struct {
+	Body struct {
+		Model    catalogview.ModelRef         `json:"model"`
+		Policies []catalogview.ModelPolicyRow `json:"policies"`
+	}
+}
+type hostModelsOut struct {
+	Body struct {
+		Host   catalogview.HostRef        `json:"host"`
+		Models []catalogview.HostModelRow `json:"models"`
+	}
 }
 
 func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 	huma.Register(api, huma.Operation{
-		OperationID: "model_hosts",
-		Method:      "GET",
-		Path:        "/models/{ref}/hosts",
-		Summary:     "List the hosts that serve this model, with binding + pricing",
-		Tags:        []string{"models"},
-		Middlewares: protect,
-		Errors:      []int{401, 404},
-	}, func(ctx context.Context, in *refInput) (*modelHostsOutput, error) {
-		snap := d.Catalog.Current()
-		m, ok := modelByRef(snap, in.Ref)
-		if !ok {
-			return nil, huma.Error404NotFound("model not found")
+		OperationID: "model_hosts", Method: "GET", Path: "/models/{ref}/hosts",
+		Summary: "List the hosts that serve this model, with binding + pricing",
+		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
+	}, func(ctx context.Context, in *refInput) (*modelHostsOut, error) {
+		m, rows, err := viewService(d).ModelHosts(ctx, in.Ref)
+		if err != nil {
+			return nil, notFound(err, "model not found")
 		}
-		out := &modelHostsOutput{}
-		out.Body.Model = subModel{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
-		out.Body.Hosts = []modelHostRow{}
-		for _, b := range snap.BindingsForModel(m.Meta.ID) {
-			h, ok := snap.Host(b.Spec.HostID)
-			if !ok {
-				continue
-			}
-			out.Body.Hosts = append(out.Body.Hosts, modelHostRow{
-				Host:    hostEntryOf(h),
-				Binding: bindingEntryOf(b),
-				Pricing: pricingFor(snap, b),
-			})
-		}
-		sort.Slice(out.Body.Hosts, func(i, j int) bool { return out.Body.Hosts[i].Host.Name < out.Body.Hosts[j].Host.Name })
+		out := &modelHostsOut{}
+		out.Body.Model, out.Body.Hosts = m, rows
 		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "model_pricing",
-		Method:      "GET",
-		Path:        "/models/{ref}/pricing",
-		Summary:     "List this model's pricing per host",
-		Tags:        []string{"models"},
-		Middlewares: protect,
-		Errors:      []int{401, 404},
-	}, func(ctx context.Context, in *refInput) (*modelPricingOutput, error) {
-		snap := d.Catalog.Current()
-		m, ok := modelByRef(snap, in.Ref)
-		if !ok {
-			return nil, huma.Error404NotFound("model not found")
+		OperationID: "model_pricing", Method: "GET", Path: "/models/{ref}/pricing",
+		Summary: "List this model's pricing per host",
+		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
+	}, func(ctx context.Context, in *refInput) (*modelPricingOut, error) {
+		m, rows, err := viewService(d).ModelPricing(ctx, in.Ref)
+		if err != nil {
+			return nil, notFound(err, "model not found")
 		}
-		out := &modelPricingOutput{}
-		out.Body.Model = subModel{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
-		out.Body.Pricing = []modelPricingRow{}
-		for _, b := range snap.BindingsForModel(m.Meta.ID) {
-			h, ok := snap.Host(b.Spec.HostID)
-			if !ok {
-				continue
-			}
-			out.Body.Pricing = append(out.Body.Pricing, modelPricingRow{
-				Host:    hostEntryOf(h),
-				Pricing: pricingFor(snap, b),
-			})
-		}
-		sort.Slice(out.Body.Pricing, func(i, j int) bool { return out.Body.Pricing[i].Host.Name < out.Body.Pricing[j].Host.Name })
+		out := &modelPricingOut{}
+		out.Body.Model, out.Body.Pricing = m, rows
 		return out, nil
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "host_models",
-		Method:      "GET",
-		Path:        "/hosts/{ref}/models",
-		Summary:     "List the models this host serves, with binding + pricing",
-		Tags:        []string{"hosts"},
-		Middlewares: protect,
-		Errors:      []int{401, 404},
-	}, func(ctx context.Context, in *refInput) (*hostModelsOutput, error) {
-		snap := d.Catalog.Current()
-		h, ok := hostByRef(snap, in.Ref)
-		if !ok {
-			return nil, huma.Error404NotFound("host not found")
+		OperationID: "model_policies", Method: "GET", Path: "/models/{ref}/policies",
+		Summary: "List the policies that grant this model, with the limits each applies to it",
+		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
+	}, func(ctx context.Context, in *refInput) (*modelPoliciesOut, error) {
+		m, rows, err := viewService(d).ModelPolicies(ctx, in.Ref)
+		if err != nil {
+			return nil, notFound(err, "model not found")
 		}
-		out := &hostModelsOutput{}
-		out.Body.Host = hostEntryOf(h)
-		out.Body.Models = []hostModelRow{}
-		for _, b := range snap.AllBindings() {
-			if b.Spec.HostID != h.Meta.ID {
-				continue
-			}
-			m, ok := snap.Model(b.Spec.ModelID)
-			if !ok {
-				continue
-			}
-			out.Body.Models = append(out.Body.Models, hostModelRow{
-				Model:   modelEntryOf(m),
-				Binding: bindingEntryOf(b),
-				Pricing: pricingFor(snap, b),
-			})
-		}
-		sort.Slice(out.Body.Models, func(i, j int) bool { return out.Body.Models[i].Model.Name < out.Body.Models[j].Model.Name })
+		out := &modelPoliciesOut{}
+		out.Body.Model, out.Body.Policies = m, rows
 		return out, nil
 	})
-}
 
-type modelHostRow struct {
-	Host    subHost     `json:"host"`
-	Binding subBinding  `json:"binding"`
-	Pricing *subPricing `json:"pricing"`
-}
-type modelHostsOutput struct {
-	Body struct {
-		Model subModel       `json:"model"`
-		Hosts []modelHostRow `json:"hosts"`
-	}
-}
-
-type modelPricingRow struct {
-	Host    subHost     `json:"host"`
-	Pricing *subPricing `json:"pricing"`
-}
-type modelPricingOutput struct {
-	Body struct {
-		Model   subModel          `json:"model"`
-		Pricing []modelPricingRow `json:"pricing"`
-	}
-}
-
-type hostModelRow struct {
-	Model   subModel    `json:"model"`
-	Binding subBinding  `json:"binding"`
-	Pricing *subPricing `json:"pricing"`
-}
-type hostModelsOutput struct {
-	Body struct {
-		Host   subHost        `json:"host"`
-		Models []hostModelRow `json:"models"`
-	}
-}
-
-// ── resolution + mapping helpers ────────────────────────────────────────────
-
-func modelByRef(snap *catalog.Snapshot, ref string) (*model.Model, bool) {
-	if m, ok := snap.Model(ref); ok {
-		return m, true
-	}
-	if ms := snap.ModelsByName(ref); len(ms) > 0 {
-		return ms[0], true
-	}
-	return nil, false
-}
-
-func hostByRef(snap *catalog.Snapshot, ref string) (*host.Host, bool) {
-	if h, ok := snap.Host(ref); ok {
-		return h, true
-	}
-	return snap.HostByName(ref)
-}
-
-func hostEntryOf(h *host.Host) subHost {
-	return subHost{ID: h.Meta.ID, Name: h.Meta.Name, DisplayName: h.Meta.DisplayName, BaseURL: h.Spec.BaseURL}
-}
-
-func modelEntryOf(m *model.Model) subModel {
-	return subModel{ID: m.Meta.ID, Name: m.Meta.Name, DisplayName: m.Meta.DisplayName}
-}
-
-func bindingEntryOf(b *binding.Binding) subBinding {
-	return subBinding{
-		ID:           b.Meta.ID,
-		Adapter:      string(b.Spec.Adapter),
-		UpstreamName: b.Spec.UpstreamName,
-		Enabled:      b.IsEnabled(),
-		Snapshots:    b.Spec.Snapshots,
-	}
-}
-
-// pricingFor resolves the pricing for a binding: its explicit PricingID first,
-// then the pricing that owns the (model, host) pair. nil when unpriced.
-func pricingFor(snap *catalog.Snapshot, b *binding.Binding) *subPricing {
-	var p *pricing.Pricing
-	if b.Spec.PricingID != "" {
-		if pr, ok := snap.Pricing(b.Spec.PricingID); ok {
-			p = pr
+	huma.Register(api, huma.Operation{
+		OperationID: "host_models", Method: "GET", Path: "/hosts/{ref}/models",
+		Summary: "List the models this host serves, with binding + pricing",
+		Tags:    []string{"hosts"}, Middlewares: protect, Errors: []int{401, 404},
+	}, func(ctx context.Context, in *refInput) (*hostModelsOut, error) {
+		h, rows, err := viewService(d).HostModels(ctx, in.Ref)
+		if err != nil {
+			return nil, notFound(err, "host not found")
 		}
-	}
-	if p == nil {
-		if pr, ok := snap.PriceByModelHost(b.Spec.ModelID, b.Spec.HostID); ok {
-			p = pr
-		}
-	}
-	if p == nil {
-		return nil
-	}
-	out := &subPricing{ID: p.Meta.ID, Name: p.Meta.Name, Currency: p.Spec.Currency, Rates: make([]subRate, 0, len(p.Spec.Rates))}
-	for _, r := range p.Spec.Rates {
-		out.Rates = append(out.Rates, subRate{Meter: string(r.Meter), Unit: string(r.Unit), Amount: r.Amount, AboveTokens: r.AboveTokens})
-	}
-	return out
+		out := &hostModelsOut{}
+		out.Body.Host, out.Body.Models = h, rows
+		return out, nil
+	})
 }
