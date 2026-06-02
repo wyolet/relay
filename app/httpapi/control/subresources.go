@@ -100,8 +100,10 @@ type policyHostsOut struct {
 }
 type policyRateLimitsOut struct {
 	Body struct {
-		Policy     catalogview.PolicyRef            `json:"policy"`
-		RateLimits []catalogview.PolicyRateLimitRow `json:"rateLimits"`
+		Policy      catalogview.PolicyRef            `json:"policy"`
+		RateLimits  []catalogview.PolicyRateLimitRow `json:"rateLimits"`
+		Unthrottled []catalogview.UnthrottledModel   `json:"unthrottled"`
+		Overlaps    []catalogview.RateLimitOverlap   `json:"overlaps"`
 	}
 }
 
@@ -229,12 +231,13 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the rate-limit rule sets this policy references",
 		Tags:    []string{"policies"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*policyRateLimitsOut, error) {
-		p, rows, err := viewService(d).PolicyRateLimits(ctx, in.Ref)
+		p, view, err := viewService(d).PolicyRateLimits(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "policy not found")
 		}
 		out := &policyRateLimitsOut{}
-		out.Body.Policy, out.Body.RateLimits = p, rows
+		out.Body.Policy = p
+		out.Body.RateLimits, out.Body.Unthrottled, out.Body.Overlaps = view.RateLimits, view.Unthrottled, view.Overlaps
 		return out, nil
 	})
 }

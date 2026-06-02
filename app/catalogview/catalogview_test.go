@@ -184,10 +184,11 @@ func TestPolicyModels_GrantAndLimits(t *testing.T) {
 
 func TestPolicyRateLimits_FlatDefault(t *testing.T) {
 	svc, _ := fixture()
-	_, rows, err := svc.PolicyRateLimits(context.Background(), "tier-1")
+	_, view, err := svc.PolicyRateLimits(context.Background(), "tier-1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	rows := view.RateLimits
 	if len(rows) != 1 || rows[0].Name != "rpm" || !rows[0].Default {
 		t.Fatalf("rows = %+v", rows)
 	}
@@ -397,5 +398,55 @@ func TestPolicyHosts_KeyEnrichmentAndRequirement(t *testing.T) {
 	}
 	if len(a.HostKeys) != 1 || a.HostKeys[0].Enabled || a.HostKeys[0].SharedWithPolicyCount != 1 {
 		t.Errorf("host-a key = %+v (want disabled, shared=1)", a.HostKeys)
+	}
+}
+
+func TestPolicyRateLimits_OverlapsAndUnthrottled(t *testing.T) {
+	provID, hostID := meta.NewID(), meta.NewID()
+	modA, modFree := meta.NewID(), meta.NewID()
+	keyID := meta.NewID()
+	rl1, rl2 := meta.NewID(), meta.NewID()
+	svc := &Service{
+		Providers: fProviders{{Meta: meta.Metadata{ID: provID, Name: "openai"}}},
+		Hosts:     fHosts{{Meta: meta.Metadata{ID: hostID, Name: "openai"}}},
+		Models: fModels{
+			{Meta: meta.Metadata{ID: modA, Name: "gpt-4o", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+			{Meta: meta.Metadata{ID: modFree, Name: "free-model", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}}},
+		},
+		Bindings: fBindings{
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}, Spec: binding.Spec{ModelID: modA, HostID: hostID, Adapter: adapters.OpenAI}},
+			{Meta: meta.Metadata{ID: meta.NewID(), Name: "b2"}, Spec: binding.Spec{ModelID: modFree, HostID: hostID, Adapter: adapters.OpenAI}},
+		},
+		Pricings: fPricings{},
+		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
+		RateLimits: fRLs{
+			{Meta: meta.Metadata{ID: rl1, Name: "rl1"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}},
+			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}},
+		},
+		// two RLBindings both matching gpt-4o (overlap); free-model matched by neither (unthrottled)
+		Policies: fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{
+			HostKeyIDs: []string{keyID},
+			RLBindings: []policy.RLBinding{
+				{Models: []string{"openai/gpt-4o"}, RateLimitID: rl1},
+				{Models: []string{"openai"}, RateLimitID: rl2},
+			},
+		}}},
+	}
+	_, view, err := svc.PolicyRateLimits(context.Background(), "p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Overlaps) != 1 {
+		t.Fatalf("overlaps = %+v", view.Overlaps)
+	}
+	o := view.Overlaps[0]
+	if o.Model != "gpt-4o" || o.Winner != rl1 || len(o.Losers) != 1 || o.Losers[0] != rl2 {
+		t.Errorf("overlap = %+v", o)
+	}
+	// free-model is matched by the "openai" RLBinding too, so it's capped — NOT unthrottled.
+	for _, u := range view.Unthrottled {
+		if u.Model.Name == "gpt-4o" {
+			t.Errorf("gpt-4o should be capped, not unthrottled")
+		}
 	}
 }

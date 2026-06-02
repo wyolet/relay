@@ -346,15 +346,88 @@ func (idx *index) keyShareCount(keyID, excludeID string) int {
 	return n
 }
 
+// UnthrottledModel — a model the policy grants on which no rate-limit applies
+// (every granted binding of it resolves to an empty limit set).
+type UnthrottledModel struct {
+	Model ModelRef `json:"model"`
+}
+
+// RateLimitOverlap — a binding claimed by more than one RLBinding. Winner is
+// the rate-limit that actually applies (first declared match); losers are the
+// ones it shadowed on that binding. All ids match PolicyRateLimitRow.ID.
+type RateLimitOverlap struct {
+	Provider string   `json:"provider"`
+	Model    string   `json:"model"`
+	Host     string   `json:"host"`
+	Winner   string   `json:"winner"`
+	Losers   []string `json:"losers"`
+}
+
+// PolicyRateLimitsView is the rate-limits tab payload: the referenced rule sets
+// plus the two derivations the server now owns — models that slip through
+// uncapped, and bindings where RLBindings overlap.
+type PolicyRateLimitsView struct {
+	RateLimits  []PolicyRateLimitRow `json:"rateLimits"`
+	Unthrottled []UnthrottledModel   `json:"unthrottled"`
+	Overlaps    []RateLimitOverlap   `json:"overlaps"`
+}
+
 // PolicyRateLimits returns the rate-limit rule sets the policy references — each
-// per-model RLBinding in declared order, then the flat default last. Declared
-// order is significant (first-match wins), so the list is not re-sorted.
-func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, []PolicyRateLimitRow, error) {
+// per-model RLBinding in declared order, then the flat default last — plus the
+// unthrottled-models and overlapping-binding derivations.
+func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, PolicyRateLimitsView, error) {
 	p, idx, err := s.loadPolicy(ctx, ref)
 	if err != nil {
-		return PolicyRef{}, nil, err
+		return PolicyRef{}, PolicyRateLimitsView{}, err
 	}
-	return policyRefOf(p, idx), idx.policyRateLimitRows(p), nil
+	models, err := s.Models.List(ctx)
+	if err != nil {
+		return PolicyRef{}, PolicyRateLimitsView{}, err
+	}
+	view := PolicyRateLimitsView{
+		RateLimits:  idx.policyRateLimitRows(p),
+		Unthrottled: []UnthrottledModel{},
+		Overlaps:    []RateLimitOverlap{},
+	}
+
+	capped := map[string]bool{} // modelID → has a non-empty limit on some binding
+	uncapped := map[string]*model.Model{}
+	for _, gb := range idx.grantedBindings(p, models) {
+		// Overlap: every RLBinding (in declared order) that matches this triple.
+		var matching []string
+		for _, rb := range p.Spec.RLBindings {
+			if modelref.MatchAny(rb.Models, gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name) {
+				matching = append(matching, rb.RateLimitID)
+			}
+		}
+		if len(matching) > 1 {
+			view.Overlaps = append(view.Overlaps, RateLimitOverlap{
+				Provider: gb.provSlug, Model: gb.model.Meta.Name, Host: gb.host.Meta.Name,
+				Winner: matching[0], Losers: matching[1:],
+			})
+		}
+		// Unthrottled bookkeeping: a model is capped if ANY granted binding
+		// resolves to a non-empty limit set.
+		rlID := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
+		if len(idx.limitsOf(rlID)) > 0 {
+			capped[gb.model.Meta.ID] = true
+		} else {
+			uncapped[gb.model.Meta.ID] = gb.model
+		}
+	}
+	for id, m := range uncapped {
+		if !capped[id] {
+			view.Unthrottled = append(view.Unthrottled, UnthrottledModel{Model: modelRefOf(m)})
+		}
+	}
+	sort.Slice(view.Unthrottled, func(i, j int) bool { return view.Unthrottled[i].Model.Name < view.Unthrottled[j].Model.Name })
+	sort.Slice(view.Overlaps, func(i, j int) bool {
+		if view.Overlaps[i].Model != view.Overlaps[j].Model {
+			return view.Overlaps[i].Model < view.Overlaps[j].Model
+		}
+		return view.Overlaps[i].Host < view.Overlaps[j].Host
+	})
+	return policyRefOf(p, idx), view, nil
 }
 
 func (idx *index) rlRow(rlID string, models []string, isDefault bool) PolicyRateLimitRow {
