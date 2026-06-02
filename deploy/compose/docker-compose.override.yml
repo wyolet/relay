@@ -61,6 +61,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      target: lean
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}
@@ -71,6 +72,7 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+      target: lean
     depends_on:
       postgres: {condition: service_healthy}
       clickhouse: {condition: service_healthy}

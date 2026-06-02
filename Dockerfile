@@ -80,8 +80,8 @@ COPY --from=assets /assets/ui/ cmd/relay/web/dist/
 RUN touch cmd/relay/web/dist/.gitkeep
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /relay ./cmd/relay
 
-# --- final: distroless, nonroot ---
-FROM gcr.io/distroless/static-debian12:nonroot
+# --- final (lean): distroless, nonroot — production image, external Postgres ---
+FROM gcr.io/distroless/static-debian12:nonroot AS lean
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 COPY --from=builder /relay /relay
 COPY --from=assets /assets/catalog /catalog
@@ -90,3 +90,23 @@ ENV RELAY_CATALOG_DIR=/catalog \
     RELAY_AUTO_SEED_IF_EMPTY=1
 EXPOSE 8080 8081
 ENTRYPOINT ["/relay"]
+
+# --- allinone: relay + embedded Postgres in one container — `docker run` demo ---
+# Single-node convenience image. Boots a local Postgres (initdb on first run)
+# then relay against it, so no external services are needed. Heavier and
+# single-node only — production uses the lean image above against managed PG.
+FROM postgres:16-alpine AS allinone
+LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
+COPY --from=builder /relay /relay
+COPY --from=assets /assets/catalog /catalog
+COPY deploy/allinone-entrypoint.sh /usr/local/bin/relay-allinone-entrypoint.sh
+RUN chmod +x /usr/local/bin/relay-allinone-entrypoint.sh
+ENV RELAY_CATALOG_DIR=/catalog \
+    RELAY_AUTO_SEED_IF_EMPTY=1 \
+    POSTGRES_USER=relay \
+    POSTGRES_PASSWORD=relay \
+    POSTGRES_DB=relay \
+    PGDATA=/var/lib/postgresql/data \
+    RELAY_PG_DSN=postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
+EXPOSE 8080 8081 5432
+ENTRYPOINT ["/usr/local/bin/relay-allinone-entrypoint.sh"]

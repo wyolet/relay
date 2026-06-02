@@ -58,11 +58,28 @@ relay-canonical protocol design.
 
 ## Quickstart
 
-### Docker (standalone — one command)
+### `docker run` (all-in-one — zero dependencies)
 
-Requires Docker. Bundles its own Postgres, ClickHouse, Valkey, and Jaeger,
-and builds the relay image from source (no published image yet). Run it from
-the repo root — the root `docker-compose.yml` wires the whole stack:
+The quickest taste. The all-in-one image bundles Postgres *inside* the
+container and seeds the catalog on first boot — nothing external to wire up:
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
+  ghcr.io/wyolet/relay:demo
+```
+
+Data plane: `http://localhost:8080` · control plane + **admin UI**:
+`http://localhost:8081`. Single-node and embedded-PG — great for a try-out, not
+for production (use the lean image + a managed Postgres for that; see below).
+_(Published image pending — until then, `docker compose up --build` below builds
+it from source.)_
+
+### Docker Compose (standalone — bundled services)
+
+Requires Docker. Bundles its own Postgres (plus optional ClickHouse, Valkey,
+Jaeger), and builds the relay image from source. Run it from the repo root —
+the root `docker-compose.yml` wires the whole stack:
 
 ```bash
 cp .env.example .env
