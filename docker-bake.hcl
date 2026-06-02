@@ -44,14 +44,14 @@ target "dev" {
 }
 
 // All-in-one: relay + embedded Postgres (Dockerfile `allinone` stage). The
-// `docker run` demo image. Tag scheme TBD — provisionally :demo + version.
+// `docker run` image, published as :standalone (+ :VERSION-standalone).
 target "allinone" {
   inherits    = ["_common"]
-  description  = "All-in-one demo image (relay + embedded Postgres) for `docker run`; pushes :demo + :VERSION-allinone"
+  description = "All-in-one image (relay + embedded Postgres) for `docker run`; pushes :standalone + :VERSION-standalone"
   target      = "allinone"
   tags = compact([
-    "${REGISTRY}/${IMAGE_NAME}:demo",
-    notequal("latest", VERSION) ? "${REGISTRY}/${IMAGE_NAME}:${VERSION}-allinone" : "",
+    "${REGISTRY}/${IMAGE_NAME}:standalone",
+    notequal("latest", VERSION) ? "${REGISTRY}/${IMAGE_NAME}:${VERSION}-standalone" : "",
   ])
 }
 
