@@ -66,7 +66,7 @@ container and seeds the catalog on first boot — nothing external to wire up:
 ```bash
 docker run -p 8080:8080 -p 8081:8081 \
   -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
-  ghcr.io/wyolet/relay:demo
+  ghcr.io/wyolet/relay:standalone
 ```
 
 Data plane: `http://localhost:8080` · control plane + **admin UI**:
