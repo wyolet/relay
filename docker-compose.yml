@@ -1,0 +1,18 @@
+# Root convenience stack — run the full standalone relay from the repo root:
+#
+#   cp .env.example .env      # then set RELAY_MASTER_KEY
+#   docker compose up --build
+#
+# This re-exports the canonical base under deploy/compose/ (valkey + relay-a/b +
+# nginx, pulling ${RELAY_IMAGE}). The adjacent docker-compose.override.yml is
+# auto-loaded by `docker compose up` and bundles Postgres/ClickHouse/Jaeger +
+# builds the relay image from source. Included files' relative paths
+# (../../.env, ./config, the build context) resolve against their own
+# directory, so the include is transparent.
+#
+# Operators wiring relay to their own managed PG/CH/Redis should run the base
+# file under deploy/compose/ directly and point the DSNs at their services —
+# see the "external mode" block in .env.example.
+
+include:
+  - deploy/compose/docker-compose.yml
