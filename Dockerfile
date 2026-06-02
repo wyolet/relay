@@ -24,9 +24,14 @@ ARG CATALOG_REF
 WORKDIR /assets
 
 # UI dist (relay-ui release tarball). With a gh_token secret the GitHub API
-# asset endpoint authenticates against the private repo; without it the public
-# release-download URL is used (works once relay-ui is public).
-RUN --mount=type=secret,id=gh_token sh -eu -c '\
+# asset endpoint authenticates against the still-private repo; failure is then
+# fatal (you have access — a miss is a real error). Without a token the build
+# is best-effort: relay-ui is private, so the fetch will miss and the image
+# ships with an empty dist (relay boots API-only; UI not served). This keeps a
+# tokenless `docker compose up --build` working for strangers today; once
+# relay-ui is public the tokenless path fetches it too. The published image is
+# built WITH a token, so it always carries the UI.
+RUN --mount=type=secret,id=gh_token,required=false sh -eu -c '\
   REPO=wyolet/relay-ui; TAG='"$UI_VERSION"'; ASSET="relay-ui-$TAG.tar.gz"; \
   TOKEN=$(cat /run/secrets/gh_token 2>/dev/null || true); \
   mkdir -p /assets/ui; \
@@ -34,12 +39,16 @@ RUN --mount=type=secret,id=gh_token sh -eu -c '\
     AID=$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
             "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
           | jq -r ".assets[] | select(.name==\"$ASSET\") | .id"); \
-    [ -n "$AID" ] || { echo "asset $ASSET not found in $REPO@$TAG"; exit 1; }; \
+    [ -n "$AID" ] || { echo "FATAL: asset $ASSET not found in $REPO@$TAG"; exit 1; }; \
     curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" \
-      "https://api.github.com/repos/$REPO/releases/assets/$AID"; \
+      "https://api.github.com/repos/$REPO/releases/assets/$AID" \
+      | tar -xz -C /assets/ui --strip-components=1; \
+  elif curl -fsSL "https://github.com/$REPO/releases/download/$TAG/$ASSET" \
+         | tar -xz -C /assets/ui --strip-components=1; then \
+    echo "fetched UI $TAG (public)"; \
   else \
-    curl -fsSL "https://github.com/$REPO/releases/download/$TAG/$ASSET"; \
-  fi | tar -xz -C /assets/ui --strip-components=1'
+    echo "WARN: no gh_token and UI fetch failed (relay-ui private?) — building without embedded UI"; \
+  fi'
 
 # Catalog data (public repo). No release tarballs yet, so fetch the source
 # archive at the pinned ref and keep only the live data tree (drafts/ are
@@ -63,7 +72,12 @@ COPY sdk/go.mod sdk/go.sum ./sdk/
 COPY jobq/go.mod jobq/go.sum ./jobq/
 RUN go mod download
 COPY . .
+# Land the fetched UI (may be empty if no token + private repo). The .gitkeep
+# guarantees dist/ is non-empty so `//go:embed all:dist` always compiles; an
+# empty dist means Present() is false and no UI is served.
+RUN mkdir -p cmd/relay/web/dist
 COPY --from=assets /assets/ui/ cmd/relay/web/dist/
+RUN touch cmd/relay/web/dist/.gitkeep
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /relay ./cmd/relay
 
 # --- final: distroless, nonroot ---
