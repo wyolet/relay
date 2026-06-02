@@ -1,0 +1,233 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1480" viewBox="0 0 1280 1480" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#60a5fa"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#fb923c"/>
+    </marker>
+    <style>
+      .title  { font-size: 28px; font-weight: 700; fill: #f1f5f9; }
+      .sub    { font-size: 14px; fill: #94a3b8; }
+      .zone   { font-size: 17px; font-weight: 700; }
+      .h      { font-size: 15px; font-weight: 700; fill: #e2e8f0; }
+      .t      { font-size: 12.5px; fill: #cbd5e1; }
+      .mono   { font-size: 12px; fill: #c7d2fe; font-family: "SF Mono", Menlo, Consolas, monospace; }
+      .monos  { font-size: 11px; fill: #93a4c4; font-family: "SF Mono", Menlo, Consolas, monospace; }
+      .lbl    { font-size: 12px; fill: #94a3b8; }
+      .lblb   { font-size: 12px; fill: #60a5fa; font-weight:600; }
+      .note   { font-size: 11.5px; fill: #94a3b8; font-style: italic; }
+    </style>
+  </defs>
+
+  <rect width="1280" height="1480" fill="#0b1120"/>
+  <text x="48" y="50" class="title">Wyolet Relay — Architecture</text>
+  <text x="48" y="74" class="sub">Two planes over a shared storage spine. Stateless hot path; control plane owns truth and publishes via PG NOTIFY.</text>
+
+  <!-- ============ STORAGE SPINE ============ -->
+  <rect x="48" y="100" width="1184" height="120" rx="12" fill="#0e2a20" stroke="#34d399" stroke-width="1.6"/>
+  <text x="72" y="128" class="zone" fill="#34d399">STORAGE SPINE — the domain &amp; storage layer is the spine, not the request pipeline</text>
+  <g>
+    <rect x="72" y="142" width="270" height="62" rx="8" fill="#0b1120" stroke="#1c4a3a"/>
+    <text x="86" y="164" class="h">Postgres</text>
+    <text x="86" y="184" class="t">config truth · 8 entity kinds</text>
+    <text x="86" y="200" class="monos">migrations · PG NOTIFY emit</text>
+
+    <rect x="356" y="142" width="270" height="62" rx="8" fill="#0b1120" stroke="#1c4a3a"/>
+    <text x="370" y="164" class="h">Redis / valkey</text>
+    <text x="370" y="184" class="t">counters · circuit breakers · kv</text>
+    <text x="370" y="200" class="monos">ratelimit Lua · secret_health:*</text>
+
+    <rect x="640" y="142" width="270" height="62" rx="8" fill="#0b1120" stroke="#1c4a3a"/>
+    <text x="654" y="164" class="h">ClickHouse</text>
+    <text x="654" y="184" class="t">usage events (batched ~10s)</text>
+    <text x="654" y="200" class="monos">usage sink observer</text>
+
+    <rect x="924" y="142" width="284" height="62" rx="8" fill="#0b1120" stroke="#1c4a3a"/>
+    <text x="938" y="164" class="h">S3</text>
+    <text x="938" y="184" class="t">opt-in payload / media offload</text>
+    <text x="938" y="200" class="monos">content-addressed blobs</text>
+  </g>
+
+  <!-- ============ CONTROL PLANE ============ -->
+  <rect x="48" y="260" width="560" height="230" rx="12" fill="#16233f" stroke="#60a5fa" stroke-width="1.6"/>
+  <text x="72" y="288" class="zone" fill="#60a5fa">CONTROL PLANE</text>
+  <text x="430" y="288" class="monos" fill="#60a5fa">RELAY_CONTROL_PORT</text>
+  <text x="72" y="310" class="t">Owns Postgres truth · own listener · session + bearer auth</text>
+
+  <rect x="72" y="324" width="246" height="70" rx="8" fill="#0b1120" stroke="#2c4470"/>
+  <text x="86" y="346" class="h">Admin CRUD — 8 kinds, uniform</text>
+  <text x="86" y="365" class="monos">GET/POST /{plural} · PUT|DELETE /by-id/{id}</text>
+  <text x="86" y="383" class="monos">providers hosts models host-keys …</text>
+
+  <rect x="332" y="324" width="252" height="70" rx="8" fill="#0b1120" stroke="#2c4470"/>
+  <text x="346" y="346" class="h">Auth &amp; ops</text>
+  <text x="346" y="365" class="monos">/auth/* (scs session) · Bearer admin</text>
+  <text x="346" y="383" class="monos">/master-key /reload /version</text>
+
+  <rect x="72" y="404" width="512" height="70" rx="8" fill="#0b1120" stroke="#2c4470"/>
+  <text x="86" y="426" class="h">Read APIs &amp; governance</text>
+  <text x="86" y="445" class="monos">/logs /usage · Authorizer (AlwaysAllow v1)</text>
+  <text x="86" y="463" class="monos">governance:* settings → Check(op, kind, ownerKind)</text>
+
+  <!-- ============ DATA PLANE ============ -->
+  <rect x="648" y="260" width="584" height="230" rx="12" fill="#2a1c10" stroke="#fb923c" stroke-width="1.6"/>
+  <text x="672" y="288" class="zone" fill="#fb923c">DATA PLANE — stateless hot path</text>
+  <text x="672" y="310" class="t">Reads ONLY the in-memory catalog Snapshot · NO Postgres on the request path</text>
+
+  <rect x="672" y="324" width="246" height="70" rx="8" fill="#0b1120" stroke="#5c3a1c"/>
+  <text x="686" y="346" class="h">Inference edge</text>
+  <text x="686" y="365" class="monos">/v1/*  Bearer = relay-key</text>
+  <text x="686" y="383" class="monos">/healthz · shape-agnostic Dispatch</text>
+
+  <rect x="932" y="324" width="276" height="70" rx="8" fill="#0b1120" stroke="#5c3a1c"/>
+  <text x="946" y="346" class="h">catalog.Snapshot</text>
+  <text x="946" y="365" class="t">immutable · COW reconciler</text>
+  <text x="946" y="383" class="monos">NOTIFY listener fan-out ~1s</text>
+
+  <rect x="672" y="404" width="536" height="70" rx="8" fill="#0b1120" stroke="#5c3a1c"/>
+  <text x="686" y="426" class="h">routing/ → Plan</text>
+  <text x="686" y="445" class="monos">{Model, Policy, HostBinding, Host, Keys, Rules}</text>
+  <text x="686" y="463" class="t">Adapter dispatch key lives on HostBinding, not Host</text>
+
+  <!-- spine -> snapshot NOTIFY arrow -->
+  <path d="M1070 220 L1070 324" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowBlue)" stroke-dasharray="5,4"/>
+  <text x="1080" y="280" class="lblb">PG NOTIFY</text>
+  <text x="1080" y="296" class="lblb">fan-out</text>
+
+  <!-- control writes truth arrow -->
+  <path d="M300 260 L300 220" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <text x="310" y="244" class="lblb">writes truth</text>
+
+  <!-- ============ REQUEST PIPELINE ============ -->
+  <rect x="48" y="528" width="1184" height="298" rx="12" fill="#111a2e" stroke="#334155" stroke-width="1.6"/>
+  <text x="72" y="556" class="zone" fill="#e2e8f0">REQUEST HOT PATH — pipeline/ (pure orchestration)</text>
+  <text x="72" y="578" class="note">customer → edge → routing → reserve → pick key → Adapter.Call → stream; failover only PRE-first-byte</text>
+
+  <!-- pipeline stages -->
+  <g>
+    <rect x="72" y="596" width="200" height="86" rx="8" fill="#0b1120" stroke="#3a4a63"/>
+    <text x="86" y="618" class="h">1 · reserve</text>
+    <text x="86" y="638" class="t">ratelimit/</text>
+    <text x="86" y="656" class="monos">one Redis Lua call</text>
+    <text x="86" y="673" class="monos">(kv-backed)</text>
+
+    <rect x="300" y="596" width="210" height="86" rx="8" fill="#0b1120" stroke="#3a4a63"/>
+    <text x="314" y="618" class="h">2 · pick key</text>
+    <text x="314" y="638" class="t">keypool/ Selector</text>
+    <text x="314" y="656" class="monos">per-key breaker</text>
+    <text x="314" y="673" class="monos">keyed by value-hash</text>
+
+    <rect x="538" y="596" width="230" height="86" rx="8" fill="#0b1120" stroke="#3a4a63"/>
+    <text x="552" y="618" class="h">3 · Adapter.Call</text>
+    <text x="552" y="638" class="t">app/adapter specAdapter</text>
+    <text x="552" y="656" class="monos">upstream URL + auth</text>
+    <text x="552" y="673" class="monos">strategy from Spec</text>
+
+    <rect x="796" y="596" width="240" height="86" rx="8" fill="#0b1120" stroke="#3a4a63"/>
+    <text x="810" y="618" class="h">4 · stream back</text>
+    <text x="810" y="638" class="t">io.TeeReader</text>
+    <text x="810" y="656" class="monos">caller gets bytes;</text>
+    <text x="810" y="673" class="monos">post-flight gets copy</text>
+
+    <rect x="1064" y="596" width="144" height="86" rx="8" fill="#2a2310" stroke="#fbbf24"/>
+    <text x="1078" y="618" class="h">caller</text>
+    <text x="1078" y="638" class="t">bytes flow</text>
+    <text x="1078" y="656" class="t">No mid-stream</text>
+    <text x="1078" y="673" class="t">failover</text>
+
+    <path d="M272 639 L300 639" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <path d="M510 639 L538 639" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <path d="M768 639 L796 639" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <path d="M1036 639 L1064 639" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- detached post-flight -->
+  <rect x="72" y="704" width="1136" height="104" rx="8" fill="#241432" stroke="#c084fc" stroke-width="1.4" stroke-dasharray="6,4"/>
+  <text x="86" y="728" class="h" fill="#c084fc">DETACHED post-flight goroutine — fires on Body.Close(), NEVER blocks the response</text>
+  <text x="86" y="750" class="monos">Limiter.Commit → Selector.RecordSuccess → Lifecycle.FirePostFlight (fan-out, per-hook panic recovery)</text>
+  <g>
+    <rect x="86" y="762" width="250" height="34" rx="6" fill="#0b1120" stroke="#6b3fa0"/>
+    <text x="100" y="784" class="monos">usagelog → JSONL / ClickHouse</text>
+    <rect x="352" y="762" width="250" height="34" rx="6" fill="#0b1120" stroke="#4a2f63"/>
+    <text x="366" y="784" class="monos">OTel span — A4a (TODO)</text>
+    <rect x="618" y="762" width="250" height="34" rx="6" fill="#0b1120" stroke="#4a2f63"/>
+    <text x="632" y="784" class="monos">Prometheus — A4b (TODO)</text>
+    <rect x="884" y="762" width="324" height="34" rx="6" fill="#0b1120" stroke="#6b3fa0"/>
+    <text x="898" y="784" class="monos">all async · bounded chan · drop-on-full + counter</text>
+  </g>
+
+  <!-- edge -> pipeline arrow -->
+  <path d="M795 490 L795 528" stroke="#fb923c" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <text x="805" y="514" class="lbl" fill="#fb923c">dispatch</text>
+
+  <!-- ============ TRANSLATION ============ -->
+  <rect x="48" y="866" width="600" height="244" rx="12" fill="#0d2925" stroke="#2dd4bf" stroke-width="1.6"/>
+  <text x="72" y="894" class="zone" fill="#2dd4bf">CANONICAL TRANSLATION — not pairwise</text>
+  <text x="72" y="916" class="t">Composition handles any A→B route — no N² translator packages</text>
+
+  <rect x="72" y="932" width="160" height="58" rx="8" fill="#0b1120" stroke="#1f5048"/>
+  <text x="86" y="956" class="h">inbound shape</text>
+  <text x="86" y="976" class="t">parse →</text>
+
+  <rect x="252" y="932" width="190" height="58" rx="8" fill="#0b1120" stroke="#2dd4bf"/>
+  <text x="266" y="956" class="h">sdk/v1 canonical</text>
+  <text x="266" y="976" class="monos">6-method Translator</text>
+
+  <rect x="462" y="932" width="160" height="58" rx="8" fill="#0b1120" stroke="#1f5048"/>
+  <text x="476" y="956" class="h">upstream shape</text>
+  <text x="476" y="976" class="t">→ serialize</text>
+
+  <path d="M232 961 L252 961" stroke="#2dd4bf" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <path d="M442 961 L462 961" stroke="#2dd4bf" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <text x="72" y="1018" class="t">• same-shape OR Spec.IsNativePath  →  byte-pass via io.Copy  (the 95% case)</text>
+  <text x="72" y="1040" class="t">• BytePass:true (Embeddings)  →  never translate</text>
+  <text x="72" y="1062" class="t">• otherwise  →  canonical chain, per-SSE-chunk on stream</text>
+  <text x="72" y="1090" class="note">Canonical knows nothing · vendors import canonical · vendor names only in cmd/relay/main.go</text>
+
+  <!-- ============ DOMAIN MODEL ============ -->
+  <rect x="672" y="866" width="560" height="244" rx="12" fill="#2a2310" stroke="#fbbf24" stroke-width="1.6"/>
+  <text x="696" y="894" class="zone" fill="#fbbf24">DOMAIN MODEL — Policy is the hub</text>
+
+  <text x="696" y="930" class="mono">RelayKey  ──►  PolicyID</text>
+  <text x="696" y="958" class="mono">Policy ┬ ModelIDs ──► Model ── HostBinding[]</text>
+  <text x="696" y="982" class="mono">       ├ HostKeyIDs            ├ HostID</text>
+  <text x="696" y="1006" class="mono">       └ RateLimitID           ├ UpstreamName</text>
+  <text x="696" y="1030" class="mono">                               ├ Adapter (openai|</text>
+  <text x="696" y="1054" class="mono">                               │  anthropic|gemini)</text>
+  <text x="696" y="1078" class="mono">Host ── HostKey · Pricing      └ Enabled</text>
+  <text x="696" y="1100" class="note">Adapter dispatch on HostBinding: one Host serves many wire shapes</text>
+
+  <!-- ============ MODULE BOUNDARY ============ -->
+  <rect x="48" y="1150" width="1184" height="290" rx="12" fill="#111a2e" stroke="#64748b" stroke-width="1.6"/>
+  <text x="72" y="1178" class="zone" fill="#cbd5e1">MODULE BOUNDARY — server → sdk, NEVER reverse</text>
+
+  <rect x="72" y="1196" width="560" height="118" rx="8" fill="#16182f" stroke="#818cf8"/>
+  <text x="86" y="1220" class="h">sdk/  (github.com/wyolet/relay/sdk — separate, vendorable module)</text>
+  <text x="86" y="1244" class="monos">v1/      canonical: types, Translator, Name, Registry (imports nothing)</text>
+  <text x="86" y="1266" class="monos">adapters/{openai, anthropic, gemini}/   import v1 only, never each other</text>
+  <text x="86" y="1288" class="monos">usage/ · catalog/ (go:embed JSON) · client/</text>
+  <text x="86" y="1306" class="monos">a consumer `go get`s this only — no pgx/redis/clickhouse</text>
+
+  <rect x="672" y="1196" width="560" height="118" rx="8" fill="#0b1120" stroke="#3a4a63"/>
+  <text x="686" y="1220" class="h">server module  (app/ · pkg/ · internal/ · cmd/)</text>
+  <text x="686" y="1244" class="monos">pkg/       imports nothing from app/ or internal/</text>
+  <text x="686" y="1266" class="monos">internal/  composition root: config, storage pool, identity</text>
+  <text x="686" y="1288" class="monos">app/       NO vendor names (enforced by grep rules 1,2,4,10)</text>
+  <text x="686" y="1306" class="monos">cmd/relay/main.go  the ONLY place vendor names appear in code</text>
+
+  <path d="M672 1255 L632 1255" stroke="#818cf8" stroke-width="2.2" marker-end="url(#arrowBlue)"/>
+  <text x="540" y="1248" class="lblb" text-anchor="middle">depends on</text>
+
+  <!-- subsystems -->
+  <rect x="72" y="1334" width="1136" height="86" rx="8" fill="#0b1120" stroke="#334155"/>
+  <text x="86" y="1358" class="h">Three subsystems hang off the same spine — reuse data-plane primitives, never fork</text>
+  <text x="86" y="1382" class="t">• Realtime data plane (above)</text>
+  <text x="430" y="1382" class="t">• Batch — app/batch + jobq module, reuses Pipeline.Run (source="batch")</text>
+  <text x="86" y="1404" class="t">• Control plane — CRUD + read APIs</text>
+  <text x="430" y="1404" class="note">Batch shipped #275/#277 · OTel + Prometheus observers are the next additive hooks (A4)</text>
+</svg>

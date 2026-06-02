@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wyolet Relay — Core Architecture &amp; Backend Integration</title>
+<style>
+  :root {
+    --bg:#0b1120; --fg:#e2e8f0; --muted:#94a3b8; --line:#1e293b;
+    --panel:#111a2e; --panel2:#0f172a;
+    --blue:#60a5fa; --blue-bg:#16233f; --orange:#fb923c; --orange-bg:#2a1c10;
+    --green:#34d399; --green-bg:#0e2a20; --teal:#2dd4bf; --teal-bg:#0d2925;
+    --amber:#fbbf24; --amber-bg:#2a2310; --purple:#c084fc; --purple-bg:#241432;
+    --slate:#cbd5e1; --code-bg:#1a2438;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.65 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap { max-width:960px; margin:0 auto; padding:48px 28px 96px; }
+  header { border-bottom:2px solid var(--line); padding-bottom:24px; margin-bottom:8px; }
+  h1 { font-size:32px; margin:0 0 6px; letter-spacing:-.02em; }
+  .lede { color:var(--muted); font-size:16px; margin:0; }
+  h2 { font-size:23px; margin:48px 0 4px; letter-spacing:-.01em; padding-top:8px; }
+  h3 { font-size:17px; margin:28px 0 6px; }
+  .kicker { text-transform:uppercase; letter-spacing:.08em; font-size:12px; font-weight:700; color:var(--blue); margin:40px 0 0; }
+  p { margin:10px 0; }
+  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.88em; background:var(--code-bg); padding:1px 6px; border-radius:5px; color:#c7d2fe; }
+  pre { background:#060b16; color:#cbd5e1; padding:16px 18px; border-radius:10px; overflow:auto; border:1px solid var(--line); font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; line-height:1.55; }
+  pre code { background:none; color:inherit; padding:0; }
+  a { color:var(--blue); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .fig { margin:24px 0; text-align:center; }
+  .fig img { max-width:100%; border:1px solid var(--line); border-radius:12px; background:#0b1120; }
+  .fig figcaption { color:var(--muted); font-size:13px; margin-top:8px; }
+  .grid { display:grid; gap:14px; margin:18px 0; }
+  .grid.two { grid-template-columns:1fr 1fr; }
+  @media (max-width:680px){ .grid.two{grid-template-columns:1fr;} }
+  .card { border:1px solid var(--line); border-radius:12px; padding:16px 18px; background:var(--panel); }
+  .card h4 { margin:0 0 6px; font-size:15px; }
+  .card p { margin:4px 0; font-size:13.5px; color:var(--slate); }
+  .pill { display:inline-block; font-size:11px; font-weight:700; padding:2px 9px; border-radius:999px; vertical-align:middle; margin-left:6px; }
+  .pill.ok { background:var(--green-bg); color:var(--green); }
+  .pill.todo { background:var(--amber-bg); color:var(--amber); }
+  .pill.if { background:var(--blue-bg); color:var(--blue); }
+  table { border-collapse:collapse; width:100%; margin:18px 0; font-size:13.5px; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  td code { font-size:12px; }
+  .seam { border-left:3px solid var(--blue); background:var(--blue-bg); padding:12px 16px; border-radius:0 8px 8px 0; margin:14px 0; font-size:13.5px; }
+  .seam strong { color:var(--blue); }
+  .rule { border-left:3px solid var(--orange); background:var(--orange-bg); padding:12px 16px; border-radius:0 8px 8px 0; margin:14px 0; font-size:13.5px; }
+  ul { margin:8px 0; padding-left:22px; }
+  li { margin:5px 0; }
+  .toc { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 22px; margin:24px 0; columns:2; font-size:14px; }
+  @media (max-width:680px){ .toc{columns:1;} }
+  .toc a { display:block; padding:3px 0; color:var(--slate); }
+  footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Wyolet Relay — Core Architecture</h1>
+  <p class="lede">A high-throughput, self-hostable LLM router in Go. BYO provider keys, k8s-native, no reselling. This document covers the core architecture and how every pluggable backend integrates behind a stable interface seam.</p>
+</header>
+
+<nav class="toc">
+  <a href="#shape">1 · The shape: two planes, one spine</a>
+  <a href="#spine">2 · The storage spine</a>
+  <a href="#hotpath">3 · The request hot path</a>
+  <a href="#canonical">4 · Canonical translation</a>
+  <a href="#integration">5 · Backend integration — the seams</a>
+  <a href="#storage">5.1 · Postgres (config truth)</a>
+  <a href="#kv">5.2 · kv: Redis / Mem</a>
+  <a href="#usage">5.3 · Usage sinks</a>
+  <a href="#secret">5.4 · Secret backends</a>
+  <a href="#adapters">5.5 · Upstream adapters</a>
+  <a href="#batch">5.6 · Batch / jobq</a>
+  <a href="#adding">6 · Adding a new backend</a>
+</nav>
+
+<figure class="fig">
+  <img src="architecture.svg" alt="Wyolet Relay architecture diagram">
+  <figcaption>The full picture — see <code>docs/architecture.svg</code> for the source.</figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<h2 id="shape">1 · The shape: two planes, one spine</h2>
+
+<p>The load-bearing idea: the <strong>“spine” is the domain model + storage layer</strong>, not the request pipeline. Everything else is a consumer of that spine. Two planes sit on top:</p>
+
+<div class="grid two">
+  <div class="card">
+    <h4>Control plane <span class="pill if">own listener</span></h4>
+    <p>Owns Postgres truth. Serves admin CRUD (8 kinds), <code>/auth/*</code>, read APIs (<code>/logs</code>, <code>/usage</code>), and ops endpoints. Every write triggers a <code>PG NOTIFY</code>.</p>
+    <p>Runs on <code>RELAY_CONTROL_PORT</code> — physically separate from the data plane.</p>
+  </div>
+  <div class="card">
+    <h4>Data plane <span class="pill ok">stateless</span></h4>
+    <p>Serves <code>/v1/*</code> inference. Reads <em>only</em> the in-memory <code>catalog.Snapshot</code> — <strong>never touches Postgres on the request path</strong>. Scales horizontally; pods stay in sync via the NOTIFY listener (~1s).</p>
+  </div>
+</div>
+
+<div class="rule">
+  <strong>Hot-path rule:</strong> no Postgres calls on the request path; catalog reads come from the immutable in-memory snapshot. The snapshot is rebuilt copy-on-write by a reconciler when a NOTIFY fires, so reads are lock-light and never block on I/O.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="spine">2 · The storage spine</h2>
+
+<p>Four backing stores, each with a distinct role and a distinct durability contract:</p>
+
+<table>
+  <tr><th>Store</th><th>Role</th><th>Contract</th></tr>
+  <tr><td><strong>Postgres</strong></td><td>Config truth — the 8 entity kinds, versioned migrations</td><td>Source of truth. Mutated only via the control plane. Publishes change via <code>PG NOTIFY</code>.</td></tr>
+  <tr><td><strong>Redis / valkey</strong></td><td>Hot counters, rate-limit reservations, per-key circuit breakers</td><td>Ephemeral; every key carries a TTL. Reachable via the <code>pkg/kv</code> abstraction.</td></tr>
+  <tr><td><strong>ClickHouse</strong></td><td>Usage events (append-only, batched ~10s)</td><td>Analytical history, not a live feed. One of several pluggable usage sinks.</td></tr>
+  <tr><td><strong>S3</strong></td><td>Opt-in request/response payloads, media offload</td><td>Content-addressed blobs. Off by default; never blocks the hot path.</td></tr>
+</table>
+
+<p>The domain model that lives in Postgres is hub-and-spoke around <strong>Policy</strong>:</p>
+<pre><code>RelayKey  ──►  PolicyID
+Policy ┬ ModelIDs ──► Model ── HostBinding[] ┬ HostID
+       ├ HostKeyIDs                          ├ UpstreamName
+       └ RateLimitID                         ├ Adapter (openai | anthropic | gemini)
+                                             └ Enabled
+Host ── HostKey (env-ref | AES-GCM stored) · Pricing (tier-aware)</code></pre>
+<p>Critically, <code>Adapter</code> — the wire-shape dispatch key — lives on the <strong>HostBinding</strong>, not the Host. One host (e.g. AWS Bedrock) can serve Claude (Anthropic shape) and Llama (OpenAI shape) simultaneously.</p>
+
+<!-- ============================================================ -->
+<h2 id="hotpath">3 · The request hot path</h2>
+
+<p>A customer request flows through a shape-agnostic edge into a pure orchestration pipeline. There is no middleware/plugin chain — the handler builds a request and calls <code>Pipeline.Run</code>.</p>
+
+<pre><code>POST /v1/chat/completions   Bearer &lt;relay-key&gt;
+        │
+        ▼
+  httpapi/inference   shape-agnostic Dispatch, NO per-vendor branching
+        ▼
+  routing/            Snapshot lookup → Plan{Model, Policy, HostBinding, Host, Keys, Rules}
+        ▼
+  pipeline/   1. reserve    → ratelimit/  (one Redis Lua call)
+              2. pick key   → keypool/    (Selector + per-key breaker, keyed by value-hash)
+              3. Adapter.Call → app/adapter specAdapter (upstream URL + auth from Spec)
+              4. stream     → io.TeeReader: caller gets bytes, post-flight gets a copy
+        ▼
+  bytes flow to caller   (failover only PRE-first-byte; no mid-stream failover)
+        ▼
+  ╔═ DETACHED post-flight goroutine — fires on Body.Close(), never blocks ═╗
+  ║  Limiter.Commit → Selector.RecordSuccess → Lifecycle.FirePostFlight    ║
+  ╚════════════════════════════════════════════════════════════════════════╝</code></pre>
+
+<div class="rule">
+  <strong>Post-flight contract:</strong> all per-request post-flight work runs in a detached goroutine triggered when the caller <code>Close()</code>s the response body. Observers are <code>lifecycle.PostFlightHook</code>s; each runs in its own sub-goroutine with panic recovery. They read the request <code>Context</code> + event; they never mutate. All emits (usage → CH, span → OTel, payload → S3) are async over bounded channels with drop-on-full + a Prometheus drop counter.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="canonical">4 · Canonical translation</h2>
+
+<p>Cross-vendor translation runs against a relay-native canonical (<code>sdk/v1</code>) — not pairwise. Composition handles any A→B route, so there is no N² explosion of translator packages.</p>
+
+<pre><code>inbound shape ──parse──►  sdk/v1 canonical  ──serialize──► upstream shape
+                          (Request/Response + 6-method Translator)</code></pre>
+
+<ul>
+  <li><strong>same-shape</strong> OR <code>Spec.IsNativePath</code> match → byte-pass via <code>io.Copy</code> (the 95% case)</li>
+  <li><strong>BytePass:true</strong> (Embeddings) → never translate</li>
+  <li><strong>otherwise</strong> → the canonical chain runs, per-SSE-chunk on streams</li>
+</ul>
+
+<div class="rule">
+  <strong>The four grep-enforced module rules:</strong> (1) canonical knows nothing — <code>sdk/v1</code> imports nothing; (2) vendors import canonical, never each other; (4) no vendor names in <code>app/</code>; (10) the <code>sdk/</code> module imports nothing from <code>app/</code> or <code>internal/</code>. Vendor names appear in code <em>only</em> in <code>cmd/relay/main.go</code>, as <code>adapter.Spec</code> literals.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="integration">5 · Backend integration — the seams</h2>
+
+<p>Every external system plugs in behind a narrow Go interface defined by the consumer. The composition root (<code>cmd/relay/main.go</code> + <code>internal/</code>) is the only place concrete backends are wired; the rest of the codebase depends on the interface. This is what keeps the <code>sdk/</code> module vendorable and the hot path swappable.</p>
+
+<!-- 5.1 -->
+<h3 id="storage">5.1 · Postgres — config truth</h3>
+<div class="seam">
+  <strong>Seam:</strong> <code>internal/storage</code> owns the pgx pool + migrations and exposes <code>Pool()</code> only. Each <code>app/X.Store</code> constructs its own sqlc-generated typed queries against that pool and converts to domain types at the boundary.
+</div>
+<ul>
+  <li>No <code>pgx</code>/<code>pgxpool</code>/<code>pgconn</code> types in any signature outside <code>internal/storage</code> and the <code>app/X.Store</code> constructors.</li>
+  <li>No SQL strings outside <code>internal/storage/gen/queries.sql</code> and the per-entity store files.</li>
+  <li>No sqlc-generated types in exported store signatures — convert to <code>*provider.Provider</code> etc. at the boundary.</li>
+  <li>Encryption policy lives in domain (<code>app/hostkey</code>), primitives in <code>pkg/crypto</code>; the master key never enters storage.</li>
+</ul>
+<p>Writes fan out cluster-wide via <code>PG NOTIFY</code>: the emit (on any catalog write) is unconditional; only the LISTEN consumer is gated by <code>RELAY_CLUSTER_MODE</code>. Payload format is <code>kind:op:id</code>, parsed with a bounded split so colon-namespaced ids survive.</p>
+
+<!-- 5.2 -->
+<h3 id="kv">5.2 · kv — Redis / valkey (with an in-memory backend)</h3>
+<div class="seam">
+  <strong>Seam:</strong> <code>pkg/kv.Store</code> with two backends — <code>kv.Mem</code> (tests, single-process) and <code>kv.Redis</code> (production). Consumers (<code>ratelimit</code>, <code>keypool</code>, <code>session</code>) each declare a narrow interface listing only the methods they use; they never import a fat <code>kv.Store</code>.
+</div>
+<ul>
+  <li>Every key is hash-tagged with <code>{tag}:</code> — the consumer's atomicity boundary. All keys touched in one Lua script / lock share the same tag.</li>
+  <li>Key construction is centralised in a <code>keys.go</code> per consumer — no inline key strings.</li>
+  <li>Every key has a TTL unless a comment justifies otherwise; persistent data goes in Postgres.</li>
+  <li>Tests must pass against <strong>both</strong> <code>kv.Mem</code> and <code>kv.Redis</code>.</li>
+</ul>
+<p>The rate-limiter is a kv-backed Lua script — the goal is <strong>one Redis round-trip per request</strong> (reserve), with auth + key selection + breaker checks sitting alongside it, not three separate trips. Full guide: <code>docs/kv.md</code>.</p>
+
+<!-- 5.3 -->
+<h3 id="usage">5.3 · Usage sinks — the observer pattern</h3>
+<div class="seam">
+  <strong>Seam:</strong> <code>app/usagelog</code> registers a <code>lifecycle.PostFlightHook</code> → bounded <code>Emitter</code> (drop-on-full + atomic drop counter) → <code>Sink</code> interface. New sinks are additive: register at boot, no pipeline change.
+</div>
+<p>Backends live as subpackages of <code>pkg/usage</code> so their heavy deps stay server-side and never leak into the SDK:</p>
+<table>
+  <tr><th>Sink</th><th>Backend</th><th>Status</th></tr>
+  <tr><td><code>file</code> / stdout</td><td>JSONL</td><td><span class="pill ok">live</span></td></tr>
+  <tr><td><code>clickhouse</code></td><td>ch driver</td><td><span class="pill if">designed, next observer</span></td></tr>
+  <tr><td><code>postgres</code></td><td>pgx</td><td><span class="pill if">subpackage present</span></td></tr>
+  <tr><td><code>valkey</code></td><td>redis</td><td><span class="pill if">subpackage present</span></td></tr>
+</table>
+<p>The pure wire shapes (<code>Tokens</code>, timing) live in <code>sdk/usage</code>; the <code>Event</code> record + filter/aggregate engine live server-side in <code>pkg/usage</code>. Cost is deliberately kept out of the event — derive it in the sink from <code>tokens × pricing</code>. OTel tracing (<strong>A4a</strong>) and Prometheus (<strong>A4b</strong>) are the next two hooks to land on the same spine.</p>
+
+<!-- 5.4 -->
+<h3 id="secret">5.4 · Secret backends — unified resolver</h3>
+<div class="seam">
+  <strong>Seam:</strong> <code>pkg/secret</code> — a <code>Ref{Kind,Env,ID,Path}</code> resolved by a <code>Resolver</code>/<code>Registry</code>. Composition wires kinds in <code>app/secret.Wire</code>. Built-ins are <code>env</code> and <code>stored</code> (AES-GCM in PG via <code>app/secret.Store</code>).
+</div>
+<p>External backends are <strong>fetch-only</strong> (resolved in-memory, never persisted) and land as subpackages:</p>
+<table>
+  <tr><th>Kind</th><th>Backend</th><th>Notes</th></tr>
+  <tr><td><code>env</code></td><td>process env</td><td>built-in, no creds in PG</td></tr>
+  <tr><td><code>stored</code></td><td>Postgres + AES-GCM</td><td>ciphertext only; <code>RELAY_MASTER_KEY</code></td></tr>
+  <tr><td><code>aws</code></td><td>Secrets Manager</td><td>stdlib SigV4</td></tr>
+  <tr><td><code>azure</code></td><td>Key Vault</td><td>—</td></tr>
+  <tr><td><code>gcp</code></td><td>Secret Manager</td><td>stdlib</td></tr>
+  <tr><td><code>bitwarden</code></td><td>Secrets Manager</td><td>pure-Go client crypto</td></tr>
+  <tr><td><code>onepassword</code></td><td>1Password SDK</td><td><code>//go:build cgo</code> — excluded from default CGO_ENABLED=0 builds</td></tr>
+</table>
+<p>On an upstream <code>FailureAuth</code>, the request loop consults <code>pipeline.KeyAgent</code> (impl <code>app/secret.Agent</code>): fail over + heal in the background when other candidates exist, or single-flight a re-resolve and retry the same key. The request path never imports <code>secret</code> directly. Full guide: <code>docs/secrets.md</code>.</p>
+
+<!-- 5.5 -->
+<h3 id="adapters">5.5 · Upstream adapters — the vendor seam</h3>
+<div class="seam">
+  <strong>Seam:</strong> each <code>sdk/adapters/&lt;vendor&gt;/</code> implements <code>v1.Translator</code> (six pure methods: parse/serialize × request/response + two stream factories). A generic <code>app/adapter.specAdapter</code> turns that translator + a <code>Spec</code> (upstream URL, auth strategy, inbound paths) into a working <code>pipeline.Adapter</code>.
+</div>
+<ul>
+  <li>One folder per <strong>vendor</strong>, not per wire shape — <code>sdk/adapters/openai/</code> owns CC, Responses, and Embeddings as files.</li>
+  <li>Adapters are stateless pure transforms — no per-request state on the value; per-stream state lives in closures the stream factories return.</li>
+  <li>Three OpenAI shapes register as separate Specs sharing the vendor package: <code>openai</code> (CC), <code>openai_responses</code>, <code>openai_embeddings</code> (<code>BytePass:true</code>).</li>
+  <li><strong>No silent drops</strong> (rule 11): an adapter emits, carries in <code>provider_data</code>/<code>extensions</code>, annotates an irreducible drop with a greppable <code>// canonical:</code> comment, or surfaces safety-relevant signals — never accept-and-discard.</li>
+</ul>
+<p>Adding a vendor = a new <code>sdk/adapters/&lt;vendor&gt;/</code> package + one <code>Spec</code> literal in <code>cmd/relay/main.go</code>. <code>sdk/adapters/gemini/</code> is the reference for a URL-path-<code>{model}</code> shape. Full guide: <code>docs/adapters.md</code>.</p>
+
+<!-- 5.6 -->
+<h3 id="batch">5.6 · Batch / jobq — a relay primitive, not a provider feature</h3>
+<div class="seam">
+  <strong>Seam:</strong> <code>jobq</code> is its own Go module (flat jobs, PG <code>Store</code> + a separate <code>PayloadStore</code> so PG never holds bytes). <code>app/batch</code> is the consumer; it drains jobs through the existing <code>Pipeline.Run</code> with <code>source="batch"</code> — reusing the realtime path's Adapter, keypool Selector, and breakers. It does not fork the hot path.
+</div>
+<p>Customer interface: <code>POST /v1/batches</code> → submit, then poll <code>GET /v1/batches/{id}</code> or receive a webhook (A2, pending), then fetch results. Where a host's adapter exposes a native batch API, relay passes through for the 50% discount; otherwise it simulates via concurrent pipeline calls. Shipped in PRs #275 (jobq) + #277 (consumer).</p>
+
+<!-- ============================================================ -->
+<h2 id="adding">6 · Adding a new backend — the checklist</h2>
+
+<p>Whatever the backend, the integration shape is the same:</p>
+<ol>
+  <li><strong>Find the seam.</strong> Identify the consumer-defined interface (<code>kv.Store</code>, usage <code>Sink</code>, secret <code>Resolver</code>, <code>v1.Translator</code>, jobq <code>Store</code>). If none fits, the change is architectural — read the relevant <code>docs/</code> guide first.</li>
+  <li><strong>Implement it in a subpackage</strong> where heavy deps stay isolated (e.g. <code>pkg/usage/clickhouse</code>, <code>pkg/secret/aws</code>). Keep deps out of <code>sdk/</code>.</li>
+  <li><strong>Wire it at the composition root</strong> — <code>cmd/relay/main.go</code> + <code>internal/</code>. This is the only place a concrete backend name appears.</li>
+  <li><strong>Respect the boundaries:</strong> nothing in <code>sdk/</code> may import <code>app/</code> or <code>internal/</code>; nothing in <code>pkg/</code> either. The grep tests for rules 1, 2, 4, 10 must stay green.</li>
+  <li><strong>Test against both backends</strong> where the interface has more than one (kv must pass on Mem and Redis).</li>
+  <li><strong>Stay off the hot path.</strong> If the backend emits, it does so async over a bounded channel with drop-on-full + a drop counter — never block-on-send on the response path.</li>
+</ol>
+
+<footer>
+  Source diagram: <code>docs/architecture.svg</code> · Authoritative rules: <code>docs/canonical-protocol.md</code> · Per-subsystem guides: <code>docs/{kv,storage,secrets,adapters,cluster}.md</code> · Roadmap: <code>docs/roadmap-oss.md</code>
+</footer>
+
+</div>
+</body>
+</html>

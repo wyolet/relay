@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wyolet Relay — Request Lifecycle</title>
+<style>
+  :root {
+    --bg:#0b1120; --fg:#e2e8f0; --muted:#94a3b8; --line:#1e293b;
+    --panel:#111a2e; --code-bg:#1a2438; --slate:#cbd5e1;
+    --blue:#60a5fa; --green:#34d399; --teal:#2dd4bf; --orange:#fb923c;
+    --amber:#fbbf24; --purple:#c084fc;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.65 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .wrap { max-width:920px; margin:0 auto; padding:48px 28px 96px; }
+  header { border-bottom:2px solid var(--line); padding-bottom:24px; }
+  h1 { font-size:32px; margin:0 0 6px; letter-spacing:-.02em; }
+  .lede { color:var(--muted); font-size:16px; margin:0; }
+  h2 { font-size:23px; margin:48px 0 6px; letter-spacing:-.01em; }
+  p { margin:10px 0; }
+  code { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.88em; background:var(--code-bg); padding:1px 6px; border-radius:5px; color:#c7d2fe; }
+  pre { background:#060b16; color:#cbd5e1; border:1px solid var(--line); padding:16px 18px; border-radius:10px; overflow:auto; font-family:"SF Mono",Menlo,Consolas,monospace; font-size:13px; line-height:1.55; }
+  a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
+  .fig { margin:28px 0; text-align:center; }
+  .fig img { max-width:100%; border:1px solid var(--line); border-radius:12px; background:var(--bg); }
+  .fig figcaption { color:var(--muted); font-size:13px; margin-top:8px; }
+  .step { display:flex; gap:16px; align-items:flex-start; border:1px solid var(--line); background:var(--panel);
+    border-radius:12px; padding:16px 18px; margin:14px 0; border-left-width:4px; }
+  .step .n { flex:0 0 30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:14px; color:#0b1120; }
+  .step h3 { margin:2px 0 4px; font-size:16px; }
+  .step p { margin:4px 0; font-size:13.5px; color:var(--slate); }
+  .step .meta { font-family:"SF Mono",Menlo,Consolas,monospace; font-size:12px; color:var(--muted); }
+  .s-blue   { border-left-color:var(--blue);   } .s-blue   .n { background:var(--blue);   }
+  .s-green  { border-left-color:var(--green);  } .s-green  .n { background:var(--green);  }
+  .s-teal   { border-left-color:var(--teal);   } .s-teal   .n { background:var(--teal);   }
+  .s-orange { border-left-color:var(--orange); } .s-orange .n { background:var(--orange); }
+  .s-amber  { border-left-color:var(--amber);  } .s-amber  .n { background:var(--amber);  }
+  .s-purple { border-left-color:var(--purple); } .s-purple .n { background:var(--purple); }
+  .pill { display:inline-block; font-size:11px; font-weight:700; padding:1px 8px; border-radius:999px; margin-right:6px;
+    font-family:"SF Mono",Menlo,Consolas,monospace; }
+  table { border-collapse:collapse; width:100%; margin:18px 0; font-size:13.5px; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .rule { border-left:4px solid var(--amber); background:#221a08; padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0; font-size:14px; }
+  .rule strong { color:var(--amber); }
+  footer { margin-top:64px; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Request Lifecycle</h1>
+  <p class="lede">One <code>/v1</code> call, end to end. The data plane is stateless and the response never waits on anything async — every check that can fail happens before the first byte, and post-flight work is detached.</p>
+</header>
+
+<figure class="fig">
+  <img src="request-lifecycle.svg" alt="Request lifecycle flow diagram">
+  <figcaption>Source: <code>docs/request-lifecycle.svg</code> · companion to <a href="architecture.html">architecture.html</a></figcaption>
+</figure>
+
+<h2>The flow, step by step</h2>
+
+<div class="step s-blue">
+  <div class="n">1</div>
+  <div>
+    <h3>Inbound — the inference edge</h3>
+    <p>The customer POSTs to <code>/v1/chat/completions</code> (or any registered shape) with a relay-key bearer token. Routes are mounted generically via <code>MountRegistry</code>; the handler is <strong>shape-agnostic</strong> — there is no per-vendor branching at the edge.</p>
+    <p class="meta">app/httpapi/inference</p>
+  </div>
+</div>
+
+<div class="step s-blue">
+  <div class="n">2</div>
+  <div>
+    <h3>Authenticate — relay-key → Policy</h3>
+    <p>The bearer is hashed and looked up against <code>snapshot.RelayKeyByHash</code>, resolving the customer's <strong>Policy</strong>. This is an in-memory snapshot read — <strong>no Postgres on the request path</strong>.</p>
+    <p class="meta"><span class="pill" style="background:#16233f;color:#60a5fa">401</span> key not found / not mapped to a Policy</p>
+  </div>
+</div>
+
+<div class="step s-orange">
+  <div class="n">3</div>
+  <div>
+    <h3>Route — build the Plan</h3>
+    <p><code>routing/</code> does a snapshot lookup and assembles a <code>Plan{Model, Policy, HostBinding, Host, Keys, Rules}</code>. The wire-shape <strong>Adapter is read off the HostBinding</strong>, not the Host — so a single host can serve multiple wire shapes.</p>
+    <p class="meta"><span class="pill" style="background:#2a1c10;color:#fb923c">403</span> Policy doesn't allow the requested model</p>
+  </div>
+</div>
+
+<div class="step s-green">
+  <div class="n">4</div>
+  <div>
+    <h3>Reserve — rate limit (one Redis Lua call)</h3>
+    <p>A single atomic reservation runs against the policy's resolved rules — the goal is <strong>one Redis round-trip per request</strong>. If the caller is over limit, it's rejected here, before any upstream work happens.</p>
+    <p class="meta"><span class="pill" style="background:#0e2a20;color:#34d399">429</span> reservation rejected · ratelimit/ + pkg/ratelimit Lua</p>
+  </div>
+</div>
+
+<div class="step s-green">
+  <div class="n">5</div>
+  <div>
+    <h3>Pick key — keypool Selector + circuit breaker</h3>
+    <p>A healthy upstream key is selected from the pool (<code>prioritized</code> / <code>round-robin</code> / <code>least-recently-used</code>). Each key has a per-key circuit breaker keyed by <strong>value-hash</strong>, so a rotated key automatically gets a fresh breaker and tripped keys are skipped.</p>
+    <p class="meta"><span class="pill" style="background:#0e2a20;color:#34d399">503</span> no healthy key in the pool · keypool/ · state at <code>secret_health:*</code></p>
+  </div>
+</div>
+
+<div class="step s-teal">
+  <div class="n">6</div>
+  <div>
+    <h3>Translate the request</h3>
+    <p>If the inbound and upstream wire shapes match, or the spec's <code>IsNativePath</code> fires, or the shape is <code>BytePass</code> (Embeddings), the body is forwarded verbatim via <code>io.Copy</code> — <strong>the 95% case</strong>. Otherwise it's parsed into the <code>sdk/v1</code> canonical and re-serialized to the upstream shape.</p>
+    <p class="meta">Failover (try the next candidate key) can still happen here — it is always <strong>pre-first-byte</strong>.</p>
+  </div>
+</div>
+
+<div class="step s-orange">
+  <div class="n">7</div>
+  <div>
+    <h3>Call upstream</h3>
+    <p>The generic <code>app/adapter</code> <code>specAdapter</code> makes the HTTP call using the Spec's upstream URL + auth strategy and the selected key. On an upstream <code>FailureAuth</code>, the <code>KeyAgent</code> decides: fail over to the next key now and heal the bad one in the background, or single-flight a re-resolve and retry the same key.</p>
+    <p class="meta"><span class="pill" style="background:#0d2925;color:#2dd4bf">heal</span> KeyAgent self-heal / failover · then first byte arrives</p>
+  </div>
+</div>
+
+<div class="step s-amber">
+  <div class="n">8</div>
+  <div>
+    <h3>Stream back — io.TeeReader</h3>
+    <p>Response bytes pass straight through to the caller (translated back per-SSE-chunk if the route is cross-shape). A buffered copy is teed aside for post-flight. <strong>After bytes start flowing there is no mid-stream failover</strong> — errors past this point belong to the caller.</p>
+  </div>
+</div>
+
+<div class="step s-amber">
+  <div class="n">9</div>
+  <div>
+    <h3>Caller receives the full response</h3>
+    <p>When the customer finishes reading and calls <code>Body.Close()</code>, the detached post-flight goroutine is triggered. The HTTP response itself is already complete and was never blocked.</p>
+  </div>
+</div>
+
+<div class="step s-purple">
+  <div class="n">10</div>
+  <div>
+    <h3>Post-flight — detached goroutine</h3>
+    <p>Runs <code>Limiter.Commit → Selector.RecordSuccess → Lifecycle.FirePostFlight</code>. Observers (registered <code>PostFlightHook</code>s, each in its own sub-goroutine with panic recovery) read the request <code>Context</code> + event; they never mutate. All emits are <strong>async over bounded channels</strong> with drop-on-full and a drop counter.</p>
+    <p class="meta">usage → JSONL/ClickHouse · OTel span (TODO A4a) · Prometheus (TODO A4b)</p>
+  </div>
+</div>
+
+<div class="rule">
+  <strong>The invariant that shapes everything:</strong> every check that can reject or fail over — auth, model authz, rate limit, key health, even upstream auth retry — happens <em>before the first response byte is forwarded</em>. Once that byte flows (step 8), the request is committed: no mid-stream failover, and post-flight bookkeeping (step 10) runs detached so it can never delay the response.
+</div>
+
+<h2>Early-exit map</h2>
+<table>
+  <tr><th>Status</th><th>Step</th><th>Cause</th></tr>
+  <tr><td><code>401</code></td><td>2 · auth</td><td>relay-key not found, or not mapped to a Policy</td></tr>
+  <tr><td><code>403</code></td><td>3 · route</td><td>Policy doesn't allow the requested model</td></tr>
+  <tr><td><code>429</code></td><td>4 · reserve</td><td>rate-limit reservation rejected</td></tr>
+  <tr><td><code>503</code></td><td>5 · pick key</td><td>no healthy key in the pool (all breakers open)</td></tr>
+  <tr><td>retry / heal</td><td>7 · upstream</td><td>upstream <code>FailureAuth</code> → KeyAgent fails over + heals in background</td></tr>
+</table>
+
+<footer>
+  Companion docs: <a href="architecture.html">architecture.html</a> · <code>docs/request-lifecycle.svg</code> · Authoritative rules: <code>docs/canonical-protocol.md</code>
+</footer>
+
+</div>
+</body>
+</html>
