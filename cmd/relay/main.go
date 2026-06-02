@@ -29,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/metricslog"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
@@ -47,6 +48,7 @@ import (
 	"github.com/wyolet/relay/jobq/payload"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
@@ -332,6 +334,13 @@ func main() {
 	go payloadCtl.Run(listenerCtx)
 	slog.Info("payloadlog: observer wired (config via settings: payload-logging)")
 
+	// Metrics: the Prometheus observer. Reads request outcome + timing in
+	// post-flight and emits the request-flow metrics via pkg/metrics. Pure
+	// boot wiring — no runner changes (see docs/metrics.md). The data-loss
+	// and provider-key metrics emit at their sources (emitters, keypool).
+	lifecycleReg.RegisterHook(metricslog.New())
+	slog.Info("metricslog: observer wired (/metrics on control plane)")
+
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
 	// over whatever backend the live settings name, rebuilt lazily on config
 	// change (mirrors the sink Controller).
@@ -433,6 +442,7 @@ func main() {
 			PayloadReader: payloadReader,
 			Selector:      selector,
 		})
+		ctrlRouter.Handle("/metrics", metrics.Handler())
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
 		go func() {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/reqid"
 )
 
@@ -365,6 +366,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.LastTransition = now
 		rec.Reason = ReasonUpstreamAuthFailed
 		s.writeRecord(ctx, keyHash, rec)
+		metrics.ProviderKeyDown(string(rec.Reason))
 		s.log.Info("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
@@ -396,6 +398,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.LastTransition = now
 		rec.Reason = ReasonUpstreamRateLimited
 		s.writeRecord(ctx, keyHash, rec)
+		metrics.ProviderKeyDown(string(rec.Reason))
 		s.log.Info("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
@@ -426,6 +429,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.LastTransition = now
 		rec.Reason = cooldownReason
 		s.writeRecord(ctx, keyHash, rec)
+		metrics.ProviderKeyDown(string(rec.Reason))
 		s.log.Info("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
@@ -457,6 +461,7 @@ func (s *Selector) RecordLocalRateLimit(ctx context.Context, keyHash string, ret
 	rec.LastTransition = now
 	rec.Reason = ReasonLocalRateLimited
 	s.writeRecord(ctx, keyHash, rec)
+	metrics.ProviderKeyDown(string(rec.Reason))
 	s.log.Info("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,

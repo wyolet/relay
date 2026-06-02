@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // DefaultQueueSize is the bounded-channel capacity when EmitterOptions
@@ -65,6 +67,7 @@ func (e *Emitter) Emit(r Record) {
 	select {
 	case e.queue <- r:
 	default:
+		metrics.RecordLost("payload")
 		n := e.dropped.Add(1)
 		if n == 1 || n&(n-1) == 0 {
 			e.log.Warn("payloadlog: queue full, record dropped",
