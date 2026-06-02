@@ -5,6 +5,7 @@ import (
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -23,6 +24,7 @@ type index struct {
 	policies           []*policy.Policy
 	rlByID             map[string]*ratelimit.RateLimit
 	providerByID       map[string]*provider.Provider
+	hostkeyByID        map[string]*hostkey.HostKey
 	providerSlug       string // the resolved model's provider slug, for DSL/RL matching
 }
 
@@ -78,6 +80,10 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 	if err != nil {
 		return nil, err
 	}
+	keys, err := s.HostKeys.List(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	idx := &index{
 		hostByID:           make(map[string]*host.Host, len(hosts)),
@@ -87,6 +93,10 @@ func (s *Service) buildIndex(ctx context.Context) (*index, error) {
 		policies:           pols,
 		rlByID:             make(map[string]*ratelimit.RateLimit, len(rls)),
 		providerByID:       make(map[string]*provider.Provider, len(provs)),
+		hostkeyByID:        make(map[string]*hostkey.HostKey, len(keys)),
+	}
+	for _, k := range keys {
+		idx.hostkeyByID[k.Meta.ID] = k
 	}
 	for _, h := range hosts {
 		idx.hostByID[h.Meta.ID] = h
@@ -131,13 +141,24 @@ func (idx *index) pricingFor(b *binding.Binding) *PricingView {
 	return out
 }
 
-// modelHostSlugs returns the slugs of the hosts the model is bound to.
-func (idx *index) modelHostSlugs(modelID string) []string {
-	bs := idx.bindingsByModel[modelID]
-	out := make([]string, 0, len(bs))
-	for _, b := range bs {
+// modelHostSet maps host id → host slug for every host the model is bound to.
+func (idx *index) modelHostSet(modelID string) map[string]string {
+	out := map[string]string{}
+	for _, b := range idx.bindingsByModel[modelID] {
 		if h, ok := idx.hostByID[b.Spec.HostID]; ok {
-			out = append(out, h.Meta.Name)
+			out[h.Meta.ID] = h.Meta.Name
+		}
+	}
+	return out
+}
+
+// policyKeyHosts is the set of host ids the policy's hostkeys authenticate to
+// — the coverage gate for customer-policy reachability.
+func (idx *index) policyKeyHosts(p *policy.Policy) map[string]struct{} {
+	out := make(map[string]struct{}, len(p.Spec.HostKeyIDs))
+	for _, id := range p.Spec.HostKeyIDs {
+		if k, ok := idx.hostkeyByID[id]; ok {
+			out[k.Spec.HostID] = struct{}{}
 		}
 	}
 	return out
