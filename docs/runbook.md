@@ -549,7 +549,7 @@ The M5 compose smoke (PER-248) validated correctness at 50–200 RPM against a l
 GOMAXPROCS=2 go test -bench=BenchmarkRelayInternalOverhead -benchtime=10000x -count=1 -run='^$' ./bench/...
 ```
 
-The bench writes `bench/results.json` with p50/p95/p99 in microseconds. The CI workflow (`.github/workflows/p99.yml`) runs this on every PR and posts a comparison table comment. The bench hard-fails when p99 > 5 ms or p50 > 1 ms. Design targets from CLAUDE.md:
+The bench writes `bench/results.json` with p50/p95/p99 in microseconds. Run it locally before changes that touch the hot path; it hard-fails when p99 > 5 ms or p50 > 1 ms. (There is no automated regression gate in CI today.) Design targets from CLAUDE.md:
 
 | Metric | Target |
 |---|---|
