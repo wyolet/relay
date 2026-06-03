@@ -42,6 +42,11 @@ type Options struct {
 	Pool      *pgxpool.Pool
 	YAMLDir   string
 	MasterKey []byte // for stored-mode HostKey rows; nil disables them
+
+	// ClearDirty re-seeds (overwrites) rows an operator has edited, resetting
+	// them to the catalog version and clearing their dirty flag. Default false:
+	// dirty rows are skipped so re-seeding never clobbers operator changes.
+	ClearDirty bool
 }
 
 // Result summarises a seed run.
@@ -55,6 +60,7 @@ type Result struct {
 	HostBindings int
 	Policies     int
 	RelayKeys    int
+	Skipped      int // dirty rows preserved (operator-edited; not re-seeded)
 }
 
 // Run executes the seed pipeline end-to-end.
@@ -145,6 +151,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: provider %q: %w", d.Metadata.Name, err)
 		}
 		p.Meta.ID = resolver.Providers[d.Metadata.Name]
+		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.provider.Upsert(ctx, p); err != nil {
 			return nil, fmt.Errorf("seed: upsert provider %q: %w", d.Metadata.Name, err)
 		}
@@ -156,6 +166,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: host %q: %w", d.Metadata.Name, err)
 		}
 		h.Meta.ID = resolver.Hosts[d.Metadata.Name]
+		if resolver.skip(h.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.host.Upsert(ctx, h); err != nil {
 			return nil, fmt.Errorf("seed: upsert host %q: %w", d.Metadata.Name, err)
 		}
@@ -167,6 +181,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: ratelimit %q: %w", d.Metadata.Name, err)
 		}
 		rl.Meta.ID = resolver.RateLimits[d.Metadata.Name]
+		if resolver.skip(rl.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.ratelimit.Upsert(ctx, rl); err != nil {
 			return nil, fmt.Errorf("seed: upsert ratelimit %q: %w", d.Metadata.Name, err)
 		}
@@ -178,6 +196,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: hostkey %q: %w", d.Metadata.Name, err)
 		}
 		k.Meta.ID = resolver.HostKeys[d.Metadata.Name]
+		if resolver.skip(k.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.hostkey.Upsert(ctx, k); err != nil {
 			return nil, fmt.Errorf("seed: upsert hostkey %q: %w", d.Metadata.Name, err)
 		}
@@ -189,6 +211,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: model %q: %w", d.Metadata.Name, err)
 		}
 		m.Meta.ID = resolver.Models[d.Metadata.Name]
+		if resolver.skip(m.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.model.Upsert(ctx, m); err != nil {
 			return nil, fmt.Errorf("seed: upsert model %q: %w", d.Metadata.Name, err)
 		}
@@ -200,6 +226,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: pricing %q: %w", d.Metadata.Name, err)
 		}
 		p.Meta.ID = resolver.Pricings[d.Metadata.Name]
+		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.pricing.Upsert(ctx, p); err != nil {
 			return nil, fmt.Errorf("seed: upsert pricing %q: %w", d.Metadata.Name, err)
 		}
@@ -211,6 +241,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: hostbinding %q: %w", d.Metadata.Name, err)
 		}
 		b.Meta.ID = resolver.Bindings[d.Metadata.Name]
+		if resolver.skip(b.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.hostbinding.Upsert(ctx, b); err != nil {
 			return nil, fmt.Errorf("seed: upsert hostbinding %q: %w", d.Metadata.Name, err)
 		}
@@ -222,6 +256,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: policy %q: %w", d.Metadata.Name, err)
 		}
 		p.Meta.ID = resolver.Policies[d.Metadata.Name]
+		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.policy.Upsert(ctx, p); err != nil {
 			return nil, fmt.Errorf("seed: upsert policy %q: %w", d.Metadata.Name, err)
 		}
@@ -233,6 +271,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			return nil, fmt.Errorf("seed: relaykey %q: %w", d.Metadata.Name, err)
 		}
 		k.Meta.ID = resolver.RelayKeys[d.Metadata.Name]
+		if resolver.skip(k.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
 		if err := stores.relaykey.Upsert(ctx, k); err != nil {
 			return nil, fmt.Errorf("seed: upsert relaykey %q: %w", d.Metadata.Name, err)
 		}
@@ -268,6 +310,17 @@ type indexBuilder struct {
 	Bindings   map[string]string
 	Policies   map[string]string
 	RelayKeys  map[string]string
+
+	// Dirty is keyed by row id: true when the existing PG row was operator-
+	// edited. Populated from the List sweep in buildResolver so the upsert
+	// loops can skip protected rows without a second round-trip.
+	Dirty map[string]bool
+}
+
+// skip reports whether the row with id should be left untouched this run:
+// it is dirty and the run was not told to clear dirty rows.
+func (i *indexBuilder) skip(id string, clearDirty bool) bool {
+	return i.Dirty[id] && !clearDirty
 }
 
 func (i *indexBuilder) ProviderID(n string) (string, bool)  { v, ok := i.Providers[n]; return v, ok }
@@ -290,6 +343,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 		Bindings:   map[string]string{},
 		Policies:   map[string]string{},
 		RelayKeys:  map[string]string{},
+		Dirty:      map[string]bool{},
 	}
 	provs, err := s.provider.List(ctx)
 	if err != nil {
@@ -297,6 +351,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, p := range provs {
 		idx.Providers[p.Meta.Name] = p.Meta.ID
+		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
 	}
 	hosts, err := s.host.List(ctx)
 	if err != nil {
@@ -304,6 +359,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, h := range hosts {
 		idx.Hosts[h.Meta.Name] = h.Meta.ID
+		idx.Dirty[h.Meta.ID] = h.Meta.Dirty
 	}
 	rls, err := s.ratelimit.List(ctx)
 	if err != nil {
@@ -311,6 +367,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, r := range rls {
 		idx.RateLimits[r.Meta.Name] = r.Meta.ID
+		idx.Dirty[r.Meta.ID] = r.Meta.Dirty
 	}
 	hks, err := s.hostkey.List(ctx)
 	if err != nil {
@@ -318,6 +375,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, k := range hks {
 		idx.HostKeys[k.Meta.Name] = k.Meta.ID
+		idx.Dirty[k.Meta.ID] = k.Meta.Dirty
 	}
 	models, err := s.model.List(ctx)
 	if err != nil {
@@ -325,6 +383,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, m := range models {
 		idx.Models[m.Meta.Name] = m.Meta.ID
+		idx.Dirty[m.Meta.ID] = m.Meta.Dirty
 	}
 	prs, err := s.pricing.List(ctx)
 	if err != nil {
@@ -332,6 +391,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, p := range prs {
 		idx.Pricings[p.Meta.Name] = p.Meta.ID
+		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
 	}
 	bnds, err := s.hostbinding.List(ctx)
 	if err != nil {
@@ -339,6 +399,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, b := range bnds {
 		idx.Bindings[b.Meta.Name] = b.Meta.ID
+		idx.Dirty[b.Meta.ID] = b.Meta.Dirty
 	}
 	pols, err := s.policy.List(ctx)
 	if err != nil {
@@ -346,6 +407,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, p := range pols {
 		idx.Policies[p.Meta.Name] = p.Meta.ID
+		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
 	}
 	rks, err := s.relaykey.List(ctx)
 	if err != nil {
@@ -353,6 +415,7 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	}
 	for _, k := range rks {
 		idx.RelayKeys[k.Meta.Name] = k.Meta.ID
+		idx.Dirty[k.Meta.ID] = k.Meta.Dirty
 	}
 	return idx, nil
 }

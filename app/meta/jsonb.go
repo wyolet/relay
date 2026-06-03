@@ -13,6 +13,7 @@ func MarshalJSONB(m Metadata) ([]byte, error) {
 		Description: m.Description,
 		Owner:       m.Owner,
 		Labels:      m.Labels,
+		Dirty:       m.Dirty,
 	})
 }
 
@@ -30,6 +31,7 @@ func UnmarshalJSONB(id, name, displayName string, raw []byte) (Metadata, error) 
 	m.Description = d.Description
 	m.Owner = d.Owner
 	m.Labels = d.Labels
+	m.Dirty = d.Dirty
 	return m, nil
 }
 
@@ -39,4 +41,5 @@ type jsonbDoc struct {
 	Description string            `json:"description,omitempty"`
 	Owner       Owner             `json:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
+	Dirty       bool              `json:"dirty,omitempty"`
 }
