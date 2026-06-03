@@ -230,12 +230,20 @@ candidates:
 	// upstream credentials replace the keypool.
 	var keys []*hostkey.HostKey
 	if !req.SkipKeyCheck {
-		keys = hostKeysForHost(snap, pol, h.Meta.ID)
-		// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
-		// (model, host). An implicit-wildcard tier policy allows everything.
-		keys = tierAllowedKeys(snap, keys, chosen.Meta.ID, h.Meta.ID)
-		if len(keys) == 0 {
-			return nil, ErrNoKeys
+		if h.Spec.NoAuth {
+			// Keyless upstream (e.g. self-hosted Ollama): inject the synthetic
+			// anonymous key so the keypool path is unchanged (one candidate,
+			// host-scoped breaker), but no real HostKey is required and no auth
+			// header is sent. Bypasses the tier gate — the anon key has no tier.
+			keys = []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
+		} else {
+			keys = hostKeysForHost(snap, pol, h.Meta.ID)
+			// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
+			// (model, host). An implicit-wildcard tier policy allows everything.
+			keys = tierAllowedKeys(snap, keys, chosen.Meta.ID, h.Meta.ID)
+			if len(keys) == 0 {
+				return nil, ErrNoKeys
+			}
 		}
 	}
 

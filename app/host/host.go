@@ -46,6 +46,13 @@ type Spec struct {
 	// empty, HostKey.Spec.PolicyID becomes required.
 	DefaultPolicy string `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
 
+	// NoAuth marks an upstream that needs no API key (a self-hosted Ollama on
+	// the operator's network). When set, routing injects a synthetic anonymous
+	// key for this host instead of requiring a real HostKey, and the adapter
+	// sends no Authorization header. Operator-managed (per-deployment), not a
+	// catalog-fixed property — Ollama Cloud still needs a key.
+	NoAuth bool `json:"noAuth,omitempty" yaml:"noAuth,omitempty"`
+
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 
