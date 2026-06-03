@@ -432,7 +432,7 @@ func ToRateLimit(d RateLimitDTO, idx Resolver) (*ratelimit.RateLimit, error) {
 		rules = append(rules, ratelimit.Rule{
 			Meter:    ratelimit.Meter(r.Meter),
 			Amount:   r.Amount,
-			Window:   w,
+			Window:   ratelimit.Window(w),
 			Strategy: ratelimit.Strategy(r.Strategy),
 		})
 	}
@@ -457,7 +457,7 @@ func FromRateLimit(rl *ratelimit.RateLimit, _ ReverseResolver) RateLimitDTO {
 		rules = append(rules, RateLimitRule{
 			Meter:    string(r.Meter),
 			Amount:   r.Amount,
-			Window:   r.Window.String(),
+			Window:   r.Window.Duration().String(),
 			Strategy: string(r.Strategy),
 		})
 	}

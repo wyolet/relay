@@ -44,7 +44,7 @@ func ResolveWithScope(namespace, subject string, rl *RateLimit) []pkgratelimit.R
 			Meter:    string(r.Meter),
 			Strategy: pkgratelimit.Strategy(r.Strategy),
 			Amount:   r.Amount,
-			Window:   r.Window,
+			Window:   r.Window.Duration(),
 		})
 	}
 	return out

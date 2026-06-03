@@ -49,7 +49,7 @@ func fixture() (*Service, string) {
 		Bindings:   fBindings{{Meta: meta.Metadata{ID: meta.NewID(), Name: "gpt-4o-on-openai"}, Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI, PricingID: pricingID}}},
 		Pricings:   fPricings{{Meta: meta.Metadata{ID: pricingID, Name: "openai-gpt-4o", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: pricing.Spec{Currency: "USD", TargetModelIDs: []string{modID}, Rates: []pricing.Rate{{Meter: pricing.MeterTokensInput, Unit: pricing.UnitPerMillion, Amount: 2.5}}}}},
 		Policies:   fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "tier-1", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{ModelIDs: []string{modID}, RateLimitID: rlID}}},
-		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 100, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}}},
+		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 100, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}}},
 		HostKeys:   fHostKeys{},
 	}
 	return svc, modID
@@ -299,7 +299,7 @@ func TestHostPolicies_OwnTierOnly(t *testing.T) {
 		Bindings:   fBindings{},
 		Pricings:   fPricings{},
 		HostKeys:   fHostKeys{},
-		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 50, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}}},
+		RateLimits: fRLs{{Meta: meta.Metadata{ID: rlID, Name: "rpm"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 50, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}}},
 		Policies: fPolicies{
 			{Meta: meta.Metadata{ID: meta.NewID(), Name: "ht", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: policy.Spec{RateLimitID: rlID}},
 			{Meta: meta.Metadata{ID: meta.NewID(), Name: "cust", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{}},
@@ -420,8 +420,8 @@ func TestPolicyRateLimits_OverlapsAndUnthrottled(t *testing.T) {
 		Pricings: fPricings{},
 		HostKeys: fHostKeys{{Meta: meta.Metadata{ID: keyID, Name: "k"}, Spec: hostkey.Spec{HostID: hostID}}},
 		RateLimits: fRLs{
-			{Meta: meta.Metadata{ID: rl1, Name: "rl1"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}},
-			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: time.Minute, Strategy: ratelimit.StrategyTokenBucket}}}},
+			{Meta: meta.Metadata{ID: rl1, Name: "rl1"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
+			{Meta: meta.Metadata{ID: rl2, Name: "rl2"}, Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 20, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategyTokenBucket}}}},
 		},
 		// two RLBindings both matching gpt-4o (overlap); free-model matched by neither (unthrottled)
 		Policies: fPolicies{{Meta: meta.Metadata{ID: meta.NewID(), Name: "p", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: policy.Spec{

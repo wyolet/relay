@@ -8,6 +8,8 @@ package ratelimit
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/meta"
@@ -31,14 +33,37 @@ type Spec struct {
 // Rule is one cap. A RateLimit with N rules produces N concurrent buckets at
 // request time. Strategy is per-rule — there is no spec-level default fallback.
 //
-// Window is a time.Duration; on the wire it accepts a human-readable string
-// ("30s", "1m") or an int64 nanosecond count for round-tripping with the
-// storage format.
+// Window is the measurement period, expressed on the wire (control-API JSON and
+// stored JSONB) as an integer number of seconds — see the Window type.
 type Rule struct {
-	Meter    Meter         `json:"meter"    yaml:"meter"    validate:"required,oneof=requests concurrency tokens tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.reasoning tokens.server_tool_use_input tokens.server_tool_use_output"`
-	Amount   int64         `json:"amount"   yaml:"amount"   validate:"required,gt=0"`
-	Window   time.Duration `json:"window"   yaml:"window"   validate:"required,gt=0"`
-	Strategy Strategy      `json:"strategy" yaml:"strategy" validate:"required,oneof=token-bucket sliding-window fixed-window leaky-bucket session-window"`
+	Meter    Meter    `json:"meter"    yaml:"meter"    validate:"required,oneof=requests concurrency tokens tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.reasoning tokens.server_tool_use_input tokens.server_tool_use_output"`
+	Amount   int64    `json:"amount"   yaml:"amount"   validate:"required,gt=0"`
+	Window   Window   `json:"window"   yaml:"window"   validate:"required,gt=0"`
+	Strategy Strategy `json:"strategy" yaml:"strategy" validate:"required,oneof=token-bucket sliding-window fixed-window leaky-bucket session-window"`
+}
+
+// Window is a rate-limit measurement period. In memory it is a time.Duration so
+// the limiter keeps its native unit, but it marshals to/from JSON as a whole
+// number of SECONDS — the granularity rate windows are ever expressed in
+// (sub-second windows are not a real case). This makes both the control-API
+// body and the stored JSONB human-legible ("60" not "60000000000") instead of
+// leaking nanoseconds.
+type Window time.Duration
+
+// Duration returns the window as a time.Duration for the limiter.
+func (w Window) Duration() time.Duration { return time.Duration(w) }
+
+func (w Window) MarshalJSON() ([]byte, error) {
+	return strconv.AppendInt(nil, int64(time.Duration(w)/time.Second), 10), nil
+}
+
+func (w *Window) UnmarshalJSON(b []byte) error {
+	secs, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return fmt.Errorf("ratelimit: window must be an integer number of seconds: %w", err)
+	}
+	*w = Window(time.Duration(secs) * time.Second)
+	return nil
 }
 
 // Meter is the dimension a Rule counts.
@@ -58,6 +83,15 @@ const (
 	MeterTokensServerToolUseIn  Meter = "tokens.server_tool_use_input"
 	MeterTokensServerToolUseOut Meter = "tokens.server_tool_use_output"
 )
+
+// AllMeters is the closed set as ordered data — the single source the OpenAPI
+// shim reads to publish the `meter` enum. Pure domain values, no HTTP/openapi
+// coupling here; keep it in sync with the const block above.
+var AllMeters = []Meter{
+	MeterRequests, MeterConcurrency, MeterTokens, MeterTokensInput,
+	MeterTokensOutput, MeterTokensCacheRead, MeterTokensCacheCreation,
+	MeterTokensReasoning, MeterTokensServerToolUseIn, MeterTokensServerToolUseOut,
+}
 
 // Strategy is the algorithm used to enforce a Rule.
 type Strategy string
