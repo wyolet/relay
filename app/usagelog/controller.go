@@ -126,7 +126,7 @@ func (c *Controller) reconcile(ctx context.Context) {
 	c.mu.Lock()
 	c.applied, c.has = cfg, true
 	c.mu.Unlock()
-	c.log.Info("usagelog: reconciled", "backend", cfg.Backend)
+	c.log.Debug("usagelog: reconciled", "backend", cfg.Backend)
 }
 
 func (c *Controller) current() settings.UsageLogging {

@@ -206,7 +206,7 @@ func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, ke
 			rec.State = CircuitHalfOpen
 			rec.LastTransition = now
 			s.writeRecord(ctx, k.KeyHash, rec)
-			s.log.Info("keypool transition",
+			s.log.Debug("keypool transition",
 				"request_id", reqid.From(ctx),
 				"key_hash", k.KeyHash,
 				"from_state", stateName(prior),
@@ -340,7 +340,7 @@ func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 		Reason:         "", // clear: key is healthy, prior reason no longer relevant
 	}
 	s.writeRecord(ctx, keyHash, rec)
-	s.log.Info("keypool transition",
+	s.log.Debug("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,
 		"from_state", stateName(prior.State),
@@ -367,7 +367,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.Reason = ReasonUpstreamAuthFailed
 		s.writeRecord(ctx, keyHash, rec)
 		metrics.ProviderKeyDown(string(rec.Reason))
-		s.log.Info("keypool transition",
+		s.log.Debug("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
 			"from_state", stateName(prior),
@@ -380,7 +380,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 
 	case FailureRateLimitShort:
 		// Stay closed; no state change.
-		s.log.Info("keypool transition",
+		s.log.Debug("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
 			"from_state", stateName(prior),
@@ -399,7 +399,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.Reason = ReasonUpstreamRateLimited
 		s.writeRecord(ctx, keyHash, rec)
 		metrics.ProviderKeyDown(string(rec.Reason))
-		s.log.Info("keypool transition",
+		s.log.Debug("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
 			"from_state", stateName(prior),
@@ -430,7 +430,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		rec.Reason = cooldownReason
 		s.writeRecord(ctx, keyHash, rec)
 		metrics.ProviderKeyDown(string(rec.Reason))
-		s.log.Info("keypool transition",
+		s.log.Debug("keypool transition",
 			"request_id", reqid.From(ctx),
 			"key_hash", keyHash,
 			"from_state", stateName(prior),
@@ -462,7 +462,7 @@ func (s *Selector) RecordLocalRateLimit(ctx context.Context, keyHash string, ret
 	rec.Reason = ReasonLocalRateLimited
 	s.writeRecord(ctx, keyHash, rec)
 	metrics.ProviderKeyDown(string(rec.Reason))
-	s.log.Info("keypool transition",
+	s.log.Debug("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,
 		"from_state", stateName(prior),
