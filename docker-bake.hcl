@@ -5,7 +5,7 @@ variable "DOCKERHUB"    { default = "docker.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
-variable "UI_VERSION"   { default = "v0.1.0" }
+variable "UI_VERSION"   { default = "v0.2.1" }
 variable "CATALOG_REF"  { default = "main" }
 
 target "_common" {
