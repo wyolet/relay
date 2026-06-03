@@ -117,12 +117,15 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerUsage(api, d, protect)
 	registerLogs(api, d, protect)
 
-	// OpenAPI shim: publish the rate-limit `meter` enum. The domain type
-	// ratelimit.Meter is a bare string (no huma tags by design), so huma emits
-	// it as a free-form string; we patch the generated schema here, sourcing the
-	// values from the domain's own const set. Lazily-marshalled spec means this
-	// lands before the first /openapi.json hit. No-op if huma renames the schema.
-	publishEnum(api, "RateLimitRule", "meter", meterEnum())
+	// OpenAPI shim: enrich generated schemas with metadata the domain types
+	// deliberately don't carry (no huma tags in app/ratelimit). The spec is
+	// marshalled lazily on first /openapi.json hit, so patching here lands.
+	// `meter` enum comes from the domain const set; `window` is documented as
+	// seconds (ratelimit.Window marshals as integer seconds). No-op if renamed.
+	patchProp(api, "RateLimitRule", "meter", func(s *huma.Schema) { s.Enum = meterEnum() })
+	patchProp(api, "RateLimitRule", "window", func(s *huma.Schema) {
+		s.Description = "Measurement period, in whole seconds."
+	})
 
 	return api
 }
@@ -136,15 +139,15 @@ func meterEnum() []any {
 	return out
 }
 
-// publishEnum sets an enum on one property of a named generated schema. This is
-// the openapi-shim seam: it keeps enum-surfacing out of the domain types and
-// off the hot path. Safe no-op if the schema or property is absent.
-func publishEnum(api huma.API, schema, prop string, enum []any) {
+// patchProp mutates one property of a named generated schema. This is the
+// openapi-shim seam: it keeps schema metadata (enums, units) out of the domain
+// types and off the hot path. Safe no-op if the schema or property is absent.
+func patchProp(api huma.API, schema, prop string, fn func(*huma.Schema)) {
 	s := api.OpenAPI().Components.Schemas.SchemaFromRef("#/components/schemas/" + schema)
 	if s == nil {
 		return
 	}
 	if p, ok := s.Properties[prop]; ok && p != nil {
-		p.Enum = enum
+		fn(p)
 	}
 }

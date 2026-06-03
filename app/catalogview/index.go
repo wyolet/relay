@@ -184,7 +184,7 @@ func (idx *index) limitsOf(rlID string) []Limit {
 	}
 	out := make([]Limit, 0, len(rl.Spec.Rules))
 	for _, r := range rl.Spec.Rules {
-		out = append(out, Limit{Meter: string(r.Meter), Amount: r.Amount, Window: r.Window.String(), Strategy: string(r.Strategy)})
+		out = append(out, Limit{Meter: string(r.Meter), Amount: r.Amount, Window: r.Window.Duration().String(), Strategy: string(r.Strategy)})
 	}
 	return out
 }

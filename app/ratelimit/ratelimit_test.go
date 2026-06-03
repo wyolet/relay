@@ -14,7 +14,7 @@ func fix(name string, owner meta.OwnerKind) *RateLimit {
 		Spec: Spec{Rules: []Rule{{
 			Meter:    MeterRequests,
 			Amount:   100,
-			Window:   time.Minute,
+			Window:   Window(time.Minute),
 			Strategy: StrategyTokenBucket,
 		}}},
 	}

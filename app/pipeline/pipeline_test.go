@@ -615,7 +615,7 @@ func TestReserveFails_BubblesUp(t *testing.T) {
 		Meta: meta.Metadata{ID: "rl-zero", Name: "zero"},
 		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{
 			Meter: ratelimit.MeterRequests, Amount: 0,
-			Window: time.Minute, Strategy: ratelimit.StrategySlidingWindow,
+			Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategySlidingWindow,
 		}}},
 	}
 	pol := makePolicy()
