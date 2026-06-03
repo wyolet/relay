@@ -442,6 +442,7 @@ func main() {
 			UsageReader:   usageReader,
 			PayloadReader: payloadReader,
 			Selector:      selector,
+			RuntimeConfig: runtimeConfig(cfg),
 		})
 		ctrlRouter.Handle("/metrics", metrics.Handler())
 		// Embedded admin UI: same-origin SPA served as the fallback after all
@@ -571,6 +572,26 @@ func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 // secret from its backend (hostkey.Store.Get re-runs the secret.Ref through
 // the registry) and, if the value changed, heals the live snapshot via the
 // normal apply path — the same machinery catalog NOTIFY uses. Reused by the
+// runtimeConfig maps the parsed env (config.RuntimeConfig) into the control
+// plane's GET /config.json body, keeping the config package free of the
+// httpapi/control type. Telemetry is omitted entirely unless a DSN is set.
+func runtimeConfig(cfg *config.Config) control.RuntimeConfig {
+	rc := control.RuntimeConfig{
+		ControlAPIURL:   cfg.Runtime.ControlAPIURL,
+		InferenceAPIURL: cfg.Runtime.InferenceAPIURL,
+		Mode:            cfg.Runtime.Mode,
+		DocsURL:         cfg.Runtime.DocsURL,
+		SupportURL:      cfg.Runtime.SupportURL,
+	}
+	if cfg.Runtime.SentryDSN != "" {
+		rc.Telemetry = &control.Telemetry{
+			SentryDSN:   cfg.Runtime.SentryDSN,
+			Environment: cfg.Runtime.TelemetryEnv,
+		}
+	}
+	return rc
+}
+
 // KeyAgent to recover from upstream key rotation without a restart.
 type keyRefresher struct {
 	store *hostkey.Store
