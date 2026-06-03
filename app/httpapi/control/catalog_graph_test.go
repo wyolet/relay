@@ -22,12 +22,12 @@ func TestGraphModels_DeprecationFilter(t *testing.T) {
 	dep.Spec.DeprecationDate = "2025-01-01"
 	idx := &resolveIndex{snap: snap, allModels: []*model.Model{live, dep}}
 
-	excl := graphModels(idx, false)
+	excl := graphModels(idx, false, nil)
 	if len(excl) != 1 || excl[0].Name != "live" {
 		t.Fatalf("includeDeprecated=false: got %d models %+v, want only 'live'", len(excl), excl)
 	}
 
-	incl := graphModels(idx, true)
+	incl := graphModels(idx, true, nil)
 	if len(incl) != 2 {
 		t.Fatalf("includeDeprecated=true: got %d models, want 2", len(incl))
 	}
@@ -39,6 +39,35 @@ func TestGraphModels_DeprecationFilter(t *testing.T) {
 	}
 	if oldEntry == nil || oldEntry.Deprecated == "" {
 		t.Fatalf("deprecated model should be present and flagged, got %+v", incl)
+	}
+}
+
+func TestGraphModels_LabelSelector(t *testing.T) {
+	snap := catalog.Build(
+		[]*provider.Provider{{Meta: meta.Metadata{ID: "P1", Name: "prov", Owner: meta.Owner{Kind: meta.OwnerSystem}}}},
+		nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	feat := &model.Model{Meta: meta.Metadata{ID: "M1", Name: "feat", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}, Labels: map[string]string{"featured": "true"}}}
+	plain := &model.Model{Meta: meta.Metadata{ID: "M2", Name: "plain", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: "P1"}}}
+	idx := &resolveIndex{snap: snap, allModels: []*model.Model{feat, plain}}
+
+	got := graphModels(idx, false, map[string]string{"featured": "true"})
+	if len(got) != 1 || got[0].Name != "feat" || !got[0].Featured {
+		t.Fatalf("label selector featured=true: got %+v, want only 'feat'", got)
+	}
+
+	if all := graphModels(idx, false, nil); len(all) != 2 {
+		t.Fatalf("nil selector should match all: got %d", len(all))
+	}
+}
+
+func TestParseLabelSelector(t *testing.T) {
+	if _, err := parseLabelSelector([]string{"nokey"}); err == nil {
+		t.Fatal("malformed selector should 400")
+	}
+	sel, err := parseLabelSelector([]string{"featured=true", "tier=flagship"})
+	if err != nil || sel["featured"] != "true" || sel["tier"] != "flagship" {
+		t.Fatalf("got %v err=%v", sel, err)
 	}
 }
 
@@ -69,7 +98,7 @@ func TestGraphModels_PrunesDisabledBindings(t *testing.T) {
 	snap := catalog.Build([]*provider.Provider{prov}, []*host.Host{h1, h2}, nil, nil, []*model.Model{m}, nil, nil, nil, []*binding.Binding{b1, b2})
 	idx := &resolveIndex{snap: snap, allModels: []*model.Model{m}}
 
-	got := graphModels(idx, false)
+	got := graphModels(idx, false, nil)
 	if len(got) != 1 || len(got[0].Bindings) != 1 || got[0].Bindings[0].HostID != hostID1 {
 		t.Fatalf("disabled binding not pruned: %+v", got)
 	}

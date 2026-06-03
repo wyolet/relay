@@ -5,10 +5,12 @@
 // call so the UI can render and cross-link them without three separate
 // list fetches + client-side flattening. Only the fields the picker and the
 // policy model view actually read are included — identity (id/name/
-// displayName), the enabled flag, host icon path, per-model deprecation,
-// capabilities, context window, and the (hostId, adapter, enabled) bindings.
-// Heavy spec (snapshots, pricing refs, modalities, …) is deliberately
-// omitted.
+// displayName), the enabled flag, host icon path, the featured flag (from
+// the catalog's `labels.featured`), per-model deprecation,
+// capabilities, context window, the pointer (the upstream wire name the
+// bare model name resolves to at request time), and the (hostId, adapter,
+// enabled) bindings. Heavy spec (full snapshot list, pricing refs, modalities, …)
+// is deliberately omitted.
 //
 // Reads the in-memory snapshot via the same index as /catalog/resolve, so
 // it returns exactly what the data plane can route to right now: disabled
@@ -19,7 +21,9 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -51,10 +55,12 @@ type graphModel struct {
 	Name               string             `json:"name"`
 	DisplayName        string             `json:"displayName,omitempty"`
 	ProviderID         string             `json:"providerId"`
+	Featured           bool               `json:"featured,omitempty"`
 	Deprecated         string             `json:"deprecated,omitempty"`
 	Capabilities       model.Capabilities `json:"capabilities,omitempty"`
 	ContextWindowTotal int                `json:"contextWindowTotal,omitempty"`
 	ContextWindowInput int                `json:"contextWindowInput,omitempty"`
+	Pointer            string             `json:"pointer,omitempty"`
 	Bindings           []graphBinding     `json:"bindings"`
 }
 
@@ -67,7 +73,8 @@ type graphOutput struct {
 }
 
 type graphQuery struct {
-	IncludeDeprecated bool `query:"includeDeprecated" doc:"Include deprecated models (still flagged via 'deprecated'). Default false drops them server-side."`
+	IncludeDeprecated bool     `query:"includeDeprecated" doc:"Include deprecated models (still flagged via 'deprecated'). Default false drops them server-side."`
+	Label             []string `query:"label" doc:"Label selector key=value (repeatable, all must match). e.g. label=featured=true."`
 }
 
 // registerCatalogGraph installs GET /catalog/graph.
@@ -81,6 +88,11 @@ func registerCatalogGraph(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 500},
 	}, func(ctx context.Context, in *graphQuery) (*graphOutput, error) {
+		sel, err := parseLabelSelector(in.Label)
+		if err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
+
 		idx, err := loadResolveIndex(d)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -89,7 +101,7 @@ func registerCatalogGraph(api huma.API, d Deps, protect huma.Middlewares) {
 		out := &graphOutput{}
 		out.Body.Providers = graphProviders(idx)
 		out.Body.Hosts = graphHosts(idx)
-		out.Body.Models = graphModels(idx, in.IncludeDeprecated)
+		out.Body.Models = graphModels(idx, in.IncludeDeprecated, sel)
 		return out, nil
 	})
 }
@@ -128,11 +140,14 @@ func graphHosts(idx *resolveIndex) []graphHost {
 	return out
 }
 
-func graphModels(idx *resolveIndex, includeDeprecated bool) []graphModel {
+func graphModels(idx *resolveIndex, includeDeprecated bool, sel map[string]string) []graphModel {
 	out := make([]graphModel, 0, len(idx.allModels))
 	for _, m := range idx.allModels {
 		dep := deprecationStatus(m)
 		if !includeDeprecated && dep != "" {
+			continue
+		}
+		if !matchesLabels(m.Meta.Labels, sel) {
 			continue
 		}
 		gm := graphModel{
@@ -140,10 +155,12 @@ func graphModels(idx *resolveIndex, includeDeprecated bool) []graphModel {
 			Name:               m.Meta.Name,
 			DisplayName:        m.Meta.DisplayName,
 			ProviderID:         m.Meta.Owner.ID,
+			Featured:           m.Meta.Labels["featured"] == "true",
 			Deprecated:         dep,
 			Capabilities:       m.Spec.Capabilities,
 			ContextWindowTotal: m.Spec.ContextWindowTotal,
 			ContextWindowInput: m.Spec.ContextWindowInput,
+			Pointer:            m.PointerUpstream(),
 			Bindings:           []graphBinding{},
 		}
 		for _, hb := range idx.snap.BindingsForModel(m.Meta.ID) {
@@ -158,6 +175,35 @@ func graphModels(idx *resolveIndex, includeDeprecated bool) []graphModel {
 		out = append(out, gm)
 	}
 	return out
+}
+
+// parseLabelSelector turns repeated key=value query params into an AND-set.
+// Mirrors pkg/filter's ?label semantics (same 400 message) so the graph and
+// the CRUD list endpoints validate selectors identically.
+func parseLabelSelector(raw []string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	sel := make(map[string]string, len(raw))
+	for _, kv := range raw {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("label: must be key=value")
+		}
+		sel[k] = v
+	}
+	return sel, nil
+}
+
+// matchesLabels reports whether labels satisfies every key=value in sel.
+// Empty sel matches everything.
+func matchesLabels(labels, sel map[string]string) bool {
+	for k, v := range sel {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // deprecationStatus returns a non-empty marker when the model is deprecated:
