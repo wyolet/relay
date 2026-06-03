@@ -59,6 +59,15 @@ const (
 	MeterTokensServerToolUseOut Meter = "tokens.server_tool_use_output"
 )
 
+// AllMeters is the closed set as ordered data — the single source the OpenAPI
+// shim reads to publish the `meter` enum. Pure domain values, no HTTP/openapi
+// coupling here; keep it in sync with the const block above.
+var AllMeters = []Meter{
+	MeterRequests, MeterConcurrency, MeterTokens, MeterTokensInput,
+	MeterTokensOutput, MeterTokensCacheRead, MeterTokensCacheCreation,
+	MeterTokensReasoning, MeterTokensServerToolUseIn, MeterTokensServerToolUseOut,
+}
+
 // Strategy is the algorithm used to enforce a Rule.
 type Strategy string
 

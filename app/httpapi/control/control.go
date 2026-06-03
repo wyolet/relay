@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/payloadlog"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/internal/identity"
@@ -116,5 +117,34 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerUsage(api, d, protect)
 	registerLogs(api, d, protect)
 
+	// OpenAPI shim: publish the rate-limit `meter` enum. The domain type
+	// ratelimit.Meter is a bare string (no huma tags by design), so huma emits
+	// it as a free-form string; we patch the generated schema here, sourcing the
+	// values from the domain's own const set. Lazily-marshalled spec means this
+	// lands before the first /openapi.json hit. No-op if huma renames the schema.
+	publishEnum(api, "RateLimitRule", "meter", meterEnum())
+
 	return api
+}
+
+// meterEnum projects the domain's closed meter set to []any for huma.Schema.Enum.
+func meterEnum() []any {
+	out := make([]any, len(ratelimit.AllMeters))
+	for i, m := range ratelimit.AllMeters {
+		out[i] = string(m)
+	}
+	return out
+}
+
+// publishEnum sets an enum on one property of a named generated schema. This is
+// the openapi-shim seam: it keeps enum-surfacing out of the domain types and
+// off the hot path. Safe no-op if the schema or property is absent.
+func publishEnum(api huma.API, schema, prop string, enum []any) {
+	s := api.OpenAPI().Components.Schemas.SchemaFromRef("#/components/schemas/" + schema)
+	if s == nil {
+		return
+	}
+	if p, ok := s.Properties[prop]; ok && p != nil {
+		p.Enum = enum
+	}
 }
