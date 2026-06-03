@@ -133,7 +133,7 @@ func (c *Controller) reconcile(ctx context.Context) {
 		c.rsink.swap(nil, c.log)
 		c.set(false, cfg.MaxBytes, cfg)
 		if has {
-			c.log.Info("payloadlog: disabled via settings")
+			c.log.Debug("payloadlog: disabled via settings")
 		}
 		return
 	}
@@ -146,7 +146,7 @@ func (c *Controller) reconcile(ctx context.Context) {
 	}
 	c.rsink.swap(sink, c.log)
 	c.set(true, cfg.MaxBytes, cfg)
-	c.log.Info("payloadlog: reconciled", "backend", cfg.Backend, "max_bytes", cfg.MaxBytes)
+	c.log.Debug("payloadlog: reconciled", "backend", cfg.Backend, "max_bytes", cfg.MaxBytes)
 }
 
 func (c *Controller) current() settings.PayloadLogging {

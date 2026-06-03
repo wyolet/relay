@@ -213,7 +213,7 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 		if req.Lifecycle != nil {
 			reqID = req.Lifecycle.RequestID
 		}
-		p.Logger.Info("proxy: post-flight enter",
+		p.Logger.Debug("proxy: post-flight enter",
 			"request_id", reqID,
 			"status", status,
 			"body_bytes", len(body),

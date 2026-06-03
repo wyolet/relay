@@ -90,7 +90,7 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 			RetryAfter: time.Duration(res.RetryAfterMs) * time.Millisecond,
 		}
 		exceeded.Rule = findRule(rules, res.RuleKey, res.RuleName, res.Meter)
-		l.log.Info("limit reserve exceeded",
+		l.log.Debug("limit reserve exceeded",
 			"request_id", reqid.From(ctx),
 			"rule", res.RuleName,
 			"meter", res.Meter,

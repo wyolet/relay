@@ -39,7 +39,7 @@ const (
 func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind adapters.Name) {
 	ctx := r.Context()
 	cls := ClassificationFrom(ctx)
-	slog.Info("proxy: handle entry",
+	slog.Debug("proxy: handle entry",
 		"request_id", reqid.From(ctx),
 		"adapter", string(adapterKind),
 		"mode", cls.Mode,
@@ -150,7 +150,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		Lifecycle:    lc,
 	}
 
-	slog.Info("proxy: calling upstream",
+	slog.Debug("proxy: calling upstream",
 		"request_id", reqid.From(ctx),
 		"host", host.Meta.Name,
 		"base_url", host.Spec.BaseURL,
@@ -163,7 +163,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		mapProxyErr(w, err)
 		return
 	}
-	slog.Info("proxy: upstream responded; streaming back",
+	slog.Debug("proxy: upstream responded; streaming back",
 		"request_id", reqid.From(ctx),
 		"status", result.Status,
 	)
@@ -172,7 +172,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
 	n, copyErr := streamCopy(w, result.Body)
-	slog.Info("proxy: stream complete",
+	slog.Debug("proxy: stream complete",
 		"request_id", reqid.From(ctx),
 		"bytes", n,
 		"copy_err", copyErr,

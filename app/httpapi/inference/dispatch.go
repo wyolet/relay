@@ -86,7 +86,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
-	slog.Info("inference: dispatch entry",
+	slog.Debug("inference: dispatch entry",
 		"request_id", reqid.From(ctx),
 		"inbound", string(in.Inbound),
 		"model", in.ModelName,

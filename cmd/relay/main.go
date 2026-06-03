@@ -60,12 +60,12 @@ import (
 
 func main() {
 	loadDotEnv(".env")
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "migrate":
-			slog.Info("relay: 'migrate' subcommand currently runs implicitly on boot")
+			slog.Debug("relay: 'migrate' subcommand currently runs implicitly on boot")
 			return
 		case "seed":
 			if err := runSeed(os.Args[2:]); err != nil {
@@ -145,7 +145,7 @@ func main() {
 		os.Exit(1)
 	}
 	if n := len(idStore.Users()); n > 0 {
-		slog.Info("identity: loaded users", "count", n)
+		slog.Debug("identity: loaded users", "count", n)
 	}
 
 	// kv backend — sessions, rate-limits, key-pool all share this.
@@ -313,7 +313,7 @@ func main() {
 	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory())
 	usageCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go usageCtl.Run(listenerCtx)
-	slog.Info("usagelog: observer wired (backend via settings: usage-logging)")
+	slog.Debug("usagelog: observer wired (backend via settings: usage-logging)")
 
 	// Payload logging: the second lifecycle observer. Always wired; its
 	// runtime config lives in the "payload-logging" settings section, so it
@@ -333,14 +333,14 @@ func main() {
 	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
 	payloadCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go payloadCtl.Run(listenerCtx)
-	slog.Info("payloadlog: observer wired (config via settings: payload-logging)")
+	slog.Debug("payloadlog: observer wired (config via settings: payload-logging)")
 
 	// Metrics: the Prometheus observer. Reads request outcome + timing in
 	// post-flight and emits the request-flow metrics via pkg/metrics. Pure
 	// boot wiring — no runner changes (see docs/metrics.md). The data-loss
 	// and provider-key metrics emit at their sources (emitters, keypool).
 	lifecycleReg.RegisterHook(metricslog.New())
-	slog.Info("metricslog: observer wired (/metrics on control plane)")
+	slog.Debug("metricslog: observer wired (/metrics on control plane)")
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
 	// over whatever backend the live settings name, rebuilt lazily on config
@@ -352,7 +352,7 @@ func main() {
 	// is confined here (composition root) so app/ stays vendor-neutral.
 	settingswatch.New(cat, settings.SectionParsing, func(p settings.Parsing) {
 		pkgopenai.SetRichParsing(p.RichParsing)
-		slog.Info("parsing: applied", "rich_parsing", p.RichParsing)
+		slog.Debug("parsing: applied", "rich_parsing", p.RichParsing)
 	}, slog.Default()).Start()
 
 	// All settings-change subscribers are now registered; start background
@@ -449,7 +449,7 @@ func main() {
 		// build) and not explicitly disabled.
 		if !cfg.UIDisable && relayweb.Present() {
 			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
-			slog.Info("relay control: serving embedded UI")
+			slog.Debug("relay control: serving embedded UI")
 		}
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
@@ -516,6 +516,21 @@ func hydrateLoop(ctx context.Context, cat *appcatalog.Catalog, stores *appcatalo
 
 // loadDotEnv reads a .env file and sets any KEY=VALUE pair whose key is not
 // already present in the environment. Comment lines and empty lines are skipped.
+// logLevel reads RELAY_LOG_LEVEL (debug|info|warn|error, default info). Parsed
+// here rather than via config.Load because the logger is set up before config.
+func logLevel() slog.Level {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LOG_LEVEL"))) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 func loadDotEnv(path string) {
 	f, err := os.Open(path)
 	if err != nil {
