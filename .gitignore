@@ -4,6 +4,9 @@
 *.swp
 *.swo
 
+# Local scratch dir (holds secrets like build tokens) — never commit
+.tmp/
+
 # py-relay
 py-relay/.venv/
 py-relay/__pycache__/

@@ -96,6 +96,7 @@ type HostSpec struct {
 	Policies []string `json:"policies,omitempty"    yaml:"policies,omitempty"`
 	// DefaultPolicy is a policy *name* (wire form) referencing one of Policies.
 	DefaultPolicy string     `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
+	NoAuth        bool       `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
 	Enabled       *bool      `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
 	HomepageURL   string     `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
 	DocsURL       string     `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`

@@ -81,6 +81,18 @@ func (s Snapshot) Upstream() string {
 	return s.Name
 }
 
+// PointerUpstream returns the upstream wire name of the snapshot the bare
+// model name resolves to (Pointer → snapshot → Upstream()). Falls back to
+// Pointer itself if no snapshot matches (shouldn't happen post-Validate).
+func (m *Model) PointerUpstream() string {
+	for _, s := range m.Spec.Snapshots {
+		if lower(s.Name) == lower(m.Spec.Pointer) {
+			return s.Upstream()
+		}
+	}
+	return m.Spec.Pointer
+}
+
 // Capabilities is the bag-of-bools feature flags every model declares.
 // Open-ended over time; new flags can be added without a migration since
 // the whole struct lives in JSONB.

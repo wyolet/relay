@@ -40,6 +40,25 @@ type HostKey struct {
 	Policies []PolicyRef `json:"policies,omitempty" yaml:"-"`
 }
 
+// AnonIDPrefix prefixes the synthetic anonymous key's id, KeyHash, and name so
+// it never collides with a real key (real KeyHash is 12 hex chars).
+const AnonIDPrefix = "anon:"
+
+// Anonymous returns the synthetic, never-persisted HostKey routing injects for
+// a host marked Spec.NoAuth — a keyless upstream (e.g. self-hosted Ollama).
+// Resolved is empty so the adapter attaches no Authorization header. KeyHash is
+// host-scoped (not derived from the empty value) so every no-auth host gets its
+// own circuit breaker rather than sharing one. Spec.PolicyID is left empty: it
+// is injected past the tier gate and carries no rate-limit tier.
+func Anonymous(hostID, hostName string) *HostKey {
+	return &HostKey{
+		Meta:     meta.Metadata{ID: AnonIDPrefix + hostID, Name: AnonIDPrefix + hostName},
+		Spec:     Spec{HostID: hostID},
+		Resolved: "",
+		KeyHash:  AnonIDPrefix + hostID,
+	}
+}
+
 // PolicyRef is the lightweight {id, name} pair used in derived reverse-ref
 // lists exposed by the control API.
 type PolicyRef struct {

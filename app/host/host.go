@@ -46,6 +46,13 @@ type Spec struct {
 	// empty, HostKey.Spec.PolicyID becomes required.
 	DefaultPolicy string `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
 
+	// NoAuth marks an upstream that needs no API key (a self-hosted Ollama on
+	// the operator's network). When set, routing injects a synthetic anonymous
+	// key for this host instead of requiring a real HostKey, and the adapter
+	// sends no Authorization header. Operator-managed (per-deployment), not a
+	// catalog-fixed property — Ollama Cloud still needs a key.
+	NoAuth bool `json:"noAuth,omitempty" yaml:"noAuth,omitempty"`
+
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 
@@ -61,15 +68,21 @@ type Spec struct {
 func (h *Host) IsEnabled() bool { return h.Spec.Enabled == nil || *h.Spec.Enabled }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
-// the Host-specific invariant that Owner.Kind, when set, is system. Empty
-// is accepted — Hosts are inherently system-defined infrastructure, so
-// YAML authors are not required to spell that out.
+// the Host-specific owner rule. A Host is normally system-defined
+// infrastructure (empty owner defaults to system), but it may also be
+// user-owned: some hosts are per-deployment (e.g. a self-hosted Ollama whose
+// baseURL only the operator knows), and user ownership is what lets the
+// operator edit them through the standard CRUD path. Governance still hard-
+// blocks edits/deletes on system-owned rows, so relaxing this does not expose
+// catalog-fixed hosts. Provider/host owner kinds remain nonsensical for a Host.
 func (h *Host) Validate() error {
 	if err := meta.Validator.Struct(h); err != nil {
 		return err
 	}
-	if h.Meta.Owner.Kind != "" && h.Meta.Owner.Kind != meta.OwnerSystem {
-		return fmt.Errorf("host %q: owner.kind must be system or empty, got %q", h.Meta.Name, h.Meta.Owner.Kind)
+	switch h.Meta.Owner.Kind {
+	case "", meta.OwnerSystem, meta.OwnerUser:
+	default:
+		return fmt.Errorf("host %q: owner.kind must be system, user, or empty, got %q", h.Meta.Name, h.Meta.Owner.Kind)
 	}
 	return nil
 }

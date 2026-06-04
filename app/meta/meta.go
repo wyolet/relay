@@ -61,6 +61,12 @@ type Metadata struct {
 	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
 	CreatedAt   time.Time         `json:"createdAt,omitempty"   yaml:"-"`
 	UpdatedAt   time.Time         `json:"updatedAt,omitempty"   yaml:"-"`
+
+	// Dirty marks a row an operator has edited via the control API. Seed skips
+	// dirty rows so re-seeding never clobbers operator changes (unless the run
+	// is told to clear them). Server-authoritative: stamped on edit, never read
+	// from manifest YAML.
+	Dirty bool `json:"dirty,omitempty" yaml:"-"`
 }
 
 // NewID returns a fresh UUIDv7 string. Centralized so every entity store

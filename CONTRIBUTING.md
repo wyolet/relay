@@ -100,6 +100,16 @@ drop-on-full — never block the response.
 - **Comments:** default to none. Write a comment only when the *why* is
   non-obvious — a hidden constraint, an invariant, or a workaround.
 
+## Releases & images
+
+CI in this repository runs tests, vet, gofmt, and the codebase-rule checks
+only — it does **not** build or publish container images. Official images
+(`wyolet/relay:latest` lean, `:standalone` all-in-one, and `:<version>` tags)
+are built and published to Docker Hub and GHCR by the maintainers, out of band,
+from a `v*` git tag. To build an image yourself, use the `Dockerfile` /
+`docker-bake.hcl` at the repo root (`docker buildx bake`), or
+`docker compose up --build`.
+
 ## Reporting bugs / requesting features
 
 Open an issue using the templates. For security issues, **do not open a

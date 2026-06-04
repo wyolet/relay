@@ -50,9 +50,9 @@ func TestValidate(t *testing.T) {
 			want: "BaseURL",
 		},
 		{
-			name: "user owner rejected",
-			h:    func() *Host { h := fix("x"); h.Meta.Owner.Kind = meta.OwnerUser; return h }(),
-			want: "owner.kind must be system",
+			name: "provider owner rejected",
+			h:    func() *Host { h := fix("x"); h.Meta.Owner.Kind = meta.OwnerProvider; return h }(),
+			want: "owner.kind must be system, user, or empty",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,5 +61,13 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("got %v, want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestHostValidate_UserOwnerAllowed(t *testing.T) {
+	h := fix("x")
+	h.Meta.Owner.Kind = meta.OwnerUser
+	if err := h.Validate(); err != nil {
+		t.Fatalf("user-owned host should validate, got %v", err)
 	}
 }

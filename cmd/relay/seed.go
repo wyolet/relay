@@ -35,6 +35,7 @@ func runSeed(args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ContinueOnError)
 	from := fs.String("from", "config", "Directory containing manifest YAMLs to seed from.")
 	apply := fs.Bool("apply", false, "Write to PG. Omit for a dry-run that only parses + validates YAML.")
+	clearDirty := fs.Bool("dirty", false, "Overwrite operator-edited ('dirty') rows too, resetting them to the catalog. Default skips them.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -63,9 +64,10 @@ func runSeed(args []string) error {
 	defer st.Close()
 
 	result, err := seed.Run(ctx, seed.Options{
-		Pool:      st.Pool(),
-		YAMLDir:   *from,
-		MasterKey: cfg.MasterKey,
+		Pool:       st.Pool(),
+		YAMLDir:    *from,
+		MasterKey:  cfg.MasterKey,
+		ClearDirty: *clearDirty,
 	})
 	if err != nil {
 		return err
@@ -80,6 +82,8 @@ func runSeed(args []string) error {
 		"policies", result.Policies,
 		"pricings", result.Pricings,
 		"relay_keys", result.RelayKeys,
+		"skipped_dirty", result.Skipped,
+		"clear_dirty", *clearDirty,
 	)
 	return nil
 }

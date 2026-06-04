@@ -338,6 +338,7 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
 		if err := store.Upsert(ctx, v); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

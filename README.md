@@ -73,8 +73,10 @@ Data plane: `http://localhost:8080` · control plane + **admin UI**:
 `http://localhost:8081`. Single-node and embedded-PG — great for a try-out, not
 for production (use the lean image + a managed Postgres for that; see below).
 Also available from GitHub Container Registry as `ghcr.io/wyolet/relay:standalone`.
-_(Published image pending — until then, `docker compose up --build` below builds
-it from source.)_
+Official images (`:latest` lean, `:standalone` all-in-one, and `:<version>`
+tags) are published to Docker Hub and GHCR by the maintainers; this repository
+does not build or publish them in CI. To build your own from source, use the
+`Dockerfile` / `docker-bake.hcl`, or `docker compose up --build` below.
 
 ### Docker Compose (standalone — bundled services)
 

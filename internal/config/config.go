@@ -65,6 +65,26 @@ type Config struct {
 	// listener (RELAY_UI_DISABLE=1). Off by default; the UI is same-origin
 	// and adds no surface beyond the control API it already fronts.
 	UIDisable bool
+
+	// Runtime is the public, unauthenticated runtime config the embedded admin
+	// UI fetches at boot via GET /config.json. Public values only — it is
+	// world-readable. All fields are optional; empty URL fields make the UI
+	// fall back to its own origin (which is correct for controlApiUrl in the
+	// single-binary case, but NOT for inferenceApiUrl when the data plane is a
+	// separate origin — hence RELAY_INFERENCE_API_URL).
+	Runtime RuntimeConfig
+}
+
+// RuntimeConfig carries the deployment-specific values surfaced to the browser
+// via GET /config.json. Mirrors the JSON the UI reads; see config_json.go.
+type RuntimeConfig struct {
+	ControlAPIURL   string // RELAY_CONTROL_API_URL   (empty ⇒ UI uses its origin)
+	InferenceAPIURL string // RELAY_INFERENCE_API_URL (empty ⇒ UI prompts; no safe origin default)
+	Mode            string // RELAY_MODE ("oss" | "cloud"); default "oss"
+	SentryDSN       string // RELAY_UI_SENTRY_DSN        (public client-side DSN)
+	TelemetryEnv    string // RELAY_UI_TELEMETRY_ENV
+	DocsURL         string // RELAY_UI_DOCS_URL
+	SupportURL      string // RELAY_UI_SUPPORT_URL
 }
 
 // Load reads every RELAY_* environment variable, validates them, and returns
@@ -150,6 +170,23 @@ func Load() (*Config, error) {
 	cfg.ShutdownDeadlineS = envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)
 
 	cfg.UIDisable = os.Getenv("RELAY_UI_DISABLE") == "1"
+
+	// Public UI runtime config (GET /config.json). URLs are trimmed of any
+	// trailing slash so the UI can append paths cleanly.
+	trimURL := func(k string) string { return strings.TrimRight(os.Getenv(k), "/") }
+	cfg.Runtime = RuntimeConfig{
+		ControlAPIURL:   trimURL("RELAY_CONTROL_API_URL"),
+		InferenceAPIURL: trimURL("RELAY_INFERENCE_API_URL"),
+		Mode:            os.Getenv("RELAY_MODE"),
+		SentryDSN:       os.Getenv("RELAY_UI_SENTRY_DSN"),
+		TelemetryEnv:    os.Getenv("RELAY_UI_TELEMETRY_ENV"),
+		DocsURL:         trimURL("RELAY_UI_DOCS_URL"),
+		SupportURL:      trimURL("RELAY_UI_SUPPORT_URL"),
+	}
+	if cfg.Runtime.Mode == "" {
+		cfg.Runtime.Mode = "oss"
+	}
+
 	cfg.ControlPort = os.Getenv("RELAY_CONTROL_PORT")
 	if cfg.ControlPort == "" {
 		cfg.ControlPort = "8081"

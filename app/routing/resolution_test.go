@@ -346,3 +346,41 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 		t.Fatal("@azure should fail: azure key tier doesn't grant this model")
 	}
 }
+
+// TestResolve_NoAuthHostInjectsAnonKey proves a host marked Spec.NoAuth resolves
+// with zero real HostKeys: routing injects the synthetic anonymous key (empty
+// value → no auth header, host-scoped KeyHash → isolated breaker) instead of
+// returning ErrNoKeys.
+func TestResolve_NoAuthHostInjectsAnonKey(t *testing.T) {
+	provID, hostID := meta.NewID(), meta.NewID()
+	modID, polID := meta.NewID(), meta.NewID()
+
+	prov := &provider.Provider{Meta: meta.Metadata{ID: provID, Name: "ollama", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	h := &host.Host{Meta: meta.Metadata{ID: hostID, Name: "ollama-self", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: host.Spec{BaseURL: "http://localhost:11434", NoAuth: true}}
+	m := &model.Model{
+		Meta: meta.Metadata{ID: modID, Name: "qwen3", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{mkSnap("qwen3")}, Pointer: slug.From("qwen3")},
+	}
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "qwen3-on-ollama", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
+	}
+	// Wildcard customer policy, NO host keys for the host.
+	pol := &policy.Policy{Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: policy.Spec{}}
+	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"}}
+
+	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m}, keyListR{}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b})
+	if err := c.Reload(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "qwen3", RelayKey: rk})
+	if err != nil {
+		t.Fatalf("no-auth host should resolve without a real key, got %v", err)
+	}
+	if len(plan.Keys) != 1 {
+		t.Fatalf("want 1 injected anon key, got %d", len(plan.Keys))
+	}
+	if k := plan.Keys[0]; k.Resolved != "" || k.KeyHash != hostkey.AnonIDPrefix+hostID {
+		t.Errorf("anon key: Resolved=%q KeyHash=%q (want empty value + host-scoped hash)", k.Resolved, k.KeyHash)
+	}
+}
