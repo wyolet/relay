@@ -6,13 +6,13 @@ limits, and self-host the whole thing. Built for teams running millions of
 LLM requests a day.
 
 ```bash
-docker run -p 8080:8080 -p 8081:8081 \
-  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
-  wyolet/relay:standalone
+docker run -p 8080:8080 -p 8081:8081 wyolet/relay:standalone
 ```
 
 A full relay with Postgres bundled and the catalog pre-seeded — admin UI on
-**:8081**, OpenAI/Anthropic-compatible API on **:8080**. See
+**:8081**, OpenAI/Anthropic-compatible API on **:8080**. The master key, admin
+password, and admin token are auto-generated on first boot and printed to the
+logs (and persisted on the data volume). See
 [Quickstart](#quickstart--first-request-in-2-minutes) for your first request.
 
 ## Why Relay
@@ -290,6 +290,7 @@ Auth: either a valid `relay_session` cookie (set by `/auth/login`) OR
 | `RELAY_MASTER_KEY` | _(empty)_ | 32-byte base64 master key for stored-mode HostKeys. Generate via `POST /master-key/generate`. |
 | `RELAY_COOKIE_SECURE` | _(unset = true)_ | Set to `false` for HTTP-only local dev. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget. |
+| `RELAY_PG_LOG` | `quiet` | _(standalone image only)_ Bundled Postgres logs to a file on the data volume, quieted to warnings. Set `stdout` to stream raw PG logs to the container. |
 | _(rich parsing)_ | `on` | Moved to the `parsing` settings section (`PUT /settings/parsing {"richParsing": false}`). Hot-reloaded; no env var, no restart. |
 
 ## Auth model

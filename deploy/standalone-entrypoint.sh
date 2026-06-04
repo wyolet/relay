@@ -16,13 +16,25 @@ PGDATA="${PGDATA:-/var/lib/postgresql/data}"
 DBUSER="${POSTGRES_USER:-relay}"
 DBNAME="${POSTGRES_DB:-relay}"
 
+# Postgres in the all-in-one image otherwise logs to the container's stdout,
+# interleaving routine checkpoint noise (log_checkpoints defaults ON in PG16)
+# with relay's JSON logs. By default we quiet it to warnings+ and divert its
+# output to a logfile on the data volume, so `docker logs` shows relay only.
+#   RELAY_PG_LOG=stdout  → restore the raw Postgres stream on stdout (debugging)
+PG_LOGFILE="$PGDATA/postgres.log"
+PG_QUIET_FLAGS="-c log_min_messages=warning -c log_checkpoints=off -c log_connections=off -c log_disconnections=off -c log_statement=none -c log_autovacuum_min_duration=-1"
+
 mkdir -p "$PGDATA" /run/postgresql
 chown -R postgres:postgres "$PGDATA" /run/postgresql
 
 if [ ! -s "$PGDATA/PG_VERSION" ]; then
   echo "[entrypoint] first run — initializing postgres…"
   su postgres -c "$PGBIN/initdb -D '$PGDATA' --encoding=UTF8 --auth=trust"
-  su postgres -c "$PGBIN/pg_ctl -D '$PGDATA' -o '-c listen_addresses=127.0.0.1' -w start"
+  if [ "${RELAY_PG_LOG:-quiet}" = "stdout" ]; then
+    su postgres -c "$PGBIN/pg_ctl -D '$PGDATA' -o '-c listen_addresses=127.0.0.1' -w start"
+  else
+    su postgres -c "$PGBIN/pg_ctl -D '$PGDATA' -l '$PG_LOGFILE' -o '-c listen_addresses=127.0.0.1 $PG_QUIET_FLAGS' -w start"
+  fi
   su postgres -c "$PGBIN/psql --no-psqlrc -v ON_ERROR_STOP=1 --dbname postgres \
     --command \"CREATE ROLE \\\"$DBUSER\\\" LOGIN SUPERUSER;\""
   su postgres -c "$PGBIN/createdb -O '$DBUSER' '$DBNAME'"
@@ -30,7 +42,15 @@ if [ ! -s "$PGDATA/PG_VERSION" ]; then
 fi
 
 echo "[entrypoint] starting postgres…"
-su postgres -c "$PGBIN/postgres -D '$PGDATA' -c listen_addresses=127.0.0.1" &
+if [ "${RELAY_PG_LOG:-quiet}" = "stdout" ]; then
+  su postgres -c "$PGBIN/postgres -D '$PGDATA' -c listen_addresses=127.0.0.1" &
+else
+  # Quiet + divert: open the logfile as root so the postgres child inherits the
+  # fd and can write regardless of file ownership.
+  su postgres -c "$PGBIN/postgres -D '$PGDATA' -c listen_addresses=127.0.0.1 $PG_QUIET_FLAGS" \
+    >>"$PG_LOGFILE" 2>&1 &
+  echo "[entrypoint] postgres logs → $PG_LOGFILE (set RELAY_PG_LOG=stdout to stream them here)"
+fi
 PG_PID=$!
 
 echo "[entrypoint] waiting for postgres…"
@@ -112,7 +132,8 @@ if [ -n "$new_secret" ] || [ -n "$admin_pw" ]; then
   { echo
     echo "  relay first-boot — generated admin credentials (saved to the data volume):"
     echo
-    echo "    control plane:  http://localhost:8081"
+    echo "    control plane:  http://localhost:8081  (admin UI)"
+    echo "    inference API:  http://localhost:8080  (/v1/*)"
     [ -n "$admin_pw" ] && echo "    username:       admin"
     [ -n "$admin_pw" ] && echo "    password:       $admin_pw"
     echo "    admin token:    $RELAY_ADMIN_TOKEN"
