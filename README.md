@@ -1,35 +1,65 @@
 # Wyolet Relay
 
-High-throughput LLM router in Go. Self-hostable, k8s-native, BYO
-provider keys. A faster, infra-grade alternative to OpenRouter and
-LiteLLM for teams running millions of LLM requests per day.
+**A high-throughput LLM router in Go.** Put one endpoint in front of every
+provider, pool your own API keys for failover and higher effective rate
+limits, and self-host the whole thing. Built for teams running millions of
+LLM requests a day.
 
-## What it does
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
+  wyolet/relay:standalone
+```
 
-- **Unified API** in front of OpenAI- and Anthropic-shape upstreams
-  (OpenAI, Anthropic, Bedrock, Vertex, Azure OpenAI, Ollama, Together,
-  Groq, Fireworks — anything that speaks one of those wire protocols).
-- **API key pooling** — failover and load-balanced multi-key
-  concurrency to multiply effective rate limits. Per-key circuit
-  breakers with auth/quota/rate-limit/server-error classification.
-- **Pluggable secret backends** — BYO keys resolved from env, an
-  AES-GCM Postgres store, or fetch-only external stores (AWS Secrets
-  Manager, Azure Key Vault, GCP Secret Manager, Vaultwarden/Bitwarden,
-  1Password). External secrets are held in memory only, never persisted.
-  On an upstream auth failure the key is re-resolved out-of-band: the
-  request fails over to another key/host immediately and the rotated
-  key heals in the background (or, as a last resort, parks briefly and
-  retries with the fresh value).
-- **Adapter dispatch on (Model, Host)** — one Host (e.g. AWS Bedrock)
-  can serve models on different wire protocols; binding-level
-  `adapter: openai | anthropic` picks correctly per request.
-- **Generated typed OpenAPI** for both planes — frontend / CLI clients
-  get full type information for free.
-- **Postgres-backed catalog with NOTIFY/LISTEN snapshot fan-out** —
-  admin writes propagate to every pod within ~1 second without a
-  hot-path PG round-trip.
-- **Streaming bytes pass through** — the orchestration layer is shape-
-  agnostic; SSE and JSON responses stream byte-for-byte from upstream.
+A full relay with Postgres bundled and the catalog pre-seeded — admin UI on
+**:8081**, OpenAI/Anthropic-compatible API on **:8080**. See
+[Quickstart](#quickstart--first-request-in-2-minutes) for your first request.
+
+## Why Relay
+
+- **One API, every upstream.** OpenAI- and Anthropic-shape endpoints
+  (OpenAI, Anthropic, Bedrock, Vertex, Azure OpenAI, Ollama, Together, Groq,
+  Fireworks — anything speaking either wire protocol). Drop-in for your
+  existing OpenAI/Anthropic SDK code.
+- **Key pooling that multiplies your rate limits.** Load-balanced, failover
+  across many keys, with per-key circuit breakers (auth / quota / rate-limit
+  / server-error aware). On an upstream auth failure a key is re-resolved
+  out-of-band — the request fails over immediately and the rotated key heals
+  in the background.
+- **BYO keys, your secret store.** Resolve keys from env, an AES-GCM
+  Postgres store, or fetch-only external backends (AWS / Azure / GCP Secret
+  Manager, Vaultwarden/Bitwarden, 1Password). External secrets stay in
+  memory, never persisted.
+- **Infra-grade performance.** < 2 ms p50 added latency, 5–10k RPS/pod,
+  k8s-native. Postgres-backed catalog fans out to every pod via NOTIFY/LISTEN
+  in ~1s with zero PG round-trips on the hot path; responses stream
+  byte-for-byte from upstream.
+- **Self-hostable, AGPL-3.0.** Your keys, your data, your infra. Generated
+  typed OpenAPI for both planes, so clients get full type information free.
+
+## Quickstart — first request in ~2 minutes
+
+**1. Start the relay** (the `docker run` above). Also on GitHub Container
+Registry as `ghcr.io/wyolet/relay:standalone`.
+
+**2. Run the setup wizard.** Open `http://localhost:8081`, log in with the
+admin credentials you set (`RELAY_ADMIN_TOKEN` / `RELAY_ADMIN_PASSWORD`). The
+wizard walks you through adding a provider key and minting a relay key — copy
+the relay-key plaintext when it's shown (it's shown exactly once).
+
+**3. Call it** like the OpenAI API:
+
+```bash
+curl http://localhost:8080/openai/v1/chat/completions \
+  -H "Authorization: Bearer <your-relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+```
+
+The bundled image is single-node with embedded Postgres — perfect for a
+try-out, not for production. For that, run the lean image
+(`wyolet/relay:latest`) against a managed Postgres; see
+[other ways to run](#other-ways-to-run) below.
 
 ## Status
 
@@ -56,27 +86,13 @@ See [`docs/roadmap.md`](docs/roadmap.md) for the full picture and
 [`docs/canonical-protocol.md`](docs/canonical-protocol.md) for the
 relay-canonical protocol design.
 
-## Quickstart
+## Other ways to run
 
-### `docker run` (all-in-one — zero dependencies)
-
-The quickest taste. The all-in-one image bundles Postgres *inside* the
-container and seeds the catalog on first boot — nothing external to wire up:
-
-```bash
-docker run -p 8080:8080 -p 8081:8081 \
-  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
-  wyolet/relay:standalone
-```
-
-Data plane: `http://localhost:8080` · control plane + **admin UI**:
-`http://localhost:8081`. Single-node and embedded-PG — great for a try-out, not
-for production (use the lean image + a managed Postgres for that; see below).
-Also available from GitHub Container Registry as `ghcr.io/wyolet/relay:standalone`.
 Official images (`:latest` lean, `:standalone` all-in-one, and `:<version>`
-tags) are published to Docker Hub and GHCR by the maintainers; this repository
-does not build or publish them in CI. To build your own from source, use the
-`Dockerfile` / `docker-bake.hcl`, or `docker compose up --build` below.
+tags) are published to Docker Hub (`wyolet/relay`) and GHCR
+(`ghcr.io/wyolet/relay`) by the maintainers; this repository does not build or
+publish them in CI. To build your own from source, use the `Dockerfile` /
+`docker-bake.hcl`, or `docker compose up --build` below.
 
 ### Docker Compose (standalone — bundled services)
 

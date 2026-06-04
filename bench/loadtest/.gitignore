@@ -1,0 +1,3 @@
+results/
+# the recorded fixture is test data, not a log — re-include past the root *.jsonl rule
+!recorded/fixtures/*.jsonl

@@ -1,0 +1,108 @@
+# Self-contained load-test stack for relay. Brings up the real distributed
+# topology — two relay pods behind an nginx LB, real valkey (Redis Lua), real
+# Postgres — plus three upstream mocks (fast / slow / streaming) and Prometheus.
+#
+# The relay image is NOT built here: pass the artifact under test.
+#   RELAY_IMAGE=ghcr.io/wyolet/relay:0.1.1 docker compose -f compose.yml up -d
+#
+# run.sh orchestrates up → seed → matrix → report → down. Don't invoke this
+# file directly unless you're poking at the stack by hand.
+name: relay-loadtest
+
+x-relay-env: &relay-env
+  RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+  RELAY_REDIS_ADDR: valkey:6379
+  RELAY_MASTER_KEY: ${RELAY_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN:-loadtest-admin-token}
+  RELAY_CATALOG_DIR: /catalog
+  RELAY_AUTO_SEED_IF_EMPTY: "1"
+  RELAY_PORT: "8080"
+  RELAY_CONTROL_PORT: "8081"
+  RELAY_CLUSTER_MODE: "on"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "relay"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  mock-fast:
+    build: ./mock
+    environment: {MOCK_MODE: fast, MOCK_ADDR: ":9990"}
+  mock-slow:
+    build: ./mock
+    environment: {MOCK_MODE: slow, MOCK_ADDR: ":9990", MOCK_LATENCY: "2s"}
+  mock-stream:
+    build: ./mock
+    environment: {MOCK_MODE: stream, MOCK_ADDR: ":9990", MOCK_CHUNKS: "64", MOCK_CHUNK_DELAY: "15ms"}
+
+  # Recorded real-traffic upstream: spec-mock-openai replays a recorded session
+  # with real inter-frame timing from ./recorded/fixtures (read-only mount).
+  recorded:
+    image: ${SPECMOCK_IMAGE:-ghcr.io/wyolet/spec-mock-openai:latest}
+    volumes:
+      - ./recorded/fixtures:/fixtures:ro
+
+  relay-a:
+    image: ${RELAY_IMAGE:?set RELAY_IMAGE to the relay artifact under test}
+    environment:
+      <<: *relay-env
+      RELAY_INSTANCE_ID: relay-a
+    depends_on:
+      postgres: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+  relay-b:
+    image: ${RELAY_IMAGE:?set RELAY_IMAGE to the relay artifact under test}
+    environment:
+      <<: *relay-env
+      RELAY_INSTANCE_ID: relay-b
+    depends_on:
+      postgres: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      relay-a: {condition: service_started}  # let -a win the seed race
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${LT_LB_PORT:-8080}:80"          # data plane (load target)
+    depends_on: [relay-a, relay-b]
+
+  control:
+    # thin alias to reach a control plane from the host for seeding + scraping
+    image: nginx:alpine
+    volumes:
+      - ./nginx-control.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${LT_CTRL_PORT:-8081}:80"
+    depends_on: [relay-a]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${LT_PROM_PORT:-9099}:9090"
+    depends_on: [relay-a, relay-b]
+
+  loadgen:
+    build: ./loadgen
+    profiles: ["tools"]            # never auto-starts; run.sh invokes via `compose run`
+    volumes:
+      - ./results:/results
