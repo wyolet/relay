@@ -40,7 +40,7 @@ CONTROL_HOST   ?= $(CONTROL_PUBLIC)
 COOKIE_JAR     := /tmp/relay-control-cookie.txt
 
 # UI release to embed.
-UI_VERSION ?= v0.2.2
+UI_VERSION ?= v0.2.3
 UI_DIST_DIR := cmd/relay/web/dist
 
 help: ## Show this help
