@@ -13,7 +13,10 @@
 #                is private. Omit once relay-ui is public.
 #     docker buildx build --secret id=gh_token,env=GH_TOKEN ...
 
-ARG UI_VERSION=v0.2.3
+# UI_VERSION has no literal default — it's the Makefile's job (UI_VERSION ?= ...),
+# threaded through docker-bake.hcl. A bare `docker build` must pass --build-arg
+# UI_VERSION=... or the UI fetch fails loudly. Single source: the Makefile.
+ARG UI_VERSION
 ARG CATALOG_REF=main
 
 # --- assets: fetch pinned UI dist + catalog data; no toolchain reaches final ---

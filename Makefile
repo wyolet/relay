@@ -204,17 +204,17 @@ restart: ## restart relay-a/b + nginx after a rebuild
 
 image: ## build + push prod (multi-tag)
 	@echo "▸ pushing $(REGISTRY)/$(IMAGE_NAME) — version=$(VERSION) sha=$(GIT_REVISION)"
-	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) docker buildx bake -f docker-bake.hcl --push prod
+	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl --push prod
 
 dev-push: ## build + push :dev moving label
 	@echo "▸ pushing $(REGISTRY)/$(IMAGE_NAME):dev — sha=$(GIT_REVISION)"
-	GIT_REVISION=$(GIT_REVISION) docker buildx bake -f docker-bake.hcl --push dev
+	GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl --push dev
 
 push-all: ## build + push both prod and dev
-	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) docker buildx bake -f docker-bake.hcl --push all
+	VERSION=$(VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl --push all
 
 local-image: ## bake into local docker as relay:dev
-	docker buildx bake -f docker-bake.hcl local
+	UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl local
 
 run-local: local-image ## boot the local image on :8080
 	docker run --rm -p 8080:8080 --name relay-local relay:dev
@@ -233,7 +233,7 @@ release: ## bump patch + build + push + tag
 	@if git rev-parse "v$(NEW_VERSION)" >/dev/null 2>&1; then \
 		echo "⚠️  tag v$(NEW_VERSION) already exists. delete locally: git tag -d v$(NEW_VERSION)"; exit 1; \
 	fi
-	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) docker buildx bake -f docker-bake.hcl --push prod
+	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl --push prod
 	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
 	git push origin "v$(NEW_VERSION)"
 	@echo "✅ released v$(NEW_VERSION)"
@@ -247,7 +247,7 @@ release-minor: ## bump minor + build + push + tag
 	@if git rev-parse "v$(NEW_VERSION)" >/dev/null 2>&1; then \
 		echo "⚠️  tag v$(NEW_VERSION) already exists. delete locally: git tag -d v$(NEW_VERSION)"; exit 1; \
 	fi
-	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) docker buildx bake -f docker-bake.hcl --push prod
+	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl --push prod
 	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
 	git push origin "v$(NEW_VERSION)"
 	@echo "✅ released v$(NEW_VERSION)"
@@ -261,7 +261,7 @@ release-major: ## bump major + build + push + tag
 	@if git rev-parse "v$(NEW_VERSION)" >/dev/null 2>&1; then \
 		echo "⚠️  tag v$(NEW_VERSION) already exists. delete locally: git tag -d v$(NEW_VERSION)"; exit 1; \
 	fi
-	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) docker buildx bake -f docker-bake.hcl --push prod
+	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) docker buildx bake -f docker-bake.hcl --push prod
 	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
 	git push origin "v$(NEW_VERSION)"
 	@echo "✅ released v$(NEW_VERSION)"

@@ -5,7 +5,12 @@ variable "DOCKERHUB"    { default = "docker.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
-variable "UI_VERSION"   { default = "v0.2.3" }
+# UI_VERSION is the single source of truth in the Makefile (UI_VERSION ?= ...);
+# `make image`/`release`/etc. pass it through as env. The empty default here is
+# only a fallback for a bare `docker buildx bake` — which will then fail the UI
+# fetch loudly rather than silently embedding the wrong version. Bump it in the
+# Makefile, nowhere else.
+variable "UI_VERSION"   { default = "" }
 variable "CATALOG_REF"  { default = "main" }
 
 target "_common" {
