@@ -57,12 +57,12 @@ target "dev" {
   ])
 }
 
-// All-in-one: relay + embedded Postgres (Dockerfile `allinone` stage). The
+// Standalone: relay + embedded Postgres (Dockerfile `standalone` stage). The
 // `docker run` image, published as :standalone (+ :VERSION-standalone).
-target "allinone" {
+target "standalone" {
   inherits    = ["_common"]
-  description = "All-in-one image (relay + embedded Postgres) for `docker run`; pushes :standalone + :VERSION-standalone to ghcr + Docker Hub"
-  target      = "allinone"
+  description = "Standalone image (relay + embedded Postgres) for `docker run`; pushes :standalone + :VERSION-standalone to ghcr + Docker Hub"
+  target      = "standalone"
   tags = compact([
     "${REGISTRY}/${IMAGE_NAME}:standalone",
     notequal("latest", VERSION) ? "${REGISTRY}/${IMAGE_NAME}:${VERSION}-standalone" : "",
@@ -88,14 +88,14 @@ target "local" {
   secret = ["id=gh_token,env=GH_TOKEN"]
 }
 
-// Local all-in-one, for smoke-testing `docker run`.
-target "local-allinone" {
-  description = "All-in-one image built host-native into the local docker daemon as relay:allinone (smoke testing `docker run`)"
+// Local standalone, for smoke-testing `docker run`.
+target "local-standalone" {
+  description = "Standalone image built host-native into the local docker daemon as relay:standalone (smoke testing `docker run`)"
   context     = "."
   dockerfile  = "Dockerfile"
-  target      = "allinone"
+  target      = "standalone"
   output      = ["type=docker"]
-  tags        = ["${IMAGE_NAME}:allinone"]
+  tags        = ["${IMAGE_NAME}:standalone"]
   args = {
     UI_VERSION  = "${UI_VERSION}"
     CATALOG_REF = "${CATALOG_REF}"
@@ -103,5 +103,10 @@ target "local-allinone" {
   secret = ["id=gh_token,env=GH_TOKEN"]
 }
 
-group "all"     { targets = ["prod", "dev", "allinone"] }
+group "all"     { targets = ["prod", "dev", "standalone"] }
+# release = the two PUBLISHED artifacts that must stay in lockstep every version:
+# the lean image (:VERSION/:latest) and the standalone image (:standalone).
+# Excludes the :dev moving label. `make release`/`image` bake this so :standalone
+# never goes stale behind a fresh :latest.
+group "release" { targets = ["prod", "standalone"] }
 group "default" { targets = ["prod"] }

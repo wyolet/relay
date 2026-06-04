@@ -94,21 +94,21 @@ ENV RELAY_CATALOG_DIR=/catalog \
 EXPOSE 8080 8081
 ENTRYPOINT ["/relay"]
 
-# --- allinone: relay + embedded Postgres in one container — `docker run` demo ---
+# --- standalone: relay + embedded Postgres in one container — `docker run` demo ---
 # Single-node convenience image. Boots a local Postgres (initdb on first run)
 # then relay against it, so no external services are needed. Built on alpine +
 # the apk postgresql16 package (no LLVM JIT) — a fraction of the official
 # postgres image's size. Single-node only; production uses the lean image above
 # against managed PG.
-FROM alpine:3.20 AS allinone
+FROM alpine:3.20 AS standalone
 LABEL org.opencontainers.image.source="https://github.com/wyolet/relay"
 RUN apk add --no-cache postgresql16 postgresql16-client tzdata \
     && mkdir -p /var/lib/postgresql/data /run/postgresql \
     && chown -R postgres:postgres /var/lib/postgresql /run/postgresql
 COPY --from=builder /relay /relay
 COPY --from=assets /assets/catalog /catalog
-COPY deploy/allinone-entrypoint.sh /usr/local/bin/relay-allinone-entrypoint.sh
-RUN chmod +x /usr/local/bin/relay-allinone-entrypoint.sh
+COPY deploy/standalone-entrypoint.sh /usr/local/bin/relay-standalone-entrypoint.sh
+RUN chmod +x /usr/local/bin/relay-standalone-entrypoint.sh
 ENV RELAY_CATALOG_DIR=/catalog \
     RELAY_AUTO_SEED_IF_EMPTY=1 \
     POSTGRES_USER=relay \
@@ -118,4 +118,4 @@ ENV RELAY_CATALOG_DIR=/catalog \
 # Only relay's two HTTP planes. Postgres is internal (loopback only) and never
 # exposed — use `docker exec` if you need to poke at it.
 EXPOSE 8080 8081
-ENTRYPOINT ["/usr/local/bin/relay-allinone-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/relay-standalone-entrypoint.sh"]
