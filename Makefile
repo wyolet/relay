@@ -300,11 +300,24 @@ control-openapi: ## list paths from /openapi.json
 sqlc-generate: ## regenerate sqlc code
 	sqlc generate
 
-ui-fetch: ## fetch relay-ui release tarball
-	@echo "Fetching relay-ui $(UI_VERSION)..."
+UI_REPO     := wyolet/relay-ui
+UI_TARBALL  := relay-ui-$(UI_VERSION).tar.gz
+
+ui-fetch: ## fetch + verify relay-ui release tarball (private repo → gh auth)
+	@command -v gh >/dev/null || { echo "ui-fetch: 'gh' is required (relay-ui is a private repo; plain curl 404s on its release assets). Install GitHub CLI and 'gh auth login'."; exit 1; }
+	@echo "Fetching relay-ui $(UI_VERSION) from $(UI_REPO)..."
 	@mkdir -p $(UI_DIST_DIR)
-	curl -fsSL "https://github.com/wyolet/relay-ui/releases/download/$(UI_VERSION)/relay-ui-$(UI_VERSION).tar.gz" \
-	  | tar -xz -C $(UI_DIST_DIR) --strip-components=1
+	@tmp=$$(mktemp -d); \
+	  gh release download "$(UI_VERSION)" --repo "$(UI_REPO)" \
+	    --pattern "$(UI_TARBALL)" --pattern "$(UI_TARBALL).sha256" --dir "$$tmp" --clobber \
+	    || { echo "ui-fetch: download failed (check 'gh auth status' and that release $(UI_VERSION) exists)."; rm -rf "$$tmp"; exit 1; }; \
+	  if [ -f "$$tmp/$(UI_TARBALL).sha256" ]; then \
+	    ( cd "$$tmp" && shasum -a 256 -c "$(UI_TARBALL).sha256" ) \
+	      || { echo "ui-fetch: sha256 verification FAILED."; rm -rf "$$tmp"; exit 1; }; \
+	  else echo "ui-fetch: no .sha256 sidecar; skipping checksum verify."; fi; \
+	  rm -rf $(UI_DIST_DIR)/* ; \
+	  tar -xz -C $(UI_DIST_DIR) --strip-components=1 -f "$$tmp/$(UI_TARBALL)"; \
+	  rm -rf "$$tmp"
 	@echo "UI fetched into $(UI_DIST_DIR)"
 
 build: ui-fetch ## ui-fetch + go build → ./relay
