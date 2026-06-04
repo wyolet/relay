@@ -1,0 +1,6 @@
+global: { scrape_interval: 2s }
+scrape_configs:
+  - job_name: relay
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['relay-a:8081', 'relay-b:8081']
