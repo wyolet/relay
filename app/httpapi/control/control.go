@@ -6,12 +6,15 @@
 package control
 
 import (
+	"context"
+
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/payloadlog"
@@ -66,9 +69,20 @@ type Deps struct {
 	// it. nil disables that endpoint.
 	Selector *keypool.Selector
 
+	// HostHealth reads per-host runtime reachability (observed state), shared
+	// with the data plane. Overlays host.Status on host reads. nil disables
+	// the overlay (Status stays absent → UI shows "unknown").
+	HostHealth HostHealthReader
+
 	// RuntimeConfig is the public config served at GET /config.json for the
 	// embedded admin UI. Zero value is fine (UI falls back to origin defaults).
 	RuntimeConfig RuntimeConfig
+}
+
+// HostHealthReader reads observed host reachability. Implemented by
+// app/hosthealth.Recorder.
+type HostHealthReader interface {
+	Read(ctx context.Context, hostID string) (host.Status, bool)
 }
 
 // Mount installs the control-plane huma API on r and registers all

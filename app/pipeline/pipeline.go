@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -99,9 +100,30 @@ type Pipeline struct {
 	// retry-with-refreshed-secret / stop). Nil = legacy behavior. The loop
 	// only consults it for retryable failures.
 	KeyAgent KeyAgent
+
+	// HostHealth records observed upstream reachability for the admin UI.
+	// Written only from the detached post-flight goroutines, never on the
+	// latency path. Nil disables health recording.
+	HostHealth HostHealth
+}
+
+// HostHealth records observed host reachability. Implemented by
+// app/hosthealth.Recorder; wired in the composition root.
+type HostHealth interface {
+	// Reachable marks the host as having answered (any HTTP response).
+	Reachable(ctx context.Context, hostID string)
+	// Unreachable marks the host as having failed to connect, with an error excerpt.
+	Unreachable(ctx context.Context, hostID, errMsg string)
 }
 
 const defaultMaxAttempts = 3
+
+// maxConnAttempts bounds how many times the pipeline re-dials the SAME host
+// after a connection-establishment failure (dial refused / DNS / TLS). A dial
+// failure is host-level, not key-level, so failing over to other keys is
+// pointless (they share the baseURL). We absorb a transient blip with a short
+// backoff, then report the host unreachable.
+const maxConnAttempts = 3
 
 var (
 	ErrNoKeys           = errors.New("pipeline: no candidate keys")
@@ -156,11 +178,12 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	}
 
 	var (
-		excluded []*hostkey.HostKey
-		acq      *policy.Acquisition
-		resp     *http.Response
-		keyValue string // current secret for acq.Key; overridden on a heal-retry
-		attempts int    // distinct keys tried (a same-key retry doesn't count)
+		excluded     []*hostkey.HostKey
+		acq          *policy.Acquisition
+		resp         *http.Response
+		keyValue     string // current secret for acq.Key; overridden on a heal-retry
+		attempts     int    // distinct keys tried (a same-key retry doesn't count)
+		connAttempts int    // consecutive dial failures against the host (any key)
 		// Last upstream response observed during retry. Carried into the
 		// final error so callers see *why* upstream rejected (otherwise
 		// "all keys exhausted" hides the actual auth/quota/server message).
@@ -209,6 +232,22 @@ loop:
 		if resp != nil {
 			lastStatus = resp.StatusCode
 			lastBody = readBodyExcerpt(resp, 512)
+		}
+
+		// Dial failure: the host is unreachable, not the key bad. Don't trip
+		// the breaker and don't fail over keys (they share the baseURL) —
+		// re-dial the same host with a short backoff, then report unreachable.
+		if kind == keypool.FailureUpstreamUnreachable {
+			connAttempts++
+			if connAttempts < maxConnAttempts {
+				if werr := sleepCtx(ctx, connBackoff(connAttempts)); werr != nil {
+					err = werr
+					break loop
+				}
+				continue // reuse acq + its reservation; re-call the same host
+			}
+			err = &UpstreamUnreachableError{Host: hostSlug, Attempts: connAttempts, Cause: err}
+			break loop
 		}
 
 		moreCandidates := retry && attempts < maxAttempts && untried(req.Keys, excluded, acq.Key) > 0
@@ -289,10 +328,69 @@ func shouldRetry(a Adapter, resp *http.Response) bool {
 
 func classify(a Adapter, resp *http.Response, callErr error) (bool, keypool.FailureKind, time.Duration) {
 	if callErr != nil {
+		if isConnError(callErr) {
+			return true, keypool.FailureUpstreamUnreachable, 0
+		}
 		return true, keypool.FailureNetwork, 0
 	}
 	return a.Retryable(resp)
 }
+
+// isConnError reports whether err is a connection-establishment failure — the
+// upstream was never reached (connection refused, no route, DNS failure, TLS
+// handshake). Such errors are host/baseURL problems, not key problems. A
+// post-connect read timeout is NOT a conn error (it falls back to
+// FailureNetwork) since the host was reachable.
+func isConnError(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		// Op=="dial" covers refused/no-route/TLS-handshake — the connect phase.
+		return opErr.Op == "dial"
+	}
+	return false
+}
+
+// connBackoff returns the wait before re-dialing the host. attempt is the
+// 1-based count of consecutive dial failures: 100ms, 200ms, capped at 2s.
+func connBackoff(attempt int) time.Duration {
+	d := 100 * time.Millisecond << (attempt - 1)
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
+}
+
+// sleepCtx waits d or until ctx is cancelled, returning ctx.Err() on cancel.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// UpstreamUnreachableError signals every attempt to reach the host failed at
+// the connection-establishment phase — a likely baseURL misconfiguration or a
+// down upstream, NOT a bad key. Distinct from UpstreamFailureError (which
+// carries an actual upstream HTTP status the keys were rejected with).
+type UpstreamUnreachableError struct {
+	Host     string
+	Attempts int
+	Cause    error
+}
+
+func (e *UpstreamUnreachableError) Error() string {
+	return fmt.Sprintf("upstream host %q unreachable after %d attempt(s): %v", e.Host, e.Attempts, e.Cause)
+}
+
+func (e *UpstreamUnreachableError) Unwrap() error { return e.Cause }
 
 type attemptAction int
 
@@ -416,6 +514,11 @@ func (p *Pipeline) runPostFlight(
 	}
 	p.Policy.RecordSuccess(ctx, acq)
 
+	// The host answered — record reachability (off the latency path).
+	if p.HostHealth != nil && req.Host != nil {
+		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
+	}
+
 	// Fan out to lifecycle observers. lc carries persistent identity;
 	// the event carries this-request's outcome. Observers see both.
 	if p.Lifecycle != nil && req.Lifecycle != nil {
@@ -434,6 +537,20 @@ func (p *Pipeline) runPostFlight(
 // is about to write an error response — telemetry must not block it).
 // No rate-limit commit / RecordSuccess: there was no success.
 func (p *Pipeline) fireFailure(req *Request, runErr error) {
+	// Record host reachability regardless of lifecycle wiring: a dial failure
+	// means unreachable; an upstream-status failure means the host answered
+	// (the keys/quota are the problem, not connectivity).
+	if p.HostHealth != nil && req.Host != nil {
+		var unreachable *UpstreamUnreachableError
+		var upstream *UpstreamFailureError
+		switch {
+		case errors.As(runErr, &unreachable):
+			p.HostHealth.Unreachable(context.Background(), req.Host.Meta.ID, runErr.Error())
+		case errors.As(runErr, &upstream):
+			p.HostHealth.Reachable(context.Background(), req.Host.Meta.ID)
+		}
+	}
+
 	if p.Lifecycle == nil || req.Lifecycle == nil {
 		return
 	}
@@ -453,8 +570,11 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 // telemetry categories for slicing — they don't mirror HTTP status codes.
 func classifyFailure(err error) (kind string, status int) {
 	var upstream *UpstreamFailureError
+	var unreachable *UpstreamUnreachableError
 	var exceeded *pkgratelimit.ExceededError
 	switch {
+	case errors.As(err, &unreachable):
+		return "upstream_unreachable", 0
 	case errors.As(err, &upstream):
 		return "upstream_error", upstream.Status
 	case errors.As(err, &exceeded):

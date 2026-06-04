@@ -5,13 +5,16 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
@@ -472,6 +475,89 @@ func TestRetryOn401_AuthFail(t *testing.T) {
 		t.Errorf("KeyHash = %q, want h2", res.KeyHash)
 	}
 	drainResult(t, res)
+}
+
+func TestConnRefused_RetriesSameHost_NoBreakerTrip(t *testing.T) {
+	t.Parallel()
+
+	dialErr := &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}
+	key := makeKey("h1", "sk-1")
+
+	adp := &fakeAdapter{
+		callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+			return nil, dialErr
+		},
+	}
+
+	mem := kv.NewMem()
+	sel := keypool.New(mem, slog.Default(), nil, nil)
+	lim := pkgratelimit.New(mem, slog.Default(), nil)
+	hh := newFakeHostHealth()
+	p := &pipeline.Pipeline{Policy: policy.NewService(&fakeSnap{}, sel, lim), Logger: slog.Default(), HostHealth: hh}
+
+	res, err := p.Run(context.Background(), &pipeline.Request{
+		Adapter: adp,
+		Keys:    []*hostkey.HostKey{key},
+		Policy:  makePolicy(),
+		Host:    &host.Host{Meta: meta.Metadata{ID: "host-1", Name: "myhost"}},
+	})
+	if res != nil {
+		drainResult(t, res)
+		t.Fatal("expected nil result on unreachable host")
+	}
+
+	var unreachable *pipeline.UpstreamUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("err = %v, want *UpstreamUnreachableError", err)
+	}
+	if unreachable.Host != "myhost" {
+		t.Errorf("Host = %q, want myhost", unreachable.Host)
+	}
+	// Re-dialled the SAME host maxConnAttempts times (single key, no failover).
+	if got := adp.callCount.Load(); got != 3 {
+		t.Errorf("callCount = %d, want 3 (re-dial same host)", got)
+	}
+	// The key breaker must NOT have opened — a dial failure isn't the key's fault.
+	if rec, found := sel.ReadCircuit(context.Background(), "h1"); found && rec.State != keypool.CircuitClosed {
+		t.Errorf("key breaker state = %v, want closed/untouched", rec.State)
+	}
+	// The host must be recorded unreachable (for the frontend Status overlay).
+	// fireFailure runs in a detached goroutine, so wait for the signal.
+	select {
+	case got := <-hh.unreachableCh:
+		if got != "host-1" {
+			t.Errorf("host health unreachable = %q, want host-1", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("host was not recorded unreachable")
+	}
+}
+
+// fakeHostHealth signals recorded outcomes over buffered channels.
+type fakeHostHealth struct {
+	reachableCh   chan string
+	unreachableCh chan string
+}
+
+func newFakeHostHealth() *fakeHostHealth {
+	return &fakeHostHealth{
+		reachableCh:   make(chan string, 4),
+		unreachableCh: make(chan string, 4),
+	}
+}
+
+func (f *fakeHostHealth) Reachable(_ context.Context, hostID string) {
+	select {
+	case f.reachableCh <- hostID:
+	default:
+	}
+}
+
+func (f *fakeHostHealth) Unreachable(_ context.Context, hostID, _ string) {
+	select {
+	case f.unreachableCh <- hostID:
+	default:
+	}
 }
 
 func TestNonRetryable_4xx_PassesThrough(t *testing.T) {
