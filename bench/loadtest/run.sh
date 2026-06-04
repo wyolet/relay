@@ -13,9 +13,11 @@ export RELAY_ADMIN_TOKEN="${RELAY_ADMIN_TOKEN:-loadtest-admin-token}"
 export LT_CTRL_PORT="${LT_CTRL_PORT:-8081}" LT_LB_PORT="${LT_LB_PORT:-8080}" LT_PROM_PORT="${LT_PROM_PORT:-9099}"
 C="docker compose -f compose.yml"
 
+echo "▸ clearing any prior stack"
+$C down -v --remove-orphans >/dev/null 2>&1 || true
 echo "▸ building helpers + starting stack (image: $RELAY_IMAGE)"
 $C build mock-fast loadgen >/dev/null
-$C up -d postgres valkey mock-fast mock-slow mock-stream relay-a relay-b nginx control prometheus
+$C up -d postgres valkey mock-fast mock-slow mock-stream recorded relay-a relay-b nginx control prometheus
 
 echo "▸ waiting for relay control plane"
 for i in $(seq 1 90); do

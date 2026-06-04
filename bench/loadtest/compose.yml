@@ -51,6 +51,13 @@ services:
     build: ./mock
     environment: {MOCK_MODE: stream, MOCK_ADDR: ":9990", MOCK_CHUNKS: "64", MOCK_CHUNK_DELAY: "15ms"}
 
+  # Recorded real-traffic upstream: spec-mock-openai replays a recorded session
+  # with real inter-frame timing from ./recorded/fixtures (read-only mount).
+  recorded:
+    image: ${SPECMOCK_IMAGE:-ghcr.io/wyolet/spec-mock-openai:latest}
+    volumes:
+      - ./recorded/fixtures:/fixtures:ro
+
   relay-a:
     image: ${RELAY_IMAGE:?set RELAY_IMAGE to the relay artifact under test}
     environment:

@@ -1,8 +1,45 @@
 [
-  {"name": "overhead-500",   "model": "fast",   "rate": 500,  "duration": "20s"},
-  {"name": "overhead-2000",  "model": "fast",   "rate": 2000, "duration": "20s"},
-  {"name": "overhead-5000",  "model": "fast",   "rate": 5000, "duration": "20s"},
-  {"name": "saturation-300", "model": "slow",   "rate": 300,  "duration": "20s"},
-  {"name": "streaming-500",  "model": "stream", "rate": 500,  "duration": "20s"},
-  {"name": "soak-1000",      "model": "fast",   "rate": 1000, "duration": "30m", "soak": true}
+  {
+    "name": "overhead-500",
+    "model": "fast",
+    "rate": 500,
+    "duration": "20s"
+  },
+  {
+    "name": "overhead-2000",
+    "model": "fast",
+    "rate": 2000,
+    "duration": "20s"
+  },
+  {
+    "name": "overhead-5000",
+    "model": "fast",
+    "rate": 5000,
+    "duration": "20s"
+  },
+  {
+    "name": "saturation-300",
+    "model": "slow",
+    "rate": 300,
+    "duration": "20s"
+  },
+  {
+    "name": "streaming-500",
+    "model": "stream",
+    "rate": 500,
+    "duration": "20s"
+  },
+  {
+    "name": "recorded-300",
+    "model": "recorded",
+    "rate": 300,
+    "duration": "20s"
+  },
+  {
+    "name": "soak-1000",
+    "model": "fast",
+    "rate": 1000,
+    "duration": "30m",
+    "soak": true
+  }
 ]

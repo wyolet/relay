@@ -11,6 +11,7 @@ HOSTS = [  # (name, mock service dns, model)
     ("mock-fast", "mock-fast:9990", "fast"),
     ("mock-slow", "mock-slow:9990", "slow"),
     ("mock-stream", "mock-stream:9990", "stream"),
+    ("recorded", "recorded:4010", "recorded"),
 ]
 
 
