@@ -1,18 +1,97 @@
-# Root convenience stack — run the full standalone relay from the repo root:
+# Wyolet Relay — convenience stack for self-hosting.
 #
-#   cp .env.example .env      # then set RELAY_MASTER_KEY
-#   docker compose up --build
+# The lean relay image wired to its own Postgres + Valkey, with volumes and
+# all environment configured. One command:
 #
-# This re-exports the canonical base under deploy/compose/ (valkey + relay-a/b +
-# nginx, pulling ${RELAY_IMAGE}). The adjacent docker-compose.override.yml is
-# auto-loaded by `docker compose up` and bundles Postgres/ClickHouse/Jaeger +
-# builds the relay image from source. Included files' relative paths
-# (../../.env, ./config, the build context) resolve against their own
-# directory, so the include is transparent.
+#   docker compose up -d
+#   docker compose logs -f relay      # watch startup
 #
-# Operators wiring relay to their own managed PG/CH/Redis should run the base
-# file under deploy/compose/ directly and point the DSNs at their services —
-# see the "external mode" block in .env.example.
+# The catalog is baked into the image and seeded into Postgres on first boot.
+# Admin UI → http://localhost:8081 · inference API → http://localhost:8080.
+# Log in as `admin` / RELAY_ADMIN_PASSWORD.
+#
+# Before a real deployment: set a stable RELAY_MASTER_KEY (it encrypts your
+# stored provider keys) and change RELAY_ADMIN_PASSWORD — put them in a `.env`
+# file next to this one, or edit the values below.
+#
+# Contributors building from source / running the multi-pod dev stack: see
+# deploy/compose/ and `make dev`.
 
-include:
-  - deploy/compose/docker-compose.yml
+name: relay
+
+volumes:
+  pg-data:
+  valkey-data:
+
+# Inline admin user mounted into the relay's config dir, so UI login works
+# with no external files. The password resolves from RELAY_ADMIN_PASSWORD.
+configs:
+  relay-admin-user:
+    content: |
+      apiVersion: relay.wyolet.dev/v1
+      kind: User
+      metadata: { name: admin }
+      spec:
+        username: admin
+        email: admin@localhost
+        password: { valueFrom: { env: RELAY_ADMIN_PASSWORD } }
+        roles: [admin]
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: relay-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: relay-valkey
+    restart: unless-stopped
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  relay:
+    image: ${RELAY_IMAGE:-wyolet/relay:latest}
+    container_name: relay
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+    configs:
+      - source: relay-admin-user
+        target: /config/users/admin.yaml
+    environment:
+      RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+      RELAY_STATE_BACKEND: redis
+      RELAY_REDIS_ADDR: valkey:6379
+      RELAY_CONFIG_DIR: /config
+      RELAY_AUTO_SEED_IF_EMPTY: "1"
+      RELAY_CONTROL_PORT: "8081"
+      RELAY_INFERENCE_API_URL: http://localhost:8080
+      RELAY_COOKIE_SECURE: "false"
+      # Admin UI login: user `admin` + this password.
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me-please}
+      # Master key encrypts stored provider keys — set a stable value for
+      # production (empty is fine to boot; required only for stored secrets).
+      RELAY_MASTER_KEY: ${RELAY_MASTER_KEY:-}
+      # Break-glass control-plane bearer (CI / scripts).
+      RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN:-}
+    ports:
+      - "8080:8080"   # inference API (OpenAI/Anthropic shapes)
+      - "8081:8081"   # admin UI + control API

@@ -92,26 +92,28 @@ Official images (`:latest` lean, `:standalone` all-in-one, and `:<version>`
 tags) are published to Docker Hub (`wyolet/relay`) and GHCR
 (`ghcr.io/wyolet/relay`) by the maintainers; this repository does not build or
 publish them in CI. To build your own from source, use the `Dockerfile` /
-`docker-bake.hcl`, or `docker compose up --build` below.
+`docker-bake.hcl`, or the dev stack under `deploy/compose/`.
 
-### Docker Compose (standalone — bundled services)
+### Docker Compose (relay + Postgres + Valkey)
 
-Requires Docker. Bundles its own Postgres (plus optional ClickHouse, Valkey,
-Jaeger), and builds the relay image from source. Run it from the repo root —
-the root `docker-compose.yml` wires the whole stack:
+The repo root ships a self-contained stack — the lean relay image wired to its
+own Postgres and Valkey, with volumes and environment preconfigured:
 
 ```bash
-cp .env.example .env
-# REQUIRED: set a master key in .env — generate one with:
-#   openssl rand -base64 32
-docker compose up --build
+docker compose up -d
 ```
 
-Data plane: `http://localhost:5100` · control plane + **admin UI**:
-`http://localhost:5103`. The image bakes in the catalog and seeds it into the
-bundled Postgres on first boot — no extra steps to get a populated catalog.
-(You still add your own host keys + a relay key to serve traffic, via the UI
-or the control API.)
+Inference API → `http://localhost:8080` · **admin UI** + control API →
+`http://localhost:8081`. The image bakes in the catalog and seeds it into
+Postgres on first boot. Log in as `admin` / `RELAY_ADMIN_PASSWORD` (default
+`change-me-please`), then add a host key + mint a relay key.
+
+Before a real deployment, set a stable `RELAY_MASTER_KEY` and change
+`RELAY_ADMIN_PASSWORD` — put them in a `.env` next to the compose file, or edit
+the defaults inline.
+
+For the multi-pod dev stack (nginx load balancer + two replicas, built from
+source), see `deploy/compose/` and `make dev`.
 
 ### Run from source (dev)
 
