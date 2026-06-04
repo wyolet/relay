@@ -7,8 +7,8 @@
 *.md
 docs/
 deploy/
-# …except the all-in-one entrypoint, COPY'd into the embedded-PG image.
-!deploy/allinone-entrypoint.sh
+# …except the standalone entrypoint, COPY'd into the embedded-PG image.
+!deploy/standalone-entrypoint.sh
 integration/
 bench/
 
