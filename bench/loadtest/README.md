@@ -52,6 +52,22 @@ binaries in their own modules, so vegeta never touches the relay binary).
 - `LT_LB_PORT` / `LT_CTRL_PORT` / `LT_PROM_PORT` — relocate published ports.
 - Edit `matrix.json` to change the scenario set.
 
+## Upstreams
+
+Three synthetic mocks (`fast`/`slow`/`stream`) are built locally from `mock/`.
+The fourth — `recorded` — replays a real OpenAI session via **spec-mock-openai**
+with real inter-token timing from `recorded/fixtures/`.
+
+`recorded` needs a spec-mock image. There is no published one yet, so build it
+from the `spec-mock-openai` repo's `Dockerfile` and pass it in:
+
+```
+SPECMOCK_IMAGE=<your spec-mock image> RELAY_IMAGE=… ./run.sh
+```
+
+(The compose default `ghcr.io/wyolet/spec-mock-openai:latest` is a placeholder
+until that image is published.)
+
 ## Roadmap (build around it later)
 
 - Recorded real-traffic sessions via spec-mock-openai as an upstream profile.
