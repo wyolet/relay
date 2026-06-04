@@ -105,9 +105,8 @@ docker compose up -d
 
 Inference API → `http://localhost:8080` · **admin UI** + control API →
 `http://localhost:8081`. The image bakes in the catalog and seeds it into
-Postgres on first boot. Log in with the user in `config/users/admin.yaml`
-(password = `RELAY_ADMIN_PASSWORD`, default `change-me-please`), then add a
-host key + mint a relay key.
+Postgres on first boot. Log in as `admin` / `RELAY_ADMIN_PASSWORD` (default
+`change-me-please`), then add a host key + mint a relay key.
 
 Before a real deployment, set a stable `RELAY_MASTER_KEY` and change
 `RELAY_ADMIN_PASSWORD` — put them in a `.env` next to the compose file, or edit

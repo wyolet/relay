@@ -8,10 +8,11 @@
 #
 # The catalog is baked into the image and seeded into Postgres on first boot.
 # Admin UI → http://localhost:8081 · inference API → http://localhost:8080.
+# Log in as `admin` / RELAY_ADMIN_PASSWORD.
 #
 # Before a real deployment: set a stable RELAY_MASTER_KEY (it encrypts your
 # stored provider keys) and change RELAY_ADMIN_PASSWORD — put them in a `.env`
-# file next to this one, or edit the defaults below.
+# file next to this one, or edit the values below.
 #
 # Contributors building from source / running the multi-pod dev stack: see
 # deploy/compose/ and `make dev`.
@@ -21,6 +22,20 @@ name: relay
 volumes:
   pg-data:
   valkey-data:
+
+# Inline admin user mounted into the relay's config dir, so UI login works
+# with no external files. The password resolves from RELAY_ADMIN_PASSWORD.
+configs:
+  relay-admin-user:
+    content: |
+      apiVersion: relay.wyolet.dev/v1
+      kind: User
+      metadata: { name: admin }
+      spec:
+        username: admin
+        email: admin@localhost
+        password: { valueFrom: { env: RELAY_ADMIN_PASSWORD } }
+        roles: [admin]
 
 services:
   postgres:
@@ -58,10 +73,9 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       valkey: {condition: service_healthy}
-    # Mounts the repo's config/ for the admin user (UI login), the system
-    # rate-limit rules, and governance settings.
-    volumes:
-      - ./config:/config:ro
+    configs:
+      - source: relay-admin-user
+        target: /config/users/admin.yaml
     environment:
       RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
       RELAY_STATE_BACKEND: redis
@@ -71,11 +85,11 @@ services:
       RELAY_CONTROL_PORT: "8081"
       RELAY_INFERENCE_API_URL: http://localhost:8080
       RELAY_COOKIE_SECURE: "false"
+      # Admin UI login: user `admin` + this password.
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me-please}
       # Master key encrypts stored provider keys — set a stable value for
       # production (empty is fine to boot; required only for stored secrets).
       RELAY_MASTER_KEY: ${RELAY_MASTER_KEY:-}
-      # Admin UI login: the username in config/users/admin.yaml + this password.
-      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me-please}
       # Break-glass control-plane bearer (CI / scripts).
       RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN:-}
     ports:
