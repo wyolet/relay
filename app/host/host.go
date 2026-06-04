@@ -16,14 +16,51 @@ package host
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/wyolet/relay/app/meta"
 )
 
 // Host is a single upstream serving endpoint.
+//
+// Spec is desired state (operator-managed, persisted in PG). Status is
+// observed runtime state (data-plane-managed, NOT persisted — overlaid from
+// kv at read time, like HostKey.Policies). The split mirrors the k8s
+// spec/status convention.
 type Host struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
+
+	// Status is runtime-observed health, overlaid by the control-API enrich
+	// step from the host-health store. nil when no observation exists yet
+	// (no traffic since boot, or the record TTL'd out) — the UI shows
+	// "unknown". Never persisted and never loaded from YAML.
+	Status *Status `json:"status,omitempty" yaml:"-"`
+}
+
+// HostHealth is the observed reachability of a host's upstream.
+type HostHealth string
+
+const (
+	// HealthUnknown — no observation yet (no traffic since boot or the record
+	// TTL'd out). The zero value.
+	HealthUnknown HostHealth = ""
+	// HealthHealthy — the upstream was reached on the most recent request
+	// (any HTTP response, even 4xx/5xx — reachability, not success).
+	HealthHealthy HostHealth = "healthy"
+	// HealthUnreachable — the most recent request failed to establish a
+	// connection (dial refused / DNS / TLS) after the pipeline's retries.
+	HealthUnreachable HostHealth = "unreachable"
+)
+
+// Status is runtime-observed health for a Host. Written by the data plane on
+// each request outcome, read by the admin API. Not persisted.
+type Status struct {
+	Health              HostHealth `json:"health" doc:"unknown | healthy | unreachable."`
+	LastError           string     `json:"lastError,omitempty" doc:"Last dial-failure error excerpt; set while unreachable."`
+	ConsecutiveFailures int        `json:"consecutiveFailures,omitempty" doc:"Consecutive dial failures; 0 when healthy."`
+	LastTransition      time.Time  `json:"lastTransition,omitempty" doc:"When health was last recorded."`
+	LastSuccess         time.Time  `json:"lastSuccess,omitempty" doc:"When the host was last reachable."`
 }
 
 // Spec carries the routing + display fields.

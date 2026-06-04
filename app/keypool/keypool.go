@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/hostkey"
@@ -53,7 +54,13 @@ const (
 	FailureRateLimitShort                    // 429 with Retry-After ≤ 5s → stay closed
 	FailureRateLimitLong                     // 429 with Retry-After > 5s → open for that duration
 	FailureServerError                       // 5xx → exponential backoff
-	FailureNetwork                           // net/timeout → treat as 5xx
+	FailureNetwork                           // net/timeout (post-connect) → treat as 5xx
+	// FailureUpstreamUnreachable is a dial-phase failure (connection refused,
+	// no route, DNS, TLS handshake): the connection was never established, so
+	// it is a property of the host/baseURL, not the key. It NEVER trips a key
+	// breaker — the pipeline retries the same host with backoff and reports an
+	// unreachable status. Distinguishes a misconfigured baseURL from a bad key.
+	FailureUpstreamUnreachable
 )
 
 // CircuitState describes the current health of a key.
@@ -66,6 +73,13 @@ const (
 )
 
 var ErrNoHealthyKeys = errors.New("keypool: no healthy keys in pool")
+
+// isAnonymous reports whether keyHash belongs to the synthetic no-auth key
+// routing injects for a NoAuth host. Such keys are exempt from the circuit
+// breaker: there is no credential to fail over to and nothing to heal.
+func isAnonymous(keyHash string) bool {
+	return strings.HasPrefix(keyHash, hostkey.AnonIDPrefix)
+}
 
 // candidate holds a healthy HostKey alongside its circuit record.
 type candidate struct {
@@ -191,6 +205,13 @@ func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, ke
 			if _, skip := excludeSet[k.KeyHash]; skip {
 				continue
 			}
+		}
+		// The synthetic no-auth key has no credential to fail over to and
+		// nothing to heal — a breaker would only strand the host's sole
+		// candidate. Always treat it as healthy.
+		if isAnonymous(k.KeyHash) {
+			healthy = append(healthy, candidate{key: k, rec: CircuitRecord{State: CircuitClosed}})
+			continue
 		}
 		rec := s.readRecord(ctx, k.KeyHash)
 
@@ -354,11 +375,19 @@ func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 // RecordFailure transitions according to kind. retryAfter is honoured only
 // for RateLimit kinds.
 func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind FailureKind, retryAfter time.Duration) {
+	if isAnonymous(keyHash) {
+		return
+	}
 	now := s.clock()
 	rec := s.readRecord(ctx, keyHash)
 	prior := rec.State
 
 	switch kind {
+	case FailureUpstreamUnreachable:
+		// Host unreachable (dial failure) — not the key's fault. Never cool the
+		// key down; the pipeline retries the same host with backoff instead.
+		return
+
 	case FailureAuth:
 		rec.State = CircuitOpen
 		rec.Indefinite = true
@@ -450,6 +479,9 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 //
 // Used by the pipeline's post-Pick Reserve path (issue #89, future PR).
 func (s *Selector) RecordLocalRateLimit(ctx context.Context, keyHash string, retryAfter time.Duration) {
+	if isAnonymous(keyHash) {
+		return
+	}
 	now := s.clock()
 	rec := s.readRecord(ctx, keyHash)
 	prior := rec.State

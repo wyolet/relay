@@ -109,7 +109,13 @@ func routingErrKind(err error) string {
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
 	var upstream *pipeline.UpstreamFailureError
+	var unreachable *pipeline.UpstreamUnreachableError
 	switch {
+	case errors.As(err, &unreachable):
+		// Dial failure against the host — likely a misconfigured baseURL or a
+		// down upstream, not a key problem. Surface it distinctly so operators
+		// don't chase key/pool config.
+		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unreachable", unreachable.Error())
 	case errors.Is(err, pipeline.ErrNoKeys):
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys")
 	case errors.As(err, &upstream):

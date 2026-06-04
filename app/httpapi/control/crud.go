@@ -488,6 +488,22 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 	}
 }
 
+// enrichHostStatus returns an enrichFn that overlays observed runtime health
+// (host.Status) onto a freshly-loaded Host from the host-health store. The
+// field is derived (json:"status", yaml:"-") and never persisted; nil when no
+// observation exists yet (no traffic / TTL'd out) so the UI shows "unknown".
+func enrichHostStatus(d Deps) enrichFn[host.Host] {
+	return func(ctx context.Context, h *host.Host) {
+		if h == nil || d.HostHealth == nil {
+			return
+		}
+		if st, found := d.HostHealth.Read(ctx, h.Meta.ID); found {
+			s := st
+			h.Status = &s
+		}
+	}
+}
+
 // enrichHostKeyPolicies returns an enrichFn that fills HostKey.Policies
 // with the user Policies that reference this key via Spec.HostKeyIDs,
 // read off the current catalog snapshot. Reverse-ref summary for the
@@ -741,7 +757,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		"",
 		listScanResolver(d.Stores.Host, hmeta),
 		nil,
-		nil,
+		enrichHostStatus(d),
 		nil,
 		nil,
 		d.Catalog,

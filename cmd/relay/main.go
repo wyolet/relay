@@ -25,6 +25,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
@@ -172,6 +173,7 @@ func main() {
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
+	hostHealth := hosthealth.New(kvStore, nil)
 	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
 
 	// Lifecycle registry — the single point where observer/middleware hooks
@@ -185,7 +187,8 @@ func main() {
 		// On an upstream auth failure the agent re-resolves the key's secret
 		// out-of-band (rotation), failing over without blocking when other
 		// candidates exist and parking only when this key is the last resort.
-		KeyAgent: appsecret.NewAgent(keyRefresher{store: stores.HostKey, cat: cat}, 0, slog.Default()),
+		KeyAgent:   appsecret.NewAgent(keyRefresher{store: stores.HostKey, cat: cat}, 0, slog.Default()),
+		HostHealth: hostHealth,
 	}
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
 
@@ -442,6 +445,7 @@ func main() {
 			UsageReader:   usageReader,
 			PayloadReader: payloadReader,
 			Selector:      selector,
+			HostHealth:    hostHealth,
 			RuntimeConfig: runtimeConfig(cfg),
 		})
 		ctrlRouter.Handle("/metrics", metrics.Handler())
