@@ -3,9 +3,9 @@
 //
 //   - fast   : reply instantly. Isolates relay's per-request overhead.
 //   - slow   : sleep MOCK_LATENCY before replying. Forces concurrency
-//              (saturation): N req/s * latency = in-flight count.
+//     (saturation): N req/s * latency = in-flight count.
 //   - stream : reply as OpenAI SSE, one token chunk every MOCK_CHUNK_DELAY,
-//              MOCK_CHUNKS chunks. Exercises relay's tee + per-chunk path.
+//     MOCK_CHUNKS chunks. Exercises relay's tee + per-chunk path.
 //
 // Serves the OpenAI chat-completions shape on /v1/chat/completions and
 // /chat/completions so it works behind relay's `openai` adapter. It is NOT a

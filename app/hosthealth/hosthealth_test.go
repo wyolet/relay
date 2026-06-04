@@ -56,8 +56,8 @@ func TestReachable_ThenUnreachable_TracksState(t *testing.T) {
 func TestNilRecorder_Safe(t *testing.T) {
 	t.Parallel()
 	var r *hosthealth.Recorder
-	r.Reachable(context.Background(), "h1")            // must not panic
-	r.Unreachable(context.Background(), "h1", "boom")  // must not panic
+	r.Reachable(context.Background(), "h1")           // must not panic
+	r.Unreachable(context.Background(), "h1", "boom") // must not panic
 	if _, found := r.Read(context.Background(), "h1"); found {
 		t.Error("nil recorder must report no record")
 	}
