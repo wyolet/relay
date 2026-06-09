@@ -47,3 +47,6 @@ error.log
 
 # Local batch payload store (jobq FileStore default dir)
 relay-batch-payloads/
+
+# stray go-build artifact of cmd/modelsdev-import
+/modelsdev-import
