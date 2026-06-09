@@ -56,7 +56,49 @@ type Opts struct {
 // the catalog convention — rather than one model per models.dev id.
 func Translate(providers []MDProvider, o Opts) (*TranslateResult, error) {
 	r := &TranslateResult{UnsupportedNPM: map[string]int{}}
-	modelIdx := map[string]bool{} // base slug → already emitted (dedup across hosts)
+
+	// Accumulate models by base slug so a model served by multiple hosts
+	// becomes ONE Model whose snapshots are the UNION across hosts — every
+	// host's binding then references only snapshots the Model declares (no
+	// snapshot_missing, no dropped snapshots). Bindings/pricings are per-host
+	// and appended live. Models flatten into r at the end, preserving order.
+	type modelAcc struct {
+		dto   *manifest.ModelDTO
+		draft bool
+		seen  map[string]bool // snapshot names already on dto
+	}
+	acc := map[string]*modelAcc{}
+	var accOrder []string
+	providerOwnsModel := map[string]bool{} // provider id → owns ≥1 (first-seen) model
+	addModel := func(base string, dto manifest.ModelDTO, draft bool, owner string) {
+		if a, ok := acc[base]; ok {
+			for _, s := range dto.Spec.Snapshots {
+				if !a.seen[s.Name] {
+					a.seen[s.Name] = true
+					a.dto.Spec.Snapshots = append(a.dto.Spec.Snapshots, s)
+				}
+			}
+			return
+		}
+		cp := dto
+		a := &modelAcc{dto: &cp, draft: draft, seen: map[string]bool{}}
+		for _, s := range cp.Spec.Snapshots {
+			a.seen[s.Name] = true
+		}
+		acc[base] = a
+		accOrder = append(accOrder, base)
+		providerOwnsModel[owner] = true
+	}
+
+	// Providers are stashed and emitted at the end — only those that own a
+	// model. A provider whose models all dedup into another provider's Model
+	// (e.g. zhipuai's GLM folding into zai) would otherwise be an orphan. Its
+	// Host still emits eagerly below (bindings need it).
+	type provStash struct {
+		dto   manifest.ProviderDTO
+		draft bool
+	}
+	var provStashes []provStash
 
 	for _, p := range providers {
 		if !o.ProcessAll && len(o.Allow) > 0 && !o.Allow[p.ID] {
@@ -73,13 +115,11 @@ func Translate(providers []MDProvider, o Opts) (*TranslateResult, error) {
 			r.UnsupportedNPM[p.NPM]++
 		}
 
-		provDTO := buildProvider(p)
+		provStashes = append(provStashes, provStash{dto: buildProvider(p), draft: draft})
 		hostDTO := buildHost(p, baseURL)
 		if draft {
-			r.Draft.Providers = append(r.Draft.Providers, provDTO)
 			r.Draft.Hosts = append(r.Draft.Hosts, hostDTO)
 		} else {
-			r.Providers = append(r.Providers, provDTO)
 			r.Hosts = append(r.Hosts, hostDTO)
 		}
 
@@ -111,25 +151,39 @@ func Translate(providers []MDProvider, o Opts) (*TranslateResult, error) {
 			bindingDTO := buildFoldedBinding(base, p.ID, adapter, primary, members)
 			pricingDTO, hasPricing := buildPricing(p.ID, base, pm.Cost)
 
+			addModel(base, modelDTO, draft, p.ID)
 			if draft {
-				if !modelIdx[base] {
-					r.Draft.Models = append(r.Draft.Models, modelDTO)
-					modelIdx[base] = true
-				}
 				r.Draft.Bindings = append(r.Draft.Bindings, bindingDTO)
 				if hasPricing {
 					r.Draft.Pricings = append(r.Draft.Pricings, pricingDTO)
 				}
 			} else {
-				if !modelIdx[base] {
-					r.Models = append(r.Models, modelDTO)
-					modelIdx[base] = true
-				}
 				r.Bindings = append(r.Bindings, bindingDTO)
 				if hasPricing {
 					r.Pricings = append(r.Pricings, pricingDTO)
 				}
 			}
+		}
+	}
+
+	// Flatten accumulated models into the result, preserving first-seen order.
+	for _, base := range accOrder {
+		a := acc[base]
+		if a.draft {
+			r.Draft.Models = append(r.Draft.Models, *a.dto)
+		} else {
+			r.Models = append(r.Models, *a.dto)
+		}
+	}
+	// Emit only providers that own a model (prune deduped-away orphans).
+	for _, ps := range provStashes {
+		if !providerOwnsModel[ps.dto.Metadata.Name] {
+			continue
+		}
+		if ps.draft {
+			r.Draft.Providers = append(r.Draft.Providers, ps.dto)
+		} else {
+			r.Providers = append(r.Providers, ps.dto)
 		}
 	}
 	return r, nil
