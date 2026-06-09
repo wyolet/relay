@@ -993,3 +993,86 @@ func (r catSnapReader) Policy(id string) (*policy.Policy, bool) {
 func (r catSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
 }
+
+// TestE2E_RelayKeyRotate exercises POST /relay-keys/by-id/{id}/rotate:
+// the new plaintext authenticates, the old one stops, and the key's
+// policy binding survives the rotation.
+func TestE2E_RelayKeyRotate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-rot","object":"chat.completion","model":"test-model","choices":[],"usage":{}}`)
+	}))
+	defer upstream.Close()
+
+	st := newStack(t)
+	oldKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
+	ctx := context.Background()
+
+	keys, err := st.stores.RelayKey.List(ctx)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("list relay-keys: err=%v len=%d", err, len(keys))
+	}
+	keyID := keys[0].Meta.ID
+	oldHash := keys[0].Spec.KeyHash
+	policyID := keys[0].Spec.PolicyID
+
+	infer := func(bearer string) int {
+		req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions",
+			bytes.NewReader([]byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Do: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := infer(oldKey); got != http.StatusOK {
+		t.Fatalf("pre-rotate inference with old key: want 200, got %d", got)
+	}
+
+	req, _ := http.NewRequest(http.MethodPost, st.control.URL+"/relay-keys/by-id/"+keyID+"/rotate", nil)
+	req.Header.Set("Authorization", "Bearer "+st.adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("rotate status: want 200, got %d; body=%s", resp.StatusCode, body)
+	}
+	var rot struct {
+		Plaintext string             `json:"plaintext"`
+		RelayKey  *relaykey.RelayKey `json:"relayKey"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rot); err != nil {
+		t.Fatalf("decode rotate response: %v", err)
+	}
+	if rot.Plaintext == "" || rot.Plaintext == oldKey {
+		t.Fatalf("rotate must return a fresh plaintext, got %q", rot.Plaintext)
+	}
+	if rot.RelayKey.Spec.KeyHash == oldHash {
+		t.Fatalf("KeyHash unchanged after rotate")
+	}
+	if rot.RelayKey.Spec.KeyHash != sha256Hex(rot.Plaintext) {
+		t.Fatalf("KeyHash does not match sha256(plaintext)")
+	}
+	if rot.RelayKey.Spec.PolicyID != policyID {
+		t.Fatalf("rotation must not change PolicyID: want %q, got %q", policyID, rot.RelayKey.Spec.PolicyID)
+	}
+
+	// Force a snapshot rebuild rather than racing the NOTIFY debouncer.
+	if err := st.cat.Reload(ctx); err != nil {
+		t.Fatalf("catalog.Reload: %v", err)
+	}
+	if got := infer(oldKey); got != http.StatusUnauthorized {
+		t.Fatalf("post-rotate inference with OLD key: want 401, got %d", got)
+	}
+	if got := infer(rot.Plaintext); got != http.StatusOK {
+		t.Fatalf("post-rotate inference with NEW key: want 200, got %d", got)
+	}
+}
