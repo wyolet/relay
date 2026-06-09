@@ -3,7 +3,7 @@
         version release release-minor release-major \
         sqlc-generate test test-integration smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
-        ui-fetch build clean schemas catalog-validate lint-rules
+        ui-fetch build clean schemas catalog-validate catalog-embed lint-rules
 
 # Load .env if present.
 -include .env
