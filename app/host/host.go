@@ -83,6 +83,14 @@ type Spec struct {
 	// empty, HostKey.Spec.PolicyID becomes required.
 	DefaultPolicy string `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
 
+	// PricingStrategies is the menu of billing modes this upstream offers:
+	// "api" (per-token metered) and/or "sub" (flat-rate subscription). A
+	// HostKey's Spec.PricingStrategy must be one of these. Empty defaults to
+	// ["api"]. Anthropic offers both (an API key or a Max subscription reach
+	// the same endpoint); Ollama Cloud is ["sub"] only; most hosts are
+	// ["api"]. Catalog-declared; the operator picks one per HostKey.
+	PricingStrategies []string `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty" validate:"omitempty,dive,oneof=api sub"`
+
 	// NoAuth marks an upstream that needs no API key (a self-hosted Ollama on
 	// the operator's network). When set, routing injects a synthetic anonymous
 	// key for this host instead of requiring a real HostKey, and the adapter
@@ -103,6 +111,27 @@ type Spec struct {
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (h *Host) IsEnabled() bool { return h.Spec.Enabled == nil || *h.Spec.Enabled }
+
+// Strategies returns the host's offered billing modes, defaulting an empty
+// menu to ["api"].
+func (s Spec) Strategies() []string {
+	if len(s.PricingStrategies) == 0 {
+		return []string{"api"}
+	}
+	return s.PricingStrategies
+}
+
+// AllowsStrategy reports whether a HostKey may declare the given pricing
+// strategy on this host. This is the composition-layer membership invariant
+// for HostKey.Spec.PricingStrategy.
+func (s Spec) AllowsStrategy(strat string) bool {
+	for _, a := range s.Strategies() {
+		if a == strat {
+			return true
+		}
+	}
+	return false
+}
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the Host-specific owner rule. A Host is normally system-defined

@@ -95,14 +95,17 @@ type HostSpec struct {
 	// Policies holds policy *names* (wire form), resolved to ids on parse.
 	Policies []string `json:"policies,omitempty"    yaml:"policies,omitempty"`
 	// DefaultPolicy is a policy *name* (wire form) referencing one of Policies.
-	DefaultPolicy string     `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
-	NoAuth        bool       `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
-	Enabled       *bool      `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
-	HomepageURL   string     `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
-	DocsURL       string     `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
-	ConsoleURL    string     `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
-	StatusPageURL string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
-	Icon          *meta.Icon `json:"icon,omitempty"        yaml:"icon,omitempty"`
+	DefaultPolicy string `json:"defaultPolicy,omitempty" yaml:"defaultPolicy,omitempty"`
+	NoAuth        bool   `json:"noAuth,omitempty"      yaml:"noAuth,omitempty"`
+	// PricingStrategies is the host's menu of offered billing modes
+	// (api | sub). Empty defaults to ["api"].
+	PricingStrategies []string   `json:"pricingStrategies,omitempty" yaml:"pricingStrategies,omitempty"`
+	Enabled           *bool      `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
+	HomepageURL       string     `json:"homepageURL,omitempty" yaml:"homepageURL,omitempty"`
+	DocsURL           string     `json:"docsURL,omitempty"     yaml:"docsURL,omitempty"`
+	ConsoleURL        string     `json:"consoleURL,omitempty"  yaml:"consoleURL,omitempty"`
+	StatusPageURL     string     `json:"statusPageURL,omitempty" yaml:"statusPageURL,omitempty"`
+	Icon              *meta.Icon `json:"icon,omitempty"        yaml:"icon,omitempty"`
 }
 
 // ModelDTO is the wire form of a Model.
@@ -180,8 +183,11 @@ type HostKeySpec struct {
 	PolicyID    string           `json:"policyId"              yaml:"policyId"`
 	ValueFrom   HostKeyValueFrom `json:"valueFrom"             yaml:"valueFrom"`
 	DefaultTier string           `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty"`
-	Enabled     *bool            `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
-	Value       string           `json:"-"                     yaml:"value,omitempty"`
+	// PricingStrategy is the billing mode this credential is (api | sub).
+	// Empty defaults to "api". Must be one of the host's pricingStrategies.
+	PricingStrategy string `json:"pricingStrategy,omitempty" yaml:"pricingStrategy,omitempty"`
+	Enabled         *bool  `json:"enabled,omitempty"     yaml:"enabled,omitempty"`
+	Value           string `json:"-"                     yaml:"value,omitempty"`
 }
 
 type HostKeyValueFrom struct {
