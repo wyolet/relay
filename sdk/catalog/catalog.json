@@ -1,7 +1,1036 @@
 {
   "version": "relay-catalog@v1alpha2",
-  "generatedAt": "2026-05-28T04:36:37.664648Z",
+  "generatedAt": "2026-06-09T18:13:05.378101Z",
   "hosts": [
+    {
+      "name": "alibaba",
+      "baseURL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "models": [
+        {
+          "model": "qvq-max",
+          "adapter": "openai",
+          "upstream": "qvq-max",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4.8
+            }
+          ]
+        },
+        {
+          "model": "qwen-flash",
+          "adapter": "openai",
+          "upstream": "qwen-flash",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.05
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.4
+            }
+          ]
+        },
+        {
+          "model": "qwen-max",
+          "adapter": "openai",
+          "upstream": "qwen-max",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6.4
+            }
+          ]
+        },
+        {
+          "model": "qwen-mt-plus",
+          "adapter": "openai",
+          "upstream": "qwen-mt-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.46
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 7.37
+            }
+          ]
+        },
+        {
+          "model": "qwen-mt-turbo",
+          "adapter": "openai",
+          "upstream": "qwen-mt-turbo",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.16
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.49
+            }
+          ]
+        },
+        {
+          "model": "qwen-omni-turbo",
+          "adapter": "openai",
+          "upstream": "qwen-omni-turbo",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 4.44
+            },
+            {
+              "meter": "tokens.audio_output",
+              "unit": "per_million",
+              "amount": 8.89
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.07
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.27
+            }
+          ]
+        },
+        {
+          "model": "qwen-omni-turbo-realtime",
+          "adapter": "openai",
+          "upstream": "qwen-omni-turbo-realtime",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 4.44
+            },
+            {
+              "meter": "tokens.audio_output",
+              "unit": "per_million",
+              "amount": 8.89
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.27
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.07
+            }
+          ]
+        },
+        {
+          "model": "qwen-plus",
+          "adapter": "openai",
+          "upstream": "qwen-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.2
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 4
+            }
+          ]
+        },
+        {
+          "model": "qwen-plus-character-ja",
+          "adapter": "openai",
+          "upstream": "qwen-plus-character-ja",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.4
+            }
+          ]
+        },
+        {
+          "model": "qwen-turbo",
+          "adapter": "openai",
+          "upstream": "qwen-turbo",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.05
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "qwen-vl-max",
+          "adapter": "openai",
+          "upstream": "qwen-vl-max",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.8
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3.2
+            }
+          ]
+        },
+        {
+          "model": "qwen-vl-ocr",
+          "adapter": "openai",
+          "upstream": "qwen-vl-ocr",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.72
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.72
+            }
+          ]
+        },
+        {
+          "model": "qwen-vl-plus",
+          "adapter": "openai",
+          "upstream": "qwen-vl-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.21
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.63
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-14b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen2.5-14b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.35
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.4
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-32b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen2.5-32b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.7
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.8
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-72b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen2.5-72b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5.6
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-7b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen2.5-7b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.175
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.7
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-omni-7b",
+          "adapter": "openai",
+          "upstream": "qwen2.5-omni-7b",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 6.76
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.4
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-vl-72b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen2.5-vl-72b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.8
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8.4
+            }
+          ]
+        },
+        {
+          "model": "qwen2-5-vl-7b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen2.5-vl-7b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.35
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.05
+            }
+          ]
+        },
+        {
+          "model": "qwen3-235b-a22b",
+          "adapter": "openai",
+          "upstream": "qwen3-235b-a22b",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.7
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.8
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 8.4
+            }
+          ]
+        },
+        {
+          "model": "qwen3-5-122b-a10b",
+          "adapter": "openai",
+          "upstream": "qwen3.5-122b-a10b",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3.2
+            }
+          ]
+        },
+        {
+          "model": "qwen3-5-35b-a3b",
+          "adapter": "openai",
+          "upstream": "qwen3.5-35b-a3b",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.25
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            }
+          ]
+        },
+        {
+          "model": "qwen3-5-397b-a17b",
+          "adapter": "openai",
+          "upstream": "qwen3.5-397b-a17b",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3.6
+            }
+          ]
+        },
+        {
+          "model": "qwen3-5-plus",
+          "adapter": "openai",
+          "upstream": "qwen3.5-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        },
+        {
+          "model": "qwen3-6-35b-a3b",
+          "adapter": "openai",
+          "upstream": "qwen3.6-35b-a3b",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.248
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.485
+            }
+          ]
+        },
+        {
+          "model": "qwen3-6-flash",
+          "adapter": "openai",
+          "upstream": "qwen3.6-flash",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 0.234375
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1875
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.125
+            }
+          ]
+        },
+        {
+          "model": "qwen3-6-max-preview",
+          "adapter": "openai",
+          "upstream": "qwen3.6-max-preview",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 1.625
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.13
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 7.8
+            }
+          ]
+        },
+        {
+          "model": "qwen3-6-plus",
+          "adapter": "openai",
+          "upstream": "qwen3.6-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 0.625
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.05
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 256000
+            }
+          ]
+        },
+        {
+          "model": "qwen3-7-max",
+          "adapter": "openai",
+          "upstream": "qwen3.7-max",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 3.125
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 7.5
+            }
+          ]
+        },
+        {
+          "model": "qwen3-7-plus",
+          "adapter": "openai",
+          "upstream": "qwen3.7-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 0.625
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 128000
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.05
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2,
+              "aboveTokens": 128000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2,
+              "aboveTokens": 128000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 128000
+            }
+          ]
+        },
+        {
+          "model": "qwen3-asr-flash",
+          "adapter": "openai",
+          "upstream": "qwen3-asr-flash",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.035
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.035
+            }
+          ]
+        },
+        {
+          "model": "qwen3-coder-30b-a3b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-30b-a3b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.45
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.25
+            }
+          ]
+        },
+        {
+          "model": "qwen3-coder-480b-a35b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-480b-a35b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 7.5
+            }
+          ]
+        },
+        {
+          "model": "qwen3-coder-flash",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-flash",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "qwen3-coder-plus",
+          "adapter": "openai",
+          "upstream": "qwen3-coder-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5
+            }
+          ]
+        },
+        {
+          "model": "qwen3-max",
+          "adapter": "openai",
+          "upstream": "qwen3-max",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6
+            }
+          ]
+        },
+        {
+          "model": "qwen3-next-80b-a3b-instruct",
+          "adapter": "openai",
+          "upstream": "qwen3-next-80b-a3b-instruct",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            }
+          ]
+        },
+        {
+          "model": "qwen3-next-80b-a3b-thinking",
+          "adapter": "openai",
+          "upstream": "qwen3-next-80b-a3b-thinking",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6
+            }
+          ]
+        },
+        {
+          "model": "qwen3-omni-flash",
+          "adapter": "openai",
+          "upstream": "qwen3-omni-flash",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 3.81
+            },
+            {
+              "meter": "tokens.audio_output",
+              "unit": "per_million",
+              "amount": 15.11
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.43
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.66
+            }
+          ]
+        },
+        {
+          "model": "qwen3-omni-flash-realtime",
+          "adapter": "openai",
+          "upstream": "qwen3-omni-flash-realtime",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.audio_input",
+              "unit": "per_million",
+              "amount": 4.57
+            },
+            {
+              "meter": "tokens.audio_output",
+              "unit": "per_million",
+              "amount": 18.13
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.52
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.99
+            }
+          ]
+        },
+        {
+          "model": "qwen3-vl-plus",
+          "adapter": "openai",
+          "upstream": "qwen3-vl-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.6
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 4.8
+            }
+          ]
+        },
+        {
+          "model": "qwq-plus",
+          "adapter": "openai",
+          "upstream": "qwq-plus",
+          "providers": [
+            "alibaba"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.8
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        }
+      ]
+    },
     {
       "name": "anthropic",
       "baseURL": "https://api.anthropic.com",
@@ -165,6 +1194,36 @@
               "unit": "per_million",
               "amount": 22.5,
               "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "claude-fable-5",
+          "adapter": "anthropic",
+          "upstream": "claude-fable-5",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 10
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 50
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 12.5
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 1
             }
           ]
         },
@@ -499,6 +1558,66 @@
           ]
         },
         {
+          "model": "claude-opus-4-8",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-8",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-4-8-20260528",
+          "adapter": "anthropic",
+          "upstream": "claude-opus-4-8-20260528",
+          "providers": [
+            "anthropic"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 25
+            },
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 6.25
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.5
+            }
+          ]
+        },
+        {
           "model": "claude-sonnet-4-20250514",
           "adapter": "anthropic",
           "upstream": "claude-sonnet-4-20250514",
@@ -652,6 +1771,176 @@
               "unit": "per_million",
               "amount": 0.3
             }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "google",
+      "baseURL": "https://generativelanguage.googleapis.com",
+      "models": [
+        {
+          "model": "gemini-2-5-flash-image",
+          "adapter": "gemini",
+          "upstream": "gemini-2.5-flash-image",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.075
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 30
+            }
+          ]
+        },
+        {
+          "model": "gemini-2-5-flash-preview-tts",
+          "adapter": "gemini",
+          "upstream": "gemini-2.5-flash-preview-tts",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 10
+            }
+          ]
+        },
+        {
+          "model": "gemini-2-5-pro-preview-tts",
+          "adapter": "gemini",
+          "upstream": "gemini-2.5-pro-preview-tts",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 20
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-1-flash-image-preview",
+          "adapter": "gemini",
+          "upstream": "gemini-3.1-flash-image-preview",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 60
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-1-pro-preview-customtools",
+          "adapter": "gemini",
+          "upstream": "gemini-3.1-pro-preview-customtools",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 12
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 18,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "gemini-3-pro-image-preview",
+          "adapter": "gemini",
+          "upstream": "gemini-3-pro-image-preview",
+          "providers": [
+            "google"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 120
+            }
+          ]
+        },
+        {
+          "model": "gemma-4-26b-a4b-it",
+          "adapter": "gemini",
+          "upstream": "gemma-4-26b-a4b-it",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma-4-31b-it",
+          "adapter": "gemini",
+          "upstream": "gemma-4-31b-it",
+          "providers": [
+            "google"
           ]
         }
       ]
@@ -1022,6 +2311,283 @@
       ]
     },
     {
+      "name": "minimax",
+      "baseURL": "https://api.minimax.io/anthropic/v1",
+      "models": [
+        {
+          "model": "minimax-m2-5-highspeed",
+          "adapter": "anthropic",
+          "upstream": "MiniMax-M2.5-highspeed",
+          "providers": [
+            "minimax"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 0.375
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.06
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        },
+        {
+          "model": "minimax-m2-7-highspeed",
+          "adapter": "anthropic",
+          "upstream": "MiniMax-M2.7-highspeed",
+          "providers": [
+            "minimax"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_creation",
+              "unit": "per_million",
+              "amount": 0.375
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.06
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        },
+        {
+          "model": "minimax-m3",
+          "adapter": "anthropic",
+          "upstream": "MiniMax-M3",
+          "providers": [
+            "minimax"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.12
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.6
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mistral",
+      "baseURL": "https://api.mistral.ai/v1",
+      "models": [
+        {
+          "model": "devstral-medium-latest",
+          "adapter": "openai",
+          "upstream": "devstral-medium-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            }
+          ]
+        },
+        {
+          "model": "devstral-small-latest",
+          "adapter": "openai",
+          "upstream": "devstral-small-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.3
+            }
+          ]
+        },
+        {
+          "model": "magistral-medium-latest",
+          "adapter": "openai",
+          "upstream": "magistral-medium-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5
+            }
+          ]
+        },
+        {
+          "model": "magistral-small-latest",
+          "adapter": "openai",
+          "upstream": "magistral-small-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1.5
+            }
+          ]
+        },
+        {
+          "model": "ministral-3b-latest",
+          "adapter": "openai",
+          "upstream": "ministral-3b-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.04
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.04
+            }
+          ]
+        },
+        {
+          "model": "ministral-8b-latest",
+          "adapter": "openai",
+          "upstream": "ministral-8b-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.1
+            }
+          ]
+        },
+        {
+          "model": "mistral-embed",
+          "adapter": "openai",
+          "upstream": "mistral-embed",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0
+            }
+          ]
+        },
+        {
+          "model": "mistral-medium-latest",
+          "adapter": "openai",
+          "upstream": "mistral-medium-latest",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            }
+          ]
+        },
+        {
+          "model": "open-mistral-nemo",
+          "adapter": "openai",
+          "upstream": "open-mistral-nemo",
+          "providers": [
+            "mistral"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.15
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.15
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "ollama-cloud",
       "baseURL": "https://ollama.com",
       "models": [
@@ -1122,6 +2688,14 @@
           ]
         },
         {
+          "model": "gemma4",
+          "adapter": "openai",
+          "upstream": "gemma4",
+          "providers": [
+            "google"
+          ]
+        },
+        {
           "model": "gemma4-26b",
           "adapter": "openai",
           "upstream": "gemma4:26b",
@@ -1149,6 +2723,22 @@
           "model": "gemma4-e4b",
           "adapter": "openai",
           "upstream": "gemma4:e4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-e4b-it-q4",
+          "adapter": "openai",
+          "upstream": "gemma4:e4b-it-q4_K_M",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-latest",
+          "adapter": "openai",
+          "upstream": "gemma4:latest",
           "providers": [
             "google"
           ]
@@ -2464,6 +4054,14 @@
           ]
         },
         {
+          "model": "gemma4",
+          "adapter": "openai",
+          "upstream": "gemma4",
+          "providers": [
+            "google"
+          ]
+        },
+        {
           "model": "gemma4-26b",
           "adapter": "openai",
           "upstream": "gemma4:26b",
@@ -2491,6 +4089,22 @@
           "model": "gemma4-e4b",
           "adapter": "openai",
           "upstream": "gemma4:e4b",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-e4b-it-q4",
+          "adapter": "openai",
+          "upstream": "gemma4:e4b-it-q4_K_M",
+          "providers": [
+            "google"
+          ]
+        },
+        {
+          "model": "gemma4-latest",
+          "adapter": "openai",
+          "upstream": "gemma4:latest",
           "providers": [
             "google"
           ]
@@ -7369,6 +8983,583 @@
           "upstream": "deepseek-v4-flash-free",
           "providers": [
             "deepseek"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "perplexity",
+      "baseURL": "https://api.perplexity.ai",
+      "models": [
+        {
+          "model": "sonar",
+          "adapter": "openai",
+          "upstream": "sonar",
+          "providers": [
+            "perplexity"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 1
+            }
+          ]
+        },
+        {
+          "model": "sonar-deep-research",
+          "adapter": "openai",
+          "upstream": "sonar-deep-research",
+          "providers": [
+            "perplexity"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8
+            },
+            {
+              "meter": "tokens.reasoning",
+              "unit": "per_million",
+              "amount": 3
+            }
+          ]
+        },
+        {
+          "model": "sonar-pro",
+          "adapter": "openai",
+          "upstream": "sonar-pro",
+          "providers": [
+            "perplexity"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 15
+            }
+          ]
+        },
+        {
+          "model": "sonar-reasoning-pro",
+          "adapter": "openai",
+          "upstream": "sonar-reasoning-pro",
+          "providers": [
+            "perplexity"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 8
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "stepfun",
+      "baseURL": "https://api.stepfun.com/v1",
+      "models": [
+        {
+          "model": "step-3-5-flash",
+          "adapter": "openai",
+          "upstream": "step-3.5-flash",
+          "providers": [
+            "stepfun"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.019
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.096
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.288
+            }
+          ]
+        },
+        {
+          "model": "step-3-5-flash-2603",
+          "adapter": "openai",
+          "upstream": "step-3.5-flash-2603",
+          "providers": [
+            "stepfun"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.019
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.096
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.288
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "xai",
+      "baseURL": "https://api.x.ai/v1",
+      "models": [
+        {
+          "model": "grok-4-20-0309-non-reasoning",
+          "adapter": "openai",
+          "upstream": "grok-4.20-0309-non-reasoning",
+          "providers": [
+            "xai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "grok-4-20-0309-reasoning",
+          "adapter": "openai",
+          "upstream": "grok-4.20-0309-reasoning",
+          "providers": [
+            "xai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "grok-4-20-multi-agent-0309",
+          "adapter": "openai",
+          "upstream": "grok-4.20-multi-agent-0309",
+          "providers": [
+            "xai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "grok-4-3",
+          "adapter": "openai",
+          "upstream": "grok-4.3",
+          "providers": [
+            "xai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1.25
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2.5,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2.5
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 5,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "grok-build-0-1",
+          "adapter": "openai",
+          "upstream": "grok-build-0.1",
+          "providers": [
+            "xai"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2,
+              "aboveTokens": 200000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4,
+              "aboveTokens": 200000
+            }
+          ]
+        },
+        {
+          "model": "grok-imagine-image",
+          "adapter": "openai",
+          "upstream": "grok-imagine-image",
+          "providers": [
+            "xai"
+          ]
+        },
+        {
+          "model": "grok-imagine-image-quality",
+          "adapter": "openai",
+          "upstream": "grok-imagine-image-quality",
+          "providers": [
+            "xai"
+          ]
+        },
+        {
+          "model": "grok-imagine-video",
+          "adapter": "openai",
+          "upstream": "grok-imagine-video",
+          "providers": [
+            "xai"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "xiaomi",
+      "baseURL": "https://api.xiaomimimo.com/v1",
+      "models": [
+        {
+          "model": "mimo-v2-5",
+          "adapter": "openai",
+          "upstream": "mimo-v2.5",
+          "providers": [
+            "xiaomi"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.08
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.16,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.8,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 4,
+              "aboveTokens": 256000
+            }
+          ]
+        },
+        {
+          "model": "mimo-v2-5-pro",
+          "adapter": "openai",
+          "upstream": "mimo-v2.5-pro",
+          "providers": [
+            "xiaomi"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 256000
+            }
+          ]
+        },
+        {
+          "model": "mimo-v2-flash",
+          "adapter": "openai",
+          "upstream": "mimo-v2-flash",
+          "providers": [
+            "xiaomi"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.01
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.1
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 0.3
+            }
+          ]
+        },
+        {
+          "model": "mimo-v2-omni",
+          "adapter": "openai",
+          "upstream": "mimo-v2-omni",
+          "providers": [
+            "xiaomi"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.08
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 0.4
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 2
+            }
+          ]
+        },
+        {
+          "model": "mimo-v2-pro",
+          "adapter": "openai",
+          "upstream": "mimo-v2-pro",
+          "providers": [
+            "xiaomi"
+          ],
+          "pricing": [
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.2
+            },
+            {
+              "meter": "tokens.cache_read",
+              "unit": "per_million",
+              "amount": 0.4,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 1
+            },
+            {
+              "meter": "tokens.input",
+              "unit": "per_million",
+              "amount": 2,
+              "aboveTokens": 256000
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 3
+            },
+            {
+              "meter": "tokens.output",
+              "unit": "per_million",
+              "amount": 6,
+              "aboveTokens": 256000
+            }
           ]
         }
       ]
