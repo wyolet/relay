@@ -62,3 +62,11 @@ type Event struct {
 	// Free-form per-runner tags (client_ip for anonymous proxy, etc.)
 	Extras map[string]string `json:"extras,omitempty"`
 }
+
+// LogOnly reports whether the event records a request rejected before any
+// upstream was reached: status 0 with an ErrorKind set (routing denials,
+// auth/proxy gating, key-pool exhaustion). Such events stay visible in
+// event listings (the logs view) but are excluded from Summary and
+// TimeSeries aggregation — they carry no usage and would otherwise pollute
+// stats as phantom unattributed requests.
+func (e Event) LogOnly() bool { return e.Status == 0 && e.ErrorKind != "" }

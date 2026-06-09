@@ -18,12 +18,15 @@ type Host struct {
 	Models  []Binding `json:"models"`
 }
 
-// Binding is one callable (snapshot, host) pair with wire metadata.
+// Binding is one callable (snapshot, host) pair with wire metadata. Featured
+// carries the catalog's `labels.featured` curation flag (the same one the
+// control API exposes) so SDK consumers can shortlist without re-curating.
 type Binding struct {
 	Model     string   `json:"model"`
 	Adapter   string   `json:"adapter"`
 	Upstream  string   `json:"upstream"`
 	Providers []string `json:"providers"`
+	Featured  bool     `json:"featured,omitempty"`
 	Pricing   []Rate   `json:"pricing,omitempty"`
 }
 

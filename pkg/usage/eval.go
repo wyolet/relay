@@ -55,7 +55,9 @@ func SortAndLimit(events []Event, limit int) []Event {
 
 // Summarize groups the (already-filtered) events by groupBy and builds
 // per-group totals + latency percentiles, sorted by request count desc.
-// Returns an error for an unknown groupBy dimension.
+// LogOnly events (pre-upstream rejections) are skipped — they belong to
+// the logs view, not usage stats. Returns an error for an unknown groupBy
+// dimension.
 func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	if groupBy == "" {
 		groupBy = "source"
@@ -74,6 +76,9 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	from, to := time.Time{}, time.Time{}
 
 	for _, ev := range events {
+		if ev.LogOnly() {
+			continue
+		}
 		key := groupKey(ev, groupBy)
 		b, ok := groups[key]
 		if !ok {
@@ -148,6 +153,9 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 	from, to := time.Time{}, time.Time{}
 
 	for _, ev := range events {
+		if ev.LogOnly() {
+			continue
+		}
 		sk := ""
 		if groupBy != "" {
 			sk = groupKey(ev, groupBy)

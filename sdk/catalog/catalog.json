@@ -1,6 +1,6 @@
 {
   "version": "relay-catalog@v1alpha2",
-  "generatedAt": "2026-06-09T18:13:05.378101Z",
+  "generatedAt": "2026-06-09T22:49:22.303703Z",
   "hosts": [
     {
       "name": "alibaba",
@@ -1132,6 +1132,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1162,6 +1163,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1204,6 +1206,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1234,6 +1237,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1294,6 +1298,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1354,6 +1359,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1384,6 +1390,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1444,6 +1451,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1504,6 +1512,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1564,6 +1573,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1624,6 +1634,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1666,6 +1677,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -1750,6 +1762,7 @@
           "providers": [
             "anthropic"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -2120,6 +2133,7 @@
           "providers": [
             "google"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -2162,6 +2176,7 @@
           "providers": [
             "google"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -2204,6 +2219,7 @@
           "providers": [
             "google"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -2236,6 +2252,7 @@
           "providers": [
             "google"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -2629,7 +2646,8 @@
           "upstream": "deepseek-v4-flash:cloud",
           "providers": [
             "deepseek"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "deepseek-v4-pro-cloud",
@@ -2637,7 +2655,8 @@
           "upstream": "deepseek-v4-pro:cloud",
           "providers": [
             "deepseek"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "gemini-3-flash-preview-cloud",
@@ -2773,7 +2792,8 @@
           "upstream": "glm-5.1:cloud",
           "providers": [
             "zhipuai"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "glm-5-cloud",
@@ -2781,7 +2801,8 @@
           "upstream": "glm-5:cloud",
           "providers": [
             "zhipuai"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "glm-ocr-cloud",
@@ -2829,7 +2850,8 @@
           "upstream": "kimi-k2.6:cloud",
           "providers": [
             "moonshot"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "kimi-k2-thinking-cloud",
@@ -2861,7 +2883,8 @@
           "upstream": "minimax-m2.7:cloud",
           "providers": [
             "minimax"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "minimax-m2-cloud",
@@ -2901,7 +2924,8 @@
           "upstream": "mistral-large-3:675b-cloud",
           "providers": [
             "mistral"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "nemotron-3-nano-30b-cloud",
@@ -3955,7 +3979,8 @@
           "upstream": "gemini-3-flash-preview:latest",
           "providers": [
             "google"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "gemma-2b",
@@ -4075,7 +4100,8 @@
           "upstream": "gemma4:31b",
           "providers": [
             "google"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "gemma4-e2b",
@@ -4139,7 +4165,8 @@
           "upstream": "gpt-oss:120b",
           "providers": [
             "openai"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "gpt-oss-120b-cloud",
@@ -5219,7 +5246,8 @@
           "upstream": "nemotron-3-super:120b",
           "providers": [
             "nvidia"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "nemotron-3-super-latest",
@@ -6011,7 +6039,8 @@
           "upstream": "qwen3.5:397b",
           "providers": [
             "alibaba"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "qwen3-5-4b",
@@ -6139,7 +6168,8 @@
           "upstream": "qwen3-vl:235b",
           "providers": [
             "alibaba"
-          ]
+          ],
+          "featured": true
         },
         {
           "model": "qwen3-vl-2b",
@@ -7802,6 +7832,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -7827,6 +7858,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -7877,6 +7909,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -7902,6 +7935,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -7952,6 +7986,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8002,6 +8037,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8027,6 +8063,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8101,6 +8138,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8151,6 +8189,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8201,6 +8240,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8275,6 +8315,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8325,6 +8366,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8375,6 +8417,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",
@@ -8425,6 +8468,7 @@
           "providers": [
             "openai"
           ],
+          "featured": true,
           "pricing": [
             {
               "meter": "tokens.input",

@@ -37,7 +37,10 @@ type Reader interface {
 
 	// Summary returns aggregated rows grouped by q.GroupBy. Each row
 	// carries totals + latency percentiles over the events matching
-	// the filter. Rows are sorted by Requests descending.
+	// the filter. Rows are sorted by Requests descending. LogOnly
+	// events (pre-upstream rejections) are excluded from aggregation —
+	// every backend must apply the Event.LogOnly predicate. The same
+	// exclusion applies to TimeSeries; Events listings keep them.
 	Summary(ctx context.Context, q SummaryQuery) (SummaryResult, error)
 
 	// TimeSeries returns one or more series of time-bucketed aggregates

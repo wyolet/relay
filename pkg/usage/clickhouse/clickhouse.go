@@ -551,9 +551,10 @@ ORDER BY %s`,
 }
 
 // buildWhere generates the WHERE clause and positional args for an EventQuery.
-// The forSummary flag has no effect on output currently; it is reserved for
-// future divergence between the two query paths.
-func buildWhere(q usage.EventQuery, _ bool) (string, []any) {
+// With aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
+// rejections, status 0 + error_kind — are excluded: they belong to the logs
+// view, not usage stats. Event listings (aggregate=false) keep them.
+func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	var clauses []string
 	var args []any
 
@@ -656,6 +657,11 @@ func buildWhere(q usage.EventQuery, _ bool) (string, []any) {
 		needle := "%" + q.Q + "%"
 		clauses = append(clauses, "(request_id ILIKE ? OR model_id ILIKE ? OR requested_model ILIKE ? OR source ILIKE ?)")
 		args = append(args, needle, needle, needle, needle)
+	}
+
+	if aggregate {
+		// Mirrors usage.Event.LogOnly.
+		clauses = append(clauses, "NOT (status = 0 AND error_kind != '')")
 	}
 
 	if len(clauses) == 0 {
