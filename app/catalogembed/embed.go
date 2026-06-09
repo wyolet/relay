@@ -146,6 +146,10 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 						Adapter:   string(hb.Spec.Adapter),
 						Upstream:  snapEntry.Upstream(),
 						Providers: providers,
+						// Featured marks only the family's pointer snapshot, so a
+						// featured family yields one shortlist entry, not every
+						// dated snapshot.
+						Featured: m.Meta.Labels["featured"] == "true" && snapEntry.Name == m.Spec.Pointer,
 						Pricing:   rates,
 					})
 				}
