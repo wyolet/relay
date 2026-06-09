@@ -252,7 +252,9 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Description: "Filters the post-flight stream, groups by group_by, " +
 			"and returns per-group totals (requests, tokens, latency " +
 			"percentiles, error count). Rows sorted by request count " +
-			"descending.",
+			"descending. Requests rejected before reaching an upstream " +
+			"(status 0 with an error kind) are excluded — see " +
+			"/usage/events or /logs for those.",
 		Tags:        []string{"usage"},
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},

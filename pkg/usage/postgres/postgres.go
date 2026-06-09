@@ -392,7 +392,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		limit = usage.MaxEventLimit
 	}
 
-	where, args := buildWhere(q)
+	where, args := buildWhere(q, false)
 	sql := fmt.Sprintf(
 		`SELECT request_id, source, ts, status, duration_ms, streamed,
 		        finish_reason, attempts, error_kind, error_message,
@@ -485,7 +485,7 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		return usage.SummaryResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
 	}
 
-	where, args := buildWhere(q.EventQuery)
+	where, args := buildWhere(q.EventQuery, true)
 
 	// Query 1: scalar aggregates + latency percentiles.
 	scalarSQL := fmt.Sprintf(`
@@ -611,7 +611,7 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 		return usage.TimeSeriesResult{}, fmt.Errorf("usage/postgres: invalid groupBy %q", groupBy)
 	}
 
-	where, args := buildWhere(q.EventQuery)
+	where, args := buildWhere(q.EventQuery, true)
 	bucketExpr := fmt.Sprintf("date_bin(interval '%d seconds', ts, TIMESTAMPTZ 'epoch')", intervalSec)
 
 	selPrefix, grpCols := "", ""
@@ -748,8 +748,11 @@ GROUP BY %ssub.bucket, kv.key`,
 }
 
 // buildWhere generates a WHERE clause and positional args ($1, $2, …) for an
-// EventQuery. The clause is empty string when no filters are set.
-func buildWhere(q usage.EventQuery) (string, []any) {
+// EventQuery. The clause is empty string when no filters are set. With
+// aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
+// rejections, status 0 + error_kind — are excluded: they belong to the logs
+// view, not usage stats. Event listings (aggregate=false) keep them.
+func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	var clauses []string
 	var args []any
 	n := 0
@@ -848,6 +851,10 @@ func buildWhere(q usage.EventQuery) (string, []any) {
 			n, n, n, n,
 		))
 		args = append(args, needle)
+	}
+	if aggregate {
+		// Mirrors usage.Event.LogOnly.
+		clauses = append(clauses, "NOT (status = 0 AND error_kind != '')")
 	}
 
 	if len(clauses) == 0 {
