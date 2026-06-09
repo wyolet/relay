@@ -11,10 +11,12 @@ package clickhouse
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/wyolet/relay/pkg/usage"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -38,6 +40,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	// Unique marker so repeated runs (and any other rows) don't interfere.
 	marker := "smoke-" + time.Now().Format("20060102T150405.000000000")
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	// RELAY_CH_DSN often points at a shared dev ClickHouse; without this the
+	// marker rows leak into live usage stats as a phantom "smoke-*" model.
+	t.Cleanup(func() { deleteMarkerRows(t, dsn, "usage_events", "model_id", marker) })
 
 	events := []usage.Event{
 		{
@@ -167,5 +172,29 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	pq.CursorTS, pq.CursorID = p2[0].Timestamp, p2[0].RequestID
 	if p3, err := s.Events(context.Background(), pq); err != nil || len(p3) != 0 {
 		t.Fatalf("page3 should be empty: err=%v rows=%+v", err, p3)
+	}
+}
+
+// deleteMarkerRows removes this run's synthetic rows so a shared ClickHouse
+// (the common RELAY_CH_DSN target) isn't left with phantom usage data. A
+// fresh connection is dialled because the Sink's own conn is closed by the
+// time t.Cleanup fires. Best-effort: a delete failure logs, never fails the
+// test.
+func deleteMarkerRows(t *testing.T, dsn, table, column, marker string) {
+	t.Helper()
+	opts, err := clickhouse.ParseDSN(dsn)
+	if err != nil {
+		t.Logf("cleanup: parse dsn: %v", err)
+		return
+	}
+	conn, err := clickhouse.Open(opts)
+	if err != nil {
+		t.Logf("cleanup: open: %v", err)
+		return
+	}
+	defer conn.Close()
+	q := fmt.Sprintf("DELETE FROM %s WHERE %s LIKE ?", table, column)
+	if err := conn.Exec(context.Background(), q, marker+"%"); err != nil {
+		t.Logf("cleanup: delete %s rows: %v", table, err)
 	}
 }
