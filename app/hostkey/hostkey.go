@@ -44,6 +44,21 @@ type HostKey struct {
 // it never collides with a real key (real KeyHash is 12 hex chars).
 const AnonIDPrefix = "anon:"
 
+// Pricing strategies — see Spec.PricingStrategy.
+const (
+	StrategyAPI = "api" // per-token metered spend
+	StrategySub = "sub" // flat-rate subscription; reference cost only
+)
+
+// EffectivePricingStrategy returns the credential's strategy, defaulting an
+// empty value to StrategyAPI.
+func (s Spec) EffectivePricingStrategy() string {
+	if s.PricingStrategy == "" {
+		return StrategyAPI
+	}
+	return s.PricingStrategy
+}
+
 // Anonymous returns the synthetic, never-persisted HostKey routing injects for
 // a host marked Spec.NoAuth — a keyless upstream (e.g. self-hosted Ollama).
 // Resolved is empty so the adapter attaches no Authorization header. KeyHash is
@@ -83,6 +98,16 @@ type Spec struct {
 	ValueFrom   ValueFrom `json:"valueFrom"             yaml:"valueFrom"             validate:"required"`
 	DefaultTier string    `json:"defaultTier,omitempty" yaml:"defaultTier,omitempty" validate:"omitempty,slug"`
 	Enabled     *bool     `json:"enabled,omitempty"     yaml:"enabled,omitempty"` // nil = true
+
+	// PricingStrategy selects how this credential's spend is accounted.
+	// "api": per-token metered — the cost is real spend and counts toward
+	// future budget enforcement. "sub": flat-rate subscription — the cost
+	// computed from the binding's pricing is a reference/"would-have-cost"
+	// figure only, never enforced. Empty defaults to "api". The value must
+	// be one of the credential's Host.Spec.PricingStrategies (the host's
+	// menu of offered billing modes); that membership is a composition-layer
+	// invariant, like Spec.PolicyID belonging to the host.
+	PricingStrategy string `json:"pricingStrategy,omitempty" yaml:"pricingStrategy,omitempty" validate:"omitempty,oneof=api sub"`
 
 	// Value is cleartext on the write path for ValueKindStored. Accepted
 	// from JSON and YAML inputs; never returned on reads — Store.Get
