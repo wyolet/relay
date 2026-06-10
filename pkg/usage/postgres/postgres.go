@@ -841,7 +841,7 @@ func (t ttftCols) stats() *usage.DurationStats {
 // groupExpr returns the SQL grouping expression for groupBy. Static
 // dimensions are column names; the dynamic "tags.<key>" dimension binds
 // the key as a positional arg (never spliced into SQL text) and groups on
-// the tag's value, missing key folded to ''.
+// the tag's value, missing key folded to ”.
 func groupExpr(groupBy string, args []any) (string, []any) {
 	if key, ok := usage.TagGroupKey(groupBy); ok {
 		args = append(args, key)
