@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	apphost "github.com/wyolet/relay/app/host"
@@ -119,10 +120,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	// does not expect; the spec's UpstreamPath is the un-prefixed target
 	// (e.g. /v1/messages). Falls back to the raw path when no spec maps it.
 	spec := d.Specs.Spec(adapterKind)
-	upstreamPath := r.URL.Path
-	if spec != nil && spec.UpstreamPath != "" {
-		upstreamPath = spec.UpstreamPath
-	}
+	upstreamPath := proxyUpstreamPath(r.URL.Path, spec, host)
 
 	lc := lifecycle.FromContext(ctx)
 	if lc != nil {
@@ -177,6 +175,19 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"bytes", n,
 		"copy_err", copyErr,
 	)
+}
+
+func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) string {
+	upstreamPath := inboundPath
+	if spec != nil && spec.UpstreamPath != "" {
+		upstreamPath = spec.UpstreamPath
+	}
+	if host != nil && host.Spec.Backend != nil {
+		if override := host.Spec.Backend["upstreamPath"]; override != "" {
+			return override
+		}
+	}
+	return upstreamPath
 }
 
 // extractorFor returns the per-shape token extractor used by proxy
