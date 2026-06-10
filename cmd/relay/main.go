@@ -403,15 +403,16 @@ func main() {
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:        st,
-		Catalog:       cat,
-		Resolver:      routing.New(cat),
-		Pipeline:      pl,
-		Proxy:         proxyPipeline,
-		Lifecycle:     lifecycleReg,
-		Adapters:      specRegistry.AdapterMap(),
-		Specs:         specRegistry,
-		RouteMounters: []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		Pinger:         st,
+		Catalog:        cat,
+		Resolver:       routing.New(cat),
+		Pipeline:       pl,
+		Proxy:          proxyPipeline,
+		Lifecycle:      lifecycleReg,
+		Adapters:       specRegistry.AdapterMap(),
+		Specs:          specRegistry,
+		RouteMounters:  []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		TrustEventTime: cfg.DevTrustEventTime,
 	})
 
 	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →

@@ -50,6 +50,7 @@ type UsageFilterInput struct {
 	TTFTMsMin      int64    `query:"ttft_ms_min" doc:"Minimum upstream time-to-first-byte (ms); excludes requests with no upstream timing."`
 	TTFTMsMax      int64    `query:"ttft_ms_max" doc:"Maximum upstream time-to-first-byte (ms)."`
 	Q              string   `query:"q" doc:"Free-text substring across request_id, model_id, requested_model, source."`
+	Tag            []string `query:"tag" doc:"Caller-tag filter as \"key:value\" (repeatable). Same key repeated matches any of its values; different keys must all match."`
 }
 
 func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
@@ -92,6 +93,11 @@ func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		return usagelog.EventQuery{}, err
 	}
 
+	tags, err := parseTagFilters(f.Tag)
+	if err != nil {
+		return usagelog.EventQuery{}, err
+	}
+
 	return usagelog.EventQuery{
 		Since:          since,
 		From:           from,
@@ -117,7 +123,25 @@ func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		TTFTMsMin:      f.TTFTMsMin,
 		TTFTMsMax:      f.TTFTMsMax,
 		Q:              f.Q,
+		Tags:           tags,
 	}, nil
+}
+
+// parseTagFilters maps repeated "key:value" tag params to the EventQuery
+// Tags filter (key → accepted values). A param without a ':' is a 400.
+func parseTagFilters(raw []string) (map[string][]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	tags := make(map[string][]string, len(raw))
+	for _, t := range raw {
+		k, v, ok := strings.Cut(t, ":")
+		if !ok || k == "" {
+			return nil, huma.Error400BadRequest("invalid `tag` value (want key:value): " + t)
+		}
+		tags[k] = append(tags[k], v)
+	}
+	return tags, nil
 }
 
 // parseTriBool maps an optional "true"/"false" query value to a *bool:
@@ -173,7 +197,7 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\"."`
+	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
 }
 
 type usageSummaryOutput struct {
@@ -185,7 +209,7 @@ type usageSummaryOutput struct {
 type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
-	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\". Empty returns a single series."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series."`
 }
 
 type usageTimeSeriesOutput struct {

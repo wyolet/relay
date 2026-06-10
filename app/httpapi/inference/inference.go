@@ -68,6 +68,11 @@ type Deps struct {
 	// adapter (or the generic framework) exposes a MountRoutes function
 	// that satisfies RouteMounter; cmd/relay/main.go wires them in.
 	RouteMounters []RouteMounter
+
+	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
+	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
+	// tooling only; off by default.
+	TrustEventTime bool
 }
 
 // Pinger reports backend health for /healthz. Storage satisfies this

@@ -41,3 +41,28 @@ func TestEffectiveLimit(t *testing.T) {
 		t.Fatalf("clamp: got %d", got)
 	}
 }
+
+func TestParseTagFilters(t *testing.T) {
+	tags, err := parseTagFilters([]string{"session_id:s1", "session_id:s2", "leg:translate", "colon:a:b"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := tags["session_id"]; len(got) != 2 || got[0] != "s1" || got[1] != "s2" {
+		t.Fatalf("session_id values: %+v", got)
+	}
+	if got := tags["leg"]; len(got) != 1 || got[0] != "translate" {
+		t.Fatalf("leg values: %+v", got)
+	}
+	if got := tags["colon"]; len(got) != 1 || got[0] != "a:b" {
+		t.Fatalf("value keeps extra colons: %+v", got)
+	}
+
+	if got, err := parseTagFilters(nil); err != nil || got != nil {
+		t.Fatalf("empty input: %+v, %v", got, err)
+	}
+	for _, bad := range []string{"nocolon", ":valueonly"} {
+		if _, err := parseTagFilters([]string{bad}); err == nil {
+			t.Fatalf("want error for %q", bad)
+		}
+	}
+}

@@ -52,6 +52,11 @@ type Config struct {
 	HealthzDeadlineMS int
 	ShutdownDeadlineS int
 
+	// DevTrustEventTime makes the inference edge honor the X-WR-Event-Time
+	// header as the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME=1).
+	// Dev/replay tooling only — never enable in production.
+	DevTrustEventTime bool
+
 	// ControlPort is the listener port for the control-plane HTTP server.
 	// Empty disables the control listener entirely (data plane only).
 	ControlPort string
@@ -168,6 +173,8 @@ func Load() (*Config, error) {
 
 	cfg.HealthzDeadlineMS = envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
 	cfg.ShutdownDeadlineS = envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)
+
+	cfg.DevTrustEventTime = os.Getenv("RELAY_DEV_TRUST_EVENT_TIME") == "1"
 
 	cfg.UIDisable = os.Getenv("RELAY_UI_DISABLE") == "1"
 

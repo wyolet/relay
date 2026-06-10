@@ -315,6 +315,11 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.RequestedModel, ev.RequestedModel) {
 		return false
 	}
+	for k, vals := range q.Tags {
+		if !inList(vals, ev.Tags[k]) {
+			return false
+		}
+	}
 	if q.Streamed != nil && ev.Streamed != *q.Streamed {
 		return false
 	}
@@ -386,6 +391,9 @@ func inList(set []string, val string) bool {
 }
 
 func groupKey(ev Event, groupBy string) string {
+	if key, ok := TagGroupKey(groupBy); ok {
+		return ev.Tags[key]
+	}
 	switch groupBy {
 	case "relay_key_hash":
 		return ev.RelayKeyHash

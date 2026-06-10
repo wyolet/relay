@@ -58,6 +58,9 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 		HostID:         lc.HostID,
 		HostKeyID:      lc.HostKeyID,
 	}
+	if !lc.EventTime.IsZero() {
+		out.Timestamp = lc.EventTime
+	}
 	if out.Timestamp.IsZero() {
 		out.Timestamp = time.Now()
 	}
@@ -91,12 +94,21 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 	if len(lc.Metadata) > 0 {
 		extras := make(map[string]string, len(lc.Metadata))
 		for k, v := range lc.Metadata {
+			if k == MetadataKeyRequestTags {
+				continue // caller tags land on Event.Tags, not relay-stamped Extras
+			}
 			if str, ok := v.(string); ok {
 				extras[k] = str
 			}
 		}
 		if len(extras) > 0 {
 			out.Extras = extras
+		}
+	}
+
+	if raw, ok := lc.Metadata[MetadataKeyRequestTags].(string); ok {
+		if tags, ok := ParseTags(raw); ok {
+			out.Tags = tags
 		}
 	}
 

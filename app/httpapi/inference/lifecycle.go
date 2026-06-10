@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"time"
 
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/reqid"
 )
@@ -28,6 +31,24 @@ func mintLifecycle(ctx context.Context, source, relayKeyToken, clientIP string) 
 		lc.Metadata["client_ip"] = clientIP
 	}
 	return lc
+}
+
+// applyObsHeaders captures the inbound observability headers onto the
+// lifecycle Context. Hot-path rule: O(1) header lookups and one string
+// copy — the tags JSON is parsed post-flight (usagelog hook), never here.
+// Both headers are inside the X-WR-* strip denylist, so they never reach
+// the upstream.
+func applyObsHeaders(lc *lifecycle.Context, h http.Header, trustEventTime bool) {
+	if trustEventTime {
+		if v := h.Get(httpheader.HeaderEventTime); v != "" {
+			if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+				lc.EventTime = t
+			}
+		}
+	}
+	if v := h.Get(httpheader.HeaderRequestTags); v != "" && len(v) <= usagelog.MaxTagsHeaderBytes {
+		lc.Metadata[usagelog.MetadataKeyRequestTags] = v
+	}
 }
 
 // sourceForMode maps a request mode to its runner-source label.

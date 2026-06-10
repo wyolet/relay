@@ -24,6 +24,17 @@ const (
 	// request by the X-WR-* denylist.
 	HeaderUsage    = "X-WR-Usage"
 	UsageValueFull = "full"
+
+	// HeaderEventTime overrides the usage Event timestamp (RFC3339).
+	// Honored only under RELAY_DEV_TRUST_EVENT_TIME=1 — dev/replay
+	// tooling. Stripped from the upstream request by the X-WR-* denylist.
+	HeaderEventTime = "X-WR-Event-Time"
+
+	// HeaderRequestTags carries caller-supplied observability tags as a
+	// flat JSON object (string→string). Validated post-flight and landed
+	// on the usage Event's tags field. Stripped from the upstream request
+	// by the X-WR-* denylist.
+	HeaderRequestTags = "X-WR-Request-Tags"
 )
 
 // SafeUpstreamError returns a user-safe error message for an upstream failure,
