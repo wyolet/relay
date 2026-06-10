@@ -49,3 +49,17 @@ func RecordLost(kind string) { RecordsLost.WithLabelValues(SafeLabel(kind)).Inc(
 // ProviderKeyDown is the one-liner keypool calls when a key transitions
 // into cooldown.
 func ProviderKeyDown(reason string) { ProviderKeysDown.WithLabelValues(SafeLabel(reason)).Inc() }
+
+// RegisterQueueDepth exposes a bounded emitter's queue depth as
+// relay_emit_queue_depth{kind=...} — the leading signal for the drops
+// RecordsLost counts after the fact. Same kinds as records_lost_total.
+// fn is sampled at scrape time (chan len is concurrency-safe). Call once
+// per kind at boot, where the emitter is constructed.
+func RegisterQueueDepth(kind string, fn func() float64) {
+	Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace:   Namespace,
+		Name:        "emit_queue_depth",
+		Help:        "Events waiting in a bounded emitter queue, by kind (usage/payload).",
+		ConstLabels: prometheus.Labels{"kind": SafeLabel(kind)},
+	}, fn))
+}

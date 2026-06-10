@@ -74,6 +74,31 @@ func TestEmitter_DropOnFull(t *testing.T) {
 	}
 }
 
+func TestEmitter_QueueDepth(t *testing.T) {
+	block := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	sink := &signalingBlockingSink{entered: entered, ch: block}
+	e := NewEmitter(EmitterOptions{QueueSize: 4}, sink)
+	t.Cleanup(func() {
+		close(block)
+		e.Close()
+	})
+
+	if d := e.QueueDepth(); d != 0 {
+		t.Fatalf("fresh emitter depth = %d, want 0", d)
+	}
+	// Park the drain goroutine in the sink, then overfill: 4 queue, the
+	// rest drop — depth must read the full queue.
+	e.Emit(Event{RequestID: "r"})
+	<-entered
+	for i := 0; i < 8; i++ {
+		e.Emit(Event{RequestID: "r"})
+	}
+	if d := e.QueueDepth(); d != 4 {
+		t.Fatalf("depth with blocked sink = %d, want 4 (queue full)", d)
+	}
+}
+
 func TestEmitter_ConcurrentEmit(t *testing.T) {
 	var buf safeBuffer
 	sink := newTestSink(&buf)
@@ -112,6 +137,19 @@ func TestEmitter_CloseIsIdempotent(t *testing.T) {
 type blockingSink struct{ ch <-chan struct{} }
 
 func (b *blockingSink) Write(_ Event) error {
+	<-b.ch
+	return nil
+}
+
+// signalingBlockingSink signals each Write entry before blocking, so a
+// test can park the drain goroutine deterministically.
+type signalingBlockingSink struct {
+	entered chan<- struct{}
+	ch      <-chan struct{}
+}
+
+func (b *signalingBlockingSink) Write(_ Event) error {
+	b.entered <- struct{}{}
 	<-b.ch
 	return nil
 }

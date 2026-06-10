@@ -90,9 +90,27 @@ from rotation, we're burning through our redundancy and heading toward
 "no healthy keys in pool" — a customer-facing outage. We want to see
 keys going down *before* requests start failing, as a leading indicator.
 
+### Q5 — Under load, where does Relay saturate first?
+
+The stress-test lens (`docs/replay-stress.md`). When you push N
+concurrent users at a pod, four things creak before anything else, and
+each needs its own leading signal:
+
+- **Open streams** — how many requests are open right now, and where
+  does concurrency plateau? The closed-loop saturation signal.
+- **Admission** — the pre-upstream leg (auth + rate-limit Lua reserve +
+  key selection). This is the Redis-contention proxy: if it spikes,
+  *then* drill into kv/Lua with a one-off — without instrumenting
+  `pkg/kv` permanently.
+- **Post-flight** — is the observer fan-out keeping up with stream
+  closes, or building a goroutine backlog?
+- **Emit queues** — `records_lost` tells us *after* it's too late; queue
+  depth shows the approach to saturation and whether sink draining
+  keeps up.
+
 ## The shipped set
 
-Seven metrics plus the free runtime baseline. Each ties to a question
+Nine metrics plus the free runtime baseline. Each ties to a question
 above. Namespace is `relay`.
 
 | Question | Metric | Type | Labels | Reads |
@@ -102,6 +120,10 @@ above. Namespace is `relay`.
 | Q2 | `relay_request_seconds` | histogram | `source` | total time; vs overhead = the split |
 | Q3 | `relay_records_lost_total` | counter | `kind` (usage/payload) | background drops |
 | Q4 | `relay_provider_keys_down_total` | counter | `reason` | rate of keys going into cooldown (leading signal) |
+| Q5 | `relay_inflight_requests` | gauge | `source` | currently-open requests; streams count until body close |
+| Q5 | `relay_admission_seconds` | histogram | `source` | request accept → upstream handoff (Redis-contention proxy) |
+| Q5 | `relay_post_flight_seconds` | histogram | — | one full post-flight fan-out (`Registry.Finalize`) |
+| Q5 | `relay_emit_queue_depth` | gauge | `kind` (usage/payload) | bounded emitter fill level — drops' leading signal |
 | baseline | Go runtime + process | (built-in) | — | goroutines, heap, GC, CPU, FDs |
 
 `source` is the runner the request took (`pipeline`/`proxy`/`ws`/
@@ -147,7 +169,11 @@ So:
 These are real signals with no question behind them *yet*. Each is a
 one-metric addition the day someone actually asks:
 
-- rate-limiter reserve latency / reject rate
+- per-op kv latency / Lua script timing (`admission_seconds` covers the
+  whole pre-upstream leg; drill in with a one-off only if it spikes)
+- per-hook lifecycle timing (`post_flight_seconds` covers the fan-out
+  total)
+- tee-buffer byte gauges (RSS covers it coarsely)
 - snapshot reload lag (NOTIFY fan-out time across pods)
 - failover and key-refresh (heal) counts
 - batch queue depth and job-state counts
@@ -159,9 +185,12 @@ Resisting these is the point of this doc. When you add one, add the
 
 - Metric declarations: `pkg/metrics/` (one file per subsystem; each sets
   `Namespace = "relay"` and a subsystem matching its package).
-- Emission: a `lifecycle.Collector` in `app/metricslog` reads the
-  per-request `lifecycle.Context` + `PostFlightEvent` in the detached
-  post-flight goroutine — same pattern as `app/usagelog`. Key-health
-  metrics are set directly in `pkg/keypool` where breakers change state.
+- Emission: `app/metricslog` is the lifecycle observer — a pre-flight
+  middleware (inflight gauge up), a post-flight Hook (the request-flow
+  histograms), and a Collector (inflight gauge down) on the shared
+  Registry. Key-health metrics are set directly in `pkg/keypool` where
+  breakers change state; queue depths are `GaugeFunc`s over the emitter
+  channels, registered at boot; the post-flight duration is a callback
+  on `lifecycle.Registry` set at boot (the Registry stays metrics-free).
 - The `/metrics` endpoint is served on the **control plane** listener
   (ops surface, not customer-facing).

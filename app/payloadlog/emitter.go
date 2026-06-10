@@ -82,6 +82,11 @@ func (e *Emitter) Emit(r Record) {
 // queue.
 func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }
 
+// QueueDepth returns the number of Records waiting in the bounded queue —
+// the leading signal before Dropped starts counting. Safe to call
+// concurrently (chan len).
+func (e *Emitter) QueueDepth() int { return len(e.queue) }
+
 // Close drains pending Records, then closes any Closer sink. Subsequent
 // Emit calls are no-ops.
 func (e *Emitter) Close() {

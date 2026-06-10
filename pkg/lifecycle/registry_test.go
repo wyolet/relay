@@ -228,6 +228,24 @@ func TestCollectorReadsHookResult(t *testing.T) {
 	}
 }
 
+func TestFinalizeObserverSeesFanOutDuration(t *testing.T) {
+	r := New()
+	r.RegisterHook(hookFn("slow", func(_ *Context, _ *PostFlightEvent) (any, error) {
+		time.Sleep(2 * time.Millisecond)
+		return nil, nil
+	}))
+	var calls int
+	var got time.Duration
+	r.SetFinalizeObserver(func(d time.Duration) { calls++; got = d })
+	r.Finalize(context.Background(), NewContext("r", "test", time.Now()), &PostFlightEvent{})
+	if calls != 1 {
+		t.Fatalf("observer calls = %d, want 1", calls)
+	}
+	if got < 2*time.Millisecond {
+		t.Fatalf("observer duration = %v, want >= 2ms (the fan-out time)", got)
+	}
+}
+
 // --- stream observers ---
 
 type testStreamFactory struct {

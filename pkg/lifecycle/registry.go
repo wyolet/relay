@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // Registry holds the registered pre-flight middleware, post-flight Hooks
@@ -14,11 +15,12 @@ import (
 // Safe for concurrent Register* / Run* / Finalize calls. Registration is
 // typically a boot-time operation; the hot side is the dispatch methods.
 type Registry struct {
-	mu              sync.RWMutex
-	preFlight       []PreFlightMiddleware
-	hooks           []Hook
-	collectors      []Collector
-	streamFactories []StreamObserverFactory
+	mu               sync.RWMutex
+	preFlight        []PreFlightMiddleware
+	hooks            []Hook
+	collectors       []Collector
+	streamFactories  []StreamObserverFactory
+	finalizeObserver func(time.Duration)
 }
 
 // New returns an empty Registry.
@@ -59,6 +61,16 @@ func (r *Registry) RegisterCollector(c Collector) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.collectors = append(r.collectors, c)
+}
+
+// SetFinalizeObserver installs fn to receive the wall-clock duration of
+// each Finalize fan-out. A callback rather than a metric so this package
+// stays decoupled from any metrics backend — the composition root wires
+// the histogram. Last call wins; nil clears.
+func (r *Registry) SetFinalizeObserver(fn func(time.Duration)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.finalizeObserver = fn
 }
 
 // RegisterStreamObserver appends f to the stream-observer factory set.
@@ -201,6 +213,14 @@ func (r *Registry) Fill(lc *Context, ev *PostFlightEvent) {
 // that goroutine, never the caller — the wait gives accurate post-flight
 // latency and lets graceful shutdown drain in-flight collectors.
 func (r *Registry) Finalize(ctx context.Context, lc *Context, ev *PostFlightEvent) {
+	r.mu.RLock()
+	obs := r.finalizeObserver
+	r.mu.RUnlock()
+	if obs != nil {
+		start := time.Now()
+		defer func() { obs(time.Since(start)) }()
+	}
+
 	r.Fill(lc, ev)
 
 	r.mu.RLock()

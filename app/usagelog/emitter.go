@@ -86,6 +86,11 @@ func (e *Emitter) Emit(ev Event) {
 // full queue. Useful for /metrics scraping.
 func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }
 
+// QueueDepth returns the number of events waiting in the bounded queue —
+// the leading signal before Dropped starts counting. Safe to call
+// concurrently (chan len).
+func (e *Emitter) QueueDepth() int { return len(e.queue) }
+
 // Close signals the drain goroutine to finish, drains pending events,
 // and returns once all sinks have processed everything in flight. After
 // the queue drains, any sink implementing Closer is closed (flush final

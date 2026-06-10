@@ -54,11 +54,92 @@ var (
 		},
 		[]string{"source"},
 	)
+
+	// InflightRequests answers "how many streams are open right now /
+	// where does concurrency plateau" (Q5). A streamed request counts
+	// until its body closes (post-flight fires at Close).
+	InflightRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "inflight_requests",
+			Help:      "Currently-open requests, by source runner. Streams count until body close.",
+		},
+		[]string{"source"},
+	)
+
+	// AdmissionSeconds is Timing.Start → upstream handoff: auth +
+	// rate-limit reserve + key selection — the Redis-contention proxy
+	// (Q5). Skipped when the request never reached upstream. Same
+	// sub-second bucket style as OverheadSeconds: 100µs → 250ms.
+	AdmissionSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Name:      "admission_seconds",
+			Help:      "Time from request accept to upstream handoff (auth + rate-limit reserve + key selection). Observed only when upstream was reached.",
+			Buckets:   []float64{0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25},
+		},
+		[]string{"source"},
+	)
+
+	// PostFlightSeconds is the duration of one full post-flight fan-out
+	// (Registry.Finalize): is post-flight keeping up with stream closes,
+	// or building a goroutine backlog (Q5)?
+	PostFlightSeconds = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Name:      "post_flight_seconds",
+			Help:      "Duration of the post-flight observer fan-out (hooks + collectors) per request.",
+			Buckets:   []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+		},
+	)
+)
+
+// Pre-resolved gauge children: the inflight inc runs on the request hot
+// path, where a per-request WithLabelValues lookup is avoidable — the
+// source set is fixed.
+var (
+	inflightPipeline = InflightRequests.WithLabelValues("pipeline")
+	inflightProxy    = InflightRequests.WithLabelValues("proxy")
+	inflightWS       = InflightRequests.WithLabelValues("ws")
+	inflightBatch    = InflightRequests.WithLabelValues("batch")
+	inflightUnknown  = InflightRequests.WithLabelValues("unknown")
 )
 
 func init() {
-	Register(RequestsTotal, RequestSeconds, OverheadSeconds)
+	Register(RequestsTotal, RequestSeconds, OverheadSeconds, InflightRequests, AdmissionSeconds, PostFlightSeconds)
 }
+
+func inflightGauge(source string) prometheus.Gauge {
+	switch source {
+	case "pipeline":
+		return inflightPipeline
+	case "proxy":
+		return inflightProxy
+	case "ws":
+		return inflightWS
+	case "batch":
+		return inflightBatch
+	default:
+		return inflightUnknown
+	}
+}
+
+// InflightInc marks a request admitted. Hot path: O(1), allocation-free.
+func InflightInc(source string) { inflightGauge(source).Inc() }
+
+// InflightDec marks a request finalized. Callers must pair with a prior
+// InflightInc for the same request or the gauge goes negative.
+func InflightDec(source string) { inflightGauge(source).Dec() }
+
+// RecordAdmission is the one-liner the post-flight metrics observer calls
+// when the request reached upstream (Timing.Upstream.Start was stamped).
+func RecordAdmission(source string, admission time.Duration) {
+	AdmissionSeconds.WithLabelValues(SafeLabel(source)).Observe(admission.Seconds())
+}
+
+// RecordPostFlight is the Finalize-duration observer wired onto
+// lifecycle.Registry at boot (the Registry stays metrics-free).
+func RecordPostFlight(d time.Duration) { PostFlightSeconds.Observe(d.Seconds()) }
 
 // RecordServed is the one-liner the post-flight metrics observer calls
 // once per finalized request. total is the full handler time; upstream
