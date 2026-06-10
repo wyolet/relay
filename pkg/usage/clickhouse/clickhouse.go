@@ -400,6 +400,7 @@ SELECT
     toInt64(quantile(0.95)(duration_ms)) AS p95,
     toInt64(quantile(0.99)(duration_ms)) AS p99,
     max(duration_ms)                    AS max_ms,
+    `+ttftSelectSQL+`,
     min(ts)                             AS first_seen,
     max(ts)                             AS last_seen
 FROM %s%s
@@ -422,9 +423,12 @@ ORDER BY requests DESC`,
 			tokens               map[string]int64
 			avgMs                int64
 			p50, p95, p99, maxMs int64
+			ttft                 ttftCols
 			firstSeen, lastSeen  time.Time
 		)
-		if err := rows.Scan(&groupVal, &requests, &errCount, &tokens, &avgMs, &p50, &p95, &p99, &maxMs, &firstSeen, &lastSeen); err != nil {
+		if err := rows.Scan(&groupVal, &requests, &errCount, &tokens, &avgMs, &p50, &p95, &p99, &maxMs,
+			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
+			&firstSeen, &lastSeen); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: scan summary: %w", err)
 		}
 		result.Rows = append(result.Rows, usage.SummaryRow{
@@ -439,6 +443,7 @@ ORDER BY requests DESC`,
 				P99: p99,
 				Max: maxMs,
 			},
+			TTFTMs:    ttft.stats(),
 			FirstSeen: firstSeen,
 			LastSeen:  lastSeen,
 		})
@@ -484,7 +489,15 @@ SELECT
     %s,
     toInt64(count())                AS requests,
     toInt64(countIf(status >= 400)) AS error_count,
+    toInt64(countIf(status >= 400 AND status < 500)) AS errors_4xx,
+    toInt64(countIf(status >= 500)) AS errors_5xx,
     sumMap(tokens)                  AS tokens,
+    toInt64(avg(duration_ms))           AS avg_ms,
+    toInt64(quantile(0.5)(duration_ms)) AS p50,
+    toInt64(quantile(0.95)(duration_ms)) AS p95,
+    toInt64(quantile(0.99)(duration_ms)) AS p99,
+    max(duration_ms)                AS max_ms,
+    `+ttftSelectSQL+`,
     min(ts)                         AS first_seen,
     max(ts)                         AS last_seen
 FROM %s%s
@@ -503,15 +516,22 @@ ORDER BY %s`,
 	totals := map[string]int64{}
 	for rows.Next() {
 		var (
-			grp      string
-			bucket   time.Time
-			requests int64
-			errCount int64
-			tokens   map[string]int64
-			first    time.Time
-			last     time.Time
+			grp                  string
+			bucket               time.Time
+			requests             int64
+			errCount             int64
+			errs4xx, errs5xx     int64
+			tokens               map[string]int64
+			avgMs                int64
+			p50, p95, p99, maxMs int64
+			ttft                 ttftCols
+			first                time.Time
+			last                 time.Time
 		)
-		dest := []any{&bucket, &requests, &errCount, &tokens, &first, &last}
+		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx, &tokens,
+			&avgMs, &p50, &p95, &p99, &maxMs,
+			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
+			&first, &last}
 		if groupBy != "" {
 			dest = append([]any{&grp}, dest...)
 		}
@@ -532,7 +552,11 @@ ORDER BY %s`,
 			Bucket:     bucket.UTC(),
 			Requests:   requests,
 			ErrorCount: errCount,
+			Errors4xx:  errs4xx,
+			Errors5xx:  errs5xx,
 			Tokens:     tokens,
+			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
+			TTFTMs:     ttft.stats(),
 		})
 		totals[grp] += requests
 		if res.From.IsZero() || first.Before(res.From) {
@@ -548,6 +572,38 @@ ORDER BY %s`,
 
 	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
 	return res, nil
+}
+
+// ttftSelectSQL aggregates TTFT (upstream_response_start µs → ms) over rows
+// that have upstream timing (sentinel -1 = none). The quantile/avg columns
+// are NaN when no row qualifies — scanned as Float64 and gated on ttft_count
+// in ttftCols.stats rather than guarded in SQL.
+const ttftSelectSQL = `
+    toInt64(countIf(upstream_response_start >= 0))                                  AS ttft_count,
+    avgIf(upstream_response_start / 1000, upstream_response_start >= 0)             AS ttft_avg,
+    quantileIf(0.5)(upstream_response_start / 1000, upstream_response_start >= 0)   AS ttft_p50,
+    quantileIf(0.95)(upstream_response_start / 1000, upstream_response_start >= 0)  AS ttft_p95,
+    quantileIf(0.99)(upstream_response_start / 1000, upstream_response_start >= 0)  AS ttft_p99,
+    toInt64(maxIf(intDiv(upstream_response_start, 1000), upstream_response_start >= 0)) AS ttft_max`
+
+// ttftCols receives the ttftSelectSQL columns for one result row.
+type ttftCols struct {
+	count              int64
+	avg, p50, p95, p99 float64
+	max                int64
+}
+
+func (t ttftCols) stats() *usage.DurationStats {
+	if t.count == 0 {
+		return nil
+	}
+	return &usage.DurationStats{
+		Avg: int64(t.avg),
+		P50: int64(t.p50),
+		P95: int64(t.p95),
+		P99: int64(t.p99),
+		Max: t.max,
+	}
 }
 
 // buildWhere generates the WHERE clause and positional args for an EventQuery.
