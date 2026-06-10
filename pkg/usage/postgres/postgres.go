@@ -498,6 +498,7 @@ SELECT
     percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p95,
     percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p99,
     max(duration_ms)                                         AS max_ms,
+    `+ttftSelectSQL+`,
     min(ts)                                                  AS first_seen,
     max(ts)                                                  AS last_seen
 FROM %s%s
@@ -519,13 +520,16 @@ ORDER BY requests DESC`,
 		avgMs      int64
 		p50, p95   int64
 		p99, maxMs int64
+		ttft       ttftCols
 		first      time.Time
 		last       time.Time
 	}
 	var scalars []scalarRow
 	for scalarRows.Next() {
 		var r scalarRow
-		if err := scalarRows.Scan(&r.grp, &r.requests, &r.errCount, &r.avgMs, &r.p50, &r.p95, &r.p99, &r.maxMs, &r.first, &r.last); err != nil {
+		if err := scalarRows.Scan(&r.grp, &r.requests, &r.errCount, &r.avgMs, &r.p50, &r.p95, &r.p99, &r.maxMs,
+			&r.ttft.avg, &r.ttft.p50, &r.ttft.p95, &r.ttft.p99, &r.ttft.max,
+			&r.first, &r.last); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan summary scalar: %w", err)
 		}
 		scalars = append(scalars, r)
@@ -544,6 +548,7 @@ ORDER BY requests DESC`,
 			ErrorCount: r.errCount,
 			Tokens:     map[string]int64{},
 			DurationMs: usage.DurationStats{Avg: r.avgMs, P50: r.p50, P95: r.p95, P99: r.p99, Max: r.maxMs},
+			TTFTMs:     r.ttft.stats(),
 			FirstSeen:  r.first,
 			LastSeen:   r.last,
 		}
@@ -625,6 +630,14 @@ SELECT
     %s%s AS bucket,
     count(*)::bigint                              AS requests,
     count(*) FILTER (WHERE status >= 400)::bigint AS error_count,
+    count(*) FILTER (WHERE status >= 400 AND status < 500)::bigint AS errors_4xx,
+    count(*) FILTER (WHERE status >= 500)::bigint AS errors_5xx,
+    avg(duration_ms)::bigint                      AS avg_ms,
+    (percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms))::bigint  AS p50,
+    (percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p95,
+    (percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p99,
+    max(duration_ms)                              AS max_ms,
+    `+ttftSelectSQL+`,
     min(ts)                                       AS first_seen,
     max(ts)                                       AS last_seen
 FROM %s%s
@@ -646,13 +659,20 @@ ORDER BY %sbucket`,
 
 	for scalarRows.Next() {
 		var (
-			grp         string
-			bucket      time.Time
-			requests    int64
-			errCount    int64
-			first, last time.Time
+			grp                  string
+			bucket               time.Time
+			requests             int64
+			errCount             int64
+			errs4xx, errs5xx     int64
+			avgMs                int64
+			p50, p95, p99, maxMs int64
+			ttft                 ttftCols
+			first, last          time.Time
 		)
-		dest := []any{&bucket, &requests, &errCount, &first, &last}
+		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx,
+			&avgMs, &p50, &p95, &p99, &maxMs,
+			&ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
+			&first, &last}
 		if groupBy != "" {
 			dest = append([]any{&grp}, dest...)
 		}
@@ -673,7 +693,11 @@ ORDER BY %sbucket`,
 			Bucket:     bucket.UTC(),
 			Requests:   requests,
 			ErrorCount: errCount,
+			Errors4xx:  errs4xx,
+			Errors5xx:  errs5xx,
 			Tokens:     map[string]int64{},
+			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
+			TTFTMs:     ttft.stats(),
 		})
 		pointIdx[pkey(grp, bucket.Unix())] = len(res.Rows[ri].Points) - 1
 		totals[grp] += requests
@@ -745,6 +769,42 @@ GROUP BY %ssub.bucket, kv.key`,
 
 	usage.SortTimeSeriesRows(res.Rows, totals, groupBy)
 	return res, nil
+}
+
+// ttftSelectSQL aggregates TTFT (upstream_response_start µs → ms) over rows
+// that have upstream timing (column is NULL when the request never reached
+// upstream — aggregates skip NULLs; FILTER keeps percentile_cont consistent).
+// All columns are NULL when no row in the group qualifies.
+const ttftSelectSQL = `
+    (avg(upstream_response_start / 1000))::bigint AS ttft_avg,
+    (percentile_cont(0.5) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint  AS ttft_p50,
+    (percentile_cont(0.95) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint AS ttft_p95,
+    (percentile_cont(0.99) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint AS ttft_p99,
+    max(upstream_response_start / 1000)           AS ttft_max`
+
+// ttftCols receives the ttftSelectSQL columns; pointers carry SQL NULL for
+// the no-samples case.
+type ttftCols struct {
+	avg, p50, p95, p99, max *int64
+}
+
+func (t ttftCols) stats() *usage.DurationStats {
+	if t.avg == nil {
+		return nil
+	}
+	deref := func(p *int64) int64 {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	return &usage.DurationStats{
+		Avg: *t.avg,
+		P50: deref(t.p50),
+		P95: deref(t.p95),
+		P99: deref(t.p99),
+		Max: deref(t.max),
+	}
 }
 
 // buildWhere generates a WHERE clause and positional args ($1, $2, …) for an

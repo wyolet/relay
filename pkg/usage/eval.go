@@ -70,6 +70,7 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 		count, errs int64
 		tokens      map[string]int64
 		latencies   []int64
+		ttfts       []int64
 		first, last time.Time
 	}
 	groups := map[string]*bucket{}
@@ -93,6 +94,9 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 			b.tokens[k] += v
 		}
 		b.latencies = append(b.latencies, ev.DurationMs)
+		if ttft, ok := ttftMs(ev); ok {
+			b.ttfts = append(b.ttfts, ttft)
+		}
 		if ev.Timestamp.Before(b.first) {
 			b.first = ev.Timestamp
 		}
@@ -115,6 +119,7 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 			ErrorCount: b.errs,
 			Tokens:     b.tokens,
 			DurationMs: durationStats(b.latencies),
+			TTFTMs:     optionalStats(b.ttfts),
 			FirstSeen:  b.first,
 			LastSeen:   b.last,
 		})
@@ -144,8 +149,11 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 	}
 
 	type point struct {
-		requests, errs int64
-		tokens         map[string]int64
+		requests, errs   int64
+		errs4xx, errs5xx int64
+		tokens           map[string]int64
+		latencies        []int64
+		ttfts            []int64
 	}
 	// seriesKey -> bucketUnix -> point
 	series := map[string]map[int64]*point{}
@@ -175,9 +183,18 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		totals[sk]++
 		if ev.Status >= 400 {
 			p.errs++
+			if ev.Status < 500 {
+				p.errs4xx++
+			} else {
+				p.errs5xx++
+			}
 		}
 		for k, v := range ev.Tokens {
 			p.tokens[k] += v
+		}
+		p.latencies = append(p.latencies, ev.DurationMs)
+		if ttft, ok := ttftMs(ev); ok {
+			p.ttfts = append(p.ttfts, ttft)
 		}
 		if from.IsZero() || ev.Timestamp.Before(from) {
 			from = ev.Timestamp
@@ -202,7 +219,11 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 				Bucket:     time.Unix(bu, 0).UTC(),
 				Requests:   p.requests,
 				ErrorCount: p.errs,
+				Errors4xx:  p.errs4xx,
+				Errors5xx:  p.errs5xx,
 				Tokens:     p.tokens,
+				DurationMs: durationStats(p.latencies),
+				TTFTMs:     optionalStats(p.ttfts),
 			})
 		}
 		row := TimeSeriesRow{Points: points}
@@ -376,9 +397,32 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.HostID
 	case "host_key_id":
 		return ev.HostKeyID
+	case "finish_reason":
+		return ev.FinishReason
+	case "error_kind":
+		return ev.ErrorKind
 	default: // "source"
 		return ev.Source
 	}
+}
+
+// ttftMs derives upstream time-to-first-byte in ms. ok is false when the
+// event never reached upstream (no timing to aggregate).
+func ttftMs(ev Event) (int64, bool) {
+	if ev.Upstream == nil {
+		return 0, false
+	}
+	return ev.Upstream.ResponseStart / 1000, true // µs → ms
+}
+
+// optionalStats is durationStats for sample sets that may legitimately be
+// empty (TTFT): nil instead of an all-zero struct.
+func optionalStats(samples []int64) *DurationStats {
+	if len(samples) == 0 {
+		return nil
+	}
+	s := durationStats(samples)
+	return &s
 }
 
 // durationStats computes avg + percentiles + max from raw samples. For

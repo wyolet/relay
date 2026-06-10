@@ -128,6 +128,18 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if row.DurationMs.P50 <= 0 {
 		t.Fatalf("p50 not computed: %+v", row.DurationMs)
 	}
+	if row.TTFTMs == nil {
+		t.Fatal("summary ttft_ms: want stats (one event has upstream timing), got nil")
+	}
+
+	// New group dimension: error_kind splits the error row from the success.
+	byErr, err := s.Summary(ctx, usage.SummaryQuery{EventQuery: q, GroupBy: "error_kind"})
+	if err != nil {
+		t.Fatalf("Summary by error_kind: %v", err)
+	}
+	if len(byErr.Rows) != 2 {
+		t.Fatalf("error_kind groups: want 2 (\"\" + upstream_5xx), got %+v", byErr.Rows)
+	}
 
 	// TimeSeries: both events within one hour-bucket, single series.
 	ts, err := s.TimeSeries(ctx, usage.TimeSeriesQuery{EventQuery: q, Interval: time.Hour})
@@ -137,17 +149,25 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if len(ts.Rows) != 1 || ts.Rows[0].Group != nil {
 		t.Fatalf("want 1 ungrouped series, got %d rows: %+v", len(ts.Rows), ts.Rows)
 	}
-	var reqs, errs int64
+	var reqs, errs, errs5xx int64
+	var sawTTFT bool
 	tokens := map[string]int64{}
 	for _, p := range ts.Rows[0].Points {
 		reqs += p.Requests
 		errs += p.ErrorCount
+		errs5xx += p.Errors5xx
+		if p.TTFTMs != nil {
+			sawTTFT = true
+		}
 		for k, v := range p.Tokens {
 			tokens[k] += v
 		}
 	}
-	if reqs != 2 || errs != 1 {
-		t.Fatalf("timeseries totals: reqs=%d errs=%d", reqs, errs)
+	if reqs != 2 || errs != 1 || errs5xx != 1 {
+		t.Fatalf("timeseries totals: reqs=%d errs=%d 5xx=%d", reqs, errs, errs5xx)
+	}
+	if !sawTTFT {
+		t.Fatal("timeseries: no bucket carried ttft_ms")
 	}
 	if tokens["input"] != 10 || tokens["output"] != 5 {
 		t.Fatalf("timeseries tokens: %+v", tokens)

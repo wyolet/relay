@@ -56,3 +56,72 @@ func TestSummarize_ExcludesLogOnly(t *testing.T) {
 		t.Fatalf("timeseries point: want reqs=2 errs=1, got reqs=%d errs=%d", p.Requests, p.ErrorCount)
 	}
 }
+
+func TestAggregates_LatencyTTFTAndErrorSplit(t *testing.T) {
+	now := time.Now().UTC()
+	events := []Event{
+		{RequestID: "a", ModelID: "m1", Timestamp: now, Status: 200, DurationMs: 100,
+			FinishReason: "stop", Upstream: &sdkusage.UpstreamTiming{ResponseStart: 50_000}},
+		{RequestID: "b", ModelID: "m1", Timestamp: now, Status: 200, DurationMs: 300,
+			FinishReason: "length", Upstream: &sdkusage.UpstreamTiming{ResponseStart: 150_000}},
+		{RequestID: "c", ModelID: "m1", Timestamp: now, Status: 429, DurationMs: 20,
+			ErrorKind: "upstream_429"},
+		{RequestID: "d", ModelID: "m1", Timestamp: now, Status: 502, DurationMs: 40,
+			ErrorKind: "upstream_5xx"},
+	}
+
+	res, err := Summarize(events, "model_id")
+	if err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	row := res.Rows[0]
+	if row.TTFTMs == nil {
+		t.Fatal("ttft_ms: want stats over the 2 events with upstream timing, got nil")
+	}
+	if row.TTFTMs.Max != 150 || row.TTFTMs.P50 != 50 {
+		t.Fatalf("ttft_ms: %+v", *row.TTFTMs)
+	}
+	if row.DurationMs.Max != 300 {
+		t.Fatalf("duration_ms: %+v", row.DurationMs)
+	}
+
+	// New group dimensions.
+	byFinish, err := Summarize(events, "finish_reason")
+	if err != nil {
+		t.Fatalf("Summarize finish_reason: %v", err)
+	}
+	if len(byFinish.Rows) != 3 { // "stop", "length", "" (the two errors)
+		t.Fatalf("finish_reason groups: %+v", byFinish.Rows)
+	}
+	byErrKind, err := Summarize(events, "error_kind")
+	if err != nil {
+		t.Fatalf("Summarize error_kind: %v", err)
+	}
+	if len(byErrKind.Rows) != 3 { // "", "upstream_429", "upstream_5xx"
+		t.Fatalf("error_kind groups: %+v", byErrKind.Rows)
+	}
+
+	ts, err := Bucketize(events, time.Hour, "")
+	if err != nil {
+		t.Fatalf("Bucketize: %v", err)
+	}
+	p := ts.Rows[0].Points[0]
+	if p.ErrorCount != 2 || p.Errors4xx != 1 || p.Errors5xx != 1 {
+		t.Fatalf("error split: errs=%d 4xx=%d 5xx=%d", p.ErrorCount, p.Errors4xx, p.Errors5xx)
+	}
+	if p.DurationMs.Max != 300 {
+		t.Fatalf("bucket duration_ms: %+v", p.DurationMs)
+	}
+	if p.TTFTMs == nil || p.TTFTMs.Max != 150 {
+		t.Fatalf("bucket ttft_ms: %+v", p.TTFTMs)
+	}
+
+	// A bucket with no upstream timing omits ttft entirely.
+	noTTFT, err := Bucketize(events[2:], time.Hour, "")
+	if err != nil {
+		t.Fatalf("Bucketize no-ttft: %v", err)
+	}
+	if noTTFT.Rows[0].Points[0].TTFTMs != nil {
+		t.Fatalf("want nil ttft_ms, got %+v", noTTFT.Rows[0].Points[0].TTFTMs)
+	}
+}

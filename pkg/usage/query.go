@@ -129,7 +129,8 @@ type SummaryQuery struct {
 
 	// GroupBy is the dimension to group on. Valid values:
 	// "relay_key_hash", "policy_id", "model_id", "host_id",
-	// "host_key_id", "source". Empty → "source".
+	// "host_key_id", "source", "finish_reason", "error_kind".
+	// Empty → "source".
 	GroupBy string
 }
 
@@ -149,8 +150,13 @@ type SummaryRow struct {
 	ErrorCount int64             `json:"error_count"`
 	Tokens     map[string]int64  `json:"tokens"`
 	DurationMs DurationStats     `json:"duration_ms"`
-	FirstSeen  time.Time         `json:"first_seen"`
-	LastSeen   time.Time         `json:"last_seen"`
+	// TTFTMs aggregates upstream time-to-first-byte (ms, derived from
+	// Upstream.ResponseStart) over the subset of events that carry upstream
+	// timing. Nil when no event in the group has it — a pointer so "no
+	// samples" is distinguishable from "all-zero latency".
+	TTFTMs    *DurationStats `json:"ttft_ms,omitempty"`
+	FirstSeen time.Time      `json:"first_seen"`
+	LastSeen  time.Time      `json:"last_seen"`
 }
 
 // DurationStats holds latency aggregates in milliseconds.
@@ -190,10 +196,19 @@ type TimeSeriesQuery struct {
 // start instant (UTC, epoch-aligned). Empty buckets are omitted — the
 // frontend zero-fills gaps against the resolved From/To range.
 type TimeSeriesPoint struct {
-	Bucket     time.Time        `json:"bucket"`
-	Requests   int64            `json:"requests"`
-	ErrorCount int64            `json:"error_count"`
+	Bucket     time.Time `json:"bucket"`
+	Requests   int64     `json:"requests"`
+	ErrorCount int64     `json:"error_count"`
+	// Errors4xx/Errors5xx split ErrorCount by status class for triage
+	// charts. They may sum below ErrorCount only if an out-of-band status
+	// >= 600 ever appears; in practice ErrorCount = Errors4xx + Errors5xx.
+	Errors4xx  int64            `json:"errors_4xx"`
+	Errors5xx  int64            `json:"errors_5xx"`
 	Tokens     map[string]int64 `json:"tokens"`
+	DurationMs DurationStats    `json:"duration_ms"`
+	// TTFTMs — see SummaryRow.TTFTMs; nil when no event in the bucket
+	// carries upstream timing.
+	TTFTMs *DurationStats `json:"ttft_ms,omitempty"`
 }
 
 // TimeSeriesRow is one series. Group is nil for the single-series case
@@ -229,6 +244,8 @@ var ValidGroupBy = []string{
 	"host_id",
 	"host_key_id",
 	"source",
+	"finish_reason",
+	"error_kind",
 }
 
 // IsValidGroupBy reports whether g is one of the supported group

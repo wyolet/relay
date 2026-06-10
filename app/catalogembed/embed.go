@@ -150,7 +150,7 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 						// featured family yields one shortlist entry, not every
 						// dated snapshot.
 						Featured: m.Meta.Labels["featured"] == "true" && snapEntry.Name == m.Spec.Pointer,
-						Pricing:   rates,
+						Pricing:  rates,
 					})
 				}
 			}

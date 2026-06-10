@@ -173,7 +173,7 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\"."`
+	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\"."`
 }
 
 type usageSummaryOutput struct {
@@ -185,7 +185,7 @@ type usageSummaryOutput struct {
 type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
-	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\". Empty returns a single series."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\". Empty returns a single series."`
 }
 
 type usageTimeSeriesOutput struct {
@@ -251,7 +251,8 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary:     "Aggregated usage rows grouped by a chosen dimension",
 		Description: "Filters the post-flight stream, groups by group_by, " +
 			"and returns per-group totals (requests, tokens, latency " +
-			"percentiles, error count). Rows sorted by request count " +
+			"percentiles, TTFT percentiles when available, error count). " +
+			"Rows sorted by request count " +
 			"descending. Requests rejected before reaching an upstream " +
 			"(status 0 with an error kind) are excluded — see " +
 			"/usage/events or /logs for those.",
@@ -283,7 +284,10 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Path:        "/usage/timeseries",
 		Summary:     "Time-bucketed usage aggregates for charting",
 		Description: "Buckets the filtered stream by `interval` (epoch-aligned) " +
-			"and returns per-bucket requests, error_count, and token sums. " +
+			"and returns per-bucket requests, error_count (with a 4xx/5xx " +
+			"split), token sums, duration_ms percentiles, and ttft_ms " +
+			"percentiles (omitted when no event in the bucket has upstream " +
+			"timing). " +
 			"With `group_by` set, returns one series per dimension value for " +
 			"stacked charts; empty returns a single series. Empty buckets are " +
 			"omitted — zero-fill against the returned from/to range.",
