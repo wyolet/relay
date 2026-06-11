@@ -457,6 +457,23 @@ func (s *Snapshot) PriceByModelHost(modelID, hostID string) (*pricing.Pricing, b
 	return p, ok
 }
 
+// PricingForBinding resolves the rate sheet billing against a binding: the
+// binding's explicit Spec.PricingID first, else the host-owned pricing
+// covering the (model, host) pair. Mirrors catalogview's resolution so the
+// admin read-projection and the emit-time cost stamp agree.
+func (s *Snapshot) PricingForBinding(b *binding.Binding) (*pricing.Pricing, bool) {
+	if b == nil {
+		return nil, false
+	}
+	if b.Spec.PricingID != "" {
+		if p, ok := s.pricingsByID[b.Spec.PricingID]; ok {
+			return p, true
+		}
+	}
+	p, ok := s.pricingByModelHost[b.Spec.ModelID+"|"+b.Spec.HostID]
+	return p, ok
+}
+
 // Binding returns the enabled HostBinding with this id, or false.
 func (s *Snapshot) Binding(id string) (*binding.Binding, bool) {
 	b, ok := s.bindingsByID[id]

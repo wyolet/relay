@@ -14,22 +14,28 @@ import (
 // ones — same Event, same Namespace — so echo and the sink both see one
 // shape. The post-flight Hook is too late for a streamed body (it runs
 // after the stream is already written); this fills during the stream.
-type StreamUsageFactory struct{}
+type StreamUsageFactory struct {
+	pricer *Pricer
+}
 
-// NewStreamUsageFactory constructs the (stateless) factory.
-func NewStreamUsageFactory() *StreamUsageFactory { return &StreamUsageFactory{} }
+// NewStreamUsageFactory constructs the factory. pricer may be nil (events
+// stay unpriced).
+func NewStreamUsageFactory(pricer *Pricer) *StreamUsageFactory {
+	return &StreamUsageFactory{pricer: pricer}
+}
 
 func (*StreamUsageFactory) Name() string { return Namespace }
 
-func (*StreamUsageFactory) NewObserver(lc *lifecycle.Context) lifecycle.StreamObserver {
-	return &streamUsageObserver{lc: lc}
+func (f *StreamUsageFactory) NewObserver(lc *lifecycle.Context) lifecycle.StreamObserver {
+	return &streamUsageObserver{lc: lc, pricer: f.pricer}
 }
 
 // streamUsageObserver accumulates upstream frames for one streamed request.
 // A streamed response that began is a success (status 200) with no error.
 type streamUsageObserver struct {
-	lc  *lifecycle.Context
-	buf bytes.Buffer
+	lc     *lifecycle.Context
+	pricer *Pricer
+	buf    bytes.Buffer
 }
 
 // Observe re-appends the SSE frame separator the dispatch scanner strips,
@@ -40,5 +46,5 @@ func (o *streamUsageObserver) Observe(frame []byte) {
 }
 
 func (o *streamUsageObserver) Result() (any, error) {
-	return buildEvent(o.lc, 200, "", "", o.buf.Bytes()), nil
+	return buildEvent(o.lc, 200, "", "", o.buf.Bytes(), o.pricer), nil
 }

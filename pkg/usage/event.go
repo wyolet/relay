@@ -6,10 +6,12 @@ import (
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
-// Event is the canonical per-request usage record. Pure attribution +
-// token counts — no cost, no pricing, no derived business metrics.
-// Cost computation, billing, and analytics are downstream consumer
-// concerns; they read this event and apply their own logic.
+// Event is the canonical per-request usage record: attribution, token
+// counts, and the cost stamped once at emit time. Cost is a historical
+// fact computed from the pricing in effect when the request ran — never
+// recomputed at read time (pricing is mutable config). This package only
+// carries the stamped fields; pricing resolution and the cost math live
+// app-side (app/usagelog + app/pricing).
 //
 // It lives in pkg/usage (not app/) so every sink/reader backend
 // (file, ClickHouse, valkey, postgres) can consume it as a vendorable
@@ -73,6 +75,22 @@ type Event struct {
 	Model  string `json:"model,omitempty"`
 	Host   string `json:"host,omitempty"`
 	Policy string `json:"policy,omitempty"`
+
+	// Provider is the model's owning provider slug at event time — same
+	// denormalization rationale as Model/Host/Policy above.
+	Provider string `json:"provider,omitempty"`
+
+	// Cost, stamped once at emit time from the pricing then in effect.
+	// CostNanos is integer nano-USD (1 USD = 1e9) — integer so sums never
+	// drift; USD-only by decision, so no currency field. nil = unpriced
+	// (no pricing resolved, or no priceable tokens — error/LogOnly rows),
+	// which MUST stay distinguishable from a true $0: never collapse nil
+	// to 0. CostBreakdown is per-meter nanos (keys like "tokens.input");
+	// Pricing is the rate sheet's slug, stamped whenever one resolved
+	// (even if the row ended up unpriced) for audit.
+	CostNanos     *int64           `json:"cost_nanos,omitempty"`
+	CostBreakdown map[string]int64 `json:"cost_breakdown,omitempty"`
+	Pricing       string           `json:"pricing,omitempty"`
 }
 
 // LogOnly reports whether the event records a request rejected before any

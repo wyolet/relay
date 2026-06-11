@@ -85,7 +85,11 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     tags                     Map(LowCardinality(String), String),
     model                    LowCardinality(String),
     host                     LowCardinality(String),
-    policy                   LowCardinality(String)
+    policy                   LowCardinality(String),
+    provider                 LowCardinality(String),
+    cost_nanos               Int64 DEFAULT -1,
+    cost_breakdown           Map(LowCardinality(String), Int64) CODEC(ZSTD(1)),
+    pricing                  LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)
@@ -100,6 +104,7 @@ var expectedColumns = []string{
 	"relay_key_hash", "policy_id", "model_id", "requested_model",
 	"host_id", "host_key_id", "tokens", "extras", "tags",
 	"model", "host", "policy",
+	"provider", "cost_nanos", "cost_breakdown", "pricing",
 }
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -109,6 +114,12 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS model LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS host LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS policy LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS provider LowCardinality(String)`,
+	// Sentinel -1 = unpriced (cost is never negative), mirroring the
+	// upstream_* timing sentinel — pre-cost rows read back as unpriced.
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_nanos Int64 DEFAULT -1`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_breakdown Map(LowCardinality(String), Int64)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pricing LowCardinality(String)`,
 }
 
 // ensureSchema creates the table if absent, then verifies its columns match
@@ -291,6 +302,16 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			streamed = 1
 		}
 
+		// Sentinel -1 = unpriced (cost is never negative; a priced $0 stays 0).
+		costNanos := int64(-1)
+		if ev.CostNanos != nil {
+			costNanos = *ev.CostNanos
+		}
+		costBreakdown := ev.CostBreakdown
+		if costBreakdown == nil {
+			costBreakdown = map[string]int64{}
+		}
+
 		err := batch.Append(
 			ev.RequestID,
 			ev.Source,
@@ -317,6 +338,10 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.Model,
 			ev.Host,
 			ev.Policy,
+			ev.Provider,
+			costNanos,
+			costBreakdown,
+			ev.Pricing,
 		)
 		if err != nil {
 			return fmt.Errorf("append row: %w", err)
@@ -339,7 +364,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -362,6 +387,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			tokens      map[string]int64
 			extras      map[string]string
 			tags        map[string]string
+			costNanos   int64
+			costBkdn    map[string]int64
 		)
 		if err := rows.Scan(
 			&ev.RequestID,
@@ -389,6 +416,10 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.Model,
 			&ev.Host,
 			&ev.Policy,
+			&ev.Provider,
+			&costNanos,
+			&costBkdn,
+			&ev.Pricing,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -405,6 +436,12 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 				Start:         upStart,
 				ResponseStart: upRespStart,
 				ResponseEnd:   upRespEnd,
+			}
+		}
+		if costNanos >= 0 {
+			ev.CostNanos = &costNanos
+			if len(costBkdn) > 0 {
+				ev.CostBreakdown = costBkdn
 			}
 		}
 		events = append(events, ev)
@@ -448,6 +485,7 @@ SELECT
     toInt64(quantile(0.99)(duration_ms)) AS p99,
     max(duration_ms)                    AS max_ms,
     `+ttftSelectSQL+`,
+    `+costSelectSQL+`,
     min(ts)                             AS first_seen,
     max(ts)                             AS last_seen
 FROM %s%s
@@ -471,10 +509,12 @@ ORDER BY requests DESC`,
 			avgMs                int64
 			p50, p95, p99, maxMs int64
 			ttft                 ttftCols
+			costNanos, unpriced  int64
 			firstSeen, lastSeen  time.Time
 		)
 		if err := rows.Scan(&groupVal, &requests, &errCount, &tokens, &avgMs, &p50, &p95, &p99, &maxMs,
 			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
+			&costNanos, &unpriced,
 			&firstSeen, &lastSeen); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: scan summary: %w", err)
 		}
@@ -493,6 +533,8 @@ ORDER BY requests DESC`,
 			TTFTMs:    ttft.stats(),
 			FirstSeen: firstSeen,
 			LastSeen:  lastSeen,
+			CostNanos: costNanos,
+			Unpriced:  unpriced,
 		})
 		if result.From.IsZero() || firstSeen.Before(result.From) {
 			result.From = firstSeen
@@ -552,6 +594,7 @@ SELECT
     toInt64(quantile(0.99)(duration_ms)) AS p99,
     max(duration_ms)                AS max_ms,
     `+ttftSelectSQL+`,
+    `+costSelectSQL+`,
     min(ts)                         AS first_seen,
     max(ts)                         AS last_seen
 FROM %s%s
@@ -579,12 +622,14 @@ ORDER BY %s`,
 			avgMs                int64
 			p50, p95, p99, maxMs int64
 			ttft                 ttftCols
+			costNanos, unpriced  int64
 			first                time.Time
 			last                 time.Time
 		)
 		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx, &tokens,
 			&avgMs, &p50, &p95, &p99, &maxMs,
 			&ttft.count, &ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
+			&costNanos, &unpriced,
 			&first, &last}
 		if groupBy != "" {
 			dest = append([]any{&grp}, dest...)
@@ -611,6 +656,8 @@ ORDER BY %s`,
 			Tokens:     tokens,
 			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
 			TTFTMs:     ttft.stats(),
+			CostNanos:  costNanos,
+			Unpriced:   unpriced,
 		})
 		totals[grp] += requests
 		if res.From.IsZero() || first.Before(res.From) {
@@ -639,6 +686,13 @@ const ttftSelectSQL = `
     quantileIf(0.95)(upstream_response_start / 1000, upstream_response_start >= 0)  AS ttft_p95,
     quantileIf(0.99)(upstream_response_start / 1000, upstream_response_start >= 0)  AS ttft_p99,
     toInt64(maxIf(intDiv(upstream_response_start, 1000), upstream_response_start >= 0)) AS ttft_max`
+
+// costSelectSQL sums emit-time cost over priced rows only (sentinel -1 =
+// unpriced) and counts the unpriced ones — a cost total must say how
+// complete it is rather than fold unpriced rows in as silent zeros.
+const costSelectSQL = `
+    toInt64(sumIf(cost_nanos, cost_nanos >= 0)) AS cost_nanos,
+    toInt64(countIf(cost_nanos < 0))            AS unpriced`
 
 // ttftCols receives the ttftSelectSQL columns for one result row.
 type ttftCols struct {
@@ -727,6 +781,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	in("model", q.Model)
 	in("host", q.Host)
 	in("policy", q.Policy)
+	in("provider", q.Provider)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {

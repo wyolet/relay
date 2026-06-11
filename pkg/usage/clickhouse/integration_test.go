@@ -19,6 +19,8 @@ import (
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
 
+func costPtr(n int64) *int64 { return &n }
+
 func TestIntegration_RoundTrip(t *testing.T) {
 	dsn := os.Getenv("RELAY_CH_DSN")
 	if dsn == "" {
@@ -49,6 +51,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			Extras:   map[string]string{"client_ip": "1.2.3.4"},
 			Tags:     map[string]string{"session_id": "s1", "leg": "bytepass"},
 			Model:    "gpt-4o", Host: "openai", Policy: "default",
+			Provider: "openai", Pricing: "openai-gpt-4o",
+			CostNanos:     costPtr(7_500_000),
+			CostBreakdown: map[string]int64{"tokens.input": 5_000_000, "tokens.output": 2_500_000},
 		},
 		{
 			RequestID: marker + "-2", Source: "pipeline", Timestamp: now.Add(time.Second),
@@ -56,6 +61,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			ErrorKind: "upstream_5xx",
 			Tags:      map[string]string{"session_id": "s1", "leg": "translate"},
 			Model:     "gpt-4o", Host: "azure", Policy: "default",
+			Provider: "openai",
 		},
 	}
 	for _, ev := range events {
@@ -106,6 +112,16 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if e1.Model != "gpt-4o" || e1.Host != "openai" || e1.Policy != "default" {
 		t.Fatalf("slug round-trip mismatch: %+v", e1)
 	}
+	if e1.Provider != "openai" || e1.Pricing != "openai-gpt-4o" {
+		t.Fatalf("provider/pricing round-trip mismatch: %+v", e1)
+	}
+	if e1.CostNanos == nil || *e1.CostNanos != 7_500_000 ||
+		e1.CostBreakdown["tokens.input"] != 5_000_000 || e1.CostBreakdown["tokens.output"] != 2_500_000 {
+		t.Fatalf("cost round-trip mismatch: %+v", e1)
+	}
+	if got[0].CostNanos != nil {
+		t.Fatalf("event-2 is unpriced; sentinel must map to nil, got %+v", got[0].CostNanos)
+	}
 	if got[0].Upstream != nil {
 		t.Fatalf("event-2 had no upstream timing; sentinel should map to nil, got %+v", got[0].Upstream)
 	}
@@ -133,6 +149,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if row.TTFTMs == nil {
 		t.Fatal("summary ttft_ms: want stats (one event has upstream timing), got nil")
 	}
+	if row.CostNanos != 7_500_000 || row.Unpriced != 1 {
+		t.Fatalf("summary cost: cost=%d unpriced=%d", row.CostNanos, row.Unpriced)
+	}
 
 	// New group dimension: error_kind splits the error row from the success.
 	byErr, err := s.Summary(context.Background(), usage.SummaryQuery{
@@ -154,6 +173,23 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if len(byHost.Rows) != 2 {
 		t.Fatalf("host groups: want 2 (openai + azure), got %+v", byHost.Rows)
+	}
+
+	// Provider: both events share one provider slug; group + filter on it.
+	byProv, err := s.Summary(context.Background(), usage.SummaryQuery{
+		EventQuery: q, GroupBy: "provider",
+	})
+	if err != nil {
+		t.Fatalf("Summary by provider: %v", err)
+	}
+	if len(byProv.Rows) != 1 || byProv.Rows[0].Group["provider"] != "openai" {
+		t.Fatalf("provider groups: %+v", byProv.Rows)
+	}
+	pvq := q
+	pvq.Provider = []string{"openai"}
+	provFiltered, err := s.Events(context.Background(), pvq)
+	if err != nil || len(provFiltered) != 2 {
+		t.Fatalf("provider filter: err=%v rows=%+v", err, provFiltered)
 	}
 	hq := q
 	hq.Host = []string{"azure"}
@@ -189,13 +225,15 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if len(ts.Rows) != 1 || ts.Rows[0].Group != nil {
 		t.Fatalf("want 1 ungrouped series, got %d rows: %+v", len(ts.Rows), ts.Rows)
 	}
-	var reqs, errs, errs5xx int64
+	var reqs, errs, errs5xx, cost, unpriced int64
 	var sawTTFT bool
 	tokens := map[string]int64{}
 	for _, p := range ts.Rows[0].Points {
 		reqs += p.Requests
 		errs += p.ErrorCount
 		errs5xx += p.Errors5xx
+		cost += p.CostNanos
+		unpriced += p.Unpriced
 		if p.TTFTMs != nil {
 			sawTTFT = true
 		}
@@ -211,6 +249,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if tokens["input"] != 10 || tokens["output"] != 5 {
 		t.Fatalf("timeseries tokens: %+v", tokens)
+	}
+	if cost != 7_500_000 || unpriced != 1 {
+		t.Fatalf("timeseries cost: cost=%d unpriced=%d", cost, unpriced)
 	}
 
 	tsg, err := s.TimeSeries(context.Background(), usage.TimeSeriesQuery{EventQuery: q, Interval: time.Hour, GroupBy: "model_id"})

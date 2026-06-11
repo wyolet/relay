@@ -78,6 +78,13 @@ func applyPlanIdentity(lc *lifecycle.Context, plan *routing.Plan) {
 		lc.HostID = plan.Host.Meta.ID
 		lc.HostName = plan.Host.Meta.Name
 	}
+	if plan.Provider != "" {
+		lc.ProviderName = plan.Provider
+	}
+	if plan.Pricing != nil {
+		lc.PricingID = plan.Pricing.Meta.ID
+		lc.PricingName = plan.Pricing.Meta.Name
+	}
 }
 
 // fireUsageFailure emits a failure post-flight observer event for a request

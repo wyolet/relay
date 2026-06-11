@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -82,9 +83,11 @@ func TestObsHeadersAreStripped(t *testing.T) {
 func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
 	lc := lifecycle.NewContext("req", "pipeline", time.Now())
 	plan := &routing.Plan{
-		Policy: &policy.Policy{Meta: meta.Metadata{ID: "pid", Name: "default"}},
-		Model:  &model.Model{Meta: meta.Metadata{ID: "mid", Name: "gpt-4o"}},
-		Host:   &host.Host{Meta: meta.Metadata{ID: "hid", Name: "openai"}},
+		Policy:   &policy.Policy{Meta: meta.Metadata{ID: "pid", Name: "default"}},
+		Model:    &model.Model{Meta: meta.Metadata{ID: "mid", Name: "gpt-4o"}},
+		Host:     &host.Host{Meta: meta.Metadata{ID: "hid", Name: "openai"}},
+		Provider: "openai",
+		Pricing:  &pricing.Pricing{Meta: meta.Metadata{ID: "prid", Name: "openai-gpt-4o"}},
 	}
 
 	applyPlanIdentity(lc, plan)
@@ -98,6 +101,12 @@ func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
 	if lc.HostID != "hid" || lc.HostName != "openai" {
 		t.Fatalf("host: %q/%q", lc.HostID, lc.HostName)
 	}
+	if lc.ProviderName != "openai" {
+		t.Fatalf("provider: %q", lc.ProviderName)
+	}
+	if lc.PricingID != "prid" || lc.PricingName != "openai-gpt-4o" {
+		t.Fatalf("pricing: %q/%q", lc.PricingID, lc.PricingName)
+	}
 
 	// Partial plan (anonymous proxy / header-pinned host): only the host
 	// resolves; policy/model stay untouched. Nil-safe in both arguments.
@@ -108,7 +117,7 @@ func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
 	if lc2.HostID != "hid2" || lc2.HostName != "ollama" {
 		t.Fatalf("partial host: %q/%q", lc2.HostID, lc2.HostName)
 	}
-	if lc2.PolicyName != "" || lc2.ModelName != "" {
+	if lc2.PolicyName != "" || lc2.ModelName != "" || lc2.ProviderName != "" || lc2.PricingID != "" {
 		t.Fatalf("partial plan leaked names: %+v", lc2)
 	}
 	applyPlanIdentity(nil, nil)

@@ -58,7 +58,7 @@ func TestBuildEvent_EventTimeAndTags(t *testing.T) {
 	lc.Metadata["client_ip"] = "10.0.0.1"
 	lc.Metadata[MetadataKeyRequestTags] = `{"session_id":"s1"}`
 
-	ev := buildEvent(lc, 200, "", "", nil)
+	ev := buildEvent(lc, 200, "", "", nil, nil)
 	if !ev.Timestamp.Equal(start) {
 		t.Fatalf("timestamp: want Timing.Start %v, got %v", start, ev.Timestamp)
 	}
@@ -75,14 +75,14 @@ func TestBuildEvent_EventTimeAndTags(t *testing.T) {
 	// EventTime set overrides the timestamp; durations stay anchored on Start.
 	eventTime := time.Date(2025, 11, 3, 9, 30, 0, 0, time.UTC)
 	lc.EventTime = eventTime
-	ev = buildEvent(lc, 200, "", "", nil)
+	ev = buildEvent(lc, 200, "", "", nil, nil)
 	if !ev.Timestamp.Equal(eventTime) {
 		t.Fatalf("timestamp: want EventTime %v, got %v", eventTime, ev.Timestamp)
 	}
 
 	// Invalid tag blob drops Tags, leaves the event intact.
 	lc.Metadata[MetadataKeyRequestTags] = `{"a":1}`
-	ev = buildEvent(lc, 200, "", "", nil)
+	ev = buildEvent(lc, 200, "", "", nil, nil)
 	if ev.Tags != nil {
 		t.Fatalf("invalid blob: want nil tags, got %+v", ev.Tags)
 	}
@@ -97,7 +97,7 @@ func TestBuildEvent_AttributionSlugs(t *testing.T) {
 	lc.ModelID, lc.ModelName = "mid", "gpt-4o"
 	lc.HostID, lc.HostName = "hid", "openai"
 
-	ev := buildEvent(lc, 200, "", "", nil)
+	ev := buildEvent(lc, 200, "", "", nil, nil)
 	if ev.PolicyID != "pid" || ev.Policy != "default" {
 		t.Fatalf("policy: %q/%q", ev.PolicyID, ev.Policy)
 	}
