@@ -86,6 +86,18 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
+	// Run the pre-flight phase (today: the inflight-gauge observer). Every
+	// path past this point must end in a Finalize — success and runner
+	// failures fire it themselves; pre-runner rejections go through
+	// fireUsageFailure — so pre-flight and post-flight stay paired.
+	if d.Lifecycle != nil {
+		if err := d.Lifecycle.RunPreFlight(ctx, lc, &lifecycle.PreFlightEvent{}); err != nil {
+			d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
+			writeAPIError(w, http.StatusInternalServerError, "server_error", "pre_flight_aborted", err.Error())
+			return
+		}
+	}
+
 	slog.Debug("inference: dispatch entry",
 		"request_id", reqid.From(ctx),
 		"inbound", string(in.Inbound),
@@ -132,6 +144,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 
 	inboundSpec := d.Specs.Spec(in.Inbound)
 	if inboundSpec == nil {
+		d.fireUsageFailure(ctx, "no_spec", "no adapter spec registered for "+string(in.Inbound))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_spec",
 			"no adapter spec registered for "+string(in.Inbound))
 		return
@@ -142,6 +155,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	if inboundSpec.BytePass {
 		upstreamAdapter := d.Specs.PipelineAdapter(in.Inbound)
 		if upstreamAdapter == nil {
+			d.fireUsageFailure(ctx, "no_adapter", "no adapter registered for "+string(in.Inbound))
 			writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
 				"no adapter registered for "+string(in.Inbound))
 			return
@@ -166,6 +180,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	if inboundSpec.IsNativePath != nil && inboundSpec.IsNativePath(plan) {
 		upstreamAdapter := d.Specs.PipelineAdapter(in.Inbound)
 		if upstreamAdapter == nil {
+			d.fireUsageFailure(ctx, "no_adapter", "no adapter registered for "+string(in.Inbound))
 			writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
 				"no adapter registered for "+string(in.Inbound))
 			return
@@ -179,12 +194,14 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// shape canonical translation.
 	upstreamSpec := d.Specs.Spec(plan.HostBinding.Spec.Adapter)
 	if upstreamSpec == nil {
+		d.fireUsageFailure(ctx, "no_spec", "no adapter spec registered for upstream "+string(plan.HostBinding.Spec.Adapter))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_spec",
 			"no adapter spec registered for upstream "+string(plan.HostBinding.Spec.Adapter))
 		return
 	}
 	upstreamAdapter := d.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter)
 	if upstreamAdapter == nil {
+		d.fireUsageFailure(ctx, "no_adapter", "no adapter registered for "+string(plan.HostBinding.Spec.Adapter))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter",
 			"no adapter registered for "+string(plan.HostBinding.Spec.Adapter))
 		return
@@ -201,6 +218,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	inboundV1 := inboundSpec.Translator
 	upstreamV1 := upstreamSpec.Translator
 	if inboundV1 == nil || upstreamV1 == nil {
+		d.fireUsageFailure(ctx, "no_translator", "missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Spec.Adapter))
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_translator",
 			"missing canonical translator for "+string(in.Inbound)+" or "+string(plan.HostBinding.Spec.Adapter))
 		return

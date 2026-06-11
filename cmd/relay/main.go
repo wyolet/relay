@@ -342,7 +342,13 @@ func main() {
 	// post-flight and emits the request-flow metrics via pkg/metrics. Pure
 	// boot wiring — no runner changes (see docs/metrics.md). The data-loss
 	// and provider-key metrics emit at their sources (emitters, keypool).
-	lifecycleReg.RegisterHook(metricslog.New())
+	metricsObs := metricslog.New()
+	lifecycleReg.RegisterPreFlight(metricsObs.PreFlight)
+	lifecycleReg.RegisterHook(metricsObs)
+	lifecycleReg.RegisterCollector(metricsObs)
+	lifecycleReg.SetFinalizeObserver(metrics.RecordPostFlight)
+	metrics.RegisterQueueDepth("usage", func() float64 { return float64(usageCtl.Emitter().QueueDepth()) })
+	metrics.RegisterQueueDepth("payload", func() float64 { return float64(payloadCtl.Emitter().QueueDepth()) })
 	slog.Debug("metricslog: observer wired (/metrics on control plane)")
 
 	// Read side of payload logging: serves the /payloads/* Logs endpoints
