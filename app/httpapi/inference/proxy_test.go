@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	apphost "github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
 func TestProxyUpstreamPath_DefaultsToSpecPath(t *testing.T) {
@@ -97,7 +99,7 @@ func TestResolveProxyHostByPolicy_BodyLadder(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(tc.body))
-			plan, pb, err := resolveProxyHostByPolicy(r, resolver, rk)
+			plan, pb, err := resolveProxyHostByPolicy(r, resolver, rk, false)
 			if tc.wantReason != "" {
 				e, ok := err.(*errProxyHostResolve)
 				if !ok || e.Reason != tc.wantReason {
@@ -151,7 +153,7 @@ func TestProxyForward_StreamedBodyByteIdentical(t *testing.T) {
 	defer srv.Close()
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	_, pb, err := resolveProxyHostByPolicy(r, resolver, rk)
+	_, pb, err := resolveProxyHostByPolicy(r, resolver, rk, false)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -180,5 +182,225 @@ func TestProxyForward_StreamedBodyByteIdentical(t *testing.T) {
 	}
 	if gotCL != int64(len(body)) {
 		t.Fatalf("upstream Content-Length: got %d, want %d", gotCL, len(body))
+	}
+}
+
+// TestProxyForward_PayloadTeeCapture drives the streamed (>peek) resolve
+// result through the real forwarder with the payload-capture tee armed,
+// asserting the upstream bytes stay identical while the lifecycle context
+// ends up with the full body — or, past the capture cap, a flagged
+// partial one with the upstream forward unaffected.
+func TestProxyForward_PayloadTeeCapture(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	resolver := routing.New(cat)
+
+	cases := []struct {
+		name       string
+		padding    int
+		logging    bool
+		wantStored int // expected lc.RequestBody length; -1 = whole body
+		wantTrunc  bool
+	}{
+		{"logging on captures full body", 3 << 20, true, -1, false},
+		{"logging off keeps prefix only", 3 << 20, false, proxyMaxBodyPeek + 1, true},
+		{"capture cap exceeded", proxyMaxBodyBuffer, true, proxyMaxBodyBuffer, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := proxyTestBody("test-model", tc.padding, false)
+			var gotBody []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody, _ = io.ReadAll(r.Body)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+
+			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			lc := lifecycle.NewContext("req-tee", "proxy", time.Now())
+			lc.PayloadLog = tc.logging
+
+			_, pb, err := resolveProxyHostByPolicy(r, resolver, rk, lc.PayloadLog)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if armed := pb.Capture != nil; armed != tc.logging {
+				t.Fatalf("capture armed: got %v, want %v", armed, tc.logging)
+			}
+			pb.seedLifecycle(lc)
+
+			p := proxy.New(nil, nil, nil)
+			res, err := p.Run(context.Background(), &proxy.Request{
+				Method:        http.MethodPost,
+				Path:          "/v1/chat/completions",
+				Body:          pb.Reader,
+				ContentLength: r.ContentLength,
+				Headers:       http.Header{},
+				HostBaseURL:   srv.URL,
+				UpstreamAuth:  "Bearer upstream-key",
+				Lifecycle:     lc,
+			})
+			if err != nil {
+				t.Fatalf("proxy run: %v", err)
+			}
+			rb := pb.wrapResult(res.Body, lc)
+			_, _ = io.ReadAll(rb)
+			_ = rb.Close()
+
+			if !bytes.Equal(gotBody, body) {
+				t.Fatalf("upstream bytes differ: got %d, want %d", len(gotBody), len(body))
+			}
+			want := body
+			if tc.wantStored >= 0 {
+				want = body[:tc.wantStored]
+			}
+			if !bytes.Equal(lc.RequestBody, want) {
+				t.Fatalf("stored body: got %d bytes, want %d", len(lc.RequestBody), len(want))
+			}
+			if lc.RequestBodyTruncated != tc.wantTrunc {
+				t.Fatalf("truncated: got %v, want %v", lc.RequestBodyTruncated, tc.wantTrunc)
+			}
+		})
+	}
+}
+
+// TestProxyForward_TeeStreamsWhileClientSending pins the latency
+// invariant: with the capture tee armed, body bytes past the peek window
+// reach the upstream while the client still withholds the tail (a
+// buffer-first regression deadlocks and trips the watchdog). The
+// post-flight hook then reads lc.RequestBody from its own goroutine —
+// under -race this exercises the concurrent send + post-flight handoff.
+func TestProxyForward_TeeStreamsWhileClientSending(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	resolver := routing.New(cat)
+	body := proxyTestBody("test-model", 2<<20, false)
+	cut := len(body) - (256 << 10) // tail the client withholds
+	// Receiving past this proves upstream consumed live-streamed bytes
+	// beyond the buffered peek prefix.
+	threshold := proxyMaxBodyPeek + (64 << 10)
+
+	upstreamSawStream := make(chan struct{})
+	upstreamBody := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got bytes.Buffer
+		buf := make([]byte, 32<<10)
+		signaled := false
+		for {
+			n, err := r.Body.Read(buf)
+			got.Write(buf[:n])
+			if !signaled && got.Len() >= threshold {
+				signaled = true
+				close(upstreamSawStream)
+			}
+			if err != nil {
+				break
+			}
+		}
+		upstreamBody <- got.Bytes()
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = pw.Write(body[:cut])
+		<-upstreamSawStream // hold the tail until upstream proves receipt
+		_, _ = pw.Write(body[cut:])
+		_ = pw.Close()
+	}()
+
+	type seen struct {
+		body  []byte
+		trunc bool
+	}
+	hookSaw := make(chan seen, 1)
+	reg := lifecycle.New()
+	reg.RegisterHook(lifecycle.HookFunc{
+		HookName: "test-capture",
+		Fn: func(lc *lifecycle.Context, _ *lifecycle.PostFlightEvent) (any, error) {
+			hookSaw <- seen{body: lc.RequestBody, trunc: lc.RequestBodyTruncated}
+			return nil, nil
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", pr)
+		lc := lifecycle.NewContext("req-stream", "proxy", time.Now())
+		lc.PayloadLog = true
+		_, pb, err := resolveProxyHostByPolicy(r, resolver, rk, true)
+		if err != nil {
+			t.Errorf("resolve: %v", err)
+			return
+		}
+		pb.seedLifecycle(lc)
+		p := proxy.New(nil, reg, nil)
+		res, err := p.Run(context.Background(), &proxy.Request{
+			Method:       http.MethodPost,
+			Path:         "/v1/chat/completions",
+			Body:         pb.Reader,
+			Headers:      http.Header{},
+			HostBaseURL:  srv.URL,
+			UpstreamAuth: "Bearer upstream-key",
+			Lifecycle:    lc,
+		})
+		if err != nil {
+			t.Errorf("proxy run: %v", err)
+			return
+		}
+		rb := pb.wrapResult(res.Body, lc)
+		_, _ = io.ReadAll(rb)
+		_ = rb.Close()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("watchdog: upstream never received streamed bytes while the client was still sending (buffer-first regression?)")
+	}
+	if got := <-upstreamBody; !bytes.Equal(got, body) {
+		t.Fatalf("upstream bytes differ: got %d, want %d", len(got), len(body))
+	}
+	select {
+	case saw := <-hookSaw:
+		if !bytes.Equal(saw.body, body) {
+			t.Fatalf("post-flight capture: got %d bytes, want the full %d", len(saw.body), len(body))
+		}
+		if saw.trunc {
+			t.Fatal("complete capture must not be flagged truncated")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-flight hook never fired")
+	}
+}
+
+// TestBodyCapture_ConcurrentFinalize races finalizeInto against a
+// transport-like reader still draining the tee: the published snapshot
+// must always be a consistent prefix of the body, stable after finalize,
+// and flagged truncated whenever it is partial. Meaningful under -race.
+func TestBodyCapture_ConcurrentFinalize(t *testing.T) {
+	body := bytes.Repeat([]byte("0123456789abcdef"), 64<<10) // 1 MiB
+	prefix := append([]byte(nil), body[:1024]...)
+	c := newBodyCapture(prefix, len(body))
+	tee := c.tee(bytes.NewReader(body[1024:]))
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, tee)
+		close(done)
+	}()
+
+	lc := lifecycle.NewContext("req-race", "proxy", time.Now())
+	c.finalizeInto(lc)
+	if !bytes.Equal(lc.RequestBody, body[:len(lc.RequestBody)]) {
+		t.Fatal("published capture is not a prefix of the body")
+	}
+	if len(lc.RequestBody) < len(body) && !lc.RequestBodyTruncated {
+		t.Fatal("partial capture must be flagged truncated")
+	}
+	snap := append([]byte(nil), lc.RequestBody...)
+	<-done
+	if !bytes.Equal(lc.RequestBody, snap) {
+		t.Fatal("published capture mutated after finalize")
 	}
 }
