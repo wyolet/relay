@@ -76,9 +76,12 @@ type Context struct {
 	// reference to the dispatch buffer, not a copy — never mutated.
 	RequestBody []byte
 
-	// RequestBodyTruncated marks RequestBody as a prefix of a larger
-	// streamed body (proxy peek-then-stream), so payload records never
-	// pretend the prefix was the whole request.
+	// RequestBodyTruncated marks RequestBody as an incomplete prefix of a
+	// larger streamed body — set on the proxy peek-then-stream path when
+	// the remainder wasn't captured (payload logging off, the tee capture
+	// hit its cap, or upstream answered before draining the request) — so
+	// payload records never pretend the stored bytes were the whole
+	// request. False whenever RequestBody holds the complete body.
 	RequestBodyTruncated bool
 
 	// Cross-hook channel. Middleware writes; observers read.

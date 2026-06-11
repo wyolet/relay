@@ -67,9 +67,11 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	//      Policy + HostBinding (proxy-authed only — anonymous traffic
 	//      has no policy and must still pin a host).
 	snap := d.Catalog.Current()
+	lc := lifecycle.FromContext(ctx)
 	var (
 		host         *apphost.Host
 		resolvedPlan *routing.Plan
+		pb           proxyBody
 	)
 	if cls.UpstreamHost != "" {
 		h, ok := snap.HostByName(cls.UpstreamHost)
@@ -87,7 +89,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
-		plan, pb, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx))
+		plan, b, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx), lc != nil && lc.PayloadLog)
 		if err != nil {
 			d.fireUsageFailure(ctx, "proxy_resolve_error", err.Error())
 			mapProxyResolveErr(w, err)
@@ -95,14 +97,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 		host = plan.Host
 		resolvedPlan = plan
+		pb = b
 		// Re-attach what the resolver consumed — the full buffered body
 		// when it fit, or the peeked prefix chained onto the live stream —
 		// so the forwarder sends exactly the bytes the customer sent.
 		r.Body = pb.Reader
-		if lc := lifecycle.FromContext(ctx); lc != nil {
-			lc.RequestBody = pb.Prefix
-			lc.RequestBodyTruncated = pb.Truncated
-		}
+		pb.seedLifecycle(lc)
 	}
 
 	// Resolve system rate-limit bucket + subject for this mode.
@@ -127,7 +127,6 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	spec := d.Specs.Spec(adapterKind)
 	upstreamPath := proxyUpstreamPath(r.URL.Path, spec, host)
 
-	lc := lifecycle.FromContext(ctx)
 	if lc != nil {
 		if host != nil {
 			lc.HostID = host.Meta.ID
@@ -171,11 +170,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"request_id", reqid.From(ctx),
 		"status", result.Status,
 	)
-	defer result.Body.Close()
+	body := pb.wrapResult(result.Body, lc)
+	defer body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
 	w.WriteHeader(result.Status)
-	n, copyErr := streamCopy(w, result.Body)
+	n, copyErr := streamCopy(w, body)
 	slog.Debug("proxy: stream complete",
 		"request_id", reqid.From(ctx),
 		"bytes", n,
@@ -306,6 +306,35 @@ type proxyBody struct {
 	Reader    io.ReadCloser
 	Prefix    []byte
 	Truncated bool
+	// Capture is armed on the streamed path when payload logging wants
+	// the full body: the remainder tees into it as it flows upstream.
+	// wrapResult finalizes it into the lifecycle context on response
+	// close. Nil when the body was fully buffered or logging is off.
+	Capture *bodyCapture
+}
+
+// seedLifecycle retains the resolver's buffered bytes on lc as the
+// payload-capture fallback. When a Capture is armed, finalize overwrites
+// both fields with the assembled full body; until then (and on any
+// failure path that never closes the response) the prefix + truncated
+// flag stand. Nil-safe on lc.
+func (pb proxyBody) seedLifecycle(lc *lifecycle.Context) {
+	if lc == nil {
+		return
+	}
+	lc.RequestBody = pb.Prefix
+	lc.RequestBodyTruncated = pb.Truncated
+}
+
+// wrapResult arms the capture handoff: the returned body's Close
+// publishes the assembled capture into lc before the inner Close spawns
+// the detached post-flight goroutine, so observers never see a torn
+// buffer. Pass-through when no capture is armed.
+func (pb proxyBody) wrapResult(body io.ReadCloser, lc *lifecycle.Context) io.ReadCloser {
+	if pb.Capture == nil || lc == nil {
+		return body
+	}
+	return &finalizeReadCloser{inner: body, c: pb.Capture, lc: lc}
 }
 
 // resolveProxyHostByPolicy reads enough of r.Body to learn the top-level
@@ -316,7 +345,11 @@ type proxyBody struct {
 // are streamed (prefix + remaining r.Body) without further buffering; only
 // when the model sits beyond the window does buffering continue, up to
 // proxyMaxBodyBuffer.
-func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, proxyBody, error) {
+//
+// captureFull arms a tee on the streamed path so payload logging stores
+// the whole body (capped at proxyMaxBodyBuffer) instead of the bare
+// prefix — without serializing client upload and upstream send.
+func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey, captureFull bool) (*routing.Plan, proxyBody, error) {
 	if rk == nil {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
@@ -337,11 +370,17 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *r
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
-		body := struct {
+		pb := proxyBody{Prefix: prefix, Truncated: true}
+		rest := io.Reader(r.Body)
+		if captureFull {
+			pb.Capture = newBodyCapture(prefix, proxyMaxBodyBuffer)
+			rest = pb.Capture.tee(r.Body)
+		}
+		pb.Reader = struct {
 			io.Reader
 			io.Closer
-		}{io.MultiReader(bytes.NewReader(prefix), r.Body), r.Body}
-		return plan, proxyBody{Reader: body, Prefix: prefix, Truncated: true}, nil
+		}{io.MultiReader(bytes.NewReader(prefix), rest), r.Body}
+		return plan, pb, nil
 	}
 
 	rest, err := io.ReadAll(io.LimitReader(r.Body, int64(proxyMaxBodyBuffer-len(prefix))+1))
