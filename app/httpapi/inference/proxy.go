@@ -87,7 +87,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
-		plan, body, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx))
+		plan, pb, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx))
 		if err != nil {
 			d.fireUsageFailure(ctx, "proxy_resolve_error", err.Error())
 			mapProxyResolveErr(w, err)
@@ -95,9 +95,14 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 		host = plan.Host
 		resolvedPlan = plan
-		// Replace the consumed body with a re-readable copy so the
-		// forwarder sees the same bytes the customer sent.
-		r.Body = io.NopCloser(bytes.NewReader(body))
+		// Re-attach what the resolver consumed — the full buffered body
+		// when it fit, or the peeked prefix chained onto the live stream —
+		// so the forwarder sends exactly the bytes the customer sent.
+		r.Body = pb.Reader
+		if lc := lifecycle.FromContext(ctx); lc != nil {
+			lc.RequestBody = pb.Prefix
+			lc.RequestBodyTruncated = pb.Truncated
+		}
 	}
 
 	// Resolve system rate-limit bucket + subject for this mode.
@@ -136,16 +141,17 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		}
 	}
 	preq := &proxy.Request{
-		Method:       r.Method,
-		Path:         upstreamPath,
-		Body:         r.Body,
-		Headers:      forwardHdr,
-		HostBaseURL:  host.Spec.BaseURL,
-		UpstreamAuth: cls.UpstreamAuth,
-		RateScope:    subject,
-		Rules:        rules,
-		Extractor:    extractorFor(d, adapterKind),
-		Lifecycle:    lc,
+		Method:        r.Method,
+		Path:          upstreamPath,
+		Body:          r.Body,
+		ContentLength: r.ContentLength,
+		Headers:       forwardHdr,
+		HostBaseURL:   host.Spec.BaseURL,
+		UpstreamAuth:  cls.UpstreamAuth,
+		RateScope:     subject,
+		Rules:         rules,
+		Extractor:     extractorFor(d, adapterKind),
+		Lifecycle:     lc,
 	}
 
 	slog.Debug("proxy: calling upstream",
@@ -262,11 +268,18 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 // error messages.
 func strconvQuote(s string) string { return "\"" + s + "\"" }
 
-// proxyMaxBodyPeek caps how many bytes resolveProxyHostByPolicy will
-// buffer when peeking the inbound JSON body for its `model` field.
-// 1 MiB comfortably exceeds any real chat-completion payload while
-// preventing a hostile caller from forcing an unbounded buffer.
+// proxyMaxBodyPeek is the prefix window resolveProxyHostByPolicy buffers
+// when peeking the inbound JSON body for its `model` field. It is a peek,
+// not a size gate: bodies that fit are parsed in full, larger ones are
+// scanned for the top-level `model` and streamed upstream. Long-context
+// requests routinely run several MiB.
 const proxyMaxBodyPeek = 1 << 20
+
+// proxyMaxBodyBuffer caps full buffering when `model` is not within the
+// peek window (pathological key order forces a complete parse). 32 MiB
+// matches the Caddy front-proxy request cap and the upstream providers'
+// own request limits; anything larger is rejected.
+const proxyMaxBodyBuffer = 32 << 20
 
 // errProxyHostResolve is the typed envelope returned by
 // resolveProxyHostByPolicy. mapProxyResolveErr maps each Reason to an
@@ -285,45 +298,141 @@ func (e *errProxyHostResolve) Error() string {
 	return e.Reason + ": " + e.Detail
 }
 
-// resolveProxyHostByPolicy reads r.Body once (capped at
-// proxyMaxBodyPeek), extracts the `model` field, and runs the catalog
-// routing resolver with SkipKeyCheck so proxy mode can reuse the same
-// policy + binding logic as normal mode without requiring keypool
-// coverage. Returns the resolved Plan AND the buffered body so the
-// caller can re-attach it to r.Body before forwarding and seed the
-// lifecycle context with model/host/policy attribution.
-func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, []byte, error) {
+// proxyBody is the body handoff from resolveProxyHostByPolicy: the reader
+// to forward upstream, the buffered prefix retained for payload capture
+// (a reference, never mutated), and whether that prefix is incomplete —
+// i.e. the remainder streams from the live request body.
+type proxyBody struct {
+	Reader    io.ReadCloser
+	Prefix    []byte
+	Truncated bool
+}
+
+// resolveProxyHostByPolicy reads enough of r.Body to learn the top-level
+// `model` field and runs the catalog routing resolver with SkipKeyCheck so
+// proxy mode can reuse the same policy + binding logic as normal mode
+// without requiring keypool coverage. Bodies within proxyMaxBodyPeek come
+// back fully buffered; larger bodies whose model appears in the peek window
+// are streamed (prefix + remaining r.Body) without further buffering; only
+// when the model sits beyond the window does buffering continue, up to
+// proxyMaxBodyBuffer.
+func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, proxyBody, error) {
 	if rk == nil {
-		return nil, nil, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
+		return nil, proxyBody{}, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
-	limited := io.LimitReader(r.Body, proxyMaxBodyPeek+1)
-	body, err := io.ReadAll(limited)
+	prefix, err := io.ReadAll(io.LimitReader(r.Body, proxyMaxBodyPeek+1))
 	if err != nil {
-		return nil, nil, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
+		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
 	}
-	if len(body) > proxyMaxBodyPeek {
-		return nil, nil, &errProxyHostResolve{Reason: "body_too_large", Detail: "request body exceeds proxy peek limit"}
+	if len(prefix) <= proxyMaxBodyPeek {
+		plan, err := resolveProxyModelJSON(prefix, resolver, rk)
+		if err != nil {
+			return nil, proxyBody{}, err
+		}
+		return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(prefix)), Prefix: prefix}, nil
 	}
 
+	if model, ok := scanTopLevelModel(prefix); ok {
+		plan, err := resolveProxyPlan(model, resolver, rk)
+		if err != nil {
+			return nil, proxyBody{}, err
+		}
+		body := struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(prefix), r.Body), r.Body}
+		return plan, proxyBody{Reader: body, Prefix: prefix, Truncated: true}, nil
+	}
+
+	rest, err := io.ReadAll(io.LimitReader(r.Body, int64(proxyMaxBodyBuffer-len(prefix))+1))
+	if err != nil {
+		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
+	}
+	full := append(prefix, rest...)
+	if len(full) > proxyMaxBodyBuffer {
+		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_too_large", Detail: "request body exceeds proxy buffer limit"}
+	}
+	plan, err := resolveProxyModelJSON(full, resolver, rk)
+	if err != nil {
+		return nil, proxyBody{}, err
+	}
+	return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(full)), Prefix: full}, nil
+}
+
+func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, error) {
 	var peek struct {
 		Model string `json:"model"`
 	}
 	if err := json.Unmarshal(body, &peek); err != nil {
-		return nil, body, &errProxyHostResolve{Reason: "body_not_json", Detail: "proxy mode without X-WR-Upstream-Host requires a JSON body carrying a 'model' field", Inner: err}
+		return nil, &errProxyHostResolve{Reason: "body_not_json", Detail: "proxy mode without X-WR-Upstream-Host requires a JSON body carrying a 'model' field", Inner: err}
 	}
 	if peek.Model == "" {
-		return nil, body, &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
+		return nil, &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
 	}
+	return resolveProxyPlan(peek.Model, resolver, rk)
+}
 
+func resolveProxyPlan(model string, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, error) {
 	plan, err := resolver.Resolve(routing.Request{
-		ModelName:    peek.Model,
+		ModelName:    model,
 		RelayKey:     rk,
 		SkipKeyCheck: true,
 	})
 	if err != nil {
-		return nil, body, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Model: peek.Model, Inner: err}
+		return nil, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Model: model, Inner: err}
 	}
-	return plan, body, nil
+	return plan, nil
+}
+
+// scanTopLevelModel extracts the top-level "model" string from possibly
+// truncated JSON. It token-walks the object and returns as soon as the
+// value is decoded, so a decoder error past that point (the cut-off tail)
+// never matters. Nested containers are consumed whole, which is what keeps
+// a "model" key inside messages from matching.
+func scanTopLevelModel(b []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return "", false
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return "", false
+	}
+	for {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		if d, ok := keyTok.(json.Delim); ok && d == '}' {
+			return "", false
+		}
+		key, _ := keyTok.(string)
+		valTok, err := dec.Token()
+		if err != nil {
+			return "", false
+		}
+		if key == "model" {
+			s, ok := valTok.(string)
+			return s, ok && s != ""
+		}
+		if d, ok := valTok.(json.Delim); ok && (d == '{' || d == '[') {
+			depth := 1
+			for depth > 0 {
+				t, err := dec.Token()
+				if err != nil {
+					return "", false
+				}
+				if dd, ok := t.(json.Delim); ok {
+					switch dd {
+					case '{', '[':
+						depth++
+					case '}', ']':
+						depth--
+					}
+				}
+			}
+		}
+	}
 }
 
 func mapProxyResolveErr(w http.ResponseWriter, err error) {

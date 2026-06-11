@@ -140,6 +140,22 @@ func TestHook_Truncation(t *testing.T) {
 	}
 }
 
+func TestHook_RequestBodyTruncatedFlag(t *testing.T) {
+	// Proxy peek-then-stream retains only a body prefix; the record must
+	// say so even when MaxBytes is unlimited and clip() cut nothing.
+	c, _ := enabledCtrl(0)
+	lc := ctx(true, "prefix-only")
+	lc.RequestBodyTruncated = true
+	v, _ := NewPayloadHook(c).Fill(lc, &lifecycle.PostFlightEvent{Status: 200, ResponseBody: []byte("resp")})
+	r := v.(*Record)
+	if !r.RequestTruncated {
+		t.Fatal("RequestTruncated must be set when the retained body is a prefix")
+	}
+	if r.ResponseTruncated {
+		t.Fatal("ResponseTruncated must be unaffected")
+	}
+}
+
 func TestStreamObserver_Gating(t *testing.T) {
 	if _, ok := NewStreamPayloadFactory(disabledCtrl()).NewObserver(ctx(true, "")).(noopObserver); !ok {
 		t.Fatal("disabled: want noopObserver")
