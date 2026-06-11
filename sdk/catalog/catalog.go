@@ -21,6 +21,13 @@ type Host struct {
 // Binding is one callable (snapshot, host) pair with wire metadata. Featured
 // carries the catalog's `labels.featured` curation flag (the same one the
 // control API exposes) so SDK consumers can shortlist without re-curating.
+//
+// Model is the catalog key — the DNS-1123 snapshot slug. Upstream is the real
+// provider wire name: the id the provider answers to and echoes back as the
+// ran model (e.g. slug gpt-5-5-2026-04-23, upstream gpt-5.5-2026-04-23).
+// Both are first-class matchable keys — consumers matching a response's model
+// against the catalog must compare it to Model AND Upstream (or just call
+// Resolve, which indexes both).
 type Binding struct {
 	Model     string   `json:"model"`
 	Adapter   string   `json:"adapter"`

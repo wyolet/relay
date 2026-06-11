@@ -70,6 +70,79 @@ func TestResolve_ProviderQualified(t *testing.T) {
 	}
 }
 
+// A response's ran-model is the provider's wire spelling, not the catalog
+// slug. Every form of it must resolve — the dotted real name (which happens
+// to slugify to the catalog key) and wire names whose slugification differs
+// from the key entirely (ollama tag syntax).
+func TestResolve_ServedWireName(t *testing.T) {
+	raw := `{
+	  "version": "test",
+	  "hosts": [
+	    {
+	      "name": "openai",
+	      "baseURL": "https://api.openai.com",
+	      "models": [
+	        {"model": "gpt-5-5-2026-04-23", "adapter": "openai", "upstream": "gpt-5.5-2026-04-23", "providers": ["openai"]}
+	      ]
+	    },
+	    {
+	      "name": "ollama-cloud",
+	      "baseURL": "https://ollama.example",
+	      "models": [
+	        {"model": "deepseek-v3-1-671b", "adapter": "openai", "upstream": "deepseek-v3.1:671b-cloud", "providers": ["deepseek"]}
+	      ]
+	    }
+	  ]
+	}`
+	ic, err := LoadBytes([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		ref, wantHost, wantUpstream string
+	}{
+		{"gpt-5.5-2026-04-23", "openai", "gpt-5.5-2026-04-23"},
+		{"gpt-5-5-2026-04-23", "openai", "gpt-5.5-2026-04-23"},
+		{"openai/gpt-5.5-2026-04-23", "openai", "gpt-5.5-2026-04-23"},
+		{"deepseek-v3.1:671b-cloud", "ollama-cloud", "deepseek-v3.1:671b-cloud"},
+		{"deepseek-v3-1-671b", "ollama-cloud", "deepseek-v3.1:671b-cloud"},
+		{"deepseek-v3.1:671b-cloud@ollama-cloud", "ollama-cloud", "deepseek-v3.1:671b-cloud"},
+		{"deepseek/deepseek-v3.1:671b-cloud", "ollama-cloud", "deepseek-v3.1:671b-cloud"},
+	}
+	for _, tc := range cases {
+		b, h, err := ic.Resolve(tc.ref)
+		if err != nil {
+			t.Errorf("Resolve(%q): %v", tc.ref, err)
+			continue
+		}
+		if h.Name != tc.wantHost || b.Upstream != tc.wantUpstream {
+			t.Errorf("Resolve(%q) = host %q upstream %q, want %q %q", tc.ref, h.Name, b.Upstream, tc.wantHost, tc.wantUpstream)
+		}
+	}
+}
+
+// A binding whose upstream normalizes to its own catalog key must index once —
+// double-indexing would make every single-host bare ref falsely ambiguous.
+func TestResolve_UpstreamSameAsModel_NotAmbiguous(t *testing.T) {
+	raw := `{
+	  "version": "test",
+	  "hosts": [{
+	    "name": "anthropic",
+	    "baseURL": "https://api.anthropic.com",
+	    "models": [
+	      {"model": "claude-opus-4-7", "adapter": "anthropic", "upstream": "claude-opus-4-7", "providers": ["anthropic"]}
+	    ]
+	  }]
+	}`
+	ic, err := LoadBytes([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ic.Resolve("claude-opus-4-7"); err != nil {
+		t.Fatalf("bare ref on a single host must resolve: %v", err)
+	}
+}
+
 func TestLoad_EmbeddedParses(t *testing.T) {
 	if _, err := Load(); err != nil {
 		t.Fatal(err)

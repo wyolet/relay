@@ -31,37 +31,48 @@ func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 	}
 	for hi, h := range c.Hosts {
 		for bi, b := range h.Models {
-			ic.addBareQualified(hi, bi, b)
-			pinKey := normRef(b.Model + "@" + h.Name)
-			if pinKey == "" {
-				continue
-			}
-			ic.pinned[pinKey] = loc{hi, bi}
-			for _, p := range b.Providers {
-				if q := normRef(p + "/" + b.Model + "@" + h.Name); q != "" {
-					ic.pinned[q] = loc{hi, bi}
-				}
+			l := loc{hi, bi}
+			ic.addForms(l, b.Model, b.Providers, h.Name)
+			if uk := normRef(b.Upstream); uk != "" && uk != normRef(b.Model) {
+				ic.addForms(l, b.Upstream, b.Providers, h.Name)
 			}
 		}
 	}
 	return ic, nil
 }
 
-func (ic *IndexedCatalog) addBareQualified(hi, bi int, b Binding) {
-	if k := normRef(b.Model); k != "" {
-		ic.bare[k] = append(ic.bare[k], loc{hi, bi})
+// addForms indexes every addressable form of one name for a binding: bare,
+// provider/name, name@host, provider/name@host. Called once with the catalog
+// key (Model) and again with the served wire name (Upstream) when the two
+// normalize differently — a response's ran-model is the provider's spelling,
+// and it must resolve without the caller keeping a private slug dictionary.
+func (ic *IndexedCatalog) addForms(l loc, name string, providers []string, host string) {
+	if k := normRef(name); k != "" {
+		ic.bare[k] = append(ic.bare[k], l)
 	}
-	for _, p := range b.Providers {
-		if q := normRef(p + "/" + b.Model); q != "" {
-			ic.qualified[q] = append(ic.qualified[q], loc{hi, bi})
+	for _, p := range providers {
+		if q := normRef(p + "/" + name); q != "" {
+			ic.qualified[q] = append(ic.qualified[q], l)
+		}
+	}
+	pinKey := normRef(name + "@" + host)
+	if pinKey == "" {
+		return
+	}
+	ic.pinned[pinKey] = l
+	for _, p := range providers {
+		if q := normRef(p + "/" + name + "@" + host); q != "" {
+			ic.pinned[q] = l
 		}
 	}
 }
 
 // Resolve maps a model ref to its binding and host. Ref forms: bare snapshot
-// name, provider/model, or model@host (and provider/model@host). Ambiguous
-// bare or provider-qualified refs across multiple hosts return an error listing
-// candidate host@model pins.
+// name, provider/model, or model@host (and provider/model@host). The model
+// segment accepts either the catalog key (Binding.Model) or the served wire
+// name (Binding.Upstream) — the string a provider echoes back as the ran
+// model resolves as-is. Ambiguous bare or provider-qualified refs across
+// multiple hosts return an error listing candidate host@model pins.
 func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
 	key := normRef(ref)
 	if key == "" {
