@@ -72,6 +72,17 @@ type Context struct {
 	ModelName  string
 	HostName   string
 
+	// ProviderName is the model's owning provider slug as resolved at
+	// request time — same denormalization rationale as the slugs above.
+	ProviderName string
+
+	// PricingID / PricingName identify the rate sheet billing this request,
+	// stamped at plan-fill from what routing already resolved. The post-
+	// flight usage observer prices the token counts against PricingID; the
+	// slug lands on the usage event for audit. Empty = unpriced route.
+	PricingID   string
+	PricingName string
+
 	// PayloadLog opts this request into full request/response body capture
 	// by the payloadlog observer. Set at the inference entry from the
 	// routing Plan (Policy or RelayKey opt-in). When false, the payload

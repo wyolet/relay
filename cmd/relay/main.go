@@ -34,6 +34,7 @@ import (
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
@@ -311,9 +312,15 @@ func main() {
 	}), slog.Default())
 	defer usageCtl.Close()
 	usageReader := usageCtl.Reader()
-	lifecycleReg.RegisterHook(usagelog.NewUsageHook())
+	// Emit-time cost: the usage producer prices each event's tokens against
+	// the pricing the plan resolved (id stamped on the lifecycle Context),
+	// read from the live snapshot — a map lookup, post-flight only.
+	usagePricer := usagelog.NewPricer(func(id string) (*pricing.Pricing, bool) {
+		return cat.Current().Pricing(id)
+	})
+	lifecycleReg.RegisterHook(usagelog.NewUsageHook(usagePricer))
 	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageCtl.Emitter()))
-	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory())
+	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory(usagePricer))
 	usageCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go usageCtl.Run(listenerCtx)
 	slog.Debug("usagelog: observer wired (backend via settings: usage-logging)")

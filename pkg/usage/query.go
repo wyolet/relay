@@ -89,10 +89,11 @@ type EventQuery struct {
 	RequestedModel []string
 
 	// Slug filters — match the denormalized entity names (Event.Model /
-	// Host / Policy) recorded at event time.
-	Model  []string
-	Host   []string
-	Policy []string
+	// Host / Policy / Provider) recorded at event time.
+	Model    []string
+	Host     []string
+	Policy   []string
+	Provider []string
 
 	// Tags filters on caller-supplied event tags: key → accepted values.
 	// AND across keys, OR within a key's values. An event with the key
@@ -142,7 +143,7 @@ type SummaryQuery struct {
 	// GroupBy is the dimension to group on. Valid values:
 	// "relay_key_hash", "policy_id", "model_id", "host_id",
 	// "host_key_id", "source", "finish_reason", "error_kind",
-	// "model", "host", "policy" (event-time slugs),
+	// "model", "host", "policy", "provider" (event-time slugs),
 	// or "tags.<key>" (dynamic, groups on a caller tag's value).
 	// Empty → "source".
 	GroupBy string
@@ -171,6 +172,12 @@ type SummaryRow struct {
 	TTFTMs    *DurationStats `json:"ttft_ms,omitempty"`
 	FirstSeen time.Time      `json:"first_seen"`
 	LastSeen  time.Time      `json:"last_seen"`
+	// CostNanos sums Event.CostNanos over the group's priced events
+	// (nano-USD). Unpriced counts the events that carried no cost stamp —
+	// reported instead of folding them into the sum as silent zeros, so a
+	// cost total always says how complete it is.
+	CostNanos int64 `json:"cost_nanos"`
+	Unpriced  int64 `json:"unpriced"`
 }
 
 // DurationStats holds latency aggregates in milliseconds.
@@ -223,6 +230,9 @@ type TimeSeriesPoint struct {
 	// TTFTMs — see SummaryRow.TTFTMs; nil when no event in the bucket
 	// carries upstream timing.
 	TTFTMs *DurationStats `json:"ttft_ms,omitempty"`
+	// CostNanos / Unpriced — see SummaryRow.
+	CostNanos int64 `json:"cost_nanos"`
+	Unpriced  int64 `json:"unpriced"`
 }
 
 // TimeSeriesRow is one series. Group is nil for the single-series case
@@ -264,6 +274,7 @@ var ValidGroupBy = []string{
 	"model",
 	"host",
 	"policy",
+	"provider",
 }
 
 // MaxTagKeyLen caps a single tag key. Enforced at write time

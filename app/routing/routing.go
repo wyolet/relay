@@ -38,6 +38,7 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/slug"
@@ -93,6 +94,11 @@ type Plan struct {
 	Host        *host.Host
 	Provider    string
 	Keys        []*hostkey.HostKey
+
+	// Pricing is the rate sheet billing against the chosen binding (explicit
+	// binding ref first, else the host-owned (model, host) cover). Resolved
+	// here so emit-time cost stamping costs zero extra lookups. Nil = unpriced.
+	Pricing *pricing.Pricing
 
 	// PayloadLoggingEnabled is the resolved opt-in for full request/response
 	// body capture: true when the matched Policy or the inbound RelayKey
@@ -248,6 +254,7 @@ candidates:
 	}
 
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
+	pr, _ := snap.PricingForBinding(chosenBnd)
 
 	return &Plan{
 		Model:       chosen,
@@ -257,6 +264,7 @@ candidates:
 		Host:        h,
 		Provider:    providerSlug,
 		Keys:        keys,
+		Pricing:     pr,
 		PayloadLoggingEnabled: (pol != nil && pol.Spec.PayloadLoggingEnabled) ||
 			req.RelayKey.Spec.PayloadLoggingEnabled,
 	}, nil
@@ -362,6 +370,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				continue
 			}
 			providerSlug, _ := snap.ProviderSlug(m.Meta.Owner.ID)
+			pr, _ := snap.PricingForBinding(hb)
 			return &Plan{
 				Model:       m,
 				Snapshot:    snapMatch,
@@ -370,6 +379,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				Host:        h,
 				Provider:    providerSlug,
 				Keys:        keys,
+				Pricing:     pr,
 			}, nil
 		}
 	}

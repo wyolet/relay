@@ -263,3 +263,77 @@ func TestSlugDimensions_FilterAndGroupBy(t *testing.T) {
 		t.Fatalf("policy filter: %+v", got)
 	}
 }
+
+func TestCostAggregates_SummaryAndTimeSeries(t *testing.T) {
+	now := time.Date(2026, 6, 11, 12, 0, 30, 0, time.UTC)
+	cost := func(n int64) *int64 { return &n }
+	events := []Event{
+		{RequestID: "a", Timestamp: now, Status: 200, Source: "pipeline",
+			Provider: "openai", CostNanos: cost(5_000_000)},
+		{RequestID: "b", Timestamp: now, Status: 200, Source: "pipeline",
+			Provider: "openai", CostNanos: cost(0)}, // priced $0, NOT unpriced
+		{RequestID: "c", Timestamp: now, Status: 500, Source: "pipeline",
+			Provider: "anthropic"}, // unpriced
+		{RequestID: "d", Timestamp: now.Add(time.Hour), Status: 200, Source: "pipeline",
+			Provider: "anthropic", CostNanos: cost(2_000_000)},
+		// LogOnly: excluded from aggregates entirely — not an unpriced count.
+		{RequestID: "e", Timestamp: now, Status: 0, ErrorKind: "no_keys"},
+	}
+
+	sum, err := Summarize(events, "source")
+	if err != nil {
+		t.Fatalf("Summarize: %v", err)
+	}
+	if len(sum.Rows) != 1 {
+		t.Fatalf("rows: %+v", sum.Rows)
+	}
+	r := sum.Rows[0]
+	if r.Requests != 4 || r.CostNanos != 7_000_000 || r.Unpriced != 1 {
+		t.Fatalf("summary cost: requests=%d cost=%d unpriced=%d", r.Requests, r.CostNanos, r.Unpriced)
+	}
+
+	byProvider, err := Summarize(events, "provider")
+	if err != nil {
+		t.Fatalf("Summarize provider: %v", err)
+	}
+	if len(byProvider.Rows) != 2 {
+		t.Fatalf("provider rows: %+v", byProvider.Rows)
+	}
+	for _, row := range byProvider.Rows {
+		switch row.Group["provider"] {
+		case "openai":
+			if row.CostNanos != 5_000_000 || row.Unpriced != 0 {
+				t.Fatalf("openai row: %+v", row)
+			}
+		case "anthropic":
+			if row.CostNanos != 2_000_000 || row.Unpriced != 1 {
+				t.Fatalf("anthropic row: %+v", row)
+			}
+		default:
+			t.Fatalf("unexpected group: %+v", row)
+		}
+	}
+
+	ts, err := Bucketize(events, time.Hour, "")
+	if err != nil {
+		t.Fatalf("Bucketize: %v", err)
+	}
+	if len(ts.Rows) != 1 || len(ts.Rows[0].Points) != 2 {
+		t.Fatalf("buckets: %+v", ts.Rows)
+	}
+	p0, p1 := ts.Rows[0].Points[0], ts.Rows[0].Points[1]
+	if p0.CostNanos != 5_000_000 || p0.Unpriced != 1 {
+		t.Fatalf("bucket 0: cost=%d unpriced=%d", p0.CostNanos, p0.Unpriced)
+	}
+	if p1.CostNanos != 2_000_000 || p1.Unpriced != 0 {
+		t.Fatalf("bucket 1: cost=%d unpriced=%d", p1.CostNanos, p1.Unpriced)
+	}
+
+	if !IsValidGroupBy("provider") {
+		t.Fatal("IsValidGroupBy(provider) = false")
+	}
+	got := FilterEvents(events, EventQuery{Provider: []string{"anthropic"}})
+	if len(got) != 2 {
+		t.Fatalf("provider filter: %+v", got)
+	}
+}

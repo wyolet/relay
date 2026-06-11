@@ -80,6 +80,7 @@ var expectedColumns = []string{
 	"relay_key_hash", "policy_id", "model_id", "requested_model",
 	"host_id", "host_key_id", "tokens", "extras", "tags",
 	"model", "host", "policy",
+	"provider", "cost_nanos", "cost_breakdown", "pricing",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -109,7 +110,11 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     tags                     jsonb        NOT NULL DEFAULT '{}',
     model                    text         NOT NULL DEFAULT '',
     host                     text         NOT NULL DEFAULT '',
-    policy                   text         NOT NULL DEFAULT ''
+    policy                   text         NOT NULL DEFAULT '',
+    provider                 text         NOT NULL DEFAULT '',
+    cost_nanos               bigint,
+    cost_breakdown           jsonb        NOT NULL DEFAULT '{}',
+    pricing                  text         NOT NULL DEFAULT ''
 )`
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -119,6 +124,12 @@ var alterTableSQL = []string{
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS model text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS host text NOT NULL DEFAULT ''`,
 	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS policy text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS provider text NOT NULL DEFAULT ''`,
+	// cost_nanos is nullable: NULL = unpriced (distinct from a priced $0),
+	// matching the upstream_* timing columns' NULL-as-absent convention.
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS cost_nanos bigint`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS cost_breakdown jsonb NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS pricing text NOT NULL DEFAULT ''`,
 }
 
 const createIndexSQL = `
@@ -367,6 +378,14 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 		if err != nil {
 			tagsJSON = []byte("{}")
 		}
+		costBkdn := ev.CostBreakdown
+		if costBkdn == nil {
+			costBkdn = map[string]int64{}
+		}
+		costBkdnJSON, err := json.Marshal(costBkdn)
+		if err != nil {
+			costBkdnJSON = []byte("{}")
+		}
 
 		var upStart, upRespStart, upRespEnd *int64
 		if ev.Upstream != nil {
@@ -400,6 +419,10 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.Model,
 			ev.Host,
 			ev.Policy,
+			ev.Provider,
+			ev.CostNanos,
+			costBkdnJSON,
+			ev.Pricing,
 		})
 	}
 
@@ -432,7 +455,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        upstream_start, upstream_response_start, upstream_response_end,
 		        relay_key_hash, policy_id, model_id, requested_model,
 		        host_id, host_key_id, tokens, extras, tags,
-		        model, host, policy
+		        model, host, policy,
+		        provider, cost_nanos, cost_breakdown, pricing
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -455,6 +479,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			tokensJSON  []byte
 			extrasJSON  []byte
 			tagsJSON    []byte
+			costNanos   *int64
+			costJSON    []byte
 		)
 		if err := rows.Scan(
 			&ev.RequestID,
@@ -482,6 +508,10 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.Model,
 			&ev.Host,
 			&ev.Policy,
+			&ev.Provider,
+			&costNanos,
+			&costJSON,
+			&ev.Pricing,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -511,6 +541,14 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			_ = json.Unmarshal(tagsJSON, &tags)
 			if len(tags) > 0 {
 				ev.Tags = tags
+			}
+		}
+		ev.CostNanos = costNanos
+		if costNanos != nil && len(costJSON) > 0 {
+			var bkdn map[string]int64
+			_ = json.Unmarshal(costJSON, &bkdn)
+			if len(bkdn) > 0 {
+				ev.CostBreakdown = bkdn
 			}
 		}
 
@@ -546,6 +584,7 @@ SELECT
     percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms)::bigint AS p99,
     max(duration_ms)                                         AS max_ms,
     `+ttftSelectSQL+`,
+    `+costSelectSQL+`,
     min(ts)                                                  AS first_seen,
     max(ts)                                                  AS last_seen
 FROM %s%s
@@ -568,6 +607,8 @@ ORDER BY requests DESC`,
 		p50, p95   int64
 		p99, maxMs int64
 		ttft       ttftCols
+		cost       int64
+		unpriced   int64
 		first      time.Time
 		last       time.Time
 	}
@@ -576,6 +617,7 @@ ORDER BY requests DESC`,
 		var r scalarRow
 		if err := scalarRows.Scan(&r.grp, &r.requests, &r.errCount, &r.avgMs, &r.p50, &r.p95, &r.p99, &r.maxMs,
 			&r.ttft.avg, &r.ttft.p50, &r.ttft.p95, &r.ttft.p99, &r.ttft.max,
+			&r.cost, &r.unpriced,
 			&r.first, &r.last); err != nil {
 			return usage.SummaryResult{}, fmt.Errorf("usage/postgres: scan summary scalar: %w", err)
 		}
@@ -598,6 +640,8 @@ ORDER BY requests DESC`,
 			TTFTMs:     r.ttft.stats(),
 			FirstSeen:  r.first,
 			LastSeen:   r.last,
+			CostNanos:  r.cost,
+			Unpriced:   r.unpriced,
 		}
 	}
 
@@ -687,6 +731,7 @@ SELECT
     (percentile_cont(0.99) WITHIN GROUP (ORDER BY duration_ms))::bigint AS p99,
     max(duration_ms)                              AS max_ms,
     `+ttftSelectSQL+`,
+    `+costSelectSQL+`,
     min(ts)                                       AS first_seen,
     max(ts)                                       AS last_seen
 FROM %s%s
@@ -716,11 +761,13 @@ ORDER BY %sbucket`,
 			avgMs                int64
 			p50, p95, p99, maxMs int64
 			ttft                 ttftCols
+			costNanos, unpriced  int64
 			first, last          time.Time
 		)
 		dest := []any{&bucket, &requests, &errCount, &errs4xx, &errs5xx,
 			&avgMs, &p50, &p95, &p99, &maxMs,
 			&ttft.avg, &ttft.p50, &ttft.p95, &ttft.p99, &ttft.max,
+			&costNanos, &unpriced,
 			&first, &last}
 		if groupBy != "" {
 			dest = append([]any{&grp}, dest...)
@@ -747,6 +794,8 @@ ORDER BY %sbucket`,
 			Tokens:     map[string]int64{},
 			DurationMs: usage.DurationStats{Avg: avgMs, P50: p50, P95: p95, P99: p99, Max: maxMs},
 			TTFTMs:     ttft.stats(),
+			CostNanos:  costNanos,
+			Unpriced:   unpriced,
 		})
 		pointIdx[pkey(grp, bucket.Unix())] = len(res.Rows[ri].Points) - 1
 		totals[grp] += requests
@@ -830,6 +879,13 @@ const ttftSelectSQL = `
     (percentile_cont(0.95) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint AS ttft_p95,
     (percentile_cont(0.99) WITHIN GROUP (ORDER BY upstream_response_start / 1000) FILTER (WHERE upstream_response_start IS NOT NULL))::bigint AS ttft_p99,
     max(upstream_response_start / 1000)           AS ttft_max`
+
+// costSelectSQL sums emit-time cost over priced rows only (cost_nanos NULL
+// = unpriced) and counts the unpriced ones — a cost total must say how
+// complete it is rather than fold unpriced rows in as silent zeros.
+const costSelectSQL = `
+    COALESCE(sum(cost_nanos), 0)::bigint                  AS cost_nanos,
+    count(*) FILTER (WHERE cost_nanos IS NULL)::bigint    AS unpriced`
 
 // ttftCols receives the ttftSelectSQL columns; pointers carry SQL NULL for
 // the no-samples case.
@@ -938,6 +994,7 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	any("model", q.Model)
 	any("host", q.Host)
 	any("policy", q.Policy)
+	any("provider", q.Provider)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {

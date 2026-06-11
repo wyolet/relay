@@ -67,11 +67,12 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 	}
 
 	type bucket struct {
-		count, errs int64
-		tokens      map[string]int64
-		latencies   []int64
-		ttfts       []int64
-		first, last time.Time
+		count, errs    int64
+		tokens         map[string]int64
+		latencies      []int64
+		ttfts          []int64
+		first, last    time.Time
+		cost, unpriced int64
 	}
 	groups := map[string]*bucket{}
 	from, to := time.Time{}, time.Time{}
@@ -96,6 +97,11 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 		b.latencies = append(b.latencies, ev.DurationMs)
 		if ttft, ok := ttftMs(ev); ok {
 			b.ttfts = append(b.ttfts, ttft)
+		}
+		if ev.CostNanos != nil {
+			b.cost += *ev.CostNanos
+		} else {
+			b.unpriced++
 		}
 		if ev.Timestamp.Before(b.first) {
 			b.first = ev.Timestamp
@@ -122,6 +128,8 @@ func Summarize(events []Event, groupBy string) (SummaryResult, error) {
 			TTFTMs:     optionalStats(b.ttfts),
 			FirstSeen:  b.first,
 			LastSeen:   b.last,
+			CostNanos:  b.cost,
+			Unpriced:   b.unpriced,
 		})
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -154,6 +162,7 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		tokens           map[string]int64
 		latencies        []int64
 		ttfts            []int64
+		cost, unpriced   int64
 	}
 	// seriesKey -> bucketUnix -> point
 	series := map[string]map[int64]*point{}
@@ -196,6 +205,11 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 		if ttft, ok := ttftMs(ev); ok {
 			p.ttfts = append(p.ttfts, ttft)
 		}
+		if ev.CostNanos != nil {
+			p.cost += *ev.CostNanos
+		} else {
+			p.unpriced++
+		}
 		if from.IsZero() || ev.Timestamp.Before(from) {
 			from = ev.Timestamp
 		}
@@ -224,6 +238,8 @@ func Bucketize(events []Event, interval time.Duration, groupBy string) (TimeSeri
 				Tokens:     p.tokens,
 				DurationMs: durationStats(p.latencies),
 				TTFTMs:     optionalStats(p.ttfts),
+				CostNanos:  p.cost,
+				Unpriced:   p.unpriced,
 			})
 		}
 		row := TimeSeriesRow{Points: points}
@@ -322,6 +338,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 		return false
 	}
 	if !inList(q.Policy, ev.Policy) {
+		return false
+	}
+	if !inList(q.Provider, ev.Provider) {
 		return false
 	}
 	for k, vals := range q.Tags {
@@ -424,6 +443,8 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.Host
 	case "policy":
 		return ev.Policy
+	case "provider":
+		return ev.Provider
 	default: // "source"
 		return ev.Source
 	}

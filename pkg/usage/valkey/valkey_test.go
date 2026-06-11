@@ -34,6 +34,10 @@ func TestWriteThenEvents(t *testing.T) {
 	now := time.Now()
 	ev := event("req-1", now, 200, "pipeline")
 	ev.Model, ev.Host, ev.Policy = "gpt-4o", "openai", "default"
+	ev.Provider, ev.Pricing = "openai", "openai-gpt-4o"
+	cost := int64(7_500_000)
+	ev.CostNanos = &cost
+	ev.CostBreakdown = map[string]int64{"tokens.input": 7_500_000}
 
 	if err := sk.Write(ev); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -51,6 +55,13 @@ func TestWriteThenEvents(t *testing.T) {
 	}
 	if got[0].Model != "gpt-4o" || got[0].Host != "openai" || got[0].Policy != "default" {
 		t.Errorf("slug round-trip: %+v", got[0])
+	}
+	if got[0].Provider != "openai" || got[0].Pricing != "openai-gpt-4o" {
+		t.Errorf("provider/pricing round-trip: %+v", got[0])
+	}
+	if got[0].CostNanos == nil || *got[0].CostNanos != 7_500_000 ||
+		got[0].CostBreakdown["tokens.input"] != 7_500_000 {
+		t.Errorf("cost round-trip: %+v", got[0])
 	}
 }
 

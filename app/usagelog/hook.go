@@ -21,17 +21,20 @@ const Namespace = "usage"
 // Canonical-first: token counts + finish reason come from
 // v1.ExtractSummary on the buffered body using the per-request
 // Translator — no vendor-specific JSON/SSE branching at this layer.
-type UsageHook struct{}
+type UsageHook struct {
+	pricer *Pricer
+}
 
-// NewUsageHook constructs the (stateless) usage producer.
-func NewUsageHook() *UsageHook { return &UsageHook{} }
+// NewUsageHook constructs the usage producer. pricer may be nil (events
+// stay unpriced).
+func NewUsageHook(pricer *Pricer) *UsageHook { return &UsageHook{pricer: pricer} }
 
 func (*UsageHook) Name() string { return Namespace }
 
 // Fill builds the Event. Always returns one (error rows are valid usage
 // records), so every finalized request yields exactly one row.
-func (*UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
-	return buildEvent(lc, ev.Status, ev.ErrorKind, ev.ErrorMessage, ev.ResponseBody), nil
+func (h *UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
+	return buildEvent(lc, ev.Status, ev.ErrorKind, ev.ErrorMessage, ev.ResponseBody, h.pricer), nil
 }
 
 // buildEvent assembles the canonical usage Event from the per-request
@@ -40,7 +43,7 @@ func (*UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (an
 // accumulated stream bytes as body); both land the same Event under the
 // same Namespace so echo + sink see one shape regardless of stream vs
 // buffered.
-func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body []byte) *Event {
+func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body []byte, pricer *Pricer) *Event {
 	out := Event{
 		RequestID:      lc.RequestID,
 		Source:         lc.Source,
@@ -60,6 +63,8 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 		Model:          lc.ModelName,
 		Host:           lc.HostName,
 		Policy:         lc.PolicyName,
+		Provider:       lc.ProviderName,
+		Pricing:        lc.PricingName,
 	}
 	if !lc.EventTime.IsZero() {
 		out.Timestamp = lc.EventTime
@@ -92,6 +97,15 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 			out.Tokens = s.Tokens
 			out.FinishReason = string(s.FinishReason)
 		}
+	}
+
+	// Emit-time cost: priced only when a rate sheet was stamped AND tokens
+	// matched its meters — anything else stays unpriced (CostNanos nil),
+	// never a fabricated $0. The Pricing slug above is stamped regardless,
+	// recording which sheet covered the route.
+	if nanos, breakdown, ok := pricer.Price(lc.PricingID, out.Tokens); ok {
+		out.CostNanos = &nanos
+		out.CostBreakdown = breakdown
 	}
 
 	if len(lc.Metadata) > 0 {
