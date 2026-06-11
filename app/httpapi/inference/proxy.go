@@ -130,6 +130,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	if lc != nil {
 		if host != nil {
 			lc.HostID = host.Meta.ID
+			lc.HostName = host.Meta.Name
 		}
 		if rk := RelayKeyFromContext(ctx); rk != nil {
 			lc.PolicyID = rk.Spec.PolicyID

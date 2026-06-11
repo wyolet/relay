@@ -33,6 +33,7 @@ func TestWriteThenEvents(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	ev := event("req-1", now, 200, "pipeline")
+	ev.Model, ev.Host, ev.Policy = "gpt-4o", "openai", "default"
 
 	if err := sk.Write(ev); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -47,6 +48,9 @@ func TestWriteThenEvents(t *testing.T) {
 	}
 	if got[0].RequestID != "req-1" {
 		t.Errorf("wrong request_id: %s", got[0].RequestID)
+	}
+	if got[0].Model != "gpt-4o" || got[0].Host != "openai" || got[0].Policy != "default" {
+		t.Errorf("slug round-trip: %+v", got[0])
 	}
 }
 

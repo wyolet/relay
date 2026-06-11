@@ -90,3 +90,21 @@ func TestBuildEvent_EventTimeAndTags(t *testing.T) {
 		t.Fatalf("event damaged: %+v", ev)
 	}
 }
+
+func TestBuildEvent_AttributionSlugs(t *testing.T) {
+	lc := lifecycle.NewContext("req-2", "pipeline", time.Now())
+	lc.PolicyID, lc.PolicyName = "pid", "default"
+	lc.ModelID, lc.ModelName = "mid", "gpt-4o"
+	lc.HostID, lc.HostName = "hid", "openai"
+
+	ev := buildEvent(lc, 200, "", "", nil)
+	if ev.PolicyID != "pid" || ev.Policy != "default" {
+		t.Fatalf("policy: %q/%q", ev.PolicyID, ev.Policy)
+	}
+	if ev.ModelID != "mid" || ev.Model != "gpt-4o" {
+		t.Fatalf("model: %q/%q", ev.ModelID, ev.Model)
+	}
+	if ev.HostID != "hid" || ev.Host != "openai" {
+		t.Fatalf("host: %q/%q", ev.HostID, ev.Host)
+	}
+}

@@ -63,6 +63,15 @@ type Context struct {
 	HostID       string
 	HostKeyID    string
 
+	// PolicyName / ModelName / HostName carry the entities' slugs
+	// (metadata.name) as resolved at request time — denormalized onto the
+	// usage event so it stays self-describing after catalog churn. Filled
+	// at the same sites as the ids, by copying what routing already
+	// resolved; never by an extra lookup.
+	PolicyName string
+	ModelName  string
+	HostName   string
+
 	// PayloadLog opts this request into full request/response body capture
 	// by the payloadlog observer. Set at the inference entry from the
 	// routing Plan (Policy or RelayKey opt-in). When false, the payload

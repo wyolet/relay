@@ -68,12 +68,15 @@ func applyPlanIdentity(lc *lifecycle.Context, plan *routing.Plan) {
 	}
 	if plan.Policy != nil {
 		lc.PolicyID = plan.Policy.Meta.ID
+		lc.PolicyName = plan.Policy.Meta.Name
 	}
 	if plan.Model != nil {
 		lc.ModelID = plan.Model.Meta.ID
+		lc.ModelName = plan.Model.Meta.Name
 	}
 	if plan.Host != nil {
 		lc.HostID = plan.Host.Meta.ID
+		lc.HostName = plan.Host.Meta.Name
 	}
 }
 

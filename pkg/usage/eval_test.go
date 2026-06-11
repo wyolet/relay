@@ -197,3 +197,69 @@ func TestTagGroupKey(t *testing.T) {
 		t.Fatal("IsValidGroupBy(tags.): want false")
 	}
 }
+
+func TestSlugDimensions_FilterAndGroupBy(t *testing.T) {
+	now := time.Now().UTC()
+	events := []Event{
+		{RequestID: "a", Timestamp: now, Status: 200,
+			Model: "gpt-4o", Host: "openai", Policy: "default"},
+		{RequestID: "b", Timestamp: now, Status: 200,
+			Model: "claude-sonnet", Host: "anthropic", Policy: "default"},
+		{RequestID: "c", Timestamp: now, Status: 500,
+			Model: "gpt-4o", Host: "azure", Policy: "premium"},
+	}
+
+	for _, g := range []string{"model", "host", "policy"} {
+		if !IsValidGroupBy(g) {
+			t.Fatalf("IsValidGroupBy(%q) = false", g)
+		}
+	}
+
+	byModel, err := Summarize(events, "model")
+	if err != nil {
+		t.Fatalf("Summarize model: %v", err)
+	}
+	if len(byModel.Rows) != 2 {
+		t.Fatalf("model groups: want 2, got %+v", byModel.Rows)
+	}
+	if byModel.Rows[0].Group["model"] != "gpt-4o" || byModel.Rows[0].Requests != 2 {
+		t.Fatalf("top model group: %+v", byModel.Rows[0])
+	}
+
+	byHost, err := Summarize(events, "host")
+	if err != nil {
+		t.Fatalf("Summarize host: %v", err)
+	}
+	if len(byHost.Rows) != 3 {
+		t.Fatalf("host groups: want 3, got %+v", byHost.Rows)
+	}
+
+	byPolicy, err := Summarize(events, "policy")
+	if err != nil {
+		t.Fatalf("Summarize policy: %v", err)
+	}
+	if len(byPolicy.Rows) != 2 || byPolicy.Rows[0].Group["policy"] != "default" {
+		t.Fatalf("policy groups: %+v", byPolicy.Rows)
+	}
+
+	ts, err := Bucketize(events, time.Hour, "model")
+	if err != nil {
+		t.Fatalf("Bucketize model: %v", err)
+	}
+	if len(ts.Rows) != 2 || ts.Rows[0].Group["model"] != "gpt-4o" {
+		t.Fatalf("timeseries model groups: %+v", ts.Rows)
+	}
+
+	got := FilterEvents(events, EventQuery{Model: []string{"gpt-4o"}})
+	if len(got) != 2 {
+		t.Fatalf("model filter: want 2, got %d", len(got))
+	}
+	got = FilterEvents(events, EventQuery{Host: []string{"azure", "anthropic"}})
+	if len(got) != 2 {
+		t.Fatalf("host filter: want 2, got %d", len(got))
+	}
+	got = FilterEvents(events, EventQuery{Policy: []string{"premium"}})
+	if len(got) != 1 || got[0].RequestID != "c" {
+		t.Fatalf("policy filter: %+v", got)
+	}
+}

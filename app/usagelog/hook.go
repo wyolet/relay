@@ -57,6 +57,9 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 		RequestedModel: lc.RequestedModel,
 		HostID:         lc.HostID,
 		HostKeyID:      lc.HostKeyID,
+		Model:          lc.ModelName,
+		Host:           lc.HostName,
+		Policy:         lc.PolicyName,
 	}
 	if !lc.EventTime.IsZero() {
 		out.Timestamp = lc.EventTime
