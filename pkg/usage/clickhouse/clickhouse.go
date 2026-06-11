@@ -690,8 +690,13 @@ const ttftSelectSQL = `
 // costSelectSQL sums emit-time cost over priced rows only (sentinel -1 =
 // unpriced) and counts the unpriced ones — a cost total must say how
 // complete it is rather than fold unpriced rows in as silent zeros.
+// The sum's alias must NOT be `cost_nanos`: ClickHouse resolves identifiers
+// to SELECT aliases before columns, so an alias shadowing the column would
+// substitute the sumIf into countIf's argument — "aggregate function found
+// inside another aggregate function" (code 184). Scans are positional, so
+// the alias name is otherwise free.
 const costSelectSQL = `
-    toInt64(sumIf(cost_nanos, cost_nanos >= 0)) AS cost_nanos,
+    toInt64(sumIf(cost_nanos, cost_nanos >= 0)) AS cost_nanos_sum,
     toInt64(countIf(cost_nanos < 0))            AS unpriced`
 
 // ttftCols receives the ttftSelectSQL columns for one result row.
