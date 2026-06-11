@@ -61,6 +61,12 @@ type Request struct {
 	// stays shape-blind either way.
 	Body io.Reader
 
+	// ContentLength is the inbound request's Content-Length, applied to
+	// the upstream request explicitly because a non-seekable streamed Body
+	// gives http.NewRequest no length to infer — without it the forward
+	// degrades to chunked transfer. <= 0 means unknown.
+	ContentLength int64
+
 	// Headers is the inbound header set with relay-internal headers
 	// already stripped (X-WR-*, Cookie, hop-by-hop).
 	// Authorization is set separately via UpstreamAuth — do not include
@@ -168,6 +174,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		}
 	}
 	upstream.Header.Set("Authorization", req.UpstreamAuth)
+	if req.ContentLength > 0 {
+		upstream.ContentLength = req.ContentLength
+	}
 
 	req.Lifecycle.MarkUpstreamStart()
 	resp, err := p.Client.Do(upstream)

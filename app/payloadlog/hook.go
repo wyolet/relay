@@ -41,6 +41,9 @@ func buildRecord(lc *lifecycle.Context, respBody []byte, maxBytes int) *Record {
 		ts = time.Now()
 	}
 	reqBody, reqTrunc := clip(lc.RequestBody, maxBytes)
+	// The proxy peek-then-stream path retains only a body prefix; the record
+	// must flag that even when MaxBytes itself didn't clip anything.
+	reqTrunc = reqTrunc || lc.RequestBodyTruncated
 	respBody, respTrunc := clip(respBody, maxBytes)
 	return &Record{
 		RequestID:         lc.RequestID,

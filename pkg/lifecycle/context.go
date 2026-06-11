@@ -76,6 +76,11 @@ type Context struct {
 	// reference to the dispatch buffer, not a copy — never mutated.
 	RequestBody []byte
 
+	// RequestBodyTruncated marks RequestBody as a prefix of a larger
+	// streamed body (proxy peek-then-stream), so payload records never
+	// pretend the prefix was the whole request.
+	RequestBodyTruncated bool
+
 	// Cross-hook channel. Middleware writes; observers read.
 	// Concurrent map writes during post-flight are a panic — keep
 	// writes to the pre-flight phase only, or wrap with your own lock
