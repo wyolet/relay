@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -87,6 +88,11 @@ type EventQuery struct {
 	HostKeyID      []string
 	RequestedModel []string
 
+	// Tags filters on caller-supplied event tags: key → accepted values.
+	// AND across keys, OR within a key's values. An event with the key
+	// missing matches only an explicit "" value. Nil/empty = no filter.
+	Tags map[string][]string
+
 	// Streamed / ErrorsOnly are tri-state: nil = no filter, else match the
 	// bool. ErrorsOnly true matches status>=400 OR error_kind!="" (false
 	// matches the complement — "successes only").
@@ -129,7 +135,8 @@ type SummaryQuery struct {
 
 	// GroupBy is the dimension to group on. Valid values:
 	// "relay_key_hash", "policy_id", "model_id", "host_id",
-	// "host_key_id", "source", "finish_reason", "error_kind".
+	// "host_key_id", "source", "finish_reason", "error_kind",
+	// or "tags.<key>" (dynamic, groups on a caller tag's value).
 	// Empty → "source".
 	GroupBy string
 }
@@ -234,9 +241,10 @@ type TimeSeriesResult struct {
 // before hitting a backend.
 const MaxBuckets = 5_000
 
-// ValidGroupBy lists the accepted GroupBy values. Used by the HTTP
+// ValidGroupBy lists the accepted static GroupBy values. Used by the HTTP
 // endpoint to reject typos with a clear 400 instead of silently
-// grouping on nothing.
+// grouping on nothing. "tags.<key>" is additionally accepted as a
+// dynamic dimension — see TagGroupKey.
 var ValidGroupBy = []string{
 	"relay_key_hash",
 	"policy_id",
@@ -248,13 +256,31 @@ var ValidGroupBy = []string{
 	"error_kind",
 }
 
+// MaxTagKeyLen caps a single tag key. Enforced at write time
+// (app/usagelog tag validation) and reused by TagGroupKey so an
+// unwritable key can't become a group dimension.
+const MaxTagKeyLen = 64
+
+// TagGroupKey extracts the tag key from a dynamic "tags.<key>" group
+// dimension. ok is false when g isn't tag-shaped or the key is empty /
+// over MaxTagKeyLen. Backends MUST bind the returned key as a query
+// parameter, never splice it into SQL text.
+func TagGroupKey(g string) (string, bool) {
+	key, found := strings.CutPrefix(g, "tags.")
+	if !found || key == "" || len(key) > MaxTagKeyLen {
+		return "", false
+	}
+	return key, true
+}
+
 // IsValidGroupBy reports whether g is one of the supported group
-// dimensions.
+// dimensions (a ValidGroupBy entry or a "tags.<key>" dynamic one).
 func IsValidGroupBy(g string) bool {
 	for _, v := range ValidGroupBy {
 		if g == v {
 			return true
 		}
 	}
-	return false
+	_, ok := TagGroupKey(g)
+	return ok
 }

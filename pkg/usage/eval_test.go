@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -123,5 +124,76 @@ func TestAggregates_LatencyTTFTAndErrorSplit(t *testing.T) {
 	}
 	if noTTFT.Rows[0].Points[0].TTFTMs != nil {
 		t.Fatalf("want nil ttft_ms, got %+v", noTTFT.Rows[0].Points[0].TTFTMs)
+	}
+}
+
+func TestTags_FilterAndGroupBy(t *testing.T) {
+	now := time.Now().UTC()
+	events := []Event{
+		{RequestID: "a", Source: "pipeline", Timestamp: now, Status: 200,
+			Tags: map[string]string{"session_id": "s1", "leg": "bytepass"}},
+		{RequestID: "b", Source: "pipeline", Timestamp: now, Status: 200,
+			Tags: map[string]string{"session_id": "s1", "leg": "translate"}},
+		{RequestID: "c", Source: "pipeline", Timestamp: now, Status: 200,
+			Tags: map[string]string{"session_id": "s2"}},
+		{RequestID: "d", Source: "pipeline", Timestamp: now, Status: 200}, // untagged
+	}
+
+	got := FilterEvents(events, EventQuery{Tags: map[string][]string{"session_id": {"s1"}}})
+	if len(got) != 2 {
+		t.Fatalf("single value: want 2, got %d", len(got))
+	}
+	got = FilterEvents(events, EventQuery{Tags: map[string][]string{"session_id": {"s1", "s2"}}})
+	if len(got) != 3 {
+		t.Fatalf("OR within key: want 3, got %d", len(got))
+	}
+	got = FilterEvents(events, EventQuery{Tags: map[string][]string{"session_id": {"s1"}, "leg": {"translate"}}})
+	if len(got) != 1 || got[0].RequestID != "b" {
+		t.Fatalf("AND across keys: %+v", got)
+	}
+	// A missing key matches only an explicit "" value.
+	got = FilterEvents(events, EventQuery{Tags: map[string][]string{"leg": {""}}})
+	if len(got) != 2 {
+		t.Fatalf("missing-key as empty: want 2 (c + d), got %d", len(got))
+	}
+
+	res, err := Summarize(events, "tags.session_id")
+	if err != nil {
+		t.Fatalf("Summarize tags.session_id: %v", err)
+	}
+	if len(res.Rows) != 3 { // s1(2), s2(1), ""(1)
+		t.Fatalf("tag groups: %+v", res.Rows)
+	}
+	if res.Rows[0].Group["tags.session_id"] != "s1" || res.Rows[0].Requests != 2 {
+		t.Fatalf("top tag group: %+v", res.Rows[0])
+	}
+
+	ts, err := Bucketize(events, time.Hour, "tags.leg")
+	if err != nil {
+		t.Fatalf("Bucketize tags.leg: %v", err)
+	}
+	if len(ts.Rows) != 3 { // "bytepass", "translate", ""
+		t.Fatalf("tag series: %+v", ts.Rows)
+	}
+
+	if _, err := Summarize(events, "tags."); err == nil {
+		t.Fatal("empty tag key: want error")
+	}
+}
+
+func TestTagGroupKey(t *testing.T) {
+	if key, ok := TagGroupKey("tags.session_id"); !ok || key != "session_id" {
+		t.Fatalf("tags.session_id: got %q, %v", key, ok)
+	}
+	for _, bad := range []string{"tags.", "tags", "session_id", "tags." + strings.Repeat("k", MaxTagKeyLen+1)} {
+		if _, ok := TagGroupKey(bad); ok {
+			t.Fatalf("want invalid: %q", bad)
+		}
+	}
+	if !IsValidGroupBy("tags.leg") {
+		t.Fatal("IsValidGroupBy(tags.leg): want true")
+	}
+	if IsValidGroupBy("tags.") {
+		t.Fatal("IsValidGroupBy(tags.): want false")
 	}
 }

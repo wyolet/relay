@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,7 +78,7 @@ var expectedColumns = []string{
 	"finish_reason", "attempts", "error_kind", "error_message",
 	"upstream_start", "upstream_response_start", "upstream_response_end",
 	"relay_key_hash", "policy_id", "model_id", "requested_model",
-	"host_id", "host_key_id", "tokens", "extras",
+	"host_id", "host_key_id", "tokens", "extras", "tags",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -103,8 +104,13 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     host_id                  text         NOT NULL DEFAULT '',
     host_key_id              text         NOT NULL DEFAULT '',
     tokens                   jsonb        NOT NULL DEFAULT '{}',
-    extras                   jsonb        NOT NULL DEFAULT '{}'
+    extras                   jsonb        NOT NULL DEFAULT '{}',
+    tags                     jsonb        NOT NULL DEFAULT '{}'
 )`
+
+// alterTableSQL upgrades a pre-tags table in place — additive columns get
+// an idempotent ALTER instead of the fail-fast "drop or rename" error.
+const alterTableSQL = `ALTER TABLE %s ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '{}'`
 
 const createIndexSQL = `
 CREATE INDEX IF NOT EXISTS %s_ts_idx ON %s (ts DESC);
@@ -117,6 +123,10 @@ func ensureSchema(ctx context.Context, pool *pgxpool.Pool, table string) error {
 	ddl := fmt.Sprintf(createTableSQL, table)
 	if _, err := pool.Exec(ctx, ddl); err != nil {
 		return fmt.Errorf("usage/postgres: create table: %w", err)
+	}
+
+	if _, err := pool.Exec(ctx, fmt.Sprintf(alterTableSQL, table)); err != nil {
+		return fmt.Errorf("usage/postgres: alter table: %w", err)
 	}
 
 	idx := fmt.Sprintf(createIndexSQL, table, table, table, table, table, table)
@@ -330,6 +340,10 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 		if extras == nil {
 			extras = map[string]string{}
 		}
+		tags := ev.Tags
+		if tags == nil {
+			tags = map[string]string{}
+		}
 		tokensJSON, err := json.Marshal(tokens)
 		if err != nil {
 			tokensJSON = []byte("{}")
@@ -337,6 +351,10 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 		extrasJSON, err := json.Marshal(extras)
 		if err != nil {
 			extrasJSON = []byte("{}")
+		}
+		tagsJSON, err := json.Marshal(tags)
+		if err != nil {
+			tagsJSON = []byte("{}")
 		}
 
 		var upStart, upRespStart, upRespEnd *int64
@@ -367,6 +385,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.HostKeyID,
 			tokensJSON,
 			extrasJSON,
+			tagsJSON,
 		})
 	}
 
@@ -398,7 +417,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        finish_reason, attempts, error_kind, error_message,
 		        upstream_start, upstream_response_start, upstream_response_end,
 		        relay_key_hash, policy_id, model_id, requested_model,
-		        host_id, host_key_id, tokens, extras
+		        host_id, host_key_id, tokens, extras, tags
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -420,6 +439,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			upRespEnd   *int64
 			tokensJSON  []byte
 			extrasJSON  []byte
+			tagsJSON    []byte
 		)
 		if err := rows.Scan(
 			&ev.RequestID,
@@ -443,6 +463,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.HostKeyID,
 			&tokensJSON,
 			&extrasJSON,
+			&tagsJSON,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -467,6 +488,13 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			_ = json.Unmarshal(extrasJSON, &extras)
 			ev.Extras = extras
 		}
+		if len(tagsJSON) > 0 {
+			var tags map[string]string
+			_ = json.Unmarshal(tagsJSON, &tags)
+			if len(tags) > 0 {
+				ev.Tags = tags
+			}
+		}
 
 		events = append(events, ev)
 	}
@@ -486,6 +514,7 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 	}
 
 	where, args := buildWhere(q.EventQuery, true)
+	grpExpr, args := groupExpr(groupBy, args)
 
 	// Query 1: scalar aggregates + latency percentiles.
 	scalarSQL := fmt.Sprintf(`
@@ -502,9 +531,9 @@ SELECT
     min(ts)                                                  AS first_seen,
     max(ts)                                                  AS last_seen
 FROM %s%s
-GROUP BY %s
+GROUP BY grp
 ORDER BY requests DESC`,
-		groupBy, s.cfg.Table, where, groupBy,
+		grpExpr, s.cfg.Table, where,
 	)
 
 	scalarRows, err := s.pool.Query(ctx, scalarSQL, args...)
@@ -558,11 +587,11 @@ ORDER BY requests DESC`,
 	// wrapped in a subquery so WHERE precedes the CROSS JOIN LATERAL.
 	if len(scalars) > 0 {
 		tokenSQL := fmt.Sprintf(`
-SELECT sub.%s AS grp, kv.key, sum(kv.value::bigint)::bigint
-FROM (SELECT %s, tokens FROM %s%s) AS sub
+SELECT sub.grp, kv.key, sum(kv.value::bigint)::bigint
+FROM (SELECT %s AS grp, tokens FROM %s%s) AS sub
 CROSS JOIN LATERAL jsonb_each_text(sub.tokens) AS kv
-GROUP BY sub.%s, kv.key`,
-			groupBy, groupBy, s.cfg.Table, where, groupBy,
+GROUP BY sub.grp, kv.key`,
+			grpExpr, s.cfg.Table, where,
 		)
 		tokenRows, err := s.pool.Query(ctx, tokenSQL, args...)
 		if err != nil {
@@ -621,8 +650,10 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 
 	selPrefix, grpCols := "", ""
 	if groupBy != "" {
-		selPrefix = groupBy + " AS grp, "
-		grpCols = groupBy + ", "
+		var grpExpr string
+		grpExpr, args = groupExpr(groupBy, args)
+		selPrefix = grpExpr + " AS grp, "
+		grpCols = "grp, "
 	}
 
 	scalarSQL := fmt.Sprintf(`
@@ -807,6 +838,18 @@ func (t ttftCols) stats() *usage.DurationStats {
 	}
 }
 
+// groupExpr returns the SQL grouping expression for groupBy. Static
+// dimensions are column names; the dynamic "tags.<key>" dimension binds
+// the key as a positional arg (never spliced into SQL text) and groups on
+// the tag's value, missing key folded to ”.
+func groupExpr(groupBy string, args []any) (string, []any) {
+	if key, ok := usage.TagGroupKey(groupBy); ok {
+		args = append(args, key)
+		return fmt.Sprintf("COALESCE(tags->>$%d, '')", len(args)), args
+	}
+	return groupBy, args
+}
+
 // buildWhere generates a WHERE clause and positional args ($1, $2, …) for an
 // EventQuery. The clause is empty string when no filters are set. With
 // aggregate set (Summary/TimeSeries), LogOnly events — pre-upstream
@@ -874,6 +917,15 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	any("host_key_id", q.HostKeyID)
 	any("requested_model", q.RequestedModel)
+	for _, k := range sortedTagKeys(q.Tags) {
+		vals := q.Tags[k]
+		if len(vals) == 0 {
+			continue
+		}
+		n += 2
+		clauses = append(clauses, fmt.Sprintf("COALESCE(tags->>$%d, '') = ANY($%d)", n-1, n))
+		args = append(args, k, vals)
+	}
 	if q.Streamed != nil {
 		add("streamed = $%d", *q.Streamed)
 	}
@@ -921,4 +973,18 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// sortedTagKeys gives the tag filter a deterministic clause order (map
+// iteration is randomized).
+func sortedTagKeys(tags map[string][]string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

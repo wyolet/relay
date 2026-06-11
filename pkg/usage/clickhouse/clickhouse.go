@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -80,7 +81,8 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     host_id                  String,
     host_key_id              String,
     tokens                   Map(LowCardinality(String), Int64) CODEC(ZSTD(1)),
-    extras                   Map(LowCardinality(String), String)
+    extras                   Map(LowCardinality(String), String),
+    tags                     Map(LowCardinality(String), String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)
@@ -93,8 +95,12 @@ var expectedColumns = []string{
 	"finish_reason", "attempts", "error_kind", "error_message",
 	"upstream_start", "upstream_response_start", "upstream_response_end",
 	"relay_key_hash", "policy_id", "model_id", "requested_model",
-	"host_id", "host_key_id", "tokens", "extras",
+	"host_id", "host_key_id", "tokens", "extras", "tags",
 }
+
+// alterTableSQL upgrades a pre-tags table in place — additive columns get
+// an idempotent ALTER instead of the fail-fast "drop or rename" error.
+const alterTableSQL = `ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS tags Map(LowCardinality(String), String)`
 
 // ensureSchema creates the table if absent, then verifies its columns match
 // what insertBatch writes. CREATE TABLE IF NOT EXISTS is a silent no-op
@@ -104,6 +110,10 @@ var expectedColumns = []string{
 func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
 	if err := conn.Exec(ctx, fmt.Sprintf(createTableSQL, retentionDays)); err != nil {
 		return fmt.Errorf("usage/clickhouse: create table: %w", err)
+	}
+
+	if err := conn.Exec(ctx, alterTableSQL); err != nil {
+		return fmt.Errorf("usage/clickhouse: alter table: %w", err)
 	}
 
 	rows, err := conn.Query(ctx,
@@ -260,6 +270,10 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 		if extras == nil {
 			extras = map[string]string{}
 		}
+		tags := ev.Tags
+		if tags == nil {
+			tags = map[string]string{}
+		}
 
 		streamed := uint8(0)
 		if ev.Streamed {
@@ -288,6 +302,7 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			ev.HostKeyID,
 			tokens,
 			extras,
+			tags,
 		)
 		if err != nil {
 			return fmt.Errorf("append row: %w", err)
@@ -310,7 +325,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -332,6 +347,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			upRespEnd   int64
 			tokens      map[string]int64
 			extras      map[string]string
+			tags        map[string]string
 		)
 		if err := rows.Scan(
 			&ev.RequestID,
@@ -355,6 +371,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&ev.HostKeyID,
 			&tokens,
 			&extras,
+			&tags,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -363,6 +380,9 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		ev.Attempts = int(attempts)
 		ev.Tokens = sdkusage.Tokens(tokens)
 		ev.Extras = extras
+		if len(tags) > 0 {
+			ev.Tags = tags
+		}
 		if upStart != -1 {
 			ev.Upstream = &sdkusage.UpstreamTiming{
 				Start:         upStart,
@@ -385,13 +405,23 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 		return usage.SummaryResult{}, fmt.Errorf("usage/clickhouse: invalid groupBy %q", groupBy)
 	}
 
-	col := groupBy // column name matches the GroupBy value in this schema
+	grpExpr := groupBy // column name matches the GroupBy value in this schema
+	var preArgs []any
+	if key, ok := usage.TagGroupKey(groupBy); ok {
+		// tags[?] binds the key (never spliced into SQL text); a missing
+		// key yields '' (Map default), matching the other backends.
+		grpExpr = "tags[?]"
+		preArgs = []any{key}
+	}
 
 	where, args := buildWhere(q.EventQuery, true)
+	// clickhouse-go substitutes ? placeholders in text order — the group
+	// key appears in the SELECT list, ahead of the WHERE args.
+	args = append(preArgs, args...)
 
 	sql := fmt.Sprintf(`
 SELECT
-    %s,
+    %s AS grp,
     toInt64(count())                    AS requests,
     toInt64(countIf(status >= 400))     AS error_count,
     sumMap(tokens)                      AS tokens,
@@ -404,9 +434,9 @@ SELECT
     min(ts)                             AS first_seen,
     max(ts)                             AS last_seen
 FROM %s%s
-GROUP BY %s
+GROUP BY grp
 ORDER BY requests DESC`,
-		col, chTable, where, col)
+		grpExpr, chTable, where)
 
 	rows, err := s.conn.Query(ctx, sql, args...)
 	if err != nil {
@@ -480,7 +510,14 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	selCols := bucketExpr + " AS bucket"
 	groupOrder := "bucket"
 	if groupBy != "" {
-		selCols = groupBy + " AS grp, " + selCols
+		grpExpr := groupBy
+		if key, ok := usage.TagGroupKey(groupBy); ok {
+			grpExpr = "tags[?]"
+			// clickhouse-go substitutes ? placeholders in text order — the
+			// group key appears in the SELECT list, ahead of the WHERE args.
+			args = append([]any{key}, args...)
+		}
+		selCols = grpExpr + " AS grp, " + selCols
 		groupOrder = "grp, bucket"
 	}
 
@@ -670,6 +707,19 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	in("host_key_id", q.HostKeyID)
 	in("requested_model", q.RequestedModel)
+	for _, k := range sortedTagKeys(q.Tags) {
+		vals := q.Tags[k]
+		if len(vals) == 0 {
+			continue
+		}
+		args = append(args, k)
+		ph := make([]string, len(vals))
+		for i, v := range vals {
+			ph[i] = "?"
+			args = append(args, v)
+		}
+		clauses = append(clauses, "tags[?] IN ("+strings.Join(ph, ",")+")")
+	}
 	if q.Streamed != nil {
 		v := uint8(0)
 		if *q.Streamed {
@@ -724,4 +774,18 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+// sortedTagKeys gives the tag filter a deterministic clause order (map
+// iteration is randomized).
+func sortedTagKeys(tags map[string][]string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

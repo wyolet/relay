@@ -79,6 +79,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	cls := ClassificationFrom(ctx)
 	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
 	lc.RequestedModel = in.ModelName
+	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture
 	// gate (lc.PayloadLog) is set once routing resolves the opt-in.

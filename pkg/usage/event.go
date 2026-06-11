@@ -61,6 +61,10 @@ type Event struct {
 
 	// Free-form per-runner tags (client_ip for anonymous proxy, etc.)
 	Extras map[string]string `json:"extras,omitempty"`
+
+	// Tags are caller-owned (X-WR-Request-Tags, validated post-flight);
+	// Extras stays relay-stamped — the provenance split queries rely on.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // LogOnly reports whether the event records a request rejected before any

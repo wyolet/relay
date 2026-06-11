@@ -47,11 +47,13 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			Upstream: &sdkusage.UpstreamTiming{Start: 100, ResponseStart: 200, ResponseEnd: 300},
 			Tokens:   sdkusage.Tokens{"input": 10, "output": 5},
 			Extras:   map[string]string{"client_ip": "1.2.3.4"},
+			Tags:     map[string]string{"session_id": "s1", "leg": "bytepass"},
 		},
 		{
 			RequestID: marker + "-2", Source: "pipeline", Timestamp: now.Add(time.Second),
 			Status: 500, DurationMs: 50, ModelID: marker, PolicyID: "p1",
 			ErrorKind: "upstream_5xx",
+			Tags:      map[string]string{"session_id": "s1", "leg": "translate"},
 		},
 	}
 	for _, ev := range events {
@@ -96,6 +98,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if e1.Extras["client_ip"] != "1.2.3.4" {
 		t.Fatalf("extras round-trip mismatch: %+v", e1.Extras)
 	}
+	if e1.Tags["session_id"] != "s1" || e1.Tags["leg"] != "bytepass" {
+		t.Fatalf("tags round-trip mismatch: %+v", e1.Tags)
+	}
 	if got[0].Upstream != nil {
 		t.Fatalf("event-2 had no upstream timing; sentinel should map to nil, got %+v", got[0].Upstream)
 	}
@@ -133,6 +138,25 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if len(byErr.Rows) != 2 {
 		t.Fatalf("error_kind groups: want 2 (\"\" + upstream_5xx), got %+v", byErr.Rows)
+	}
+
+	// Tag filter narrows to the matching event only.
+	tq := q
+	tq.Tags = map[string][]string{"leg": {"translate"}}
+	tagged, err := s.Events(context.Background(), tq)
+	if err != nil || len(tagged) != 1 || tagged[0].RequestID != marker+"-2" {
+		t.Fatalf("tag filter: err=%v rows=%+v", err, tagged)
+	}
+
+	// Dynamic tag group dimension splits by tag value.
+	byLeg, err := s.Summary(context.Background(), usage.SummaryQuery{
+		EventQuery: q, GroupBy: "tags.leg",
+	})
+	if err != nil {
+		t.Fatalf("Summary by tags.leg: %v", err)
+	}
+	if len(byLeg.Rows) != 2 {
+		t.Fatalf("tags.leg groups: want 2 (bytepass + translate), got %+v", byLeg.Rows)
 	}
 
 	// TimeSeries pushed into SQL: both events in one hour-bucket.

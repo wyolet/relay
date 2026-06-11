@@ -34,6 +34,12 @@ type Context struct {
 	// upstream + end marks as the request progresses. See timing.go.
 	Timing Timing
 
+	// EventTime is a caller-asserted event timestamp (X-WR-Event-Time,
+	// honored only under the dev trust flag). Zero = unset. It overrides
+	// the usage Event's Timestamp only — never Timing.Start, which every
+	// duration derives from and must stay real.
+	EventTime time.Time
+
 	// Streamed reports whether the response was streamed back to the
 	// caller. Set by the runner once known (request flag in pipeline,
 	// upstream Content-Type in proxy).
