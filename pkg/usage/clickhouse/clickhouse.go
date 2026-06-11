@@ -82,7 +82,10 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     host_key_id              String,
     tokens                   Map(LowCardinality(String), Int64) CODEC(ZSTD(1)),
     extras                   Map(LowCardinality(String), String),
-    tags                     Map(LowCardinality(String), String)
+    tags                     Map(LowCardinality(String), String),
+    model                    LowCardinality(String),
+    host                     LowCardinality(String),
+    policy                   LowCardinality(String)
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)
@@ -96,11 +99,17 @@ var expectedColumns = []string{
 	"upstream_start", "upstream_response_start", "upstream_response_end",
 	"relay_key_hash", "policy_id", "model_id", "requested_model",
 	"host_id", "host_key_id", "tokens", "extras", "tags",
+	"model", "host", "policy",
 }
 
-// alterTableSQL upgrades a pre-tags table in place — additive columns get
-// an idempotent ALTER instead of the fail-fast "drop or rename" error.
-const alterTableSQL = `ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS tags Map(LowCardinality(String), String)`
+// alterTableSQL upgrades a pre-existing table in place — additive columns
+// get an idempotent ALTER instead of the fail-fast "drop or rename" error.
+var alterTableSQL = []string{
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS tags Map(LowCardinality(String), String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS model LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS host LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS policy LowCardinality(String)`,
+}
 
 // ensureSchema creates the table if absent, then verifies its columns match
 // what insertBatch writes. CREATE TABLE IF NOT EXISTS is a silent no-op
@@ -112,8 +121,10 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 		return fmt.Errorf("usage/clickhouse: create table: %w", err)
 	}
 
-	if err := conn.Exec(ctx, alterTableSQL); err != nil {
-		return fmt.Errorf("usage/clickhouse: alter table: %w", err)
+	for _, stmt := range alterTableSQL {
+		if err := conn.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("usage/clickhouse: alter table: %w", err)
+		}
 	}
 
 	rows, err := conn.Query(ctx,
@@ -303,6 +314,9 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			tokens,
 			extras,
 			tags,
+			ev.Model,
+			ev.Host,
+			ev.Policy,
 		)
 		if err != nil {
 			return fmt.Errorf("append row: %w", err)
@@ -325,7 +339,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -372,6 +386,9 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&tokens,
 			&extras,
 			&tags,
+			&ev.Model,
+			&ev.Host,
+			&ev.Policy,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -707,6 +724,9 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	in("host_key_id", q.HostKeyID)
 	in("requested_model", q.RequestedModel)
+	in("model", q.Model)
+	in("host", q.Host)
+	in("policy", q.Policy)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {

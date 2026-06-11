@@ -315,6 +315,15 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.RequestedModel, ev.RequestedModel) {
 		return false
 	}
+	if !inList(q.Model, ev.Model) {
+		return false
+	}
+	if !inList(q.Host, ev.Host) {
+		return false
+	}
+	if !inList(q.Policy, ev.Policy) {
+		return false
+	}
 	for k, vals := range q.Tags {
 		if !inList(vals, ev.Tags[k]) {
 			return false
@@ -409,6 +418,12 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.FinishReason
 	case "error_kind":
 		return ev.ErrorKind
+	case "model":
+		return ev.Model
+	case "host":
+		return ev.Host
+	case "policy":
+		return ev.Policy
 	default: // "source"
 		return ev.Source
 	}

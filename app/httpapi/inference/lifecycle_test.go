@@ -6,6 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -68,4 +73,43 @@ func TestObsHeadersAreStripped(t *testing.T) {
 			t.Fatalf("%s is not covered by the strip denylist", name)
 		}
 	}
+}
+
+// applyPlanIdentity is the single fill point both runners (pipeline
+// dispatch and proxy plan-override) route through — ids and the
+// denormalized slugs must land together, and partial plans must fill
+// only what they resolved.
+func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
+	lc := lifecycle.NewContext("req", "pipeline", time.Now())
+	plan := &routing.Plan{
+		Policy: &policy.Policy{Meta: meta.Metadata{ID: "pid", Name: "default"}},
+		Model:  &model.Model{Meta: meta.Metadata{ID: "mid", Name: "gpt-4o"}},
+		Host:   &host.Host{Meta: meta.Metadata{ID: "hid", Name: "openai"}},
+	}
+
+	applyPlanIdentity(lc, plan)
+
+	if lc.PolicyID != "pid" || lc.PolicyName != "default" {
+		t.Fatalf("policy: %q/%q", lc.PolicyID, lc.PolicyName)
+	}
+	if lc.ModelID != "mid" || lc.ModelName != "gpt-4o" {
+		t.Fatalf("model: %q/%q", lc.ModelID, lc.ModelName)
+	}
+	if lc.HostID != "hid" || lc.HostName != "openai" {
+		t.Fatalf("host: %q/%q", lc.HostID, lc.HostName)
+	}
+
+	// Partial plan (anonymous proxy / header-pinned host): only the host
+	// resolves; policy/model stay untouched. Nil-safe in both arguments.
+	lc2 := lifecycle.NewContext("req2", "proxy", time.Now())
+	applyPlanIdentity(lc2, &routing.Plan{
+		Host: &host.Host{Meta: meta.Metadata{ID: "hid2", Name: "ollama"}},
+	})
+	if lc2.HostID != "hid2" || lc2.HostName != "ollama" {
+		t.Fatalf("partial host: %q/%q", lc2.HostID, lc2.HostName)
+	}
+	if lc2.PolicyName != "" || lc2.ModelName != "" {
+		t.Fatalf("partial plan leaked names: %+v", lc2)
+	}
+	applyPlanIdentity(nil, nil)
 }

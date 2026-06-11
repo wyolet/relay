@@ -65,6 +65,14 @@ type Event struct {
 	// Tags are caller-owned (X-WR-Request-Tags, validated post-flight);
 	// Extras stays relay-stamped — the provenance split queries rely on.
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// Model, Host, Policy are the entities' slugs (metadata.name) at
+	// event time, denormalized so events stay self-describing when the
+	// catalog entity is gone (deleted, renamed, re-seeded). The *_id
+	// fields above remain the precise keys.
+	Model  string `json:"model,omitempty"`
+	Host   string `json:"host,omitempty"`
+	Policy string `json:"policy,omitempty"`
 }
 
 // LogOnly reports whether the event records a request rejected before any

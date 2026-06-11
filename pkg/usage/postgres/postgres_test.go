@@ -53,12 +53,14 @@ func TestIntegration_RoundTrip(t *testing.T) {
 			Tokens:   sdkusage.Tokens{"input": 10, "output": 5},
 			Extras:   map[string]string{"client_ip": "1.2.3.4"},
 			Tags:     map[string]string{"session_id": "s1", "leg": "bytepass"},
+			Model:    "gpt-4o", Host: "openai", Policy: "default",
 		},
 		{
 			RequestID: marker + "-2", Source: "pipeline", Timestamp: now.Add(time.Second),
 			Status: 500, DurationMs: 50, ModelID: marker, PolicyID: "p1",
 			ErrorKind: "upstream_5xx",
 			Tags:      map[string]string{"session_id": "s1", "leg": "translate"},
+			Model:     "gpt-4o", Host: "azure", Policy: "default",
 		},
 	}
 	for _, ev := range events {
@@ -106,6 +108,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	if e1.Tags["session_id"] != "s1" || e1.Tags["leg"] != "bytepass" {
 		t.Fatalf("tags round-trip mismatch: %+v", e1.Tags)
 	}
+	if e1.Model != "gpt-4o" || e1.Host != "openai" || e1.Policy != "default" {
+		t.Fatalf("slug round-trip mismatch: %+v", e1)
+	}
 	if got[0].Upstream != nil {
 		t.Fatalf("event-2 had no upstream timing; want nil, got %+v", got[0].Upstream)
 	}
@@ -144,6 +149,21 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if len(byErr.Rows) != 2 {
 		t.Fatalf("error_kind groups: want 2 (\"\" + upstream_5xx), got %+v", byErr.Rows)
+	}
+
+	// Slug dimensions: group by the denormalized host slug; filter on it.
+	byHost, err := s.Summary(ctx, usage.SummaryQuery{EventQuery: q, GroupBy: "host"})
+	if err != nil {
+		t.Fatalf("Summary by host: %v", err)
+	}
+	if len(byHost.Rows) != 2 {
+		t.Fatalf("host groups: want 2 (openai + azure), got %+v", byHost.Rows)
+	}
+	hq := q
+	hq.Host = []string{"azure"}
+	hostFiltered, err := s.Events(ctx, hq)
+	if err != nil || len(hostFiltered) != 1 || hostFiltered[0].RequestID != marker+"-2" {
+		t.Fatalf("host filter: err=%v rows=%+v", err, hostFiltered)
 	}
 
 	// Tag filter narrows to the matching event only.

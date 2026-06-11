@@ -79,6 +79,7 @@ var expectedColumns = []string{
 	"upstream_start", "upstream_response_start", "upstream_response_end",
 	"relay_key_hash", "policy_id", "model_id", "requested_model",
 	"host_id", "host_key_id", "tokens", "extras", "tags",
+	"model", "host", "policy",
 }
 
 // createTableSQL creates the usage_events table. upstream_* are NULLABLE bigint
@@ -105,12 +106,20 @@ const createTableSQL = `CREATE TABLE IF NOT EXISTS %s (
     host_key_id              text         NOT NULL DEFAULT '',
     tokens                   jsonb        NOT NULL DEFAULT '{}',
     extras                   jsonb        NOT NULL DEFAULT '{}',
-    tags                     jsonb        NOT NULL DEFAULT '{}'
+    tags                     jsonb        NOT NULL DEFAULT '{}',
+    model                    text         NOT NULL DEFAULT '',
+    host                     text         NOT NULL DEFAULT '',
+    policy                   text         NOT NULL DEFAULT ''
 )`
 
-// alterTableSQL upgrades a pre-tags table in place — additive columns get
-// an idempotent ALTER instead of the fail-fast "drop or rename" error.
-const alterTableSQL = `ALTER TABLE %s ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '{}'`
+// alterTableSQL upgrades a pre-existing table in place — additive columns
+// get an idempotent ALTER instead of the fail-fast "drop or rename" error.
+var alterTableSQL = []string{
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS tags jsonb NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS model text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS host text NOT NULL DEFAULT ''`,
+	`ALTER TABLE %s ADD COLUMN IF NOT EXISTS policy text NOT NULL DEFAULT ''`,
+}
 
 const createIndexSQL = `
 CREATE INDEX IF NOT EXISTS %s_ts_idx ON %s (ts DESC);
@@ -125,8 +134,10 @@ func ensureSchema(ctx context.Context, pool *pgxpool.Pool, table string) error {
 		return fmt.Errorf("usage/postgres: create table: %w", err)
 	}
 
-	if _, err := pool.Exec(ctx, fmt.Sprintf(alterTableSQL, table)); err != nil {
-		return fmt.Errorf("usage/postgres: alter table: %w", err)
+	for _, stmt := range alterTableSQL {
+		if _, err := pool.Exec(ctx, fmt.Sprintf(stmt, table)); err != nil {
+			return fmt.Errorf("usage/postgres: alter table: %w", err)
+		}
 	}
 
 	idx := fmt.Sprintf(createIndexSQL, table, table, table, table, table, table)
@@ -386,6 +397,9 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			tokensJSON,
 			extrasJSON,
 			tagsJSON,
+			ev.Model,
+			ev.Host,
+			ev.Policy,
 		})
 	}
 
@@ -417,7 +431,8 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 		        finish_reason, attempts, error_kind, error_message,
 		        upstream_start, upstream_response_start, upstream_response_end,
 		        relay_key_hash, policy_id, model_id, requested_model,
-		        host_id, host_key_id, tokens, extras, tags
+		        host_id, host_key_id, tokens, extras, tags,
+		        model, host, policy
 		 FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d`,
 		s.cfg.Table, where, limit,
 	)
@@ -464,6 +479,9 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&tokensJSON,
 			&extrasJSON,
 			&tagsJSON,
+			&ev.Model,
+			&ev.Host,
+			&ev.Policy,
 		); err != nil {
 			return nil, fmt.Errorf("usage/postgres: scan event: %w", err)
 		}
@@ -917,6 +935,9 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	any("host_key_id", q.HostKeyID)
 	any("requested_model", q.RequestedModel)
+	any("model", q.Model)
+	any("host", q.Host)
+	any("policy", q.Policy)
 	for _, k := range sortedTagKeys(q.Tags) {
 		vals := q.Tags[k]
 		if len(vals) == 0 {
