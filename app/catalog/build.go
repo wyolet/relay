@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
@@ -36,7 +37,7 @@ func Build(
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings)
+	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil)
 }
 
 func build(
@@ -49,6 +50,7 @@ func build(
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
+	ovls []*overlay.Overlay,
 ) *Snapshot {
 	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings))
 
@@ -69,6 +71,9 @@ func build(
 	s.addHosts(hosts, polByID)
 	s.addPolicies(pols, modelIDs, keyIDs, rlIDs)
 	s.addModels(models, providerIDs)
+	// Overlays swap templates for effective rows BEFORE indexing, so
+	// aliases/refs below index the merged spec.
+	s.applyOverlays(ovls)
 	s.addHostKeys(keys, hostIDs, polByID)
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()
@@ -97,6 +102,8 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		snapshotsByName:       map[string]snapshotRef{},
 		snapshotAliases:       map[string]snapshotRef{},
 		aliasExact:            map[string]AliasRef{},
+		overlaysByTarget:      map[string]*overlay.Overlay{},
+		modelTemplates:        map[string]*model.Model{},
 		hostKeysByID:          make(map[string]*hostkey.HostKey, nKeys),
 		rateLimitsByID:        make(map[string]*ratelimit.RateLimit, nRLs),
 		rateLimitsByName:      make(map[string]*ratelimit.RateLimit, nRLs),

@@ -58,6 +58,13 @@ type Model struct {
 	DisplayName string             `db:"display_name" json:"display_name"`
 }
 
+type Overlay struct {
+	Kind       string             `db:"kind" json:"kind"`
+	ResourceID string             `db:"resource_id" json:"resource_id"`
+	Patch      []byte             `db:"patch" json:"patch"`
+	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Policy struct {
 	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`

@@ -376,3 +376,19 @@ INSERT INTO batch_items (batch_id, idx, job_id) VALUES ($1, $2, $3);
 
 -- name: ListBatchItems :many
 SELECT batch_id, idx, job_id FROM batch_items WHERE batch_id = $1 ORDER BY idx ASC;
+
+-- name: ListOverlays :many
+SELECT kind, resource_id, patch, updated_at FROM overlays ORDER BY kind, resource_id;
+
+-- name: GetOverlay :one
+SELECT kind, resource_id, patch, updated_at FROM overlays WHERE kind = $1 AND resource_id = $2;
+
+-- name: UpsertOverlay :exec
+INSERT INTO overlays (kind, resource_id, patch, updated_at)
+VALUES ($1, $2, $3, NOW())
+ON CONFLICT (kind, resource_id) DO UPDATE SET
+    patch = EXCLUDED.patch,
+    updated_at = NOW();
+
+-- name: DeleteOverlay :exec
+DELETE FROM overlays WHERE kind = $1 AND resource_id = $2;

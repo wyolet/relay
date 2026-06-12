@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
@@ -75,6 +76,17 @@ type Snapshot struct {
 	// first with a deterministic tiebreak. Consulted only on aliasExact
 	// miss; see ResolveAlias.
 	aliasPatterns []aliasPattern
+
+	// overlaysByTarget mirrors the overlays table: kind|resourceID →
+	// the user's sparse patch. Applied to templates at build/reconcile
+	// (overlay_apply.go); rows whose target is absent are inert.
+	overlaysByTarget map[string]*overlay.Overlay
+
+	// modelTemplates stashes the PRISTINE template for every model whose
+	// snapshot entry is an overlay-merged effective row, so reconcile can
+	// re-derive (overlay changed) or restore (overlay deleted) without
+	// re-reading PG. Sparse: only overlaid models appear.
+	modelTemplates map[string]*model.Model
 
 	hostKeysByID map[string]*hostkey.HostKey
 

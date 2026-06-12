@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
@@ -41,7 +42,7 @@ type notifyEvent struct {
 var validKinds = map[string]struct{}{
 	"provider": {}, "host": {}, "model": {}, "hostkey": {},
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
-	"hostbinding": {}, "settings": {},
+	"hostbinding": {}, "settings": {}, "overlay": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -142,6 +143,9 @@ type listenerStores struct {
 	}
 	relaykey interface {
 		Get(ctx context.Context, id string) (*relaykey.RelayKey, error)
+	}
+	overlay interface {
+		Get(ctx context.Context, kind, resourceID string) (*overlay.Overlay, error)
 	}
 	settings SettingsLister
 }
@@ -272,7 +276,8 @@ var kindOrder = map[string]int{
 	"pricing":     6,
 	"hostbinding": 7,
 	"relaykey":    8,
-	"settings":    9,
+	"overlay":     9, // after model upserts so re-merges see fresh templates
+	"settings":    10,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -389,6 +394,25 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 		// cost is acceptable. PR2 adds incremental ApplyHostBinding* when
 		// routing reads bindings.
 		return l.cat.Reload(ctx)
+
+	case "overlay":
+		// Composite-key payload: id slot carries "kind|resource_id"
+		// (see migration 000022's overlay_notify()).
+		kind, resourceID, ok := strings.Cut(e.ID, "|")
+		if !ok || l.stores.overlay == nil {
+			return nil
+		}
+		if e.Op == "delete" {
+			return l.cat.ApplyOverlayDelete(kind, resourceID)
+		}
+		o, err := l.stores.overlay.Get(ctx, kind, resourceID)
+		if err != nil {
+			return err
+		}
+		if o == nil {
+			return l.cat.ApplyOverlayDelete(kind, resourceID)
+		}
+		return l.cat.ApplyOverlayUpsert(o)
 
 	case "settings":
 		if e.Op == "delete" {

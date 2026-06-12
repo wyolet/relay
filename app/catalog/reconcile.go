@@ -126,7 +126,9 @@ func (c *Catalog) ApplyModelUpsert(m *model.Model) error {
 		c.commitWithGrants(s)
 		return nil
 	}
-	insertModel(s, clean)
+	// clean is the TEMPLATE; index the overlay-merged effective row
+	// (identity when no overlay exists). See overlay_apply.go.
+	insertModel(s, s.overlaidModel(clean))
 	c.commitWithGrants(s)
 	return nil
 }
@@ -169,6 +171,9 @@ func deleteModel(s *Snapshot, id string) {
 	s.modelsByName[m.Meta.Name] = removeModelFromSlice(s.modelsByName[m.Meta.Name], id)
 	s.deindexModelSnapshots(m)
 	delete(s.modelsByID, id)
+	// The overlay row (if any) stays registered — inert until the model
+	// reappears; only the stashed template goes with the model.
+	delete(s.modelTemplates, id)
 	// Remove from policy joins.
 	for polID, models := range s.modelsByPolicy {
 		s.modelsByPolicy[polID] = removeModelFromSlice(models, id)

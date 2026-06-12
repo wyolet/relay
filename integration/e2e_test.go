@@ -447,6 +447,120 @@ func TestE2E_AliasModel(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// TestE2E_OverlaySurvivesReseed is the overlay feature's end-to-end
+// contract (docs/overlays.md): a user patch set via the control API
+// merges into the live snapshot via NOTIFY, routes traffic, and SURVIVES
+// a template re-seed — while un-overridden template changes flow through.
+func TestE2E_OverlaySurvivesReseed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","model":"m",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],`+
+			`"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer upstream.Close()
+
+	st := newStack(t)
+	relayKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
+	models := st.cat.Current().ModelsByName("test-model")
+	if len(models) != 1 {
+		t.Fatalf("seeded model missing")
+	}
+	modelID := models[0].Meta.ID
+
+	infer := func(modelName string) int {
+		body := []byte(`{"model":"` + modelName + `","messages":[{"role":"user","content":"hi"}]}`)
+		req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+relayKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("infer: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	waitFor := func(desc string, cond func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if cond() {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for: %s", desc)
+	}
+	ctrl := func(method, path string, body []byte) (*http.Response, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest(method, st.control.URL+path, bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+st.adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		return resp, raw
+	}
+	overlayPath := "/models/by-id/" + modelID + "/overlay"
+
+	// 1. Invalid patch is rejected at write time (not quarantined later).
+	if resp, _ := ctrl(http.MethodPut, overlayPath, []byte(`{"patch":{"pointer":"nope"}}`)); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid patch: want 400, got %d", resp.StatusCode)
+	}
+
+	// 2. Set the overlay via the control API; NOTIFY merges it fleet-wide.
+	resp, raw := ctrl(http.MethodPut, overlayPath, []byte(`{"patch":{"aliases":["team-fast"],"family":"custom"}}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT overlay: want 200, got %d: %s", resp.StatusCode, raw)
+	}
+	var view struct {
+		Template  struct{ Family string } `json:"template"`
+		Effective struct {
+			Family  string
+			Aliases []string
+		} `json:"effective"`
+	}
+	if err := json.Unmarshal(raw, &view); err != nil {
+		t.Fatalf("decode overlay view: %v", err)
+	}
+	if view.Effective.Family != "custom" || view.Template.Family != "" {
+		t.Fatalf("provenance view wrong: %s", raw)
+	}
+	waitFor("overlay alias routes", func() bool { return infer("team-fast") == http.StatusOK })
+
+	// 3. Re-seed: overwrite the TEMPLATE row (what a catalog upgrade does).
+	tmpl, err := st.stores.Model.Get(context.Background(), modelID)
+	if err != nil || tmpl == nil {
+		t.Fatalf("template fetch: %v", err)
+	}
+	tmpl.Spec.Version = "v2"
+	tmpl.Spec.Aliases = []string{"catalog-shipped[1m]"}
+	if err := st.stores.Model.Upsert(context.Background(), tmpl); err != nil {
+		t.Fatalf("template reseed: %v", err)
+	}
+	waitFor("template alias routes after reseed", func() bool { return infer("catalog-shipped[1m]") == http.StatusOK })
+	if got := infer("team-fast"); got != http.StatusOK {
+		t.Fatalf("overlay alias clobbered by reseed: %d", got)
+	}
+	if _, raw := ctrl(http.MethodGet, overlayPath, nil); !bytes.Contains(raw, []byte(`"version":"v2"`)) || !bytes.Contains(raw, []byte(`"family":"custom"`)) {
+		t.Fatalf("effective must carry template v2 AND overlay family: %s", raw)
+	}
+
+	// 4. Factory reset: overlay alias stops routing, template stays.
+	if resp, _ := ctrl(http.MethodDelete, overlayPath, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE overlay: %d", resp.StatusCode)
+	}
+	waitFor("overlay alias gone after factory reset", func() bool { return infer("team-fast") == http.StatusNotFound })
+	if got := infer("catalog-shipped[1m]"); got != http.StatusOK {
+		t.Fatalf("template alias lost after factory reset: %d", got)
+	}
+}
+
 // TestE2E_RelayKeyAuth_RejectsBadBearer confirms the inference plane
 // rejects unauthenticated traffic before any routing or upstream call.
 func TestE2E_RelayKeyAuth_RejectsBadBearer(t *testing.T) {
