@@ -867,7 +867,12 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
-		nil,
+		// Credential material is server-managed: PUT can neither wipe nor
+		// overwrite it. Rotation goes through POST /relay-keys/by-id/{id}/rotate.
+		func(existing, incoming *relaykey.RelayKey) {
+			incoming.Spec.KeyHash = existing.Spec.KeyHash
+			incoming.Spec.Prefix = existing.Spec.Prefix
+		},
 		d.Catalog,
 		true, // skipCreate
 		protect,
