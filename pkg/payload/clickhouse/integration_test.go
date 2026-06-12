@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/wyolet/relay/pkg/payload"
 )
 
@@ -36,6 +37,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	defer s.Close()
 
 	marker := "smoke-" + time.Now().Format("20060102T150405.000000000")
+	// RELAY_CH_DSN often points at a shared dev ClickHouse; without this the
+	// marker rows leak into the live payload log.
+	t.Cleanup(func() { deleteMarkerRows(t, dsn, marker) })
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	rec := payload.Record{
@@ -87,5 +91,28 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	defer rdr.Close()
 	if _, err := rdr.Get(ctx, marker+"-1"); err != nil {
 		t.Fatalf("reader Get: %v", err)
+	}
+}
+
+// deleteMarkerRows removes this run's synthetic rows so a shared ClickHouse
+// (the common RELAY_CH_DSN target) isn't left with phantom payload data. A
+// fresh connection is dialled because the Sink's own conn is closed by the
+// time t.Cleanup fires. Best-effort: a delete failure logs, never fails the
+// test.
+func deleteMarkerRows(t *testing.T, dsn, marker string) {
+	t.Helper()
+	opts, err := clickhouse.ParseDSN(dsn)
+	if err != nil {
+		t.Logf("cleanup: parse dsn: %v", err)
+		return
+	}
+	conn, err := clickhouse.Open(opts)
+	if err != nil {
+		t.Logf("cleanup: open: %v", err)
+		return
+	}
+	defer conn.Close()
+	if err := conn.Exec(context.Background(), "DELETE FROM payload_logs WHERE request_id LIKE ?", marker+"%"); err != nil {
+		t.Logf("cleanup: delete payload_logs rows: %v", err)
 	}
 }
