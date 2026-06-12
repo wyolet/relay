@@ -30,6 +30,9 @@
             "null"
           ]
         },
+        "payloadLoggingEnabled": {
+          "type": "boolean"
+        },
         "rateLimit": {
           "type": "string"
         },

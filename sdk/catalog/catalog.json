@@ -1,6 +1,6 @@
 {
   "version": "relay-catalog@v1alpha2",
-  "generatedAt": "2026-06-09T22:49:22.303703Z",
+  "generatedAt": "2026-06-12T19:48:22.706478Z",
   "hosts": [
     {
       "name": "alibaba",
@@ -1228,6 +1228,9 @@
               "unit": "per_million",
               "amount": 1
             }
+          ],
+          "aliases": [
+            "claude-fable-5[1m]"
           ]
         },
         {
@@ -1473,6 +1476,9 @@
               "unit": "per_million",
               "amount": 0.5
             }
+          ],
+          "aliases": [
+            "claude-opus-4-6[1m]"
           ]
         },
         {
@@ -1534,6 +1540,9 @@
               "unit": "per_million",
               "amount": 0.5
             }
+          ],
+          "aliases": [
+            "claude-opus-4-7[1m]"
           ]
         },
         {
@@ -1595,6 +1604,9 @@
               "unit": "per_million",
               "amount": 0.5
             }
+          ],
+          "aliases": [
+            "claude-opus-4-8[1m]"
           ]
         },
         {
@@ -1784,6 +1796,9 @@
               "unit": "per_million",
               "amount": 0.3
             }
+          ],
+          "aliases": [
+            "claude-sonnet-4-6[1m]"
           ]
         }
       ]

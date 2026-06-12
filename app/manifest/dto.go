@@ -143,6 +143,10 @@ type ModelSpec struct {
 
 	Snapshots []model.Snapshot `json:"snapshots" yaml:"snapshots"`
 	Pointer   string           `json:"pointer"   yaml:"pointer"`
+
+	// Aliases are resolution-only matchers (see model.Spec.Aliases). Plain
+	// strings, no cross-refs to resolve.
+	Aliases []string `json:"aliases,omitempty" yaml:"aliases,omitempty"`
 }
 
 // HostBindingDTO is the top-level wire form of a standalone HostBinding entity.

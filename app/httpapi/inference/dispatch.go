@@ -133,8 +133,9 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 
 	plan, err := d.Resolver.Resolve(routing.Request{
-		ModelName: modelRef,
-		RelayKey:  rk,
+		ModelName:    modelRef,
+		RawModelName: in.ModelName,
+		RelayKey:     rk,
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
@@ -234,7 +235,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator) {
 	ctx := r.Context()
 
-	wireBody := rewriteModelField(in.Body, plan.Snapshot.Upstream())
+	wireBody := rewriteModelField(in.Body, plan.UpstreamModel())
 
 	lc := lifecycle.FromContext(ctx)
 	applyPlanIdentity(lc, plan)
@@ -252,7 +253,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		Provider:      plan.Provider,
 		Keys:          plan.Keys,
 		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.Snapshot.Upstream(),
+		UpstreamModel: plan.UpstreamModel(),
 		Stream:        in.Stream,
 		Lifecycle:     lc,
 	}
@@ -327,7 +328,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "translate_request", err.Error())
 		return
 	}
-	canonReq.Model = v1.ModelRefs{plan.Snapshot.Upstream()}
+	canonReq.Model = v1.ModelRefs{plan.UpstreamModel()}
 	applyOutputDefaults(canonReq, plan.Model.Spec.MaxOutputTokens)
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
@@ -353,7 +354,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		Provider:      plan.Provider,
 		Keys:          plan.Keys,
 		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.Snapshot.Upstream(),
+		UpstreamModel: plan.UpstreamModel(),
 		Stream:        in.Stream,
 		Lifecycle:     lc,
 	}

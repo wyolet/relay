@@ -24,6 +24,10 @@ func (s *Snapshot) clone() *Snapshot {
 		modelsByName:    copySliceMap(s.modelsByName),
 		snapshotsByName: shallowMap(s.snapshotsByName),
 		snapshotAliases: shallowMap(s.snapshotAliases),
+		aliasExact:      shallowMap(s.aliasExact),
+		// The reconciler filters this slice in place (deindexModelAliases),
+		// so the clone needs its own backing array.
+		aliasPatterns: append([]aliasPattern(nil), s.aliasPatterns...),
 
 		hostKeysByID:     shallowMap(s.hostKeysByID),
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),

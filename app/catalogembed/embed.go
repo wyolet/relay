@@ -141,6 +141,12 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 					if pr, ok := snap.PriceByModelHost(m.Meta.ID, h.Meta.ID); ok && pr.IsEnabled() {
 						rates = ratesFrom(pr)
 					}
+					// Declared aliases resolve to the pointer snapshot, so they
+					// ride only that row.
+					var aliases []string
+					if snapEntry.Name == m.Spec.Pointer && len(m.Spec.Aliases) > 0 {
+						aliases = append([]string(nil), m.Spec.Aliases...)
+					}
 					hostEntry.Models = append(hostEntry.Models, sdkcatalog.Binding{
 						Model:     snapEntry.Name,
 						Adapter:   string(hb.Spec.Adapter),
@@ -151,6 +157,7 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 						// dated snapshot.
 						Featured: m.Meta.Labels["featured"] == "true" && snapEntry.Name == m.Spec.Pointer,
 						Pricing:  rates,
+						Aliases:  aliases,
 					})
 				}
 			}

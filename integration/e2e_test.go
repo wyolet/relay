@@ -265,6 +265,9 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 		Spec: model.Spec{
 			Snapshots: []model.Snapshot{{Name: "test-model"}},
 			Pointer:   "test-model",
+			// Declared aliases (inert for the other tests; exercised by
+			// TestE2E_AliasModel): one exact bracket form, one wildcard.
+			Aliases: []string{"test-model[1m]", "test-modelx[*]"},
 		},
 	}
 	mustUpsert(s.t, s.stores.Model.Upsert(ctx, mdl), "model")
@@ -383,6 +386,64 @@ func TestE2E_ChatCompletions(t *testing.T) {
 	//
 	// Sleep gives any racing goroutines a moment to settle so -race
 	// catches latent issues. 100ms is generous.
+	time.Sleep(100 * time.Millisecond)
+}
+
+// TestE2E_AliasModel exercises declared-alias resolution end-to-end
+// (docs/model-aliases.md): an alias-addressed request routes to the real
+// model and the verbatim alias form goes upstream — the declared string
+// for an exact alias (whatever the caller's spelling), the caller's raw
+// string for a wildcard match.
+func TestE2E_AliasModel(t *testing.T) {
+	captured := newCapturedRequest()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","object":"chat.completion","model":"m",`+
+			`"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],`+
+			`"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}))
+	defer upstream.Close()
+
+	st := newStack(t)
+	relayKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
+
+	cases := []struct {
+		name     string
+		send     string // model field the caller writes
+		wantWire string // model field the upstream must receive
+	}{
+		{"exact alias declared spelling", "test-model[1m]", "test-model[1m]"},
+		{"exact alias variant spelling", "TEST-MODEL.1M", "test-model[1m]"},
+		{"wildcard alias raw verbatim", "test-modelx[exp-2027]", "test-modelx[exp-2027]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"` + tc.send + `","messages":[{"role":"user","content":"hi"}]}`)
+			req, err := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions", bytes.NewReader(body))
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+relayKey)
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			respBody, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status: want 200, got %d. body=%s", resp.StatusCode, respBody)
+			}
+
+			got := captured.snapshot()
+			want := `"model":"` + tc.wantWire + `"`
+			if !bytes.Contains(got.body, []byte(want)) {
+				t.Errorf("upstream body %s does not carry %s", got.body, want)
+			}
+		})
+	}
 	time.Sleep(100 * time.Millisecond)
 }
 

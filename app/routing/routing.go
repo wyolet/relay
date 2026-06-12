@@ -31,6 +31,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -65,8 +66,14 @@ var (
 // Request carries the inbound resolution inputs.
 type Request struct {
 	// ModelName is the slug or upstream-name reference the caller asked
-	// for (typically from the body's "model" field).
+	// for (typically from the body's "model" field), possibly with a
+	// header-derived "@host" pin folded in by the handler.
 	ModelName string
+
+	// RawModelName is the verbatim caller string before any header pin
+	// folding. Carried upstream as the wire name when the ref matches a
+	// wildcard alias. Falls back to ModelName when empty.
+	RawModelName string
 
 	// RelayKey is the authenticated key (already validated for auth).
 	// Its Spec.PolicyID drives policy selection.
@@ -85,7 +92,7 @@ type Request struct {
 // doesn't need.
 //
 // Snapshot is the resolved checkpoint. The handler rewrites the request
-// body's `model` field to Snapshot.Upstream() before invoking the adapter.
+// body's `model` field to Plan.UpstreamModel() before invoking the adapter.
 type Plan struct {
 	Model       *model.Model
 	Snapshot    *model.Snapshot
@@ -105,6 +112,28 @@ type Plan struct {
 	// sets PayloadLoggingEnabled. Read by the inference entry to flag the
 	// lifecycle Context so the payloadlog observer captures bodies.
 	PayloadLoggingEnabled bool
+
+	// UpstreamOverride, when non-empty, replaces Snapshot.Upstream() as
+	// the wire model name. Set only by declared-alias resolution: the
+	// alias string itself (exact match) or the caller's raw request
+	// string (wildcard match). Consumers read the wire name via
+	// UpstreamModel(), never Snapshot.Upstream() directly.
+	UpstreamOverride string
+
+	// ResolvedVia tags non-canonical resolution for usage events, e.g.
+	// "alias:claude-fable-5[1m]" (the declared alias or pattern that
+	// matched). Empty for normal snapshot-name resolution.
+	ResolvedVia string
+}
+
+// UpstreamModel returns the wire model name for this plan — the alias
+// verbatim override when resolution went through a declared alias,
+// otherwise the snapshot's upstream name.
+func (p *Plan) UpstreamModel() string {
+	if p.UpstreamOverride != "" {
+		return p.UpstreamOverride
+	}
+	return p.Snapshot.Upstream()
 }
 
 // Resolver wraps a Catalog snapshot accessor and answers Resolve calls.
@@ -126,8 +155,9 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	snap := r.cat.Current()
 
 	// 1. Snapshot lookup — customer-facing addressing is purely by
-	//    snapshot name. Model.Meta.Name is admin-only.
-	models, snapMatch, pinHostID := resolveModel(snap, req.ModelName)
+	//    snapshot name (with declared aliases as last-priority matchers).
+	//    Model.Meta.Name is admin-only.
+	models, snapMatch, pinHostID, alias := resolveModel(snap, req.ModelName)
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
@@ -142,6 +172,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID)
 		if err == nil && plan != nil {
 			plan.PayloadLoggingEnabled = req.RelayKey.Spec.PayloadLoggingEnabled
+			applyAlias(plan, alias, req)
 		}
 		return plan, err
 	}
@@ -256,7 +287,7 @@ candidates:
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
 	pr, _ := snap.PricingForBinding(chosenBnd)
 
-	return &Plan{
+	plan := &Plan{
 		Model:       chosen,
 		Snapshot:    snapMatch,
 		Policy:      pol,
@@ -267,7 +298,30 @@ candidates:
 		Pricing:     pr,
 		PayloadLoggingEnabled: (pol != nil && pol.Spec.PayloadLoggingEnabled) ||
 			req.RelayKey.Spec.PayloadLoggingEnabled,
-	}, nil
+	}
+	applyAlias(plan, alias, req)
+	return plan, nil
+}
+
+// applyAlias stamps the verbatim-upstream override and the usage tag when
+// the model was matched via a declared alias. Exact aliases carry their
+// declared string upstream; wildcard matches carry the caller's raw
+// request string (which never holds a header pin — RawModelName is
+// captured pre-fold, and in-body pins skip the pattern probe entirely).
+func applyAlias(plan *Plan, ref *appcatalog.AliasRef, req Request) {
+	if ref == nil {
+		return
+	}
+	plan.ResolvedVia = "alias:" + ref.Name
+	if !ref.Pattern {
+		plan.UpstreamOverride = ref.Name
+		return
+	}
+	raw := req.RawModelName
+	if raw == "" {
+		raw = req.ModelName
+	}
+	plan.UpstreamOverride = raw
 }
 
 // resolveModel maps a caller-supplied model ref to its snapshot via the
@@ -276,15 +330,23 @@ candidates:
 // forms collapse identically ("openai/gpt-5.4-mini" == "openai/gpt-5-4-mini").
 // pinHostID is non-empty when the ref named a host ("model@host"), in which
 // case binding selection is constrained to that host.
-func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model, snap2 *model.Snapshot, pinHostID string) {
+func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model, snap2 *model.Snapshot, pinHostID string, alias *appcatalog.AliasRef) {
 	key := slug.From(name)
 	if key == "" {
-		return nil, nil, ""
+		return nil, nil, "", nil
 	}
 	if m, s, hostID, ok := snap.ResolveSnapshot(key); ok {
-		return []*model.Model{m}, s, hostID
+		return []*model.Model{m}, s, hostID, nil
 	}
-	return nil, nil, ""
+	// Declared aliases are last-priority: probed only after every real
+	// catalog name missed. Wildcard patterns are skipped for refs that
+	// carry an "@host" pin — the pin segment is glued into the normalized
+	// key and would corrupt the match (exact aliases support pins via
+	// synthesized forms).
+	if ref, ok := snap.ResolveAlias(key, !strings.ContainsRune(name, '@')); ok {
+		return []*model.Model{ref.Model}, ref.Snapshot, ref.HostID, &ref
+	}
+	return nil, nil, "", nil
 }
 
 // tierAllowedKeys drops keys whose host-owned tier policy doesn't grant the

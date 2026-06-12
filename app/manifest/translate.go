@@ -180,6 +180,7 @@ func ToModel(d ModelDTO, idx Resolver) (*model.Model, error) {
 		Enabled:              d.Spec.Enabled,
 		Snapshots:            d.Spec.Snapshots,
 		Pointer:              d.Spec.Pointer,
+		Aliases:              d.Spec.Aliases,
 	}
 	return m, nil
 }
@@ -217,6 +218,7 @@ func FromModel(m *model.Model, rev ReverseResolver) ModelDTO {
 			Enabled:              m.Spec.Enabled,
 			Snapshots:            m.Spec.Snapshots,
 			Pointer:              m.Spec.Pointer,
+			Aliases:              m.Spec.Aliases,
 		},
 	}
 }

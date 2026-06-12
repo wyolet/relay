@@ -12,8 +12,10 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/pkg/slug"
 )
 
 // Model is the published model definition.
@@ -59,6 +61,18 @@ type Spec struct {
 	// to at request time.
 	Snapshots []Snapshot `json:"snapshots" yaml:"snapshots" validate:"required,min=1,dive"`
 	Pointer   string     `json:"pointer"   yaml:"pointer"   validate:"required"`
+
+	// Aliases are resolution-only, last-priority matchers. A request whose
+	// model string matches no catalog name (snapshot names + their
+	// synthesized provider/host forms) is checked against declared aliases:
+	// exact forms first, then patterns — the ONLY place wildcards are
+	// allowed (exactly one '*', with a literal prefix). A match resolves to
+	// this Model's Pointer snapshot and the caller's string goes upstream
+	// VERBATIM. Aliases are lookup keys, never identity: they never appear
+	// in policy grants, modelref, admin URLs, or the usage `model` slug.
+	// Matching runs on the slug-normalized form ("claude-fable-5[1m]" ≡
+	// "claude-fable-5-1m"). See docs/model-aliases.md.
+	Aliases []string `json:"aliases,omitempty" yaml:"aliases,omitempty"`
 }
 
 // Snapshot is a dated checkpoint of a Model. Name is the customer-facing
@@ -85,12 +99,32 @@ func (s Snapshot) Upstream() string {
 // model name resolves to (Pointer → snapshot → Upstream()). Falls back to
 // Pointer itself if no snapshot matches (shouldn't happen post-Validate).
 func (m *Model) PointerUpstream() string {
-	for _, s := range m.Spec.Snapshots {
-		if lower(s.Name) == lower(m.Spec.Pointer) {
-			return s.Upstream()
-		}
+	if s := m.PointerSnapshot(); s != nil {
+		return s.Upstream()
 	}
 	return m.Spec.Pointer
+}
+
+// PointerSnapshot returns the snapshot Pointer names, nil when none
+// matches (can't happen post-Validate; callers stay defensive).
+func (m *Model) PointerSnapshot() *Snapshot {
+	for i := range m.Spec.Snapshots {
+		if lower(m.Spec.Snapshots[i].Name) == lower(m.Spec.Pointer) {
+			return &m.Spec.Snapshots[i]
+		}
+	}
+	return nil
+}
+
+// AliasPattern reports whether alias is a wildcard pattern and, when it
+// is, returns the slug-normalized literal prefix and suffix used for
+// boundary-accurate matching against From-normalized lookup keys.
+func AliasPattern(alias string) (prefix, suffix string, ok bool) {
+	pre, post, found := strings.Cut(alias, "*")
+	if !found {
+		return "", "", false
+	}
+	return slug.FromPrefix(pre), slug.FromSuffix(post), true
 }
 
 // Capabilities is the bag-of-bools feature flags every model declares.
@@ -164,15 +198,57 @@ func (m *Model) Validate() error {
 		return fmt.Errorf("model %q: owner.id is required (provider id)", m.Meta.Name)
 	}
 	snaps := make(map[string]struct{}, len(m.Spec.Snapshots))
+	snapSlugs := make(map[string]struct{}, len(m.Spec.Snapshots))
 	for _, s := range m.Spec.Snapshots {
 		key := lower(s.Name)
 		if _, dup := snaps[key]; dup {
 			return fmt.Errorf("model %q: duplicate snapshot %q", m.Meta.Name, s.Name)
 		}
 		snaps[key] = struct{}{}
+		snapSlugs[slug.From(s.Name)] = struct{}{}
 	}
 	if _, ok := snaps[lower(m.Spec.Pointer)]; !ok {
 		return fmt.Errorf("model %q: pointer %q does not match any snapshot", m.Meta.Name, m.Spec.Pointer)
+	}
+	return m.validateAliases(snapSlugs)
+}
+
+// validateAliases enforces the alias rules: at most one '*', patterns
+// need a usable literal prefix, no duplicates on the normalized form
+// (which also catches MaxLen-truncation collisions), and an exact alias
+// may not shadow one of the model's own snapshot names — exact catalog
+// names always win at resolution, so such an alias would be dead.
+func (m *Model) validateAliases(snapSlugs map[string]struct{}) error {
+	seen := make(map[string]struct{}, len(m.Spec.Aliases))
+	for _, a := range m.Spec.Aliases {
+		if a == "" {
+			return fmt.Errorf("model %q: empty alias", m.Meta.Name)
+		}
+		if strings.Count(a, "*") > 1 {
+			return fmt.Errorf("model %q: alias %q: at most one '*' is allowed", m.Meta.Name, a)
+		}
+		var key string
+		if prefix, suffix, isPattern := AliasPattern(a); isPattern {
+			if a[0] == '*' {
+				return fmt.Errorf("model %q: alias %q: pattern must start with a literal prefix", m.Meta.Name, a)
+			}
+			if prefix == "" {
+				return fmt.Errorf("model %q: alias %q: pattern prefix has no usable characters", m.Meta.Name, a)
+			}
+			key = prefix + "*" + suffix
+		} else {
+			key = slug.From(a)
+			if key == "" {
+				return fmt.Errorf("model %q: alias %q has no usable characters", m.Meta.Name, a)
+			}
+			if _, shadows := snapSlugs[key]; shadows {
+				return fmt.Errorf("model %q: alias %q normalizes to snapshot name %q — exact names always win, the alias would be dead", m.Meta.Name, a, key)
+			}
+		}
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("model %q: duplicate alias %q (normalized form %q)", m.Meta.Name, a, key)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }

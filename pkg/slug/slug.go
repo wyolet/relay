@@ -42,6 +42,53 @@ func From(displayName string) string {
 	return s
 }
 
+// FromPrefix normalizes the literal prefix of a wildcard pattern. Unlike
+// From it keeps the boundary dash when the raw prefix ends mid-separator
+// ("claude-fable-5[" → "claude-fable-5-"), so prefix matching against
+// From-normalized keys stays boundary-accurate ("claude-fable-5[*]" must
+// not match "claude-fable-50-foo"). No MaxLen truncation — patterns are
+// validated, not minted.
+func FromPrefix(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevDash := true // suppress leading dashes
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return b.String()
+}
+
+// FromSuffix normalizes the literal suffix of a wildcard pattern: the
+// mirror of FromPrefix — keeps a leading boundary dash (":acme" → "-acme"),
+// trims trailing separators ("]" → "").
+func FromSuffix(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 1)
+	prevDash := false // a leading separator run becomes one boundary dash
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
+}
+
 // WithSuffix appends "-N" to base, ensuring the result fits in MaxLen by
 // trimming base. N ≥ 2 (callers iterate from 2).
 func WithSuffix(base string, n int) string {

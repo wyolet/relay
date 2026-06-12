@@ -85,6 +85,9 @@ func applyPlanIdentity(lc *lifecycle.Context, plan *routing.Plan) {
 		lc.PricingID = plan.Pricing.Meta.ID
 		lc.PricingName = plan.Pricing.Meta.Name
 	}
+	if plan.ResolvedVia != "" {
+		lc.Metadata["resolved_via"] = plan.ResolvedVia
+	}
 }
 
 // fireUsageFailure emits a failure post-flight observer event for a request

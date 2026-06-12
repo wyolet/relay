@@ -35,6 +35,13 @@ type Binding struct {
 	Providers []string `json:"providers"`
 	Featured  bool     `json:"featured,omitempty"`
 	Pricing   []Rate   `json:"pricing,omitempty"`
+
+	// Aliases are the model's declared resolution-only matchers, attached
+	// to the pointer-snapshot row: exact strings or single-'*' wildcard
+	// patterns. Last-priority lookup keys for Resolve, never identity —
+	// the relay routes them to this binding and passes the requested
+	// string upstream verbatim.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // Rate is one priced meter on a binding.

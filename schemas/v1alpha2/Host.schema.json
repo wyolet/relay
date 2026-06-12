@@ -30,7 +30,19 @@
         "icon": {
           "$ref": "#/$defs/Icon"
         },
+        "noAuth": {
+          "type": "boolean"
+        },
         "policies": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "pricingStrategies": {
           "items": {
             "type": "string"
           },

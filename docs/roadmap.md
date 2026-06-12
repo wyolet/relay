@@ -85,3 +85,10 @@ in each phase doc.
 - **Boot YAML→DB settings seed** (PR #254) — seed-if-absent.
 - **Per-request timing + reasoning span** — `lifecycle.Timing` (µs offsets
   anchored to start) + reasoning span for canonical-inbound streams (#232).
+- **Model aliases (resolution-only)** (2026-06-13) — last-priority
+  matchers on `model.Spec.Aliases` (exact + single-`*` wildcards),
+  verbatim upstream wire name via `Plan.UpstreamModel()`,
+  `extras.resolved_via` usage tagging. Solves the Claude Code
+  `claude-fable-5[1m]` 404. Full mechanism: `model-aliases.md`. The
+  rejected per-policy arbitrary-model passthrough is parked in
+  `roadmap-v2.md`'s Icebox.
