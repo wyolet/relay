@@ -94,11 +94,11 @@ func TestValidate_Rules(t *testing.T) {
 		t.Fatalf("valid overlay rejected: %v", err)
 	}
 	for name, o := range map[string]*Overlay{
-		"bad kind":      {Kind: "host", ResourceID: "id1", Patch: []byte(`{"a":1}`)},
-		"no resource":   {Kind: KindModel, Patch: []byte(`{"a":1}`)},
-		"non-object":    {Kind: KindModel, ResourceID: "id1", Patch: []byte(`[1]`)},
-		"empty patch":   {Kind: KindModel, ResourceID: "id1", Patch: []byte(`{}`)},
-		"enabled key":   {Kind: KindModel, ResourceID: "id1", Patch: []byte(`{"enabled":false}`)},
+		"bad kind":    {Kind: "host", ResourceID: "id1", Patch: []byte(`{"a":1}`)},
+		"no resource": {Kind: KindModel, Patch: []byte(`{"a":1}`)},
+		"non-object":  {Kind: KindModel, ResourceID: "id1", Patch: []byte(`[1]`)},
+		"empty patch": {Kind: KindModel, ResourceID: "id1", Patch: []byte(`{}`)},
+		"enabled key": {Kind: KindModel, ResourceID: "id1", Patch: []byte(`{"enabled":false}`)},
 	} {
 		if err := o.Validate(); err == nil {
 			t.Errorf("%s: accepted", name)

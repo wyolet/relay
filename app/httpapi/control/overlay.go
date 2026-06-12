@@ -37,8 +37,8 @@ type overlayPutInput struct {
 }
 
 type overlayView struct {
-	Kind       string          `json:"kind"`
-	ResourceID string          `json:"resourceId"`
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resourceId"`
 	// Patch is the stored user patch; null when no overlay exists.
 	Patch json.RawMessage `json:"patch,omitempty"`
 	// Template is the pristine catalog spec (what re-seed maintains).
