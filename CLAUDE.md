@@ -48,6 +48,12 @@ app/                       — the application: domain + composition + handlers
    policy,relaykey,pricing}/  — 8 entity packages
                              — each: domain types, Validate(), Store{List,
                                      Get,Upsert,Delete}
+  overlay/                 — catalog overlays: user-owned sparse spec
+                             patches on pristine TEMPLATE rows, merged to
+                             EFFECTIVE rows at snapshot load (survives
+                             re-seed). Merge engine + union whitelist +
+                             store; applied only in app/catalog
+                             (overlay_apply.go). See docs/overlays.md.
   adapter/                 — generic adapter framework (singular):
                              Spec, Registry, generic pipeline.Adapter
                              parameterised by upstream URL + auth strategy.

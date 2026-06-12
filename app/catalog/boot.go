@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
@@ -52,6 +53,7 @@ type Stores struct {
 	Pricing   *pricing.Store
 	Binding   *binding.Store
 	RelayKey  *relaykey.Store
+	Overlay   *overlay.Store
 	Settings  *settings.Store
 
 	// Secrets is the shared secret-resolution registry (env + stored
@@ -80,6 +82,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		Pricing:   pricing.NewStore(opts.Pool),
 		Binding:   binding.NewStore(opts.Pool),
 		RelayKey:  relaykey.NewStore(q),
+		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),
 		Secrets:   secReg,
 	}
@@ -88,6 +91,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
 		stores.Binding,
 	)
+	cat.UseOverlays(stores.Overlay)
 	cat.settings.store = stores.Settings
 	return cat, stores, nil
 }
@@ -131,6 +135,7 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		policy:    stores.Policy,
 		pricing:   stores.Pricing,
 		relaykey:  stores.RelayKey,
+		overlay:   stores.Overlay,
 		settings:  stores.Settings,
 	})
 	return listener, nil

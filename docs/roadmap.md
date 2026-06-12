@@ -92,3 +92,9 @@ in each phase doc.
   `claude-fable-5[1m]` 404. Full mechanism: `model-aliases.md`. The
   rejected per-policy arbitrary-model passthrough is parked in
   `roadmap-v2.md`'s Icebox.
+- **Catalog overlays** (2026-06-13) — user customization that survives
+  re-seed: template/overlay/effective split, load-time merge in
+  `app/catalog`, union-merged aliases/tags, write-time reject +
+  load-time quarantine, `/models/by-id/{id}/overlay` subresource.
+  Model-only in v1; clone-as-overlay (Easy Registration) and
+  diff-on-write deferred. Full design: `overlays.md`.

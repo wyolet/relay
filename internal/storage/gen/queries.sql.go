@@ -81,6 +81,20 @@ func (q *Queries) DeleteModel(ctx context.Context, id string) error {
 	return err
 }
 
+const deleteOverlay = `-- name: DeleteOverlay :exec
+DELETE FROM overlays WHERE kind = $1 AND resource_id = $2
+`
+
+type DeleteOverlayParams struct {
+	Kind       string `db:"kind" json:"kind"`
+	ResourceID string `db:"resource_id" json:"resource_id"`
+}
+
+func (q *Queries) DeleteOverlay(ctx context.Context, arg DeleteOverlayParams) error {
+	_, err := q.db.Exec(ctx, deleteOverlay, arg.Kind, arg.ResourceID)
+	return err
+}
+
 const deletePolicy = `-- name: DeletePolicy :exec
 DELETE FROM policies WHERE id = $1
 `
@@ -266,6 +280,27 @@ func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) 
 		&i.Metadata,
 		&i.Spec,
 		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getOverlay = `-- name: GetOverlay :one
+SELECT kind, resource_id, patch, updated_at FROM overlays WHERE kind = $1 AND resource_id = $2
+`
+
+type GetOverlayParams struct {
+	Kind       string `db:"kind" json:"kind"`
+	ResourceID string `db:"resource_id" json:"resource_id"`
+}
+
+func (q *Queries) GetOverlay(ctx context.Context, arg GetOverlayParams) (Overlay, error) {
+	row := q.db.QueryRow(ctx, getOverlay, arg.Kind, arg.ResourceID)
+	var i Overlay
+	err := row.Scan(
+		&i.Kind,
+		&i.ResourceID,
+		&i.Patch,
 		&i.UpdatedAt,
 	)
 	return i, err
@@ -955,6 +990,35 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 			&i.Metadata,
 			&i.Spec,
 			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOverlays = `-- name: ListOverlays :many
+SELECT kind, resource_id, patch, updated_at FROM overlays ORDER BY kind, resource_id
+`
+
+func (q *Queries) ListOverlays(ctx context.Context) ([]Overlay, error) {
+	rows, err := q.db.Query(ctx, listOverlays)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Overlay
+	for rows.Next() {
+		var i Overlay
+		if err := rows.Scan(
+			&i.Kind,
+			&i.ResourceID,
+			&i.Patch,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -1730,6 +1794,25 @@ func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error 
 		arg.Metadata,
 		arg.Spec,
 	)
+	return err
+}
+
+const upsertOverlay = `-- name: UpsertOverlay :exec
+INSERT INTO overlays (kind, resource_id, patch, updated_at)
+VALUES ($1, $2, $3, NOW())
+ON CONFLICT (kind, resource_id) DO UPDATE SET
+    patch = EXCLUDED.patch,
+    updated_at = NOW()
+`
+
+type UpsertOverlayParams struct {
+	Kind       string `db:"kind" json:"kind"`
+	ResourceID string `db:"resource_id" json:"resource_id"`
+	Patch      []byte `db:"patch" json:"patch"`
+}
+
+func (q *Queries) UpsertOverlay(ctx context.Context, arg UpsertOverlayParams) error {
+	_, err := q.db.Exec(ctx, upsertOverlay, arg.Kind, arg.ResourceID, arg.Patch)
 	return err
 }
 

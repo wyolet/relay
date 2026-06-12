@@ -29,6 +29,9 @@ func (s *Snapshot) clone() *Snapshot {
 		// so the clone needs its own backing array.
 		aliasPatterns: append([]aliasPattern(nil), s.aliasPatterns...),
 
+		overlaysByTarget: shallowMap(s.overlaysByTarget),
+		modelTemplates:   shallowMap(s.modelTemplates),
+
 		hostKeysByID:     shallowMap(s.hostKeysByID),
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),
 		rateLimitsByName: shallowMap(s.rateLimitsByName),

@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
@@ -30,6 +31,11 @@ type Catalog struct {
 	relayKeys  RelayKeyLister
 	pricings   PricingLister
 	bindings   BindingLister
+
+	// overlays is optional (nil = feature dormant): set via UseOverlays
+	// from the composition root so existing New callers (tests,
+	// catalog-embed) stay untouched.
+	overlays OverlayLister
 
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
@@ -69,6 +75,9 @@ type PricingLister interface {
 type BindingLister interface {
 	List(ctx context.Context) ([]*binding.Binding, error)
 }
+type OverlayLister interface {
+	List(ctx context.Context) ([]*overlay.Overlay, error)
+}
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
@@ -97,6 +106,10 @@ func New(
 	c.snap.Store(&Snapshot{})
 	return c
 }
+
+// UseOverlays attaches the overlay source. Called once at composition
+// time before the first Reload; nil (the default) keeps overlays dormant.
+func (c *Catalog) UseOverlays(l OverlayLister) { c.overlays = l }
 
 // Current returns the live Snapshot. Safe to call from any goroutine; the
 // returned pointer is immutable until the next successful Reload.
@@ -155,6 +168,13 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: bindings: %w", err)
 	}
+	var ovls []*overlay.Overlay
+	if c.overlays != nil {
+		ovls, err = c.overlays.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: overlays: %w", err)
+		}
+	}
 
 	enabledProvs := filter(provs, (*provider.Provider).IsEnabled)
 	enabledHosts := filter(hosts, (*host.Host).IsEnabled)
@@ -179,7 +199,7 @@ func (c *Catalog) Reload(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings)
+	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls)
 	c.snap.Store(snap)
 	c.markReady()
 	return nil
