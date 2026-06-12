@@ -24,9 +24,8 @@ on:
         description: 'Version tag to publish (e.g. v0.1.0)'
         required: true
       ui_version:
-        description: 'relay-ui release tag to embed'
+        description: 'relay-ui release tag to embed (default: UI_VERSION from the Makefile)'
         required: false
-        default: 'v0.1.0'
       catalog_ref:
         description: 'relay-catalog ref to seed'
         required: false
@@ -74,15 +73,23 @@ jobs:
         run: |
           REF="${{ github.event.inputs.tag || github.ref_name }}"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
+          # UI pin: explicit dispatch input wins; otherwise the Makefile is
+          # the single source of truth (see docker-bake.hcl's UI_VERSION note).
+          UI="${{ github.event.inputs.ui_version }}"
+          [ -n "$UI" ] || UI=$(sed -n 's/^UI_VERSION ?= //p' Makefile)
+          [ -n "$UI" ] || { echo "::error::could not resolve UI_VERSION from Makefile"; exit 1; }
+          echo "ui_version=$UI" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push lean + all-in-one (multi-arch, both registries)
+      - name: Build and push lean + standalone (multi-arch, both registries)
         env:
           VERSION: ${{ steps.v.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           GH_TOKEN: ${{ secrets.UI_FETCH_TOKEN }}
-          UI_VERSION: ${{ github.event.inputs.ui_version || 'v0.1.0' }}
+          UI_VERSION: ${{ steps.v.outputs.ui_version }}
           CATALOG_REF: ${{ github.event.inputs.catalog_ref || 'main' }}
         run: |
           # Args, the gh_token secret, dual-registry tags, and no-cache-filter
           # (force a fresh asset fetch) are all declared in docker-bake.hcl.
-          docker buildx bake -f docker-bake.hcl --push prod allinone
+          # `release` = the prod + standalone bake group (same set `make
+          # release` publishes locally).
+          docker buildx bake -f docker-bake.hcl --push release
