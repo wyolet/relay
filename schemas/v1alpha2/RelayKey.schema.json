@@ -12,6 +12,9 @@
         "passthroughAllowed": {
           "type": "boolean"
         },
+        "payloadLoggingEnabled": {
+          "type": "boolean"
+        },
         "policy": {
           "type": "string"
         },

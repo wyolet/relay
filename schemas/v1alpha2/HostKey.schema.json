@@ -15,6 +15,9 @@
         "policyId": {
           "type": "string"
         },
+        "pricingStrategy": {
+          "type": "string"
+        },
         "valueFrom": {
           "$ref": "#/$defs/HostKeyValueFrom"
         }

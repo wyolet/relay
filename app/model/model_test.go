@@ -122,6 +122,68 @@ func TestSnapshotUpstream(t *testing.T) {
 	}
 }
 
+func TestValidateAliases(t *testing.T) {
+	withAliases := func(aliases ...string) *Model {
+		m := fix("claude-fable-5")
+		m.Spec.Aliases = aliases
+		return m
+	}
+	t.Run("valid exact and pattern", func(t *testing.T) {
+		m := withAliases("claude-fable-5[1m]", "claude-fable-5[*]", "ft:gpt*:acme")
+		if err := m.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
+	for _, tc := range []struct {
+		name    string
+		aliases []string
+		want    string
+	}{
+		{"empty alias", []string{""}, "empty alias"},
+		{"bare star", []string{"*"}, "literal prefix"},
+		{"leading star", []string{"*-mini"}, "literal prefix"},
+		{"two stars", []string{"a*b*c"}, "at most one"},
+		{"pattern prefix no usable chars", []string{"[[*x"}, "no usable characters"},
+		{"exact no usable chars", []string{"[]"}, "no usable characters"},
+		{"dup normalized exact", []string{"x[1m]", "x.1m"}, "duplicate alias"},
+		{"dup normalized pattern", []string{"x[*]", "x.*"}, "duplicate alias"},
+		{"shadows own snapshot", []string{"claude.fable.5.snap"}, "always win"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := withAliases(tc.aliases...).Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+	t.Run("truncation collision caught", func(t *testing.T) {
+		base := strings.Repeat("a", 62)
+		// Both normalize to the same 63-char-truncated slug.
+		m := withAliases(base+"[1m]", base+"[2m]")
+		if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate alias") {
+			t.Fatalf("want truncation dup error, got %v", err)
+		}
+	})
+}
+
+func TestAliasPattern(t *testing.T) {
+	for _, tc := range []struct {
+		alias     string
+		pre, suf  string
+		isPattern bool
+	}{
+		{"claude-fable-5[*]", "claude-fable-5-", "", true},
+		{"ft:gpt*:acme", "ft-gpt", "-acme", true},
+		{"claude-fable-5[1m]", "", "", false},
+	} {
+		pre, suf, ok := AliasPattern(tc.alias)
+		if ok != tc.isPattern || pre != tc.pre || suf != tc.suf {
+			t.Errorf("AliasPattern(%q) = (%q,%q,%v), want (%q,%q,%v)",
+				tc.alias, pre, suf, ok, tc.pre, tc.suf, tc.isPattern)
+		}
+	}
+}
+
 func TestIsEnabled(t *testing.T) {
 	tru, fls := true, false
 	for _, tc := range []struct {

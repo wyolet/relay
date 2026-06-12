@@ -44,6 +44,27 @@ These were considered, found not to clear the bar, and parked. Each has a
 named **unblock signal** — the concrete external thing that would flip the
 call. Don't casually promote them.
 
+### Per-policy arbitrary-model passthrough
+
+A policy-level `arbitraryModels {enabled, host, adapter}` escape hatch:
+when set, an unresolvable requested model is not a 404 — routing
+synthesizes a Plan pinned to the configured host/adapter with the
+caller's model string carried verbatim upstream, and usage lands
+unpriced and tagged (`resolved_via: "arbitrary"`, no ModelID).
+Deliberately not built alongside model aliases
+(`docs/model-aliases.md`): it breaks the "every routed request resolves
+to a real catalog Model" invariant, bypasses pricing / deprecation /
+capability metadata, makes the policy model-grant advisory on the
+fallback host, and taxes every future Plan consumer with an
+"unresolved?" branch. Aliases (wildcards included) + one-step model
+registration cover the known cases; the verbatim-upstream carry this
+would need already exists (`Plan.UpstreamOverride`), so layering it on
+later is cheap.
+
+**Unblock signal:** a real operator whose upstream model ids are too
+churny to catalog even with wildcard aliases (e.g. per-user fine-tune
+ids minted at request time).
+
 ### Cross-shape translation (inbound ≠ binding shape)
 
 `/v1/chat/completions` for a model whose binding declares

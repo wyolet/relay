@@ -63,6 +63,19 @@ type Snapshot struct {
 	// a synthesized alias.
 	snapshotAliases map[string]snapshotRef
 
+	// aliasExact indexes declared model aliases (model.Spec.Aliases) by
+	// every slug-normalized exact form (bare, provider-qualified,
+	// host-pinned). Checked only after snapshotsByName + snapshotAliases
+	// miss — declared aliases are last-priority matchers and never shadow
+	// real catalog names. Cross-model collisions keep a deterministic
+	// winner (see insertAliasExact).
+	aliasExact map[string]AliasRef
+
+	// aliasPatterns holds the wildcard aliases, sorted longest-prefix
+	// first with a deterministic tiebreak. Consulted only on aliasExact
+	// miss; see ResolveAlias.
+	aliasPatterns []aliasPattern
+
 	hostKeysByID map[string]*hostkey.HostKey
 
 	rateLimitsByID   map[string]*ratelimit.RateLimit
@@ -160,6 +173,7 @@ func (s *Snapshot) indexModelSnapshots(m *model.Model) {
 			}
 		}
 	}
+	s.indexModelAliases(m, provSlug)
 }
 
 // deindexModelSnapshots removes a model's snapshots from both indices. Bare
@@ -175,6 +189,7 @@ func (s *Snapshot) deindexModelSnapshots(m *model.Model) {
 			delete(s.snapshotAliases, k)
 		}
 	}
+	s.deindexModelAliases(m)
 }
 
 // ResolveSnapshot maps a slug-normalized model ref to its model + snapshot,

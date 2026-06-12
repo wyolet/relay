@@ -78,34 +78,6 @@
       },
       "type": "object"
     },
-    "HostBindingDTO": {
-      "additionalProperties": false,
-      "properties": {
-        "adapter": {
-          "type": "string"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "host": {
-          "type": "string"
-        },
-        "snapshots": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "host",
-        "adapter"
-      ],
-      "type": "object"
-    },
     "Modalities": {
       "additionalProperties": false,
       "properties": {
@@ -133,6 +105,15 @@
     "ModelSpec": {
       "additionalProperties": false,
       "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "capabilities": {
           "$ref": "#/$defs/Capabilities"
         },
@@ -162,15 +143,6 @@
         },
         "family": {
           "type": "string"
-        },
-        "hosts": {
-          "items": {
-            "$ref": "#/$defs/HostBindingDTO"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
         },
         "knowledgeCutoff": {
           "type": "string"
@@ -217,7 +189,6 @@
         }
       },
       "required": [
-        "hosts",
         "snapshots",
         "pointer"
       ],

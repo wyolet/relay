@@ -50,7 +50,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 		return 0, nil, fmt.Errorf("batch: parse model: %w", err)
 	}
 
-	plan, err := rn.Resolver.Resolve(routing.Request{ModelName: modelName, RelayKey: rk})
+	plan, err := rn.Resolver.Resolve(routing.Request{ModelName: modelName, RawModelName: modelName, RelayKey: rk})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)
 	}
@@ -91,10 +91,13 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 		lc.PricingID = plan.Pricing.Meta.ID
 		lc.PricingName = plan.Pricing.Meta.Name
 	}
+	if plan.ResolvedVia != "" {
+		lc.Metadata["resolved_via"] = plan.ResolvedVia
+	}
 	lc.Translator = upstreamSpec.Translator
 
 	preq := &pipeline.Request{
-		Body:          inference.RewriteModelField(body, plan.Snapshot.Upstream()),
+		Body:          inference.RewriteModelField(body, plan.UpstreamModel()),
 		Headers:       http.Header{},
 		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       upstreamAdapter,
@@ -104,7 +107,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 		Provider:      plan.Provider,
 		Keys:          plan.Keys,
 		ModelName:     plan.Model.Meta.Name,
-		UpstreamModel: plan.Snapshot.Upstream(),
+		UpstreamModel: plan.UpstreamModel(),
 		Stream:        false,
 		Lifecycle:     lc,
 	}

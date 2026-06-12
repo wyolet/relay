@@ -107,6 +107,19 @@ func TestApplyPlanIdentity_IDsAndSlugs(t *testing.T) {
 	if lc.PricingID != "prid" || lc.PricingName != "openai-gpt-4o" {
 		t.Fatalf("pricing: %q/%q", lc.PricingID, lc.PricingName)
 	}
+	if _, ok := lc.Metadata["resolved_via"]; ok {
+		t.Fatal("resolved_via stamped without alias resolution")
+	}
+
+	// Alias-resolved plan stamps the resolved_via tag (read by the usage
+	// hook into Event.Extras).
+	lcA := lifecycle.NewContext("req-a", "pipeline", time.Now())
+	planA := *plan
+	planA.ResolvedVia = "alias:gpt-4o[1m]"
+	applyPlanIdentity(lcA, &planA)
+	if got := lcA.Metadata["resolved_via"]; got != "alias:gpt-4o[1m]" {
+		t.Fatalf("resolved_via: %v", got)
+	}
 
 	// Partial plan (anonymous proxy / header-pinned host): only the host
 	// resolves; policy/model stay untouched. Nil-safe in both arguments.

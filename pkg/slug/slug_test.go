@@ -22,6 +22,45 @@ func TestFrom(t *testing.T) {
 	}
 }
 
+func TestFromPrefix(t *testing.T) {
+	cases := map[string]string{
+		"claude-fable-5[": "claude-fable-5-", // boundary dash kept
+		"claude-fable-5":  "claude-fable-5",
+		"ft:":             "ft-",
+		"---x":            "x",
+		"":                "",
+		"[[":              "",
+	}
+	for in, want := range cases {
+		if got := FromPrefix(in); got != want {
+			t.Errorf("FromPrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestFromSuffix(t *testing.T) {
+	cases := map[string]string{
+		"]":      "",
+		":acme":  "-acme", // boundary dash kept
+		"acme":   "acme",
+		"-mini]": "-mini",
+		"":       "",
+	}
+	for in, want := range cases {
+		if got := FromSuffix(in); got != want {
+			t.Errorf("FromSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Pins the equivalence model-alias resolution depends on: the CC-style
+// bracket variant normalizes to the same key an operator would guess.
+func TestFromBracketVariant(t *testing.T) {
+	if got := From("claude-fable-5[1m]"); got != "claude-fable-5-1m" {
+		t.Fatalf(`From("claude-fable-5[1m]") = %q, want "claude-fable-5-1m"`, got)
+	}
+}
+
 func TestUnique(t *testing.T) {
 	taken := map[string]bool{"openai-prod": true, "openai-prod-2": true}
 	exists := func(s string) bool { return taken[s] }

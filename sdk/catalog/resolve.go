@@ -13,10 +13,23 @@ type IndexedCatalog struct {
 	bare      map[string][]loc
 	qualified map[string][]loc
 	pinned    map[string]loc
+
+	// Declared-alias maps, probed only after the real-name maps miss —
+	// mirroring the relay's last-priority alias semantics. Patterns are
+	// bare-only and sorted longest-prefix-first.
+	aliasBare      map[string][]loc
+	aliasQualified map[string][]loc
+	aliasPinned    map[string]loc
+	aliasPatterns  []aliasPattern
 }
 
 type loc struct {
 	host, binding int
+}
+
+type aliasPattern struct {
+	prefix, suffix string
+	l              loc
 }
 
 func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
@@ -24,10 +37,13 @@ func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 		return nil, fmt.Errorf("catalog: nil catalog")
 	}
 	ic := &IndexedCatalog{
-		Catalog:   c,
-		bare:      map[string][]loc{},
-		qualified: map[string][]loc{},
-		pinned:    map[string]loc{},
+		Catalog:        c,
+		bare:           map[string][]loc{},
+		qualified:      map[string][]loc{},
+		pinned:         map[string]loc{},
+		aliasBare:      map[string][]loc{},
+		aliasQualified: map[string][]loc{},
+		aliasPinned:    map[string]loc{},
 	}
 	for hi, h := range c.Hosts {
 		for bi, b := range h.Models {
@@ -36,9 +52,45 @@ func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 			if uk := normRef(b.Upstream); uk != "" && uk != normRef(b.Model) {
 				ic.addForms(l, b.Upstream, b.Providers, h.Name)
 			}
+			for _, a := range b.Aliases {
+				if pre, post, found := strings.Cut(a, "*"); found {
+					if p := normPrefix(pre); p != "" {
+						ic.aliasPatterns = append(ic.aliasPatterns, aliasPattern{prefix: p, suffix: normSuffix(post), l: l})
+					}
+					continue
+				}
+				ic.addAliasForms(l, a, b.Providers, h.Name)
+			}
 		}
 	}
+	// Longest normalized prefix wins on overlap; index-order tiebreak is
+	// already deterministic (catalog file order).
+	sort.SliceStable(ic.aliasPatterns, func(i, j int) bool {
+		return len(ic.aliasPatterns[i].prefix) > len(ic.aliasPatterns[j].prefix)
+	})
 	return ic, nil
+}
+
+// addAliasForms mirrors addForms into the declared-alias maps.
+func (ic *IndexedCatalog) addAliasForms(l loc, name string, providers []string, host string) {
+	if k := normRef(name); k != "" {
+		ic.aliasBare[k] = append(ic.aliasBare[k], l)
+	}
+	for _, p := range providers {
+		if q := normRef(p + "/" + name); q != "" {
+			ic.aliasQualified[q] = append(ic.aliasQualified[q], l)
+		}
+	}
+	pinKey := normRef(name + "@" + host)
+	if pinKey == "" {
+		return
+	}
+	ic.aliasPinned[pinKey] = l
+	for _, p := range providers {
+		if q := normRef(p + "/" + name + "@" + host); q != "" {
+			ic.aliasPinned[q] = l
+		}
+	}
 }
 
 // addForms indexes every addressable form of one name for a binding: bare,
@@ -86,6 +138,26 @@ func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
 	}
 	if locs, ok := ic.bare[key]; ok {
 		return ic.pick(key, locs)
+	}
+	// Declared aliases: last priority, so real catalog names always win.
+	if l, ok := ic.aliasPinned[key]; ok {
+		return ic.at(l)
+	}
+	if locs, ok := ic.aliasQualified[key]; ok {
+		return ic.pick(key, locs)
+	}
+	if locs, ok := ic.aliasBare[key]; ok {
+		return ic.pick(key, locs)
+	}
+	// Wildcards are bare-only: a pinned ref ("@host") would glue the pin
+	// into the key and corrupt the match, so it skips the pattern scan.
+	if !strings.ContainsRune(ref, '@') {
+		for _, p := range ic.aliasPatterns {
+			if len(key) >= len(p.prefix)+len(p.suffix) &&
+				strings.HasPrefix(key, p.prefix) && strings.HasSuffix(key, p.suffix) {
+				return ic.at(p.l)
+			}
+		}
 	}
 	return Binding{}, Host{}, fmt.Errorf("catalog: model %q not found", ref)
 }

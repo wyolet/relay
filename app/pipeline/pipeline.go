@@ -62,8 +62,10 @@ type Request struct {
 
 	ModelName string
 
-	// UpstreamModel is the resolved upstream model name (snapshot.Upstream()),
-	// passed to Adapter.Call for shapes that put the model in the URL path.
+	// UpstreamModel is the resolved upstream wire name (routing's
+	// Plan.UpstreamModel() — the snapshot's upstream name, or the alias
+	// verbatim override when resolution matched a declared alias). Passed
+	// to Adapter.Call for shapes that put the model in the URL path.
 	UpstreamModel string
 
 	// Stream reports whether the caller requested a streamed response, passed
