@@ -94,9 +94,9 @@ func TestDispatch_AliasBytePass_VerbatimWireName(t *testing.T) {
 	d := buildRunnableDeps(t, cat)
 
 	cases := []struct {
-		name      string
-		send      string // caller's model string (body + minimal parse)
-		wantWire  string // model field the upstream must receive
+		name     string
+		send     string // caller's model string (body + minimal parse)
+		wantWire string // model field the upstream must receive
 	}{
 		{"exact alias, declared spelling", "test-model[1m]", "test-model[1m]"},
 		{"exact alias, caller variant spelling", "TEST-MODEL.1M", "test-model[1m]"},

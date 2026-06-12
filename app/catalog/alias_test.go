@@ -33,11 +33,11 @@ func TestAlias_ExactFormsSynthesized(t *testing.T) {
 	s := c.Current()
 
 	for _, ref := range []string{
-		"gpt-4o[1m]",                       // bare
-		"openai/gpt-4o[1m]",                // provider-qualified
-		"gpt-4o[1m]@openai-direct",         // host-pinned
-		"openai/gpt-4o[1m]@openai-direct",  // both
-		"GPT-4O.1M",                        // normalization collapses with bare
+		"gpt-4o[1m]",                      // bare
+		"openai/gpt-4o[1m]",               // provider-qualified
+		"gpt-4o[1m]@openai-direct",        // host-pinned
+		"openai/gpt-4o[1m]@openai-direct", // both
+		"GPT-4O.1M",                       // normalization collapses with bare
 	} {
 		got, ok := s.ResolveAlias(slug.From(ref), true)
 		if !ok {
@@ -160,8 +160,8 @@ func TestAlias_OverlappingPatternsLongestPrefixWins(t *testing.T) {
 	s0 := c.Current()
 	a := *s0.ModelsByName("gpt-4o")[0]
 	b := *s0.ModelsByName("gpt-4o-mini")[0]
-	a.Spec.Aliases = []string{"nick*"}          // prefix "nick"
-	b.Spec.Aliases = []string{"nick-special*"}  // longer prefix
+	a.Spec.Aliases = []string{"nick*"}         // prefix "nick"
+	b.Spec.Aliases = []string{"nick-special*"} // longer prefix
 	if err := c.ApplyModelUpsert(&a); err != nil {
 		t.Fatal(err)
 	}
