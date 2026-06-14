@@ -103,11 +103,16 @@ func responsesUnmarshalTool(data []byte) (ResponsesTool, error) {
 	}
 }
 
-// ResponsesToolChoice is polymorphic: a string shorthand ("auto", "required", "none")
-// or a {type:"function", name:"..."} object.
+// ResponsesToolChoice is polymorphic: a string shorthand ("auto", "required",
+// "none"), a {type:"function", name:"..."} object, or one of the object forms
+// the adapter does not model — hosted-tool ({type:"file_search"}), allowed_tools,
+// mcp, custom. For the latter the full object is preserved in Raw so it re-emits
+// verbatim; only auto/required/none are legal as bare strings, so collapsing any
+// object mode to a string 400s ("Invalid value").
 type ResponsesToolChoice struct {
-	Mode         string // "auto" | "required" | "none" | "function"
-	FunctionName string // only when Mode == "function"
+	Mode         string          // "auto" | "required" | "none" | "function" | <hosted-tool type>
+	FunctionName string          // only when Mode == "function"
+	Raw          json.RawMessage // verbatim object for unmodeled modes
 }
 
 func (tc ResponsesToolChoice) MarshalJSON() ([]byte, error) {
@@ -119,9 +124,23 @@ func (tc ResponsesToolChoice) MarshalJSON() ([]byte, error) {
 			Type string `json:"type"`
 			Name string `json:"name"`
 		}{Type: "function", Name: tc.FunctionName})
-	default:
-		return json.Marshal(tc.Mode)
 	}
+	// Unmodeled object mode. Re-emit the captured object verbatim when we have it
+	// (preserves allowed_tools/mcp/custom sub-fields on a direct round-trip).
+	if len(tc.Raw) > 0 {
+		return tc.Raw, nil
+	}
+	if tc.Mode == "" {
+		return json.Marshal("auto")
+	}
+	// Reconstructed from canonical (Raw is lost across the canonical round-trip,
+	// which carries only Mode): emit the minimal object form. Sufficient for a
+	// hosted-tool choice (just {type}); the sub-fields of allowed_tools/mcp/custom
+	// are an irreducible drop through canonical.
+	// canonical: tool_choice object sub-fields dropped — no canonical field.
+	return json.Marshal(struct {
+		Type string `json:"type"`
+	}{Type: tc.Mode})
 }
 
 func (tc *ResponsesToolChoice) UnmarshalJSON(data []byte) error {
@@ -142,5 +161,10 @@ func (tc *ResponsesToolChoice) UnmarshalJSON(data []byte) error {
 	}
 	tc.Mode = obj.Type
 	tc.FunctionName = obj.Name
+	if obj.Type != "function" {
+		// Hosted-tool / allowed_tools / mcp / custom: keep the whole object so it
+		// re-emits verbatim instead of collapsing to a bare-string mode (400).
+		tc.Raw = append(json.RawMessage(nil), data...)
+	}
 	return nil
 }

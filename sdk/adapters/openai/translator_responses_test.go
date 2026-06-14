@@ -1750,3 +1750,82 @@ func TestResponsesStream_HostedToolNoOrphanStarted(t *testing.T) {
 		}
 	}
 }
+
+// --- tool_choice object modes (PR3) ---
+
+// TestResponsesToolChoice_ObjectModes locks the fix for object-form tool_choice:
+// anything other than auto/required/none must serialize as an OBJECT, never a
+// bare string (OpenAI 400s "Invalid value: 'file_search'").
+func TestResponsesToolChoice_ObjectModes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string // canonical JSON we expect back out
+	}{
+		{"auto", `"auto"`, `"auto"`},
+		{"required", `"required"`, `"required"`},
+		{"none", `"none"`, `"none"`},
+		{"function", `{"type":"function","name":"f"}`, `{"type":"function","name":"f"}`},
+		{"hosted file_search", `{"type":"file_search"}`, `{"type":"file_search"}`},
+		{"allowed_tools verbatim", `{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`,
+			`{"type":"allowed_tools","mode":"auto","tools":[{"type":"function","name":"f"}]}`},
+		{"mcp verbatim", `{"type":"mcp","server_label":"s"}`, `{"type":"mcp","server_label":"s"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var c ResponsesToolChoice
+			if err := json.Unmarshal([]byte(tc.in), &c); err != nil {
+				t.Fatal(err)
+			}
+			out, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(out) != tc.want {
+				t.Errorf("round-trip:\n got %s\nwant %s", out, tc.want)
+			}
+		})
+	}
+}
+
+// TestResponsesToolChoice_HostedReconstructedFromCanonical: a hosted-tool choice
+// rebuilt from canonical (Mode only, Raw lost) must still serialize as {type:...},
+// not a bare string — the realistic Responses->canonical->Responses path to a
+// non-"openai" host.
+func TestResponsesToolChoice_HostedReconstructedFromCanonical(t *testing.T) {
+	c := ResponsesToolChoice{Mode: "file_search"} // no Raw
+	out, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != `{"type":"file_search"}` {
+		t.Errorf("got %s, want {\"type\":\"file_search\"}", out)
+	}
+}
+
+// TestResponsesSerializeRequest_HostedToolChoiceObject: end-to-end through the
+// translator — an inbound hosted-tool tool_choice must leave SerializeRequest as
+// an object, not a bare string.
+func TestResponsesSerializeRequest_HostedToolChoiceObject(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"model": "gpt-5", "input": "hi",
+		"tools":       []any{map[string]any{"type": "function", "name": "f", "parameters": json.RawMessage(`{"type":"object"}`)}},
+		"tool_choice": map[string]any{"type": "file_search"},
+	})
+	req, err := (ResponsesTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	tcv, ok := m["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice must be an object, got %T: %v", m["tool_choice"], m["tool_choice"])
+	}
+	if tcv["type"] != "file_search" {
+		t.Errorf("tool_choice.type: %v", tcv["type"])
+	}
+}
