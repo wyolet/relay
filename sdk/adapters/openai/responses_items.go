@@ -155,6 +155,18 @@ type ResponsesSummaryText struct {
 	Text string `json:"text"`
 }
 
+// MarshalJSON emits the required discriminator. The Responses API rejects a
+// summary part without it ("Missing required parameter input[N].summary[M].type");
+// the only valid value is "summary_text", so hardcode it rather than carry a
+// field that can only hold one value.
+func (s ResponsesSummaryText) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	return json.Marshal(wire{Type: "summary_text", Text: s.Text})
+}
+
 // ResponsesReasoning is an output item representing the model's reasoning steps.
 type ResponsesReasoning struct {
 	ID               string                 `json:"id,omitempty"`
