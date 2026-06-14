@@ -134,6 +134,55 @@ If you already pass `response.output` back verbatim, you're done — no code cha
 just a relay binary with #324. **Immediate unblock without reasoning round-trip:**
 disable thinking (no `rs_` items → no pairing requirement → the tool loop just runs).
 
+### Streaming-event coverage (current — supersedes the dated tables below)
+
+The `responsesToCanonicalStream.translate` switch. This is the authoritative
+status as of 2026-06-14; the per-event tables further down (dated 2026-05-25,
+stale line numbers) predate #319–#329 and several "dropped" claims there are now
+wrong (refusal deltas, `response.failed`, `encrypted_content`, reasoning-summary
+config are all handled).
+
+**Handled** (→ canonical event):
+
+| Responses event | → canonical |
+|---|---|
+| `response.created` | `generation.created` |
+| `response.output_item.added` | `item.started` |
+| `response.output_text.delta` | `item.delta` (text) |
+| `response.function_call_arguments.delta` | `item.delta` (arguments) |
+| `response.reasoning_text.delta` | `item.delta` (reasoning) |
+| `response.reasoning_summary_text.delta` | `item.delta` (reasoning) — **the only plaintext thinking gpt-5.5 streams** (raw reasoning_text is encrypted). Accumulated to backfill the terminal item's `summary`. |
+| `response.refusal.delta` | `item.delta` (text) — canonical rule 9 |
+| `response.output_item.done` | `item.completed` |
+| `response.completed` / `.incomplete` | `generation.completed` |
+| `response.failed` | `generation.completed` (status=failed) |
+| `error` | `error` |
+
+**Intentionally dropped** (safe — the text already streamed via its `.delta`, and
+terminal state arrives on `response.completed`): `response.in_progress`,
+`response.content_part.added` / `.done`, `response.output_text.done`,
+`response.function_call_arguments.done`, `response.reasoning_text.done`,
+`response.reasoning_summary_text.done` / `reasoning_summary_part.added` / `.done`,
+`response.refusal.done`.
+
+**Uncovered — genuine feature gaps** (canonical doesn't model the feature, so the
+stream events are dropped *and* the matching output-item type hard-errors in
+buffered `ParseResponse` / is dropped in streaming `output_item.done`):
+
+| Responses feature | Stream events dropped | Item-parse behavior |
+|---|---|---|
+| Hosted/server-side tools (web_search, file_search, code_interpreter, image_generation, computer_use, MCP, custom/local_shell) | `response.{web_search_call,file_search_call,code_interpreter_call,image_generation_call,mcp_call,…}.*` | `web_search_call` / `file_search_call` / … items → **buffered parse errors** `unsupported item type`; streaming drops them. Request-side: these tool *definitions* error at `ParseRequest` (`unsupported tool type`). |
+| Audio output | `response.audio.delta` / `.done`, `response.audio_transcript.delta` / `.done` | No canonical audio item; `audio_tokens` not metered. |
+| Streaming citations/annotations | `response.output_text.annotation.added` | Buffered URL-citation annotations are partially mapped; file-citation + streaming annotations dropped. |
+
+These gaps are **deferred, not bugs** — covering them means new canonical item
+types + a multi-vendor modeling decision (out of scope for the cross-shape
+passthrough). They are listed here so the next person knows the edges. The one
+sharp corner worth flagging: a buffered response that contains a hosted-tool
+output item (e.g. the model used web_search) currently fails the whole parse
+rather than degrading — if a host starts returning those, that error path needs
+to become a skip-with-annotation.
+
 ---
 
 ## Request: canonical → Responses (`SerializeRequest`)

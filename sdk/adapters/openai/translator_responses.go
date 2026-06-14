@@ -834,6 +834,10 @@ type responsesToCanonicalStream struct {
 	model      string
 	created    int64
 	started    bool
+	// reasoningSummary accumulates streamed reasoning-summary text per reasoning
+	// item id, so the item's terminal output_item.done (which arrives with an
+	// empty summary on gpt-5.5) can be backfilled with what was streamed.
+	reasoningSummary map[string]string
 }
 
 func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -938,6 +942,27 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
 
+	// Reasoning summary deltas are the ONLY reasoning text a summary-mode model
+	// streams as plaintext (raw reasoning_text is encrypted on gpt-5.5). Map them
+	// to the same canonical reasoning delta so the thinking renders live, and
+	// accumulate so the terminal reasoning item carries the summary too.
+	case ResponsesEventReasoningSummaryTextDelta:
+		var ev ResponsesReasoningSummaryTextDeltaEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return nil, nil
+		}
+		if s.reasoningSummary == nil {
+			s.reasoningSummary = map[string]string{}
+		}
+		s.reasoningSummary[ev.ItemID] += ev.Delta
+		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
+			ItemID: ev.ItemID,
+			Index:  ev.OutputIndex,
+			Kind:   v1.DeltaKindReasoning,
+			Delta:  ev.Delta,
+		})
+		frames = append(frames, v1.SSEFrame{Event: v1.EventItemDelta, Data: deltaData})
+
 	// R-2: refusal deltas map to text deltas (canonical rule 9: refusal is text +
 	// finish_reason, not a separate item type).
 	case ResponsesEventRefusalDelta:
@@ -980,6 +1005,14 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		ci, _ := responsesItemToCanonical(wireItem)
 		if ci == nil {
 			return nil, nil
+		}
+		// gpt-5.5's terminal reasoning item arrives with an empty summary (the
+		// text came over reasoning_summary_text deltas). Backfill it from what we
+		// accumulated so non-streaming consumers / logs see the thinking too.
+		if r, ok := ci.(*v1.Reasoning); ok && len(r.Summary) == 0 {
+			if acc := s.reasoningSummary[responsesItemID(wireItem)]; acc != "" {
+				r.Summary = []v1.SummaryText{{Text: acc}}
+			}
 		}
 		completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 			ItemID: responsesItemID(wireItem),
