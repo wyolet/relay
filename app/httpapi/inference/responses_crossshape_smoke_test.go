@@ -154,8 +154,8 @@ func TestCrossShape_CCtoResponses_Buffered(t *testing.T) {
 
 	// --- the CC response relay returned to the caller ---
 	ccResp := w.Body.String()
-	mustContain(t, "cc resp", ccResp, `"chat.completion"`)  // CC shape, not Responses
-	mustContain(t, "cc resp", ccResp, "get_weather")        // tool call surfaced
+	mustContain(t, "cc resp", ccResp, `"chat.completion"`)   // CC shape, not Responses
+	mustContain(t, "cc resp", ccResp, "get_weather")         // tool call surfaced
 	mustContain(t, "cc resp", ccResp, `"total_tokens":5608`) // #328 no reasoning double-count
 }
 
