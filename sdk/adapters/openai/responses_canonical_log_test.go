@@ -133,3 +133,31 @@ func TestResponsesReasoningRoundTrip(t *testing.T) {
 		t.Fatalf("BUG: reasoning/function_call ids not both present: %s", back)
 	}
 }
+
+// TestResponsesReasoning_SummaryAlwaysEmitted guards a required-field omission:
+// a reasoning item commonly has no summary, but the Responses API rejects an
+// input reasoning item without one ("Missing required parameter
+// input[N].summary"). It must serialize as [] — never null, never omitted.
+func TestResponsesReasoning_SummaryAlwaysEmitted(t *testing.T) {
+	b, err := (&ResponsesReasoning{ID: "rs_1", EncryptedContent: "blob"}).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"summary":[]`) {
+		t.Fatalf("BUG: reasoning item missing summary:[] : %s", b)
+	}
+
+	// Round-trip: a no-summary reasoning item fed back as input keeps summary.
+	resp := `{"id":"r","object":"response","status":"completed","model":"m","output":[{"type":"reasoning","id":"rs_2","encrypted_content":"X","summary":[]},{"type":"function_call","id":"fc","call_id":"c","name":"f","arguments":"{}"}]}`
+	canon, err := ResponsesTranslator{}.ParseResponse([]byte(resp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ResponsesTranslator{}.SerializeRequest(&v1.Request{Model: v1.ModelRefs{"m"}, Input: canon.Output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(back), `"summary":[]`) {
+		t.Fatalf("BUG: round-tripped reasoning item dropped summary: %s", back)
+	}
+}
