@@ -670,6 +670,29 @@ func responsesAnnotationFromCanonical(a v1.Annotation) ResponsesAnnotation {
 	}
 }
 
+// parseStreamTerminalResponse extracts the `response` object from a terminal
+// streaming event (response.completed / .incomplete / .failed) using the
+// polymorphic-aware UnmarshalResponsesResponse. The event's response.output is
+// a []ResponsesItem interface slice that plain json.Unmarshal cannot build, so
+// the terminal event MUST go through the custom unmarshaler — otherwise the
+// error is swallowed and usage/finish_reason never reach the caller.
+func parseStreamTerminalResponse(data []byte) *ResponsesResponse {
+	var ev struct {
+		Response json.RawMessage `json:"response"`
+	}
+	if err := json.Unmarshal(data, &ev); err != nil {
+		return nil
+	}
+	if len(ev.Response) == 0 || string(ev.Response) == "null" {
+		return nil
+	}
+	resp, err := UnmarshalResponsesResponse(ev.Response)
+	if err != nil {
+		return nil
+	}
+	return resp
+}
+
 // responsesResponseToCanonical converts a *ResponsesResponse to canonical *v1.Response.
 func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 	cr := &v1.Response{
@@ -950,14 +973,16 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemCompleted, Data: completedData})
 
 	case ResponsesEventCompleted, ResponsesEventIncomplete:
-		var ev ResponsesCompletedEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
+		// Parse the terminal response via the polymorphic-aware unmarshaler:
+		// a plain json.Unmarshal into ResponsesResponse fails on the
+		// []ResponsesItem interface `output`, and the swallowed error dropped
+		// the whole terminal event — losing usage, finish_reason, and [DONE]
+		// from every streamed cross-shape response.
+		resp := parseStreamTerminalResponse(data)
+		if resp == nil {
 			return nil, nil
 		}
-		if ev.Response == nil {
-			return nil, nil
-		}
-		cr := responsesResponseToCanonical(ev.Response)
+		cr := responsesResponseToCanonical(resp)
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 			ID:           cr.ID,
 			Status:       cr.Status,
@@ -969,16 +994,13 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	// R-2: response.failed means the generation terminated with an error; emit
 	// generation.completed with StatusFailed so the consumer isn't left hanging.
 	case ResponsesEventFailed:
-		var ev ResponsesFailedEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
-		}
-		if ev.Response == nil {
+		resp := parseStreamTerminalResponse(data)
+		if resp == nil {
 			errData, _ := json.Marshal(v1.ErrorEvent{Code: "response_failed", Message: "response failed"})
 			frames = append(frames, v1.SSEFrame{Event: v1.EventError, Data: errData})
 			return marshalCanonicalFrames(frames), nil
 		}
-		cr := responsesResponseToCanonical(ev.Response)
+		cr := responsesResponseToCanonical(resp)
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 			ID:           cr.ID,
 			Status:       v1.StatusFailed,
