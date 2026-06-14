@@ -724,6 +724,47 @@ func TestBufferCanonical_FlatUsage(t *testing.T) {
 	}
 }
 
+// TestForwardUpstreamError_ForwardsBodyVerbatim guards the swallowed-error fix:
+// on an upstream 4xx the cross-shape path must relay the provider's error body
+// (and status) verbatim, not run success-shaped translation that discards the
+// message. Regression for "relay returns 400 with no reason".
+func TestForwardUpstreamError_ForwardsBodyVerbatim(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json") // set by ForwardUpstreamHeaders upstream
+	upstreamErr := `{"error":{"message":"Function tools with reasoning_effort are not supported for gpt-5.5 in /v1/chat/completions. Please use /v1/responses instead.","type":"invalid_request_error","param":"reasoning_effort","code":null}}`
+	body := io.NopCloser(strings.NewReader(upstreamErr))
+
+	forwardUpstreamError(rec, body, http.StatusBadRequest)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if got := rec.Body.String(); got != upstreamErr {
+		t.Fatalf("body not forwarded verbatim:\n got: %s\nwant: %s", got, upstreamErr)
+	}
+}
+
+// TestForwardUpstreamError_EmptyBody_SynthesizesEnvelope: when the upstream
+// sends a bodiless error, relay must still emit a structured error (never a
+// bodiless status), preserving the upstream status code.
+func TestForwardUpstreamError_EmptyBody_SynthesizesEnvelope(t *testing.T) {
+	rec := httptest.NewRecorder()
+	body := io.NopCloser(strings.NewReader("   "))
+
+	forwardUpstreamError(rec, body, http.StatusBadGateway)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	e := parseDispatchErr(t, rec.Body.Bytes())
+	if e.Error.Code != "upstream_error" {
+		t.Fatalf("error code = %q, want upstream_error (body: %s)", e.Error.Code, rec.Body.Bytes())
+	}
+	if !strings.Contains(e.Error.Message, "no body") {
+		t.Fatalf("message should explain the empty upstream body, got: %q", e.Error.Message)
+	}
+}
+
 // TestForwardHeaders_DropsAcceptEncoding guards the content-coding fix: the
 // relay must not forward the caller's Accept-Encoding upstream, so Go's
 // transport transparently decompresses and the canonical translate path always
