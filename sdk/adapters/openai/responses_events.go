@@ -14,6 +14,8 @@ const (
 	ResponsesEventFunctionCallArgumentsDone  = "response.function_call_arguments.done"
 	ResponsesEventReasoningTextDelta         = "response.reasoning_text.delta"
 	ResponsesEventReasoningTextDone          = "response.reasoning_text.done"
+	ResponsesEventReasoningSummaryTextDelta  = "response.reasoning_summary_text.delta"
+	ResponsesEventReasoningSummaryTextDone   = "response.reasoning_summary_text.done"
 	ResponsesEventRefusalDelta               = "response.refusal.delta"
 	ResponsesEventRefusalDone                = "response.refusal.done"
 	ResponsesEventCompleted                  = "response.completed"
@@ -111,6 +113,27 @@ type ResponsesReasoningTextDoneEvent struct {
 	ItemID       string `json:"item_id"`
 	OutputIndex  int    `json:"output_index"`
 	ContentIndex int    `json:"content_index"`
+	Text         string `json:"text"`
+}
+
+// ResponsesReasoningSummaryTextDeltaEvent carries an incremental reasoning
+// SUMMARY text delta. Reasoning models stream their human-readable thinking
+// (from reasoning.summary:"auto") on this channel — distinct from the raw
+// reasoning_text channel, which gpt-5.5 encrypts rather than streaming as
+// plaintext. summary_index identifies which summary part the delta belongs to.
+type ResponsesReasoningSummaryTextDeltaEvent struct {
+	ItemID       string `json:"item_id"`
+	OutputIndex  int    `json:"output_index"`
+	SummaryIndex int    `json:"summary_index"`
+	Delta        string `json:"delta"`
+}
+
+// ResponsesReasoningSummaryTextDoneEvent carries the completed text for one
+// reasoning summary part.
+type ResponsesReasoningSummaryTextDoneEvent struct {
+	ItemID       string `json:"item_id"`
+	OutputIndex  int    `json:"output_index"`
+	SummaryIndex int    `json:"summary_index"`
 	Text         string `json:"text"`
 }
 
