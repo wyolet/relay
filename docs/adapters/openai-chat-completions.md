@@ -39,11 +39,11 @@ Overall fidelity is good for the common text+tools case but has several material
 | `ModelConfig[model].Reasoning.Effort` | ✅ mapped | → `reasoning_effort` — translator_cc.go:249 |
 | `ModelConfig[model].Reasoning.Summary` | ⚠️ dropped | `ReasoningConfig.Summary` never read — translator_cc.go:248–250 |
 | `ModelConfig[model].Reasoning.BudgetTokens` | ⚠️ dropped | `ReasoningConfig.BudgetTokens` never read — translator_cc.go:248–250 |
-| `ModelConfig[model].Tools.Definitions` FunctionTool | ✅ mapped | translator_cc.go:260–278 |
-| `ModelConfig[model].Tools.Definitions` ServerTool | ⛔ error | Returns `fmt.Errorf("unsupported tool type %T")` — translator_cc.go:263 |
-| `ModelConfig[model].Tools.Definitions` MCPTool | ⛔ error | Same path as ServerTool — translator_cc.go:263 |
-| `ModelConfig[model].Tools.Choice` | ✅ mapped | translator_cc.go:280–284 |
-| `ModelConfig[model].Tools.Parallel` | ✅ mapped | → `parallel_tool_calls` — translator_cc.go:279 |
+| `Request.Tools.Definitions` FunctionTool | ✅ mapped | translator_cc.go:260–278 |
+| `Request.Tools.Definitions` ServerTool | ⛔ error | Returns `fmt.Errorf("unsupported tool type %T")` — translator_cc.go:263 |
+| `Request.Tools.Definitions` MCPTool | ⛔ error | Same path as ServerTool — translator_cc.go:263 |
+| `Request.Tools.Choice` | ✅ mapped | translator_cc.go:280–284 |
+| `Request.Tools.Parallel` | ✅ mapped | → `parallel_tool_calls` — translator_cc.go:279 |
 | `ModelConfig[model].Output.Format` text/json_object/json_schema | ✅ mapped | `ccFormatToResponseFormat` translator_cc.go:846 |
 | `ModelConfig[model].Output.Verbosity` | ⚠️ dropped | `OutputConfig.Verbosity` never read — translator_cc.go:251–257 |
 | `CacheConfig` (request-level) | ⚠️ dropped | Intentional per cache.go comment; OpenAI auto-caches. No code reads `req.CacheConfig` — translator_cc.go:217–302 |

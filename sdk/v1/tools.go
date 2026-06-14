@@ -5,6 +5,17 @@ import (
 	"fmt"
 )
 
+// ToolsConfig is the task-level tool spec carried on Request.Tools. It groups
+// the tool definitions with their selection knobs (choice/parallel). One spec
+// applies to every model in a multiplex request — tools are a property of the
+// task, not the model, and each upstream adapter renders this onto its own wire
+// shape.
+type ToolsConfig struct {
+	Definitions Tools       `json:"definitions,omitempty"`
+	Choice      *ToolChoice `json:"choice,omitempty"`
+	Parallel    *bool       `json:"parallel,omitempty"`
+}
+
 // FunctionTool is a caller-executed tool. The caller's code receives the
 // tool_call item and submits a tool_result in the next request.
 type FunctionTool struct {

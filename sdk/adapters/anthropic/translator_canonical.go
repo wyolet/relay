@@ -254,8 +254,7 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
 			tc.Choice = anthropicParseToolChoice(wire.ToolChoice)
 		}
-		opts.Tools = tc
-		hasOpts = true
+		req.Tools = tc
 	}
 
 	// Thinking → ReasoningConfig
@@ -325,6 +324,29 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	var callerToolChoice *v1.ToolChoice
 	var callerParallel *bool
 
+	// Tools are task-level (req.Tools), shared across models — not per-model.
+	if tc := req.Tools; tc != nil {
+		for _, tool := range tc.Definitions {
+			ft, ok := tool.(*v1.FunctionTool)
+			if !ok {
+				return nil, fmt.Errorf("anthropic serialize_request: unsupported tool type %T", tool)
+			}
+			schema := ft.Parameters
+			if schema == nil {
+				schema = json.RawMessage(`{}`)
+			}
+			out.Tools = append(out.Tools, anthropicCanonTool{
+				Name:        ft.Name,
+				Description: ft.Description,
+				InputSchema: schema,
+			})
+		}
+		if tc.Choice != nil {
+			callerToolChoice = tc.Choice
+			callerParallel = tc.Parallel
+		}
+	}
+
 	if opts, ok := req.ModelConfig[model]; ok && opts != nil {
 		if opts.Sampling != nil {
 			s := opts.Sampling
@@ -347,28 +369,6 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				// Map effort string to budget_tokens if needed; keep as Effort passthrough.
 			}
 			out.Thinking = thinking
-		}
-		if opts.Tools != nil {
-			tc := opts.Tools
-			for _, tool := range tc.Definitions {
-				ft, ok := tool.(*v1.FunctionTool)
-				if !ok {
-					return nil, fmt.Errorf("anthropic serialize_request: unsupported tool type %T", tool)
-				}
-				schema := ft.Parameters
-				if schema == nil {
-					schema = json.RawMessage(`{}`)
-				}
-				out.Tools = append(out.Tools, anthropicCanonTool{
-					Name:        ft.Name,
-					Description: ft.Description,
-					InputSchema: schema,
-				})
-			}
-			if tc.Choice != nil {
-				callerToolChoice = tc.Choice
-				callerParallel = tc.Parallel
-			}
 		}
 
 		// Structured output via forced-tool trick. Anthropic has no native

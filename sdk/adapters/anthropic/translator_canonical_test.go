@@ -229,22 +229,21 @@ func TestAnthropicParseRequest_ToolDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["claude-3-5-sonnet-20241022"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("no tool opts")
 	}
-	if len(opts.Tools.Definitions) != 1 {
-		t.Fatalf("tools len: %d", len(opts.Tools.Definitions))
+	if len(req.Tools.Definitions) != 1 {
+		t.Fatalf("tools len: %d", len(req.Tools.Definitions))
 	}
-	ft, ok := opts.Tools.Definitions[0].(*v1.FunctionTool)
+	ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool)
 	if !ok {
-		t.Fatalf("tool is %T", opts.Tools.Definitions[0])
+		t.Fatalf("tool is %T", req.Tools.Definitions[0])
 	}
 	if ft.Name != "search" {
 		t.Errorf("tool name: %q", ft.Name)
 	}
-	if opts.Tools.Choice == nil || opts.Tools.Choice.Mode != "auto" {
-		t.Errorf("tool choice: %v", opts.Tools.Choice)
+	if req.Tools.Choice == nil || req.Tools.Choice.Mode != "auto" {
+		t.Errorf("tool choice: %v", req.Tools.Choice)
 	}
 }
 
@@ -464,13 +463,9 @@ func TestAnthropicSerializeRequest_ToolChoice_Required(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{"claude-3-5-sonnet-20241022"},
 		OutputMode: v1.OutputModeSync,
-		ModelConfig: map[string]*v1.ModelOpts{
-			"claude-3-5-sonnet-20241022": {
-				Tools: &v1.ToolsConfig{
-					Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
-					Choice:      &v1.ToolChoice{Mode: "required"},
-				},
-			},
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+			Choice:      &v1.ToolChoice{Mode: "required"},
 		},
 		Input: []v1.Item{
 			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
@@ -494,14 +489,10 @@ func TestAnthropicSerializeRequest_CacheConfig(t *testing.T) {
 		Instructions: "You are Scarlet.",
 		OutputMode:   v1.OutputModeSync,
 		CacheConfig:  &v1.CacheConfig{Instructions: true, Tools: true},
-		ModelConfig: map[string]*v1.ModelOpts{
-			model: {
-				Tools: &v1.ToolsConfig{
-					Definitions: v1.Tools{
-						&v1.FunctionTool{Name: "a", Parameters: json.RawMessage(`{}`)},
-						&v1.FunctionTool{Name: "b", Parameters: json.RawMessage(`{}`)},
-					},
-				},
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{
+				&v1.FunctionTool{Name: "a", Parameters: json.RawMessage(`{}`)},
+				&v1.FunctionTool{Name: "b", Parameters: json.RawMessage(`{}`)},
 			},
 		},
 		Input: []v1.Item{
@@ -1644,14 +1635,10 @@ func TestSerializeRequest_ParallelFalse_DisablesParallel(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{"claude-3-5-sonnet-20241022"},
 		OutputMode: v1.OutputModeSync,
-		ModelConfig: map[string]*v1.ModelOpts{
-			"claude-3-5-sonnet-20241022": {
-				Tools: &v1.ToolsConfig{
-					Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
-					Choice:      &v1.ToolChoice{Mode: "auto"},
-					Parallel:    boolPtr(false),
-				},
-			},
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+			Choice:      &v1.ToolChoice{Mode: "auto"},
+			Parallel:    boolPtr(false),
 		},
 		Input: []v1.Item{
 			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
@@ -1677,14 +1664,10 @@ func TestSerializeRequest_ParallelNil_NoDisable(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{"claude-3-5-sonnet-20241022"},
 		OutputMode: v1.OutputModeSync,
-		ModelConfig: map[string]*v1.ModelOpts{
-			"claude-3-5-sonnet-20241022": {
-				Tools: &v1.ToolsConfig{
-					Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
-					Choice:      &v1.ToolChoice{Mode: "auto"},
-					Parallel:    nil,
-				},
-			},
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+			Choice:      &v1.ToolChoice{Mode: "auto"},
+			Parallel:    nil,
 		},
 		Input: []v1.Item{
 			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
@@ -1847,12 +1830,12 @@ func TestSerializeRequest_StructuredOutput_CallerForcesToolWins(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{model},
 		OutputMode: v1.OutputModeSync,
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{&v1.FunctionTool{Name: "my_tool", Parameters: json.RawMessage(`{}`)}},
+			Choice:      &v1.ToolChoice{Mode: "function", FunctionName: "my_tool"},
+		},
 		ModelConfig: map[string]*v1.ModelOpts{
 			model: {
-				Tools: &v1.ToolsConfig{
-					Definitions: v1.Tools{&v1.FunctionTool{Name: "my_tool", Parameters: json.RawMessage(`{}`)}},
-					Choice:      &v1.ToolChoice{Mode: "function", FunctionName: "my_tool"},
-				},
 				Output: &v1.OutputConfig{Format: &v1.Format{Type: "json_schema", Schema: schema}},
 			},
 		},

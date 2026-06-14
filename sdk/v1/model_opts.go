@@ -4,19 +4,12 @@ import "encoding/json"
 
 // ModelOpts is per-model configuration keyed by model name in
 // Request.ModelConfig. All fields are optional; nil means use the vendor
-// default.
+// default. Tool definitions are NOT here — they are task-level and live in
+// Request.Tools (one spec shared across all models).
 type ModelOpts struct {
-	Tools     *ToolsConfig     `json:"tools,omitempty"`
 	Sampling  *SamplingParams  `json:"sampling,omitempty"`
 	Reasoning *ReasoningConfig `json:"reasoning,omitempty"`
 	Output    *OutputConfig    `json:"output,omitempty"`
-}
-
-// ToolsConfig groups tool-related options for a single model target.
-type ToolsConfig struct {
-	Definitions Tools       `json:"definitions,omitempty"`
-	Choice      *ToolChoice `json:"choice,omitempty"`
-	Parallel    *bool       `json:"parallel,omitempty"`
 }
 
 // SamplingParams controls token sampling. All fields default-OK when nil.

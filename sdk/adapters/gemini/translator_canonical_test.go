@@ -131,19 +131,15 @@ func TestParseRequest_Tools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["*"]
-	if opts == nil {
-		t.Fatal("no ModelConfig")
-	}
-	if opts.Tools == nil || len(opts.Tools.Definitions) != 1 {
+	if req.Tools == nil || len(req.Tools.Definitions) != 1 {
 		t.Fatal("no tools")
 	}
-	ft := opts.Tools.Definitions[0].(*v1.FunctionTool)
+	ft := req.Tools.Definitions[0].(*v1.FunctionTool)
 	if ft.Name != "search" {
 		t.Errorf("tool name: %s", ft.Name)
 	}
-	if opts.Tools.Choice == nil || opts.Tools.Choice.Mode != "required" {
-		t.Errorf("choice: %+v", opts.Tools.Choice)
+	if req.Tools.Choice == nil || req.Tools.Choice.Mode != "required" {
+		t.Errorf("choice: %+v", req.Tools.Choice)
 	}
 }
 
@@ -259,13 +255,9 @@ func TestSerializeRequest_ToolChoiceRequired_ANY(t *testing.T) {
 		Input: []v1.Item{
 			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
 		},
-		ModelConfig: map[string]*v1.ModelOpts{
-			"gemini-1.5-pro": {
-				Tools: &v1.ToolsConfig{
-					Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
-					Choice:      &v1.ToolChoice{Mode: "required"},
-				},
-			},
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+			Choice:      &v1.ToolChoice{Mode: "required"},
 		},
 	}
 	body, err := tr.SerializeRequest(req)

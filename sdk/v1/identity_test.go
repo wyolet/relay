@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -46,11 +48,18 @@ func TestIdentityTranslator_RequestRoundTrip(t *testing.T) {
 	req := &Request{
 		Model:       ModelRefs{"m"},
 		CacheConfig: &CacheConfig{Tools: true},
-		Input:       []Item{&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "hi"}}}},
+		Tools: &ToolsConfig{Definitions: Tools{
+			&FunctionTool{Name: "search", Parameters: json.RawMessage(`{}`)},
+		}},
+		Input: []Item{&Message{Role: RoleUser, Content: []Part{&TextPart{Text: "hi"}}}},
 	}
 	wire, err := IdentityTranslator{}.SerializeRequest(req)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Tools are top-level, never nested under model_config.
+	if bytes.Contains(wire, []byte(`"model_config"`)) {
+		t.Errorf("tools leaked into model_config: %s", wire)
 	}
 	got, err := IdentityTranslator{}.ParseRequest(wire)
 	if err != nil {
@@ -58,6 +67,9 @@ func TestIdentityTranslator_RequestRoundTrip(t *testing.T) {
 	}
 	if got.CacheConfig == nil || !got.CacheConfig.Tools {
 		t.Errorf("cache_config lost in round-trip: %+v", got.CacheConfig)
+	}
+	if got.Tools == nil || len(got.Tools.Definitions) != 1 {
+		t.Errorf("top-level tools lost in round-trip: %+v", got.Tools)
 	}
 	if len(got.Input) != 1 {
 		t.Errorf("input lost: %+v", got.Input)

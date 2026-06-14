@@ -333,7 +333,30 @@ How does a request reference a tool?
 
 ### Function tools — inline
 
-Same as today's Chat Completions / Messages:
+Tool definitions are **task-level**, not per-model: they live in a single
+top-level `tools` object (`Request.Tools`, a `ToolsConfig{definitions, choice,
+parallel}`), shared by every model in a multiplex request. They do **not** sit
+under `model_config` — that map is reserved for per-model knobs (`sampling`,
+`reasoning`, `output`) and relay-level options that may not reach upstream. One
+spec, defined once; each upstream adapter renders it onto its own wire `tools`
+field and decides how.
+
+```json
+{
+  "model": "gpt-5.5",
+  "input": [ ... ],
+  "tools": {
+    "definitions": [
+      { "type": "function", "name": "get_weather", "description": "...", "parameters": {} }
+    ],
+    "choice": { "mode": "auto" },
+    "parallel": true
+  },
+  "model_config": { "gpt-5.5": { "reasoning": { "effort": "high" } } }
+}
+```
+
+Each definition is one of:
 ```json
 {
   "type": "function",

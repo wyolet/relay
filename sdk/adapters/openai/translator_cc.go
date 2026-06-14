@@ -125,7 +125,7 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 				tc.Choice = choice
 			}
 		}
-		opts.Tools = tc
+		req.Tools = tc
 	}
 
 	// Reasoning
@@ -256,32 +256,33 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			}
 			out.ResponseFormat = rf
 		}
-		if opts.Tools != nil {
-			tc := opts.Tools
-			for _, tool := range tc.Definitions {
-				ft, ok := tool.(*v1.FunctionTool)
-				if !ok {
-					return nil, fmt.Errorf("cc serialize_request: unsupported tool type %T", tool)
-				}
-				params := ft.Parameters
-				if params == nil {
-					params = json.RawMessage(`{}`)
-				}
-				out.Tools = append(out.Tools, Tool{
-					Type: "function",
-					Function: FunctionDef{
-						Name:        ft.Name,
-						Description: ft.Description,
-						Parameters:  params,
-						Strict:      ft.Strict,
-					},
-				})
+	}
+
+	// Tools are task-level (req.Tools), shared across models — not per-model.
+	if tc := req.Tools; tc != nil {
+		for _, tool := range tc.Definitions {
+			ft, ok := tool.(*v1.FunctionTool)
+			if !ok {
+				return nil, fmt.Errorf("cc serialize_request: unsupported tool type %T", tool)
 			}
-			out.ParallelToolCalls = tc.Parallel
-			if tc.Choice != nil {
-				if b, err := json.Marshal(tc.Choice); err == nil {
-					out.ToolChoice = b
-				}
+			params := ft.Parameters
+			if params == nil {
+				params = json.RawMessage(`{}`)
+			}
+			out.Tools = append(out.Tools, Tool{
+				Type: "function",
+				Function: FunctionDef{
+					Name:        ft.Name,
+					Description: ft.Description,
+					Parameters:  params,
+					Strict:      ft.Strict,
+				},
+			})
+		}
+		out.ParallelToolCalls = tc.Parallel
+		if tc.Choice != nil {
+			if b, err := json.Marshal(tc.Choice); err == nil {
+				out.ToolChoice = b
 			}
 		}
 	}
@@ -478,7 +479,7 @@ func (CCTranslator) NewFromCanonicalStream() func(chunk []byte) ([]byte, error) 
 
 // hasOpts returns true if any field in opts is set.
 func hasOpts(opts *v1.ModelOpts) bool {
-	return opts.Sampling != nil || opts.Tools != nil || opts.Reasoning != nil || opts.Output != nil
+	return opts.Sampling != nil || opts.Reasoning != nil || opts.Output != nil
 }
 
 // ccContentToText extracts plain text from a CC content field (string or array).

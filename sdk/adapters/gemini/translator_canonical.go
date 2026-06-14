@@ -120,8 +120,7 @@ func (GeminiTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 				tc.Choice = geminiToolModeToChoice(tcWire.FunctionCallingConfig)
 			}
 		}
-		opts.Tools = tc
-		hasOpts = true
+		req.Tools = tc
 	}
 
 	if hasOpts && len(req.Model) > 0 {
@@ -201,29 +200,31 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		if hasGC {
 			out.GenerationConfig = gc
 		}
-		if tc := opts.Tools; tc != nil {
-			var decls []functionDeclaration
-			for _, tool := range tc.Definitions {
-				ft, ok := tool.(*v1.FunctionTool)
-				if !ok {
-					return nil, fmt.Errorf("gemini serialize_request: unsupported tool type %T", tool)
-				}
-				schema := ft.Parameters
-				if schema == nil {
-					schema = json.RawMessage(`{}`)
-				}
-				decls = append(decls, functionDeclaration{
-					Name:        ft.Name,
-					Description: ft.Description,
-					Parameters:  schema,
-				})
+	}
+
+	// Tools are task-level (req.Tools), shared across models — not per-model.
+	if tc := req.Tools; tc != nil {
+		var decls []functionDeclaration
+		for _, tool := range tc.Definitions {
+			ft, ok := tool.(*v1.FunctionTool)
+			if !ok {
+				return nil, fmt.Errorf("gemini serialize_request: unsupported tool type %T", tool)
 			}
-			if len(decls) > 0 {
-				out.Tools = []geminiTool{{FunctionDeclarations: decls}}
+			schema := ft.Parameters
+			if schema == nil {
+				schema = json.RawMessage(`{}`)
 			}
-			if tc.Choice != nil {
-				out.ToolConfig = canonicalChoiceToGemini(tc.Choice)
-			}
+			decls = append(decls, functionDeclaration{
+				Name:        ft.Name,
+				Description: ft.Description,
+				Parameters:  schema,
+			})
+		}
+		if len(decls) > 0 {
+			out.Tools = []geminiTool{{FunctionDeclarations: decls}}
+		}
+		if tc.Choice != nil {
+			out.ToolConfig = canonicalChoiceToGemini(tc.Choice)
 		}
 	}
 

@@ -117,16 +117,15 @@ func TestCCParseRequest_Tools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("expected tools config")
 	}
-	if len(opts.Tools.Definitions) != 1 {
-		t.Fatalf("tools len: %d", len(opts.Tools.Definitions))
+	if len(req.Tools.Definitions) != 1 {
+		t.Fatalf("tools len: %d", len(req.Tools.Definitions))
 	}
-	ft, ok := opts.Tools.Definitions[0].(*v1.FunctionTool)
+	ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool)
 	if !ok {
-		t.Fatalf("tool is %T", opts.Tools.Definitions[0])
+		t.Fatalf("tool is %T", req.Tools.Definitions[0])
 	}
 	if ft.Name != "search" {
 		t.Errorf("tool name: %q", ft.Name)
@@ -150,8 +149,7 @@ func TestCCParseRequest_ToolChoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Tools == nil || opts.Tools.Choice == nil {
+	if req.Tools == nil || req.Tools.Choice == nil {
 		t.Fatal("expected tool choice")
 	}
 }
@@ -170,12 +168,11 @@ func TestCCParseRequest_ParallelToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("expected tools")
 	}
-	if opts.Tools.Parallel == nil || *opts.Tools.Parallel != false {
-		t.Errorf("parallel_tool_calls: %v", opts.Tools.Parallel)
+	if req.Tools.Parallel == nil || *req.Tools.Parallel != false {
+		t.Errorf("parallel_tool_calls: %v", req.Tools.Parallel)
 	}
 }
 
@@ -409,11 +406,9 @@ func TestCCSerializeRequest_CacheConfigIsNoOp(t *testing.T) {
 		Model:        v1.ModelRefs{"gpt-4o"},
 		Instructions: "be concise",
 		CacheConfig:  &v1.CacheConfig{Instructions: true, Tools: true},
-		ModelConfig: map[string]*v1.ModelOpts{
-			"gpt-4o": {Tools: &v1.ToolsConfig{Definitions: v1.Tools{
-				&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)},
-			}}},
-		},
+		Tools: &v1.ToolsConfig{Definitions: v1.Tools{
+			&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)},
+		}},
 		Input: []v1.Item{
 			&v1.Message{
 				Role:        v1.RoleUser,
@@ -484,12 +479,8 @@ func TestCCSerializeRequest_Tools(t *testing.T) {
 	req := &v1.Request{
 		Model: v1.ModelRefs{"gpt-4o"},
 		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "x"}}}},
-		ModelConfig: map[string]*v1.ModelOpts{
-			"gpt-4o": {
-				Tools: &v1.ToolsConfig{
-					Definitions: []v1.Tool{&v1.FunctionTool{Name: "search", Parameters: schema}},
-				},
-			},
+		Tools: &v1.ToolsConfig{
+			Definitions: []v1.Tool{&v1.FunctionTool{Name: "search", Parameters: schema}},
 		},
 	}
 	b, err := (CCTranslator{}).SerializeRequest(req)

@@ -131,7 +131,7 @@ func TestParseModelConfigEmptyObject(t *testing.T) {
 	if opts == nil {
 		t.Fatal("expected non-nil model_config[x] for empty object")
 	}
-	if opts.Sampling != nil || opts.Tools != nil || opts.Reasoning != nil || opts.Output != nil {
+	if opts.Sampling != nil || opts.Reasoning != nil || opts.Output != nil {
 		t.Errorf("expected all fields nil for empty object opts: %+v", opts)
 	}
 }
@@ -212,67 +212,57 @@ func TestParseRequiresInput(t *testing.T) {
 	}
 }
 
-// --- Tools (now in ModelConfig) ---
+// --- Tools (top-level on Request) ---
 
 func TestParseWithTools(t *testing.T) {
 	body := `{
 		"model": "gpt-4o",
 		"input": "what is the weather?",
-		"model_config": {
-			"gpt-4o": {
-				"tools": {
-					"definitions": [{"type":"function","name":"get_weather","parameters":{"type":"object"}}],
-					"choice": "auto"
-				}
-			}
+		"tools": {
+			"definitions": [{"type":"function","name":"get_weather","parameters":{"type":"object"}}],
+			"choice": "auto"
 		}
 	}`
 	req, err := Parse([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("expected tools config")
 	}
-	if len(opts.Tools.Definitions) != 1 {
-		t.Fatalf("expected 1 tool, got %d", len(opts.Tools.Definitions))
+	if len(req.Tools.Definitions) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(req.Tools.Definitions))
 	}
-	if opts.Tools.Definitions[0].ToolType() != ToolTypeFunction {
-		t.Errorf("tool type: %v", opts.Tools.Definitions[0].ToolType())
+	if req.Tools.Definitions[0].ToolType() != ToolTypeFunction {
+		t.Errorf("tool type: %v", req.Tools.Definitions[0].ToolType())
 	}
-	if opts.Tools.Choice == nil {
+	if req.Tools.Choice == nil {
 		t.Fatal("expected tool choice")
 	}
-	if opts.Tools.Choice.Mode != "auto" {
-		t.Errorf("tool choice mode: %q", opts.Tools.Choice.Mode)
+	if req.Tools.Choice.Mode != "auto" {
+		t.Errorf("tool choice mode: %q", req.Tools.Choice.Mode)
 	}
 }
 
-func TestParseWithServerAndMCPToolsInModelConfig(t *testing.T) {
+func TestParseWithServerAndMCPTools(t *testing.T) {
 	body := `{
 		"model": "gpt-4o",
 		"input": "search for cats",
-		"model_config": {
-			"gpt-4o": {
-				"tools": {
-					"definitions": [
-						{"type":"server","name":"web_search"},
-						{"type":"mcp","server_url":"https://mcp.example.com"}
-					]
-				}
-			}
+		"tools": {
+			"definitions": [
+				{"type":"server","name":"web_search"},
+				{"type":"mcp","server_url":"https://mcp.example.com"}
+			]
 		}
 	}`
 	req, err := Parse([]byte(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-4o"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("expected tools config")
 	}
-	defs := opts.Tools.Definitions
+	defs := req.Tools.Definitions
 	if len(defs) != 2 {
 		t.Fatalf("expected 2 tools, got %d", len(defs))
 	}

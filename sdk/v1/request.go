@@ -26,6 +26,13 @@ type Request struct {
 	Model       ModelRefs             `json:"model"`
 	ModelConfig map[string]*ModelOpts `json:"model_config,omitempty"`
 
+	// Tools is the task-level tool spec (definitions + choice + parallel),
+	// shared across every model in a multiplex request. It is NOT per-model:
+	// the spec is a property of the task, and the upstream adapter decides how
+	// to render it. Per-model knobs (sampling/reasoning/output) live in
+	// ModelConfig.
+	Tools *ToolsConfig `json:"tools,omitempty"`
+
 	// CacheConfig is the vendor-neutral prompt-cache configuration. Supporting
 	// adapters emit breakpoints; others ignore it. See CacheConfig type.
 	CacheConfig *CacheConfig `json:"cache_config,omitempty"`
@@ -46,6 +53,7 @@ func (r *Request) MarshalJSON() ([]byte, error) {
 		Instructions string                     `json:"instructions,omitempty"`
 		Input        []Item                     `json:"input"`
 		ModelConfig  map[string]*ModelOpts      `json:"model_config,omitempty"`
+		Tools        *ToolsConfig               `json:"tools,omitempty"`
 		CacheConfig  *CacheConfig               `json:"cache_config,omitempty"`
 		OutputMode   string                     `json:"output_mode,omitempty"`
 		User         string                     `json:"user,omitempty"`
@@ -57,6 +65,7 @@ func (r *Request) MarshalJSON() ([]byte, error) {
 		Instructions: r.Instructions,
 		Input:        r.Input,
 		ModelConfig:  r.ModelConfig,
+		Tools:        r.Tools,
 		CacheConfig:  r.CacheConfig,
 		OutputMode:   r.OutputMode,
 		User:         r.User,
