@@ -39,6 +39,8 @@ substantially since 2026-05-25).
 | #327 | `status` (output-only) echoed back on round-tripped message/function_call/reasoning input items → 400 `Unknown parameter input[N].status`. Now stripped on marshal for all item types. |
 | #328 | `total_tokens` used `Tokens.Sum()`, double-counting reasoning (a sub-breakdown of output): reported 5657 vs OpenAI's 5608. Now `input + output`. |
 | #329 | `stop_sequences`/`top_k` forwarded but **don't exist on the Responses API** → 400 `Unknown parameter`; and `function_call_output.output` (required) was `omitempty` → empty tool result dropped it → 400. Both fixed; stop_sequences now an annotated canonical drop. |
+| #331 | `reasoning_summary_text` deltas not mapped to canonical reasoning → summary-mode thinking (gpt-5.5's only plaintext reasoning) lost. Now streamed as canonical reasoning deltas + accumulated to backfill the terminal item's `summary`. |
+| #332 | reasoning summary **parts** serialized as `{text}` with no discriminator → 400 `Missing required parameter input[N].summary[0].type`. #331 made non-empty summary arrays common on round-trip, surfacing it. `ResponsesSummaryText.MarshalJSON` now always emits `type: "summary_text"`. |
 
 > **`wireReq` footgun:** `SerializeRequest` marshals a bespoke struct literal, not
 > `rreq`. Any canonical/request field not *explicitly* copied into that literal is
