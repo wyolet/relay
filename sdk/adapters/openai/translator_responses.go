@@ -71,8 +71,11 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 		Temperature     *float64 `json:"temperature,omitempty"`
 		TopP            *float64 `json:"top_p,omitempty"`
-		TopK            *int     `json:"top_k,omitempty"`
 		MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
+		// No top_k / stop_sequences: the Responses API has neither parameter
+		// (they exist only on Chat Completions). Emitting them 400s with
+		// "Unknown parameter". canonical stop_sequences is dropped at the
+		// canonicalToResponsesRequest mapping with a greppable annotation.
 
 		Text      *ResponsesTextConfig      `json:"text,omitempty"`
 		Reasoning *ResponsesReasoningConfig `json:"reasoning,omitempty"`
@@ -81,7 +84,6 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		Metadata          map[string]string `json:"metadata,omitempty"`
 		User              string            `json:"user,omitempty"`
 		Stream            *bool             `json:"stream,omitempty"`
-		StopSequences     []string          `json:"stop_sequences,omitempty"`
 		Store             *bool             `json:"store,omitempty"`
 		Include           []string          `json:"include,omitempty"`
 	}
@@ -102,7 +104,6 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		ToolChoice:        rreq.ToolChoice,
 		Temperature:       rreq.Temperature,
 		TopP:              rreq.TopP,
-		TopK:              rreq.TopK,
 		MaxOutputTokens:   rreq.MaxOutputTokens,
 		Text:              rreq.Text,
 		Reasoning:         rreq.Reasoning,
@@ -110,7 +111,6 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		Metadata:          req.Metadata,
 		User:              req.User,
 		Stream:            rreq.Stream,
-		StopSequences:     rreq.StopSequences,
 		Store:             &storeFalse,
 		Include:           []string{"reasoning.encrypted_content"},
 	})
@@ -337,8 +337,6 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 
 // canonicalToResponsesRequest maps a canonical *v1.Request back to a *ResponsesRequest.
 // Used for SerializeRequest and for echo fields in SerializeResponse.
-// canonicalToResponsesRequest maps a canonical *v1.Request back to a *ResponsesRequest.
-// Used for SerializeRequest and for echo fields in SerializeResponse.
 func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	if len(req.Model) == 0 {
 		return nil, fmt.Errorf("canonical request has no model")
@@ -364,7 +362,8 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 			rreq.Temperature = s.Temperature
 			rreq.TopP = s.TopP
 			rreq.MaxOutputTokens = s.MaxTokens
-			rreq.StopSequences = s.Stop
+			// canonical: stop_sequences dropped — the Responses API has no
+			// stop-sequence parameter (Chat Completions only); emitting it 400s.
 			// canonical: Seed has no Responses wire equivalent — dropped
 			// canonical: FrequencyPenalty has no Responses wire equivalent — dropped
 			// canonical: PresencePenalty has no Responses wire equivalent — dropped

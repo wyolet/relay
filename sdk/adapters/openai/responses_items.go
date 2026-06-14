@@ -104,19 +104,25 @@ func (*ResponsesFunctionCallOutput) ResponsesItemType() ResponsesItemType {
 	return ResponsesItemTypeFunctionCallOutput
 }
 
+// MarshalJSON emits exactly one of output (string) or content (array). output
+// is REQUIRED on the wire, and an empty tool result ("") is valid — so when no
+// content array is set, emit output unconditionally (a *string, non-nil even
+// for ""). omitempty on a plain string would drop a required field and 400
+// ("Missing required parameter: 'input[N].output'").
 func (f *ResponsesFunctionCallOutput) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Type    ResponsesItemType `json:"type"`
 		CallID  string            `json:"call_id"`
-		Output  string            `json:"output,omitempty"`
+		Output  *string           `json:"output,omitempty"`
 		Content []ResponsesPart   `json:"content,omitempty"`
 	}
-	return json.Marshal(wire{
-		Type:    ResponsesItemTypeFunctionCallOutput,
-		CallID:  f.CallID,
-		Output:  f.Output,
-		Content: f.Content,
-	})
+	w := wire{Type: ResponsesItemTypeFunctionCallOutput, CallID: f.CallID}
+	if f.Content != nil {
+		w.Content = f.Content
+	} else {
+		w.Output = &f.Output
+	}
+	return json.Marshal(w)
 }
 
 func (f *ResponsesFunctionCallOutput) UnmarshalJSON(data []byte) error {

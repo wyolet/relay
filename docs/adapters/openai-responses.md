@@ -33,13 +33,44 @@ substantially since 2026-05-25).
 | #319 | upstream non-2xx bodies were swallowed → bodiless 400s; now forwarded verbatim |
 | #321 | assistant message content serialized as `input_text`; must be `output_text` by role — OpenAI 400'd every multi-turn |
 | #322 | streamed `response.completed`/`.incomplete`/`.failed` parsed via plain `json.Unmarshal` into the polymorphic `[]ResponsesItem` output → errored → swallowed → **no terminal event, no usage, no `[DONE]`**. Now routed through `parseStreamTerminalResponse` (the custom unmarshaler). |
-| #323 | `SerializeRequest`'s hand-written `wireReq` literal omitted the `Stream` (+`StopSequences`) field it declared → upstream never got `stream:true` → buffered `application/json` came back → `streamCanonical` found no SSE frames → **empty 200**. Now copied. |
+| #323 | `SerializeRequest`'s hand-written `wireReq` literal omitted the `Stream` field it declared → upstream never got `stream:true` → buffered `application/json` came back → `streamCanonical` found no SSE frames → **empty 200**. Now copied. |
 | #324 | reasoning↔tool round-trip (see below). |
+| #326 | reasoning item `summary` was `omitempty` → dropped when empty → 400 `Missing required parameter input[N].summary`. Now always emits `[]`. |
+| #327 | `status` (output-only) echoed back on round-tripped message/function_call/reasoning input items → 400 `Unknown parameter input[N].status`. Now stripped on marshal for all item types. |
+| #328 | `total_tokens` used `Tokens.Sum()`, double-counting reasoning (a sub-breakdown of output): reported 5657 vs OpenAI's 5608. Now `input + output`. |
+| #329 | `stop_sequences`/`top_k` forwarded but **don't exist on the Responses API** → 400 `Unknown parameter`; and `function_call_output.output` (required) was `omitempty` → empty tool result dropped it → 400. Both fixed; stop_sequences now an annotated canonical drop. |
 
 > **`wireReq` footgun:** `SerializeRequest` marshals a bespoke struct literal, not
 > `rreq`. Any canonical/request field not *explicitly* copied into that literal is
 > silently dropped (this is exactly how #323 happened). Audit the literal whenever
 > you add a request field.
+
+### Authoritative input contract (from OpenAI's OpenAPI spec)
+
+Source of truth: `openai/openai-openapi` `openapi.yaml` (`CreateResponse` →
+`InputItem`). The recurring 400 class is items echoed back as **input** carrying
+fields that are **output-only**, or **omitting a required field**. The spec uses
+one schema per item type for both directions, so "output-only" means
+*server-rejected on input*, not *schema-absent*. The contract we serialize to:
+
+| input item | required | emit on input | NEVER emit on input |
+|---|---|---|---|
+| `message` (user/system/developer) | `role`, `content` | `input_text`/`input_image`/`input_file` parts | `status`; `output_text`/`refusal` parts |
+| `message` (assistant, round-tripped) | `role`, `content` | `output_text` parts (this is the only place they're legal) | `status` |
+| `function_call` | `call_id`, `name`, `arguments` | `id` (optional), `arguments` as a **string** | `status` |
+| `function_call_output` | `call_id`, `output` | exactly one of `output` (string, `""` OK) **or** `content[]` | `status` |
+| `reasoning` | `id`, `summary` | `summary` (≥ `[]`), `encrypted_content` | `status` |
+
+Top-level request params that **do not exist** on Responses (Chat-Completions-only —
+emitting them 400s): `stop`/`stop_sequences`, `top_k`, `frequency_penalty`,
+`presence_penalty`, `logit_bias`, `n`, boolean `logprobs`. Real names that differ:
+`max_output_tokens` (not `max_tokens`), `text.format` (not `response_format`).
+`reasoning.effort` ∈ {none, minimal, low, medium, high, xhigh}; `reasoning.summary`
+∈ {auto, concise, detailed}. `include` accepts `reasoning.encrypted_content`.
+
+> The Responses request schemas are **not** `additionalProperties:false`, so the
+> "Unknown parameter" 400s are enforced server-side, not by the spec document.
+> The two definitive negatives the spec *does* prove are `stop_sequences`/`top_k`.
 
 ### Reasoning ↔ tool-call round-trip (stateless)
 
