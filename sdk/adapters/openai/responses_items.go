@@ -162,14 +162,22 @@ func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 	type wire struct {
 		Type             ResponsesItemType      `json:"type"`
 		ID               string                 `json:"id,omitempty"`
-		Summary          []ResponsesSummaryText `json:"summary,omitempty"`
+		Summary          []ResponsesSummaryText `json:"summary"`
 		EncryptedContent string                 `json:"encrypted_content,omitempty"`
 		Status           ResponsesStatus        `json:"status,omitempty"`
+	}
+	// summary is REQUIRED on a reasoning item (the Responses API rejects one
+	// without it: "Missing required parameter input[N].summary"). A reasoning
+	// item commonly has no summary (low effort, or summary not requested), so
+	// emit at least [] — never null, never omitted.
+	summary := r.Summary
+	if summary == nil {
+		summary = []ResponsesSummaryText{}
 	}
 	return json.Marshal(wire{
 		Type:             ResponsesItemTypeReasoning,
 		ID:               r.ID,
-		Summary:          r.Summary,
+		Summary:          summary,
 		EncryptedContent: r.EncryptedContent,
 		Status:           r.Status,
 	})
