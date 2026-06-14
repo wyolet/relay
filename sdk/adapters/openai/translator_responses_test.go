@@ -1829,3 +1829,116 @@ func TestResponsesSerializeRequest_HostedToolChoiceObject(t *testing.T) {
 		t.Errorf("tool_choice.type: %v", tcv["type"])
 	}
 }
+
+// --- P1 request-config fidelity (PR4) ---
+
+// TestResponsesParseRequest_VerbosityReasoningSummaryDescription locks the inbound
+// mapping of text.verbosity, reasoning.summary, and text.format.json_schema.description
+// into canonical — all three were previously silently dropped on parse.
+func TestResponsesParseRequest_VerbosityReasoningSummaryDescription(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"model":     "gpt-5",
+		"input":     "hi",
+		"reasoning": map[string]any{"effort": "high", "summary": "detailed"},
+		"text": map[string]any{
+			"verbosity": "low",
+			"format": map[string]any{
+				"type": "json_schema", "name": "S", "description": "a schema",
+				"schema": json.RawMessage(`{"type":"object"}`),
+			},
+		},
+	})
+	req, err := (ResponsesTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := req.ModelConfig["gpt-5"]
+	if opts == nil {
+		t.Fatal("no model config")
+	}
+	if opts.Reasoning == nil || opts.Reasoning.Summary != "detailed" {
+		t.Errorf("reasoning.summary: %+v", opts.Reasoning)
+	}
+	if opts.Output == nil || opts.Output.Verbosity != "low" {
+		t.Errorf("verbosity: %+v", opts.Output)
+	}
+	if opts.Output.Format == nil || opts.Output.Format.Description != "a schema" {
+		t.Errorf("format.description: %+v", opts.Output.Format)
+	}
+}
+
+// TestResponsesSerializeRequest_VerbosityDescription locks the outbound mapping:
+// canonical verbosity + format.description must reach the Responses wire body.
+func TestResponsesSerializeRequest_VerbosityDescription(t *testing.T) {
+	strict := true
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gpt-5"},
+		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+		ModelConfig: map[string]*v1.ModelOpts{"gpt-5": {
+			Output: &v1.OutputConfig{
+				Verbosity: "high",
+				Format:    &v1.Format{Type: "json_schema", Name: "S", Description: "d", Schema: json.RawMessage(`{}`), Strict: &strict},
+			},
+		}},
+	}
+	b, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, b)
+	text, ok := m["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("text missing: %v", m["text"])
+	}
+	if text["verbosity"] != "high" {
+		t.Errorf("verbosity: %v", text["verbosity"])
+	}
+	f, ok := text["format"].(map[string]any)
+	if !ok || f["description"] != "d" {
+		t.Errorf("format.description: %v", text["format"])
+	}
+}
+
+// TestResponsesParseRequest_PromptRejected: a stored prompt-template ref is
+// stateful and must fail loud cross-shape, not silently drop the instructions.
+func TestResponsesParseRequest_PromptRejected(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"model":  "gpt-5",
+		"input":  "hi",
+		"prompt": map[string]any{"id": "pmpt_123", "version": "2"},
+	})
+	_, err := (ResponsesTranslator{}).ParseRequest(body)
+	if err == nil || !strings.Contains(err.Error(), "prompt") {
+		t.Fatalf("expected prompt rejection, got %v", err)
+	}
+}
+
+// TestResponsesStream_FunctionCallItemStartedCarriesName: item.started for a
+// function_call must carry the tool name (for downstream Anthropic-style emit).
+func TestResponsesStream_FunctionCallItemStartedCarriesName(t *testing.T) {
+	fn := (ResponsesTranslator{}).NewToCanonicalStream()
+	chunk := responsesSSEChunk(ResponsesEventOutputItemAdded, map[string]any{
+		"output_index": 0,
+		"item":         map[string]any{"type": "function_call", "id": "fc_0", "call_id": "c0", "name": "search", "arguments": ""},
+	})
+	out, err := fn(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Find the item.started frame and assert its name.
+	for _, fr := range splitCanonicalFrames(out) {
+		event, data, ok := v1.ParseSSEChunk(fr)
+		if !ok || event != v1.EventItemStarted {
+			continue
+		}
+		var ev v1.ItemStartedEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Name != "search" {
+			t.Errorf("item.started name: %q, want search", ev.Name)
+		}
+		return
+	}
+	t.Fatal("no item.started frame emitted")
+}

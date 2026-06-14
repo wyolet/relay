@@ -223,6 +223,13 @@ func responsesRejectStatefulFields(req *ResponsesRequest) error {
 	if len(req.Include) > 0 {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "include")
 	}
+	if len(req.Prompt) > 0 && string(req.Prompt) != "null" {
+		// A stored prompt template lives in OpenAI's server-side store and carries
+		// the actual instructions. Cross-shape we can't resolve it, and silently
+		// dropping it would send an empty/wrong request — fail loud, like the other
+		// stateful fields. (Byte-pass to OpenAI-native is unaffected.)
+		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "prompt")
+	}
 	return nil
 }
 
@@ -305,21 +312,30 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 		cr.Tools = tc
 	}
 
+	// canonical: max_tool_calls dropped — no canonical field for a tool-call cap.
+	// Honored only on the byte-pass path; cross-shape it cannot be expressed.
+	_ = req.MaxToolCalls
+
 	// Reasoning.
-	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		opts.Reasoning = &v1.ReasoningConfig{Effort: req.Reasoning.Effort}
+	if req.Reasoning != nil && (req.Reasoning.Effort != "" || req.Reasoning.Summary != "") {
+		opts.Reasoning = &v1.ReasoningConfig{
+			Effort:  req.Reasoning.Effort,
+			Summary: req.Reasoning.Summary,
+		}
 		hasOpts = true
 	}
 
-	// Output format.
-	if req.Text != nil && req.Text.Format != nil {
-		oc := &v1.OutputConfig{
-			Format: &v1.Format{
-				Type:   req.Text.Format.Type,
-				Name:   req.Text.Format.Name,
-				Schema: req.Text.Format.Schema,
-				Strict: req.Text.Format.Strict,
-			},
+	// Output format + verbosity.
+	if req.Text != nil && (req.Text.Format != nil || req.Text.Verbosity != "") {
+		oc := &v1.OutputConfig{Verbosity: req.Text.Verbosity}
+		if f := req.Text.Format; f != nil {
+			oc.Format = &v1.Format{
+				Type:        f.Type,
+				Name:        f.Name,
+				Description: f.Description,
+				Schema:      f.Schema,
+				Strict:      f.Strict,
+			}
 		}
 		opts.Output = oc
 		hasOpts = true
@@ -375,13 +391,18 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 			// canonical: BudgetTokens has no Responses wire equivalent — dropped
 			rreq.Reasoning = rc
 		}
-		if opts.Output != nil && opts.Output.Format != nil {
-			rreq.Text = &ResponsesTextConfig{Format: &ResponsesFormat{
-				Type:   opts.Output.Format.Type,
-				Name:   opts.Output.Format.Name,
-				Schema: opts.Output.Format.Schema,
-				Strict: opts.Output.Format.Strict,
-			}}
+		if opts.Output != nil && (opts.Output.Format != nil || opts.Output.Verbosity != "") {
+			tc := &ResponsesTextConfig{Verbosity: opts.Output.Verbosity}
+			if f := opts.Output.Format; f != nil {
+				tc.Format = &ResponsesFormat{
+					Type:        f.Type,
+					Name:        f.Name,
+					Description: f.Description,
+					Schema:      f.Schema,
+					Strict:      f.Strict,
+				}
+			}
+			rreq.Text = tc
 		}
 	}
 
@@ -921,6 +942,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		var itemProbe struct {
 			Type ResponsesItemType `json:"type"`
 			ID   string            `json:"id"`
+			Name string            `json:"name"`
 		}
 		if err := json.Unmarshal(evHeader.Item, &itemProbe); err != nil {
 			return nil, nil
@@ -937,7 +959,10 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		startData, _ := json.Marshal(v1.ItemStartedEvent{
 			ItemID:   itemProbe.ID,
 			ItemType: v1.ItemType(itemProbe.Type),
-			Index:    evHeader.OutputIndex,
+			// Name rides item.started for function_call items so downstream
+			// serializers that emit the tool name at item-start (Anthropic) have it.
+			Name:  itemProbe.Name,
+			Index: evHeader.OutputIndex,
 		})
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemStarted, Data: startData})
 
@@ -1108,8 +1133,21 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		frames = append(frames, v1.SSEFrame{Event: v1.EventError, Data: errData})
 
 	default:
-		// Unknown/unhandled events (content_part.added, output_text.done, etc.) are dropped.
-		// They carry no information not already covered by the 6 canonical events.
+		// Unhandled events fall into two classes, both intentionally dropped:
+		//
+		//  1. Redundant lifecycle/.done events (content_part.added, output_text.done,
+		//     reasoning_summary_part.*, queued, in_progress) — carry nothing the 6
+		//     canonical events don't already convey.
+		//  2. Hosted-tool / annotation / audio events (web_search_call.*,
+		//     file_search_call.*, code_interpreter_call.*, image_generation_call.*,
+		//     mcp_call.*, custom_tool_call_input.*, output_text.annotation.added,
+		//     audio.*) — no canonical representation exists yet.
+		//
+		// canonical: hosted-tool / annotation / audio stream events dropped — no
+		// canonical event. Note mcp_call.failed / mcp_list_tools.failed carry an
+		// error that is lost here; surfacing it as a fatal canonical error would
+		// wrongly abort an otherwise-completing stream, so it waits for a
+		// non-fatal canonical warning channel (deferred). See docs/adapters/openai-responses.md.
 	}
 
 	return marshalCanonicalFrames(frames), nil

@@ -21,6 +21,9 @@ type ResponsesRequest struct {
 	Text      *ResponsesTextConfig      `json:"text,omitempty"`
 	Reasoning *ResponsesReasoningConfig `json:"reasoning,omitempty"`
 
+	MaxToolCalls *int            `json:"max_tool_calls,omitempty"`
+	Prompt       json.RawMessage `json:"prompt,omitempty"` // stored prompt template ref; stateful
+
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
 	User              string            `json:"user,omitempty"`
@@ -42,18 +45,20 @@ type ResponsesRequest struct {
 	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
 }
 
-// ResponsesTextConfig controls the output text format.
+// ResponsesTextConfig controls the output text format and verbosity.
 type ResponsesTextConfig struct {
-	Format *ResponsesFormat `json:"format,omitempty"`
+	Format    *ResponsesFormat `json:"format,omitempty"`
+	Verbosity string           `json:"verbosity,omitempty"` // "low" | "medium" | "high"
 }
 
 // ResponsesFormat specifies the response format type.
 // Type is one of: "text", "json_object", "json_schema".
 type ResponsesFormat struct {
-	Type   string          `json:"type"`
-	Name   string          `json:"name,omitempty"`   // json_schema only
-	Schema json.RawMessage `json:"schema,omitempty"` // json_schema only
-	Strict *bool           `json:"strict,omitempty"` // json_schema only
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`        // json_schema only
+	Description string          `json:"description,omitempty"` // json_schema only
+	Schema      json.RawMessage `json:"schema,omitempty"`      // json_schema only
+	Strict      *bool           `json:"strict,omitempty"`      // json_schema only
 }
 
 // ResponsesReasoningConfig controls reasoning effort.
