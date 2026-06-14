@@ -539,9 +539,16 @@ func responsesAnnotationToCanonical(a ResponsesAnnotation) v1.Annotation {
 func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 	switch v := item.(type) {
 	case *v1.Message:
+		// The Responses API ties content-part type to role: assistant content
+		// must be output_text (or refusal), user/system content input_text.
+		// Honor the role here rather than the canonical part type — inbound
+		// parsers (and canonical clients) don't always carry an assistant turn
+		// as an OutputTextPart, and emitting input_text on an assistant message
+		// is a hard 400 ("Invalid value: 'input_text'").
+		asOutput := v.Role == v1.RoleAssistant
 		parts := make([]ResponsesPart, 0, len(v.Content))
 		for _, p := range v.Content {
-			rp := responsesPartFromCanonical(p)
+			rp := responsesPartFromCanonical(p, asOutput)
 			if rp != nil {
 				parts = append(parts, rp)
 			}
@@ -568,7 +575,7 @@ func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 			Output: v.Output,
 		}
 		for _, p := range v.Content {
-			rp := responsesPartFromCanonical(p)
+			rp := responsesPartFromCanonical(p, false) // tool result is model input
 			if rp != nil {
 				out.Content = append(out.Content, rp)
 			}
@@ -600,11 +607,22 @@ func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 }
 
 // responsesPartFromCanonical converts a canonical v1.Part to a ResponsesPart.
-func responsesPartFromCanonical(p v1.Part) ResponsesPart {
+// asOutput selects the text wire type required by the parent item's role:
+// assistant message content must be output_text, everything else input_text.
+// It governs both canonical text variants so a TextPart on an assistant turn
+// (common from inbound parsers) still serializes as output_text, and an
+// OutputTextPart spliced into a user turn degrades to input_text.
+func responsesPartFromCanonical(p v1.Part, asOutput bool) ResponsesPart {
 	switch v := p.(type) {
 	case *v1.TextPart:
+		if asOutput {
+			return &ResponsesOutputTextPart{Text: v.Text}
+		}
 		return &ResponsesTextPart{Text: v.Text}
 	case *v1.OutputTextPart:
+		if !asOutput {
+			return &ResponsesTextPart{Text: v.Text}
+		}
 		out := &ResponsesOutputTextPart{Text: v.Text}
 		for _, a := range v.Annotations {
 			ra := responsesAnnotationFromCanonical(a)

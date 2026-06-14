@@ -10,6 +10,47 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
+// TestResponsesItemFromCanonical_RoleDrivenTextType guards the Responses wire
+// invariant: assistant content serializes as output_text, user/system content
+// as input_text — regardless of the canonical part variant. A TextPart on an
+// assistant turn (how inbound parsers carry history) must NOT emit input_text,
+// which OpenAI rejects with "Invalid value: 'input_text'".
+func TestResponsesItemFromCanonical_RoleDrivenTextType(t *testing.T) {
+	partType := func(it ResponsesItem) ResponsesPartType {
+		msg, ok := it.(*ResponsesMessage)
+		if !ok || len(msg.Content) == 0 {
+			t.Fatalf("expected non-empty ResponsesMessage, got %T", it)
+		}
+		return msg.Content[0].ResponsesPartType()
+	}
+
+	cases := []struct {
+		name string
+		item v1.Item
+		want ResponsesPartType
+	}{
+		{"assistant TextPart -> output_text",
+			&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
+			ResponsesPartTypeOutputText},
+		{"assistant OutputTextPart -> output_text",
+			&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "hi"}}},
+			ResponsesPartTypeOutputText},
+		{"user TextPart -> input_text",
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
+			ResponsesPartTypeInputText},
+		{"system TextPart -> input_text",
+			&v1.Message{Role: v1.RoleSystem, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
+			ResponsesPartTypeInputText},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := partType(responsesItemFromCanonical(tc.item)); got != tc.want {
+				t.Fatalf("part type = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // --- ParseRequest ---
 
 func TestResponsesParseRequest_SimpleStringInput(t *testing.T) {
