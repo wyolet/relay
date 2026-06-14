@@ -66,8 +66,24 @@ func (ts *ResponsesTools) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// responsesUnmarshalTool decodes a single tool. Returns an explicit error for types
-// outside the v1 supported set.
+// ResponsesRawTool carries a tool definition whose `type` the adapter does not
+// model — the hosted/server-side tools (web_search, file_search, code_interpreter,
+// image_generation, computer_use, mcp, local_shell, custom). It exists so an
+// unmodeled tool def round-trips verbatim instead of hard-erroring the whole
+// request. Cross-shape it is dropped at responsesRequestToCanonical with an
+// annotation (it can't be expressed to a non-OpenAI upstream); within-vendor is
+// byte-pass and never reaches here.
+type ResponsesRawTool struct {
+	Type ResponsesToolType
+	Raw  json.RawMessage
+}
+
+func (*ResponsesRawTool) isResponsesTool()                       {}
+func (r *ResponsesRawTool) ResponsesToolType() ResponsesToolType { return r.Type }
+func (r *ResponsesRawTool) MarshalJSON() ([]byte, error)         { return r.Raw, nil }
+
+// responsesUnmarshalTool decodes a single tool. Function tools map to canonical;
+// every other (hosted-tool) type is captured verbatim as a ResponsesRawTool.
 func responsesUnmarshalTool(data []byte) (ResponsesTool, error) {
 	var probe struct {
 		Type ResponsesToolType `json:"type"`
@@ -83,7 +99,7 @@ func responsesUnmarshalTool(data []byte) (ResponsesTool, error) {
 		}
 		return &v, nil
 	default:
-		return nil, fmt.Errorf("unsupported tool type %q; v1 supports only function tools", probe.Type)
+		return &ResponsesRawTool{Type: probe.Type, Raw: append(json.RawMessage(nil), data...)}, nil
 	}
 }
 

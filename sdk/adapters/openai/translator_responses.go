@@ -278,7 +278,10 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 		for _, t := range req.Tools {
 			ft, ok := t.(*ResponsesFunctionTool)
 			if !ok {
-				return nil, fmt.Errorf("unsupported tool type %T in Responses request", t)
+				// canonical: hosted-tool definition (web_search, mcp, …) dropped —
+				// not expressible to a non-OpenAI upstream. Skip rather than 400
+				// the whole request (rule 11: annotated, not silent).
+				continue
 			}
 			params := ft.Parameters
 			if params == nil {
@@ -479,6 +482,13 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 		}
 		return r, nil
 
+	case *ResponsesRawItem:
+		// canonical: hosted-tool item (web_search_call, mcp_call, …) dropped —
+		// no canonical representation. Round-trips only within Responses, which
+		// is byte-pass and never reaches this translator. Returning (nil, nil)
+		// drops it without failing the parse (rule 11: annotated, not silent).
+		return nil, nil
+
 	default:
 		return nil, fmt.Errorf("unsupported item type %T", item)
 	}
@@ -610,6 +620,10 @@ func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 		return r
 
 	default:
+		// canonical: unknown canonical item type dropped — no Responses wire
+		// representation. Latent: canonical carries only the four modeled types
+		// (hosted-tool items are dropped at responsesItemToCanonical, never
+		// reaching canonical), so this is unreachable today (rule 11: annotated).
 		return nil
 	}
 }
@@ -912,6 +926,12 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			return nil, nil
 		}
 		if itemProbe.ID == "" || itemProbe.Type == "" {
+			return nil, nil
+		}
+		if !responsesCanonicalItemType(itemProbe.Type) {
+			// Unmodeled item type (hosted-tool call): its output_item.done drops
+			// at responsesItemToCanonical, so emitting item.started here would
+			// orphan a started-without-completed. Skip the lifecycle entirely.
 			return nil, nil
 		}
 		startData, _ := json.Marshal(v1.ItemStartedEvent{

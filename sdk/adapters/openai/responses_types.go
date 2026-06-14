@@ -10,6 +10,20 @@ const (
 	ResponsesItemTypeReasoning          ResponsesItemType = "reasoning"
 )
 
+// responsesCanonicalItemType reports whether an item type has a canonical
+// representation. Everything else (hosted-tool calls) is carried as a
+// ResponsesRawItem and dropped cross-shape, so the streaming path must not emit
+// a canonical item lifecycle for it.
+func responsesCanonicalItemType(t ResponsesItemType) bool {
+	switch t {
+	case ResponsesItemTypeMessage, ResponsesItemTypeFunctionCall,
+		ResponsesItemTypeFunctionCallOutput, ResponsesItemTypeReasoning:
+		return true
+	default:
+		return false
+	}
+}
+
 // ResponsesPartType is the wire discriminator for the Responses API Content part union.
 type ResponsesPartType string
 
