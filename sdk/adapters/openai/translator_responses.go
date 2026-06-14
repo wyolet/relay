@@ -98,6 +98,8 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		ParallelToolCalls: rreq.ParallelToolCalls,
 		Metadata:          req.Metadata,
 		User:              req.User,
+		Stream:            rreq.Stream,
+		StopSequences:     rreq.StopSequences,
 	})
 }
 
