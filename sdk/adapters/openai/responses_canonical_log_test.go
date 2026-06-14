@@ -161,3 +161,26 @@ func TestResponsesReasoning_SummaryAlwaysEmitted(t *testing.T) {
 		t.Fatalf("BUG: round-tripped reasoning item dropped summary: %s", back)
 	}
 }
+
+// TestResponsesItems_StatusNeverEmittedOnInput guards an output-only field leak:
+// the Responses API stamps "status" on items it returns but rejects it as input
+// ("Unknown parameter: 'input[N].status'"). Items round-trip from a prior
+// response into the next request's input, so no item type may emit status.
+func TestResponsesItems_StatusNeverEmittedOnInput(t *testing.T) {
+	resp := `{"id":"r","object":"response","status":"completed","model":"m","output":[` +
+		`{"type":"reasoning","id":"rs_1","encrypted_content":"X","summary":[],"status":"completed"},` +
+		`{"type":"function_call","id":"fc_1","call_id":"c","name":"f","arguments":"{}","status":"completed"},` +
+		`{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi","annotations":[]}]}` +
+		`]}`
+	canon, err := ResponsesTranslator{}.ParseResponse([]byte(resp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ResponsesTranslator{}.SerializeRequest(&v1.Request{Model: v1.ModelRefs{"m"}, Input: canon.Output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(back), `"status"`) {
+		t.Fatalf("BUG: round-tripped input item emitted output-only status field: %s", back)
+	}
+}
