@@ -813,9 +813,11 @@ func canonicalUsageToResponses(t usage.Tokens) *ResponsesUsage {
 	input := int(t["input"]) + cached
 	output := int(t["output"])
 	r := &ResponsesUsage{
-		InputTokens:        input,
-		OutputTokens:       output,
-		TotalTokens:        int(t.Sum()),
+		InputTokens:  input,
+		OutputTokens: output,
+		// input + output, NOT Tokens.Sum(): reasoning is a sub-breakdown
+		// already inside output_tokens, so summing the map double-counts it.
+		TotalTokens:        input + output,
 		InputTokensDetails: ResponsesInputDeets{CachedTokens: cached},
 	}
 	if reasoning := int(t["reasoning"]); reasoning > 0 {

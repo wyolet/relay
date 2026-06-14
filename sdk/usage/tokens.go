@@ -22,8 +22,12 @@ func (t Tokens) Add(other Tokens) {
 	}
 }
 
-// Sum returns the total of all values. Used by legacy single-meter
-// rate-limit callers that haven't migrated to typed meters.
+// Sum returns the arithmetic total of all values. Used by legacy
+// single-meter rate-limit callers that haven't migrated to typed meters.
+//
+// NOT a token total for billing/usage reporting: some keys are
+// sub-breakdowns of a coarser one (e.g. reasoning ⊂ output), so Sum
+// double-counts them. A provider total_tokens is input + output.
 func (t Tokens) Sum() int64 {
 	var s int64
 	for _, v := range t {
