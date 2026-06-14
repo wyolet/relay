@@ -19,7 +19,6 @@ func UnmarshalResponsesResponse(data []byte) (*ResponsesResponse, error) {
 		CreatedAt         int64                       `json:"created_at"`
 		Model             string                      `json:"model"`
 		Status            ResponsesStatus             `json:"status"`
-		FinishReason      ResponsesFinishReason       `json:"finish_reason"`
 		Output            []json.RawMessage           `json:"output"`
 		Usage             *ResponsesUsage             `json:"usage"`
 		Error             *ResponsesError             `json:"error"`
@@ -44,7 +43,6 @@ func UnmarshalResponsesResponse(data []byte) (*ResponsesResponse, error) {
 		CreatedAt:         wire.CreatedAt,
 		Model:             wire.Model,
 		Status:            wire.Status,
-		FinishReason:      wire.FinishReason,
 		Output:            output,
 		Usage:             wire.Usage,
 		Error:             wire.Error,

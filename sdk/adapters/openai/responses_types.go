@@ -48,15 +48,9 @@ const (
 	ResponsesStatusInProgress ResponsesStatus = "in_progress"
 )
 
-// ResponsesFinishReason explains why generation stopped.
-type ResponsesFinishReason string
-
-const (
-	ResponsesFinishReasonStop          ResponsesFinishReason = "stop"
-	ResponsesFinishReasonLength        ResponsesFinishReason = "length"
-	ResponsesFinishReasonContentFilter ResponsesFinishReason = "content_filter"
-	ResponsesFinishReasonToolCalls     ResponsesFinishReason = "tool_calls"
-)
+// The Responses API has no finish_reason field: terminal state is carried by
+// status + incomplete_details.reason. Canonical finish_reason is derived from
+// those (see responsesCanonicalFinishReason / canonicalResponsesStatus).
 
 // ResponsesItem is a sealed interface for elements of the Responses API Input or Output array.
 // The only valid concrete types are *ResponsesMessage, *ResponsesFunctionCall,

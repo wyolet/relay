@@ -12,9 +12,8 @@ type ResponsesResponse struct {
 	Object       string                `json:"object"`     // always "response"
 	CreatedAt    int64                 `json:"created_at"` // unix seconds
 	Model        string                `json:"model"`
-	Status       ResponsesStatus       `json:"status"`
-	FinishReason ResponsesFinishReason `json:"finish_reason,omitempty"`
-	Output       []ResponsesItem       `json:"output"`
+	Status ResponsesStatus `json:"status"`
+	Output []ResponsesItem `json:"output"`
 	Usage        *ResponsesUsage       `json:"usage,omitempty"`
 
 	// Required spec fields that may be null — no omitempty so they serialize.
