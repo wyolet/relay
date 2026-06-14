@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -367,6 +368,20 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	defer result.Body.Close()
 
 	ForwardUpstreamHeaders(w.Header(), result.Headers)
+
+	// Upstream rejected pre-first-byte (4xx/5xx). Forward its error body
+	// verbatim with the upstream status, mirroring the byte-pass path. The
+	// provider's message (e.g. "...use /v1/responses instead") is the
+	// actionable signal; running the success-shaped ParseResponse/SSE-scan on
+	// an error body discards it and emits a generic translate failure or an
+	// empty body — the bug this guards against. Errors are exempt from the
+	// canonical-only output rule: the diagnostic beats the shape, and this is
+	// the same uniform handling stream and buffered both need (no mid-stream
+	// failover concern since no bytes have flowed yet).
+	if result.Status >= 400 {
+		forwardUpstreamError(w, result.Body, result.Status)
+		return
+	}
 	// The body is re-serialized by the canonical chain (and may be
 	// usage-injected), so any upstream content coding/length no longer
 	// describes what we emit. Drop them — leaving Content-Encoding: gzip on a
@@ -492,31 +507,50 @@ func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 	}
 }
 
+// forwardUpstreamError relays an upstream error response (4xx/5xx) to the
+// caller verbatim. The upstream Content-Type was already copied by
+// ForwardUpstreamHeaders; the stale upstream Content-Length/Encoding are
+// dropped so the write reflects the bytes we actually emit. If the upstream
+// sent no body (or it can't be read), a structured relay error envelope is
+// synthesized so the caller never receives a bodiless status — the exact
+// failure this guards against.
+func forwardUpstreamError(w http.ResponseWriter, body io.ReadCloser, status int) {
+	raw, err := io.ReadAll(body)
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		writeAPIError(w, status, "upstream_error", "upstream_error",
+			fmt.Sprintf("upstream returned status %d with no body", status))
+		return
+	}
+	w.Header().Del("Content-Encoding")
+	w.Header().Del("Content-Length")
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
+}
+
 // bufferCanonical handles the sync (non-streaming) canonical cross-shape
 // response. It owns the status write so it can drop the upstream
 // Content-Length (the translated — and optionally usage-injected — body
 // differs in length) and optionally inject the relay_usage echo block.
+// Upstream non-2xx responses never reach here — dispatchCanonical forwards
+// them verbatim via forwardUpstreamError — so status is always a success.
 func bufferCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, status int, echo bool, canonReq *v1.Request, upstreamV1, inboundV1 v1.Translator) {
 	ctx := r.Context()
 	raw, err := io.ReadAll(body)
 	if err != nil {
-		w.WriteHeader(status)
+		d.fireUsageFailure(ctx, "read_response", err.Error())
+		writeAPIError(w, http.StatusBadGateway, "upstream_error", "read_response", err.Error())
 		return
 	}
 
 	// Canonical contract: this caller asked for canonical and must receive
 	// canonical — never the raw upstream vendor body. A parse/serialize
-	// failure is surfaced as a canonical error, not masked by forwarding
-	// vendor bytes (which would leak vendor-shaped usage/output a canonical
-	// client can't decode). See codebase rule 11.
+	// failure on a SUCCESS body is surfaced as a canonical error, not masked
+	// by forwarding vendor bytes (which would leak vendor-shaped usage/output a
+	// canonical client can't decode). See codebase rule 11.
 	canResp, perr := upstreamV1.ParseResponse(raw)
 	if perr != nil {
-		st := http.StatusBadGateway
-		if status >= 400 {
-			st = status
-		}
 		d.fireUsageFailure(ctx, "translate_response", perr.Error())
-		writeAPIError(w, st, "upstream_error", "translate_response", perr.Error())
+		writeAPIError(w, http.StatusBadGateway, "upstream_error", "translate_response", perr.Error())
 		return
 	}
 	if echo {
