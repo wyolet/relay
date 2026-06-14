@@ -19,6 +19,92 @@ from-canonical stream that will surface data loss in production cross-shape rout
 
 ---
 
+## Update 2026-06-14 — cross-shape rollout fixes + reasoning round-trip contract
+
+Pointing the modern OpenAI models at the `openai_responses` adapter
+(`relay-catalog#19`) routed live CC/canonical/Anthropic-inbound traffic through
+this cross-shape translator for the first time and surfaced a cluster of latent
+bugs. All fixed; **several P0 items in the audit below are now resolved** —
+trust this section over the dated table line-numbers (the file has grown
+substantially since 2026-05-25).
+
+| Fix | What was broken |
+|---|---|
+| #319 | upstream non-2xx bodies were swallowed → bodiless 400s; now forwarded verbatim |
+| #321 | assistant message content serialized as `input_text`; must be `output_text` by role — OpenAI 400'd every multi-turn |
+| #322 | streamed `response.completed`/`.incomplete`/`.failed` parsed via plain `json.Unmarshal` into the polymorphic `[]ResponsesItem` output → errored → swallowed → **no terminal event, no usage, no `[DONE]`**. Now routed through `parseStreamTerminalResponse` (the custom unmarshaler). |
+| #323 | `SerializeRequest`'s hand-written `wireReq` literal omitted the `Stream` (+`StopSequences`) field it declared → upstream never got `stream:true` → buffered `application/json` came back → `streamCanonical` found no SSE frames → **empty 200**. Now copied. |
+| #324 | reasoning↔tool round-trip (see below). |
+
+> **`wireReq` footgun:** `SerializeRequest` marshals a bespoke struct literal, not
+> `rreq`. Any canonical/request field not *explicitly* copied into that literal is
+> silently dropped (this is exactly how #323 happened). Audit the literal whenever
+> you add a request field.
+
+### Reasoning ↔ tool-call round-trip (stateless)
+
+**The pairing rule.** OpenAI's Responses API binds each reasoning item (`rs_…`) to
+the `function_call` (`fc_…`) it produced. When a tool loop re-sends the
+`function_call` on the next turn, Responses requires its reasoning sibling to
+travel with it, validated by id — otherwise:
+
+```
+400 invalid_request_error: Item 'fc_…' of type 'function_call' was provided
+without its required 'reasoning' item: 'rs_…'
+```
+
+Chat Completions never enforced this; it is specific to the Responses item model.
+
+**How relay carries it.** The canonical protocol is deliberately stateless (it
+rejects `previous_response_id` / `store` / `conversation` on inbound). So the only
+way reasoning can travel with its tool call across a turn is OpenAI's **encrypted
+reasoning blob**. As of #324 the adapter **injects, unconditionally, on the
+cross-shape upstream request** (`SerializeRequest`):
+
+- `store: false` — relay never persists server-side / never uses `previous_response_id`
+- `include: ["reasoning.encrypted_content"]` — ask OpenAI to return the blob
+
+The blob round-trips on the canonical reasoning item's **`provider_data`**
+(`v1.Reasoning.ProviderData`): `responsesItemToCanonical` stores
+`{encrypted_content, id}` into it on parse (buffered **and** streaming —
+`response.output_item.done` routes through the same function), and
+`responsesItemFromCanonical` restores it into `ResponsesReasoning.EncryptedContent`
+when serializing the next request. This supersedes audit findings on
+`encrypted_content` being dropped (rows for `Reasoning.ProviderData` /
+`encrypted_content` / "Silently dropped #1").
+
+`include`/`store` remain **rejected on inbound `ParseRequest`** (a caller can't set
+them) — the injection is an adapter-internal, outbound-only concern. **Byte-pass**
+(Responses-native inbound → openai-proper host) is untouched: the caller's own
+`store`/`include` pass through.
+
+> **Caveat — `store:false` privacy/retention:** OpenAI no longer persists these
+> responses server-side (was the default `store:true`, ~30-day retention). Correct
+> for a stateless proxy; note it if a deployment relied on OpenAI-side retention.
+
+### What a canonical client / agent runner MUST do
+
+The pairing only survives if the runner echoes the prior turn's output back
+**faithfully**. When you splice a previous `response.output` into the next
+request's `input` (canonical is symmetric — output items are valid input items):
+
+1. **Include the `reasoning` items** — not just `message` + `function_call`. If you
+   filter the output down to "the parts I care about" and drop reasoning, the
+   `function_call` loses its sibling and 400s.
+2. **Preserve order** — each `reasoning` item must precede the `function_call` it
+   produced, exactly as received. Don't re-sort or coalesce.
+3. **Pass `provider_data` through untouched** — it is an opaque, same-vendor blob.
+   Don't parse, mutate, or regenerate it. (Applies to `provider_data` on any item.)
+4. **Streaming:** accumulate **every** `item.completed` event into your output list
+   (reasoning items included, with their `provider_data`) — that full set is what
+   you feed back as `input`.
+
+If you already pass `response.output` back verbatim, you're done — no code change,
+just a relay binary with #324. **Immediate unblock without reasoning round-trip:**
+disable thinking (no `rs_` items → no pairing requirement → the tool loop just runs).
+
+---
+
 ## Request: canonical → Responses (`SerializeRequest`)
 
 | Canonical element | Status | Notes + file:line |
