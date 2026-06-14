@@ -466,6 +466,94 @@ func TestResponsesParseResponse_SimpleText(t *testing.T) {
 	}
 }
 
+// TestResponsesParseResponse_FinishReasonFromStatus locks the fix for the
+// fabricated finish_reason: the Responses API has no finish_reason field, so the
+// canonical finish_reason must be derived from status + incomplete_details.reason.
+// Before the fix, every non-stop terminal masqueraded as a clean stop.
+func TestResponsesParseResponse_FinishReasonFromStatus(t *testing.T) {
+	mk := func(status, incompleteReason string, withFnCall bool) []byte {
+		m := map[string]any{
+			"id": "resp_fr", "object": "response", "model": "gpt-5", "status": status,
+			"output": []any{},
+		}
+		if incompleteReason != "" {
+			m["incomplete_details"] = map[string]any{"reason": incompleteReason}
+		}
+		if withFnCall {
+			m["output"] = []any{map[string]any{
+				"type": "function_call", "id": "fc_0", "call_id": "c0",
+				"name": "f", "arguments": "{}",
+			}}
+		}
+		return mustJSON(m)
+	}
+	cases := []struct {
+		name, status, reason string
+		fnCall               bool
+		want                 v1.FinishReason
+	}{
+		{"plain stop", "completed", "", false, v1.FinishReasonStop},
+		{"tool calls", "completed", "", true, v1.FinishReasonToolCalls},
+		{"truncated", "incomplete", "max_output_tokens", false, v1.FinishReasonLength},
+		{"content filter", "incomplete", "content_filter", false, v1.FinishReasonContentFilter},
+		{"incomplete unknown reason", "incomplete", "", false, v1.FinishReasonLength},
+		{"failed has no finish_reason", "failed", "", false, v1.FinishReason("")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := (ResponsesTranslator{}).ParseResponse(mk(tc.status, tc.reason, tc.fnCall))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.FinishReason != tc.want {
+				t.Errorf("finish_reason: got %q, want %q", resp.FinishReason, tc.want)
+			}
+			if resp.Status != v1.Status(tc.status) {
+				t.Errorf("status: got %q, want %q", resp.Status, tc.status)
+			}
+		})
+	}
+}
+
+// TestResponsesSerializeResponse_StatusFromFinishReason locks the inverse: a
+// canonical length/content_filter finish_reason must serialize to a Responses
+// body as status=incomplete + incomplete_details.reason, with NO finish_reason field.
+func TestResponsesSerializeResponse_StatusFromFinishReason(t *testing.T) {
+	cases := []struct {
+		name       string
+		fr         v1.FinishReason
+		status     v1.Status
+		wantStatus string
+		wantReason string
+	}{
+		{"length", v1.FinishReasonLength, v1.StatusIncomplete, "incomplete", "max_output_tokens"},
+		{"content_filter", v1.FinishReasonContentFilter, v1.StatusCompleted, "incomplete", "content_filter"},
+		{"stop", v1.FinishReasonStop, v1.StatusCompleted, "completed", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := (ResponsesTranslator{}).SerializeResponse(
+				&v1.Response{ID: "r", Model: "gpt-5", Status: tc.status, FinishReason: tc.fr}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := decodeMap(t, b)
+			if _, ok := m["finish_reason"]; ok {
+				t.Errorf("finish_reason must not appear: %v", m["finish_reason"])
+			}
+			if m["status"] != tc.wantStatus {
+				t.Errorf("status: got %v, want %q", m["status"], tc.wantStatus)
+			}
+			if tc.wantReason != "" {
+				inc, ok := m["incomplete_details"].(map[string]any)
+				if !ok || inc["reason"] != tc.wantReason {
+					t.Errorf("incomplete_details.reason: got %v, want %q", m["incomplete_details"], tc.wantReason)
+				}
+			}
+		})
+	}
+}
+
 func TestResponsesParseResponse_ToolCall(t *testing.T) {
 	body := mustJSON(map[string]any{
 		"id":         "resp_02",
@@ -749,8 +837,13 @@ func TestResponsesSerializeResponse_ToolCallOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := decodeMap(t, b)
-	if m["finish_reason"] != "tool_calls" {
-		t.Errorf("finish_reason: %v", m["finish_reason"])
+	// Responses has no finish_reason field; tool_calls is conveyed by
+	// status=completed + a function_call output item.
+	if _, ok := m["finish_reason"]; ok {
+		t.Errorf("finish_reason must not appear on a Responses body: %v", m["finish_reason"])
+	}
+	if m["status"] != "completed" {
+		t.Errorf("status: %v", m["status"])
 	}
 	output := m["output"].([]any)
 	if len(output) != 1 {
@@ -844,12 +937,11 @@ func TestResponsesNewToCanonicalStream_TextSequence(t *testing.T) {
 		}),
 		responsesSSEChunk(ResponsesEventCompleted, ResponsesCompletedEvent{
 			Response: &ResponsesResponse{
-				ID:           "resp_s1",
-				Object:       "response",
-				Model:        "gpt-5",
-				Status:       ResponsesStatusCompleted,
-				FinishReason: ResponsesFinishReasonStop,
-				Output:       []ResponsesItem{},
+				ID:     "resp_s1",
+				Object: "response",
+				Model:  "gpt-5",
+				Status: ResponsesStatusCompleted,
+				Output: []ResponsesItem{},
 			},
 		}),
 	}
@@ -1338,7 +1430,6 @@ func TestResponsesNewToCanonicalStream_RefusalDelta(t *testing.T) {
 	})
 	feed(ResponsesEventCompleted, ResponsesCompletedEvent{Response: &ResponsesResponse{
 		ID: "resp_ref", Model: "gpt-4o", Status: ResponsesStatusCompleted,
-		FinishReason: ResponsesFinishReasonStop,
 	}})
 
 	events := extractCanonicalEvents(allOut)

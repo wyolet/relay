@@ -135,14 +135,13 @@ func (ResponsesTranslator) SerializeResponse(resp *v1.Response, req *v1.Request)
 		Object:    "response",
 		CreatedAt: resp.CreatedAt,
 		Model:     resp.Model,
-		Status:    ResponsesStatus(resp.Status),
 	}
 	if rresp.CreatedAt == 0 {
 		rresp.CreatedAt = time.Now().Unix()
 	}
 
-	// Map canonical finish_reason to Responses finish_reason.
-	rresp.FinishReason = canonicalFinishReasonToResponses(resp.FinishReason)
+	// Responses has no finish_reason field: derive status + incomplete_details.
+	rresp.Status, rresp.IncompleteDetails = canonicalResponsesStatus(resp.Status, resp.FinishReason, resp.IncompleteDetails)
 
 	// Map output items.
 	for _, item := range resp.Output {
@@ -157,16 +156,11 @@ func (ResponsesTranslator) SerializeResponse(resp *v1.Response, req *v1.Request)
 		rresp.Usage = canonicalUsageToResponses(resp.Usage)
 	}
 
-	// Map error/incomplete.
+	// incomplete_details is set above via canonicalResponsesStatus.
 	if resp.Error != nil {
 		rresp.Error = &ResponsesError{
 			Code:    resp.Error.Code,
 			Message: resp.Error.Message,
-		}
-	}
-	if resp.IncompleteDetails != nil {
-		rresp.IncompleteDetails = &ResponsesIncompleteDetails{
-			Reason: resp.IncompleteDetails.Reason,
 		}
 	}
 
@@ -716,7 +710,7 @@ func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 		Model:     resp.Model,
 		Status:    v1.Status(resp.Status),
 	}
-	cr.FinishReason = responsesFinishReasonToCanonical(resp.FinishReason)
+	cr.FinishReason = responsesCanonicalFinishReason(resp)
 
 	for _, item := range resp.Output {
 		ci, _ := responsesItemToCanonical(item)
@@ -738,40 +732,64 @@ func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 	return cr
 }
 
-// responsesFinishReasonToCanonical maps a Responses finish_reason to canonical.
-func responsesFinishReasonToCanonical(fr ResponsesFinishReason) v1.FinishReason {
-	switch fr {
-	case ResponsesFinishReasonStop:
+// responsesCanonicalFinishReason derives a canonical finish_reason from a
+// Responses response. The Responses API has NO finish_reason field — terminal
+// state is carried by status + incomplete_details.reason. Reading a (nonexistent)
+// wire finish_reason always yielded "" → defaulted to stop, so truncation and
+// content-filter cutoffs masqueraded as clean stops (canonical rule 11).
+func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
+	switch resp.Status {
+	case ResponsesStatusCompleted:
+		for _, it := range resp.Output {
+			if it != nil && it.ResponsesItemType() == ResponsesItemTypeFunctionCall {
+				return v1.FinishReasonToolCalls
+			}
+		}
 		return v1.FinishReasonStop
-	case ResponsesFinishReasonLength:
+	case ResponsesStatusIncomplete:
+		if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason == "content_filter" {
+			return v1.FinishReasonContentFilter
+		}
+		// max_output_tokens or any other incomplete reason → truncated.
 		return v1.FinishReasonLength
-	case ResponsesFinishReasonToolCalls:
-		return v1.FinishReasonToolCalls
-	case ResponsesFinishReasonContentFilter:
-		return v1.FinishReasonContentFilter
 	default:
-		return v1.FinishReasonStop
+		// failed / cancelled / queued / in_progress: not a clean stop. The
+		// signal rides Status + Error; do not fabricate a finish_reason.
+		return ""
 	}
 }
 
-// canonicalFinishReasonToResponses maps a canonical finish_reason to Responses.
-func canonicalFinishReasonToResponses(fr v1.FinishReason) ResponsesFinishReason {
+// canonicalResponsesStatus derives the Responses wire status + incomplete_details
+// from a canonical finish_reason/status. The inverse of
+// responsesCanonicalFinishReason: length/content_filter become status=incomplete
+// with the matching incomplete_details.reason (the only way Responses expresses
+// them — it has no finish_reason field).
+func canonicalResponsesStatus(status v1.Status, fr v1.FinishReason, inc *v1.IncompleteDetails) (ResponsesStatus, *ResponsesIncompleteDetails) {
 	switch fr {
-	case v1.FinishReasonStop:
-		return ResponsesFinishReasonStop
 	case v1.FinishReasonLength:
-		return ResponsesFinishReasonLength
-	case v1.FinishReasonToolCalls:
-		return ResponsesFinishReasonToolCalls
+		reason := "max_output_tokens"
+		if inc != nil && inc.Reason != "" {
+			reason = inc.Reason
+		}
+		return ResponsesStatusIncomplete, &ResponsesIncompleteDetails{Reason: reason}
 	case v1.FinishReasonContentFilter:
-		return ResponsesFinishReasonContentFilter
-	case v1.FinishReasonRefusal:
-		// Refusal: canonical has a dedicated finish_reason; Responses doesn't.
-		// Map to stop (the refusal text is in the message content).
-		return ResponsesFinishReasonStop
-	default:
-		return ResponsesFinishReasonStop
+		reason := "content_filter"
+		if inc != nil && inc.Reason != "" {
+			reason = inc.Reason
+		}
+		return ResponsesStatusIncomplete, &ResponsesIncompleteDetails{Reason: reason}
 	}
+	// stop / tool_calls / refusal / empty: honor an explicit non-completed
+	// canonical status (failed/cancelled/queued from a Responses-native
+	// upstream) verbatim; otherwise the response completed.
+	if status != "" && status != v1.StatusCompleted {
+		var id *ResponsesIncompleteDetails
+		if inc != nil {
+			id = &ResponsesIncompleteDetails{Reason: inc.Reason}
+		}
+		return ResponsesStatus(status), id
+	}
+	return ResponsesStatusCompleted, nil
 }
 
 // responsesUsageToCanonical maps Responses' Usage block to the
@@ -1368,20 +1386,19 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		}
 
 		finalResp := &ResponsesResponse{
-			ID:           s.responseID,
-			Object:       "response",
-			CreatedAt:    s.created,
-			Model:        s.model,
-			Status:       ResponsesStatus(ev.Status),
-			FinishReason: canonicalFinishReasonToResponses(ev.FinishReason),
-			Output:       append([]ResponsesItem{}, s.closedItems...),
+			ID:        s.responseID,
+			Object:    "response",
+			CreatedAt: s.created,
+			Model:     s.model,
+			Output:    append([]ResponsesItem{}, s.closedItems...),
 		}
+		finalResp.Status, finalResp.IncompleteDetails = canonicalResponsesStatus(ev.Status, ev.FinishReason, nil)
 		if ev.Usage != nil {
 			finalResp.Usage = canonicalUsageToResponses(ev.Usage)
 		}
 
 		var finalEvent string
-		if ev.Status == v1.StatusIncomplete {
+		if finalResp.Status == ResponsesStatusIncomplete {
 			finalEvent = ResponsesEventIncomplete
 		} else {
 			finalEvent = ResponsesEventCompleted
