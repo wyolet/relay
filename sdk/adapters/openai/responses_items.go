@@ -203,6 +203,28 @@ func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// ResponsesRawItem carries a Responses item whose `type` the adapter does not
+// model — the hosted/server-side tool items (web_search_call, file_search_call,
+// code_interpreter_call, image_generation_call, mcp_call, computer_call, …) and
+// any future item type. It exists so an unmodeled item round-trips verbatim
+// instead of hard-erroring the whole parse: before this, a single web_search_call
+// output item failed UnmarshalResponsesResponse and 500'd the entire response
+// (web_search auto-fires on several gpt-5.x models). Captured on parse, re-emitted
+// byte-for-byte on marshal.
+//
+// Cross-shape these items have no canonical representation and are dropped at
+// responsesItemToCanonical with an annotation (canonical rule 11 — annotated,
+// not silent). They survive only within-vendor, which is the byte-pass path and
+// never reaches this translator.
+type ResponsesRawItem struct {
+	Type ResponsesItemType
+	Raw  json.RawMessage
+}
+
+func (*ResponsesRawItem) isResponsesItem()                       {}
+func (r *ResponsesRawItem) ResponsesItemType() ResponsesItemType { return r.Type }
+func (r *ResponsesRawItem) MarshalJSON() ([]byte, error)         { return r.Raw, nil }
+
 // responsesUnmarshalItem decodes a single item from the wire format.
 func responsesUnmarshalItem(data []byte) (ResponsesItem, error) {
 	var probe struct {
@@ -237,7 +259,10 @@ func responsesUnmarshalItem(data []byte) (ResponsesItem, error) {
 		}
 		return &v, nil
 	default:
-		return nil, fmt.Errorf("unsupported item type %q", probe.Type)
+		// Unmodeled item type (hosted-tool calls, future types): capture verbatim
+		// rather than fail the whole parse. Copy the bytes — the source slice may
+		// alias a larger buffer that the caller reuses.
+		return &ResponsesRawItem{Type: probe.Type, Raw: append(json.RawMessage(nil), data...)}, nil
 	}
 }
 

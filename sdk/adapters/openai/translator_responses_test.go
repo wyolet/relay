@@ -1631,3 +1631,122 @@ func TestResponsesSerializeRequest_ReasoningSummary(t *testing.T) {
 
 // R-3 also needs splitSSEFrames — it's already defined in translator_responses.go
 // but the test uses ParseResponsesSSEChunk which is in the same package.
+
+// --- Hosted-tool raw passthrough (PR2) ---
+
+// TestResponsesParseResponse_HostedToolItemNoError locks the don't-500 fix: a
+// response carrying a hosted-tool output item (web_search_call) must parse
+// successfully — the item is dropped from canonical (no representation) but the
+// surrounding message survives. Before the fix the whole ParseResponse errored.
+func TestResponsesParseResponse_HostedToolItemNoError(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"id": "resp_ws", "object": "response", "model": "gpt-5", "status": "completed",
+		"output": []any{
+			map[string]any{
+				"type": "web_search_call", "id": "ws_0", "status": "completed",
+				"action": map[string]any{"type": "search", "query": "golang"},
+			},
+			map[string]any{
+				"type": "message", "id": "msg_0", "status": "completed", "role": "assistant",
+				"content": []any{map[string]any{"type": "output_text", "text": "Found it."}},
+			},
+		},
+	})
+	resp, err := (ResponsesTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatalf("hosted-tool item must not error the parse: %v", err)
+	}
+	if len(resp.Output) != 1 {
+		t.Fatalf("output len: %d (web_search_call should drop, message should survive)", len(resp.Output))
+	}
+	if _, ok := resp.Output[0].(*v1.Message); !ok {
+		t.Fatalf("surviving item is %T, want *v1.Message", resp.Output[0])
+	}
+}
+
+// TestResponsesRawItem_RoundTrip locks verbatim re-emission: an unmodeled item
+// unmarshals to ResponsesRawItem and marshals back byte-identical.
+func TestResponsesRawItem_RoundTrip(t *testing.T) {
+	raw := []byte(`{"type":"mcp_call","id":"mcp_0","name":"lookup","arguments":"{}","output":"ok"}`)
+	item, err := responsesUnmarshalItem(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ri, ok := item.(*ResponsesRawItem)
+	if !ok {
+		t.Fatalf("item is %T, want *ResponsesRawItem", item)
+	}
+	if ri.ResponsesItemType() != "mcp_call" {
+		t.Errorf("type: %q", ri.ResponsesItemType())
+	}
+	out, err := json.Marshal(ri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(raw) {
+		t.Errorf("round-trip:\n got %s\nwant %s", out, raw)
+	}
+}
+
+// TestResponsesParseRequest_HostedToolDefNoError locks the request-side fix:
+// a hosted-tool definition must not 400 the request; the function tool alongside
+// it survives to canonical.
+func TestResponsesParseRequest_HostedToolDefNoError(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"model": "gpt-5", "input": "hi",
+		"tools": []any{
+			map[string]any{"type": "web_search"},
+			map[string]any{"type": "function", "name": "f", "parameters": json.RawMessage(`{"type":"object"}`)},
+		},
+	})
+	req, err := (ResponsesTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatalf("hosted-tool def must not error the request: %v", err)
+	}
+	if req.Tools == nil || len(req.Tools.Definitions) != 1 {
+		t.Fatalf("want 1 surviving function tool, got %v", req.Tools)
+	}
+	if ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool); !ok || ft.Name != "f" {
+		t.Fatalf("surviving tool: %v", req.Tools.Definitions[0])
+	}
+}
+
+// TestResponsesParseRequest_HostedToolInputItemNoError: a round-tripped hosted-tool
+// item in the input array must not 400 the request.
+func TestResponsesParseRequest_HostedToolInputItemNoError(t *testing.T) {
+	body := mustJSON(map[string]any{
+		"model": "gpt-5",
+		"input": []any{
+			map[string]any{"type": "web_search_call", "id": "ws_0", "status": "completed"},
+			map[string]any{"type": "message", "role": "user",
+				"content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
+		},
+	})
+	req, err := (ResponsesTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatalf("hosted-tool input item must not error: %v", err)
+	}
+	if len(req.Input) != 1 {
+		t.Fatalf("input len: %d (web_search_call drops, message survives)", len(req.Input))
+	}
+}
+
+// TestResponsesStream_HostedToolNoOrphanStarted: output_item.added for a
+// hosted-tool type must not emit a canonical item.started (which would orphan a
+// started-without-completed, since the item's done is dropped).
+func TestResponsesStream_HostedToolNoOrphanStarted(t *testing.T) {
+	fn := (ResponsesTranslator{}).NewToCanonicalStream()
+	chunk := responsesSSEChunk(ResponsesEventOutputItemAdded, map[string]any{
+		"output_index": 0,
+		"item":         map[string]any{"type": "web_search_call", "id": "ws_0", "status": "in_progress"},
+	})
+	out, err := fn(chunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range extractCanonicalEvents(out) {
+		if e == v1.EventItemStarted {
+			t.Fatalf("emitted item.started for a hosted-tool item: %q", out)
+		}
+	}
+}
