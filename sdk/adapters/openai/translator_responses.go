@@ -290,8 +290,7 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 			}
 			tc.Choice = choice
 		}
-		opts.Tools = tc
-		hasOpts = true
+		cr.Tools = tc
 	}
 
 	// Reasoning.
@@ -373,30 +372,31 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 				Strict: opts.Output.Format.Strict,
 			}}
 		}
-		if opts.Tools != nil {
-			tc := opts.Tools
-			for _, tool := range tc.Definitions {
-				ft, ok := tool.(*v1.FunctionTool)
-				if !ok {
-					continue
-				}
-				params := ft.Parameters
-				if params == nil {
-					params = json.RawMessage(`{}`)
-				}
-				rreq.Tools = append(rreq.Tools, &ResponsesFunctionTool{
-					Name:        ft.Name,
-					Description: ft.Description,
-					Parameters:  params,
-					Strict:      ft.Strict,
-				})
+	}
+
+	// Tools are task-level (req.Tools), shared across models — not per-model.
+	if tc := req.Tools; tc != nil {
+		for _, tool := range tc.Definitions {
+			ft, ok := tool.(*v1.FunctionTool)
+			if !ok {
+				continue
 			}
-			rreq.ParallelToolCalls = tc.Parallel
-			if tc.Choice != nil {
-				rreq.ToolChoice = &ResponsesToolChoice{
-					Mode:         tc.Choice.Mode,
-					FunctionName: tc.Choice.FunctionName,
-				}
+			params := ft.Parameters
+			if params == nil {
+				params = json.RawMessage(`{}`)
+			}
+			rreq.Tools = append(rreq.Tools, &ResponsesFunctionTool{
+				Name:        ft.Name,
+				Description: ft.Description,
+				Parameters:  params,
+				Strict:      ft.Strict,
+			})
+		}
+		rreq.ParallelToolCalls = tc.Parallel
+		if tc.Choice != nil {
+			rreq.ToolChoice = &ResponsesToolChoice{
+				Mode:         tc.Choice.Mode,
+				FunctionName: tc.Choice.FunctionName,
 			}
 		}
 	}

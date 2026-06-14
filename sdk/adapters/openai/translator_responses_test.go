@@ -161,16 +161,15 @@ func TestResponsesParseRequest_Tools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-5"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("expected tools config")
 	}
-	if len(opts.Tools.Definitions) != 1 {
-		t.Fatalf("tools len: %d", len(opts.Tools.Definitions))
+	if len(req.Tools.Definitions) != 1 {
+		t.Fatalf("tools len: %d", len(req.Tools.Definitions))
 	}
-	ft, ok := opts.Tools.Definitions[0].(*v1.FunctionTool)
+	ft, ok := req.Tools.Definitions[0].(*v1.FunctionTool)
 	if !ok {
-		t.Fatalf("tool is %T", opts.Tools.Definitions[0])
+		t.Fatalf("tool is %T", req.Tools.Definitions[0])
 	}
 	if ft.Name != "search" {
 		t.Errorf("tool name: %q", ft.Name)
@@ -193,12 +192,11 @@ func TestResponsesParseRequest_ToolChoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-5"]
-	if opts == nil || opts.Tools == nil || opts.Tools.Choice == nil {
+	if req.Tools == nil || req.Tools.Choice == nil {
 		t.Fatal("expected tool choice")
 	}
-	if opts.Tools.Choice.Mode != "required" {
-		t.Errorf("choice mode: %q", opts.Tools.Choice.Mode)
+	if req.Tools.Choice.Mode != "required" {
+		t.Errorf("choice mode: %q", req.Tools.Choice.Mode)
 	}
 }
 
@@ -216,12 +214,11 @@ func TestResponsesParseRequest_ParallelToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := req.ModelConfig["gpt-5"]
-	if opts == nil || opts.Tools == nil {
+	if req.Tools == nil {
 		t.Fatal("expected tools")
 	}
-	if opts.Tools.Parallel == nil || *opts.Tools.Parallel != false {
-		t.Errorf("parallel_tool_calls: %v", opts.Tools.Parallel)
+	if req.Tools.Parallel == nil || *req.Tools.Parallel != false {
+		t.Errorf("parallel_tool_calls: %v", req.Tools.Parallel)
 	}
 }
 

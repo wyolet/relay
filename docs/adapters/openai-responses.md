@@ -39,11 +39,11 @@ from-canonical stream that will surface data loss in production cross-shape rout
 | `ModelConfig[model].Reasoning.BudgetTokens` | ⛔ | Same as above — no field in wire struct, no error, no log. |
 | `ModelConfig[model].Output.Format` | ✅ | `translator_responses.go:357-364` → `text.format` |
 | `ModelConfig[model].Output.Verbosity` | ⛔ | **Silently dropped.** `v1.OutputConfig.Verbosity` has no Responses wire equivalent; never read in `canonicalToResponsesRequest`. |
-| `ModelConfig[model].Tools.Definitions` (FunctionTool) | ✅ | `translator_responses.go:366-383` |
-| `ModelConfig[model].Tools.Definitions` (ServerTool) | ⚠️ | `translator_responses.go:368-371` — non-`*v1.FunctionTool` entries are silently **skipped** (`continue`) with no error and no log. |
-| `ModelConfig[model].Tools.Definitions` (MCPTool) | ⚠️ | Same silent skip — `translator_responses.go:368-371`. |
-| `ModelConfig[model].Tools.Parallel` | ✅ | `translator_responses.go:383` |
-| `ModelConfig[model].Tools.Choice` | ✅ | `translator_responses.go:384-389` |
+| `Request.Tools.Definitions` (FunctionTool) | ✅ | `translator_responses.go:366-383` |
+| `Request.Tools.Definitions` (ServerTool) | ⚠️ | `translator_responses.go:368-371` — non-`*v1.FunctionTool` entries are silently **skipped** (`continue`) with no error and no log. |
+| `Request.Tools.Definitions` (MCPTool) | ⚠️ | Same silent skip — `translator_responses.go:368-371`. |
+| `Request.Tools.Parallel` | ✅ | `translator_responses.go:383` |
+| `Request.Tools.Choice` | ✅ | `translator_responses.go:384-389` |
 | `CacheConfig` (Instructions / Tools) | ⛔ | **Silently dropped.** Responses API ignores explicit cache breakpoints (OpenAI caches automatically). Per `cache.go` adapter contract, this is intentional — but the drop is invisible (no log). |
 | `ItemCacheConfig.Anchor` (per-item) | ⛔ | **Silently dropped.** `responsesItemFromCanonical` builds `ResponsesMessage` without consulting `Message.CacheConfig` (`translator_responses.go:515-519`). |
 | `Message.ProviderData` (input items) | ⛔ | **Silently dropped.** `responsesItemFromCanonical` for `*v1.Message` does not copy `ProviderData` (`translator_responses.go:506-520`). |
