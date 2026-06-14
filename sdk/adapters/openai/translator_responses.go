@@ -82,7 +82,18 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		User              string            `json:"user,omitempty"`
 		Stream            *bool             `json:"stream,omitempty"`
 		StopSequences     []string          `json:"stop_sequences,omitempty"`
+		Store             *bool             `json:"store,omitempty"`
+		Include           []string          `json:"include,omitempty"`
 	}
+	// Stateless reasoning round-trip: relay's canonical protocol is stateless
+	// (it rejects previous_response_id / store / conversation), so the ONLY way
+	// a reasoning item can travel with its tool_call across a tool-loop turn —
+	// which the Responses API requires by id — is the encrypted reasoning blob.
+	// Ask OpenAI to return it (include) and don't persist server-side (store
+	// false). The blob round-trips via Reasoning.ProviderData in
+	// responsesItemTo/FromCanonical; without the include it's never returned and
+	// a function_call comes back without its required reasoning sibling (400).
+	storeFalse := false
 	return json.Marshal(wireReq{
 		Model:             req.Model[0],
 		Input:             inputJSON,
@@ -100,6 +111,8 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		User:              req.User,
 		Stream:            rreq.Stream,
 		StopSequences:     rreq.StopSequences,
+		Store:             &storeFalse,
+		Include:           []string{"reasoning.encrypted_content"},
 	})
 }
 

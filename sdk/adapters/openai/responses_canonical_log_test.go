@@ -90,3 +90,46 @@ func TestResponsesSerializeRequest_StreamFlagPropagates(t *testing.T) {
 		t.Fatalf("BUG: stream:true not set on upstream request: %s", body)
 	}
 }
+
+// TestResponsesReasoningRoundTrip guards the stateless reasoning/tool pairing:
+// the upstream request must ask for the encrypted reasoning blob (include +
+// store:false), and a reasoning item's encrypted_content must survive
+// Responses->canonical->Responses so the function_call keeps its required
+// reasoning sibling on the next tool-loop turn.
+func TestResponsesReasoningRoundTrip(t *testing.T) {
+	// 1. Request asks OpenAI for the blob and doesn't persist server-side.
+	reqBody, err := ResponsesTranslator{}.SerializeRequest(&v1.Request{
+		Model: v1.ModelRefs{"gpt-5-5"},
+		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(reqBody), `"reasoning.encrypted_content"`) {
+		t.Errorf("BUG: request missing include reasoning.encrypted_content: %s", reqBody)
+	}
+	if !strings.Contains(string(reqBody), `"store":false`) {
+		t.Errorf("BUG: request missing store:false: %s", reqBody)
+	}
+
+	// 2. A reasoning item with encrypted_content round-trips intact.
+	respBody := `{"id":"resp_1","object":"response","status":"completed","model":"gpt-5.5","output":[{"type":"reasoning","id":"rs_abc","encrypted_content":"BLOB123","summary":[]},{"type":"function_call","id":"fc_xyz","call_id":"call_1","name":"f","arguments":"{}"}]}`
+	canon, err := ResponsesTranslator{}.ParseResponse([]byte(respBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Feed the canonical items back as a follow-up request's input.
+	back, err := ResponsesTranslator{}.SerializeRequest(&v1.Request{
+		Model: v1.ModelRefs{"gpt-5-5"},
+		Input: canon.Output,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(back), "BLOB123") {
+		t.Fatalf("BUG: encrypted_content lost on round-trip; reasoning sibling would 400: %s", back)
+	}
+	if !strings.Contains(string(back), `"rs_abc"`) || !strings.Contains(string(back), `"fc_xyz"`) {
+		t.Fatalf("BUG: reasoning/function_call ids not both present: %s", back)
+	}
+}
