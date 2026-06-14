@@ -42,8 +42,9 @@ type OutputConfig struct {
 // Format specifies the response format type.
 // Type is one of: "text", "json_object", "json_schema".
 type Format struct {
-	Type   string          `json:"type"`
-	Name   string          `json:"name,omitempty"`   // json_schema only
-	Schema json.RawMessage `json:"schema,omitempty"` // json_schema only
-	Strict *bool           `json:"strict,omitempty"` // json_schema only
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`        // json_schema only
+	Description string          `json:"description,omitempty"` // json_schema only
+	Schema      json.RawMessage `json:"schema,omitempty"`      // json_schema only
+	Strict      *bool           `json:"strict,omitempty"`      // json_schema only
 }

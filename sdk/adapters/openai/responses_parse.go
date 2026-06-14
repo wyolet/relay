@@ -30,6 +30,9 @@ func ParseResponsesRequest(body []byte) (*ResponsesRequest, error) {
 		Text      *ResponsesTextConfig      `json:"text"`
 		Reasoning *ResponsesReasoningConfig `json:"reasoning"`
 
+		MaxToolCalls *int            `json:"max_tool_calls"`
+		Prompt       json.RawMessage `json:"prompt"`
+
 		ParallelToolCalls *bool             `json:"parallel_tool_calls"`
 		Metadata          map[string]string `json:"metadata"`
 		User              string            `json:"user"`
@@ -104,6 +107,9 @@ func ParseResponsesRequest(body []byte) (*ResponsesRequest, error) {
 
 		Text:      wire.Text,
 		Reasoning: wire.Reasoning,
+
+		MaxToolCalls: wire.MaxToolCalls,
+		Prompt:       wire.Prompt,
 
 		ParallelToolCalls: wire.ParallelToolCalls,
 		Metadata:          wire.Metadata,

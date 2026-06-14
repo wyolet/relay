@@ -12,6 +12,11 @@
 
 ## Verdict
 
+> **Current state lives in the two `Update 2026-06-14` sections below** — read them
+> first. This original verdict and the dated `2026-05-25` tables predate the
+> cross-shape rollout fixes (#319–#332) and the schema-diff audit (#333–#335 + the
+> P1 bundle); most of their open items are now resolved.
+
 The adapter is the tightest mapping in the codebase because canonical is a narrowed Responses
 shape. The core happy path (text generation, function calls, reasoning, usage) is high-fidelity.
 There are, however, **five material silent-drop classes** and **two structural bugs** in the
@@ -41,6 +46,35 @@ substantially since 2026-05-25).
 | #329 | `stop_sequences`/`top_k` forwarded but **don't exist on the Responses API** → 400 `Unknown parameter`; and `function_call_output.output` (required) was `omitempty` → empty tool result dropped it → 400. Both fixed; stop_sequences now an annotated canonical drop. |
 | #331 | `reasoning_summary_text` deltas not mapped to canonical reasoning → summary-mode thinking (gpt-5.5's only plaintext reasoning) lost. Now streamed as canonical reasoning deltas + accumulated to backfill the terminal item's `summary`. |
 | #332 | reasoning summary **parts** serialized as `{text}` with no discriminator → 400 `Missing required parameter input[N].summary[0].type`. #331 made non-empty summary arrays common on round-trip, surfacing it. `ResponsesSummaryText.MarshalJSON` now always emits `type: "summary_text"`. |
+
+### Update 2026-06-14 (part 2) — systematic schema-diff audit
+
+The reactive fixes above were each found by a live 400. A full schema diff of
+the adapter against `openai/openai-openapi` (request params, item types, stream
+events, response/usage fields) then surfaced the gaps the 400s hadn't reached
+yet. P0s first, one PR each:
+
+| PR | Class | What was broken |
+|---|---|---|
+| #333 | **finish_reason** | The Responses `Response` object has **no `finish_reason` field** — terminal state is `status` + `incomplete_details.reason`. The adapter declared one and mapped from it; real upstreams never send it → defaulted to `stop`, so truncation (`max_output_tokens`) and `content_filter` masqueraded as a clean stop for every billing/telemetry/safety consumer (rule 11). Now derived: `responsesCanonicalFinishReason` (parse) + `canonicalResponsesStatus` (serialize). The fabricated field + `ResponsesFinishReason` type are gone. |
+| #334 | **hosted-tool items** | Any hosted/server-side tool item (web_search_call, file_search_call, code_interpreter_call, image_generation_call, mcp_call, computer_call, …) hit the unmarshal `default` and **failed the entire `ParseResponse`/`ParseRequest`** — one item 500'd the whole response (web_search auto-fires on gpt-5.x), and a hosted-tool def 400'd the request. Now `ResponsesRawItem`/`ResponsesRawTool` capture unmodeled items/defs verbatim and round-trip them byte-for-byte; cross-shape they're dropped at the canonical boundary with an annotation, never 500. Streaming no longer orphans an `item.started` for them. |
+| #335 | **tool_choice object modes** | `ResponsesToolChoice` modeled only auto/required/none/function; every other object form (hosted-tool `{type:"file_search"}`, allowed_tools, mcp, custom) collapsed to its `type` string and re-emitted as a **bare string** → 400 `Invalid value`. Reachable cross-shape (e.g. Responses-inbound to a non-`openai` host). Now the full object is preserved in `Raw` and re-emitted verbatim; the marshal default emits `{type: Mode}` so a hosted-tool choice survives even the canonical round-trip. |
+
+P1 fidelity bundle (one PR):
+
+- **`text.verbosity`** — was unmodeled; now `ResponsesTextConfig.Verbosity` ↔ `OutputConfig.Verbosity` both ways.
+- **`reasoning.summary` (inbound)** — was dropped on parse (outbound already worked); now mapped to `ReasoningConfig.Summary`.
+- **`text.format.json_schema.description`** — was dropped both ways; `Description` added to `ResponsesFormat` and canonical `Format`, mapped both ways.
+- **`prompt` (stored template ref)** — was silently dropped, sending an empty/wrong request; now **rejected** as a stateful field (fail loud), like `previous_response_id`. (Byte-pass to OpenAI-native is unaffected.)
+- **`max_tool_calls`** — annotated canonical drop (no canonical field for a tool-call cap; honored only on byte-pass).
+- **streaming `item.started` `name`** — now carries the function name (for downstream Anthropic-style start emit).
+- **streaming hosted-tool / annotation / audio events** (web_search_call.*, mcp_call.*, output_text.annotation.added, audio.*) — documented annotated drops (no canonical representation). `mcp_call.failed`/`mcp_list_tools.failed` carry an error that is lost here; surfacing it as a fatal canonical error would wrongly abort an otherwise-completing stream, so it waits for a non-fatal canonical warning channel (**deferred**).
+
+> **Stale-table warning:** the dated `2026-05-25` tables further down predate all
+> of the above and now misreport several rows as open (refusal streaming,
+> `response.failed`, `encrypted_content`, `file_citation`, finish_reason). Trust
+> this section and the `2026-06-14` tables over them. The dated tables are kept
+> only for the field-by-field schema reference, not the verdicts.
 
 > **`wireReq` footgun:** `SerializeRequest` marshals a bespoke struct literal, not
 > `rreq`. Any canonical/request field not *explicitly* copied into that literal is
