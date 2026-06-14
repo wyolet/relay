@@ -210,3 +210,56 @@ func TestCanonicalUsage_TotalNoReasoningDoubleCount(t *testing.T) {
 		t.Errorf("Responses input/output = %d/%d, want 5504/104", rr.InputTokens, rr.OutputTokens)
 	}
 }
+
+// TestResponsesSerialize_NoUnsupportedParams guards against emitting params the
+// Responses API does not have: stop_sequences and top_k exist only on Chat
+// Completions, and sending either 400s with "Unknown parameter". A canonical
+// stop sequence must be dropped, not forwarded.
+func TestResponsesSerialize_NoUnsupportedParams(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gpt-5-5"},
+		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+		ModelConfig: map[string]*v1.ModelOpts{
+			"gpt-5-5": {Sampling: &v1.SamplingParams{Stop: []string{"STOPWORD"}}},
+		},
+	}
+	body, err := ResponsesTranslator{}.SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(body)
+	if strings.Contains(s, "stop_sequences") || strings.Contains(s, "STOPWORD") {
+		t.Fatalf("BUG: stop_sequences forwarded to Responses API (unsupported -> 400): %s", s)
+	}
+	if strings.Contains(s, "top_k") {
+		t.Fatalf("BUG: top_k forwarded to Responses API (unsupported -> 400): %s", s)
+	}
+}
+
+// TestResponsesFunctionCallOutput_RequiredOutput guards the required output
+// field: a tool returning an empty string must still emit "output":"" (omitempty
+// would drop it -> 400 missing input[N].output), and the content-array form must
+// emit content WITHOUT a sibling output.
+func TestResponsesFunctionCallOutput_RequiredOutput(t *testing.T) {
+	empty, err := (&ResponsesFunctionCallOutput{CallID: "c"}).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(empty), `"output":""`) {
+		t.Fatalf("BUG: empty tool result dropped required output field: %s", empty)
+	}
+
+	withContent, err := (&ResponsesFunctionCallOutput{
+		CallID:  "c",
+		Content: []ResponsesPart{&ResponsesTextPart{Text: "result"}},
+	}).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(withContent), `"output"`) {
+		t.Fatalf("BUG: output emitted alongside content (must be one-of): %s", withContent)
+	}
+	if !strings.Contains(string(withContent), `"content"`) {
+		t.Fatalf("BUG: content form dropped content: %s", withContent)
+	}
+}
