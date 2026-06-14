@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -182,5 +183,30 @@ func TestResponsesItems_StatusNeverEmittedOnInput(t *testing.T) {
 	}
 	if strings.Contains(string(back), `"status"`) {
 		t.Fatalf("BUG: round-tripped input item emitted output-only status field: %s", back)
+	}
+}
+
+// TestCanonicalUsage_TotalNoReasoningDoubleCount guards the total_tokens
+// double-count: reasoning is a sub-breakdown already inside output_tokens, so
+// a naive Tokens.Sum() over the map counts it twice (5657 instead of 5608).
+// The provider total must be input_tokens + output_tokens.
+func TestCanonicalUsage_TotalNoReasoningDoubleCount(t *testing.T) {
+	// input 5504 (5120 cached) + output 104 (49 reasoning) -> total 5608.
+	tok := usage.Tokens{"input": 384, "cache_read": 5120, "output": 104, "reasoning": 49}
+
+	cc := canonicalUsageToCC(tok)
+	if cc.TotalTokens != 5608 {
+		t.Errorf("CC total_tokens = %d, want 5608 (reasoning double-counted?)", cc.TotalTokens)
+	}
+	if cc.PromptTokens != 5504 || cc.CompletionTokens != 104 {
+		t.Errorf("CC prompt/completion = %d/%d, want 5504/104", cc.PromptTokens, cc.CompletionTokens)
+	}
+
+	rr := canonicalUsageToResponses(tok)
+	if rr.TotalTokens != 5608 {
+		t.Errorf("Responses total_tokens = %d, want 5608 (reasoning double-counted?)", rr.TotalTokens)
+	}
+	if rr.InputTokens != 5504 || rr.OutputTokens != 104 {
+		t.Errorf("Responses input/output = %d/%d, want 5504/104", rr.InputTokens, rr.OutputTokens)
 	}
 }

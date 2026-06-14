@@ -24,8 +24,9 @@ type Response struct {
 	// cache_creation, reasoning, audio_input, audio_output, …). Keys
 	// match pricing.MeterForUsageKey so the same vocabulary flows from
 	// adapters through observers through pricing without translation.
-	// Tokens.Sum() returns the honest "all tokens processed" total —
-	// dimensions are non-overlapping by construction.
+	// Some keys are sub-breakdowns of a coarser one (reasoning/audio_output
+	// ⊂ output) — so a provider total_tokens is input + output, not
+	// Tokens.Sum() over the whole map, which would double-count them.
 	Usage usage.Tokens `json:"usage,omitempty"`
 
 	Error             *Error             `json:"error,omitempty"`
