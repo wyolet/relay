@@ -8,13 +8,13 @@ import "encoding/json"
 // Metadata, Temperature, TopP) must be populated by the translators from the
 // original *ResponsesRequest so the body matches the spec's required-field list.
 type ResponsesResponse struct {
-	ID           string                `json:"id"`
-	Object       string                `json:"object"`     // always "response"
-	CreatedAt    int64                 `json:"created_at"` // unix seconds
-	Model        string                `json:"model"`
-	Status ResponsesStatus `json:"status"`
-	Output []ResponsesItem `json:"output"`
-	Usage        *ResponsesUsage       `json:"usage,omitempty"`
+	ID        string          `json:"id"`
+	Object    string          `json:"object"`     // always "response"
+	CreatedAt int64           `json:"created_at"` // unix seconds
+	Model     string          `json:"model"`
+	Status    ResponsesStatus `json:"status"`
+	Output    []ResponsesItem `json:"output"`
+	Usage     *ResponsesUsage `json:"usage,omitempty"`
 
 	// Required spec fields that may be null — no omitempty so they serialize.
 	Error             *ResponsesError             `json:"error"`
