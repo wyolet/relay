@@ -56,13 +56,31 @@ secrets:
   # -- Name of a pre-existing Secret holding all keys below. When set, the chart
   # creates no Secret and reads these keys from it:
   #   RELAY_MASTER_KEY, RELAY_ADMIN_TOKEN, RELAY_PG_DSN, RELAY_CH_DSN
-  #   (and postgres-password / clickhouse-password if bundling those stores).
+  #   (and postgres-password / clickhouse-password if bundling those stores,
+  #    and RELAY_ADMIN_PASSWORD if auth.adminUser.enabled).
   existingSecret: ""
   # -- AES-GCM master key. base64-std of 32 random bytes:
   #   openssl rand -base64 32
   masterKey: ""
   # -- Break-glass admin bearer token for the control API. e.g. sk-wr-<random>.
   adminToken: ""
+
+# ----------------------------------------------------------------------------
+# Auth. The break-glass admin TOKEN (secrets.adminToken) always works as a
+# bearer for the control API. For username/password UI login you need a User —
+# enable adminUser to mount one (relay loads Users from RELAY_CONFIG_DIR).
+# ----------------------------------------------------------------------------
+auth:
+  adminUser:
+    # -- Provision a username/password login user for the control UI.
+    enabled: false
+    username: admin
+    # -- Password. Stored in the chart Secret as RELAY_ADMIN_PASSWORD and
+    # referenced from the User YAML via valueFrom.env. With existingSecret set,
+    # put RELAY_ADMIN_PASSWORD in that Secret instead and leave this blank.
+    password: ""
+    # -- Where the User YAML is mounted + RELAY_CONFIG_DIR points.
+    configDir: /etc/relay/config
 
 # ----------------------------------------------------------------------------
 # Bundled PostgreSQL — relay's OWN config store. This is NOT the platform's
