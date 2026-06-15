@@ -75,6 +75,8 @@ auth:
     # -- Provision a username/password login user for the control UI.
     enabled: false
     username: admin
+    # -- Required by the User schema (must be a valid address).
+    email: admin@relay.local
     # -- Password. Stored in the chart Secret as RELAY_ADMIN_PASSWORD and
     # referenced from the User YAML via valueFrom.env. With existingSecret set,
     # put RELAY_ADMIN_PASSWORD in that Secret instead and leave this blank.
