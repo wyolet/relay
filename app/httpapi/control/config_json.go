@@ -14,11 +14,30 @@ package control
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/httpapi"
 )
+
+// ConfigJSONHandler serves GET /config.json at the control listener ROOT. The
+// UI fetches ${origin}/config.json at boot — before it knows the /api prefix —
+// so this must stay at root even though the rest of the control API mounts
+// under /api. The body is constant for the process lifetime, so it is
+// marshalled once. Mirrors registerConfigJSON's body shaping.
+func ConfigJSONHandler(rc RuntimeConfig) http.HandlerFunc {
+	if rc.Version == "" {
+		rc.Version = httpapi.Version
+	}
+	buf, _ := json.Marshal(rc)
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=600")
+		_, _ = w.Write(buf)
+	}
+}
 
 // RuntimeConfig is the JSON shape the UI reads. Every field is optional and
 // omitempty: an empty controlApiUrl tells the UI to use its own origin; an

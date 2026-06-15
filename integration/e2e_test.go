@@ -181,12 +181,15 @@ func newStack(t *testing.T) *stack {
 	const adminToken = "test-admin-token"
 
 	ctrlRouter := chi.NewRouter()
-	control.Mount(ctrlRouter, control.Deps{
-		Sessions:   sessMgr,
-		AdminToken: adminToken,
-		Authz:      authz.AlwaysAllowAuthenticated{},
-		Catalog:    cat,
-		Stores:     stores,
+	// Mirror prod: control API under /api so SPA routes aren't shadowed.
+	ctrlRouter.Route("/api", func(r chi.Router) {
+		control.Mount(r, control.Deps{
+			Sessions:   sessMgr,
+			AdminToken: adminToken,
+			Authz:      authz.AlwaysAllowAuthenticated{},
+			Catalog:    cat,
+			Stores:     stores,
+		})
 	})
 
 	inferRouter := chi.NewRouter()
@@ -495,7 +498,7 @@ func TestE2E_OverlaySurvivesReseed(t *testing.T) {
 	}
 	ctrl := func(method, path string, body []byte) (*http.Response, []byte) {
 		t.Helper()
-		req, _ := http.NewRequest(method, st.control.URL+path, bytes.NewReader(body))
+		req, _ := http.NewRequest(method, st.control.URL+"/api"+path, bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+st.adminToken)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
@@ -788,7 +791,7 @@ func TestE2E_OpenAPI_AllRefsResolve(t *testing.T) {
 		url  string
 	}{
 		{"inference", st.inference.URL + "/openapi.json"},
-		{"control", st.control.URL + "/openapi.json"},
+		{"control", st.control.URL + "/api/openapi.json"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, err := http.Get(tc.url)
@@ -874,7 +877,7 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 
 	// GET before any write returns defaults.
 	{
-		req, _ := http.NewRequest(http.MethodGet, st.control.URL+path, nil)
+		req, _ := http.NewRequest(http.MethodGet, st.control.URL+"/api"+path, nil)
 		req.Header.Set("Authorization", "Bearer "+st.adminToken)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -905,7 +908,7 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 			Enabled:              true,
 			AllowUnauthenticated: true,
 		})
-		req, _ := http.NewRequest(http.MethodPut, st.control.URL+path, bytes.NewReader(raw))
+		req, _ := http.NewRequest(http.MethodPut, st.control.URL+"/api"+path, bytes.NewReader(raw))
 		req.Header.Set("Authorization", "Bearer "+st.adminToken)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := http.DefaultClient.Do(req)
@@ -993,7 +996,7 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, relayKey string) {
 func (s *stack) enableProxyMode(allowAnon bool) {
 	s.t.Helper()
 	raw, _ := json.Marshal(settings.ProxyMode{Enabled: true, AllowUnauthenticated: allowAnon})
-	req, _ := http.NewRequest(http.MethodPut, s.control.URL+"/settings/proxy-mode", bytes.NewReader(raw))
+	req, _ := http.NewRequest(http.MethodPut, s.control.URL+"/api/settings/proxy-mode", bytes.NewReader(raw))
 	req.Header.Set("Authorization", "Bearer "+s.adminToken)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -1209,7 +1212,7 @@ func TestE2E_RelayKeyRotate(t *testing.T) {
 		t.Fatalf("pre-rotate inference with old key: want 200, got %d", got)
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, st.control.URL+"/relay-keys/by-id/"+keyID+"/rotate", nil)
+	req, _ := http.NewRequest(http.MethodPost, st.control.URL+"/api/relay-keys/by-id/"+keyID+"/rotate", nil)
 	req.Header.Set("Authorization", "Bearer "+st.adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
