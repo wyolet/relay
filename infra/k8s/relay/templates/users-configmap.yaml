@@ -16,6 +16,7 @@ data:
       name: {{ .Values.auth.adminUser.username }}
     spec:
       username: {{ .Values.auth.adminUser.username }}
+      email: {{ .Values.auth.adminUser.email }}
       password:
         valueFrom:
           env: RELAY_ADMIN_PASSWORD
