@@ -448,19 +448,29 @@ func main() {
 		if len(cfg.ControlAllowOrigins) > 0 {
 			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 		}
-		control.Mount(ctrlRouter, control.Deps{
-			Identity:      idStore,
-			Sessions:      sessMgr,
-			AdminToken:    cfg.AdminToken,
-			Authz:         authz.AlwaysAllowAuthenticated{},
-			Catalog:       cat,
-			Stores:        stores,
-			CookieSecure:  cookieSecure,
-			UsageReader:   usageReader,
-			PayloadReader: payloadReader,
-			Selector:      selector,
-			HostHealth:    hostHealth,
-			RuntimeConfig: runtimeConfig(cfg),
+		// /config.json stays at the listener ROOT — the UI fetches it at boot,
+		// before it knows the /api prefix. It advertises controlApiUrl=/api so
+		// the SPA's API client targets /api/* while the SPA's own routes
+		// (/models, /policies, …) fall through to the embedded UI below.
+		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(runtimeConfig(cfg)))
+		// Control API under /api so its CRUD paths (/models, /policies, …) don't
+		// shadow the SPA's identically-named client-side routes on the shared
+		// control origin (a hard-reload of /models must serve the UI, not JSON).
+		ctrlRouter.Route("/api", func(r chi.Router) {
+			control.Mount(r, control.Deps{
+				Identity:      idStore,
+				Sessions:      sessMgr,
+				AdminToken:    cfg.AdminToken,
+				Authz:         authz.AlwaysAllowAuthenticated{},
+				Catalog:       cat,
+				Stores:        stores,
+				CookieSecure:  cookieSecure,
+				UsageReader:   usageReader,
+				PayloadReader: payloadReader,
+				Selector:      selector,
+				HostHealth:    hostHealth,
+				RuntimeConfig: runtimeConfig(cfg),
+			})
 		})
 		ctrlRouter.Handle("/metrics", metrics.Handler())
 		// Embedded admin UI: same-origin SPA served as the fallback after all
@@ -600,6 +610,12 @@ func runtimeConfig(cfg *config.Config) control.RuntimeConfig {
 		Mode:            cfg.Runtime.Mode,
 		DocsURL:         cfg.Runtime.DocsURL,
 		SupportURL:      cfg.Runtime.SupportURL,
+	}
+	// The control API is mounted under /api so its CRUD paths don't shadow the
+	// embedded SPA's client-side routes on the shared control origin. Advertise
+	// that prefix to the UI by default; an explicit RELAY_CONTROL_API_URL wins.
+	if rc.ControlAPIURL == "" {
+		rc.ControlAPIURL = "/api"
 	}
 	if cfg.Runtime.SentryDSN != "" {
 		rc.Telemetry = &control.Telemetry{

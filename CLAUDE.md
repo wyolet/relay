@@ -377,15 +377,21 @@ Responses spec to byte-pass when the host is OpenAI proper).
 
 ### Admin CRUD surface
 
-Eight kinds, uniform shape. **No `/control/` prefix** — the control
-plane runs on its own listener (`RELAY_CONTROL_PORT`).
+Eight kinds, uniform shape. The control API is mounted under **`/api`** on
+the control listener (`RELAY_CONTROL_PORT`). The prefix exists because the
+embedded SPA is served from the *same* listener (as the `NotFound` fallback),
+and its client-side routes (`/models`, `/policies`, …) would otherwise be
+shadowed by the identically-named CRUD endpoints on a hard reload. `/config.json`
+and `/metrics` stay at the listener root (the UI fetches config before it knows
+the prefix; Prometheus scrapes `/metrics`). The UI learns the prefix at runtime
+from `config.json`'s `controlApiUrl` (defaults to `/api`).
 
 ```
-GET    /{plural}                 list
-GET    /{plural}/{ref}           read by slug or id (UUID form prefers id)
-POST   /{plural}                 create — server stamps id+slug from displayName
-PUT    /{plural}/by-id/{id}      update (id-routed; body may change slug)
-DELETE /{plural}/by-id/{id}      delete (id-routed)
+GET    /api/{plural}                 list
+GET    /api/{plural}/{ref}           read by slug or id (UUID form prefers id)
+POST   /api/{plural}                 create — server stamps id+slug from displayName
+PUT    /api/{plural}/by-id/{id}      update (id-routed; body may change slug)
+DELETE /api/{plural}/by-id/{id}      delete (id-routed)
 ```
 
 Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
