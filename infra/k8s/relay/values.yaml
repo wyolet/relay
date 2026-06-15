@@ -1,0 +1,210 @@
+# Default values for the relay chart.
+# Production overrides live in values-prod.example.yaml — copy and edit it.
+
+# -- Number of relay replicas (overridden by autoscaling if enabled).
+replicaCount: 2
+
+image:
+  repository: ghcr.io/wyolet/relay
+  # -- The LEAN image (external data stores). Pin to a released version in prod;
+  # do NOT use :standalone here (that bakes an embedded single-node Postgres).
+  tag: ""          # defaults to .Chart.appVersion when empty
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ----------------------------------------------------------------------------
+# Relay application config (non-secret env -> ConfigMap; DSNs/keys -> Secret).
+# ----------------------------------------------------------------------------
+relay:
+  # -- Data plane (inference) listen port: /v1/*, /healthz.
+  port: 8080
+  # -- Control plane port: /auth, CRUD, /metrics, /version, embedded UI.
+  controlPort: 8081
+  # -- "oss" | "cloud". Not a plane split — one binary serves both planes.
+  mode: oss
+  # -- Multi-pod catalog NOTIFY/LISTEN sync. Keep "on" for any replicas > 1.
+  clusterMode: "on"
+  # -- Usage/payload event sink. "clickhouse" wires the bundled CH below.
+  eventlogBackend: clickhouse
+  # -- Hot state + rate-limit counters. "redis" wires the bundled Valkey below.
+  stateBackend: redis
+  logLevel: info
+  # -- Cookies are Secure (set false only for plain-HTTP testing).
+  cookieSecure: "true"
+  maxRequestBytes: ""        # empty = relay default
+  healthzDeadlineMs: "500"
+  # -- Writable dir for the ClickHouse WAL segments (emptyDir-backed).
+  eventlogDir: /var/lib/relay/eventlog
+  # -- CORS allowlist for the control API (comma-separated origins). Required if
+  # the UI is served from a different origin than the control plane.
+  controlAllowOrigins: ""
+  # -- Extra raw env vars (name/value) appended to the relay container.
+  extraEnv: []
+
+# ----------------------------------------------------------------------------
+# Secrets. master key + admin token are REQUIRED (no silent auto-generation of
+# security-critical material). Either set them here (sealed/SOPS the file) or
+# point existingSecret at a Secret you manage out-of-band.
+# ----------------------------------------------------------------------------
+secrets:
+  # -- Name of a pre-existing Secret holding all keys below. When set, the chart
+  # creates no Secret and reads these keys from it:
+  #   RELAY_MASTER_KEY, RELAY_ADMIN_TOKEN, RELAY_PG_DSN, RELAY_CH_DSN
+  #   (and postgres-password / clickhouse-password if bundling those stores).
+  existingSecret: ""
+  # -- AES-GCM master key. base64-std of 32 random bytes:
+  #   openssl rand -base64 32
+  masterKey: ""
+  # -- Break-glass admin bearer token for the control API. e.g. sk-wr-<random>.
+  adminToken: ""
+
+# ----------------------------------------------------------------------------
+# Bundled PostgreSQL — relay's OWN config store. This is NOT the platform's
+# shared "wyolet" Postgres; relay always owns its data. Disable to point relay
+# at an external RELAY-DEDICATED Postgres via external.pgDsn.
+# ----------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  image: postgres:16-alpine
+  auth:
+    username: relay
+    database: relay
+    # -- Password for the relay PG user (goes into the Secret + assembled DSN).
+    password: ""
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1",  memory: 1Gi }
+
+# ----------------------------------------------------------------------------
+# Bundled ClickHouse — usage + payload events.
+# ----------------------------------------------------------------------------
+clickhouse:
+  enabled: true
+  image: clickhouse/clickhouse-server:24.8-alpine
+  auth:
+    username: relay
+    database: relay
+    password: ""
+  retentionDays: "30"     # RELAY_CH_RETENTION_DAYS
+  persistence:
+    enabled: true
+    size: 50Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits:   { cpu: "2",  memory: 4Gi }
+
+# ----------------------------------------------------------------------------
+# Bundled Valkey — hot state + rate-limit counters. Passwordless by design
+# (relay reads only RELAY_REDIS_ADDR); lock down with the NetworkPolicy below.
+# ----------------------------------------------------------------------------
+valkey:
+  enabled: true
+  image: valkey/valkey:8-alpine
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+# ----------------------------------------------------------------------------
+# External data stores (used when the bundled component above is disabled).
+# Point these at RELAY-DEDICATED stores, never the shared platform Postgres.
+# ----------------------------------------------------------------------------
+external:
+  pgDsn: ""        # postgres://user:pw@host:5432/relay?sslmode=require
+  chDsn: ""        # clickhouse://user:pw@host:9000/relay
+  redisAddr: ""    # host:6379
+
+# ----------------------------------------------------------------------------
+# Relay pod/runtime.
+# ----------------------------------------------------------------------------
+resources:
+  requests: { cpu: 250m, memory: 256Mi }
+  limits:   { cpu: "1",  memory: 1Gi }
+# -- GOMEMLIMIT/GOGC are part of relay's deployment story (allocation-conscious
+# hot path). Defaults track the memory limit; tune for your traffic.
+goMemLimit: "900MiB"
+goGC: "100"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: ""
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  type: ClusterIP
+  inferencePort: 80      # exposes container :relay.port
+  controlPort: 8081      # exposes container :relay.controlPort
+  annotations: {}
+
+# Prometheus Operator ServiceMonitor scraping /metrics on the control port.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# Ingress. Two hosts: the inference (customer-facing) edge and the control
+# (admin UI/API) edge. TLS strongly recommended; relay sets Secure cookies.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  inference:
+    host: ""           # api.relay.example.com  -> data plane :relay.port
+  control:
+    host: ""           # admin.relay.example.com -> control plane :controlPort
+  tls: []              # [{secretName: relay-tls, hosts: [api..., admin...]}]
+
+# NetworkPolicy restricting the data stores to relay pods only.
+networkPolicy:
+  enabled: false
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# -- Spread replicas across nodes by default.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: relay
+        app.kubernetes.io/component: relay

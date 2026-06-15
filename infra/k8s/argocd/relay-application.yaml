@@ -1,0 +1,91 @@
+# ArgoCD Application for Wyolet Relay.
+#
+# Prereqs (one-time, before the first sync):
+#   1. Create the secret out-of-band — ArgoCD cannot mint it:
+#        NAMESPACE=relay RELEASE=relay infra/k8s/relay/scripts/gen-secret.sh
+#   2. Fill the <…> placeholders below (repoURL, targetRevision, ingress hosts).
+#   3. kubectl apply -f infra/k8s/argocd/relay-application.yaml
+#
+# The chart reads everything sensitive from secrets.existingSecret, so this
+# manifest holds NO secret material and is safe to commit.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: relay
+  namespace: argocd
+  # Pruning finalizer: deleting this Application also removes its resources.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: <https://github.com/wyolet/relay.git>   # or your fork/mirror
+    targetRevision: <main, or a release tag>
+    path: infra/k8s/relay
+    helm:
+      # Inline values — keeps the whole env definition in one committed file.
+      # No secrets here; the security-critical material lives in the Secret that
+      # gen-secret.sh created (referenced by secrets.existingSecret).
+      valuesObject:
+        image:
+          tag: "0.4.0"            # pin a released version; never :latest in prod
+        secrets:
+          existingSecret: relay-secrets
+        # Bundled, relay-OWNED stores (NOT the shared platform Postgres).
+        postgresql:
+          enabled: true
+          primary:
+            persistence:
+              size: 20Gi
+              # storageClass: fast-ssd
+        clickhouse:
+          enabled: true
+          persistence:
+            size: 100Gi
+            # storageClass: fast-ssd
+        valkey:
+          enabled: true
+          persistence:
+            size: 10Gi
+        autoscaling:
+          enabled: true
+          minReplicas: 3
+          maxReplicas: 20
+          targetCPUUtilizationPercentage: 65
+        resources:
+          requests: { cpu: 500m, memory: 512Mi }
+          limits:   { cpu: "2",  memory: 2Gi }
+        goMemLimit: "1800MiB"
+        serviceMonitor:
+          enabled: true             # requires prometheus-operator CRDs in-cluster
+        networkPolicy:
+          enabled: true
+        ingress:
+          enabled: true
+          className: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+            # Inference responses stream — turn off proxy buffering.
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+          inference:
+            host: <api.relay.example.com>
+          control:
+            host: <admin.relay.example.com>
+          tls:
+            - secretName: relay-tls
+              hosts:
+                - <api.relay.example.com>
+                - <admin.relay.example.com>
+        relay:
+          controlAllowOrigins: <https://admin.relay.example.com>
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: relay
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      # StatefulSets + large rendered objects apply cleanly server-side.
+      - ServerSideApply=true

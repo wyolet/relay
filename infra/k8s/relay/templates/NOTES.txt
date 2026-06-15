@@ -1,0 +1,29 @@
+Relay {{ .Chart.AppVersion }} deployed as "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Data stores (relay owns these — NOT the shared platform Postgres):
+  Postgres:   {{ if .Values.postgresql.enabled }}bundled ({{ include "relay.postgresql.fullname" . }}:5432){{ else }}external ({{ .Values.external.pgDsn | default "MISSING external.pgDsn" }}){{ end }}
+  ClickHouse: {{ if .Values.clickhouse.enabled }}bundled ({{ include "relay.clickhouse.fullname" . }}:9000){{ else }}{{ .Values.external.chDsn | default "disabled" }}{{ end }}
+  Valkey:     {{ if .Values.valkey.enabled }}bundled ({{ include "relay.valkey.fullname" . }}:6379){{ else }}{{ .Values.external.redisAddr | default "disabled (state=memory)" }}{{ end }}
+
+Relay self-migrates Postgres on boot (advisory-locked, multi-pod safe) and
+self-seeds the catalog into an empty DB from the image's baked /catalog.
+
+Endpoints (ClusterIP):
+  inference (data plane): {{ include "relay.fullname" . }}:{{ .Values.service.inferencePort }}   -> /v1/*, /healthz
+  control plane:          {{ include "relay.fullname" . }}-control:{{ .Values.service.controlPort }}  -> UI, CRUD, /metrics, /version
+
+Quick checks:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "relay.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "relay.fullname" . }} 8080:{{ .Values.service.inferencePort }}
+  curl localhost:8080/healthz
+{{ if not .Values.ingress.enabled }}
+Ingress is disabled — expose via port-forward or enable ingress.* in values.
+{{- else }}
+Ingress:
+  inference: https://{{ .Values.ingress.inference.host }}
+  control:   https://{{ .Values.ingress.control.host }}
+{{- end }}
+{{ if .Values.serviceMonitor.enabled }}
+Prometheus: ServiceMonitor scrapes /metrics on the control port (relay_* metrics;
+relay_overhead_seconds is the wedge metric).
+{{- end }}
