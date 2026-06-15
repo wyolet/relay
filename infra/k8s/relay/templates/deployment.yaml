@@ -136,8 +136,11 @@ spec:
             - name: tmp
               mountPath: /tmp
             {{- if .Values.auth.adminUser.enabled }}
+            # subPath mounts the single file (no ConfigMap ..data symlink tree),
+            # so relay's recursive User loader can't read admin.yaml twice.
             - name: users
-              mountPath: {{ .Values.auth.adminUser.configDir }}
+              mountPath: {{ .Values.auth.adminUser.configDir }}/admin.yaml
+              subPath: admin.yaml
               readOnly: true
             {{- end }}
       volumes:

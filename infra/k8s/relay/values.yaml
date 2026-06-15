@@ -79,8 +79,10 @@ auth:
     # referenced from the User YAML via valueFrom.env. With existingSecret set,
     # put RELAY_ADMIN_PASSWORD in that Secret instead and leave this blank.
     password: ""
-    # -- Where the User YAML is mounted + RELAY_CONFIG_DIR points.
-    configDir: /etc/relay/config
+    # -- Where the User YAML is mounted + RELAY_CONFIG_DIR points. Under the
+    # writable state emptyDir so the subPath mountpoint is creatable under
+    # readOnlyRootFilesystem (a sibling of eventlog/batch-payloads, not walked).
+    configDir: /var/lib/relay/users
 
 # ----------------------------------------------------------------------------
 # Bundled PostgreSQL — relay's OWN config store. This is NOT the platform's
