@@ -24,5 +24,14 @@ data:
   {{- with .Values.relay.controlAllowOrigins }}
   RELAY_CONTROL_ALLOW_ORIGINS: {{ . | quote }}
   {{- end }}
+  {{- $inferenceUrl := .Values.relay.inferenceApiUrl }}
+  {{- if and (not $inferenceUrl) .Values.gateway.enabled .Values.gateway.inference.host }}
+  {{- $inferenceUrl = printf "https://%s" .Values.gateway.inference.host }}
+  {{- else if and (not $inferenceUrl) .Values.ingress.enabled .Values.ingress.inference.host }}
+  {{- $inferenceUrl = printf "https://%s" .Values.ingress.inference.host }}
+  {{- end }}
+  {{- with $inferenceUrl }}
+  RELAY_INFERENCE_API_URL: {{ . | quote }}
+  {{- end }}
   GOMEMLIMIT: {{ .Values.goMemLimit | quote }}
   GOGC: {{ .Values.goGC | quote }}

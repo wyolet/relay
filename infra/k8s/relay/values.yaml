@@ -44,6 +44,10 @@ relay:
   # -- CORS allowlist for the control API (comma-separated origins). Required if
   # the UI is served from a different origin than the control plane.
   controlAllowOrigins: ""
+  # -- Data-plane origin the embedded UI calls (served via GET /config.json as
+  # inferenceApiUrl). Leave empty to auto-derive https://<inference host> from
+  # gateway.inference.host / ingress.inference.host. Set explicitly to override.
+  inferenceApiUrl: ""
   # -- Extra raw env vars (name/value) appended to the relay container.
   extraEnv: []
 
