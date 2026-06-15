@@ -38,6 +38,9 @@ relay:
   healthzDeadlineMs: "500"
   # -- Writable dir for the ClickHouse WAL segments (emptyDir-backed).
   eventlogDir: /var/lib/relay/eventlog
+  # -- Writable dir for the batch payload store (emptyDir-backed; readOnlyRootFs
+  # makes the relative default uncreatable).
+  batchPayloadDir: /var/lib/relay/batch-payloads
   # -- CORS allowlist for the control API (comma-separated origins). Required if
   # the UI is served from a different origin than the control plane.
   controlAllowOrigins: ""
