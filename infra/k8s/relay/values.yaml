@@ -178,6 +178,23 @@ ingress:
     host: ""           # admin.relay.example.com -> control plane :controlPort
   tls: []              # [{secretName: relay-tls, hosts: [api..., admin...]}]
 
+# Gateway API exposure — cluster-native alternative to ingress (traefik/istio/etc.
+# Gateway + cert-manager gateway-shim + external-dns). When enabled, a Gateway with
+# HTTPS listeners for the two planes is created; cert-manager auto-issues the TLS
+# secret from certClusterIssuer (one cert across both hostnames) and external-dns
+# publishes the DNS. Leave ingress.enabled=false when using this.
+gateway:
+  enabled: false
+  className: ""               # GatewayClass, e.g. public / traefik / istio
+  certClusterIssuer: ""       # cert-manager.io/cluster-issuer -> auto TLS (no manual Certificate)
+  externalDnsTarget: ""       # external-dns.alpha.kubernetes.io/target (CNAME target)
+  tlsSecretName: ""           # defaults to <fullname>-tls
+  httpsPort: 443
+  inference:
+    host: ""                  # api.relay.example.com -> data plane
+  control:
+    host: ""                  # admin.relay.example.com -> control plane
+
 # NetworkPolicy restricting the data stores to relay pods only.
 networkPolicy:
   enabled: false

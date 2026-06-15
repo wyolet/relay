@@ -1,0 +1,60 @@
+{{- if .Values.gateway.enabled }}
+{{- if not .Values.gateway.className -}}
+{{- fail "gateway.className is required when gateway.enabled=true (your cluster's GatewayClass, e.g. public / traefik / istio)." -}}
+{{- end }}
+{{- if not (or .Values.gateway.inference.host .Values.gateway.control.host) -}}
+{{- fail "gateway.enabled=true needs at least one of gateway.inference.host / gateway.control.host." -}}
+{{- end }}
+{{- $tlsSecret := .Values.gateway.tlsSecretName | default (printf "%s-tls" (include "relay.fullname" .)) }}
+# Cluster-native exposure via Gateway API. cert-manager's gateway-shim watches the
+# cluster-issuer annotation and issues ONE TLS cert covering every listener that
+# references $tlsSecret (so both planes' hostnames land on a single cert, which
+# also covers multi-label names like api.relay.* that a *.domain wildcard cannot).
+# external-dns publishes the listener hostnames from the target annotation.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "relay.fullname" . }}
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.gateway.certClusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.gateway.externalDnsTarget }}
+    external-dns.alpha.kubernetes.io/target: {{ . | quote }}
+    {{- end }}
+spec:
+  gatewayClassName: {{ .Values.gateway.className }}
+  listeners:
+    {{- if .Values.gateway.inference.host }}
+    - name: inference-https
+      protocol: HTTPS
+      port: {{ .Values.gateway.httpsPort }}
+      hostname: {{ .Values.gateway.inference.host | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: {{ $tlsSecret }}
+    {{- end }}
+    {{- if .Values.gateway.control.host }}
+    - name: control-https
+      protocol: HTTPS
+      port: {{ .Values.gateway.httpsPort }}
+      hostname: {{ .Values.gateway.control.host | quote }}
+      allowedRoutes:
+        namespaces:
+          from: Same
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: {{ $tlsSecret }}
+    {{- end }}
+{{- end }}
