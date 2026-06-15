@@ -69,6 +69,7 @@ fi
 
 MASTER_KEY="$(openssl rand -base64 32)"
 ADMIN_TOKEN="sk-wr-$(openssl rand -hex 24)"
+ADMIN_PASSWORD="$(openssl rand -hex 16)"
 PG_PW="$(openssl rand -hex 24)"
 CH_PW="$(openssl rand -hex 24)"
 
@@ -78,6 +79,7 @@ CH_DSN="clickhouse://${CH_USER}:${CH_PW}@${FULLNAME}-clickhouse:9000/${CH_DB}"
 kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
   --from-literal=RELAY_MASTER_KEY="$MASTER_KEY" \
   --from-literal=RELAY_ADMIN_TOKEN="$ADMIN_TOKEN" \
+  --from-literal=RELAY_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   --from-literal=RELAY_PG_DSN="$PG_DSN" \
   --from-literal=RELAY_CH_DSN="$CH_DSN" \
   --from-literal=postgres-password="$PG_PW" \
@@ -92,8 +94,11 @@ cat <<EOF
   Point the chart at it:   secrets.existingSecret: $SECRET_NAME
   (this is already set in infra/k8s/argocd/relay-application.yaml)
 
-  Admin token (save it now — it is only shown here):
+  Admin bearer token (control API):
     $ADMIN_TOKEN
 
-  Re-read it later:  $0 --show
+  Admin UI login (when auth.adminUser.enabled, username "admin"):
+    password: $ADMIN_PASSWORD
+
+  Re-read the token later:  $0 --show
 EOF

@@ -22,6 +22,9 @@ spec:
         {{- if not .Values.secrets.existingSecret }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
+        {{- if .Values.auth.adminUser.enabled }}
+        checksum/users: {{ include (print $.Template.BasePath "/users-configmap.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
     spec:
       serviceAccountName: {{ include "relay.serviceAccountName" . }}
@@ -90,6 +93,15 @@ spec:
                   name: {{ include "relay.secretName" . }}
                   key: RELAY_CH_DSN
             {{- end }}
+            {{- if .Values.auth.adminUser.enabled }}
+            - name: RELAY_CONFIG_DIR
+              value: {{ .Values.auth.adminUser.configDir | quote }}
+            - name: RELAY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "relay.secretName" . }}
+                  key: RELAY_ADMIN_PASSWORD
+            {{- end }}
             {{- with .Values.relay.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -123,12 +135,22 @@ spec:
               mountPath: /var/lib/relay
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.auth.adminUser.enabled }}
+            - name: users
+              mountPath: {{ .Values.auth.adminUser.configDir }}
+              readOnly: true
+            {{- end }}
       volumes:
         # readOnlyRootFilesystem -> writable scratch for the CH WAL + temp.
         - name: state
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.auth.adminUser.enabled }}
+        - name: users
+          configMap:
+            name: {{ include "relay.fullname" . }}-users
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
