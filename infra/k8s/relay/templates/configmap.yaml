@@ -12,6 +12,7 @@ data:
   RELAY_STATE_BACKEND: {{ .Values.relay.stateBackend | quote }}
   RELAY_EVENTLOG_BACKEND: {{ .Values.relay.eventlogBackend | quote }}
   RELAY_EVENTLOG_DIR: {{ .Values.relay.eventlogDir | quote }}
+  RELAY_BATCH_PAYLOAD_DIR: {{ .Values.relay.batchPayloadDir | quote }}
   RELAY_REDIS_ADDR: {{ include "relay.redisAddr" . | quote }}
   RELAY_CH_RETENTION_DAYS: {{ .Values.clickhouse.retentionDays | quote }}
   RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
