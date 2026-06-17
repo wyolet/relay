@@ -302,7 +302,7 @@ p = geminiPart{FunctionCall: &geminiFC{Args: json.RawMessage(fmt.Sprintf("%q", e
 
 4. **(P1) Document `CallID` synthesis** in a code comment and add a test with two parallel calls to the same function. If the relay's `FunctionCallOutput` matching is name-based rather than ID-based for Gemini, document it. If it must be unique, append the output index: `CallID = fmt.Sprintf("%s_%d", name, outputIndex)`.
 
-5. ~~**(P2) Add `thoughtSignature`**~~ — **DONE.** `geminiPart.ThoughtSignature` round-trips via `ProviderData` on `Reasoning` + `FunctionCall` (parse/serialize/stream). Validated end-to-end by `app/adapter/gemini_integration_test.go` (fake-Gemini upstream — there is no live Gemini access). Remaining Gemini follow-ups: native *inbound* route (deferred — framework work, untestable without access) and catalog wiring + live dogfood (blocked on access).
+5. ~~**(P2) Add `thoughtSignature`**~~ — **DONE.** `geminiPart.ThoughtSignature` round-trips via `ProviderData` on `Reasoning` + `FunctionCall` (parse/serialize/stream). Validated end-to-end by `app/adapter/gemini_integration_test.go` (fake-Gemini upstream). Known limitations: the native *inbound* Gemini route and live catalog dogfood both require upstream Gemini API access; the adapter is upstream (outbound) only today.
 
 6. **(P2) Surface `CacheConfig` drop as a no-op comment** rather than silent discard. Optionally log a debug line; this prevents hours of debugging why cache hits never appear on Gemini routes.
 

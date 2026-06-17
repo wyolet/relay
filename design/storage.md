@@ -1,6 +1,6 @@
 # Storage Layer — Conventions & Rules
 
-> Status: target architecture. Live code may not yet conform. New PRs MUST.
+> Status: canonical architecture (shipped in Phase 2). New PRs MUST conform.
 
 ## Purpose
 

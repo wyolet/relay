@@ -5,7 +5,7 @@
 -- EFFECTIVE row happens at catalog load time (app/catalog), never in
 -- storage — re-seeding replaces templates and is completely
 -- overlay-unaware, so user customizations survive catalog upgrades.
--- See docs/overlays.md.
+-- See design/overlays.md.
 --
 -- kind is the target resource kind ("model" in v1); resource_id the
 -- target row id. No FK: kinds are heterogeneous and an orphan overlay

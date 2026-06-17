@@ -37,7 +37,7 @@ type Response struct {
 	// the ONE field no vendor adapter ever populates — it's always nil on
 	// a normal round-trip, and only set when the caller opts in with
 	// `X-WR-Usage: full`. Declared here (a relay-native first-class field,
-	// like CacheConfig — see docs/canonical-protocol.md "relay_usage") so
+	// like CacheConfig — see design/canonical-protocol.md "relay_usage") so
 	// the canonical client and schema stay honest about what relay can put
 	// on the wire. On vendor-shaped responses relay injects the same JSON
 	// as a top-level `relay_usage` key after translation; vendor SDKs

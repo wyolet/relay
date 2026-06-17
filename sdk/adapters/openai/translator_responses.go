@@ -1147,7 +1147,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		// canonical event. Note mcp_call.failed / mcp_list_tools.failed carry an
 		// error that is lost here; surfacing it as a fatal canonical error would
 		// wrongly abort an otherwise-completing stream, so it waits for a
-		// non-fatal canonical warning channel (deferred). See docs/adapters/openai-responses.md.
+		// non-fatal canonical warning channel (deferred). See design/adapters/openai-responses.md.
 	}
 
 	return marshalCanonicalFrames(frames), nil

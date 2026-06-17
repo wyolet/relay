@@ -1,6 +1,7 @@
 # Media offload — provider-side file references for large media
 
-Status: **design / roadmap** (not implemented). Owner: TBD.
+Status: **design reference** — not implemented in v1. Captures the
+architecture and rationale for provider-side media offload.
 
 ## Problem
 
@@ -8,7 +9,7 @@ LLM requests can be large — providers accept up to ~32 MB (Anthropic's
 documented request ceiling). The pain is **not the text**: ~1M tokens is
 only ~4–5 MB of JSON, and successive turns in a chat session are
 near-identical, so text compresses well at rest (ClickHouse block
-compression collapses the shared prefixes — see `docs/payload-logging.md`).
+compression collapses the shared prefixes — see `design/payload-logging.md`).
 
 The real bandwidth sink is **media on multi-turn resends**. A 3 MB image
 in the conversation history is re-uploaded on *every* turn (client → relay
@@ -148,7 +149,7 @@ sends, and the content-hash cache makes every resend free. Gate on
 ## Relationship to the storage path
 
 This shares its core primitive — **content-hash addressing of media** —
-with the logging/storage work (`docs/payload-logging.md`, the
+with the logging/storage work (`design/payload-logging.md`, the
 content-addressed blob store, "Idea B2"). Both hash media to dedup it; one
 references the provider's copy for *inference*, the other stores a single
 relay-side copy for *audit*. Build the hashing primitive once.

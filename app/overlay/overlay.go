@@ -9,7 +9,7 @@
 // snapshot build / reconcile), never in storage — so re-seeding replaces
 // templates and is completely overlay-unaware, while un-overridden
 // fields keep tracking the upstream catalog. Factory reset = delete the
-// overlay row. Full design + decided trade-offs: docs/overlays.md.
+// overlay row. Full design + decided trade-offs: design/overlays.md.
 //
 // Deliberately out of scope (v1): kinds other than "model"; diff-on-write
 // against generic CRUD PUT (the overlay is an explicitly user-managed

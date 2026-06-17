@@ -82,8 +82,8 @@ try-out, not for production. For that, run the lean image
 | Real authz (Casbin) | **roadmap B3**; today is "any authenticated caller can do anything" |
 | Batch API | **roadmap D** |
 
-See [`docs/roadmap.md`](docs/roadmap.md) for the full picture and
-[`docs/canonical-protocol.md`](docs/canonical-protocol.md) for the
+See [`design/roadmap.md`](design/roadmap.md) for the full picture and
+[`design/canonical-protocol.md`](design/canonical-protocol.md) for the
 relay-canonical protocol design.
 
 ## Other ways to run
@@ -317,7 +317,7 @@ Future-proof seams (already wired):
   without touching handlers.
 
 JWT for programmatic API access is a planned third caller type
-([`docs/roadmap.md`](docs/roadmap.md) B4).
+([`design/roadmap.md`](design/roadmap.md) B4).
 
 ## Performance
 
@@ -342,7 +342,7 @@ Hot-path rules ([`CLAUDE.md`](CLAUDE.md)):
 
 **Note**: the in-process bench harness was retired with the legacy
 pipeline; a new harness against `app/pipeline.Pipeline.Run` is
-[`docs/roadmap.md`](docs/roadmap.md) A3.
+[`design/roadmap.md`](design/roadmap.md) A3.
 
 ## Repository layout
 
@@ -357,7 +357,7 @@ cmd/litellm-import/   regenerate config YAML from LiteLLM JSON
 config/               operator-authored YAML catalog
 migrations/postgres/  versioned SQL up + down
 deploy/compose/       dev pg, test pg, smoke stack
-docs/                 design notes + roadmap + runbook
+design/                 design notes + roadmap + runbook
 ```
 
 ## Development
@@ -382,16 +382,9 @@ enforces the canonical-protocol import boundaries (rules 1/2/4/10).
 
 ## Roadmap
 
-The roadmap is split by product phase — [`docs/roadmap.md`](docs/roadmap.md)
-is the index:
-
-- [`roadmap-oss.md`](docs/roadmap-oss.md) — the open-source core: batch
-  orchestration, webhooks, new adapters, observability, and launch readiness.
-- [`roadmap-enterprise.md`](docs/roadmap-enterprise.md) — on-prem: authN/authz,
-  SSO, audit, HA, air-gap, security-review readiness.
-- [`roadmap-saas.md`](docs/roadmap-saas.md) — hosted multi-tenant: billing,
-  quotas, tenant isolation, compliance.
-- [`roadmap-v2.md`](docs/roadmap-v2.md) — beyond v1: the Tool Gateway + icebox.
+[`design/roadmap.md`](design/roadmap.md) is the index and shared changelog;
+[`roadmap-oss.md`](design/roadmap-oss.md) tracks the open-source core: batch
+orchestration, webhooks, new adapters, observability, and launch readiness.
 
 ## License
 

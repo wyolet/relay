@@ -132,7 +132,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
-	registerOverlayRoutes(api, d, protect) // /models/by-id/{id}/overlay — docs/overlays.md
+	registerOverlayRoutes(api, d, protect) // /models/by-id/{id}/overlay — design/overlays.md
 	registerCatalogGraph(api, d, protect)
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)

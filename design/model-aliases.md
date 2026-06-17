@@ -145,5 +145,5 @@ The alternative design — a per-policy "accept any model name" escape
 hatch with synthetic plans — was rejected for v1: it breaks the
 every-request-resolves invariant, creates a permanent second class of
 unpriced ghost usage, and taxes every future Plan consumer with an
-"unresolved?" branch. See the icebox entry in `docs/roadmap-v2.md` for
-the parked design and its unblock signal.
+"unresolved?" branch. The design is parked pending a specific external
+signal that the resolution-only model is insufficient.

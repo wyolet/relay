@@ -92,7 +92,7 @@ keys going down *before* requests start failing, as a leading indicator.
 
 ### Q5 — Under load, where does Relay saturate first?
 
-The stress-test lens (`docs/replay-stress.md`). When you push N
+The stress-test lens. When you push N
 concurrent users at a pod, four things creak before anything else, and
 each needs its own leading signal:
 

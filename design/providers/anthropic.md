@@ -10,7 +10,8 @@
 > - https://platform.claude.com/docs/en/api/openai-sdk
 > - Internal: `internal/provider/anthropic/client.go`, `internal/api/anthropic/parse.go`
 >
-> Status: working draft for the schema/provider redesign
+> Status: provider/API reference (snapshot 2026-05-07; updated as the
+> Anthropic API evolves).
 
 ---
 
@@ -449,9 +450,9 @@ Current model IDs as of 2026-05-07:
 
 ### Headers — Inbound Allowlist Gap
 
-**FIXME for next PR:** `pkg/httpheader/policy.go` `InboundAllowlist` does not include `anthropic-beta` or `anthropic-version`. Customers using beta features (extended thinking, computer use, interleaved thinking) must send these headers, but Relay strips them before the pipeline sees them. They need to be in the inbound allowlist.
+**Known limitation:** the inbound header allowlist (`pkg/httpheader`) does not include `anthropic-beta` or `anthropic-version`. Customers using beta features (extended thinking, computer use, interleaved thinking) send these headers, but they are stripped before the pipeline sees them — they need to be added to the inbound allowlist.
 
-**FIXME for next PR:** `OutboundAllowlist` includes `OpenAI-Beta` but not `anthropic-version` or `anthropic-beta`. The Anthropic client hardcodes `anthropic-version: 2023-06-01` (correct value, still current), but `anthropic-beta` from the customer request is silently dropped and never forwarded to Anthropic. Any beta feature a customer requests will silently not work.
+**Known limitation:** the outbound allowlist forwards `OpenAI-Beta` but not `anthropic-version` or `anthropic-beta`. The Anthropic client hardcodes `anthropic-version: 2023-06-01` (correct, still current), but `anthropic-beta` from the customer request is dropped and never forwarded, so a requested beta feature silently won't take effect.
 
 ### Token Accounting
 
@@ -461,7 +462,7 @@ billed_input = input_tokens + cache_creation_input_tokens + cache_read_input_tok
 ```
 But each has a different multiplier: cache creation ~1.25x, cache reads ~0.1x vs normal 1x. Store all three fields separately in usage records. `server_tool_use.web_search_requests` is a separate cost item.
 
-**FIXME for next PR:** `internal/api/anthropic/parse.go` and usage extraction do not parse the response body for `cache_creation_input_tokens` / `cache_read_input_tokens` / `server_tool_use`. These fields are present in the upstream response and are needed for accurate billing attribution.
+**Known limitation:** usage extraction does not separately meter all of `cache_creation_input_tokens` / `cache_read_input_tokens` / `server_tool_use` from the upstream response body. These fields are present upstream and are needed for fully accurate billing attribution.
 
 ### Streaming Passthrough
 

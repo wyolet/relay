@@ -56,7 +56,7 @@ app/adapter/                   Generic framework (singular, NOT per-vendor)
   spec.go                      Spec, AuthStrategy, InboundPath, specAdapter
   registry.go                  Registry of Specs + accessors
 
-app/adapters/                  Vocabulary only (collapse pending PR 5)
+app/adapters/                  Vocabulary only (Name constants + helpers)
   name.go                      Name constants (catalog vocabulary)
   json.go                      shared marshal/unmarshal helpers
   translator.go                OLD adapters.Translator interface — UNUSED

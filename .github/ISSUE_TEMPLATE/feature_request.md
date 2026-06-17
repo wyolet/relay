@@ -19,5 +19,5 @@ labels: enhancement
 
 ## Scope / fit
 
-<!-- How does this fit relay's infra-grade wedge? See docs/roadmap*.md —
+<!-- How does this fit relay's infra-grade wedge? See design/roadmap*.md —
      is there a related roadmap item? -->

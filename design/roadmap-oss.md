@@ -57,8 +57,8 @@ separate binary.
 
 **Dependencies:** lands cleaner once A2 (webhooks) exists so batch
 completion can emit a webhook instead of forcing customer polling.
-Pairs with mode-tier pricing (SaaS `roadmap-saas.md`) to honour the
-provider-batch 50% discount — but batch ships first; pricing is additive.
+Pairs with mode-tier pricing (a future hosted-billing concern) to honour
+the provider-batch 50% discount — but batch ships first; pricing is additive.
 
 ### A2. Webhooks per request-authoring unit
 
@@ -69,7 +69,7 @@ batch events (completion, failure, rate-limit, breaker trip).
 RelayKey, per Policy, per User, or all three with precedence rules? Most
 likely answer: per RelayKey (finest grain that always exists), falling
 back to per Policy (operator default), with per-User reserved for SaaS
-tenant defaults once multi-tenancy lands. **Write `docs/webhooks.md`
+tenant defaults once multi-tenancy lands. **Write `design/webhooks.md`
 first** to pin this before code.
 
 **Why:** every async flow (batch first, long-running stream second) needs
@@ -122,9 +122,9 @@ boot, no pipeline change):
   ~1–2 days.
 
 **Why:** "observability" is one of the four wedge axes. The OSS core needs
-real traces + metrics out of the box; the enterprise track
-(`roadmap-enterprise.md`) then *wires and hardens* these into a supported
-deployment story — but the code lands here.
+real traces + metrics out of the box; a future hardened on-prem build
+then *wires and hardens* these into a supported deployment story — but
+the code lands here.
 
 ### A5. Per-request capture gaps (A2b carryover)
 
@@ -141,8 +141,8 @@ enrichment, echo-usage, payload content capture). **Remaining:**
   minted. Needs an edge-level capture hook if we want them visible.
 
 **Out of scope by design:** cost (derive in the sink from tokens ×
-pricing, keep the event pricing-free); SaaS attribution
-(session/app/end-user — that's `roadmap-saas.md`).
+pricing, keep the event pricing-free); multi-tenant attribution
+(session/app/end-user — a future hosted-product concern).
 
 ### A6. No-silent-drops adapter contract — automation
 
@@ -159,8 +159,8 @@ A `bench/pipeline/` harness against `app/pipeline.Pipeline.Run` already
 exists (plus `bench/fakeanthropic`). **Remaining:** wire it into CI as a
 regression gate and document the baseline numbers against the performance
 contract (in-process: p50 < 100µs, p99 < 500µs; live: p50 < 2ms, p99 10ms
-SLO / 15ms public claim). ~half day. The "flying blind" framing is stale —
-the harness exists, it just isn't gating.
+SLO / 15ms public claim). ~half day. The harness exists; it just isn't
+wired as a CI gate yet.
 
 ### A8. Media offload — provider-side file references
 
@@ -178,7 +178,7 @@ retention); a stale/expired/cross-scope ref 404s pre-first-byte and
 retry). Pre-flight pipeline stage gated by a `Spec` capability —
 translators stay pure (rule 6). Shares the content-hash primitive with the
 storage-side content-addressed blob store. Full design:
-`docs/media-offload.md`.
+`design/media-offload.md`.
 
 **Size:** ~1 week.
 
@@ -199,7 +199,7 @@ tiers by cost:
 
 WS already produces a per-request log event per frame; the only capture
 wrinkle is accumulating response frames per correlation-id. Full notes:
-`docs/payload-logging.md` "Real-time log streaming". Ties into the unified
+`design/payload-logging.md` "Real-time log streaming". Ties into the unified
 usage/logs model.
 
 ### A10. Non-token pricing meters
@@ -219,8 +219,8 @@ dimension.
 
 **Driven by:** when we actually proxy non-text shapes. Today every seeded
 model is text-only. Design-doc-first. (Mode-tier pricing — batch/priority/
-flex tiers — is a billing concern and lives in `roadmap-saas.md`, though
-it shares the multi-row-Pricing shape with this.)
+flex tiers — is a future hosted-billing concern, though it shares the
+multi-row-Pricing shape with this.)
 
 ### A21. List filtering — control-plane query contract ✅ (mostly shipped)
 
@@ -271,7 +271,7 @@ The path from private repo to credible public release.
 - **Rewrite README for the public** — positioning vs OpenRouter/LiteLLM,
   the BYO-key / no-reseller wedge.
 - **Public docs:** architecture, canonical-protocol, deploy guide, config
-  reference. Much exists in `docs/` already but assumes internal context —
+  reference. Much exists in `design/` already but assumes internal context —
   needs a public pass.
 
 ### A15. One-command self-host quickstart
@@ -306,9 +306,11 @@ the *hardened* Helm chart with TLS/HA; this is the get-started version).
 
 ---
 
-## Dependencies out of this track
+## Foundational for later work
 
-- Enterprise (`roadmap-enterprise.md`) reuses A4 (observability) as its
-  "observability wired" deliverable and A7 (bench) as its perf SLO gate.
-- SaaS (`roadmap-saas.md`) reuses A1 (batch) + A2 (webhooks) as async
-  primitives and A10's multi-row-Pricing shape for mode-tier billing.
+Several OSS items are load-bearing for any future hardened on-prem or
+hosted multi-tenant build: A4 (observability) and A7 (bench) become the
+"observability wired" / perf-SLO deliverables, and A1 (batch) + A2
+(webhooks) + A10's multi-row-Pricing shape are the async + billing
+primitives those phases would reuse. They land here, in the OSS core,
+first.

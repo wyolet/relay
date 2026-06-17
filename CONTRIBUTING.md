@@ -21,7 +21,7 @@ docker compose up             # bundled Postgres / ClickHouse / Valkey / Jaeger
 ```
 
 The data plane listens on `:5100`, the control plane on `:5103`. See the
-deployment docs under `docs/` for configuration details.
+deployment docs under `design/` for configuration details.
 
 ## Build & test
 
@@ -52,11 +52,11 @@ as the architectural orientation doc. In short:
 - `internal/` — composition root / boundary (config, storage).
 - `cmd/relay/` — the binary entrypoint and the **only** place vendor
   names appear in code.
-- `docs/` — design docs, the roadmap, per-adapter fidelity audits.
+- `design/` — design docs, the roadmap, per-adapter fidelity audits.
 
 ## Codebase rules (non-negotiable)
 
-The full set lives in [`docs/canonical-protocol.md`](docs/canonical-protocol.md)
+The full set lives in [`design/canonical-protocol.md`](design/canonical-protocol.md)
 ("Codebase rules") and is summarized in `CLAUDE.md`. The ones a PR is
 most likely to trip on:
 

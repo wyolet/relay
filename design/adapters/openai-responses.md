@@ -68,7 +68,7 @@ P1 fidelity bundle (one PR):
 - **`prompt` (stored template ref)** — was silently dropped, sending an empty/wrong request; now **rejected** as a stateful field (fail loud), like `previous_response_id`. (Byte-pass to OpenAI-native is unaffected.)
 - **`max_tool_calls`** — annotated canonical drop (no canonical field for a tool-call cap; honored only on byte-pass).
 - **streaming `item.started` `name`** — now carries the function name (for downstream Anthropic-style start emit).
-- **streaming hosted-tool / annotation / audio events** (web_search_call.*, mcp_call.*, output_text.annotation.added, audio.*) — documented annotated drops (no canonical representation). `mcp_call.failed`/`mcp_list_tools.failed` carry an error that is lost here; surfacing it as a fatal canonical error would wrongly abort an otherwise-completing stream, so it waits for a non-fatal canonical warning channel (**deferred**).
+- **streaming hosted-tool / annotation / audio events** (web_search_call.*, mcp_call.*, output_text.annotation.added, audio.*) — documented annotated drops (no canonical representation). `mcp_call.failed`/`mcp_list_tools.failed` carry an error that is lost here; surfacing it as a fatal canonical error would wrongly abort an otherwise-completing stream, so it waits for a non-fatal canonical warning channel (a deferred enhancement, not a blocker for the shipped cross-shape routes).
 
 > **Stale-table warning:** the dated `2026-05-25` tables further down predate all
 > of the above and now misreport several rows as open (refusal streaming,

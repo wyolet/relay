@@ -6,6 +6,7 @@
 .github
 *.md
 docs/
+design/
 deploy/
 # …except the standalone entrypoint, COPY'd into the embedded-PG image.
 !deploy/standalone-entrypoint.sh

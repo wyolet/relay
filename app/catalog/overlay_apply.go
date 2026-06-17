@@ -2,7 +2,7 @@
 // rows. Overlays (app/overlay) are user-owned sparse spec patches; the
 // merge happens here at snapshot build/reconcile time, never in storage,
 // so re-seeding templates is overlay-unaware and user customizations
-// survive catalog upgrades. See docs/overlays.md.
+// survive catalog upgrades. See design/overlays.md.
 package catalog
 
 import (

@@ -94,7 +94,7 @@ payloads. LLM wire bodies are JSON, and:
 This is the same split Langfuse v3 uses (traces + input/output text in
 ClickHouse; binary media in object storage). The `clickhouse` backend
 implements the text half; binary/oversized-media spill to object storage
-is a follow-up (see "Roadmap" below and `docs/media-offload.md`, which
+is a follow-up (see "Roadmap" below and `design/media-offload.md`, which
 shares the content-hash primitive).
 
 ### CH backend internals
@@ -166,7 +166,7 @@ reader (the CH reader holds a connection pool). For CH the read path uses a
 - **Media spill to object storage**: oversized/binary bodies (base64
   images/audio) don't compress and bloat CH rows. Spill them to S3 by
   content-hash, store the URI in the CH row, fetch on `Get`. Shares the
-  content-hash primitive with `docs/media-offload.md`.
+  content-hash primitive with `design/media-offload.md`.
 - **Content-addressed message dedup**: hash each message, store unique
   messages once, store a request as a list of hashes — turns the O(N²)
   chat-history redundancy into O(N) for real (vs. relying on compression).

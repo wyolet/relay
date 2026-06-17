@@ -1,35 +1,25 @@
 # Roadmap — index
 
-Wyolet Relay's roadmap is split by **product phase**. Each phase is a
-separate doc; this file is the map + the shared state.
-
-| Phase | Doc | Goal |
-|---|---|---|
-| **OSS** | [`roadmap-oss.md`](roadmap-oss.md) | Open-source the infra-grade core. The wedge: BYO-key, no-reseller, Go-fast router that out-performs OpenRouter/LiteLLM on the infrastructure axis. |
-| **Enterprise** | [`roadmap-enterprise.md`](roadmap-enterprise.md) | The hardened on-prem build — real authN/authz, audit, SSO, HA, air-gap, security-review readiness, license gating. Sold to a single org running its own deployment. |
-| **SaaS** | [`roadmap-saas.md`](roadmap-saas.md) | The hosted multi-tenant product — signup, billing, quotas, tenant isolation, compliance, the customer dashboard. |
-| **Beyond v1** | [`roadmap-v2.md`](roadmap-v2.md) | Tool Gateway (a separate product line) + the Icebox of deferred-indefinitely ideas. Off the v1 critical path. |
-
-The three v1 phases are **sequential as products** (OSS → Enterprise →
-SaaS) but their engineering tracks overlap: enterprise authN reuses the
-OSS auth seams; SaaS multi-tenancy reuses enterprise org scoping. Each
-doc lists its own dependencies on the others.
+This file is the map + the shared changelog. The open-source core's
+backlog lives in [`roadmap-oss.md`](roadmap-oss.md):
+open-source the infra-grade core — the wedge is a BYO-key, no-reseller,
+Go-fast router that out-performs OpenRouter/LiteLLM on the infrastructure
+axis.
 
 Items list **what / why / rough size / where it lives**. When "where"
 would take more than a sentence, the item is its own design doc waiting
-to be written; the path under `docs/` is the placeholder.
+to be written; the path under `design/` is the placeholder.
 
 ## How to pick
 
 Default move: take the top open item from **`roadmap-oss.md`** — the OSS
 core is the critical path and everything else builds on it. The order
-within each doc is intentional so each item unblocks the next without
+within the doc is intentional so each item unblocks the next without
 orphan work.
 
 When in doubt about a backlog/design-first item, write the design doc
-first (`docs/<topic>.md`) — surfacing the open questions usually flips
-"backlog" to "now" or "icebox." Icebox items (`roadmap-v2.md`) don't
-move without a specific external signal; don't casually promote them.
+first (`design/<topic>.md`) — surfacing the open questions usually flips
+"backlog" to "now" or "icebox."
 
 ---
 
@@ -57,7 +47,7 @@ in each phase doc.
   `generateContent` Translator; introduced `Spec.UpstreamPathFn` + widened
   `pipeline.Adapter.Call(...,upstreamModel,stream)`.
 - **Adapter fidelity audits + fixes** (PRs #201/#202/#203) — per-adapter
-  audits in `docs/adapters/` + a batch of P0/P1 fixes; proposed the
+  audits in `design/adapters/` + a batch of P0/P1 fixes; proposed the
   no-silent-drops contract (now canonical rule 11).
 - **WebSocket transport** (PRs #196 server, #198 client) — `/v1/ws`
   canonical shape over one long-lived connection, multiplexed by id.
@@ -76,7 +66,7 @@ in each phase doc.
   opt-in, off the hot path. Unified log/payload model: `GET /logs` +
   `GET /logs/{request_id}`; file/s3/clickhouse body backends; settings-driven
   hot-swap for both payload and log backends. Full design:
-  `docs/payload-logging.md`.
+  `design/payload-logging.md`.
 - **`pkg/secret` unified resolver** (PR #226) + **five external fetch-only
   backends** (PRs #242–#248: aws/azure/gcp/bitwarden/onepassword; 1Password
   behind `cgo` tag, PR #251).
@@ -90,8 +80,8 @@ in each phase doc.
   verbatim upstream wire name via `Plan.UpstreamModel()`,
   `extras.resolved_via` usage tagging. Solves the Claude Code
   `claude-fable-5[1m]` 404. Full mechanism: `model-aliases.md`. The
-  rejected per-policy arbitrary-model passthrough is parked in
-  `roadmap-v2.md`'s Icebox.
+  rejected per-policy arbitrary-model passthrough is parked pending an
+  external signal.
 - **Catalog overlays** (2026-06-13) — user customization that survives
   re-seed: template/overlay/effective split, load-time merge in
   `app/catalog`, union-merged aliases/tags, write-time reject +

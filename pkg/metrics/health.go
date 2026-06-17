@@ -3,7 +3,7 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 // Health signals: the two "am I about to have a problem" metrics from
-// docs/metrics.md — silent data loss (Q3) and provider keys dying (Q4).
+// design/metrics.md — silent data loss (Q3) and provider keys dying (Q4).
 // Both are one-liner emitters the owning packages call at the relevant
 // moment; nothing here reaches back into them.
 var (
