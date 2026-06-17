@@ -1,4 +1,4 @@
-// overlay.go binds the catalog-overlay subresource (docs/overlays.md):
+// overlay.go binds the catalog-overlay subresource (design/overlays.md):
 //
 //	GET    /models/by-id/{id}/overlay   patch + template + effective + quarantine state
 //	PUT    /models/by-id/{id}/overlay   set/replace the user's sparse patch

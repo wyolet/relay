@@ -1,0 +1,169 @@
+---
+title: "Quickstart"
+description: "Your first request through Relay in ~2 minutes"
+---
+
+Relay puts one endpoint in front of every LLM provider and pools your API
+keys for failover and higher effective rate limits.
+
+<Steps>
+  <Step title="Start the relay">
+    Pick one — a single self-contained container, or Compose with separate
+    Postgres + Valkey. Either way the catalog is baked in and seeded on first
+    boot.
+
+    <Tabs>
+      <Tab title="docker run (standalone)">
+        The standalone image bundles Postgres. Credentials are auto-generated
+        on first boot and printed to the logs.
+
+        ```bash
+        docker run -p 8080:8080 -p 8081:8081 wyolet/relay:standalone
+        ```
+
+        Add a volume to keep your data, credentials, and master key across
+        restarts (a fresh container regenerates them otherwise):
+
+        ```bash
+        docker run -p 8080:8080 -p 8081:8081 \
+          -v relay-data:/var/lib/postgresql/data \
+          wyolet/relay:standalone
+        ```
+
+        See [Persisting data](/configuration#persisting-data-across-runs).
+      </Tab>
+      <Tab title="docker compose">
+        The lean relay image wired to its own Postgres + Valkey, with volumes
+        and env preconfigured. Save as `docker-compose.yml` and run
+        `docker compose up -d`. Volumes persist data across restarts.
+
+        ```yaml docker-compose.yml
+        name: relay
+
+        volumes:
+          pg-data:
+          valkey-data:
+
+        configs:
+          relay-admin-user:
+            content: |
+              apiVersion: relay.wyolet.dev/v1
+              kind: User
+              metadata: { name: admin }
+              spec:
+                username: admin
+                email: admin@localhost
+                password: { valueFrom: { env: RELAY_ADMIN_PASSWORD } }
+                roles: [admin]
+
+        services:
+          postgres:
+            image: postgres:16-alpine
+            restart: unless-stopped
+            environment:
+              POSTGRES_USER: relay
+              POSTGRES_PASSWORD: relay
+              POSTGRES_DB: relay
+            volumes: ["pg-data:/var/lib/postgresql/data"]
+            healthcheck:
+              test: ["CMD-SHELL", "pg_isready -U relay"]
+              interval: 3s
+              timeout: 5s
+              retries: 10
+
+          valkey:
+            image: valkey/valkey:8-alpine
+            restart: unless-stopped
+            volumes: ["valkey-data:/data"]
+            healthcheck:
+              test: ["CMD", "valkey-cli", "ping"]
+              interval: 3s
+              timeout: 5s
+              retries: 10
+
+          relay:
+            image: wyolet/relay:latest
+            restart: unless-stopped
+            depends_on:
+              postgres: { condition: service_healthy }
+              valkey: { condition: service_healthy }
+            configs:
+              - source: relay-admin-user
+                target: /config/users/admin.yaml
+            environment:
+              RELAY_PG_DSN: postgres://relay:relay@postgres:5432/relay?sslmode=disable
+              RELAY_STATE_BACKEND: redis
+              RELAY_REDIS_ADDR: valkey:6379
+              RELAY_CONFIG_DIR: /config
+              RELAY_AUTO_SEED_IF_EMPTY: "1"
+              RELAY_CONTROL_PORT: "8081"
+              RELAY_INFERENCE_API_URL: http://localhost:8080
+              RELAY_COOKIE_SECURE: "false"
+              RELAY_ADMIN_PASSWORD: change-me-please   # admin UI login
+              RELAY_MASTER_KEY: ""                     # set a stable value for production
+              RELAY_ADMIN_TOKEN: ""                    # break-glass bearer (optional)
+            ports:
+              - "8080:8080"   # inference API
+              - "8081:8081"   # admin UI + control API
+        ```
+
+        Log in as **admin** / `change-me-please` (change `RELAY_ADMIN_PASSWORD`
+        before exposing it). Set a stable `RELAY_MASTER_KEY` for production — it
+        encrypts your stored provider keys.
+      </Tab>
+    </Tabs>
+
+    <Info>Admin UI on **:8081**, OpenAI/Anthropic-compatible API on **:8080**.</Info>
+  </Step>
+
+  <Step title="Run the setup wizard">
+    Open [localhost:8081](http://localhost:8081) and sign in:
+
+    - **docker run (standalone)** — username `admin` and the password printed to
+      the container logs on first boot.
+    - **docker compose** — username `admin` and `RELAY_ADMIN_PASSWORD`.
+
+    Then follow the wizard to add a provider key and mint a relay key.
+
+    <Warning>The relay-key plaintext is shown **exactly once** — copy it then.</Warning>
+  </Step>
+
+  <Step title="Make a request">
+    <CodeGroup>
+    ```bash OpenAI shape
+    curl http://localhost:8080/openai/v1/chat/completions \
+      -H "Authorization: Bearer <your-relay-key>" \
+      -H "Content-Type: application/json" \
+      -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+    ```
+
+    ```bash Anthropic shape
+    curl http://localhost:8080/anthropic/v1/messages \
+      -H "Authorization: Bearer <your-relay-key>" \
+      -H "Content-Type: application/json" \
+      -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+    ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+<Card title="Hit a snag?" icon="bug" href="/troubleshooting">
+  Common errors — "no healthy keys in pool", bad bearer, adapter mismatch.
+</Card>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Every `RELAY_*` environment variable and runtime setting.
+  </Card>
+  <Card title="Inference API" icon="bolt" href="/reference/inference-api">
+    Endpoints, wire shapes, streaming, and error codes.
+  </Card>
+  <Card title="Control API" icon="sliders" href="/reference/control-api">
+    Manage hosts, keys, policies, and relay keys.
+  </Card>
+  <Card title="Troubleshooting" icon="bug" href="/troubleshooting">
+    Common errors and how to fix them.
+  </Card>
+</CardGroup>

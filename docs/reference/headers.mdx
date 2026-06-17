@@ -1,0 +1,66 @@
+---
+title: "Headers"
+description: "The HTTP headers Relay reads and emits"
+---
+
+Relay uses a small set of `X-WR-*` request headers to control routing and
+behavior, plus standard auth and request-id headers. Anything Relay doesn't
+recognize is left alone.
+
+## Request headers
+
+| Header | Purpose |
+| --- | --- |
+| `Authorization` | `Bearer <relay-key>` in normal mode. In [proxy mode](/concepts/proxy-mode) it carries your **own upstream provider key**, forwarded verbatim. |
+| `X-WR-API-Key` | Your relay key — the preferred place to send it. Takes precedence over `Authorization`. |
+| `x-api-key` | Relay-key fallback, for Anthropic-SDK-style clients that send the key here. |
+| `X-WR-Proxy-Mode` | Set to `Proxy` to enable [proxy mode](/concepts/proxy-mode). Omit (or `No-Proxy`) for normal routing. |
+| `X-WR-Upstream-Host` | Pin a specific upstream host by its catalog slug. Required for anonymous proxy requests. |
+| `X-WR-Usage` | Set to `full` to receive an inline `relay_usage` block in the response. Honored only for canonical-shape requests. |
+| `X-Request-ID` | A request ID you supply. If valid (printable ASCII, 1–128 chars) Relay uses it as-is; otherwise it generates one. |
+
+### How Relay finds your relay key
+
+In normal mode, Relay looks for the relay key in this order:
+
+1. `X-WR-API-Key`
+2. `Authorization: Bearer <token>`
+3. `x-api-key`
+
+Use whichever fits your client. If you're pointing an existing OpenAI or
+Anthropic SDK at Relay, just set its API key — it lands in `Authorization` or
+`x-api-key` and Relay picks it up.
+
+## Response headers
+
+| Header | Meaning |
+| --- | --- |
+| `X-Relay-Request-ID` | Set on every response. Echoes your `X-Request-ID` if you sent a valid one, otherwise a generated ID. Use it to correlate a call with your logs. |
+
+Relay forwards the upstream provider's response headers through to you, minus
+hop-by-hop headers. On cross-shape translated responses, `Content-Length` and
+`Content-Encoding` are dropped, since the translated body differs from the
+upstream's.
+
+## What Relay strips before calling upstream
+
+Relay never leaks its own auth or control headers to the provider. Before
+forwarding a request upstream it removes:
+
+- `Authorization` and `x-api-key` (replaced with the correct upstream
+  credential)
+- `Cookie`
+- every `X-WR-*` header
+- standard hop-by-hop headers
+
+<Info>
+This is why your relay key is safe to send as a bearer token: it's used to
+authenticate *you to Relay*, then stripped — it never reaches the provider.
+</Info>
+
+## Client IP and trusted proxies
+
+For anonymous proxy rate limiting, Relay needs your real client IP. If Relay
+sits behind a load balancer, set `RELAY_TRUSTED_PROXIES` to a comma-separated
+list of CIDRs; Relay then trusts `X-Forwarded-For` from those peers and uses
+the rightmost untrusted IP. Unset, it uses the direct connection address.

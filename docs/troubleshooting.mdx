@@ -1,0 +1,131 @@
+---
+title: "Troubleshooting"
+description: "Common errors and how to fix them"
+---
+
+The fastest way to diagnose a failed request is the status code plus the
+error body. Here are the stumbles you're most likely to hit first.
+
+## `401 Unauthorized` on `/v1` requests
+
+Your relay key is missing, malformed, or wrong.
+
+- Confirm the header is exactly `Authorization: Bearer <relay-key>`.
+- Use the **plaintext** returned when the key was created, not the id or
+  prefix. If you lost it, mint a new one — plaintext is never retrievable.
+- A disabled relay key also returns 401; check it's enabled in the dashboard.
+
+## `403 Forbidden` — model not granted
+
+The relay key authenticated, but its **policy** doesn't grant the requested
+model.
+
+- In the dashboard, open the policy attached to your relay key and confirm
+  the model is in its allowed set.
+- The model name in your request must match a catalog model the policy grants.
+
+## `404` — unknown model or no binding
+
+- The `model` value doesn't resolve to any catalog model, **or**
+- the model has no **enabled host binding**. A model needs a binding to a
+  host (with an adapter and an upstream name) to be routable.
+
+List what your key can actually reach:
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer <relay-key>"
+```
+
+## `502` / `503` — "no healthy keys in pool"
+
+Every host key for the route has tripped its **circuit breaker** — usually
+because the upstream credential is wrong, revoked, or rate-limited. Each key
+has a per-key breaker keyed on auth / quota / rate-limit / server-error
+classification.
+
+To recover:
+
+1. Fix the underlying cause — correct the upstream key value, or wait out a
+   rate limit.
+2. Clear the breaker state so the fixed key can be tried again. In dev with
+   the bundled stack:
+
+   ```bash
+   make breakers-reset
+   ```
+
+   This clears the `secret_health:*` keys in the state backend. In
+   production, breakers heal automatically once the cooldown passes.
+
+<Info>
+A rotated key gets a fresh breaker automatically — the breaker is keyed by
+value-hash, so a new value starts clean and the old hash's record expires.
+</Info>
+
+## Adapter mismatch
+
+If a request to a model returns a wire-format error from the upstream, the
+host binding's `adapter` (`openai` or `anthropic`) likely doesn't match the
+upstream's actual wire protocol.
+
+- A single host (e.g. AWS Bedrock) can serve models on different protocols —
+  the adapter is set **per binding**, not per host.
+- Confirm the binding's adapter matches how that specific model speaks
+  (Claude on Bedrock → `anthropic`; Llama on Bedrock → `openai`).
+
+## The container starts but the dashboard won't log in
+
+- On the **standalone** image the admin password is auto-generated and
+  **printed to the container logs** on first boot — check `docker logs` for
+  the `admin` / password line. It's persisted on the data volume across
+  restarts.
+- The admin UI is served on `RELAY_CONTROL_PORT` (`:8081` by default; standalone
+  maps it there). Set it to `off` only if you want the control plane disabled.
+- For local HTTP (no TLS), `RELAY_COOKIE_SECURE` must be `false` — otherwise
+  the session cookie is marked `Secure` and the browser drops it. The
+  standalone image already defaults it to `false`; set it on the lean image.
+- On the **lean** image you supply credentials yourself: set
+  `RELAY_ADMIN_TOKEN` for bearer access, or mount a `kind: User` YAML into
+  `RELAY_CONFIG_DIR` for dashboard username/password login.
+
+## Credentials (and catalog) regenerate on every run
+
+You're starting a **new** container each time without a volume, so the
+standalone image boots against an empty data dir and regenerates the master
+key, admin credentials, and catalog. Mount a named volume to persist them:
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -v relay-data:/var/lib/postgresql/data \
+  wyolet/relay:standalone
+```
+
+Everything — Postgres data, master key, admin login — lives under that one
+directory. See [Persisting data](/configuration#persisting-data-across-runs)
+and [Retrieving or pinning the master key](/configuration#retrieving-or-pinning-the-master-key).
+
+`docker stop` + `docker start <container>` already preserves state; only a
+fresh `docker run` without a volume starts clean.
+
+## Stored host key won't decrypt after a restart
+
+`RELAY_MASTER_KEY` changed between runs. It must be **stable** — it's the key
+that decrypts stored secrets. Restore the original master key, or re-enter
+the host key values under the new one. The standalone image keeps it stable
+automatically **as long as you mount a volume** (see above).
+
+## Health checks
+
+```bash
+# Inference liveness + Postgres ping (public)
+curl http://localhost:8080/healthz
+
+# Control plane build version (public)
+curl http://localhost:8081/api/version
+```
+
+<Note>
+Still stuck? Send the request, the full error body, and the output of
+`/healthz` and `/api/version` — that's enough to diagnose almost anything.
+</Note>

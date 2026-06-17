@@ -1,0 +1,96 @@
+---
+title: "Authentication"
+description: "Relay keys, host keys, and how the two planes are secured"
+---
+
+Relay has three kinds of caller, and each authenticates differently. Keeping
+them straight is the key to understanding the whole security model.
+
+| Caller | Reaches | Credential |
+| --- | --- | --- |
+| Your app | Inference plane (`/v1/*`) | **Relay key** — `Authorization: Bearer <relay-key>` |
+| A browser / the dashboard | Control plane | **Session cookie** (`relay_session`) |
+| An operator or CI | Control plane | **Admin bearer** — `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
+
+## Relay keys (your apps)
+
+A **relay key** is the bearer token your application code uses. It's an
+*indirection*: it never exposes the underlying provider credentials, and you
+can scope it, rate-limit it, and revoke it on its own.
+
+- Relay generates the plaintext with `crypto/rand` and stores only
+  `sha256(plaintext)` plus a short display prefix.
+- The plaintext is returned **exactly once**, on creation — save it then.
+- Every inference request is authenticated by hashing the bearer and looking
+  it up in the in-memory snapshot. No database round-trip.
+
+Each relay key points at a **policy**, which decides what it can do — see
+[the mental model](/introduction#the-mental-model).
+
+## Host keys (your provider credentials)
+
+A **host key** is a real upstream credential (your OpenAI key, your Anthropic
+key). Relay holds these for you in one of two modes:
+
+<CodeGroup>
+
+```json Env reference — no secret in the database
+{
+  "valueFrom": { "kind": "env", "env": "OPENAI_API_KEY" }
+}
+```
+
+```json Stored — AES-GCM encrypted in Postgres
+{
+  "valueFrom": { "kind": "stored" },
+  "value": "sk-..."
+}
+```
+
+</CodeGroup>
+
+Stored values are encrypted with `RELAY_MASTER_KEY`; only ciphertext touches
+the database. External fetch-only backends (AWS / Azure / GCP Secret Manager,
+Bitwarden, 1Password) are also supported — those secrets are held in memory
+only and never persisted.
+
+<Warning>
+`RELAY_MASTER_KEY` must stay **stable** across restarts — it decrypts your
+stored host keys. Losing or rotating it without re-encrypting makes existing
+stored secrets unreadable.
+</Warning>
+
+Relay keys and host keys never touch each other on the wire: a caller presents
+a relay key, and Relay separately draws a host key from the pool to call
+upstream. The provider credential is never exposed to your callers.
+
+## The control plane
+
+The admin surface (dashboard + CRUD + ops endpoints) accepts either:
+
+- a **session cookie**, set by `POST /api/auth/login` and backed by server-side
+  sessions (opaque token, rotated on login, destroyed on logout); or
+- the **admin bearer**, `RELAY_ADMIN_TOKEN` — a break-glass credential for
+  operators and CI that coexists with sessions.
+
+Run the control plane on its own port (`RELAY_CONTROL_PORT`) and keep it off
+the public internet; expose only the inference plane.
+
+### Passwords
+
+Admin passwords are bcrypt-aware: hashes prefixed `$2a$ / $2b$ / $2y$` are
+verified with bcrypt; plain-text passwords still work for legacy config but
+log a deprecation warning.
+
+## Authorization
+
+Every authenticated control-plane caller has full access. Access is controlled
+at the network boundary you run — keep the control plane on its own port and
+off the public internet. Granular, role-based permissions arrive with the
+multi-user version.
+
+<Note>
+Run the control plane on its own port behind your network controls, and use
+the admin bearer (`RELAY_ADMIN_TOKEN`) for operators and CI. The inference
+plane is the only surface you expose publicly.
+</Note>

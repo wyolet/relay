@@ -1,0 +1,116 @@
+---
+title: "Inference API"
+description: "The data plane — send LLM requests through Relay"
+---
+
+The inference plane is the customer-facing data plane. It listens on
+`RELAY_PORT` (default `8080`) and speaks OpenAI- and Anthropic-shape wire
+protocols, plus Relay's own provider-neutral canonical shape.
+
+## Authentication
+
+Every inference request authenticates with a **relay key** as a bearer token:
+
+```
+Authorization: Bearer <relay-key>
+```
+
+Relay keys are minted in the admin UI or via the control plane
+(`POST /api/relay-keys`). The plaintext is shown exactly once on creation —
+Relay stores only `sha256(plaintext)`.
+
+## Namespacing
+
+Each vendor wire shape is served under its own path prefix. The bare `/v1`
+namespace belongs to Relay's canonical shape.
+
+| Prefix | Wire shape |
+| --- | --- |
+| `/openai/...` | OpenAI Chat Completions, Responses, Embeddings |
+| `/anthropic/...` | Anthropic Messages |
+| `/v1/...` | Relay canonical (provider-neutral) |
+
+## Endpoints
+
+| Method | Path | Shape |
+| --- | --- | --- |
+| `POST` | `/openai/v1/chat/completions` | OpenAI Chat Completions |
+| `POST` | `/openai/v1/responses` | OpenAI Responses API |
+| `POST` | `/openai/v1/embeddings` | OpenAI Embeddings (byte-pass) |
+| `POST` | `/anthropic/v1/messages` | Anthropic Messages |
+| `POST` | `/v1/generate` | Relay canonical request/response |
+| `GET` | `/v1/models` | Models accessible to the relay key |
+| `GET` | `/healthz` | Liveness + Postgres ping (public) |
+| `GET` | `/openapi.json` | Generated typed OpenAPI spec |
+
+## Examples
+
+<CodeGroup>
+
+```bash OpenAI Chat Completions
+curl http://localhost:8080/openai/v1/chat/completions \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "hello"}]
+  }'
+```
+
+```bash Anthropic Messages
+curl http://localhost:8080/anthropic/v1/messages \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 256,
+    "messages": [{"role": "user", "content": "hello"}]
+  }'
+```
+
+```bash Streaming (SSE)
+curl http://localhost:8080/openai/v1/chat/completions \
+  -H "Authorization: Bearer <relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "stream": true,
+    "messages": [{"role": "user", "content": "hello"}]
+  }'
+```
+
+</CodeGroup>
+
+<Info>
+Responses stream byte-for-byte from the upstream when the inbound shape
+matches the upstream shape. Cross-shape requests (e.g. OpenAI in,
+Anthropic upstream) are translated per chunk through Relay's canonical
+protocol.
+</Info>
+
+## Models
+
+The `model` field is resolved against your catalog. A model is reachable
+only if a policy grants it to your relay key **and** the model has an
+enabled host binding with a healthy host key. List what your key can reach:
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer <relay-key>"
+```
+
+## Errors
+
+| Status | Meaning |
+| --- | --- |
+| `401` | Missing or invalid relay key. |
+| `403` | Relay key's policy does not grant the requested model. |
+| `404` | Unknown model, or no enabled binding for it. |
+| `429` | Rate limit reached (relay-side or upstream). |
+| `502` / `503` | No healthy key in the pool, or upstream unreachable. See [Troubleshooting](/troubleshooting). |
+
+<Warning>
+Relay does not fail over mid-stream. Failover across keys and hosts
+happens **before the first byte** reaches you. Once bytes flow, an
+upstream error is returned as-is.
+</Warning>

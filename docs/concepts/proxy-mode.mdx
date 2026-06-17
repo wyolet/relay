@@ -1,0 +1,100 @@
+---
+title: "Proxy Mode"
+description: "Forward requests with the caller's own upstream key, no key pool"
+---
+
+Normal Relay routing maps a **relay key** to a pool of your provider keys and
+picks one for each request. **Proxy mode** is the other way around: the caller
+brings their **own upstream provider key**, and Relay forwards the request to
+the provider verbatim — no policy resolution, no key pool, no model rewrite,
+no translation.
+
+It's useful when you want Relay in front of provider traffic for rate
+limiting, observability, and a single endpoint, but the credential belongs to
+the caller rather than to a Relay-managed pool.
+
+## Normal mode vs proxy mode
+
+| | Normal mode | Proxy mode |
+| --- | --- | --- |
+| Upstream credential | Drawn from your key pool | The caller's, forwarded as-is |
+| Routing | Full policy → model → host binding | Host pinned by header (or model lookup) |
+| Model rewrite | Yes | No — body forwarded verbatim |
+| Translation | Cross-shape supported | None — byte-for-byte forward |
+| Key pooling & failover | Yes | No |
+
+## Enabling it
+
+Proxy mode is **off by default**. Turn it on through the control plane:
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/proxy-mode \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "allowUnauthenticated": false}'
+```
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch. While `false`, every proxy request returns `403`. |
+| `allowUnauthenticated` | `false` | Whether anonymous proxy requests (no relay key) are allowed. |
+
+The change hot-reloads across all pods within ~1s — no restart.
+
+<Note>
+Proxy mode is gated by this **global** switch today. A per-relay-key
+`passthroughAllowed` flag exists for future per-key gating but is not yet
+enforced — for now, `enabled` is what controls access.
+</Note>
+
+## Making a proxy request
+
+Send `X-WR-Proxy-Mode: Proxy`, put your upstream key in `Authorization`, and
+pin the upstream host with `X-WR-Upstream-Host`:
+
+```bash
+curl http://localhost:8080/anthropic/v1/messages \
+  -H "X-WR-Proxy-Mode: Proxy" \
+  -H "X-WR-API-Key: <your-relay-key>" \
+  -H "X-WR-Upstream-Host: anthropic" \
+  -H "Authorization: Bearer sk-ant-your-own-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+```
+
+Relay strips its own headers (`X-WR-*`, `X-WR-API-Key`) and forwards the body
+unchanged, with your `Authorization` reattached as the upstream credential.
+
+### Authenticated vs anonymous
+
+- **Authenticated proxy** — include your relay key in `X-WR-API-Key`. The
+  request is attributed to that key and rate-limited under the
+  `inference-api-proxy` pool. If you omit `X-WR-Upstream-Host`, Relay reads
+  the `model` from the body and resolves the host from your relay key's
+  policy.
+- **Anonymous proxy** — omit the relay key. Allowed only when
+  `allowUnauthenticated` is on, rate-limited per client IP under
+  `inference-api-proxy-anonymous`, and **`X-WR-Upstream-Host` is required**
+  (there's no policy to infer the host from).
+
+## Discovering upstream hosts
+
+List the host slugs you can target with `X-WR-Upstream-Host`:
+
+```bash
+curl http://localhost:8080/v1/proxy/hosts \
+  -H "X-WR-API-Key: <your-relay-key>"
+```
+
+## Errors
+
+| Status | Meaning |
+| --- | --- |
+| `400` | `X-WR-Proxy-Mode` has an invalid value, `Authorization` (upstream key) is missing, or `X-WR-Upstream-Host` is unknown / required-but-absent. |
+| `401` | Anonymous proxy request while `allowUnauthenticated` is off. |
+| `403` | Proxy mode is disabled (`enabled: false`). |
+
+<Note>
+Proxy mode does no translation and no model rewriting — the body is forwarded
+exactly as sent. Send the request in the wire shape the target host expects.
+</Note>

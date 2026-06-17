@@ -10,7 +10,7 @@
 // k=v works on every kind via the Labels hook. The host-key circuit-breaker
 // state filter (?health=) is intentionally absent here — it needs a
 // snapshot+kv join the pure store-slice engine can't express; see
-// docs/filtering.md F3.
+// design/filtering.md F3.
 package control
 
 import (

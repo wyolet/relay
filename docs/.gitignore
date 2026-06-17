@@ -1,0 +1,9 @@
+# Mintlify
+.mintlify/
+node_modules/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/

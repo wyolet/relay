@@ -6,7 +6,7 @@ Guidance for Claude Code working in this repo.
 
 Before any non-trivial change, read `CONTRIBUTING.md` (build/test, the
 PR workflow, and the load-bearing codebase rules) and the design docs
-under `docs/` (`docs/roadmap.md` for what's next, `docs/canonical-protocol.md`
+under `design/` (`design/roadmap.md` for what's next, `design/canonical-protocol.md`
 for the protocol invariants). The repo layout, ports, and build/deploy
 pipeline are documented in `CONTRIBUTING.md` and the `Makefile`.
 
@@ -17,9 +17,9 @@ k8s-native, BYO provider keys. Competes with OpenRouter and LiteLLM on
 the infrastructure axis (performance, key pooling, batch orchestration,
 observability).
 
-Roadmap and stage breakdown: `docs/roadmap.md` (split into per-phase
-docs — see the index). Design context lives in the `docs/` tree
-(`docs/canonical-protocol.md`, `docs/adapters/`, the per-subsystem
+Roadmap and stage breakdown: `design/roadmap.md` (split into per-phase
+docs — see the index). Design context lives in the `design/` tree
+(`design/canonical-protocol.md`, `design/adapters/`, the per-subsystem
 guides) — read before non-trivial architectural suggestions.
 
 ## Wedge — what we are NOT
@@ -53,7 +53,7 @@ app/                       — the application: domain + composition + handlers
                              EFFECTIVE rows at snapshot load (survives
                              re-seed). Merge engine + union whitelist +
                              store; applied only in app/catalog
-                             (overlay_apply.go). See docs/overlays.md.
+                             (overlay_apply.go). See design/overlays.md.
   adapter/                 — generic adapter framework (singular):
                              Spec, Registry, generic pipeline.Adapter
                              parameterised by upstream URL + auth strategy.
@@ -156,7 +156,7 @@ config/                    — relay-local YAML (NOT the public catalog)
 migrations/postgres/       — versioned SQL up + down
 
 deploy/compose/            — dev pg, test pg, smoke stack
-docs/                      — design + runbook + roadmap
+design/                      — design + runbook + roadmap
 integration/               — make test-integration + make smoke-mock
 ```
 
@@ -166,7 +166,7 @@ integration/               — make test-integration + make smoke-mock
   collapsed into the generic `app/adapter/` framework.
 - `sdk/adapters/openai/responses/{cctranslator,anthropictranslator}/`
   pairwise translator packages — replaced by canonical chain
-  composition (see docs/canonical-protocol.md).
+  composition (see design/canonical-protocol.md).
 - `Deps.CrossShapeHandlers` + `inference.CrossShapeHandler` — the
   temporary hook is gone; dispatch is uniform.
 - `Deps.Translators` (the old `adapters.Registry` keyed on the
@@ -226,7 +226,7 @@ NOT regenerate them in this repo.
 ## Codebase rules (non-negotiable)
 
 These are the load-bearing rules every change must obey. Authoritative
-source: `docs/canonical-protocol.md` "Codebase rules" section. Quoted
+source: `design/canonical-protocol.md` "Codebase rules" section. Quoted
 here because new sessions must inherit them.
 
 1. **Canonical knows nothing.** `sdk/v1/` declares its own types,
@@ -263,7 +263,7 @@ here because new sessions must inherit them.
    `cache_config` (`ItemCacheConfig{anchor}`). No vendor cache vocab
    (`cache_control`, `prompt_cache_key`) reaches canonical; Anthropic
    emits breakpoints, OpenAI no-ops, hit-rate reads back via
-   `Usage["cache_read"]`. See `docs/canonical-protocol.md` rule 7.
+   `Usage["cache_read"]`. See `design/canonical-protocol.md` rule 7.
 8. **`provider_data` for same-vendor opaque blobs.** Signed/encrypted
    vendor payloads (Anthropic thinking signatures, OpenAI
    `encrypted_content`) carry on the relevant item (`reasoning`,
@@ -286,7 +286,7 @@ here because new sessions must inherit them.
     irreducible drop with a greppable `// canonical: <field> dropped — <why>`
     comment, or — for safety-relevant signals (unmapped finish/stop reason,
     content filter, refusal) — surface it rather than masquerade as success.
-    Silent accept-and-discard is the bug class the `docs/adapters/` fidelity
+    Silent accept-and-discard is the bug class the `design/adapters/` fidelity
     audits found across every adapter. (Automated `adapter_drop` warning
     emission is deferred; translators are pure with no logger.)
 
@@ -332,7 +332,7 @@ RelayKey (inbound customer API key → PolicyID)
 ("customer hits /v1/chat/completions with bearer key X; key has Policy
 Y; Policy Y allows Model M served via Host H with Adapter A"). When
 multi-tenancy lands the Route + Org/Project hierarchy comes back per
-`docs/roadmap.md` track B.
+`design/roadmap.md` track B.
 
 ### Identity model (every catalog resource)
 
@@ -351,7 +351,7 @@ Cross-references in spec fields (e.g. `policy.spec.modelIds`,
 0009). YAML manifest DTOs use names externally; `app/manifest`
 resolves names → ids on parse and ids → names on render. Slug edit
 isn't yet implemented; when added it needs a referencing-rewriter
-(`docs/roadmap.md` C5).
+(`design/roadmap.md` C5).
 
 `pkg/ids` (UUIDv7) and `pkg/slug` (slugify + collision suffix) are
 pure helpers.
@@ -503,7 +503,7 @@ body); they never mutate. Track via
 7. Document expected kv ops per request in the consumer's package doc
    comment.
 
-Full guide: `docs/kv.md`.
+Full guide: `design/kv.md`.
 
 ### Storage layer conventions
 
@@ -528,7 +528,7 @@ constructs its own sqlc queries via `gen.New(pool)` against
 The legacy "Storage.Catalog domain repos" pattern is GONE. Each
 `app/X.Store` is independent.
 
-Full guide: `docs/storage.md`.
+Full guide: `design/storage.md`.
 
 ### Cluster mode
 
@@ -537,7 +537,7 @@ Catalog NOTIFY/LISTEN keeps every pod's snapshot in sync within ~1s.
 Future: leader election, Redis Cluster client. The NOTIFY emit (on
 catalog write) is unconditional; only the LISTEN consumer is gated.
 
-Full guide: `docs/cluster.md`.
+Full guide: `design/cluster.md`.
 
 ### Streaming
 
@@ -545,7 +545,7 @@ Full guide: `docs/cluster.md`.
   flight goroutine sees a buffered copy via `io.TeeReader` once
   `Body.Close()` fires.
 - Same-shape passthrough is the 95% case. Cross-shape transform runs
-  per-chunk via stateful translators (`docs/adapters.md`) — each SSE
+  per-chunk via stateful translators (`design/adapters.md`) — each SSE
   event is parsed at the `\n\n` boundary, translated upstream→OpenAI→
   inbound, flushed. Either side may be identity (no-op) when shapes match.
 
@@ -682,7 +682,7 @@ roadmap A3. We're temporarily flying blind on regressions.
 - Boring choices on the edges, smart choices in the middle. The router
   (chi) is the edge; the pipeline is the middle.
 - "Three similar lines is better than a premature abstraction."
-- Read the design docs under `docs/` (`docs/canonical-protocol.md` and
+- Read the design docs under `design/` (`design/canonical-protocol.md` and
   the per-subsystem guides) before proposing architecture changes.
-- The roadmap (`docs/roadmap.md`) names every known follow-up — check
+- The roadmap (`design/roadmap.md`) names every known follow-up — check
   it before opening a new design question.

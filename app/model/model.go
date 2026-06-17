@@ -71,7 +71,7 @@ type Spec struct {
 	// VERBATIM. Aliases are lookup keys, never identity: they never appear
 	// in policy grants, modelref, admin URLs, or the usage `model` slug.
 	// Matching runs on the slug-normalized form ("claude-fable-5[1m]" ≡
-	// "claude-fable-5-1m"). See docs/model-aliases.md.
+	// "claude-fable-5-1m"). See design/model-aliases.md.
 	Aliases []string `json:"aliases,omitempty" yaml:"aliases,omitempty"`
 }
 

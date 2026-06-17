@@ -2,7 +2,7 @@
 // It owns no metrics of its own — it reads the per-request lifecycle
 // Context + outcome and forwards them to the one-liner emitters in
 // pkg/metrics. Registering it is the entire wiring for the request-flow
-// metrics (Q1–Q2, Q5 in docs/metrics.md); no runner (pipeline/proxy/ws/
+// metrics (Q1–Q2, Q5 in design/metrics.md); no runner (pipeline/proxy/ws/
 // batch) changes, because every runner already feeds the lifecycle spine.
 //
 // It registers on three phases: pre-flight (inflight gauge up), the

@@ -347,7 +347,7 @@ func main() {
 
 	// Metrics: the Prometheus observer. Reads request outcome + timing in
 	// post-flight and emits the request-flow metrics via pkg/metrics. Pure
-	// boot wiring — no runner changes (see docs/metrics.md). The data-loss
+	// boot wiring — no runner changes (see design/metrics.md). The data-loss
 	// and provider-key metrics emit at their sources (emitters, keypool).
 	metricsObs := metricslog.New()
 	lifecycleReg.RegisterPreFlight(metricsObs.PreFlight)

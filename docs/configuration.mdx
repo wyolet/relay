@@ -1,0 +1,167 @@
+---
+title: "Configuration"
+description: "Environment variables and runtime settings"
+---
+
+Relay is configured through `RELAY_*` environment variables. The standalone
+image ships with sensible defaults and auto-generates its secrets on first
+boot — a bare `docker run` needs no environment variables at all. The values
+below matter when you move to a real (lean-image + managed-Postgres) deployment.
+
+## Environment variables
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_PG_DSN` | _(required, except standalone)_ | Postgres connection string. The standalone image provides its own. |
+| `RELAY_PORT` | `8080` | Inference (data plane) listener port. |
+| `RELAY_CONTROL_PORT` | `8081` | Control plane + admin UI listener port. Set `off` to disable. |
+| `RELAY_MASTER_KEY` | _(auto-generated on standalone)_ | 32-byte base64 key for stored-mode host keys. Generate with `openssl rand -base64 32`. Must be **stable** in production. |
+| `RELAY_ADMIN_TOKEN` | _(auto-generated on standalone)_ | Break-glass control-plane bearer. Empty disables it on the lean image. |
+| `RELAY_INFERENCE_API_URL` | _(standalone: `http://localhost:8080`)_ | Data-plane origin the admin UI calls (served via `/config.json`). Set to your public API URL in production. |
+| `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Use `redis` for multi-pod deployments. |
+| `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
+| `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
+| `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML (rate limits, identity). |
+| `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. |
+| `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). |
+| `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget in seconds. |
+| `RELAY_LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warn` \| `error`. |
+
+### Clustering & scale
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_CLUSTER_MODE` | `off` | `on` enables the Postgres `LISTEN` consumer so every pod's snapshot stays in sync. Turn `on` for any multi-pod deployment. |
+| `RELAY_INSTANCE_ID` | _(empty)_ | Stable pod/instance identity, surfaced in logs and metrics. |
+| `RELAY_MAX_REQUEST_BYTES` | _(unlimited)_ | Reject inbound request bodies larger than this many bytes. |
+| `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Timeout for the `/healthz` dependency checks. |
+
+### Storage backends
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_CATALOG_BACKEND` | _(empty)_ | Catalog source strategy (`pg` for Postgres-backed). |
+| `RELAY_EVENTLOG_BACKEND` | `file` | Usage/event sink: `file` \| `clickhouse` \| `postgres` \| `valkey`. |
+| `RELAY_EVENTLOG_DIR` | _(empty)_ | Directory for the `file` event-log backend. |
+| `RELAY_CH_DSN` | _(empty)_ | ClickHouse DSN; required when an event/usage backend is `clickhouse`. |
+| `RELAY_CH_RETENTION_DAYS` | `90` | TTL for ClickHouse-stored usage events. |
+
+### Observability
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_OTLP_ENDPOINT` | _(empty)_ | OpenTelemetry collector endpoint for traces. |
+
+### Admin UI & CORS
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_CONTROL_API_URL` | _(empty ⇒ UI uses its own origin)_ | Control-API origin the admin UI calls. Defaults to `/api`. |
+| `RELAY_CONTROL_ALLOW_ORIGINS` | _(empty)_ | Comma-separated CORS allowlist for the control API. |
+| `RELAY_UI_DISABLE` | _(empty)_ | Set `1` to suppress the embedded admin UI on the control listener. |
+
+<Info>
+On the standalone image, the master key, admin password, and admin token are
+generated on first boot, printed to the container logs, and persisted on the
+data volume. To pin your own, pass them with `-e`.
+</Info>
+
+## Minimal standalone run
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 wyolet/relay:standalone
+```
+
+- Inference API → `http://localhost:8080`
+- Admin UI + control API → `http://localhost:8081`
+- Credentials are auto-generated and printed to the logs on first boot.
+
+## Persisting data across runs
+
+A bare `docker run` uses an ephemeral filesystem, so starting a **new**
+container regenerates the master key, admin credentials, and an empty catalog.
+Mount a named volume to keep everything:
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -v relay-data:/var/lib/postgresql/data \
+  wyolet/relay:standalone
+```
+
+The standalone image stores everything under that one directory — Postgres
+data **and** the relay bootstrap state:
+
+```
+/var/lib/postgresql/data/
+├── (postgres data files)
+├── relay-bootstrap.env     # RELAY_MASTER_KEY + RELAY_ADMIN_TOKEN
+└── relay-config/
+    └── admin-user.yaml      # admin username + password
+```
+
+So the single `-v` mount preserves the catalog, your config, **and** the
+secrets. First boot against an empty volume generates them once; every run
+after reuses them.
+
+<Warning>
+The master key lives in this volume. **Don't delete it** — losing the key makes
+any stored (encrypted) provider keys permanently unreadable.
+</Warning>
+
+## Retrieving or pinning the master key
+
+The master key and admin token are printed to the logs on first boot. After
+that, read them back from the container or volume:
+
+```bash
+# from the running container
+docker exec <container> cat /var/lib/postgresql/data/relay-bootstrap.env
+docker exec <container> cat /var/lib/postgresql/data/relay-config/admin-user.yaml
+
+# or from the named volume, no container needed
+docker run --rm -v relay-data:/d alpine cat /d/relay-bootstrap.env
+```
+
+For anything beyond a demo, **supply your own** key instead of relying on the
+auto-generated one — then you already hold it and aren't dependent on the
+volume to recover it. Operator-supplied env always wins; the entrypoint never
+overwrites or regenerates a value you pass:
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -v relay-data:/var/lib/postgresql/data \
+  -e RELAY_MASTER_KEY="$(openssl rand -base64 32)" \
+  -e RELAY_ADMIN_TOKEN="$(openssl rand -hex 24)" \
+  wyolet/relay:standalone
+```
+
+## Production run (lean image + managed Postgres)
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -e RELAY_PG_DSN="postgres://user:pass@db:5432/relay?sslmode=require" \
+  -e RELAY_MASTER_KEY="<your-stable-master-key>" \
+  -e RELAY_CONTROL_PORT=8081 \
+  -e RELAY_STATE_BACKEND=redis \
+  -e RELAY_REDIS_ADDR="redis:6379" \
+  wyolet/relay:latest
+```
+
+<Warning>
+`RELAY_MASTER_KEY` must be **stable** across restarts in production. It
+decrypts your stored host keys — rotating it without re-encrypting will
+make existing stored secrets unreadable.
+</Warning>
+
+## Runtime settings
+
+Some behavior is configured at runtime via the control plane rather than
+env vars, and hot-reloads without a restart. For example, rich request
+parsing:
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/parsing \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"richParsing": false}'
+```

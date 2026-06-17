@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Enforce the load-bearing canonical-protocol codebase rules via grep.
-# Source of truth: docs/canonical-protocol.md "Codebase rules".
+# Source of truth: design/canonical-protocol.md "Codebase rules".
 # CLAUDE.md: "The grep tests for rules 1, 2, 4, 10 must hold on every commit."
 #
 # These are import-graph checks — the unambiguous, automatable core of the
@@ -45,7 +45,7 @@ if [ -n "$hits" ]; then note "routing/pipeline/keypool imports app/catalogview (
 
 if [ $fail -ne 0 ]; then
   echo
-  echo "Codebase-rule check FAILED — see docs/canonical-protocol.md \"Codebase rules\"."
+  echo "Codebase-rule check FAILED — see design/canonical-protocol.md \"Codebase rules\"."
   exit 1
 fi
 echo

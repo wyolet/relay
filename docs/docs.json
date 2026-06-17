@@ -1,0 +1,65 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Wyolet Relay",
+  "colors": {
+    "primary": "#8B5CF6",
+    "light": "#A78BFA",
+    "dark": "#7C3AED"
+  },
+  "favicon": "/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "clients",
+              "claude-code",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/catalog",
+              "concepts/overlays",
+              "concepts/key-pooling",
+              "concepts/proxy-mode",
+              "concepts/observability",
+              "concepts/auth"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/inference-api",
+              "reference/control-api",
+              "reference/headers",
+              "troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/wyolethq",
+      "github": "https://github.com/wyolet",
+      "discord": "https://discord.gg/KUhJ8X3w",
+      "linkedin": "https://www.linkedin.com/company/wyolet",
+      "bluesky": "https://bsky.app/profile/wyolet.bsky.social",
+      "reddit": "https://www.reddit.com/r/wyolet"
+    }
+  }
+}
