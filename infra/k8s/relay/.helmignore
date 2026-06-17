@@ -1,5 +1,0 @@
-.git
-*.md
-values-prod.yaml
-*.tmp
-.DS_Store

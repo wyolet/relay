@@ -25,17 +25,14 @@ cmd/relay/web/dist/
 events/
 *.jsonl
 
-# Bench output — written at runtime, not source-tracked
-bench/results*.json
+# Kept private — not published to the public repo (live copies in .tmp/)
+/bench/
+/infra/
 
 # Secrets — never commit
 .env
 .env.*
 !.env.example
-bench/litellm/.env
-
-# bench output artifacts
-bench/*.json
 
 /replay
 error.log

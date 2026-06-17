@@ -387,6 +387,3 @@ smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-moc
 		status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status
-
-loadtest: ## run the containerized load-test harness (set RELAY_IMAGE=...)
-	RELAY_IMAGE=$(RELAY_IMAGE) bench/loadtest/run.sh
