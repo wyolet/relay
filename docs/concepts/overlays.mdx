@@ -1,0 +1,65 @@
+---
+title: "Catalog Overlays"
+description: "Customize catalog-managed resources without losing your edits on the next update"
+---
+
+The catalog ships providers, hosts, and models as **system-owned** data, and
+catalog updates replace those rows. So how do you tweak a system-owned model —
+say, pin a different context window or add your own alias — without your change
+getting clobbered the next time the catalog refreshes?
+
+**Overlays.** An overlay is a small, user-owned patch layered on top of a
+pristine catalog row. Relay merges the two when it builds its in-memory
+snapshot, and the merged result is what routing sees.
+
+## How it works
+
+Three words describe the model:
+
+| Term | What it is |
+| --- | --- |
+| **Template** | The pristine catalog row, exactly as shipped/seeded. The catalog owns it. |
+| **Overlay** | Your sparse patch — just the fields you changed. You own it. |
+| **Effective** | `merge(template, overlay)` — what the snapshot serves. Exists only in memory. |
+
+Only the fields you touch are pinned. Everything else keeps tracking the
+upstream catalog — so a catalog update can ship a new context window, new model
+snapshots, or new pricing and they flow straight through, while your custom
+aliases and notes stay put.
+
+<Info>
+Because the effective row lives only in memory, a direct database read shows the
+**template**. The overlay endpoint is the source of truth for what you've
+changed — it returns the template, your patch, the merged result, and any
+validation state in one response.
+</Info>
+
+## Managing an overlay
+
+The overlay is a subresource on the model, under the `/api` control prefix:
+
+```bash
+# View template + your patch + effective merge
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/models/by-id/<id>/overlay
+
+# Set (or replace) your sparse patch
+curl -X PUT http://localhost:8081/api/models/by-id/<id>/overlay \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"patch": {"spec": {"aliases": ["my-model"]}}}'
+
+# Factory reset — drop the overlay, the template resumes verbatim
+curl -X DELETE http://localhost:8081/api/models/by-id/<id>/overlay \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN"
+```
+
+<Note>
+`PUT` **replaces** the whole patch (it's not a deep merge of patches), so send
+the complete set of fields you want overridden. `DELETE` is a clean factory
+reset: the catalog template takes over again with nothing pinned.
+</Note>
+
+Your entire customization state is just the overlay rows in Postgres — back up
+the database and you've captured everything. There's no separate config to keep
+in sync.

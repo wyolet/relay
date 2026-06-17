@@ -1,0 +1,112 @@
+---
+title: "Catalog & Ownership"
+description: "Where the providers, hosts, and models come from — and what you can edit"
+---
+
+When you start Relay, it already knows about the major providers, their
+hosts, and hundreds of models. That knowledge is the **catalog** — the
+seeded set of providers, hosts, models, pricing, and policies Relay routes
+against. You add your own keys and policies on top of it.
+
+## The catalog repo
+
+The catalog is maintained as open data in its own repository,
+[`wyolet/relay-catalog`](https://github.com/wyolet/relay-catalog), separate
+from the relay engine. It's a tree of YAML under `data/`:
+
+```
+data/
+  providers/<provider>/provider.yaml
+                       models/<model>.yaml
+  hosts/<host>/host.yaml
+               pricing/<model>.yaml
+               policies/<policy>.yaml
+```
+
+Ownership drives placement: providers own their models; hosts own their
+pricing and tier policies. Each release is published as a versioned tarball,
+and a default snapshot is baked into the relay binary — so a fresh container
+boots with a populated catalog and **no external fetch required**.
+
+<Info>
+Pin a specific catalog release with `RELAY_CATALOG_VERSION`. Unset, Relay
+uses the version embedded in the binary.
+</Info>
+
+Keeping the catalog in its own repo means provider, model, and pricing
+updates ship on their own cadence — you can pull a newer catalog without
+upgrading the engine, and the data is reviewable and versioned in the open.
+
+## System-owned vs user-owned
+
+Every resource carries an **owner**, and the owner decides whether you can
+edit it. There are two that matter day to day:
+
+| Owner | What it is | Editable? |
+| --- | --- | --- |
+| **System** | Seeded from the catalog — providers, hosts, models, their pricing | Read-only via the API; managed by the catalog |
+| **User** | Things you create — host keys, relay keys, your policies | Fully editable |
+
+This keeps the curated catalog stable: a catalog update can refresh a
+provider's models or pricing without clobbering edits, because the things
+*you* own live alongside the system data rather than on top of it.
+
+To customize a *system-owned* row — pin a context window, add your own alias —
+without losing the change on the next catalog update, use an
+[**overlay**](/concepts/overlays): a sparse, user-owned patch merged over the
+catalog template at load time.
+
+## Model aliases
+
+Models can carry **aliases** — alternate names that resolve to the same model.
+An alias is matched last (after exact name and slug), supports a single `*`
+wildcard, and routes to the model's real upstream wire name verbatim. This is
+how a client can address, say, `claude-fable-5[1m]` and have it resolve to the
+underlying model the catalog actually serves. Aliases are a resolution
+convenience only — they never invent a new model or change what's billed.
+
+### What's system-owned today
+
+Right now the catalog ships providers, hosts, and models as **system-owned** —
+the hosted, commercial providers (OpenAI, Anthropic, and the gateways in
+front of them). You point at them by adding your **own host keys** (which are
+user-owned) and granting models through **your policies**.
+
+A handful of **system-owned rate limits** also ship with the catalog. These
+configure the global admission pool — the relay-wide guardrails that protect
+the deployment as a whole, independent of any one customer's limits.
+
+### What becomes user-owned
+
+Self-hosted and local upstreams are different: there's no canonical "OpenAI"
+to curate. So **self-hostable hosts and models — Ollama and the like — are
+yours to create, edit, and configure** directly through the control plane.
+You define the host (its base URL and wire adapter), add the models you run,
+and bind them — all as user-owned resources.
+
+<Note>
+Rule of thumb: if it's a commercial provider Relay ships knowledge of, it's
+system-owned and you consume it. If it's something you stand up yourself, you
+own it and you edit it.
+</Note>
+
+## Editing the catalog locally
+
+You can also point Relay at a local clone of the catalog data instead of the
+embedded default — useful for adding a provider or model the published
+catalog doesn't have yet. Clone the catalog, then mount it into the container
+and enable auto-seed:
+
+```bash
+git clone https://github.com/wyolet/relay-catalog
+
+docker run -p 8080:8080 -p 8081:8081 \
+  -e RELAY_CATALOG_DIR=/catalog \
+  -e RELAY_AUTO_SEED_IF_EMPTY=1 \
+  -v "$(pwd)/relay-catalog/data:/catalog:ro" \
+  wyolet/relay:standalone
+```
+
+On first boot against an empty database, Relay walks the mounted tree and
+seeds it. See [Configuration](/configuration) for the full set of seed
+variables.

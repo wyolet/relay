@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="440" viewBox="0 0 880 440" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#a78bfa"/></marker>
+    <marker id="ahg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="#8595ad"/></marker>
+    <style>
+      .card { fill: #131c31; stroke: #2a3852; stroke-width: 1.5; }
+      .accent { fill: #1e1b3a; stroke: #7c5cff; stroke-width: 1.5; }
+      .zone { font-size: 13px; font-weight: 700; fill: #a78bfa; letter-spacing: .04em; }
+      .h { font-size: 14px; font-weight: 700; fill: #e2e8f0; }
+      .t { font-size: 11.5px; fill: #94a3b8; }
+      .lbl { font-size: 11px; fill: #a78bfa; font-weight: 600; }
+      .lblg { font-size: 11px; fill: #8595ad; font-weight: 600; }
+    </style>
+  </defs>
+  <rect width="880" height="440" fill="#0b1120"/>
+
+  <!-- ===== CONTROL (write) lane ===== -->
+  <rect x="40" y="40" width="150" height="60" rx="10" class="card"/>
+  <text x="58" y="66" class="h">Operator</text>
+  <text x="58" y="84" class="t">admin UI / CI</text>
+
+  <rect x="250" y="34" width="220" height="72" rx="12" class="accent"/>
+  <text x="270" y="58" class="zone">CONTROL PLANE</text>
+  <text x="270" y="79" class="t">CRUD · auth · admin UI</text>
+  <text x="270" y="96" class="t">session / admin bearer</text>
+
+  <rect x="560" y="40" width="280" height="60" rx="10" class="card"/>
+  <text x="580" y="66" class="h">Postgres</text>
+  <text x="580" y="84" class="t">config truth · source of record</text>
+
+  <path d="M190 70 L250 70" stroke="#8595ad" stroke-width="1.6" marker-end="url(#ahg)"/>
+  <path d="M470 70 L560 70" stroke="#a78bfa" stroke-width="1.8" marker-end="url(#ah)"/>
+  <text x="486" y="60" class="lbl">writes truth</text>
+
+  <!-- ===== shared snapshot ===== -->
+  <rect x="250" y="186" width="430" height="66" rx="12" class="accent"/>
+  <text x="270" y="212" class="h">In-memory catalog snapshot</text>
+  <text x="270" y="234" class="t">immutable · copy-on-write · the only thing the hot path reads</text>
+
+  <path d="M640 100 L640 186" stroke="#a78bfa" stroke-width="1.8" marker-end="url(#ah)" stroke-dasharray="5,4"/>
+  <text x="652" y="148" class="lbl">PG NOTIFY → rebuild (~1s)</text>
+
+  <path d="M360 252 L360 322" stroke="#a78bfa" stroke-width="1.8" marker-end="url(#ah)"/>
+  <text x="372" y="290" class="lbl">reads (no PG on hot path)</text>
+
+  <!-- ===== DATA (read) lane ===== -->
+  <rect x="40" y="322" width="150" height="60" rx="10" class="card"/>
+  <text x="58" y="348" class="h">Your app</text>
+  <text x="58" y="366" class="t">OpenAI / Anthropic SDK</text>
+
+  <rect x="250" y="322" width="220" height="72" rx="12" class="accent"/>
+  <text x="270" y="346" class="zone">DATA PLANE</text>
+  <text x="270" y="367" class="t">/v1/* · relay-key auth</text>
+  <text x="270" y="384" class="t">stateless hot path</text>
+
+  <rect x="560" y="322" width="280" height="60" rx="10" class="card"/>
+  <text x="580" y="348" class="h">Upstream providers</text>
+  <text x="580" y="366" class="t">OpenAI · Anthropic · Bedrock …</text>
+
+  <path d="M190 352 L250 352" stroke="#8595ad" stroke-width="1.6" marker-end="url(#ahg)"/>
+  <path d="M470 352 L560 352" stroke="#8595ad" stroke-width="1.6" marker-end="url(#ahg)"/>
+  <text x="486" y="342" class="lblg">forwards</text>
+</svg>

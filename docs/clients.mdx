@@ -1,0 +1,147 @@
+---
+title: "Using the SDKs"
+description: "Point the OpenAI and Anthropic client libraries at Relay"
+---
+
+Relay speaks the OpenAI and Anthropic wire protocols, so you don't need a new
+client library — point the official SDK you already use at Relay's base URL
+and pass your **relay key** as the API key. Relay accepts the key whether the
+SDK sends it as a bearer token or an `x-api-key` header, so this just works.
+
+| SDK | Base URL | Endpoint it calls |
+| --- | --- | --- |
+| OpenAI | `http://localhost:8080/openai/v1` | `/openai/v1/chat/completions` |
+| Anthropic | `http://localhost:8080/anthropic` | `/anthropic/v1/messages` |
+
+<Info>
+Swap `http://localhost:8080` for your relay's public URL in production. The
+data plane is the inference port (`8080` by default).
+</Info>
+
+## OpenAI shape
+
+<CodeGroup>
+
+```python Python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/openai/v1",
+    api_key="<your-relay-key>",
+)
+
+resp = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "hello"}],
+)
+print(resp.choices[0].message.content)
+```
+
+```javascript Node
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "http://localhost:8080/openai/v1",
+  apiKey: "<your-relay-key>",
+});
+
+const resp = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "hello" }],
+});
+console.log(resp.choices[0].message.content);
+```
+
+```bash cURL
+curl http://localhost:8080/openai/v1/chat/completions \
+  -H "Authorization: Bearer <your-relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
+```
+
+</CodeGroup>
+
+## Anthropic shape
+
+<CodeGroup>
+
+```python Python
+from anthropic import Anthropic
+
+client = Anthropic(
+    base_url="http://localhost:8080/anthropic",
+    api_key="<your-relay-key>",
+)
+
+msg = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "hello"}],
+)
+print(msg.content[0].text)
+```
+
+```javascript Node
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({
+  baseURL: "http://localhost:8080/anthropic",
+  apiKey: "<your-relay-key>",
+});
+
+const msg = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  max_tokens: 256,
+  messages: [{ role: "user", content: "hello" }],
+});
+console.log(msg.content[0].text);
+```
+
+```bash cURL
+curl http://localhost:8080/anthropic/v1/messages \
+  -H "Authorization: Bearer <your-relay-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+```
+
+</CodeGroup>
+
+## Streaming
+
+Both SDKs stream as usual — Relay passes the event stream straight through.
+
+<CodeGroup>
+
+```python OpenAI · Python
+stream = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "hello"}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+```python Anthropic · Python
+with client.messages.stream(
+    model="claude-sonnet-4-6",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "hello"}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="")
+```
+
+</CodeGroup>
+
+## Which models can I call?
+
+The `model` you pass must be granted by your relay key's policy and have an
+enabled host binding. List what your key can reach:
+
+```bash
+curl http://localhost:8080/v1/models \
+  -H "Authorization: Bearer <your-relay-key>"
+```
+
+See [Troubleshooting](/troubleshooting) if a model returns `403` or `404`.

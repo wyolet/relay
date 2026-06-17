@@ -1,0 +1,112 @@
+---
+title: "Architecture"
+description: "How Relay is put together — two planes, one snapshot"
+---
+
+Relay is two HTTP listeners sharing one in-memory view of your catalog. The
+**inference plane** serves your traffic; the **control plane** serves the
+admin UI and CRUD. Neither touches Postgres on the request path — both read
+from a snapshot that's kept fresh in the background.
+
+<Frame caption="Relay's two planes share one in-memory catalog snapshot, kept in sync from Postgres via NOTIFY/LISTEN.">
+  <img className="block dark:hidden" src="/images/architecture/overview.svg" alt="Relay two-plane architecture overview" />
+  <img className="hidden dark:block" src="/images/architecture/overview-dark.svg" alt="Relay two-plane architecture overview" />
+</Frame>
+
+## The two planes
+
+<CardGroup cols={2}>
+  <Card title="Inference plane" icon="bolt">
+    Listens on `RELAY_PORT`. Stateless and hot-path-optimized. Serves
+    `/v1/*` and `/healthz`, authenticates with relay keys, and routes each
+    request to a healthy upstream. No vendor branching — dispatch is uniform.
+  </Card>
+  <Card title="Control plane" icon="sliders">
+    Listens on `RELAY_CONTROL_PORT`. Serves the admin UI plus the control API
+    under `/api` (`/api/auth/*`, CRUD for every catalog kind, operational
+    endpoints). Authenticates with a session cookie or admin bearer.
+  </Card>
+</CardGroup>
+
+Running them on separate ports means you can expose the inference plane to
+the internet while keeping the control plane on a private network.
+
+## The snapshot is the spine
+
+Postgres is the source of truth, but it's never read on the request path.
+Instead, every pod holds an **immutable in-memory snapshot** of the catalog.
+
+1. A control-plane write lands in Postgres.
+2. The write fires a `NOTIFY` on a Postgres channel.
+3. Every pod's listener receives it, rebuilds the snapshot with a
+   copy-on-write reconciler, and atomically swaps it in — debounced to
+   ~1 second.
+
+The result: config changes propagate fleet-wide in about a second, and a
+request never pays a database round-trip to learn how to route.
+
+<Frame caption="A control-plane write propagates to every pod's snapshot via Postgres NOTIFY/LISTEN.">
+  <img className="block dark:hidden" src="/images/architecture/snapshot-fanout.svg" alt="Snapshot fan-out via NOTIFY/LISTEN" />
+  <img className="hidden dark:block" src="/images/architecture/snapshot-fanout-dark.svg" alt="Snapshot fan-out via NOTIFY/LISTEN" />
+</Frame>
+
+## A request, end to end
+
+<Frame caption="The inference request lifecycle: auth, route, draw a key, forward, stream, settle.">
+  <img className="block dark:hidden" src="/images/architecture/request-lifecycle.svg" alt="Inference request lifecycle" />
+  <img className="hidden dark:block" src="/images/architecture/request-lifecycle-dark.svg" alt="Inference request lifecycle" />
+</Frame>
+
+<Steps>
+  <Step title="Authenticate">
+    The relay key's hash is looked up in the snapshot. No match → `401`.
+  </Step>
+  <Step title="Route">
+    The key's **policy** confirms it grants the requested **model**, then the
+    model resolves to a **host binding** — which carries the wire adapter
+    (`openai` or `anthropic`) and the upstream model name.
+  </Step>
+  <Step title="Reserve and draw a key">
+    Rate-limit budget is reserved (one Redis Lua call is the goal), and a
+    healthy **host key** is drawn from the pool. Tripped circuit breakers are
+    skipped; failover happens here, before any bytes flow.
+  </Step>
+  <Step title="Forward and stream">
+    Relay forwards to the upstream and streams the response straight back. If
+    the inbound and upstream shapes match, bytes pass through verbatim;
+    otherwise each chunk is translated through Relay's canonical protocol.
+  </Step>
+  <Step title="Settle (post-flight)">
+    After the response finishes, a **detached goroutine** commits the
+    rate-limit usage, records key success, and fires usage observers. This
+    never blocks your response.
+  </Step>
+</Steps>
+
+<Info>
+Relay does not fail over **mid-stream**. All failover across keys and hosts
+happens before the first byte reaches the caller. Once bytes flow, an
+upstream error is surfaced as-is.
+</Info>
+
+## Why it's fast
+
+- **No Postgres on the hot path** — routing reads the in-memory snapshot only.
+- **One Redis round-trip** — rate-limit reservation is a single Lua call, not
+  three trips.
+- **Async everything off-path** — usage, traces, and payload capture emit on
+  bounded channels with drop-on-full, never blocking the response.
+- **Byte-for-byte passthrough** — when shapes match, Relay copies bytes
+  rather than parsing and re-serializing.
+
+This keeps added latency to single-digit milliseconds at the p50 under real
+load, with each pod handling thousands of requests per second; you scale out
+by adding pods, not by tuning one.
+
+## Where state lives
+
+| Store | Holds | On the request path? |
+| --- | --- | --- |
+| **Postgres** | Catalog truth: hosts, models, keys, policies | No — only via the snapshot |
+| **In-memory snapshot** | Read-optimized copy of the catalog | Yes — every routing decision |
+| **Redis / Valkey** | Rate-limit counters, per-key circuit breakers | Yes — one Lua call per request |

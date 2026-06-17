@@ -1,0 +1,115 @@
+---
+title: "Usage & Logging"
+description: "Track every request, and optionally capture full payloads"
+---
+
+Relay records every request that passes through it, and can optionally capture
+the full request/response bodies. Both are read back through the control plane,
+so you get usage analytics and request-level debugging without bolting on a
+separate tool.
+
+## Usage tracking
+
+Every request is logged — there's no opt-in. Each record carries the relay
+key, policy, model, status, token counts, and timing. Capture happens off the
+hot path in a detached observer, so it never adds latency to a response.
+
+Read it back through the control plane:
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /logs` | The request log, newest first (paginated with `limit` + `cursor`). |
+| `GET /logs/{request_id}` | A single request, with captured bodies attached if payload logging was on. |
+| `GET /usage/events` | Raw usage events, filterable. |
+| `GET /usage/summary` | Aggregated totals (tokens, counts) over a window. |
+| `GET /usage/timeseries` | Bucketed usage over time. |
+
+The usage endpoints filter by policy, model, status, and time window — for
+example, status `>= 400` for errors only, or a model id over the last day:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?modelId=<id>&since=24h"
+```
+
+### Where usage is stored
+
+The sink is selectable and hot-swappable via the control plane — no restart:
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/usage-logging \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"backend": "clickhouse"}'
+```
+
+| Backend | Use |
+| --- | --- |
+| `file` (default) | JSONL on disk — fine for a single node and a try-out. |
+| `clickhouse` | Analytical store for high-volume, queryable history. |
+| `postgres` | Reuse your existing database. |
+| `valkey` | Redis-compatible, for short-lived recent history. |
+
+## Payload logging
+
+Payload logging captures the **full request and response bodies** and attaches
+them to the matching log record (joined by request id). It's how you inspect
+exactly what a client sent and what the provider returned — invaluable for
+debugging integrations.
+
+It's **off by default** and gated at three levels. All must line up for a body
+to be captured:
+
+<Steps>
+  <Step title="Global master switch">
+    `PUT /api/settings/payload-logging` with `enabled: true`. While this is off,
+    nothing is ever captured, regardless of the per-request flags below.
+  </Step>
+  <Step title="Per-request opt-in">
+    Then capture is enabled for a request when **either** its **policy** or its
+    **relay key** opts in — `payloadLoggingEnabled: true` on either one.
+  </Step>
+</Steps>
+
+So you can turn capture on broadly (set it on a policy) or narrowly (set it on
+a single relay key you're debugging), while the global switch stays the master
+kill switch.
+
+```bash
+# 1. Turn the observer on globally, pick a backend.
+curl -X PUT http://localhost:8081/api/settings/payload-logging \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "backend": "file", "maxBytes": 1048576}'
+
+# 2. Opt a single relay key into capture.
+curl -X PUT http://localhost:8081/api/relay-keys/by-id/<id> \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"spec": {"payloadLoggingEnabled": true}}'
+```
+
+### Reading captured payloads
+
+The bodies come back on the log detail endpoint:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/logs/<request_id>
+```
+
+The response includes `request_body` and `response_body`, plus
+`request_truncated` / `response_truncated` flags when a body exceeded
+`maxBytes`.
+
+| Backend | Use |
+| --- | --- |
+| `file` (default) | JSONL on disk. |
+| `s3` | Object storage — content-addressed blobs; credentials resolved from env or the encrypted store, never plaintext. |
+| `clickhouse` | Alongside ClickHouse usage events. |
+
+<Warning>
+Payloads contain prompts and completions — potentially sensitive data. Keep it
+off by default, scope it to the keys or policies you're actively debugging, and
+set a `maxBytes` cap.
+</Warning>

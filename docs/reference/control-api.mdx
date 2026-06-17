@@ -1,0 +1,132 @@
+---
+title: "Control API"
+description: "The admin plane — manage your catalog, keys, and policies"
+---
+
+The control plane is the admin API behind the dashboard. It listens on
+`RELAY_CONTROL_PORT` (separate from the inference port) and serves the admin
+UI, CRUD for every catalog entity, auth, and operational endpoints.
+
+<Info>
+All control-API routes are mounted under the **`/api`** prefix (e.g.
+`GET /api/providers`). The prefix keeps the API from shadowing the embedded
+admin UI's client-side routes (`/models`, `/policies`, …), which are served
+on the same origin — a hard reload of `/models` must return the UI, not JSON.
+Only `/config.json` and `/metrics` stay at the listener root.
+</Info>
+
+## Authentication
+
+Two ways to authenticate:
+
+| Caller | Mechanism |
+| --- | --- |
+| Browser / dashboard | `relay_session` cookie, set by `POST /api/auth/login` |
+| Operator / CI | `Authorization: Bearer ${RELAY_ADMIN_TOKEN}` (break-glass) |
+
+```bash
+# Break-glass bearer (CI, scripts)
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  http://localhost:8081/api/providers
+```
+
+## CRUD surface
+
+Eight catalog kinds share one uniform shape:
+
+```
+GET    /api/{plural}                 list
+GET    /api/{plural}/{ref}           read by slug or id (UUID form prefers id)
+POST   /api/{plural}                 create (server stamps id + slug)
+PUT    /api/{plural}/by-id/{id}      update
+DELETE /api/{plural}/by-id/{id}      delete
+```
+
+Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
+`policies`, `pricings`, `relay-keys`.
+
+<Info>
+Every write triggers a Postgres `NOTIFY`; the change propagates to every
+pod's in-memory snapshot within ~1 second. No manual reload needed for
+CRUD operations.
+</Info>
+
+## Host keys
+
+A **host key** is your upstream provider credential (e.g. your OpenAI key).
+Two value modes:
+
+<CodeGroup>
+
+```json Env-ref (no secret in DB)
+{
+  "metadata": { "displayName": "My OpenAI key" },
+  "spec": {
+    "hostId": "<host-id>",
+    "policyId": "<host-tier-policy-id>",
+    "valueFrom": { "kind": "env", "env": "OPENAI_API_KEY" }
+  }
+}
+```
+
+```json Stored (AES-GCM encrypted in Postgres)
+{
+  "metadata": { "displayName": "My OpenAI key" },
+  "spec": {
+    "hostId": "<host-id>",
+    "policyId": "<host-tier-policy-id>",
+    "valueFrom": { "kind": "stored" },
+    "value": "sk-..."
+  }
+}
+```
+
+</CodeGroup>
+
+Stored-mode values are encrypted with `RELAY_MASTER_KEY` and only the
+ciphertext is persisted.
+
+## Relay keys
+
+A **relay key** is the inbound bearer your callers use. The server generates
+the plaintext via `crypto/rand`, stores only `sha256(plaintext)` + a short
+display prefix, and returns the plaintext **once** on create.
+
+```bash
+curl -X POST http://localhost:8081/api/relay-keys \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metadata": { "displayName": "prod key" },
+    "spec": { "policyId": "<policy-id>" }
+  }'
+```
+
+Response:
+
+```json
+{
+  "plaintext": "rk_live_...",   // save this now — never retrievable again
+  "relayKey": { "metadata": { "id": "..." }, "spec": { "prefix": "rk_live" } }
+}
+```
+
+<Warning>
+The `plaintext` field is returned exactly once. Persist it on receipt — it
+cannot be retrieved later, only rotated.
+</Warning>
+
+## Operational endpoints
+
+```
+POST   /api/auth/login           username + password → session cookie
+POST   /api/auth/logout          destroy session
+GET    /api/auth/whoami          return the authenticated caller
+POST   /api/master-key/generate  mint a candidate RELAY_MASTER_KEY
+POST   /api/reload               force full snapshot rebuild from Postgres
+GET    /api/version              build version (public)
+GET    /api/openapi.json         generated typed spec
+```
+
+`/reload` is a manual fallback; normal CRUD writes propagate automatically
+via `NOTIFY`.

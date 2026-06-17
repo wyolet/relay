@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Wyolet Relay">
+  <title>Wyolet Relay</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g transform="translate(-29.6 118.3) scale(0.85)" fill="#fff">
+    <path d="M168 168 L236 168 L368 300 L300 300 Z"/>
+    <path d="M250 110 L318 110 L508 300 L440 300 Z"/>
+    <path d="M164 24 L372 24 L504 156 L436 156 L348 68 L208 68 Z"/>
+  </g>
+</svg>

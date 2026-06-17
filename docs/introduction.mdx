@@ -1,0 +1,98 @@
+---
+title: "Introduction"
+description: "What Relay is, and the mental model for the rest of these docs"
+---
+
+Relay is a high-throughput router that puts **one endpoint in front of
+every LLM provider**. You point your app at Relay, send OpenAI- or
+Anthropic-shaped requests, and Relay handles provider selection, key
+pooling, failover, and rate limits behind a single bearer token.
+
+The result: your code talks to one stable API, while the messy parts —
+juggling provider keys, surviving a dead key, staying under rate limits —
+move out of your app and into Relay.
+
+## Why it exists
+
+A single provider API key has a fixed rate limit and a single point of
+failure. The moment you run real traffic you end up writing the same glue
+every time: rotate between keys, retry on `429`, fall back when one
+provider degrades, keep per-model limits straight. Relay is that glue,
+extracted into a service and made operable.
+
+<CardGroup cols={2}>
+  <Card title="Higher effective throughput" icon="gauge-high">
+    Pool many provider keys behind one relay key. Limits add up instead of
+    capping you at a single key's ceiling.
+  </Card>
+  <Card title="Failover by default" icon="shield-halved">
+    Per-key circuit breakers route around dead or throttled keys without
+    your app noticing.
+  </Card>
+  <Card title="One wire shape" icon="plug">
+    OpenAI- and Anthropic-compatible endpoints. Keep your existing SDK;
+    just change the base URL.
+  </Card>
+  <Card title="Operable" icon="sliders">
+    An admin UI and Control API for hosts, keys, and policies — not a config
+    file you redeploy to change.
+  </Card>
+</CardGroup>
+
+## The mental model
+
+A handful of catalog nouns carry the whole system. Once these click, the
+reference pages read straight through.
+
+<AccordionGroup>
+  <Accordion title="Hosts" icon="server">
+    The upstream endpoints Relay routes to — a provider's API surface, like
+    OpenAI or Anthropic. A host defines the wire shape Relay speaks to it.
+  </Accordion>
+  <Accordion title="Models" icon="cube">
+    Catalog entries bound to a host. The `model` field in a request resolves
+    against the catalog; a model is reachable only when it has an enabled
+    host binding behind it.
+  </Accordion>
+  <Accordion title="Host keys" icon="key">
+    Your real upstream provider credentials, held by Relay. Many host keys
+    for the same **host** form a **pool**; Relay spreads traffic across them
+    and breaks the circuit on any that fail.
+  </Accordion>
+  <Accordion title="Relay keys" icon="ticket">
+    The bearer tokens *your* apps use. A relay key never exposes the
+    underlying host keys — it's an indirection you can scope, rate-limit,
+    and revoke on its own.
+  </Accordion>
+  <Accordion title="Policies" icon="scale-balanced">
+    Rules that decide which models a relay key may reach. Policies are how
+    you grant one key just `gpt-4o` and another the whole catalog.
+  </Accordion>
+  <Accordion title="Rate limits" icon="timer">
+    Limits you attach to keys and policies, enforced by Relay before a
+    request ever leaves for the upstream.
+  </Accordion>
+</AccordionGroup>
+
+A request, end to end: your app sends an OpenAI- or Anthropic-shaped call
+with a **relay key** → the key's **policy** confirms it grants the requested
+**model** → Relay resolves the model to its **host** binding and draws a
+healthy **host key** from the pool → it applies any **rate limits** and
+forwards the request → the response streams back in the same shape you sent.
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    First request through Relay in about two minutes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Every `RELAY_*` environment variable and runtime setting.
+  </Card>
+  <Card title="Inference API" icon="bolt" href="/reference/inference-api">
+    Endpoints, wire shapes, streaming, and error codes.
+  </Card>
+  <Card title="Control API" icon="sliders" href="/reference/control-api">
+    Manage hosts, keys, policies, and relay keys.
+  </Card>
+</CardGroup>

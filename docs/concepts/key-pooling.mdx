@@ -1,0 +1,92 @@
+---
+title: "Key Pooling"
+description: "How Relay multiplies your rate limits and routes around dead keys"
+---
+
+A single provider API key has one rate limit and one failure mode: when it's
+throttled or revoked, your traffic stops. Relay pools many keys behind one
+relay key, spreads load across them, and breaks the circuit on any that fail —
+so your effective limit is the *sum* of your keys, and one bad key doesn't
+take you down.
+
+<Frame caption="One relay key draws from a pool of host keys; unhealthy keys are skipped automatically.">
+  <img className="block dark:hidden" src="/images/architecture/key-pooling.svg" alt="Key pooling and failover" />
+  <img className="hidden dark:block" src="/images/architecture/key-pooling-dark.svg" alt="Key pooling and failover" />
+</Frame>
+
+## The pool
+
+A **host key** is one real upstream credential. Every host key bound to the
+same **host** forms that host's pool. When a request routes to a host, Relay
+picks a healthy key from its pool — your callers never see which one.
+
+Pooling is **per-tenant**: Relay never mixes keys across tenants. The pool is
+the set of keys *you* configured for *your* host.
+
+## Picking a key
+
+The selection strategy is set on the policy. Three algorithms ship today:
+
+| Strategy | Behavior |
+| --- | --- |
+| `prioritized` | Cost-tiered: always use the cheapest healthy key first, fall through on failure. |
+| `round-robin` | Even spread across all healthy keys. |
+| `least-recently-used` | Pick the key idle longest — smooths bursty load. |
+
+Selection across all candidate keys is **atomic** — a single Redis Lua script
+evaluates health and reserves in one round-trip, so concurrent requests don't
+stampede the same key.
+
+## Circuit breakers
+
+Each key has its own circuit breaker, so one failing key never drags the
+others down. Failures are classified, because they don't all mean the same
+thing:
+
+| Class | Trigger |
+| --- | --- |
+| `FailureAuth` | Key rejected — wrong, revoked, or disabled. |
+| `FailureRateLimitShort` | Short-window upstream throttle. |
+| `FailureRateLimitLong` | Sustained upstream throttle. |
+| `FailureServerError` | Upstream `5xx`. |
+| `FailureNetwork` | Connection failed / timed out. |
+
+When a key's breaker is open, it's skipped during selection and heals
+automatically after its cooldown.
+
+<Info>
+Breakers are keyed by the key's **value hash**, not its id. Rotate a key to a
+new value and it gets a fresh, closed breaker automatically — the old hash's
+record simply expires. No manual reset needed after a rotation.
+</Info>
+
+## Failover happens before the first byte
+
+Relay only fails over **pre-first-byte**. If a key fails during selection or
+on the initial upstream call, Relay moves to the next healthy candidate. Once
+response bytes start flowing back to your caller, the request is committed —
+there is no mid-stream failover.
+
+## Self-healing on auth failure
+
+A `FailureAuth` is special: the credential itself may just be stale (rotated
+in your secret store but not yet refreshed in Relay). Instead of giving up,
+Relay re-resolves the key out of band:
+
+- **Other healthy keys exist** → fail over now, and heal the stale key in the
+  background so it rejoins the pool.
+- **It's the last key** → park briefly on a single re-resolve and retry with
+  the fresh value.
+- **Genuinely revoked** (value unchanged) → return a clean error.
+
+This is why pairing Relay with an external secret backend (AWS / Azure / GCP
+Secret Manager, Bitwarden, 1Password) makes rotation invisible to your
+callers — see [Configuration](/configuration) for backends.
+
+## Recovering a drained pool
+
+If *every* key for a route has tripped, requests return "no healthy keys in
+pool". That almost always means a real upstream problem (bad credentials,
+sustained throttling). Fix the cause, then — in dev — clear breaker state with
+`make breakers-reset`; in production breakers heal on their own once the
+cooldown passes. See [Troubleshooting](/troubleshooting).

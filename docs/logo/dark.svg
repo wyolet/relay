@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 100" role="img" aria-label="Wyolet Relay">
+  <title>Wyolet Relay</title>
+  <defs>
+    <linearGradient id="wyolet-mark-grad" gradientUnits="userSpaceOnUse" x1="156" y1="16" x2="516" y2="308">
+      <stop offset="0" stop-color="#e9e2ff"/>
+      <stop offset="1" stop-color="#bfa9fb"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(8 16) scale(0.235) translate(-156 -16)" fill="url(#wyolet-mark-grad)">
+    <path d="M168 168 L236 168 L368 300 L300 300 Z"/>
+    <path d="M250 110 L318 110 L508 300 L440 300 Z"/>
+    <path d="M164 24 L372 24 L504 156 L436 156 L348 68 L208 68 Z"/>
+  </g>
+  <text y="66" font-family="'Inter Variable', Inter, ui-sans-serif, system-ui, sans-serif" font-size="44" letter-spacing="7.9">
+    <tspan x="106" font-weight="500" fill="#A89EA9">WYOLET</tspan>
+    <tspan dx="14" font-weight="600" fill="#FAFAFA">RELAY</tspan>
+  </text>
+</svg>
