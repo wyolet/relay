@@ -20,7 +20,10 @@
     <a href="https://docs.wyolet.com/quickstart"><strong>Quickstart</strong></a> ·
     <a href="https://docs.wyolet.com">Docs</a> ·
     <a href="https://discord.gg/KUhJ8X3w">Discord</a> ·
-    <a href="https://x.com/wyolethq">@wyolethq</a>
+    <a href="https://x.com/wyolethq">X</a> ·
+    <a href="https://www.linkedin.com/company/wyolet">LinkedIn</a> ·
+    <a href="https://bsky.app/profile/wyolet.bsky.social">Bluesky</a> ·
+    <a href="https://www.reddit.com/r/wyolet">Reddit</a>
   </p>
 </div>
 
