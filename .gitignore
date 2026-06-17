@@ -7,11 +7,6 @@
 # Local scratch dir (holds secrets like build tokens) — never commit
 .tmp/
 
-# py-relay
-py-relay/.venv/
-py-relay/__pycache__/
-py-relay/.python-version
-
 # Build artifacts
 /relay
 /dist/
@@ -25,9 +20,10 @@ cmd/relay/web/dist/
 events/
 *.jsonl
 
-# Kept private — not published to the public repo (live copies in .tmp/)
+# Kept out of the public repo (live copies in .tmp/) — moving to separate repos
 /bench/
 /infra/
+/py-relay/
 
 # Secrets — never commit
 .env
