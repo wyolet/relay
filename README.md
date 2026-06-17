@@ -10,7 +10,7 @@
 
   <p>
     <a href="https://docs.wyolet.com"><img src="https://img.shields.io/badge/docs-docs.wyolet.com-7c3aed" alt="Docs"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-7c3aed" alt="License: AGPL-3.0"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-7c3aed" alt="License: Apache-2.0"></a>
     <a href="https://hub.docker.com/r/wyolet/relay"><img src="https://img.shields.io/badge/docker-wyolet%2Frelay-2496ED?logo=docker&logoColor=white" alt="Docker image"></a>
     <a href="https://discord.gg/KUhJ8X3w"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
     <a href="https://x.com/wyolethq"><img src="https://img.shields.io/badge/follow-%40wyolethq-000000?logo=x&logoColor=white" alt="Follow on X"></a>
@@ -99,11 +99,12 @@ knows hundreds of models.
 Want the full architecture, API reference, and configuration?
 → **[docs.wyolet.com](https://docs.wyolet.com)**
 
-## Commercial use
+## Commercial support
 
-Relay is AGPL-3.0 and free to self-host. If you're building something commercial —
-a proprietary product, or licensing and support that don't fit AGPL — we're happy
-to talk: **[business@wyolet.com](mailto:business@wyolet.com)**.
+Relay is Apache-2.0 — free to use, self-host, and build on, in commercial and
+closed-source products alike. Want managed hosting, enterprise builds, or priority
+support instead of running it yourself? We're happy to talk:
+**[business@wyolet.com](mailto:business@wyolet.com)**.
 
 ## Contributing
 
@@ -112,6 +113,7 @@ the build, test, and PR workflow.
 
 ## License
 
-[AGPL-3.0](LICENSE) — run a modified Relay as a network service and you must
-publish your changes. Need to embed it in a proprietary product? See
-[Commercial use](#commercial-use).
+[Apache-2.0](LICENSE). Use it in anything — commercial, closed-source, hosted, or
+embedded — no copyleft strings attached. See
+[Commercial support](#commercial-support) if you'd rather we run or support it for
+you.

@@ -247,9 +247,10 @@ The path from private repo to credible public release.
 - **Decide the open-core line** — what's OSS vs held back as commercial
   (enterprise/SaaS features from the other tracks). Write it down; it
   drives every later "is this public?" call.
-- **Pick a license** — permissive Apache-2.0 vs protective BSL/AGPL to
-  stop cloud resale. The no-reseller wedge argues for a protective
-  license; decide explicitly.
+- **Pick a license** — ✅ **decided: Apache-2.0.** Open-core with the
+  enterprise/SaaS features held in separate builds, so the public core is
+  permissively licensed for maximum adoption; monetization is hosting +
+  enterprise builds + support, not copyleft enforcement.
 
 ### A12. Pre-publication audit
 

@@ -118,4 +118,4 @@ public issue** — see [`SECURITY.md`](SECURITY.md).
 ## License
 
 By contributing, you agree that your contributions will be licensed under
-the project's [AGPL-3.0](LICENSE) license.
+the project's [Apache-2.0](LICENSE) license.
