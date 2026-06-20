@@ -30,7 +30,7 @@ func targetFromBinding(b catalog.Binding, h catalog.Host) (Target, error) {
 	return Target{
 		baseURL:  strings.TrimRight(h.BaseURL, "/"),
 		adapter:  a,
-		upstream: b.Upstream,
+		upstream: b.Name,
 		binding:  b,
 	}, nil
 }

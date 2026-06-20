@@ -48,9 +48,9 @@ func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 	for hi, h := range c.Hosts {
 		for bi, b := range h.Models {
 			l := loc{hi, bi}
-			ic.addForms(l, b.Model, b.Providers, h.Name)
-			if uk := normRef(b.Upstream); uk != "" && uk != normRef(b.Model) {
-				ic.addForms(l, b.Upstream, b.Providers, h.Name)
+			ic.addForms(l, b.MetadataName, b.Providers, h.Name)
+			if uk := normRef(b.Name); uk != "" && uk != normRef(b.MetadataName) {
+				ic.addForms(l, b.Name, b.Providers, h.Name)
 			}
 			for _, a := range b.Aliases {
 				if pre, post, found := strings.Cut(a, "*"); found {
@@ -95,7 +95,7 @@ func (ic *IndexedCatalog) addAliasForms(l loc, name string, providers []string, 
 
 // addForms indexes every addressable form of one name for a binding: bare,
 // provider/name, name@host, provider/name@host. Called once with the catalog
-// key (Model) and again with the served wire name (Upstream) when the two
+// key (MetadataName) and again with the served wire name (Name) when the two
 // normalize differently — a response's ran-model is the provider's spelling,
 // and it must resolve without the caller keeping a private slug dictionary.
 func (ic *IndexedCatalog) addForms(l loc, name string, providers []string, host string) {
@@ -121,8 +121,8 @@ func (ic *IndexedCatalog) addForms(l loc, name string, providers []string, host 
 
 // Resolve maps a model ref to its binding and host. Ref forms: bare snapshot
 // name, provider/model, or model@host (and provider/model@host). The model
-// segment accepts either the catalog key (Binding.Model) or the served wire
-// name (Binding.Upstream) — the string a provider echoes back as the ran
+// segment accepts either the catalog key (Binding.MetadataName) or the served
+// wire name (Binding.Name) — the string a provider echoes back as the ran
 // model resolves as-is. Ambiguous bare or provider-qualified refs across
 // multiple hosts return an error listing candidate host@model pins.
 func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
@@ -190,7 +190,7 @@ func (ic *IndexedCatalog) candidates(locs []loc) string {
 	for _, l := range locs {
 		h := ic.Catalog.Hosts[l.host]
 		b := h.Models[l.binding]
-		s := b.Model + "@" + h.Name
+		s := b.MetadataName + "@" + h.Name
 		if _, dup := seen[s]; dup {
 			continue
 		}

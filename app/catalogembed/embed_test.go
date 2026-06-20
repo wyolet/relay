@@ -94,7 +94,7 @@ spec:
 	}
 	for _, h := range cat.Hosts {
 		for _, b := range h.Models {
-			if b.Model == "draft-model" {
+			if b.MetadataName == "draft-model" {
 				t.Fatal("draft model appeared in embed")
 			}
 		}
@@ -102,7 +102,7 @@ spec:
 	found := false
 	for _, h := range cat.Hosts {
 		for _, b := range h.Models {
-			if b.Model == "snap" {
+			if b.MetadataName == "snap" {
 				found = true
 			}
 		}
@@ -117,7 +117,7 @@ func TestValidateAdapters_RejectsUnknownAdapter(t *testing.T) {
 		Hosts: []sdkcatalog.Host{{
 			Name: "h",
 			Models: []sdkcatalog.Binding{{
-				Model: "m", Adapter: "openai_responses",
+				MetadataName: "m", Adapter: "openai_responses",
 			}},
 		}},
 	}

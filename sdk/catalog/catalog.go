@@ -22,19 +22,21 @@ type Host struct {
 // carries the catalog's `labels.featured` curation flag (the same one the
 // control API exposes) so SDK consumers can shortlist without re-curating.
 //
-// Model is the catalog key — the DNS-1123 snapshot slug. Upstream is the real
-// provider wire name: the id the provider answers to and echoes back as the
-// ran model (e.g. slug gpt-5-5-2026-04-23, upstream gpt-5.5-2026-04-23).
-// Both are first-class matchable keys — consumers matching a response's model
-// against the catalog must compare it to Model AND Upstream (or just call
-// Resolve, which indexes both).
+// Name is the model's real provider wire name: the id the provider answers to
+// and echoes back as the ran model — the identity a consumer recognizes.
+// MetadataName is the catalog key, the DNS-1123 snapshot slug (== catalog
+// metadata.name), an internal addressing handle (e.g. name gpt-5.5-2026-04-23,
+// MetadataName gpt-5-5-2026-04-23). Both are first-class matchable keys —
+// consumers matching a response's model against the catalog must compare it to
+// Name AND MetadataName (or just call Resolve, which indexes both). The json
+// tags are unchanged from the on-wire catalog (`upstream`/`model`).
 type Binding struct {
-	Model     string   `json:"model"`
-	Adapter   string   `json:"adapter"`
-	Upstream  string   `json:"upstream"`
-	Providers []string `json:"providers"`
-	Featured  bool     `json:"featured,omitempty"`
-	Pricing   []Rate   `json:"pricing,omitempty"`
+	Name         string   `json:"upstream"`
+	MetadataName string   `json:"model"`
+	Adapter      string   `json:"adapter"`
+	Providers    []string `json:"providers"`
+	Featured     bool     `json:"featured,omitempty"`
+	Pricing      []Rate   `json:"pricing,omitempty"`
 
 	// Aliases are the model's declared resolution-only matchers, attached
 	// to the pointer-snapshot row: exact strings or single-'*' wildcard

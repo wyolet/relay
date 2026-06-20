@@ -148,10 +148,10 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 						aliases = append([]string(nil), m.Spec.Aliases...)
 					}
 					hostEntry.Models = append(hostEntry.Models, sdkcatalog.Binding{
-						Model:     snapEntry.Name,
-						Adapter:   string(hb.Spec.Adapter),
-						Upstream:  snapEntry.Upstream(),
-						Providers: providers,
+						MetadataName: snapEntry.Name,
+						Adapter:      string(hb.Spec.Adapter),
+						Name:         snapEntry.Upstream(),
+						Providers:    providers,
 						// Featured marks only the family's pointer snapshot, so a
 						// featured family yields one shortlist entry, not every
 						// dated snapshot.
@@ -167,8 +167,8 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 		}
 		sort.Slice(hostEntry.Models, func(i, j int) bool {
 			mi, mj := hostEntry.Models[i], hostEntry.Models[j]
-			if mi.Model != mj.Model {
-				return mi.Model < mj.Model
+			if mi.MetadataName != mj.MetadataName {
+				return mi.MetadataName < mj.MetadataName
 			}
 			return mi.Adapter < mj.Adapter
 		})
@@ -196,7 +196,7 @@ func ValidateAdapters(c *sdkcatalog.Catalog) error {
 	for _, h := range c.Hosts {
 		for _, b := range h.Models {
 			if _, ok := SDKAdapters[b.Adapter]; !ok {
-				return fmt.Errorf("catalog-embed: host %q model %q: unknown adapter %q", h.Name, b.Model, b.Adapter)
+				return fmt.Errorf("catalog-embed: host %q model %q: unknown adapter %q", h.Name, b.MetadataName, b.Adapter)
 			}
 		}
 	}
@@ -211,8 +211,8 @@ func MarshalJSON(c *sdkcatalog.Catalog) ([]byte, error) {
 	for i := range cp.Hosts {
 		models := append([]sdkcatalog.Binding(nil), cp.Hosts[i].Models...)
 		sort.Slice(models, func(a, b int) bool {
-			if models[a].Model != models[b].Model {
-				return models[a].Model < models[b].Model
+			if models[a].MetadataName != models[b].MetadataName {
+				return models[a].MetadataName < models[b].MetadataName
 			}
 			return models[a].Adapter < models[b].Adapter
 		})
