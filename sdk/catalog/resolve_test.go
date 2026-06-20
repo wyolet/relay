@@ -37,7 +37,7 @@ func TestResolve_AmbiguousAndPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Name != "host-b" || b.Upstream != "gpt-4o" {
+	if h.Name != "host-b" || b.Name != "gpt-4o" {
 		t.Fatalf("got host=%q binding=%+v", h.Name, b)
 	}
 }
@@ -65,7 +65,7 @@ func TestResolve_ProviderQualified(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Upstream != "gpt-4o-2024-08-06" || h.Name != "openai" {
+	if b.Name != "gpt-4o-2024-08-06" || h.Name != "openai" {
 		t.Fatalf("got host=%q binding=%+v", h.Name, b)
 	}
 }
@@ -115,8 +115,8 @@ func TestResolve_ServedWireName(t *testing.T) {
 			t.Errorf("Resolve(%q): %v", tc.ref, err)
 			continue
 		}
-		if h.Name != tc.wantHost || b.Upstream != tc.wantUpstream {
-			t.Errorf("Resolve(%q) = host %q upstream %q, want %q %q", tc.ref, h.Name, b.Upstream, tc.wantHost, tc.wantUpstream)
+		if h.Name != tc.wantHost || b.Name != tc.wantUpstream {
+			t.Errorf("Resolve(%q) = host %q upstream %q, want %q %q", tc.ref, h.Name, b.Name, tc.wantHost, tc.wantUpstream)
 		}
 	}
 }
@@ -171,7 +171,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 		Version: "relay-catalog@v1alpha2",
 		Hosts: []Host{{
 			Name: "h", BaseURL: "https://x",
-			Models: []Binding{{Model: "m", Adapter: "openai", Upstream: "m", Providers: []string{"p"}}},
+			Models: []Binding{{MetadataName: "m", Adapter: "openai", Name: "m", Providers: []string{"p"}}},
 		}},
 	}
 	b, err := json.Marshal(c)

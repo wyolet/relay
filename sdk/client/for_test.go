@@ -190,7 +190,7 @@ func TestFor_StreamCost(t *testing.T) {
 func TestWithAdapterName(t *testing.T) {
 	cat := testCatalog(t)
 	target, err := targetFromBinding(
-		catalog.Binding{Model: "gpt-4o", Adapter: "openai", Upstream: "gpt-4o"},
+		catalog.Binding{MetadataName: "gpt-4o", Adapter: "openai", Name: "gpt-4o"},
 		catalog.Host{Name: "h", BaseURL: "http://example.com"},
 	)
 	if err != nil {

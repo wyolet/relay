@@ -21,7 +21,7 @@ func bindingTarget(srvURL, upstream string, pricing []catalog.Rate) Target {
 		baseURL:  srvURL,
 		adapter:  adapters["openai"],
 		upstream: upstream,
-		binding:  catalog.Binding{Model: "gpt-4o", Adapter: "openai", Upstream: upstream, Pricing: pricing},
+		binding:  catalog.Binding{MetadataName: "gpt-4o", Adapter: "openai", Name: upstream, Pricing: pricing},
 	}
 }
 

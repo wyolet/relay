@@ -48,9 +48,9 @@ func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 	for hi, h := range c.Hosts {
 		for bi, b := range h.Models {
 			l := loc{hi, bi}
-			ic.addForms(l, b.Model, b.Providers, h.Name)
-			if uk := normRef(b.Upstream); uk != "" && uk != normRef(b.Model) {
-				ic.addForms(l, b.Upstream, b.Providers, h.Name)
+			ic.addForms(l, b.MetadataName, b.Providers, h.Name)
+			if uk := normRef(b.Name); uk != "" && uk != normRef(b.MetadataName) {
+				ic.addForms(l, b.Name, b.Providers, h.Name)
 			}
 			for _, a := range b.Aliases {
 				if pre, post, found := strings.Cut(a, "*"); found {
@@ -95,7 +95,7 @@ func (ic *IndexedCatalog) addAliasForms(l loc, name string, providers []string, 
 
 // addForms indexes every addressable form of one name for a binding: bare,
 // provider/name, name@host, provider/name@host. Called once with the catalog
-// key (Model) and again with the served wire name (Upstream) when the two
+// key (MetadataName) and again with the served wire name (Name) when the two
 // normalize differently — a response's ran-model is the provider's spelling,
 // and it must resolve without the caller keeping a private slug dictionary.
 func (ic *IndexedCatalog) addForms(l loc, name string, providers []string, host string) {
@@ -121,8 +121,8 @@ func (ic *IndexedCatalog) addForms(l loc, name string, providers []string, host 
 
 // Resolve maps a model ref to its binding and host. Ref forms: bare snapshot
 // name, provider/model, or model@host (and provider/model@host). The model
-// segment accepts either the catalog key (Binding.Model) or the served wire
-// name (Binding.Upstream) — the string a provider echoes back as the ran
+// segment accepts either the catalog key (Binding.MetadataName) or the served
+// wire name (Binding.Name) — the string a provider echoes back as the ran
 // model resolves as-is. Ambiguous bare or provider-qualified refs across
 // multiple hosts return an error listing candidate host@model pins.
 func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
@@ -162,6 +162,63 @@ func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
 	return Binding{}, Host{}, fmt.Errorf("catalog: model %q not found", ref)
 }
 
+// ResolveModelSlug maps a ref to the unique model slug (Binding.MetadataName),
+// aggregating across hosts. Unlike Resolve, several hosts serving the same model
+// is NOT ambiguous here — they share one slug, and the discovery graph wants the
+// model, not a single (model, host) pin. It errors only when the ref is unknown
+// or genuinely maps to more than one distinct model. Same ref forms + priority
+// as Resolve (real names beat declared aliases; wildcards last).
+func (ic *IndexedCatalog) ResolveModelSlug(ref string) (string, error) {
+	key := normRef(ref)
+	if key == "" {
+		return "", fmt.Errorf("catalog: invalid model ref %q", ref)
+	}
+	if l, ok := ic.pinned[key]; ok {
+		return ic.slugAt(l), nil
+	}
+	for _, m := range []map[string][]loc{ic.qualified, ic.bare} {
+		if locs, ok := m[key]; ok {
+			return ic.uniqueSlug(key, locs)
+		}
+	}
+	if l, ok := ic.aliasPinned[key]; ok {
+		return ic.slugAt(l), nil
+	}
+	for _, m := range []map[string][]loc{ic.aliasQualified, ic.aliasBare} {
+		if locs, ok := m[key]; ok {
+			return ic.uniqueSlug(key, locs)
+		}
+	}
+	if !strings.ContainsRune(ref, '@') {
+		for _, p := range ic.aliasPatterns {
+			if len(key) >= len(p.prefix)+len(p.suffix) &&
+				strings.HasPrefix(key, p.prefix) && strings.HasSuffix(key, p.suffix) {
+				return ic.slugAt(p.l), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("catalog: model %q not found", ref)
+}
+
+func (ic *IndexedCatalog) slugAt(l loc) string {
+	return ic.Catalog.Hosts[l.host].Models[l.binding].MetadataName
+}
+
+func (ic *IndexedCatalog) uniqueSlug(key string, locs []loc) (string, error) {
+	var slug string
+	for _, l := range locs {
+		s := ic.slugAt(l)
+		if slug != "" && s != slug {
+			return "", fmt.Errorf("catalog: ref %q maps to multiple models (%q, %q)", key, slug, s)
+		}
+		slug = s
+	}
+	if slug == "" {
+		return "", fmt.Errorf("catalog: model %q not found", key)
+	}
+	return slug, nil
+}
+
 func (ic *IndexedCatalog) pick(key string, locs []loc) (Binding, Host, error) {
 	switch len(locs) {
 	case 0:
@@ -190,7 +247,7 @@ func (ic *IndexedCatalog) candidates(locs []loc) string {
 	for _, l := range locs {
 		h := ic.Catalog.Hosts[l.host]
 		b := h.Models[l.binding]
-		s := b.Model + "@" + h.Name
+		s := b.MetadataName + "@" + h.Name
 		if _, dup := seen[s]; dup {
 			continue
 		}

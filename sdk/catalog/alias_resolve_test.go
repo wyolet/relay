@@ -38,8 +38,8 @@ func TestResolve_AliasExactForms(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", ref, err)
 		}
-		if b.Model != "claude-fable-5" || h.Name != "anthropic" {
-			t.Errorf("Resolve(%q) = %q@%q", ref, b.Model, h.Name)
+		if b.MetadataName != "claude-fable-5" || h.Name != "anthropic" {
+			t.Errorf("Resolve(%q) = %q@%q", ref, b.MetadataName, h.Name)
 		}
 	}
 }
@@ -50,8 +50,8 @@ func TestResolve_AliasPattern(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Model != "claude-fable-5" {
-		t.Errorf("pattern resolved to %q", b.Model)
+	if b.MetadataName != "claude-fable-5" {
+		t.Errorf("pattern resolved to %q", b.MetadataName)
 	}
 	// Real catalog names beat the wildcard: "claude-fable-5x-real" is inside
 	// the pattern's range but is a real binding key.
@@ -59,8 +59,8 @@ func TestResolve_AliasPattern(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Model != "claude-fable-5x-real" {
-		t.Errorf("real name lost to pattern: %q", b.Model)
+	if b.MetadataName != "claude-fable-5x-real" {
+		t.Errorf("real name lost to pattern: %q", b.MetadataName)
 	}
 	// Pinned refs skip the pattern scan.
 	if _, _, err := ic.Resolve("claude-fable-5x[thing]@anthropic"); err == nil {

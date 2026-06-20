@@ -23,6 +23,15 @@ var adapters = map[string]Adapter{
 		path:       "/v1/chat/completions",
 		auth:       Auth{Header: "Authorization", Scheme: "Bearer"},
 	},
+	// openai_responses speaks the OpenAI Responses API (/responses) — the wire
+	// the Codex/ChatGPT subscription backend uses. Name matches the catalog
+	// binding adapter so For() resolves it too. The translator forces
+	// store:false (no server-side persistence).
+	"openai_responses": {
+		translator: openai.ResponsesTranslator{},
+		path:       "/responses",
+		auth:       Auth{Header: "Authorization", Scheme: "Bearer"},
+	},
 	"anthropic": {
 		translator: anthropic.AnthropicTranslator{},
 		path:       "/v1/messages",
