@@ -47,7 +47,7 @@ func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "sk-test", []byte(`{}`), nil, "", false)
+	resp, err := a.Call(context.Background(), srv.URL, "sk-test", []byte(`{}`), nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	hdr := http.Header{"X-Relay-Test": []string{"hello"}}
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false)
+	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
 	s.Build()
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), nil, "", false)
+	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	hdr := http.Header{"Anthropic-Version": []string{"2024-12-01"}}
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false)
+	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSpecAdapter_Call_EmptyAPIKey(t *testing.T) {
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "", []byte(`{}`), nil, "", false)
+	resp, err := a.Call(context.Background(), srv.URL, "", []byte(`{}`), nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSpecAdapter_Call_BodyForwarded(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	want := []byte(`{"model":"gpt-4o","messages":[]}`)
-	resp, err := a.Call(context.Background(), srv.URL, "key", want, nil, "", false)
+	resp, err := a.Call(context.Background(), srv.URL, "key", want, nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -286,5 +286,105 @@ func TestSpecAdapter_ExtractTokens_Custom(t *testing.T) {
 	}
 	if tok["input"] != 10 { //nolint:gomnd
 		t.Errorf("input: want 10, got %d", tok["input"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OAuth auth-variant selection (Phase 3)
+// ---------------------------------------------------------------------------
+
+// dualAuthSpec mirrors the Anthropic spec: x-api-key by default, Bearer + the
+// oauth beta header when the credential is an OAuth token.
+func dualAuthSpec() *adapter.Spec {
+	return (&adapter.Spec{
+		Name:         adapters.Anthropic,
+		UpstreamPath: "/v1/messages",
+		Auth: adapter.AuthStrategy{
+			Header:       "x-api-key",
+			ExtraHeaders: map[string]string{"x-api-version": "v1"},
+		},
+		OAuthAuth: adapter.AuthStrategy{
+			Header: "Authorization",
+			Scheme: "Bearer",
+			ExtraHeaders: map[string]string{
+				"x-api-version": "v1",
+				"x-oauth-beta":  "beta-v1",
+			},
+		},
+	}).Build()
+}
+
+type capturedHeaders struct{ auth, apiKey, beta, version string }
+
+func callCapture(t *testing.T, s *adapter.Spec, key string, hdr http.Header, oauth bool) capturedHeaders {
+	t.Helper()
+	var got capturedHeaders
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.auth = r.Header.Get("Authorization")
+		got.apiKey = r.Header.Get("x-api-key")
+		got.beta = r.Header.Get("x-oauth-beta")
+		got.version = r.Header.Get("x-api-version")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	resp, err := s.PipelineAdapter().Call(context.Background(), srv.URL, key, []byte(`{}`), hdr, "", false, oauth)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	resp.Body.Close()
+	return got
+}
+
+func TestSpecAdapter_OAuth_SelectsBearerAndBeta(t *testing.T) {
+	got := callCapture(t, dualAuthSpec(), "sk-ant-oat01-tok", nil, true)
+	if got.auth != "Bearer sk-ant-oat01-tok" {
+		t.Errorf("Authorization = %q, want Bearer sk-ant-oat01-tok", got.auth)
+	}
+	if got.apiKey != "" {
+		t.Errorf("x-api-key = %q, want empty (must not leak the api-key header for oauth)", got.apiKey)
+	}
+	if got.beta != "beta-v1" {
+		t.Errorf("oauth beta header = %q, want beta-v1", got.beta)
+	}
+	if got.version != "v1" {
+		t.Errorf("api version header = %q, want v1", got.version)
+	}
+}
+
+func TestSpecAdapter_NotOAuth_UsesAPIKey(t *testing.T) {
+	got := callCapture(t, dualAuthSpec(), "sk-ant-apikey", nil, false)
+	if got.apiKey != "sk-ant-apikey" {
+		t.Errorf("x-api-key = %q, want sk-ant-apikey", got.apiKey)
+	}
+	if got.auth != "" {
+		t.Errorf("Authorization = %q, want empty for api-key mode", got.auth)
+	}
+	if got.beta != "" {
+		t.Errorf("oauth beta header = %q, want empty for api-key mode", got.beta)
+	}
+}
+
+// A spec with no OAuthAuth variant (e.g. plain OpenAI Bearer) must fall back to
+// its default Auth even when the credential is oauth-kind.
+func TestSpecAdapter_OAuth_FallsBackWhenNoVariant(t *testing.T) {
+	s := (&adapter.Spec{
+		Name:         adapters.OpenAI,
+		UpstreamPath: "/v1/chat/completions",
+		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+	}).Build()
+	got := callCapture(t, s, "sk-tok", nil, true)
+	if got.auth != "Bearer sk-tok" {
+		t.Errorf("Authorization = %q, want Bearer sk-tok (default Auth used)", got.auth)
+	}
+}
+
+// Security edge: relay's resolved credential must win over any Authorization
+// header forwarded from the caller (the auth header is Set, not Add).
+func TestSpecAdapter_OAuth_OverridesForwardedAuthHeader(t *testing.T) {
+	hdr := http.Header{"Authorization": []string{"Bearer caller-relay-key"}}
+	got := callCapture(t, dualAuthSpec(), "sk-ant-oat01-upstream", hdr, true)
+	if got.auth != "Bearer sk-ant-oat01-upstream" {
+		t.Errorf("Authorization = %q, want the upstream credential to override the forwarded one", got.auth)
 	}
 }

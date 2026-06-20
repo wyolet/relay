@@ -98,6 +98,7 @@ func TestGeminiIntegration_Sync_PathAuthAndCanonicalShape(t *testing.T) {
 		nil,
 		testGeminiModel,
 		false, // sync
+		false, // oauth
 	)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -188,7 +189,8 @@ func TestGeminiIntegration_Stream_PathAuthAndCanonicalShape(t *testing.T) {
 		minimalGeminiBody(t),
 		nil,
 		testGeminiModel,
-		true, // stream
+		true,  // stream
+		false, // oauth
 	)
 	if err != nil {
 		t.Fatalf("Call: %v", err)

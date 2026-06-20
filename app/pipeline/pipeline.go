@@ -39,7 +39,7 @@ import (
 // that encode them in the URL path — Gemini's generateContent vs
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream bool) (*http.Response, error)
+	Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
 	ExtractTokens(body []byte) sdkusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
 }
@@ -224,8 +224,13 @@ loop:
 			req.Lifecycle.Attempts = attempts
 		}
 
+		// An OAuth-kind credential authenticates differently upstream (Bearer +
+		// vendor beta header vs an API-key header); the adapter picks the auth
+		// variant. Determined per acquired key, so a failover from an oauth key
+		// to an api key (or vice versa) authenticates each correctly.
+		oauth := acq != nil && acq.Key != nil && acq.Key.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
 		req.Lifecycle.MarkUpstreamStart()
-		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream)
+		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			return p.makeResult(req, inbound, acq, resp), nil
 		}

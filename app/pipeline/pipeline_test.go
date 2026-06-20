@@ -51,10 +51,12 @@ type fakeAdapter struct {
 	tokens    pkgusage.Tokens
 	retryFn   func(*http.Response) (bool, keypool.FailureKind, time.Duration)
 	callCount atomic.Int32
+	lastOAuth atomic.Bool
 }
 
-func (f *fakeAdapter) Call(ctx context.Context, baseURL, key string, body []byte, hdr http.Header, _ string, _ bool) (*http.Response, error) {
+func (f *fakeAdapter) Call(ctx context.Context, baseURL, key string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
 	f.callCount.Add(1)
+	f.lastOAuth.Store(oauth)
 	if f.callFn != nil {
 		return f.callFn(ctx, baseURL, key, body, hdr)
 	}
@@ -823,5 +825,45 @@ func TestMaxAttempts_DefaultsToThree(t *testing.T) {
 	}
 	if adp.callCount.Load() != 3 {
 		t.Errorf("callCount = %d, want 3 (defaultMaxAttempts)", adp.callCount.Load())
+	}
+}
+
+// TestOAuthFlag_DerivedFromKeyKind verifies the pipeline tells the adapter
+// whether the acquired credential is an OAuth token, derived from the key's
+// value-kind — so the adapter can pick the Bearer+beta auth variant.
+func TestOAuthFlag_DerivedFromKeyKind(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		kind hostkey.ValueKind
+		want bool
+	}{
+		{"oauth", hostkey.ValueKindOAuth, true},
+		{"stored", hostkey.ValueKindStored, false},
+		{"env", hostkey.ValueKindEnv, false},
+		{"unset", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := makeKey("h", "sk-abc")
+			key.Spec.ValueFrom.Kind = tc.kind
+			adp := &fakeAdapter{}
+			p := newPipeline()
+			p.Lifecycle = lifecycle.New()
+			req := &pipeline.Request{
+				Adapter:   adp,
+				Keys:      []*hostkey.HostKey{key},
+				Policy:    makePolicy(),
+				Lifecycle: lifecycle.NewContext("req-oauth", "pipeline", time.Now()),
+			}
+			res, err := p.Run(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := adp.lastOAuth.Load(); got != tc.want {
+				t.Errorf("oauth flag for kind %q = %v, want %v", tc.kind, got, tc.want)
+			}
+			drainResult(t, res)
+		})
 	}
 }

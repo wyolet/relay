@@ -71,8 +71,18 @@ type Spec struct {
 	// ":streamGenerateContent". When nil, UpstreamPath is used verbatim.
 	UpstreamPathFn func(upstreamModel string, stream bool) string
 
-	// Auth configures how the upstream is authenticated.
+	// Auth configures how the upstream is authenticated with an API-key
+	// credential (the default).
 	Auth AuthStrategy
+
+	// OAuthAuth is the alternate auth used when the resolved credential is an
+	// OAuth token (HostKey value-kind "oauth") rather than an API key — e.g.
+	// Anthropic subscription tokens go out as `Authorization: Bearer …` + the
+	// oauth beta header instead of `x-api-key`. A zero value (empty Header)
+	// means the spec has no OAuth variant and Auth is used for every credential.
+	// Selecting it keeps the binding on the same wire shape (so same-shape
+	// byte-pass still applies); only the upstream auth headers differ.
+	OAuthAuth AuthStrategy
 
 	// Translator is the canonical v1.Translator for this shape. Used by
 	// the standard dispatch chain (inbound→canonical→upstream and back).
@@ -164,9 +174,10 @@ type specAdapter struct {
 var _ pipeline.Adapter = (*specAdapter)(nil)
 
 // Call issues POST {baseURL}{spec.UpstreamPath} with the supplied body.
-// Auth headers are set per spec.Auth; forwarded headers are applied first
-// so Relay's own headers win on conflict.
-func (a *specAdapter) Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream bool) (*http.Response, error) {
+// Auth headers are set per spec.Auth (or spec.OAuthAuth when oauth is true and
+// the spec defines an OAuth variant); forwarded headers are applied first so
+// Relay's own headers win on conflict.
+func (a *specAdapter) Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
 	path := a.spec.UpstreamPath
 	if a.spec.UpstreamPathFn != nil {
 		path = a.spec.UpstreamPathFn(upstreamModel, stream)
@@ -184,15 +195,20 @@ func (a *specAdapter) Call(ctx context.Context, baseURL, apiKey string, body []b
 
 	req.Header.Set("Content-Type", "application/json")
 
-	if apiKey != "" && a.spec.Auth.Header != "" {
-		val := apiKey
-		if a.spec.Auth.Scheme != "" {
-			val = a.spec.Auth.Scheme + " " + apiKey
-		}
-		req.Header.Set(a.spec.Auth.Header, val)
+	auth := a.spec.Auth
+	if oauth && a.spec.OAuthAuth.Header != "" {
+		auth = a.spec.OAuthAuth
 	}
 
-	for k, v := range a.spec.Auth.ExtraHeaders {
+	if apiKey != "" && auth.Header != "" {
+		val := apiKey
+		if auth.Scheme != "" {
+			val = auth.Scheme + " " + apiKey
+		}
+		req.Header.Set(auth.Header, val)
+	}
+
+	for k, v := range auth.ExtraHeaders {
 		if req.Header.Get(k) == "" {
 			req.Header.Set(k, v)
 		}
