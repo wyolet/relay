@@ -162,6 +162,63 @@ func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
 	return Binding{}, Host{}, fmt.Errorf("catalog: model %q not found", ref)
 }
 
+// ResolveModelSlug maps a ref to the unique model slug (Binding.MetadataName),
+// aggregating across hosts. Unlike Resolve, several hosts serving the same model
+// is NOT ambiguous here — they share one slug, and the discovery graph wants the
+// model, not a single (model, host) pin. It errors only when the ref is unknown
+// or genuinely maps to more than one distinct model. Same ref forms + priority
+// as Resolve (real names beat declared aliases; wildcards last).
+func (ic *IndexedCatalog) ResolveModelSlug(ref string) (string, error) {
+	key := normRef(ref)
+	if key == "" {
+		return "", fmt.Errorf("catalog: invalid model ref %q", ref)
+	}
+	if l, ok := ic.pinned[key]; ok {
+		return ic.slugAt(l), nil
+	}
+	for _, m := range []map[string][]loc{ic.qualified, ic.bare} {
+		if locs, ok := m[key]; ok {
+			return ic.uniqueSlug(key, locs)
+		}
+	}
+	if l, ok := ic.aliasPinned[key]; ok {
+		return ic.slugAt(l), nil
+	}
+	for _, m := range []map[string][]loc{ic.aliasQualified, ic.aliasBare} {
+		if locs, ok := m[key]; ok {
+			return ic.uniqueSlug(key, locs)
+		}
+	}
+	if !strings.ContainsRune(ref, '@') {
+		for _, p := range ic.aliasPatterns {
+			if len(key) >= len(p.prefix)+len(p.suffix) &&
+				strings.HasPrefix(key, p.prefix) && strings.HasSuffix(key, p.suffix) {
+				return ic.slugAt(p.l), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("catalog: model %q not found", ref)
+}
+
+func (ic *IndexedCatalog) slugAt(l loc) string {
+	return ic.Catalog.Hosts[l.host].Models[l.binding].MetadataName
+}
+
+func (ic *IndexedCatalog) uniqueSlug(key string, locs []loc) (string, error) {
+	var slug string
+	for _, l := range locs {
+		s := ic.slugAt(l)
+		if slug != "" && s != slug {
+			return "", fmt.Errorf("catalog: ref %q maps to multiple models (%q, %q)", key, slug, s)
+		}
+		slug = s
+	}
+	if slug == "" {
+		return "", fmt.Errorf("catalog: model %q not found", key)
+	}
+	return slug, nil
+}
+
 func (ic *IndexedCatalog) pick(key string, locs []loc) (Binding, Host, error) {
 	switch len(locs) {
 	case 0:
