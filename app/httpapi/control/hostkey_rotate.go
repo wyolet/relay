@@ -45,8 +45,8 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
 		}
-		if existing.Spec.ValueFrom.Kind != hostkey.ValueKindStored {
-			return nil, huma.Error400BadRequest("rotate is supported only for stored-mode host-keys")
+		if existing.Spec.ValueFrom.Kind != hostkey.ValueKindStored && existing.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
+			return nil, huma.Error400BadRequest("rotate is supported only for stored- and oauth-mode host-keys")
 		}
 		existing.Spec.Value = in.Body.Value
 		if err := d.Stores.HostKey.Upsert(ctx, existing); err != nil {

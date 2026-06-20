@@ -21,6 +21,8 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
+	sdkoauth "github.com/wyolet/relay/sdk/oauth"
 )
 
 // BootstrapOptions configures the one-call Bootstrap helper. Pool and
@@ -93,6 +95,27 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	)
 	cat.UseOverlays(stores.Overlay)
 	cat.settings.store = stores.Settings
+
+	// OAuth credential resolver: stores its token blob via the same AES-GCM
+	// path as KindStored, and refreshes on expiry using the live
+	// oauth:<provider> settings section. Registered here (not in secret.Wire)
+	// because the provider-config lookup reads the catalog settings cache,
+	// which only exists once cat is built. Refresh is off the hot path (load /
+	// post-401 heal), so the cache (populated by Hydrate before any resolve) is
+	// always ready by the time a token actually needs refreshing.
+	secReg.Register(pkgsecret.KindOAuth, pkgoauth.NewResolver(secStored,
+		func(provider string) (sdkoauth.ProviderConfig, bool) {
+			v, ok := cat.Setting(settings.OAuthSection(provider))
+			if !ok {
+				return sdkoauth.ProviderConfig{}, false
+			}
+			pc, ok := v.(*settings.OAuthProvider)
+			if !ok || pc == nil {
+				return sdkoauth.ProviderConfig{}, false
+			}
+			return pc.ProviderConfig, true
+		}))
+
 	return cat, stores, nil
 }
 

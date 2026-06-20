@@ -195,8 +195,9 @@ type HostKeySpec struct {
 }
 
 type HostKeyValueFrom struct {
-	Kind string `json:"kind"          yaml:"kind"`
-	Env  string `json:"env,omitempty" yaml:"env,omitempty"`
+	Kind     string `json:"kind"               yaml:"kind"`
+	Env      string `json:"env,omitempty"      yaml:"env,omitempty"`
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 }
 
 // PolicyDTO carries policy-level model-handling flags + the grant list.

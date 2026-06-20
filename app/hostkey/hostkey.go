@@ -3,13 +3,17 @@
 // is owned by the actor that created it (Meta.Owner.Kind=user, or
 // =system for YAML-seeded keys) and *targets* a Host via Spec.HostID.
 //
-// Two value modes:
+// Value modes:
 //
 //   - ValueKindEnv:    Spec.ValueFrom.Env names an environment variable the
 //     relay reads at boot. No cleartext touches storage.
 //   - ValueKindStored: cleartext is supplied on the write boundary
 //     (Spec.Value), encrypted by the storage layer with
 //     RELAY_MASTER_KEY, and persisted as opaque bytes.
+//   - ValueKindOAuth:  Spec.Value carries an OAuth token blob (access +
+//     refresh + expiry). Stored encrypted exactly like ValueKindStored; the
+//     resolver returns the access token and refreshes it on expiry via the
+//     oauth:<Provider> settings section. Spec.ValueFrom.Provider selects it.
 //
 // Spec.Value is intentionally tagged `json:"-"` so cleartext never appears in
 // JSONB or in API responses. Loading from YAML is the only path that carries
@@ -118,10 +122,15 @@ type Spec struct {
 }
 
 // ValueFrom is the value-mode discriminator. For ValueKindEnv, Env names the
-// environment variable. For ValueKindStored, Env is empty.
+// environment variable. For ValueKindStored, Env is empty. For ValueKindOAuth,
+// Provider names the oauth:<provider> settings section used to refresh the
+// token, and Spec.Value (on write) carries the initial token blob.
 type ValueFrom struct {
-	Kind ValueKind `json:"kind"          yaml:"kind"          validate:"required,oneof=env stored"`
+	Kind ValueKind `json:"kind"          yaml:"kind"          validate:"required,oneof=env stored oauth"`
 	Env  string    `json:"env,omitempty" yaml:"env,omitempty"`
+	// Provider selects the oauth:<provider> settings section (refresh
+	// endpoints + client). Required for ValueKindOAuth, empty otherwise.
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 }
 
 // ValueKind enumerates the supported value-storage modes.
@@ -130,6 +139,12 @@ type ValueKind string
 const (
 	ValueKindEnv    ValueKind = "env"
 	ValueKindStored ValueKind = "stored"
+	// ValueKindOAuth stores an OAuth token blob (access + refresh + expiry),
+	// encrypted like ValueKindStored. The resolver returns the access token and
+	// refreshes it on expiry via the oauth:<Provider> config. Same at-rest
+	// storage as stored (rotated + decrypted by the same machinery); the
+	// distinction is semantic and lives in this Spec, not the value_kind column.
+	ValueKindOAuth ValueKind = "oauth"
 )
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
@@ -176,6 +191,16 @@ func (k *HostKey) Validate() error {
 		}
 		if k.Spec.ValueFrom.Env != "" {
 			return fmt.Errorf("hostkey %q: valueFrom.env must be empty for stored mode", k.Meta.Name)
+		}
+	case ValueKindOAuth:
+		if k.Spec.Value == "" && k.Resolved == "" {
+			return fmt.Errorf("hostkey %q: value (oauth token blob) required for oauth mode", k.Meta.Name)
+		}
+		if k.Spec.ValueFrom.Env != "" {
+			return fmt.Errorf("hostkey %q: valueFrom.env must be empty for oauth mode", k.Meta.Name)
+		}
+		if k.Spec.ValueFrom.Provider == "" {
+			return fmt.Errorf("hostkey %q: valueFrom.provider required for oauth mode", k.Meta.Name)
 		}
 	}
 	return nil
