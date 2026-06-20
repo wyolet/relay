@@ -251,11 +251,11 @@ func TestValidateAdapters_RejectsUnknownAdapter(t *testing.T) {
 		Hosts: []sdkcatalog.Host{{
 			Name: "h",
 			Models: []sdkcatalog.Binding{{
-				MetadataName: "m", Adapter: "openai_responses",
+				MetadataName: "m", Adapter: "openai_embeddings",
 			}},
 		}},
 	}
 	if err := ValidateAdapters(cat); err == nil {
-		t.Fatal("expected error for openai_responses")
+		t.Fatal("expected error for openai_embeddings")
 	}
 }

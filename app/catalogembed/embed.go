@@ -22,9 +22,10 @@ import (
 
 // SDKAdapters is the adapter-name set the public SDK client supports today.
 var SDKAdapters = map[string]struct{}{
-	"openai":    {},
-	"anthropic": {},
-	"gemini":    {},
+	"openai":           {},
+	"openai_responses": {},
+	"anthropic":        {},
+	"gemini":           {},
 }
 
 // Compose loads manifest documents into a catalog snapshot and flattens it to
