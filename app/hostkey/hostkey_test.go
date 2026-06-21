@@ -24,6 +24,9 @@ func fix(name string, kind ValueKind) *HostKey {
 		k.Spec.ValueFrom.Env = "EXAMPLE_VAR"
 	case ValueKindStored:
 		k.Spec.Value = "sk-test"
+	case ValueKindOAuth:
+		k.Spec.Value = `{"access_token":"at","refresh_token":"rt"}`
+		k.Spec.ValueFrom.Provider = "anthropic"
 	}
 	return k
 }
@@ -36,6 +39,11 @@ func TestValidate(t *testing.T) {
 	})
 	t.Run("ok stored", func(t *testing.T) {
 		if err := fix("k", ValueKindStored).Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
+	t.Run("ok oauth", func(t *testing.T) {
+		if err := fix("k", ValueKindOAuth).Validate(); err != nil {
 			t.Fatalf("unexpected: %v", err)
 		}
 	})
@@ -79,6 +87,25 @@ func TestValidate(t *testing.T) {
 			name: "stored mode with env rejected",
 			k: func() *HostKey {
 				k := fix("k", ValueKindStored)
+				k.Spec.ValueFrom.Env = "X"
+				return k
+			}(),
+			want: "valueFrom.env must be empty",
+		},
+		{
+			name: "oauth mode missing value",
+			k:    func() *HostKey { k := fix("k", ValueKindOAuth); k.Spec.Value = ""; return k }(),
+			want: "value (oauth token blob) required",
+		},
+		{
+			name: "oauth mode missing provider",
+			k:    func() *HostKey { k := fix("k", ValueKindOAuth); k.Spec.ValueFrom.Provider = ""; return k }(),
+			want: "valueFrom.provider required",
+		},
+		{
+			name: "oauth mode with env rejected",
+			k: func() *HostKey {
+				k := fix("k", ValueKindOAuth)
 				k.Spec.ValueFrom.Env = "X"
 				return k
 			}(),

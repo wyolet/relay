@@ -28,6 +28,13 @@ const (
 	// KindStored decrypts AES-GCM ciphertext held in the relay's own
 	// store (Postgres today) using the master key.
 	KindStored Kind = "stored"
+	// KindOAuth resolves an OAuth credential: the AES-GCM-stored value is an
+	// oauth token blob (access + refresh + expiry); the resolver returns the
+	// access token, refreshing via the refresh token when it has expired. The
+	// stored ciphertext lives in the same secret_values table as KindStored
+	// (Ref.ID), so it is rotated and decrypted by the same machinery; Ref.Provider
+	// selects the oauth:<provider> config (endpoints/client) used to refresh.
+	KindOAuth Kind = "oauth"
 	// KindAWS fetches a secret from AWS Secrets Manager. Fetch-only: the
 	// secret lives in AWS, relay holds the resolved value in memory only.
 	// Locator is Path = "<secretName>[:<jsonKey>]".
@@ -78,6 +85,11 @@ type Ref struct {
 	// KindBitwarden, …): an opaque per-backend reference string the
 	// resolver parses (e.g. "prod/openai-key:apiKey", "openai-key/password").
 	Path string `json:"path,omitempty"`
+
+	// Provider names the oauth:<provider> settings section whose config
+	// (endpoints, client id) refreshes this credential. Meaningful only when
+	// Kind == KindOAuth.
+	Provider string `json:"provider,omitempty"`
 }
 
 // Validate checks the Ref has the locator its Kind requires.
@@ -90,6 +102,13 @@ func (r Ref) Validate() error {
 	case KindStored:
 		if r.ID == "" {
 			return fmt.Errorf("secret: stored ref requires a non-empty id")
+		}
+	case KindOAuth:
+		if r.ID == "" {
+			return fmt.Errorf("secret: oauth ref requires a non-empty id")
+		}
+		if r.Provider == "" {
+			return fmt.Errorf("secret: oauth ref requires a non-empty provider")
 		}
 	default:
 		if _, ok := pathAddressed[r.Kind]; ok {

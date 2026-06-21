@@ -251,8 +251,9 @@ func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 			HostID:   hostID,
 			PolicyID: policyID,
 			ValueFrom: hostkey.ValueFrom{
-				Kind: hostkey.ValueKind(d.Spec.ValueFrom.Kind),
-				Env:  d.Spec.ValueFrom.Env,
+				Kind:     hostkey.ValueKind(d.Spec.ValueFrom.Kind),
+				Env:      d.Spec.ValueFrom.Env,
+				Provider: d.Spec.ValueFrom.Provider,
 			},
 			DefaultTier:     d.Spec.DefaultTier,
 			PricingStrategy: d.Spec.PricingStrategy,
@@ -284,8 +285,9 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 			HostID:   hostID,
 			PolicyID: policyID,
 			ValueFrom: HostKeyValueFrom{
-				Kind: string(k.Spec.ValueFrom.Kind),
-				Env:  k.Spec.ValueFrom.Env,
+				Kind:     string(k.Spec.ValueFrom.Kind),
+				Env:      k.Spec.ValueFrom.Env,
+				Provider: k.Spec.ValueFrom.Provider,
 			},
 			DefaultTier:     k.Spec.DefaultTier,
 			PricingStrategy: k.Spec.PricingStrategy,

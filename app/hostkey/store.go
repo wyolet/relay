@@ -102,15 +102,28 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 			Spec:         specJSON,
 		})
 		return err
-	case ValueKindStored:
+	case ValueKindStored, ValueKindOAuth:
+		// OAuth credentials share stored's at-rest path: the value (an OAuth
+		// token blob for oauth mode) is AES-GCM-encrypted into secret_values and
+		// the row records value_kind='stored'. The oauth semantics + provider
+		// live in the spec JSON (ValueFrom.Kind/Provider), recovered in fromRow.
 		if s.stored == nil {
-			return errors.New("hostkey.Upsert: stored mode requires a secret backend (master key)")
+			return errors.New("hostkey.Upsert: stored/oauth mode requires a secret backend (master key)")
 		}
-		if k.Spec.Value == "" {
-			return errors.New("hostkey.Upsert: cleartext value required for stored mode")
-		}
-		if _, err := s.stored.Create(ctx, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
-			return fmt.Errorf("hostkey.Upsert store secret: %w", err)
+		switch {
+		case k.Spec.Value != "":
+			// Create or rotate: encrypt the supplied value into secret_values.
+			if _, err := s.stored.Create(ctx, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
+				return fmt.Errorf("hostkey.Upsert store secret: %w", err)
+			}
+		case k.Resolved != "":
+			// Metadata-only update: no new value supplied but one already
+			// exists. Leave the secret_values ciphertext untouched (the row
+			// upsert below preserves it); only metadata/spec change. This is
+			// the only way to edit an oauth key without re-supplying its token
+			// blob (its Resolved is the access token, not the stored blob).
+		default:
+			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
 		if _, err := s.q.InsertSecretStoredRef(ctx, gen.InsertSecretStoredRefParams{
 			ID:          k.Meta.ID,
@@ -218,8 +231,16 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 		}
 		ref = secret.Ref{Kind: secret.KindEnv, Env: k.Spec.ValueFrom.Env}
 	case string(ValueKindStored):
-		k.Spec.ValueFrom.Kind = ValueKindStored
-		ref = secret.Ref{Kind: secret.KindStored, ID: r.ID}
+		// value_kind='stored' is the at-rest storage kind; the spec JSON says
+		// whether it's a plain stored secret or an OAuth credential (whose
+		// provider drives refresh). Distinguish on the spec, not the column.
+		if spec.ValueFrom.Kind == ValueKindOAuth {
+			k.Spec.ValueFrom.Kind = ValueKindOAuth
+			ref = secret.Ref{Kind: secret.KindOAuth, ID: r.ID, Provider: spec.ValueFrom.Provider}
+		} else {
+			k.Spec.ValueFrom.Kind = ValueKindStored
+			ref = secret.Ref{Kind: secret.KindStored, ID: r.ID}
+		}
 	default:
 		return nil, fmt.Errorf("unknown value_kind %q", r.ValueKind)
 	}
