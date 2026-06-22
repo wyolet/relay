@@ -598,6 +598,50 @@ func TestAnthropicSerializeRequest_ThinkingConfig(t *testing.T) {
 	}
 }
 
+// Regression: effort-only reasoning (no explicit budget, as the agent sends) must
+// still emit a concrete budget_tokens — Anthropic 400s on thinking.type=enabled
+// without it. max_tokens must exceed the budget, and the custom temperature that
+// thinking forbids must be dropped.
+func TestAnthropicSerializeRequest_ThinkingEffortBudget(t *testing.T) {
+	temp := 0.7
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-3-7-sonnet-20250219"},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			"claude-3-7-sonnet-20250219": {
+				Reasoning: &v1.ReasoningConfig{Effort: "medium", Summary: "auto"},
+				Sampling:  &v1.SamplingParams{Temperature: &temp},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	thinking, ok := m["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("no thinking block: %v", m["thinking"])
+	}
+	if thinking["type"] != "enabled" {
+		t.Errorf("thinking type: %v", thinking["type"])
+	}
+	budget, ok := thinking["budget_tokens"].(float64)
+	if !ok || int(budget) < 1024 {
+		t.Errorf("budget_tokens must be present and >= 1024, got %v", thinking["budget_tokens"])
+	}
+	maxTokens := m["max_tokens"].(float64)
+	if maxTokens <= budget {
+		t.Errorf("max_tokens %v must exceed budget_tokens %v", maxTokens, budget)
+	}
+	if _, present := m["temperature"]; present {
+		t.Errorf("temperature must be dropped when thinking is enabled, got %v", m["temperature"])
+	}
+}
+
 func TestAnthropicSerializeRequest_UserMetadata(t *testing.T) {
 	req := &v1.Request{
 		Model:      v1.ModelRefs{"claude-3-5-sonnet-20241022"},

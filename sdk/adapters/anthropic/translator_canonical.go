@@ -34,6 +34,26 @@ import (
 
 const defaultMaxTokensCanonical = 4096
 
+// anthropicEffortBudget maps a canonical reasoning "effort" level to an Anthropic
+// thinking budget_tokens. Anthropic has no effort knob, so the relay canonical
+// effort levels translate to concrete token budgets (all at/above the 1024 floor).
+func anthropicEffortBudget(effort string) int {
+	switch effort {
+	case "minimal":
+		return 1024
+	case "low":
+		return 2048
+	case "medium":
+		return 4096
+	case "high":
+		return 8192
+	case "xhigh", "max":
+		return 16384
+	default:
+		return 4096
+	}
+}
+
 // structuredOutputToolName is the synthetic tool injected to implement
 // Output.Format (json_schema / json_object) via the forced-tool trick.
 // The double-underscore prefix and "relay" namespace make collisions with
@@ -360,15 +380,29 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		if opts.Reasoning != nil {
 			rc := opts.Reasoning
-			thinking := &anthropicCanonThinking{Type: "enabled"}
+			// Anthropic's extended thinking takes an explicit budget_tokens — it has
+			// NO "effort" knob (that's OpenAI). So map effort→budget when the caller
+			// gave no explicit budget, clamp to Anthropic's 1024 floor, and ensure
+			// max_tokens leaves room past the budget (Anthropic requires
+			// max_tokens > budget_tokens). Without this, thinking.type=enabled goes
+			// out with budget_tokens omitted → 400 "budget_tokens: Field required".
+			budget := 0
 			if rc.BudgetTokens != nil {
-				thinking.BudgetTokens = *rc.BudgetTokens
+				budget = *rc.BudgetTokens
 			}
-			if rc.Effort != "" {
-				thinking.Type = "enabled"
-				// Map effort string to budget_tokens if needed; keep as Effort passthrough.
+			if budget <= 0 {
+				budget = anthropicEffortBudget(rc.Effort)
 			}
-			out.Thinking = thinking
+			if budget < 1024 {
+				budget = 1024
+			}
+			if maxTokens <= budget {
+				maxTokens = budget + 4096 // headroom for the visible answer beyond the thinking
+			}
+			out.Thinking = &anthropicCanonThinking{Type: "enabled", BudgetTokens: budget}
+			// Extended thinking is incompatible with custom sampling — Anthropic
+			// rejects temperature/top_p/top_k alongside an enabled thinking block.
+			out.Temperature, out.TopP, out.TopK = nil, nil, nil
 		}
 
 		// Structured output via forced-tool trick. Anthropic has no native
