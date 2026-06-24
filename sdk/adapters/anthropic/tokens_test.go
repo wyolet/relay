@@ -139,6 +139,80 @@ func TestExtractTokens_PartialFields(t *testing.T) {
 	}
 }
 
+// The full SSE buffer is what relay's post-flight actually hands ExtractTokens
+// (proxy.go tees the raw upstream stream). cache_creation appears ONLY in
+// message_start; the final message_delta carries the cumulative output_tokens
+// and re-echoes cache_read but NOT cache_creation. A single json.Unmarshal on
+// this body fails — the regression these tests guard is "streaming usage = 0".
+const sseWriteStream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":null,"usage":{"input_tokens":12,"output_tokens":1,"cache_creation_input_tokens":2048,"cache_read_input_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"cache_read_input_tokens":0,"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+const sseReadStream = `event: message_start
+data: {"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":null,"usage":{"input_tokens":12,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":2048}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"cache_read_input_tokens":2048,"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+func TestExtractTokens_StreamingWrite_CapturesCacheCreation(t *testing.T) {
+	tok := ExtractTokens([]byte(sseWriteStream))
+	if tok == nil {
+		t.Fatal("expected non-nil Tokens from full SSE write stream")
+	}
+	if tok["cache_creation"] != 2048 {
+		t.Errorf("cache_creation: want 2048, got %d (the regression: lost from message_start)", tok["cache_creation"])
+	}
+	if tok["input"] != 12 {
+		t.Errorf("input: want 12, got %d", tok["input"])
+	}
+	if tok["output"] != 5 {
+		t.Errorf("output: want 5 (final cumulative), got %d", tok["output"])
+	}
+	if _, ok := tok["cache_read"]; ok {
+		t.Errorf("cache_read should be absent when zero, got %d", tok["cache_read"])
+	}
+}
+
+func TestExtractTokens_StreamingRead_CapturesCacheRead(t *testing.T) {
+	tok := ExtractTokens([]byte(sseReadStream))
+	if tok == nil {
+		t.Fatal("expected non-nil Tokens from full SSE read stream")
+	}
+	if tok["cache_read"] != 2048 {
+		t.Errorf("cache_read: want 2048, got %d", tok["cache_read"])
+	}
+	if tok["output"] != 5 {
+		t.Errorf("output: want 5, got %d", tok["output"])
+	}
+	if _, ok := tok["cache_creation"]; ok {
+		t.Errorf("cache_creation should be absent on a pure read, got %d", tok["cache_creation"])
+	}
+}
+
 func TestExtractTokens_Add(t *testing.T) {
 	// Simulate streaming: message_start gives input, message_delta gives output.
 	msgStart := []byte(`{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1}}}`)
