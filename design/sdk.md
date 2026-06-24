@@ -10,7 +10,31 @@ sdk/
   usage/                    Tokens + timing types
   catalog/                  embedded host/binding/pricing data + resolver + Cost
   client/                   the HTTP/WS client consumers call
+  oauth/                    vendor-neutral OAuth: PKCE auth-code + device
+                            (RFC 8628) + refresh, TokenSource (in-process
+                            lifecycle + Persister), RFC 8414 discovery
 ```
+
+## OAuth (`sdk/oauth`)
+
+Generic OAuth machinery over `golang.org/x/oauth2` so consumers (apps and the
+relay server) don't hand-roll PKCE/exchange/refresh and nobody is locked into
+relay. Shipped in #349.
+
+- `oauth.Flow` — `AuthorizeURL` (PKCE S256), `Exchange`, `DeviceAuth`/
+  `DeviceToken` (RFC 8628), lazy `Refresh`. Machinery only: no persistence,
+  no loop.
+- `oauth.TokenSource` — standalone in-process token lifecycle: caches until
+  expiry, refreshes on expiry, single-flights concurrent refreshes, persists
+  the rotated token via a caller-supplied `Persister`. The relay-free path.
+- `oauth.ProviderConfig` — serializable shape mapping to `*oauth2.Config`;
+  vendor specifics are config, not baked in. `Discover` fills empty endpoints
+  from RFC 8414 authorization-server metadata (explicit config wins).
+
+Vendor specifics (client_id, endpoints, scopes, beta headers) are data, never
+baked into the package — mirror the sanctioned Claude Agent-SDK auth in config.
+Server-side use of these primitives lives in `pkg/secret/oauth` +
+`app/hostkey` `ValueKindOAuth` (see `design/settings.md`).
 
 ## Module boundary
 

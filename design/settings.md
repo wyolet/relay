@@ -62,3 +62,23 @@ Create `app/settings/<section>.go`: the typed struct with JSON tags, a
 `Defaults` + `Decode: decodeAndValidate[...]`. The typed GET/PUT endpoints,
 the cache, and the seed pick it up automatically. If it needs hot-swap, add a
 Watcher or Controller at the composition root.
+
+## OAuth provider sections (`oauth:<provider>`)
+
+OAuth upstream credentials (shipped #349) lean on the settings layer for their
+vendor config. A `HostKey` can carry `valueFrom.kind: oauth` (+ `provider`)
+holding an encrypted access/refresh/expiry blob — stored at rest exactly like a
+`stored` secret (`app/hostkey` `ValueKindOAuth`). On expiry the
+`pkg/secret/oauth` resolver refreshes the token using the live
+`oauth:<provider>` settings section (a generic `OAuthProvider`: endpoints,
+client_id, scopes), then re-persists the rotated refresh token. Refresh rides
+the existing `fromRow → Resolve` / `KeyAgent` heal path — **no pipeline
+changes** — and concurrent resolves single-flight.
+
+The provider machinery itself is `sdk/oauth` (see `design/sdk.md`); the relay
+core registers **no provider by default** — operators/community add their own
+via `RegisterOAuthProvider`, keeping vendor specifics out of the core. At the
+data plane, the adapter `Spec` gains an `OAuthAuth` strategy (e.g. Bearer + a
+beta header) selected per-acquired-key when the resolved credential is an OAuth
+token; the binding stays on the same wire shape, so same-shape byte-pass still
+applies — only the upstream auth headers differ.
