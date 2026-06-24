@@ -47,8 +47,8 @@ func TestResolve_NonSkippedPin_Works(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Name != "anthropic" || b.Upstream != "claude-3" {
-		t.Fatalf("got host=%q upstream=%q", h.Name, b.Upstream)
+	if h.Name != "anthropic" || b.Name != "claude-3" {
+		t.Fatalf("got host=%q upstream=%q", h.Name, b.Name)
 	}
 }
 
@@ -82,8 +82,8 @@ func TestResolve_ProviderQualifiedPin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provider/model@host pin failed: %v", err)
 	}
-	if h.Name != "azure" || b.Upstream != "gpt-4o-dep" {
-		t.Fatalf("got host=%q upstream=%q", h.Name, b.Upstream)
+	if h.Name != "azure" || b.Name != "gpt-4o-dep" {
+		t.Fatalf("got host=%q upstream=%q", h.Name, b.Name)
 	}
 }
 
