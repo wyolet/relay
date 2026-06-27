@@ -321,7 +321,7 @@ Recognized prefixes preserved in the mask: `sk-`, `gsk_`, `xai-`, `ant-`, `hf_`.
 |---|---|
 | PG dump only | Useless ciphertext — no credentials leaked |
 | `RELAY_MASTER_KEY` only | Nothing to decrypt — no PG, no ciphertext |
-| Both PG dump + master key | Full compromise — same posture as LiteLLM / OpenRouter |
+| Both PG dump + master key | Full compromise — same posture as comparable self-hosted routers |
 
 Keep `RELAY_MASTER_KEY` out of Postgres and out of application logs. Treat it like a root CA private key.
 

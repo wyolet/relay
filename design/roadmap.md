@@ -3,8 +3,7 @@
 This file is the map + the shared changelog. The open-source core's
 backlog lives in [`roadmap-oss.md`](roadmap-oss.md):
 open-source the infra-grade core — the wedge is a BYO-key, no-reseller,
-Go-fast router that out-performs OpenRouter/LiteLLM on the infrastructure
-axis.
+Go-fast router that leads on the infrastructure axis.
 
 Items list **what / why / rough size / where it lives**. When "where"
 would take more than a sentence, the item is its own design doc waiting
@@ -88,3 +87,28 @@ in each phase doc.
   load-time quarantine, `/models/by-id/{id}/overlay` subresource.
   Model-only in v1; clone-as-overlay (Easy Registration) and
   diff-on-write deferred. Full design: `overlays.md`.
+- **Relay-native batch** (#275 `jobq` + #277 `app/batch`, 2026-05-31) —
+  durable bulk submissions reusing `Pipeline.Run` (`source="batch"`),
+  River-style claim model, mounted at `/v1/batches`. `jobq` is its own Go
+  module. See roadmap-oss A1.
+- **HostBinding first-class entity** (#281 + catalog #14, 2026-06-02) —
+  `model.Spec.Hosts` removed; routing reads `BindingsForModel`. Re-seed
+  required on rollout.
+- **Prometheus request metrics** (#280) — `relay_requests_total` +
+  latency/overhead/admission/post-flight histograms. `design/metrics.md`.
+- **Catalogview read-projection** (#282) — PG-backed admin/UX endpoints
+  (`/models/{ref}/{hosts,pricing,policies}`, `/hosts/{ref}/models`), off
+  the hot path.
+- **Emit-time usage cost** (#311/#312, 2026-06-13) — events carry
+  `cost_nanos` + `cost_breakdown` + attribution slugs; reversed the
+  derive-at-sink plan.
+- **Stress-replay hardening** (#307–#312) — spec-mock-anthropic + a
+  230k-request burn (0 failures, >1k concurrent streams).
+- **OSS public launch** (#256–#261, 2026-05-30) — Apache-2.0, hygiene
+  files, `docker compose` quickstart, public CI + grep gates, ghcr +
+  Docker Hub publish. Follow-up: bench/infra/py-relay split out of the
+  public tree (#347/#348). See roadmap-oss Part 2.
+- **k8s production deploy** (2026-06-15) — ArgoCD on the aliboyev cluster,
+  relay.wyolet.com / api.relay.wyolet.com, chart owns its PG/CH/Valkey.
+- **OAuth credential kind** (#349, 2026-06-24) — Anthropic
+  Agent-SDK-via-subscription machinery (sanctioned upstream).

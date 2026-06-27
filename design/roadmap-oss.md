@@ -3,7 +3,8 @@
 **Goal:** open-source the infra-grade core and reach a credible public
 launch. The wedge is the infrastructure axis — performance, key pooling,
 batch orchestration, observability — under a BYO-key / no-reseller model.
-Feature parity with LiteLLM is *not* the goal; infra-grade throughput is.
+Feature parity with existing routers is *not* the goal; infra-grade
+throughput is.
 
 This doc has two halves:
 
@@ -13,10 +14,11 @@ This doc has two halves:
 - **Part 2 — Launch readiness.** The work to make the repo publishable —
   license, history scrub, docs, CI, community surface.
 
-Order is deliberate: land the headline infra features (batch, webhooks,
-adapters, observability completion) *while* the launch-readiness work
-proceeds in parallel, then cut the public release once both halves are
-green. Don't open-source a core that's missing its headline feature.
+**Status (2026-06-25):** the public release shipped — repo is public
+under Apache-2.0, batch + observability metrics landed, Part 2
+launch-readiness is done. Remaining Part 1 work (webhooks, more adapters,
+OTel, media offload, live tail, non-token meters) is now ordinary backlog,
+not launch-blocking. Per-item status is marked inline below.
 
 See [`roadmap.md`](roadmap.md) for shared "Recently shipped" history.
 
@@ -24,7 +26,16 @@ See [`roadmap.md`](roadmap.md) for shared "Recently shipped" history.
 
 ## Part 1 — Core infra features
 
-### A1. Batch processing (relay-native) — headline differentiator
+### A1. Batch processing (relay-native) — headline differentiator ✅ shipped
+
+**Shipped** (#275 `jobq` module + #277 `app/batch` consumer, 2026-05-31):
+relay-native batch reusing `Pipeline.Run` (`source="batch"`), River-style
+state-flip+commit claim model, mounted at `/v1/batches` on the inference
+auth chain. `jobq` is its own Go module (flat jobs, PG store + PayloadStore,
+"PG never holds bytes"). Deferred tail: leader election, native
+provider-batch passthrough (50% discount), `supportsBatch`-per-binding,
+shared-vs-separate realtime ratelimit bucket. Design notes below are kept
+as history.
 
 **What:** a relay primitive for fire-and-forget bulk submissions,
 **working for any upstream regardless of whether the provider exposes a
@@ -117,9 +128,11 @@ boot, no pipeline change):
 - **A4a — OTel tracing.** A span on the lifecycle `Context`, started at
   entry, ended in post-flight with routing attributes. Replaces the
   deleted no-op `reqid` span. ~1–2 days.
-- **A4b — Prometheus.** Wire `pkg/metrics` request counters/histograms +
-  `relay_pipeline_post_flight_duration_seconds` onto the post-flight hook.
-  ~1–2 days.
+- **A4b — Prometheus.** ✅ **shipped** (#280). `pkg/metrics/request.go`
+  exposes `relay_requests_total`, `relay_request_seconds`,
+  `relay_overhead_seconds`, `relay_admission_seconds`, and
+  `relay_post_flight_seconds` (the post-flight fan-out histogram). See
+  `design/metrics.md`.
 
 **Why:** "observability" is one of the four wedge axes. The OSS core needs
 real traces + metrics out of the box; a future hardened on-prem build
@@ -140,9 +153,12 @@ enrichment, echo-usage, payload content capture). **Remaining:**
   can't yield a model name) live at the route edge, before the Context is
   minted. Needs an edge-level capture hook if we want them visible.
 
-**Out of scope by design:** cost (derive in the sink from tokens ×
-pricing, keep the event pricing-free); multi-tenant attribution
-(session/app/end-user — a future hosted-product concern).
+**Update (#311/#312):** cost is now stamped at **emit** time — the event
+carries `cost_nanos` + `cost_breakdown` + attribution slugs (nil = unpriced,
+≠ 0). The earlier "derive in the sink, keep the event pricing-free" plan
+was reversed; join-at-query lost. Still open: per-policy ratelimit hit
+counts. Still out of scope: multi-tenant attribution (session/app/end-user —
+a future hosted-product concern).
 
 ### A6. No-silent-drops adapter contract — automation
 
@@ -238,9 +254,17 @@ detail + design invariants in [`filtering.md`](filtering.md).
 
 ---
 
-## Part 2 — Launch readiness
+## Part 2 — Launch readiness ✅ shipped
 
-The path from private repo to credible public release.
+**Done** (PRs #256–#261, 2026-05-30; follow-ups through #347/#348). The repo
+is public under **Apache-2.0** with the full hygiene set (`LICENSE`,
+`NOTICE`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`), a
+`docker compose up` quickstart, public CI with the canonical-protocol grep
+gates + `make lint-rules`, ghcr.io + Docker Hub image publishing, and a live
+k8s deploy (ArgoCD on the aliboyev cluster, relay.wyolet.com /
+api.relay.wyolet.com). The per-item history below is retained for context;
+nothing here is outstanding except the optional telemetry/community items
+in A19.
 
 ### A11. Open-core line + license
 
@@ -269,8 +293,8 @@ The path from private repo to credible public release.
 
 ### A14. Public-facing docs + README
 
-- **Rewrite README for the public** — positioning vs OpenRouter/LiteLLM,
-  the BYO-key / no-reseller wedge.
+- **Rewrite README for the public** — the BYO-key / no-reseller wedge and
+  the infra-grade positioning.
 - **Public docs:** architecture, canonical-protocol, deploy guide, config
   reference. Much exists in `design/` already but assumes internal context —
   needs a public pass.
