@@ -15,7 +15,7 @@ labels: enhancement
 
 ## Alternatives considered
 
-<!-- Other approaches, workarounds, or prior art (OpenRouter/LiteLLM/etc.). -->
+<!-- Other approaches, workarounds, or prior art. -->
 
 ## Scope / fit
 

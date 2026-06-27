@@ -24,7 +24,7 @@ Treat the canonical as a **protocol**, not an endpoint.
 
 OpenAI's Responses API consolidated their server-side capabilities (web_search, code_interpreter, file_search, computer_use, image_generation, mcp) into a single endpoint shape. Anthropic added equivalents (web_search, code_execution) under their existing Messages API. The industry direction is clear: LLM APIs are accreting agentic capabilities — server tools, MCP integration, multi-step transcripts — and customers expect them as first-class features.
 
-If the relay only translates wire shapes, customers go elsewhere (LangChain / LangGraph / vendor-direct) for the agentic layer. If the relay owns the protocol, it competes there too.
+If the relay only translates wire shapes, customers reach for a separate agentic layer (orchestration frameworks / vendor-direct). If the relay owns the protocol, that layer can live here too.
 
 The constraint: we don't want to be locked into OpenAI's evolutionary path. They've shipped seven business-tier and infrastructure-specific knobs since Responses launched (`phase`, `safety_identifier`, `service_tier`, `conversation`, `context_management`, `encrypted_content`, `prompt_cache_key`). Their API absorbs their business logic. Ours should not.
 
