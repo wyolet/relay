@@ -5,11 +5,12 @@ variable "DOCKERHUB"    { default = "docker.io/wyolet" }
 variable "IMAGE_NAME"   { default = "relay" }
 variable "VERSION"      { default = "latest" }
 variable "GIT_REVISION" { default = "" }
-# UI_VERSION is the single source of truth in the Makefile (UI_VERSION ?= ...);
-# `make image`/`release`/etc. pass it through as env. The empty default here is
-# only a fallback for a bare `docker buildx bake` — which will then fail the UI
-# fetch loudly rather than silently embedding the wrong version. Bump it in the
-# Makefile, nowhere else.
+# UI_VERSION + CATALOG_REF are pinned in versions.env (the release BOM); the
+# Makefile `include`s it and passes both through as env on every bake call.
+# Bump them in versions.env, nowhere else. The defaults here are only fallbacks
+# for a bare `docker buildx bake` with no Makefile: UI_VERSION="" fails the UI
+# fetch loudly rather than embedding the wrong version; CATALOG_REF="main"
+# tracks the branch (non-reproducible) and is why releases must go through Make.
 variable "UI_VERSION"   { default = "" }
 variable "CATALOG_REF"  { default = "main" }
 
