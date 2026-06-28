@@ -5,12 +5,12 @@ name: Publish image
 # demand). The image bakes in the pinned admin UI + catalog (see Dockerfile).
 #
 # Required repo secrets:
-#   UI_FETCH_TOKEN    — read access to the (private) wyolet/relay-ui repo, to
-#                       fetch the UI release asset. Drop it + the guard below
-#                       once relay-ui is public (Dockerfile falls back to the
-#                       public URL).
 #   DOCKERHUB_TOKEN   — Docker Hub access token (secret). The username is the
 #                       repo VARIABLE DOCKERHUB_USERNAME (vars.*, not secret).
+#
+# The UI release asset is fetched from the now-public wyolet/relay-ui using the
+# workflow's built-in GITHUB_TOKEN — no dedicated PAT. Companion artifact
+# versions (UI_VERSION, CATALOG_REF) come from versions.env (the release BOM).
 #
 # First publish creates each package private; make them public (ghcr: org
 # package settings; Docker Hub: repo settings) so users can pull without auth.
@@ -24,12 +24,11 @@ on:
         description: 'Version tag to publish (e.g. v0.1.0)'
         required: true
       ui_version:
-        description: 'relay-ui release tag to embed (default: UI_VERSION from the Makefile)'
+        description: 'relay-ui release tag to embed (default: UI_VERSION from versions.env)'
         required: false
       catalog_ref:
-        description: 'relay-catalog ref to seed'
+        description: 'relay-catalog ref to seed (default: CATALOG_VERSION from versions.env)'
         required: false
-        default: 'main'
 
 permissions:
   contents: read
@@ -43,13 +42,9 @@ jobs:
 
       - name: Require secrets
         env:
-          UI_FETCH_TOKEN: ${{ secrets.UI_FETCH_TOKEN }}
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          # Without a UI token the Dockerfile silently ships a UI-less image
-          # (relay-ui is private). Drop the UI check once relay-ui is public.
-          [ -n "$UI_FETCH_TOKEN" ] || { echo "::error::UI_FETCH_TOKEN secret is required (read access to wyolet/relay-ui)"; exit 1; }
           [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets are required"; exit 1; }
 
       - uses: docker/setup-qemu-action@v3
@@ -68,25 +63,28 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Resolve version
+      - name: Resolve versions
         id: v
         run: |
           REF="${{ github.event.inputs.tag || github.ref_name }}"
           echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
-          # UI pin: explicit dispatch input wins; otherwise the Makefile is
-          # the single source of truth (see docker-bake.hcl's UI_VERSION note).
-          UI="${{ github.event.inputs.ui_version }}"
-          [ -n "$UI" ] || UI=$(sed -n 's/^UI_VERSION ?= //p' Makefile)
-          [ -n "$UI" ] || { echo "::error::could not resolve UI_VERSION from Makefile"; exit 1; }
-          echo "ui_version=$UI" >> "$GITHUB_OUTPUT"
+          # Companion pins come from versions.env (the release BOM); explicit
+          # workflow_dispatch inputs override.
+          set -a; . ./versions.env; set +a
+          UI="${{ github.event.inputs.ui_version }}";  [ -n "$UI" ]  || UI="$UI_VERSION"
+          CAT="${{ github.event.inputs.catalog_ref }}"; [ -n "$CAT" ] || CAT="$CATALOG_VERSION"
+          [ -n "$UI" ]  || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
+          [ -n "$CAT" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
+          echo "ui_version=$UI"   >> "$GITHUB_OUTPUT"
+          echo "catalog_ref=$CAT" >> "$GITHUB_OUTPUT"
 
       - name: Build and push lean + standalone (multi-arch, both registries)
         env:
           VERSION: ${{ steps.v.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
-          GH_TOKEN: ${{ secrets.UI_FETCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UI_VERSION: ${{ steps.v.outputs.ui_version }}
-          CATALOG_REF: ${{ github.event.inputs.catalog_ref || 'main' }}
+          CATALOG_REF: ${{ steps.v.outputs.catalog_ref }}
         run: |
           # Args, the gh_token secret, dual-registry tags, and no-cache-filter
           # (force a fresh asset fetch) are all declared in docker-bake.hcl.
