@@ -45,6 +45,36 @@ library is the foundation. Codebase rules 1/2/4/10 (canonical knows nothing;
 vendors import canonical; no vendor names in `app/`; `pkg` purity) extend to the
 module: nothing under `sdk/` imports `app/` or `internal/`.
 
+## Releasing the modules
+
+The repo is three modules — root `github.com/wyolet/relay` (the server, whose
+`app/`/`pkg/` packages external repos like `relay-catalog` import), plus
+`sdk` and `jobq` submodules. In-repo dev wires them via `go.work` + the
+`replace github.com/wyolet/relay/sdk => ./sdk` / `./jobq` directives in the root
+`go.mod`; those replaces are **dev-only** — Go ignores a dependency's `replace`
+lines, so an external consumer resolves the root `go.mod`'s `require` versions
+from real tags. The root `require`s therefore must point at **published**
+versions, never `v0.0.0`.
+
+`sdk` and `jobq` are versioned **independently** with their own tags
+(`sdk/vX.Y.Z`, `jobq/vX.Y.Z`); the root releases on its own `vX.Y.Z` via
+`make release`. This is manual — there is no automation tying them together,
+so the discipline is:
+
+1. When `sdk` or `jobq`'s API changes and you want consumers to get it, tag the
+   submodule at the release commit: `git tag sdk/vX.Y.Z && git push origin sdk/vX.Y.Z`.
+2. Bump the matching `require github.com/wyolet/relay/<mod> vX.Y.Z` in the root
+   `go.mod` and commit. **Keep the `replace`** (it's what dev/`go.work` use).
+   The root build stays green even before the tag exists because `go.work` +
+   `replace` shadow the version — but the tag must exist before any external
+   consumer (or a tagged root release) pulls it.
+3. Release the root normally with `make release`.
+
+Leaving a root `require` at `v0.0.0` (or a stale version) silently breaks
+external consumers while in-repo builds keep working — the failure only shows up
+downstream. Verify consumability after tagging by `go get`-ing the root module
+from a scratch dir outside the repo.
+
 ## Calling relay (primary path)
 
 ```go
