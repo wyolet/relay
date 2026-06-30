@@ -392,8 +392,8 @@ func TestE2E_ChatCompletions(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// TestE2E_AliasModel exercises declared-alias resolution end-to-end
-// (design/model-aliases.md): an alias-addressed request routes to the real
+// TestE2E_AliasModel exercises declared-alias resolution end-to-end:
+// an alias-addressed request routes to the real
 // model and the verbatim alias form goes upstream — the declared string
 // for an exact alias (whatever the caller's spelling), the caller's raw
 // string for a wildcard match.
@@ -451,7 +451,7 @@ func TestE2E_AliasModel(t *testing.T) {
 }
 
 // TestE2E_OverlaySurvivesReseed is the overlay feature's end-to-end
-// contract (design/overlays.md): a user patch set via the control API
+// contract: a user patch set via the control API
 // merges into the live snapshot via NOTIFY, routes traffic, and SURVIVES
 // a template re-seed — while un-overridden template changes flow through.
 func TestE2E_OverlaySurvivesReseed(t *testing.T) {

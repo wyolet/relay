@@ -1,0 +1,78 @@
+---
+title: "Metrics"
+description: "Prometheus metrics exposed by Relay, and what each one answers"
+---
+
+Relay exports Prometheus metrics for traffic, latency, its own overhead, and a
+few saturation signals. Everything is in the `relay` namespace, plus the
+standard Go runtime and process collectors.
+
+## Scrape endpoint
+
+Metrics are served at `/metrics` on the **control listener**
+(`RELAY_CONTROL_PORT`, default `8081`) — at the listener root, *not* under the
+`/api` prefix.
+
+```bash
+curl http://localhost:8081/metrics
+```
+
+```yaml Prometheus scrape config
+scrape_configs:
+  - job_name: relay
+    static_configs:
+      - targets: ["relay:8081"]
+```
+
+## Request flow
+
+The core RED-style metrics (Rate, Errors, Duration), plus the Relay-vs-upstream
+time split. All are labelled by `source` — the runner that handled the request:
+`pipeline`, `proxy`, `ws`, or `batch`.
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `relay_requests_total` | counter | `source`, `status` | How much traffic and how many errors. `status` is a bounded **class** (`2xx`/`3xx`/`4xx`/`5xx`/`other`), never the raw code. |
+| `relay_request_seconds` | histogram | `source` | End-to-end latency, from handler entry to response body closed. |
+| `relay_overhead_seconds` | histogram | `source` | **Relay's own time** = total handler time minus the upstream call. |
+| `relay_admission_seconds` | histogram | `source` | Time from request accept to upstream handoff — auth + rate-limit reserve + key selection. |
+| `relay_inflight_requests` | gauge | `source` | Currently-open requests. A streamed request counts until its body closes. |
+| `relay_post_flight_seconds` | histogram | _(none)_ | Duration of the post-flight observer fan-out per request. |
+
+<Info>
+`relay_overhead_seconds` is **the** metric to watch — it isolates the latency
+Relay itself adds. The performance SLO lives here: p99 overhead under 10 ms in a
+live distributed deployment. Its buckets are tuned tight (100 µs → 500 ms) for
+exactly this question.
+</Info>
+
+<Note>
+`relay_overhead_seconds` and `relay_admission_seconds` are only observed when the
+request actually **reached upstream**. A request rejected before handoff (auth
+failure, rate-limited, no healthy key) is counted in `relay_requests_total` but
+contributes no overhead/admission sample — there's no meaningful split to record.
+</Note>
+
+## Health & saturation
+
+Leading indicators for the two failures that hurt silently: dropped background
+records, and provider keys dying off.
+
+| Metric | Type | Labels | What it answers |
+| --- | --- | --- | --- |
+| `relay_records_lost_total` | counter | `kind` | Background records (`usage` / `payload`) dropped because a bounded emitter queue was full. A drop you can't see is a billing or audit hole — so it's counted. |
+| `relay_emit_queue_depth` | gauge | `kind` | Events waiting in a bounded emitter queue (`usage` / `payload`) — the leading signal for the drops above, before they happen. |
+| `relay_provider_keys_down_total` | counter | `reason` | Times a pooled provider key was put into cooldown by a failure. `reason` is the failure class, e.g. `auth`, `rate_limit`, `server_error`, `network`, `local_rl`. |
+
+<Note>
+`relay_provider_keys_down_total` is a counter of cooldown **transitions**, not a
+gauge of "keys down right now." Breaker state lives in shared kv, so a per-pod
+gauge would be inconsistent across the fleet; trip counts, by contrast, sum
+cleanly. Watch its rate, not its absolute value.
+</Note>
+
+## Standard collectors
+
+The default Go and process collectors are registered too, so you also get the
+usual `go_*` (goroutines, GC, memory) and `process_*` (CPU, FDs, resident
+memory) series without any extra configuration.

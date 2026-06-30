@@ -21,7 +21,8 @@ docker compose up             # bundled Postgres / ClickHouse / Valkey / Jaeger
 ```
 
 The data plane listens on `:5100`, the control plane on `:5103`. See the
-deployment docs under `design/` for configuration details.
+configuration docs in [`docs/`](docs/) (published at docs.wyolet.com) for
+configuration details.
 
 ## Build & test
 
@@ -52,13 +53,13 @@ as the architectural orientation doc. In short:
 - `internal/` — composition root / boundary (config, storage).
 - `cmd/relay/` — the binary entrypoint and the **only** place vendor
   names appear in code.
-- `design/` — design docs, the roadmap, per-adapter fidelity audits.
+- `docs/` — the public documentation site (Mintlify; published at
+  docs.wyolet.com).
 
 ## Codebase rules (non-negotiable)
 
-The full set lives in [`design/canonical-protocol.md`](design/canonical-protocol.md)
-("Codebase rules") and is summarized in `CLAUDE.md`. The ones a PR is
-most likely to trip on:
+The full set lives in [`CLAUDE.md`](CLAUDE.md) ("Codebase rules"). The
+ones a PR is most likely to trip on:
 
 1. **Canonical knows nothing.** `sdk/v1/` imports nothing from `app/`,
    `internal/`, or any vendor adapter.

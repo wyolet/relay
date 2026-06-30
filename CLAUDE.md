@@ -6,8 +6,9 @@ Guidance for Claude Code working in this repo.
 
 Before any non-trivial change, read `CONTRIBUTING.md` (build/test, the
 PR workflow, and the load-bearing codebase rules) and the design docs
-under `design/` (`design/roadmap.md` for what's next, `design/canonical-protocol.md`
-for the protocol invariants). The repo layout, ports, and build/deploy
+under `.tmp/design/` — internal notes, gitignored, kept out of the
+published tree (`.tmp/design/roadmap.md` for what's next,
+`.tmp/design/canonical-protocol.md` for the protocol invariants). The repo layout, ports, and build/deploy
 pipeline are documented in `CONTRIBUTING.md` and the `Makefile`.
 
 ## What this is
@@ -19,11 +20,11 @@ performance, key pooling, batch orchestration, observability.
 Open source (Apache-2.0), published as a Docker image (`wyolet/relay`)
 and deployable to k8s. The public-facing surface (README, quickstart,
 issue templates, docs at docs.wyolet.com) assumes no internal context;
-keep that audience in mind when editing anything outside `design/`.
+keep that audience in mind when editing anything outside `.tmp/design/`.
 
-Roadmap and stage breakdown: `design/roadmap.md` (the index; the OSS
-core backlog lives in `design/roadmap-oss.md`). Design context lives in
-the `design/` tree (`design/canonical-protocol.md`, `design/adapters/`,
+Roadmap and stage breakdown: `.tmp/design/roadmap.md` (the index; the OSS
+core backlog lives in `.tmp/design/roadmap-oss.md`). Design context lives in
+the `.tmp/design/` tree (`.tmp/design/canonical-protocol.md`, `.tmp/design/adapters/`,
 the per-subsystem guides) — read before non-trivial architectural
 suggestions.
 
@@ -61,12 +62,12 @@ app/                       — the application: domain + composition + handlers
   overlay/                 — catalog overlays: user-owned sparse spec patches
                              on pristine TEMPLATE rows, merged to EFFECTIVE
                              rows at snapshot load (survives re-seed). See
-                             design/overlays.md.
+                             .tmp/design/overlays.md.
   modelref/                — parses the catalog model-reference DSL + aliases
   meta/                    — identity primitives every entity carries (id/
                              name/displayName, owner)
   settings/                — typed-sectioned config layer (DB-backed settings,
-                             incl. governance:* sections). See design/settings.md.
+                             incl. governance:* sections). See .tmp/design/settings.md.
   settingswatch/           — applies a value-typed settings section to a live
                              component on change
   adapter/                 — generic adapter framework (singular):
@@ -91,7 +92,7 @@ app/                       — the application: domain + composition + handlers
     control/               — admin plane: /auth/* + CRUD + /version + ...
   transport/ws/            — customer-facing WebSocket inference transport
   batch/                   — batch consumer: reuses Pipeline.Run (source="batch")
-                             over the jobq module. See design/ + roadmap.
+                             over the jobq module. See .tmp/design/ + roadmap.
   manifest/                — YAML DTOs + translate ↔ domain
   seed/                    — YAML → Postgres orchestration
   session/                 — scs wrapper, kv-backed
@@ -116,7 +117,7 @@ pkg/                       — server-internal shared libs (NOT the SDK)
                              live in sdk/usage; pkg/usage.Event embeds them.)
   payload/                 — request/response payload model (the /logs path)
   filter/                  — declarative allowlist query engine for list
-                             endpoints (typed-accessor SOT). design/filtering.md.
+                             endpoints (typed-accessor SOT). .tmp/design/filtering.md.
   crypto/                  — AES-GCM helpers (master-key)
   secret/                  — unified secret resolution: Ref{Kind,Env,ID,Path}
                              + Resolver/Registry/Writer. Built-in env + stored
@@ -178,7 +179,7 @@ config/                    — relay-local YAML (NOT the public catalog)
 
 migrations/postgres/       — versioned SQL up + down
 deploy/compose/            — dev pg, test pg, smoke stack
-design/                    — design + runbook + roadmap
+.tmp/design/                — design + runbook + roadmap (gitignored; not published)
 integration/               — make test-integration + make smoke-mock
 ```
 
@@ -233,7 +234,7 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
 ## Codebase rules (non-negotiable)
 
 These are the load-bearing rules every change must obey. Authoritative
-source: `design/canonical-protocol.md` "Codebase rules" section (11 rules).
+source: `.tmp/design/canonical-protocol.md` "Codebase rules" section (11 rules).
 Condensed here because new sessions must inherit them.
 
 1. **Canonical knows nothing.** `sdk/v1/` declares its own types,
@@ -336,7 +337,7 @@ catalog re-check). Routing reads `snapshot.BindingsForModel(modelID)`.
 
 **Route entity is deferred** — Policy + RelayKey cover the v1 case. When
 multi-tenancy lands the Route + Org/Project hierarchy comes back per
-`design/roadmap.md`.
+`.tmp/design/roadmap.md`.
 
 ### Identity model (every catalog resource)
 
@@ -360,7 +361,7 @@ Model references resolve through `app/modelref` (the catalog reference
 DSL). Resolution-only **aliases** are last-priority matchers attached to a
 Model (`spec.aliases`, e.g. `gpt-5-5[1m]`, wildcard `[*]`); a matched
 alias routes to that model but the upstream model name is sent verbatim.
-See `design/model-aliases.md`.
+See `.tmp/design/model-aliases.md`.
 
 ### Adapter dispatch lives on Binding, not Host
 
@@ -455,7 +456,7 @@ seeded from YAML, mutable via control API, watched live by
 (default edit:true / delete:false — a speed-bump, not a wall). Owner-tier
 invariants are hardcoded in `app/settings.Check(op, kind, ownerKind)`
 (system rows never delete/edit-via-CRUD; user rows allowed;
-catalog-managed rows consult the section). See `design/settings.md`.
+catalog-managed rows consult the section). See `.tmp/design/settings.md`.
 
 ### Hot-path rules (non-negotiable)
 
@@ -509,7 +510,7 @@ panic recovery. Hooks read the per-request `lifecycle.Context` and the
 6. Tests must pass against both `kv.Mem` and `kv.Redis` backends.
 7. Document expected kv ops per request in the consumer's package doc.
 
-Full guide: `design/kv.md`.
+Full guide: `.tmp/design/kv.md`.
 
 ### Storage layer conventions
 
@@ -527,21 +528,21 @@ Full guide: `design/kv.md`.
    `pkg/crypto`. Storage handles already-encrypted bytes; the master key
    never enters `internal/storage`.
 
-Each `app/X.Store` is independent. Full guide: `design/storage.md`.
+Each `app/X.Store` is independent. Full guide: `.tmp/design/storage.md`.
 
 ### Cluster mode
 
 `RELAY_CLUSTER_MODE=on` is on by default in any multi-pod deployment.
 Catalog NOTIFY/LISTEN keeps every pod's snapshot in sync within ~1s. The
 NOTIFY emit (on catalog write) is unconditional; only the LISTEN consumer
-is gated. Full guide: `design/cluster.md`.
+is gated. Full guide: `.tmp/design/cluster.md`.
 
 ### Streaming
 
 - Tee model: response bytes pass through to the caller; the post-flight
   goroutine sees a buffered copy via `io.TeeReader` once `Body.Close()` fires.
 - Same-shape passthrough is the 95% case. Cross-shape transform runs
-  per-chunk via stateful translators (`design/adapters.md`) — each SSE event
+  per-chunk via stateful translators (`.tmp/design/adapters.md`) — each SSE event
   is parsed at the `\n\n` boundary, translated, flushed. Either side may be
   identity (no-op) when shapes match.
 
@@ -600,7 +601,7 @@ observers are live:
   (JSONL) backend is a disk-eating footgun (linear-scan reader, no rotation);
   never leave it on. `cmd/payload-migrate` backfills across backends.
 - **Prometheus** (`app/metricslog`): request counters/histograms. See
-  `design/metrics.md` and `docs/metrics.md`.
+  `.tmp/design/metrics.md` and `docs/reference/metrics.mdx`.
 
 OTel traces are not wired yet — the span belongs on the lifecycle `Context`,
 started at entry, ended in post-flight. Structured JSON logs go to stdout.
@@ -667,6 +668,6 @@ use live numbers for SLO conversations.
 - Boring choices on the edges, smart choices in the middle. The router (chi)
   is the edge; the pipeline is the middle.
 - "Three similar lines is better than a premature abstraction."
-- Read the design docs under `design/` before proposing architecture changes.
-- The roadmap (`design/roadmap.md`) names every known follow-up — check it
+- Read the design docs under `.tmp/design/` before proposing architecture changes.
+- The roadmap (`.tmp/design/roadmap.md`) names every known follow-up — check it
   before opening a new design question.

@@ -7,7 +7,7 @@ import (
 )
 
 // The request-flow metrics (Rate / Errors / Duration) plus the Relay-vs-
-// upstream split. See design/metrics.md for the questions these answer.
+// upstream split.
 //
 // Labelled by `source` (the runner: pipeline/proxy/ws/batch) — the
 // lowest-cardinality dimension already on the lifecycle Context. Wire

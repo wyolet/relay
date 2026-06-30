@@ -35,6 +35,7 @@ reference/
   inference-api.mdx       data-plane endpoints
   control-api.mdx         admin CRUD + ops (mounted under /api)
   headers.mdx             X-WR-* request/response headers
+  metrics.mdx             Prometheus metrics catalog
 troubleshooting.mdx       common errors
 ```
 

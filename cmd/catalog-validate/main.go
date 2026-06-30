@@ -2,8 +2,7 @@
 // (catalogvalidate.ValidateGraph) against a directory of YAML manifests
 // and prints findings. Catalog repos with their own curation conventions
 // don't use this binary directly — they import app/catalogvalidate as a
-// library and compose their own []Rule slice via RunRules. See
-// design/catalog-validation.md.
+// library and compose their own []Rule slice via RunRules.
 //
 // Usage:
 //

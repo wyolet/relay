@@ -41,6 +41,7 @@
               "reference/inference-api",
               "reference/control-api",
               "reference/headers",
+              "reference/metrics",
               "troubleshooting"
             ]
           }
