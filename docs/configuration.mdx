@@ -23,6 +23,8 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
 | `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML (rate limits, identity). |
 | `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. |
+| `RELAY_CATALOG_VERSION` | _(empty)_ | Pin the seeded catalog to a published [relay-catalog](https://github.com/wyolet/relay-catalog) release tag (e.g. `v0.1.0`). On boot, if the stored catalog version differs, the release archive is fetched and re-seeded — no image rebuild needed. Re-seeds never overwrite your changes: operator-edited resources are skipped and overlays re-apply. |
+| `RELAY_CATALOG_URL` | _(GitHub archive)_ | Override the archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point at a mirror for airgapped deployments. |
 | `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget in seconds. |
 | `RELAY_LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warn` \| `error`. |

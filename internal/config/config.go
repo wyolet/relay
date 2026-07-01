@@ -40,6 +40,8 @@ type Config struct {
 	AutoSeedIfEmpty bool
 	ConfigDir       string
 	CatalogDir      string
+	CatalogVersion  string
+	CatalogURL      string
 	InstanceID      string
 	EventlogDir     string
 	MaxRequestBytes int64 // 0 = use httpmw.DefaultMaxRequestBytes
@@ -160,9 +162,19 @@ func Load() (*Config, error) {
 	// is set — operators in airgapped/managed deploys leave it unset and
 	// rely on admin API writes or a pre-populated DB.
 	//
-	// This is the dev/airgapped escape hatch; the tarball-fetcher (planned)
-	// will be the production default once shipped.
+	// This is the dev/airgapped escape hatch; CatalogVersion below is the
+	// production path.
 	cfg.CatalogDir = os.Getenv("RELAY_CATALOG_DIR")
+
+	// CatalogVersion pins the seeded catalog to a published relay-catalog
+	// ref (e.g. "v0.1.0"). At boot the stored catalog-source marker is
+	// compared against it; on mismatch the archive is fetched (from
+	// CatalogURL, default the wyolet/relay-catalog GitHub archive) and
+	// re-seeded — no image rebuild to move catalog versions. Re-seeds skip
+	// operator-edited (dirty) rows and overlays re-merge at snapshot load,
+	// so user changes survive. Unset = seed-if-empty from CatalogDir only.
+	cfg.CatalogVersion = os.Getenv("RELAY_CATALOG_VERSION")
+	cfg.CatalogURL = os.Getenv("RELAY_CATALOG_URL")
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")

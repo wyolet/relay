@@ -40,6 +40,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionParsing,
 		Description: "Inbound request-body parsing depth. RichParsing extracts per-request metadata + messages for attribution/observability; off reads only routing fields. Default on. Hot-reloaded.",
 	})
+	registerSettingsSection[settings.CatalogSource](api, d, protect, settings.Section{
+		Name:        settings.SectionCatalogSource,
+		Description: "Provenance of the seeded public catalog: the version last seeded and when. Compared against RELAY_CATALOG_VERSION at boot; a mismatch triggers a re-seed (operator-edited rows are skipped, overlays re-apply). Blank the version to force a re-seed on the next boot.",
+	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
 			Name:        gs,
