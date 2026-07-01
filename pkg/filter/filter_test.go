@@ -243,3 +243,40 @@ func TestEmptyValueIsNoConstraint(t *testing.T) {
 		t.Fatalf("empty value should not filter, got total %d", total)
 	}
 }
+
+func TestDefaultLimit(t *testing.T) {
+	s := schema()
+	s.DefaultLimit = 2
+
+	parse := func(q string) Query[row] {
+		t.Helper()
+		v, err := url.ParseQuery(q)
+		if err != nil {
+			t.Fatalf("bad test query %q: %v", q, err)
+		}
+		pq, err := s.Parse(v)
+		if err != nil {
+			t.Fatalf("Parse(%q) unexpected error: %v", q, err)
+		}
+		return pq
+	}
+
+	got, total := parse("").Apply(data)
+	if len(got) != 2 || total != 3 {
+		t.Fatalf("absent limit => len %d total %d, want default window 2/3", len(got), total)
+	}
+	got, _ = parse("limit=3").Apply(data)
+	if len(got) != 3 {
+		t.Fatalf("explicit limit=3 => len %d, want 3 (overrides default)", len(got))
+	}
+	got, _ = parse("limit=0").Apply(data)
+	if len(got) != 3 {
+		t.Fatalf("explicit limit=0 => len %d, want 3 (opt out of default)", len(got))
+	}
+
+	// Without DefaultLimit the legacy return-everything behavior holds.
+	got, _ = mustParse(t, "").Apply(data)
+	if len(got) != 3 {
+		t.Fatalf("no default, absent limit => len %d, want 3", len(got))
+	}
+}
