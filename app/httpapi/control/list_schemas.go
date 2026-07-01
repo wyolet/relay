@@ -122,6 +122,9 @@ var modelFilter = filter.Schema[model.Model]{
 	},
 	Labels:      func(m *model.Model) map[string]string { return labelsOf(m.Meta) },
 	DefaultSort: "name",
+	// The catalog is the one list that grows unbounded (500+ models);
+	// don't ship the whole thing to clients that never asked for a window.
+	DefaultLimit: 100,
 }
 
 var hostFilter = filter.Schema[host.Host]{

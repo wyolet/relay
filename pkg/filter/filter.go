@@ -93,6 +93,12 @@ type Schema[T any] struct {
 	// "-created_at". Must reference a Sortable field; empty leaves input
 	// order untouched.
 	DefaultSort string
+	// DefaultLimit is the page size applied when ?limit= is absent, so a
+	// bare list request can't return an unbounded set. 0 keeps the legacy
+	// return-everything behavior. An explicit ?limit=0 opts out (returns
+	// everything up to MaxLimit semantics); the response's pre-window total
+	// always reports the full match count.
+	DefaultLimit int
 }
 
 // Error is a rejected-request error (unknown key, bad value, disallowed
@@ -159,11 +165,22 @@ func (s Schema[T]) Params() []Param {
 			Description: "Label selector key=value (repeatable, all must match)."})
 	}
 	if sortable := s.sortableNames(); len(sortable) > 0 {
-		out = append(out, Param{Name: "sort", Type: "string", Enum: sortable,
+		// Enumerate the "-" descending variants too: generated clients
+		// (openapi-typescript) type the param from this enum, and a
+		// missing "-name" makes valid requests untypeable.
+		enum := make([]string, 0, len(sortable)*2)
+		for _, n := range sortable {
+			enum = append(enum, n, "-"+n)
+		}
+		out = append(out, Param{Name: "sort", Type: "string", Enum: enum,
 			Description: "Sort field; prefix with '-' for descending."})
 	}
+	limitDoc := "Max items to return (page size)."
+	if s.DefaultLimit > 0 {
+		limitDoc = fmt.Sprintf("Max items to return (page size). Defaults to %d when absent; pass 0 for the full set.", s.DefaultLimit)
+	}
 	out = append(out,
-		Param{Name: "limit", Type: "integer", Description: "Max items to return (page size)."},
+		Param{Name: "limit", Type: "integer", Description: limitDoc},
 		Param{Name: "offset", Type: "integer", Description: "Items to skip before the page."})
 	return out
 }
@@ -281,7 +298,9 @@ func (s Schema[T]) Parse(raw url.Values) (Query[T], error) {
 		if n > MaxLimit {
 			n = MaxLimit
 		}
-		q.limit = n
+		q.limit = n // explicit 0 = full set (opt out of DefaultLimit)
+	} else {
+		q.limit = s.DefaultLimit
 	}
 	if v := raw.Get("offset"); v != "" {
 		n, err := strconv.Atoi(v)
