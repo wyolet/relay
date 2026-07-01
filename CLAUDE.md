@@ -228,6 +228,13 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
   tree. When set + `RELAY_AUTO_SEED_IF_EMPTY=1` + PG is empty, Bootstrap
   walks it recursively and seeds. Unset disables auto-seed (falls back to
   the embedded default).
+- `RELAY_CATALOG_VERSION` — pins the seeded catalog to a relay-catalog
+  release tag. At hydrate the stored `catalog-source` settings marker is
+  compared; on mismatch (or empty PG) the archive is fetched
+  (`RELAY_CATALOG_URL` template overrides the GitHub default) and
+  re-seeded, then the marker updated. Layering-safe: dirty rows skipped,
+  overlays re-merge. Fetch failure on a non-empty catalog logs and boots
+  with existing rows. This is the production catalog-upgrade path.
 - The recursive `manifest.LoadDir` is layout-agnostic — dispatches on
   each YAML's `kind` field, so the nested catalog tree just works.
 

@@ -2,7 +2,11 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -40,6 +44,24 @@ type BootstrapOptions struct {
 	// kind field in each YAML doc, so the nested layout is transparent.
 	// Idempotent: if any catalog row already exists, seeding is skipped.
 	AutoSeedDir string
+
+	// CatalogVersion, when non-empty, pins the seeded catalog to a
+	// published relay-catalog ref (tag). At hydrate the stored
+	// "catalog-source" marker is compared against it; on mismatch (or an
+	// empty catalog) the archive is fetched from CatalogURL, seeded, and
+	// the marker updated — no image rebuild needed to move catalog
+	// versions. The seed is layering-safe: operator-edited (dirty) rows
+	// are skipped and overlays re-merge at snapshot load. A fetch failure
+	// against a non-empty catalog logs and continues with the existing
+	// rows (never blocks boot); against an empty catalog it falls back to
+	// AutoSeedDir when set, else fails hydrate (retried by the caller).
+	CatalogVersion string
+
+	// CatalogURL overrides the archive URL template used by
+	// CatalogVersion fetches ("{version}" substituted). Empty uses
+	// seed.DefaultCatalogURLTemplate (the wyolet/relay-catalog GitHub
+	// archive). Point it at a mirror for airgapped deployments.
+	CatalogURL string
 }
 
 // Stores bundles the eight entity stores constructed by Bootstrap. Exposed
@@ -131,7 +153,11 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: load key version: %w", err)
 	}
-	if opts.AutoSeedDir != "" {
+	if opts.CatalogVersion != "" {
+		if err := seedVersioned(ctx, stores, opts); err != nil {
+			return nil, fmt.Errorf("catalog.Hydrate: %w", err)
+		}
+	} else if opts.AutoSeedDir != "" {
 		empty, err := isCatalogEmpty(ctx, stores)
 		if err != nil {
 			return nil, fmt.Errorf("catalog.Hydrate: check empty: %w", err)
@@ -177,6 +203,81 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		return nil, nil, nil, err
 	}
 	return cat, listener, stores, nil
+}
+
+// seedVersioned reconciles the seeded catalog with opts.CatalogVersion:
+// fetch + seed + marker update when the stored catalog-source marker
+// disagrees (or the catalog is empty), no-op otherwise. See the
+// BootstrapOptions.CatalogVersion doc for the failure policy.
+func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) error {
+	row, err := stores.Settings.Get(ctx, settings.SectionCatalogSource)
+	if err != nil {
+		return fmt.Errorf("read catalog-source marker: %w", err)
+	}
+	cur, _ := row.Value.(*settings.CatalogSource)
+	empty, err := isCatalogEmpty(ctx, stores)
+	if err != nil {
+		return fmt.Errorf("check empty: %w", err)
+	}
+	if cur != nil && cur.Version == opts.CatalogVersion && !empty {
+		return nil
+	}
+
+	tmp, err := os.MkdirTemp("", "relay-catalog-*")
+	if err != nil {
+		return fmt.Errorf("catalog fetch tmpdir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	dataDir, fetchErr := seed.FetchCatalog(ctx, opts.CatalogURL, opts.CatalogVersion, tmp)
+	if fetchErr != nil {
+		if !empty {
+			// Availability over freshness: the existing rows keep serving;
+			// the mismatch is retried on the next boot.
+			slog.Error("catalog: versioned fetch failed; keeping existing catalog",
+				"version", opts.CatalogVersion, "err", fetchErr)
+			return nil
+		}
+		if opts.AutoSeedDir != "" {
+			slog.Error("catalog: versioned fetch failed on empty catalog; seeding local dir instead",
+				"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", fetchErr)
+			if _, err := seed.Run(ctx, seed.Options{
+				Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
+			}); err != nil {
+				return fmt.Errorf("fallback seed: %w", err)
+			}
+			// Marker deliberately not written: the local tree's version is
+			// unknown, so the fetch is retried until it succeeds.
+			return nil
+		}
+		return fmt.Errorf("fetch catalog %s: %w", opts.CatalogVersion, fetchErr)
+	}
+
+	res, err := seed.Run(ctx, seed.Options{
+		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
+	})
+	if err != nil {
+		return fmt.Errorf("seed catalog %s: %w", opts.CatalogVersion, err)
+	}
+	marker, err := json.Marshal(settings.CatalogSource{
+		Version:  opts.CatalogVersion,
+		SeededAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal catalog-source marker: %w", err)
+	}
+	if _, err := stores.Settings.Upsert(ctx, settings.SectionCatalogSource, marker); err != nil {
+		return fmt.Errorf("write catalog-source marker: %w", err)
+	}
+	prev := ""
+	if cur != nil {
+		prev = cur.Version
+	}
+	slog.Info("catalog: seeded version",
+		"version", opts.CatalogVersion, "previous", prev,
+		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
+		"skipped_dirty", res.Skipped)
+	return nil
 }
 
 // isCatalogEmpty returns true when every catalog table has zero rows.

@@ -104,6 +104,11 @@ func main() {
 	if cfg.AutoSeedIfEmpty && cfg.CatalogDir != "" {
 		bootOpts.AutoSeedDir = cfg.CatalogDir
 	}
+	if cfg.CatalogVersion != "" {
+		bootOpts.CatalogVersion = cfg.CatalogVersion
+		bootOpts.CatalogURL = cfg.CatalogURL
+		slog.Info("catalog: version pinned", "version", cfg.CatalogVersion)
+	}
 
 	// Stores-first: wire the catalog stores synchronously so the control
 	// plane can serve CRUD even if the data-plane snapshot bootstrap

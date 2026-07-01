@@ -110,3 +110,34 @@ docker run -p 8080:8080 -p 8081:8081 \
 On first boot against an empty database, Relay walks the mounted tree and
 seeds it. See [Configuration](/configuration) for the full set of seed
 variables.
+
+## Pinning a catalog version
+
+To track published catalog releases without rebuilding or remounting
+anything, set `RELAY_CATALOG_VERSION` to a
+[relay-catalog release tag](https://github.com/wyolet/relay-catalog/releases):
+
+```bash
+docker run -p 8080:8080 -p 8081:8081 \
+  -e RELAY_CATALOG_VERSION=v0.1.0 \
+  wyolet/relay:standalone
+```
+
+On boot, Relay compares the tag against the version it last seeded (recorded
+in the `catalog-source` settings section). If they differ — including on a
+fresh database — it downloads that release archive, seeds it, and updates the
+marker. Bumping the env var and restarting is a catalog upgrade.
+
+Re-seeding is layered so your changes survive:
+
+- Resources you've edited through the admin API are marked dirty and are
+  **skipped** by re-seeds.
+- [Overlays](/concepts/overlays) patch pristine catalog rows and re-apply
+  after every re-seed — the catalog can ship new fields underneath while
+  your overrides stay pinned.
+- Resources you created yourself are never touched.
+
+If the download fails and the database already has a catalog, Relay logs the
+failure and keeps serving the existing data — a registry outage never blocks
+boot. Use `RELAY_CATALOG_URL` to fetch from a mirror in airgapped
+environments.
