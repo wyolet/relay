@@ -18,8 +18,80 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/usagelog"
 )
+
+// --- read scoping ---
+//
+// Usage and log events carry the sha256 hash of the inbound bearer
+// (relay_key_hash), so "the caller's traffic" is exactly "events whose hash
+// belongs to a relay-key the caller owns". Under a scoping Authorizer,
+// every usage/logs read is narrowed to that set; admins (and the
+// single-user default authorizer) read the whole stream.
+
+type relayKeyLister interface {
+	List(ctx context.Context) ([]*relaykey.RelayKey, error)
+}
+
+func relayKeysOf(d Deps) relayKeyLister {
+	if d.Stores == nil || d.Stores.RelayKey == nil {
+		return nil
+	}
+	return d.Stores.RelayKey
+}
+
+// relayKeyScope decides what slice of the usage/log stream the caller may
+// read. unrestricted=true means the whole stream. Otherwise hashes lists
+// the bearer hashes of the caller's relay-keys — possibly empty, which
+// means "no events at all", never "everything".
+func relayKeyScope(ctx context.Context, authzr authz.Authorizer, keys relayKeyLister) (hashes []string, unrestricted bool, err error) {
+	// Probe with a non-read verb: OwnerScoped grants it to admins only;
+	// the single-user authorizer grants any authenticated caller.
+	if authzr.Authorize(ctx, "usage.read_all", authz.Resource{Kind: "usage"}) == nil {
+		return nil, true, nil
+	}
+	s, ok := authzr.(authz.Scoper)
+	if !ok || keys == nil {
+		return nil, false, nil // cannot resolve ownership → scope to nothing
+	}
+	all, err := keys.List(ctx)
+	if err != nil {
+		return nil, false, huma.Error500InternalServerError(err.Error())
+	}
+	for _, k := range all {
+		if k.Spec.KeyHash != "" && s.Visible(ctx, "relay-key", k.Meta.Owner) {
+			hashes = append(hashes, k.Spec.KeyHash)
+		}
+	}
+	return hashes, false, nil
+}
+
+// scopeEventQuery narrows q to the given hashes, intersecting any caller-
+// supplied relay_key_hash filter. Returns false when the scoped caller can
+// match no events — the handler must short-circuit to an empty result,
+// because an empty hash filter downstream means "unfiltered".
+func scopeEventQuery(q *usagelog.EventQuery, hashes []string) bool {
+	if len(hashes) == 0 {
+		return false
+	}
+	if len(q.RelayKeyHash) == 0 {
+		q.RelayKeyHash = hashes
+		return true
+	}
+	owned := make(map[string]struct{}, len(hashes))
+	for _, h := range hashes {
+		owned[h] = struct{}{}
+	}
+	kept := q.RelayKeyHash[:0:0]
+	for _, h := range q.RelayKeyHash {
+		if _, ok := owned[h]; ok {
+			kept = append(kept, h)
+		}
+	}
+	q.RelayKeyHash = kept
+	return len(kept) > 0
+}
 
 // --- shared input filters ---
 
@@ -243,7 +315,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageEventsInput) (*usageEventsOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.events", authz.Resource{Kind: "usage"}); err != nil {
+		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		q, err := in.toEventQuery()
@@ -257,6 +329,15 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 				return nil, err
 			}
 			q.CursorTS, q.CursorID = ts, id
+		}
+		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		if err != nil {
+			return nil, err
+		}
+		if !unrestricted && !scopeEventQuery(&q, hashes) {
+			out := &usageEventsOutput{}
+			out.Body.Events = []usagelog.Event{}
+			return out, nil
 		}
 		events, err := d.UsageReader.Events(ctx, q)
 		if err != nil {
@@ -292,12 +373,19 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageSummaryInput) (*usageSummaryOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.summary", authz.Resource{Kind: "usage"}); err != nil {
+		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		base, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
+		}
+		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		if err != nil {
+			return nil, err
+		}
+		if !unrestricted && !scopeEventQuery(&base, hashes) {
+			return &usageSummaryOutput{Body: usagelog.SummaryResult{Rows: []usagelog.SummaryRow{}}}, nil
 		}
 		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy}
 		res, err := d.UsageReader.Summary(ctx, q)
@@ -327,13 +415,18 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageTimeSeriesInput) (*usageTimeSeriesOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.timeseries", authz.Resource{Kind: "usage"}); err != nil {
+		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		base, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
+		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		if err != nil {
+			return nil, err
+		}
+		scopedOut := !unrestricted && !scopeEventQuery(&base, hashes)
 		interval, err := parseInterval(in.Interval)
 		if err != nil {
 			return nil, err
@@ -347,6 +440,9 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if int64(effectiveWindow(base)/interval) > usagelog.MaxBuckets {
 			return nil, huma.Error400BadRequest(
 				"interval too small for the requested window: would exceed the bucket cap — widen interval or shorten since")
+		}
+		if scopedOut {
+			return &usageTimeSeriesOutput{Body: usagelog.TimeSeriesResult{Rows: []usagelog.TimeSeriesRow{}}}, nil
 		}
 		q := usagelog.TimeSeriesQuery{EventQuery: base, Interval: interval, GroupBy: in.GroupBy}
 		res, err := d.UsageReader.TimeSeries(ctx, q)

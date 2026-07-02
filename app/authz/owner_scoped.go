@@ -9,11 +9,12 @@ import (
 	"github.com/wyolet/relay/app/user"
 )
 
-// scopedReadKinds are the catalog kinds whose rows carry meta.Owner and
-// whose reads are therefore scoped per-row via Visible. Reads on any other
-// kind (settings, usage, logs, debug, ...) have no per-row owner to scope
-// by, so OwnerScoped grants them to admins only until a scoped read path
-// exists for that surface.
+// scopedReadKinds are the kinds whose read handlers scope rows to the
+// caller: catalog kinds per-row via Visible on meta.Owner, and the
+// usage/logs read surface via the caller's owned relay-key hashes
+// (relayKeyScope in httpapi/control). Reads on any other kind (settings,
+// debug, ...) have no scoped read path, so OwnerScoped grants them to
+// admins only.
 var scopedReadKinds = map[string]bool{
 	"provider":     true,
 	"host":         true,
@@ -24,6 +25,8 @@ var scopedReadKinds = map[string]bool{
 	"pricing":      true,
 	"host-binding": true,
 	"relay-key":    true,
+	"usage":        true,
+	"logs":         true,
 }
 
 // OwnerScoped grants each authenticated user access to catalog reads and

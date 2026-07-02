@@ -22,11 +22,17 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/catalogview"
+	"github.com/wyolet/relay/app/meta"
 )
 
-func viewService(d Deps) *catalogview.Service {
-	return &catalogview.Service{
+// viewService builds the read-projection service for one request. When the
+// configured Authorizer scopes reads, the service drops rows the caller may
+// not see (foreign policies, foreign host-keys) and 404s policy-rooted
+// projections on invisible policies.
+func viewService(ctx context.Context, d Deps) *catalogview.Service {
+	svc := &catalogview.Service{
 		Models:     d.Stores.Model,
 		Hosts:      d.Stores.Host,
 		Bindings:   d.Stores.Binding,
@@ -36,6 +42,12 @@ func viewService(d Deps) *catalogview.Service {
 		Providers:  d.Stores.Provider,
 		HostKeys:   d.Stores.HostKey,
 	}
+	if s, ok := d.Authz.(authz.Scoper); ok {
+		svc.Visible = func(kind string, owner meta.Owner) bool {
+			return s.Visible(ctx, kind, owner)
+		}
+	}
+	return svc
 }
 
 func notFound(err error, msg string) error {
@@ -113,7 +125,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the hosts that serve this model, with binding + pricing",
 		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*modelHostsOut, error) {
-		m, rows, err := viewService(d).ModelHosts(ctx, in.Ref)
+		m, rows, err := viewService(ctx, d).ModelHosts(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "model not found")
 		}
@@ -127,7 +139,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List this model's pricing per host",
 		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*modelPricingOut, error) {
-		m, rows, err := viewService(d).ModelPricing(ctx, in.Ref)
+		m, rows, err := viewService(ctx, d).ModelPricing(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "model not found")
 		}
@@ -141,7 +153,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the policies that grant this model, with the limits each applies to it",
 		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*modelPoliciesOut, error) {
-		m, rows, err := viewService(d).ModelPolicies(ctx, in.Ref)
+		m, rows, err := viewService(ctx, d).ModelPolicies(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "model not found")
 		}
@@ -155,7 +167,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the models this host serves, with binding + pricing",
 		Tags:    []string{"hosts"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*hostModelsOut, error) {
-		h, rows, err := viewService(d).HostModels(ctx, in.Ref)
+		h, rows, err := viewService(ctx, d).HostModels(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "host not found")
 		}
@@ -169,7 +181,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the upstream credentials this host owns (secret-free)",
 		Tags:    []string{"hosts"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*hostKeysOut, error) {
-		h, rows, err := viewService(d).HostKeyList(ctx, in.Ref)
+		h, rows, err := viewService(ctx, d).HostKeyList(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "host not found")
 		}
@@ -183,7 +195,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the host-tier serving policies this host owns, with limits",
 		Tags:    []string{"hosts"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*hostPoliciesOut, error) {
-		h, rows, err := viewService(d).HostPolicies(ctx, in.Ref)
+		h, rows, err := viewService(ctx, d).HostPolicies(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "host not found")
 		}
@@ -197,7 +209,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the models this policy grants, with the limits it applies to each",
 		Tags:    []string{"policies"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *policyModelsInput) (*policyModelsOut, error) {
-		svc := viewService(d)
+		svc := viewService(ctx, d)
 		p, rows, err := svc.PolicyModels(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "policy not found")
@@ -217,7 +229,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the hosts this policy can reach, with the host-keys that reach each",
 		Tags:    []string{"policies"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*policyHostsOut, error) {
-		p, rows, err := viewService(d).PolicyHosts(ctx, in.Ref)
+		p, rows, err := viewService(ctx, d).PolicyHosts(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "policy not found")
 		}
@@ -231,7 +243,7 @@ func registerSubresources(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "List the rate-limit rule sets this policy references",
 		Tags:    []string{"policies"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *refInput) (*policyRateLimitsOut, error) {
-		p, view, err := viewService(d).PolicyRateLimits(ctx, in.Ref)
+		p, view, err := viewService(ctx, d).PolicyRateLimits(ctx, in.Ref)
 		if err != nil {
 			return nil, notFound(err, "policy not found")
 		}

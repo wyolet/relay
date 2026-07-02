@@ -75,6 +75,20 @@ type Service struct {
 	RateLimits rateLimitStore
 	Providers  providerStore
 	HostKeys   hostKeyStore
+
+	// Visible optionally scopes rows per owner: policy-rooted projections
+	// 404 on a policy the caller may not see, and host-key / policy rows
+	// inside other projections are dropped. Nil leaves every row visible
+	// (the single-user default). kind is the singular resource kind
+	// ("policy", "host-key").
+	Visible func(kind string, owner meta.Owner) bool
+}
+
+func (s *Service) visible(kind string, owner meta.Owner) bool {
+	if s.Visible == nil {
+		return true
+	}
+	return s.Visible(kind, owner)
 }
 
 // ── view shapes ─────────────────────────────────────────────────────────────
@@ -233,6 +247,9 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 
 	rows := []ModelPolicyRow{}
 	for _, p := range idx.policies {
+		if !s.visible("policy", p.Meta.Owner) {
+			continue
+		}
 		hostSlug, granted, _ := idx.policyGrantsModel(p, m, provSlug, modelHosts)
 		if !granted {
 			continue

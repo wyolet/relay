@@ -90,6 +90,8 @@ type PolicyRateLimitRow struct {
 }
 
 // loadPolicy resolves the policy {ref} (id or slug) and builds the index.
+// A policy the caller may not see resolves as ErrNotFound (existence must
+// not be confirmed), which gates every policy-rooted projection.
 func (s *Service) loadPolicy(ctx context.Context, ref string) (*policy.Policy, *index, error) {
 	idx, err := s.buildIndex(ctx)
 	if err != nil {
@@ -97,6 +99,9 @@ func (s *Service) loadPolicy(ctx context.Context, ref string) (*policy.Policy, *
 	}
 	for _, p := range idx.policies {
 		if p.Meta.ID == ref || p.Meta.Name == ref {
+			if !s.visible("policy", p.Meta.Owner) {
+				return nil, nil, ErrNotFound
+			}
 			return p, idx, nil
 		}
 	}
