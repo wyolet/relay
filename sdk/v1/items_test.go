@@ -34,9 +34,9 @@ func TestMessageRoundTrip(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			item, err := unmarshalItem([]byte(tc.wire))
+			item, err := UnmarshalItem([]byte(tc.wire))
 			if err != nil {
-				t.Fatalf("unmarshalItem: %v", err)
+				t.Fatalf("UnmarshalItem: %v", err)
 			}
 			msg, ok := item.(*Message)
 			if !ok {
@@ -49,7 +49,7 @@ func TestMessageRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			item2, err := unmarshalItem(got)
+			item2, err := UnmarshalItem(got)
 			if err != nil {
 				t.Fatalf("re-unmarshal: %v", err)
 			}
@@ -66,7 +66,7 @@ func TestMessageRoundTrip(t *testing.T) {
 
 func TestMessageStringContentNormalization(t *testing.T) {
 	wire := `{"type":"message","role":"user","content":"hello"}`
-	item, err := unmarshalItem([]byte(wire))
+	item, err := UnmarshalItem([]byte(wire))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,9 +85,9 @@ func TestMessageStringContentNormalization(t *testing.T) {
 
 func TestMessageProviderDataRoundTrip(t *testing.T) {
 	wire := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}],"provider_data":{"sig":"abc123"}}`
-	item, err := unmarshalItem([]byte(wire))
+	item, err := UnmarshalItem([]byte(wire))
 	if err != nil {
-		t.Fatalf("unmarshalItem: %v", err)
+		t.Fatalf("UnmarshalItem: %v", err)
 	}
 	msg := item.(*Message)
 	if len(msg.ProviderData) == 0 {
@@ -97,7 +97,7 @@ func TestMessageProviderDataRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	item2, err := unmarshalItem(b)
+	item2, err := UnmarshalItem(b)
 	if err != nil {
 		t.Fatalf("re-unmarshal: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestMessageProviderDataRoundTrip(t *testing.T) {
 
 func TestFunctionCallRoundTrip(t *testing.T) {
 	wire := `{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"get_weather","arguments":"{\"city\":\"NYC\"}","status":"completed"}`
-	item, err := unmarshalItem([]byte(wire))
+	item, err := UnmarshalItem([]byte(wire))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestFunctionCallRoundTrip(t *testing.T) {
 		t.Errorf("call_id: %q", fc.CallID)
 	}
 	b, _ := json.Marshal(fc)
-	item2, err := unmarshalItem(b)
+	item2, err := UnmarshalItem(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestFunctionCallRoundTrip(t *testing.T) {
 func TestFunctionCallOutputRoundTrip(t *testing.T) {
 	t.Run("string output", func(t *testing.T) {
 		wire := `{"type":"function_call_output","call_id":"call_abc","output":"sunny"}`
-		item, err := unmarshalItem([]byte(wire))
+		item, err := UnmarshalItem([]byte(wire))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -146,7 +146,7 @@ func TestFunctionCallOutputRoundTrip(t *testing.T) {
 			t.Errorf("output: %q", fco.Output)
 		}
 		b, _ := json.Marshal(fco)
-		item2, _ := unmarshalItem(b)
+		item2, _ := UnmarshalItem(b)
 		fco2 := item2.(*FunctionCallOutput)
 		if fco2.Output != fco.Output {
 			t.Errorf("output mismatch after round-trip")
@@ -155,7 +155,7 @@ func TestFunctionCallOutputRoundTrip(t *testing.T) {
 
 	t.Run("content array output", func(t *testing.T) {
 		wire := `{"type":"function_call_output","call_id":"call_abc","content":[{"type":"input_text","text":"done"}]}`
-		item, err := unmarshalItem([]byte(wire))
+		item, err := UnmarshalItem([]byte(wire))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +168,7 @@ func TestFunctionCallOutputRoundTrip(t *testing.T) {
 
 func TestReasoningRoundTrip(t *testing.T) {
 	wire := `{"type":"reasoning","id":"rs_1","summary":[{"text":"step 1"},{"text":"step 2"}],"status":"completed"}`
-	item, err := unmarshalItem([]byte(wire))
+	item, err := UnmarshalItem([]byte(wire))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestReasoningRoundTrip(t *testing.T) {
 		t.Errorf("summary length: %d", len(r.Summary))
 	}
 	b, _ := json.Marshal(r)
-	item2, err := unmarshalItem(b)
+	item2, err := UnmarshalItem(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,9 +195,9 @@ func TestReasoningRoundTrip(t *testing.T) {
 
 func TestReasoningProviderDataRoundTrip(t *testing.T) {
 	wire := `{"type":"reasoning","id":"rs_1","summary":[{"text":"thinking"}],"provider_data":{"encrypted":"xyz"}}`
-	item, err := unmarshalItem([]byte(wire))
+	item, err := UnmarshalItem([]byte(wire))
 	if err != nil {
-		t.Fatalf("unmarshalItem: %v", err)
+		t.Fatalf("UnmarshalItem: %v", err)
 	}
 	r := item.(*Reasoning)
 	if len(r.ProviderData) == 0 {
@@ -207,7 +207,7 @@ func TestReasoningProviderDataRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	item2, err := unmarshalItem(b)
+	item2, err := UnmarshalItem(b)
 	if err != nil {
 		t.Fatalf("re-unmarshal: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestMixedItemsArrayRoundTrip(t *testing.T) {
 		{"type":"function_call","id":"fc_1","call_id":"call_1","name":"weather","arguments":"{}"},
 		{"type":"function_call_output","call_id":"call_1","output":"sunny"}
 	]`
-	items, err := unmarshalItems([]byte(wire))
+	items, err := UnmarshalItems([]byte(wire))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,9 +255,40 @@ func TestUnsupportedItemTypeReturnsError(t *testing.T) {
 	}
 	for _, typ := range unsupported {
 		wire := `{"type":"` + typ + `"}`
-		_, err := unmarshalItem([]byte(wire))
+		_, err := UnmarshalItem([]byte(wire))
 		if err == nil {
 			t.Errorf("expected error for type %q, got nil", typ)
 		}
+	}
+}
+
+func TestItemCompletedEventUnmarshal(t *testing.T) {
+	wire := `{"item_id":"msg_1","index":2,"item":{"type":"message","role":"assistant","content":"hi"}}`
+	var ev ItemCompletedEvent
+	if err := json.Unmarshal([]byte(wire), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.ItemID != "msg_1" || ev.Index != 2 {
+		t.Errorf("header: %+v", ev)
+	}
+	msg, ok := ev.Item.(*Message)
+	if !ok {
+		t.Fatalf("want *Message, got %T", ev.Item)
+	}
+	if msg.Role != RoleAssistant {
+		t.Errorf("role: %v", msg.Role)
+	}
+
+	var nullItem ItemCompletedEvent
+	if err := json.Unmarshal([]byte(`{"item_id":"x","index":0,"item":null}`), &nullItem); err != nil {
+		t.Fatal(err)
+	}
+	if nullItem.Item != nil {
+		t.Errorf("null item should stay nil, got %T", nullItem.Item)
+	}
+
+	var bad ItemCompletedEvent
+	if err := json.Unmarshal([]byte(`{"item_id":"x","index":0,"item":{"type":"computer_call"}}`), &bad); err == nil {
+		t.Error("expected error for unsupported item type, got nil")
 	}
 }

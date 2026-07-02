@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -299,10 +300,10 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*Response, erro
 
 	body, err := io.ReadAll(resp.body)
 	if err != nil {
-		return nil, fmt.Errorf("relay client: read body: %w", err)
+		return nil, fmt.Errorf("%s: read body: %w", c.host(), err)
 	}
 	if resp.status/100 != 2 {
-		return nil, parseAPIError(resp.status, body)
+		return nil, parseAPIError(c.host(), resp.status, body)
 	}
 	wire, err := c.translator.ParseResponse(body)
 	if err != nil {
@@ -323,7 +324,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 	if resp.status/100 != 2 {
 		body, _ := io.ReadAll(resp.body)
 		_ = resp.body.Close()
-		return nil, parseAPIError(resp.status, body)
+		return nil, parseAPIError(c.host(), resp.status, body)
 	}
 	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -384,6 +385,16 @@ func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*
 		path = c.pathFn(model, mode == v1.OutputModeStream)
 	}
 	return c.transport.roundTrip(ctx, c, path, body)
+}
+
+// host returns the authority of the client's base URL, used to attribute
+// errors to the upstream actually dialed. Falls back to the raw base URL
+// when it doesn't parse.
+func (c *Client) host() string {
+	if u, err := url.Parse(c.baseURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return c.baseURL
 }
 
 // Event is one canonical stream event: its name (a v1.Event* constant) and the
@@ -513,25 +524,32 @@ func (s *Stream) Timing() StreamTiming {
 	return t
 }
 
-// APIError is a non-2xx response from the target.
+// APIError is a non-2xx response from the target. Host names the upstream
+// the call actually hit (a relay deployment or a vendor host dialed
+// directly), so the error self-identifies its origin.
 type APIError struct {
 	StatusCode int
+	Host       string
 	Code       string
 	Message    string
 	Raw        []byte
 }
 
 func (e *APIError) Error() string {
-	if e.Code != "" {
-		return fmt.Sprintf("relay client: %d %s: %s", e.StatusCode, e.Code, e.Message)
+	host := e.Host
+	if host == "" {
+		host = "upstream"
 	}
-	return fmt.Sprintf("relay client: %d: %s", e.StatusCode, string(e.Raw))
+	if e.Code != "" {
+		return fmt.Sprintf("%s: %d %s: %s", host, e.StatusCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("%s: %d: %s", host, e.StatusCode, string(e.Raw))
 }
 
 // parseAPIError best-effort-extracts a code/message from the common
 // {"error":{...}} envelope (relay, OpenAI, Anthropic all use it).
-func parseAPIError(status int, body []byte) *APIError {
-	e := &APIError{StatusCode: status, Raw: body}
+func parseAPIError(host string, status int, body []byte) *APIError {
+	e := &APIError{StatusCode: status, Host: host, Raw: body}
 	var wire struct {
 		Error struct {
 			Code    string `json:"code"`

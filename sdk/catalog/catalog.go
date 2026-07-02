@@ -111,6 +111,9 @@ type Modalities struct {
 //
 // Name is the model's real provider wire name: the id the provider answers to
 // and echoes back as the ran model — the identity a consumer recognizes.
+// Always non-empty: the generator falls back to the snapshot slug when the
+// catalog carries no distinct wire name, so consumers never need a fallback
+// of their own.
 // MetadataName is the catalog key, the DNS-1123 snapshot slug (== catalog
 // metadata.name), an internal addressing handle (e.g. name gpt-5.5-2026-04-23,
 // MetadataName gpt-5-5-2026-04-23). Both are first-class matchable keys —

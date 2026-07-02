@@ -1,6 +1,10 @@
 package v1
 
-import "github.com/wyolet/relay/sdk/usage"
+import (
+	"encoding/json"
+
+	"github.com/wyolet/relay/sdk/usage"
+)
 
 // Canonical stream event name constants.
 // These six events collapse OpenAI Responses' ~50 event types.
@@ -60,6 +64,31 @@ type ItemCompletedEvent struct {
 	ItemID string `json:"item_id"`
 	Index  int    `json:"index"`
 	Item   Item   `json:"item"`
+}
+
+// UnmarshalJSON decodes the event, dispatching the polymorphic Item field via
+// UnmarshalItem — Item is an interface, so plain json.Unmarshal cannot decode
+// it. A missing or null item leaves the field nil.
+func (e *ItemCompletedEvent) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ItemID string          `json:"item_id"`
+		Index  int             `json:"index"`
+		Item   json.RawMessage `json:"item"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	e.ItemID = raw.ItemID
+	e.Index = raw.Index
+	e.Item = nil
+	if len(raw.Item) > 0 && string(raw.Item) != "null" {
+		item, err := UnmarshalItem(raw.Item)
+		if err != nil {
+			return err
+		}
+		e.Item = item
+	}
+	return nil
 }
 
 // GenerationCompletedEvent is the final event in a stream. Carries the
