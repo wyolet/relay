@@ -22,6 +22,9 @@ target "_common" {
   args = {
     UI_VERSION  = "${UI_VERSION}"
     CATALOG_REF = "${CATALOG_REF}"
+    // Binary version stamp (/api/version). "latest" is a tag alias, not a
+    // version — unversioned builds stamp "dev".
+    VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
   }
   // UI fetch token for the (private) relay-ui repo, read from the GH_TOKEN env.
   // Optional in the Dockerfile (required=false) — unset env yields an empty
@@ -85,6 +88,9 @@ target "local" {
   args = {
     UI_VERSION  = "${UI_VERSION}"
     CATALOG_REF = "${CATALOG_REF}"
+    // Binary version stamp (/api/version). "latest" is a tag alias, not a
+    // version — unversioned builds stamp "dev".
+    VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
   }
   secret = ["id=gh_token,env=GH_TOKEN"]
 }
@@ -100,6 +106,9 @@ target "local-standalone" {
   args = {
     UI_VERSION  = "${UI_VERSION}"
     CATALOG_REF = "${CATALOG_REF}"
+    // Binary version stamp (/api/version). "latest" is a tag alias, not a
+    // version — unversioned builds stamp "dev".
+    VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
   }
   secret = ["id=gh_token,env=GH_TOKEN"]
 }
