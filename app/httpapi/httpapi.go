@@ -20,9 +20,13 @@ import (
 )
 
 // Version is the human-facing build version surfaced in the OpenAPI Info
-// block and the /version endpoint. Bumped manually for now; later wired to
-// `git describe` via -ldflags.
-const Version = "0.1.0"
+// block, /version, and /config.json. Stamped at build time via
+//
+//	-ldflags "-X github.com/wyolet/relay/app/httpapi.Version=<tag>"
+//
+// (the image build threads the release tag through docker-bake.hcl →
+// Dockerfile). Unstamped builds report "dev".
+var Version = "dev"
 
 // installOnce gates the global huma overrides (error rewriter + schema
 // namer) so both planes' Mount() can call Install without doubling up.

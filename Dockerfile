@@ -81,7 +81,13 @@ COPY . .
 RUN mkdir -p cmd/relay/web/dist
 COPY --from=assets /assets/ui/ cmd/relay/web/dist/
 RUN touch cmd/relay/web/dist/.gitkeep
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /relay ./cmd/relay
+# VERSION stamps /api/version + the OpenAPI Info block; "dev" when unset
+# (bare `docker build`). The release pipeline passes the git tag via
+# docker-bake.hcl.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w -X github.com/wyolet/relay/app/httpapi.Version=${VERSION}" \
+    -o /relay ./cmd/relay
 
 # --- final (lean): distroless, nonroot — production image, external Postgres ---
 FROM gcr.io/distroless/static-debian12:nonroot AS lean
