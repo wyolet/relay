@@ -44,13 +44,18 @@ func TestOwnerScopedAuthorize(t *testing.T) {
 		{"user reads model", alice, "models.read", Resource{Kind: "model", Name: "gpt-4o"}, nil},
 		{"user reads model overlay", alice, "models.overlay.read", Resource{Kind: "model", ID: "m-1"}, nil},
 
-		// Reads on non-catalog kinds: admin only until those surfaces scope.
+		// Usage/logs reads pass authz; their handlers scope rows to the
+		// caller's relay-keys. The read_all probe stays admin-only.
+		{"user reads usage (handler-scoped)", alice, "usage.read", Resource{Kind: "usage"}, nil},
+		{"user lists logs (handler-scoped)", alice, "logs.list", Resource{Kind: "logs"}, nil},
+		{"user denied usage read_all probe", alice, "usage.read_all", Resource{Kind: "usage"}, ErrForbidden},
+		{"admin passes usage read_all probe", root, "usage.read_all", Resource{Kind: "usage"}, nil},
+
+		// Reads on non-scoped kinds: admin only.
 		{"user denied settings read", alice, "settings.read", Resource{Kind: "settings"}, ErrForbidden},
-		{"user denied usage", alice, "usage.events", Resource{Kind: "usage"}, ErrForbidden},
-		{"user denied logs", alice, "logs.list", Resource{Kind: "logs"}, ErrForbidden},
 		{"user denied debug", alice, "debug.snapshot", Resource{Kind: "debug"}, ErrForbidden},
 		{"admin role reads settings", root, "settings.read", Resource{Kind: "settings"}, nil},
-		{"admin token reads usage", token, "usage.events", Resource{Kind: "usage"}, nil},
+		{"admin token reads usage", token, "usage.read", Resource{Kind: "usage"}, nil},
 
 		// Mutations with no owner info fail closed for non-admins.
 		{"user denied ownerless update", alice, "policies.update", Resource{Kind: "policy", ID: "x"}, ErrForbidden},

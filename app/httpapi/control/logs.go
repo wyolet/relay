@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -96,6 +97,15 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
+		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		if err != nil {
+			return nil, err
+		}
+		if !unrestricted && !scopeEventQuery(&q, hashes) {
+			out := &logsListOutput{}
+			out.Body.Logs = []usagelog.Event{}
+			return out, nil
+		}
 		events, err := d.UsageReader.Events(ctx, q)
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -125,7 +135,7 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
 	}, func(ctx context.Context, in *logGetInput) (*logGetOutput, error) {
-		if err := d.Authz.Authorize(ctx, "logs.get", authz.Resource{Kind: "logs"}); err != nil {
+		if err := d.Authz.Authorize(ctx, "logs.read", authz.Resource{Kind: "logs"}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		events, err := d.UsageReader.Events(ctx, usagelog.EventQuery{RequestID: in.RequestID, Limit: 1})
@@ -133,6 +143,16 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		if len(events) == 0 {
+			return nil, huma.Error404NotFound("no log record for request id " + in.RequestID)
+		}
+		// A record from someone else's traffic (or unattributed traffic) is
+		// 404, not 403 — don't confirm the request id exists. Gates the
+		// payload join below too.
+		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		if err != nil {
+			return nil, err
+		}
+		if !unrestricted && !slices.Contains(hashes, events[0].RelayKeyHash) {
 			return nil, huma.Error404NotFound("no log record for request id " + in.RequestID)
 		}
 		out := &logGetOutput{}
