@@ -322,7 +322,6 @@ func idTokenClaims(tok *oauth.Token) (*idClaims, error) {
 	return nil, fmt.Errorf("token response carried neither an id_token nor an inline user profile (is the openid scope configured?)")
 }
 
-
 // cachedDiscover wraps sdk/oauth issuer discovery with a small per-process
 // cache so each login dance doesn't refetch provider metadata.
 func cachedDiscover() func(ctx context.Context, pc oauth.ProviderConfig) (oauth.ProviderConfig, error) {
