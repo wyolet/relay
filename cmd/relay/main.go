@@ -43,10 +43,12 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/app/user"
 	relayweb "github.com/wyolet/relay/cmd/relay/web"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
 	"github.com/wyolet/relay/pkg/kv"
@@ -153,6 +155,14 @@ func main() {
 	}
 	if n := len(idStore.Users()); n > 0 {
 		slog.Debug("identity: loaded users", "count", n)
+	}
+
+	// DB-backed users: login reads the table; YAML identity is the
+	// seed-if-absent bootstrap (and break-glass fallback at login).
+	usersStore := user.NewStore(gen.New(st.Pool()))
+	if err := user.SeedFromIdentity(bootCtx, usersStore, idStore, slog.Default()); err != nil {
+		slog.Error("user seed from identity YAML failed", "err", err)
+		os.Exit(1)
 	}
 
 	// kv backend — sessions, rate-limits, key-pool all share this.
@@ -457,13 +467,14 @@ func main() {
 		// before it knows the /api prefix. It advertises controlApiUrl=/api so
 		// the SPA's API client targets /api/* while the SPA's own routes
 		// (/models, /policies, …) fall through to the embedded UI below.
-		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(runtimeConfig(cfg)))
+		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(runtimeConfig(cfg), cat))
 		// Control API under /api so its CRUD paths (/models, /policies, …) don't
 		// shadow the SPA's identically-named client-side routes on the shared
 		// control origin (a hard-reload of /models must serve the UI, not JSON).
 		ctrlRouter.Route("/api", func(r chi.Router) {
 			control.Mount(r, control.Deps{
 				Identity:      idStore,
+				Users:         usersStore,
 				Sessions:      sessMgr,
 				AdminToken:    cfg.AdminToken,
 				Authz:         authz.AlwaysAllowAuthenticated{},

@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
 )
 
@@ -28,6 +29,11 @@ import (
 type Deps struct {
 	// Identity is the YAML-backed user store used by /auth/login.
 	Identity *identity.Store
+
+	// Users is the DB-backed user store. Login consults it before the YAML
+	// fallback; the OIDC callback provisions into it. nil disables both
+	// (YAML-only deployments).
+	Users *user.Store
 
 	// Sessions is the cookie-backed session manager. Login/Logout write to
 	// it; the session middleware (installed by Mount) reads from it.
@@ -122,6 +128,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerVersion(api)          // public
 	registerConfigJSON(api, d)    // public: GET /config.json for the embedded UI
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
+	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
 	registerCRUD(api, d, protect) // 8 kinds × CRUD
 	registerHostKeyRotate(api, d, protect)

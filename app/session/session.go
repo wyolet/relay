@@ -29,6 +29,7 @@ const (
 	cookieName    = "relay_session"
 	keyUserID     = "user_id"
 	keyUsername   = "username"
+	keyRoles      = "roles"
 	defaultExpiry = 24 * time.Hour
 )
 
@@ -72,20 +73,28 @@ func (m *Manager) Middleware(h http.Handler) http.Handler {
 				Username:  m.sm.GetString(ctx, keyUsername),
 				SessionID: m.sm.Token(ctx),
 			}
+			if raw := m.sm.GetString(ctx, keyRoles); raw != "" {
+				_ = json.Unmarshal([]byte(raw), &a.Roles)
+			}
 			ctx = actor.WithActor(ctx, a)
 		}
 		h.ServeHTTP(w, r.WithContext(ctx))
 	}))
 }
 
-// Login records userID/username into the current session, rotating the
-// session ID to prevent session fixation. Call after credential validation.
-func (m *Manager) Login(ctx context.Context, userID, username string) error {
+// Login records userID/username (and any roles) into the current session,
+// rotating the session ID to prevent session fixation. Call after
+// credential validation.
+func (m *Manager) Login(ctx context.Context, userID, username string, roles ...string) error {
 	if err := m.sm.RenewToken(ctx); err != nil {
 		return err
 	}
 	m.sm.Put(ctx, keyUserID, userID)
 	m.sm.Put(ctx, keyUsername, username)
+	if len(roles) > 0 {
+		b, _ := json.Marshal(roles)
+		m.sm.Put(ctx, keyRoles, string(b))
+	}
 	return nil
 }
 

@@ -194,6 +194,15 @@ func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 	return err
 }
 
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users WHERE id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteUser, id)
+	return err
+}
+
 const getBatch = `-- name: GetBatch :one
 SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
 FROM batches WHERE id = $1
@@ -586,6 +595,69 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 	row := q.db.QueryRow(ctx, getSetting, section)
 	var i Setting
 	err := row.Scan(&i.Section, &i.Value, &i.UpdatedAt)
+	return i, err
+}
+
+const getUser = `-- name: GetUser :one
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users WHERE id = $1
+`
+
+func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
+	row := q.db.QueryRow(ctx, getUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.OidcSubject,
+		&i.Roles,
+		&i.Disabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users WHERE oidc_subject = $1
+`
+
+func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.Text) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByOIDCSubject, oidcSubject)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.OidcSubject,
+		&i.Roles,
+		&i.Disabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByUsername = `-- name: GetUserByUsername :one
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users WHERE username = $1
+`
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByUsername, username)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Email,
+		&i.PasswordHash,
+		&i.OidcSubject,
+		&i.Roles,
+		&i.Disabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -1502,6 +1574,40 @@ func (q *Queries) ListStoredSecretsForRotation(ctx context.Context) ([]ListStore
 	return items, nil
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users ORDER BY created_at ASC
+`
+
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.Email,
+			&i.PasswordHash,
+			&i.OidcSubject,
+			&i.Roles,
+			&i.Disabled,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const maxSecretValueKeyVersion = `-- name: MaxSecretValueKeyVersion :one
 SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values
 `
@@ -2048,5 +2154,41 @@ type UpsertSettingParams struct {
 
 func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
 	_, err := q.db.Exec(ctx, upsertSetting, arg.Section, arg.Value)
+	return err
+}
+
+const upsertUser = `-- name: UpsertUser :exec
+INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE SET
+    username      = EXCLUDED.username,
+    email         = EXCLUDED.email,
+    password_hash = EXCLUDED.password_hash,
+    oidc_subject  = EXCLUDED.oidc_subject,
+    roles         = EXCLUDED.roles,
+    disabled      = EXCLUDED.disabled,
+    updated_at    = now()
+`
+
+type UpsertUserParams struct {
+	ID           string      `db:"id" json:"id"`
+	Username     string      `db:"username" json:"username"`
+	Email        pgtype.Text `db:"email" json:"email"`
+	PasswordHash pgtype.Text `db:"password_hash" json:"password_hash"`
+	OidcSubject  pgtype.Text `db:"oidc_subject" json:"oidc_subject"`
+	Roles        []string    `db:"roles" json:"roles"`
+	Disabled     bool        `db:"disabled" json:"disabled"`
+}
+
+func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
+	_, err := q.db.Exec(ctx, upsertUser,
+		arg.ID,
+		arg.Username,
+		arg.Email,
+		arg.PasswordHash,
+		arg.OidcSubject,
+		arg.Roles,
+		arg.Disabled,
+	)
 	return err
 }

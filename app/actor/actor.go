@@ -32,10 +32,27 @@ type Actor struct {
 	// permissions to break-glass callers.
 	AdminToken bool
 
+	// Roles are carried verbatim from the user record at session build;
+	// app/authz interprets them. Empty for the admin-token bypass (which
+	// AdminToken already marks as all-powerful).
+	Roles []string
+
 	// Future fields (intentionally empty in v1; populated by the multi-
 	// tenant work):
 	//   ActiveOrgID string
-	//   Roles       []string
+}
+
+// HasRole reports whether the actor carries role.
+func (a *Actor) HasRole(role string) bool {
+	if a == nil {
+		return false
+	}
+	for _, r := range a.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
 }
 
 // IsAuthenticated reports whether the actor represents any kind of valid

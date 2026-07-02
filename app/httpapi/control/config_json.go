@@ -20,23 +20,43 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/settings"
 )
 
 // ConfigJSONHandler serves GET /config.json at the control listener ROOT. The
 // UI fetches ${origin}/config.json at boot — before it knows the /api prefix —
 // so this must stay at root even though the rest of the control API mounts
-// under /api. The body is constant for the process lifetime, so it is
-// marshalled once. Mirrors registerConfigJSON's body shaping.
-func ConfigJSONHandler(rc RuntimeConfig) http.HandlerFunc {
+// under /api. Static fields are marshalled per request because feature flags
+// (auth:oidc) are settings-driven and may flip at runtime. Mirrors
+// registerConfigJSON's body shaping.
+func ConfigJSONHandler(rc RuntimeConfig, settingsSrc settings.Reader) http.HandlerFunc {
 	if rc.Version == "" {
 		rc.Version = httpapi.Version
 	}
-	buf, _ := json.Marshal(rc)
 	return func(w http.ResponseWriter, _ *http.Request) {
+		buf, _ := json.Marshal(withFeatures(rc, settingsSrc))
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=600")
 		_, _ = w.Write(buf)
 	}
+}
+
+// withFeatures overlays settings-driven feature flags onto the static
+// runtime config. The rc value is copied; its Features map is never mutated.
+func withFeatures(rc RuntimeConfig, settingsSrc settings.Reader) RuntimeConfig {
+	if settingsSrc == nil {
+		return rc
+	}
+	if !settings.AuthOIDCFrom(settingsSrc).Enabled {
+		return rc
+	}
+	f := make(map[string]bool, len(rc.Features)+1)
+	for k, v := range rc.Features {
+		f[k] = v
+	}
+	f["oidc"] = true
+	rc.Features = f
+	return rc
 }
 
 // RuntimeConfig is the JSON shape the UI reads. Every field is optional and
@@ -78,11 +98,9 @@ func registerConfigJSON(api huma.API, d Deps) {
 	if body.Version == "" {
 		body.Version = httpapi.Version
 	}
-	resp := &configJSONOutput{
-		// Cacheable but short — a deploy's new values land within a minute,
-		// and refreshes within a session serve from cache. Never no-store.
-		CacheControl: "public, max-age=60, stale-while-revalidate=600",
-		Body:         body,
+	var settingsSrc settings.Reader
+	if d.Catalog != nil {
+		settingsSrc = d.Catalog
 	}
 	huma.Register(api, huma.Operation{
 		OperationID: "runtime_config",
@@ -91,6 +109,11 @@ func registerConfigJSON(api huma.API, d Deps) {
 		Summary:     "Public runtime config for the embedded admin UI",
 		Tags:        []string{"system"},
 	}, func(_ context.Context, _ *struct{}) (*configJSONOutput, error) {
-		return resp, nil
+		return &configJSONOutput{
+			// Cacheable but short — a deploy's new values land within a minute,
+			// and refreshes within a session serve from cache. Never no-store.
+			CacheControl: "public, max-age=60, stale-while-revalidate=600",
+			Body:         withFeatures(body, settingsSrc),
+		}, nil
 	})
 }

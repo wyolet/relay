@@ -6,6 +6,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
 )
 
@@ -20,8 +21,9 @@ type loginInput struct {
 // authResponse is shared by /auth/login and /auth/whoami.
 type authResponse struct {
 	Body struct {
-		UserID   string `json:"user_id"`
-		Username string `json:"username"`
+		UserID   string   `json:"user_id"`
+		Username string   `json:"username"`
+		Roles    []string `json:"roles,omitempty"`
 	}
 }
 
@@ -36,22 +38,41 @@ func registerAuth(api huma.API, d Deps) {
 		Tags:        []string{"auth"},
 		Errors:      []int{401, 503},
 	}, func(ctx context.Context, in *loginInput) (*authResponse, error) {
-		if d.Identity == nil {
-			return nil, huma.Error503ServiceUnavailable("login not configured (no identity store)")
+		// DB-backed users first; YAML identity remains the bootstrap /
+		// break-glass fallback. Both mint the same session shape.
+		if d.Users != nil {
+			u, err := d.Users.ByUsername(ctx, in.Body.Username)
+			if err != nil {
+				return nil, huma.Error500InternalServerError("user lookup failed: " + err.Error())
+			}
+			if u != nil && !u.Disabled && user.VerifyPassword(u.PasswordHash, in.Body.Password) {
+				if err := d.Sessions.Login(ctx, u.ID, u.Username, u.Roles...); err != nil {
+					return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
+				}
+				out := &authResponse{}
+				out.Body.UserID = u.ID
+				out.Body.Username = u.Username
+				out.Body.Roles = u.Roles
+				return out, nil
+			}
 		}
-		user, ok := d.Identity.ByUsername(in.Body.Username)
+		if d.Identity == nil {
+			return nil, huma.Error401Unauthorized("invalid credentials")
+		}
+		yu, ok := d.Identity.ByUsername(in.Body.Username)
 		if !ok {
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
-		if !identity.Verify(user, in.Body.Password) {
+		if !identity.Verify(yu, in.Body.Password) {
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
-		if err := d.Sessions.Login(ctx, user.Metadata.Name, user.Spec.Username.Get()); err != nil {
+		if err := d.Sessions.Login(ctx, yu.Metadata.Name, yu.Spec.Username.Get(), yu.Spec.Roles...); err != nil {
 			return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 		}
 		out := &authResponse{}
-		out.Body.UserID = user.Metadata.Name
-		out.Body.Username = user.Spec.Username.Get()
+		out.Body.UserID = yu.Metadata.Name
+		out.Body.Username = yu.Spec.Username.Get()
+		out.Body.Roles = yu.Spec.Roles
 		return out, nil
 	})
 
@@ -83,6 +104,7 @@ func registerAuth(api huma.API, d Deps) {
 		out := &authResponse{}
 		out.Body.UserID = a.UserID
 		out.Body.Username = a.Username
+		out.Body.Roles = a.Roles
 		return out, nil
 	})
 }

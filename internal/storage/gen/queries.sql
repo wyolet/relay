@@ -392,3 +392,30 @@ ON CONFLICT (kind, resource_id) DO UPDATE SET
 
 -- name: DeleteOverlay :exec
 DELETE FROM overlays WHERE kind = $1 AND resource_id = $2;
+
+-- name: GetUser :one
+SELECT * FROM users WHERE id = $1;
+
+-- name: GetUserByUsername :one
+SELECT * FROM users WHERE username = $1;
+
+-- name: GetUserByOIDCSubject :one
+SELECT * FROM users WHERE oidc_subject = $1;
+
+-- name: ListUsers :many
+SELECT * FROM users ORDER BY created_at ASC;
+
+-- name: UpsertUser :exec
+INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE SET
+    username      = EXCLUDED.username,
+    email         = EXCLUDED.email,
+    password_hash = EXCLUDED.password_hash,
+    oidc_subject  = EXCLUDED.oidc_subject,
+    roles         = EXCLUDED.roles,
+    disabled      = EXCLUDED.disabled,
+    updated_at    = now();
+
+-- name: DeleteUser :exec
+DELETE FROM users WHERE id = $1;
