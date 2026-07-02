@@ -21,6 +21,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
@@ -272,6 +273,9 @@ func registerKind[T any](
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
 				m.Owner.Kind = defaultOwnerKind
 			}
+			if err := stampOwnerID(ctx, &m.Owner); err != nil {
+				return nil, huma.Error400BadRequest(err.Error())
+			}
 			// Validate AFTER stamping id+slug so the entity's Validate() sees
 			// the same shape the store will persist. Rejecting here keeps bad
 			// rows out of PG (which would otherwise break Bootstrap).
@@ -328,6 +332,8 @@ func registerKind[T any](
 		if mergeUpdate != nil {
 			mergeUpdate(existing, v)
 		}
+		// Owner is server-controlled provenance; PUT cannot chown a row.
+		m.Owner = metaOf(existing).Owner
 		if validate != nil {
 			if err := validate(v); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
@@ -394,6 +400,29 @@ func registerKind[T any](
 		}
 		return &emptyResponse{}, nil
 	})
+}
+
+// stampOwnerID fills Owner.ID from the acting user on user-owned rows so
+// ownership is recorded with an identity to key on. Admin-token callers
+// carry no UserID: their rows keep an empty owner id and behave as
+// operator/shared rows. A client-supplied owner.id must be truthful — only
+// the break-glass admin token may set someone else's.
+func stampOwnerID(ctx context.Context, o *meta.Owner) error {
+	if o.Kind != meta.OwnerUser {
+		return nil
+	}
+	a := actor.From(ctx)
+	if a == nil {
+		return nil
+	}
+	switch {
+	case o.ID == "":
+		o.ID = a.UserID
+	case o.ID == a.UserID || a.AdminToken:
+	default:
+		return errors.New("owner.id must be empty or match the calling user")
+	}
+	return nil
 }
 
 // slugTakenFn returns the existence predicate slug.Unique needs to mint a
