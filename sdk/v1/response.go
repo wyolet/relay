@@ -120,7 +120,7 @@ func ParseResponse(body []byte) (*Response, error) {
 		Extensions:        raw.Extensions,
 	}
 	if len(raw.Output) > 0 && string(raw.Output) != "null" {
-		items, err := unmarshalItems(raw.Output)
+		items, err := UnmarshalItems(raw.Output)
 		if err != nil {
 			return nil, fmt.Errorf("output: %w", err)
 		}

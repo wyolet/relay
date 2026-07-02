@@ -192,9 +192,12 @@ func (r *Reasoning) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// unmarshalItem decodes a single item from wire format.
-// Returns an explicit error for unsupported item types.
-func unmarshalItem(data []byte) (Item, error) {
+// UnmarshalItem decodes a single item from its wire JSON, dispatching on the
+// "type" discriminator to the concrete Item type. Returns an explicit error
+// for unsupported item types — consumers persisting or re-parsing items should
+// use this instead of probing the type tag themselves, so a new item type
+// fails loudly rather than being silently dropped.
+func UnmarshalItem(data []byte) (Item, error) {
 	var probe struct {
 		Type ItemType `json:"type"`
 	}
@@ -231,15 +234,15 @@ func unmarshalItem(data []byte) (Item, error) {
 	}
 }
 
-// unmarshalItems decodes an array of items from wire JSON.
-func unmarshalItems(data []byte) ([]Item, error) {
+// UnmarshalItems decodes a JSON array of items via UnmarshalItem.
+func UnmarshalItems(data []byte) ([]Item, error) {
 	var raws []json.RawMessage
 	if err := json.Unmarshal(data, &raws); err != nil {
 		return nil, fmt.Errorf("input array: %w", err)
 	}
 	items := make([]Item, 0, len(raws))
 	for _, raw := range raws {
-		it, err := unmarshalItem(raw)
+		it, err := UnmarshalItem(raw)
 		if err != nil {
 			return nil, err
 		}

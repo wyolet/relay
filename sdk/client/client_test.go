@@ -187,6 +187,13 @@ func TestRelay_APIError(t *testing.T) {
 	if apiErr.StatusCode != 400 || apiErr.Code != "translate_request" {
 		t.Errorf("apiErr: %+v", apiErr)
 	}
+	wantHost := strings.TrimPrefix(srv.URL, "http://")
+	if apiErr.Host != wantHost {
+		t.Errorf("host: %q, want %q", apiErr.Host, wantHost)
+	}
+	if !strings.Contains(apiErr.Error(), wantHost) {
+		t.Errorf("error should name the upstream host: %q", apiErr.Error())
+	}
 }
 
 // --- OpenAI direct target (CC translator) — bypasses relay ---

@@ -96,5 +96,5 @@ func normalizeInput(raw json.RawMessage) ([]Item, error) {
 			Content: []Part{&TextPart{Text: s}},
 		}}, nil
 	}
-	return unmarshalItems(raw)
+	return UnmarshalItems(raw)
 }

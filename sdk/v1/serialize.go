@@ -14,7 +14,7 @@ func Marshal(resp *Response) ([]byte, error) {
 }
 
 // UnmarshalResponse decodes a wire JSON response into a *Response.
-// Output items are dispatched via unmarshalItem.
+// Output items are dispatched via UnmarshalItem.
 func UnmarshalResponse(data []byte) (*Response, error) {
 	var wire struct {
 		ID                string                     `json:"id"`
@@ -35,7 +35,7 @@ func UnmarshalResponse(data []byte) (*Response, error) {
 
 	output := make([]Item, 0, len(wire.Output))
 	for i, raw := range wire.Output {
-		item, err := unmarshalItem(raw)
+		item, err := UnmarshalItem(raw)
 		if err != nil {
 			return nil, fmt.Errorf("output[%d]: %w", i, err)
 		}
