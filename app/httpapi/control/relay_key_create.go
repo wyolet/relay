@@ -79,6 +79,9 @@ func registerRelayKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 			k.Meta.Name = slug.Unique(base, slugTakenFn(d.Stores.RelayKey, func(rk *relaykey.RelayKey) *meta.Metadata { return &rk.Meta }))
 		}
 		k.Meta.Owner.Kind = meta.OwnerUser
+		if err := stampOwnerID(ctx, &k.Meta.Owner); err != nil {
+			return nil, huma.Error400BadRequest(err.Error())
+		}
 
 		k.Spec.PolicyID = in.Body.Spec.PolicyID
 		k.Spec.Enabled = in.Body.Spec.Enabled
