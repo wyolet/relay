@@ -18,6 +18,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/model"
@@ -80,8 +81,11 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 			"sanitizer may have dropped it.",
 		Tags:        []string{"debug"},
 		Middlewares: protect,
-		Errors:      []int{401, 500},
+		Errors:      []int{401, 403, 500},
 	}, func(ctx context.Context, in *debugSnapshotInput) (*debugSnapshotOutput, error) {
+		if err := d.Authz.Authorize(ctx, "debug.snapshot", authz.Resource{Kind: "debug"}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
 		snap := d.Catalog.Current()
 		out := &debugSnapshotOutput{}
 

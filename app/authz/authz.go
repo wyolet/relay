@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/meta"
 )
 
 // ErrUnauthenticated is returned when the call has no actor in context.
@@ -35,6 +36,22 @@ type Resource struct {
 	Kind string // "provider", "policy", "model", ...
 	ID   string // resource id, if known (UUID)
 	Name string // resource slug, if id is not known
+	// Owner is the target row's provenance, populated by handlers that
+	// have already fetched the row (mutations authorize twice as cheaply
+	// as fetching twice). Nil means "owner unknown" — owner-aware
+	// implementations must fail closed on mutations, not open.
+	Owner *meta.Owner
+}
+
+// Scoper is an optional interface an Authorizer may implement to gate
+// per-row visibility in list/read paths, where per-row Authorize calls
+// would be the wrong shape. Handlers filter rows through Visible when the
+// configured Authorizer implements it; an Authorizer that doesn't (the
+// default AlwaysAllowAuthenticated) leaves reads unfiltered.
+type Scoper interface {
+	// Visible reports whether the current actor may see a row of kind
+	// with the given owner in lists and reads.
+	Visible(ctx context.Context, kind string, owner meta.Owner) bool
 }
 
 // Authorizer is the policy-decision interface. Authorize returns nil to

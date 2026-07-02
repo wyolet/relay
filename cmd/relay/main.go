@@ -471,13 +471,17 @@ func main() {
 		// Control API under /api so its CRUD paths (/models, /policies, …) don't
 		// shadow the SPA's identically-named client-side routes on the shared
 		// control origin (a hard-reload of /models must serve the UI, not JSON).
+		var authorizer authz.Authorizer = authz.AlwaysAllowAuthenticated{}
+		if cfg.MultiUser {
+			authorizer = authz.OwnerScoped{}
+		}
 		ctrlRouter.Route("/api", func(r chi.Router) {
 			control.Mount(r, control.Deps{
 				Identity:      idStore,
 				Users:         usersStore,
 				Sessions:      sessMgr,
 				AdminToken:    cfg.AdminToken,
-				Authz:         authz.AlwaysAllowAuthenticated{},
+				Authz:         authorizer,
 				Catalog:       cat,
 				Stores:        stores,
 				CookieSecure:  cookieSecure,
