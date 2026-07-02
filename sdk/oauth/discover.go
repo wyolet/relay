@@ -37,23 +37,28 @@ func (c ProviderConfig) Discover(ctx context.Context, hc *http.Client) (Provider
 		hc = http.DefaultClient
 	}
 
-	url := strings.TrimRight(c.Issuer, "/") + "/.well-known/oauth-authorization-server"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return c, err
+	// RFC 8414 first, then OpenID Connect discovery — providers commonly
+	// publish only one of the two paths.
+	base := strings.TrimRight(c.Issuer, "/")
+	var (
+		md      asMetadata
+		lastErr error
+	)
+	for _, url := range []string{
+		base + "/.well-known/oauth-authorization-server",
+		base + "/.well-known/openid-configuration",
+	} {
+		m, err := fetchASMetadata(ctx, hc, url)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		md = m
+		lastErr = nil
+		break
 	}
-	req.Header.Set("Accept", "application/json")
-	resp, err := hc.Do(req)
-	if err != nil {
-		return c, fmt.Errorf("oauth: discover %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return c, fmt.Errorf("oauth: discover %s: status %d", url, resp.StatusCode)
-	}
-	var md asMetadata
-	if err := json.NewDecoder(resp.Body).Decode(&md); err != nil {
-		return c, fmt.Errorf("oauth: discover %s: decode: %w", url, err)
+	if lastErr != nil {
+		return c, lastErr
 	}
 
 	out := c
@@ -67,7 +72,28 @@ func (c ProviderConfig) Discover(ctx context.Context, hc *http.Client) (Provider
 		out.DeviceAuthURL = md.DeviceAuthorizationEndpoint
 	}
 	if out.AuthURL == "" || out.TokenURL == "" {
-		return c, fmt.Errorf("oauth: discover %s: metadata missing authorization_endpoint or token_endpoint", url)
+		return c, fmt.Errorf("oauth: discover %s: metadata missing authorization_endpoint or token_endpoint", c.Issuer)
 	}
 	return out, nil
+}
+
+func fetchASMetadata(ctx context.Context, hc *http.Client, url string) (asMetadata, error) {
+	var md asMetadata
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return md, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return md, fmt.Errorf("oauth: discover %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return md, fmt.Errorf("oauth: discover %s: status %d", url, resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&md); err != nil {
+		return md, fmt.Errorf("oauth: discover %s: decode: %w", url, err)
+	}
+	return md, nil
 }

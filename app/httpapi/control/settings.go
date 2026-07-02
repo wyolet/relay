@@ -44,6 +44,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.SectionCatalogSource,
 		Description: "Provenance of the seeded public catalog: the version last seeded and when. Compared against RELAY_CATALOG_VERSION at boot; a mismatch triggers a re-seed (operator-edited rows are skipped, overlays re-apply). Blank the version to force a re-seed on the next boot.",
 	})
+	registerSettingsSection[settings.AuthOIDC](api, d, protect, settings.Section{
+		Name:        settings.AuthOIDCSection,
+		Description: "Inbound OpenID Connect login for the control plane. Generic OIDC (issuer discovery + authorization-code flow); disabled by default. registration=open auto-provisions a user on first login. The client secret is referenced by env var name, never stored here.",
+	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
 			Name:        gs,
