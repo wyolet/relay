@@ -42,14 +42,14 @@ func registerRelayKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 			"rotated — create a new key instead.",
 		Tags:        []string{"relay-keys"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *rotateRelayKeyInput) (*rotateRelayKeyResponse, error) {
-		if err := d.Authz.Authorize(ctx, "relay-keys.update", authz.Resource{Kind: "relay-key", ID: in.ID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		existing, err := d.Stores.RelayKey.Get(ctx, in.ID)
-		if err != nil || existing == nil {
+		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "relay-key", existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("relay-key %q not found", in.ID))
+		}
+		if err := d.Authz.Authorize(ctx, "relay-keys.update", authz.Resource{Kind: "relay-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
+			return nil, mapAuthzErr(err)
 		}
 		// Rotating a revoked key would hand out a token that still can't
 		// authenticate (RevokedAt survives rotation) — reject instead of

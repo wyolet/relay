@@ -19,6 +19,7 @@
 package control
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -28,9 +29,12 @@ import (
 )
 
 func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
-	return func(action string, _, incoming *policy.Policy) error {
+	return func(ctx context.Context, action string, _, incoming *policy.Policy) error {
 		if action == "delete" || incoming == nil {
 			return nil
+		}
+		if err := checkHostKeyRefsVisible(ctx, d, incoming.Spec.HostKeyIDs); err != nil {
+			return err
 		}
 		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {
 			return nil

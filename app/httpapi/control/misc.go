@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 )
 
@@ -47,8 +48,11 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 			"deployment. Rotation requires re-encrypting all stored HostKey values.",
 		Tags:        []string{"system"},
 		Middlewares: protect,
-		Errors:      []int{401, 500},
-	}, func(_ context.Context, _ *struct{}) (*masterKeyGenerateOutput, error) {
+		Errors:      []int{401, 403, 500},
+	}, func(ctx context.Context, _ *struct{}) (*masterKeyGenerateOutput, error) {
+		if err := d.Authz.Authorize(ctx, "master-key.generate", authz.Resource{Kind: "master-key"}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
 		buf := make([]byte, 32)
 		if _, err := rand.Read(buf); err != nil {
 			return nil, huma.Error500InternalServerError("rand: " + err.Error())
@@ -78,8 +82,11 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 			"stored rows on boot.",
 		Tags:        []string{"system"},
 		Middlewares: protect,
-		Errors:      []int{401, 500},
+		Errors:      []int{401, 403, 500},
 	}, func(ctx context.Context, _ *struct{}) (*masterKeyRotateOutput, error) {
+		if err := d.Authz.Authorize(ctx, "master-key.rotate", authz.Resource{Kind: "master-key"}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
 		if d.Stores == nil || d.Stores.HostKey == nil {
 			return nil, huma.Error500InternalServerError("hostkey store not wired")
 		}
@@ -122,8 +129,11 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 			"the snapshot has drifted (e.g. after a manual DB edit).",
 		Tags:        []string{"system"},
 		Middlewares: protect,
-		Errors:      []int{401, 500},
+		Errors:      []int{401, 403, 500},
 	}, func(ctx context.Context, _ *struct{}) (*reloadOutput, error) {
+		if err := d.Authz.Authorize(ctx, "system.reload", authz.Resource{Kind: "system"}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
 		if d.Catalog == nil {
 			return nil, huma.Error500InternalServerError("catalog not wired")
 		}

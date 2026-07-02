@@ -33,17 +33,17 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary:     "Rotate a stored-mode HostKey credential",
 		Tags:        []string{"host-keys"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *rotateHostKeyInput) (*itemResponse[hostkey.HostKey], error) {
-		if err := d.Authz.Authorize(ctx, "host-keys.update", authz.Resource{Kind: "host-key", ID: in.ID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		if in.Body.Value == "" {
 			return nil, huma.Error400BadRequest("value is required")
 		}
 		existing, err := d.Stores.HostKey.Get(ctx, in.ID)
-		if err != nil || existing == nil {
+		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "host-key", existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
+		}
+		if err := d.Authz.Authorize(ctx, "host-keys.update", authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
+			return nil, mapAuthzErr(err)
 		}
 		if existing.Spec.ValueFrom.Kind != hostkey.ValueKindStored && existing.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
 			return nil, huma.Error400BadRequest("rotate is supported only for stored- and oauth-mode host-keys")

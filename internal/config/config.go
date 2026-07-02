@@ -35,6 +35,12 @@ type Config struct {
 	AdminToken string
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
 
+	// MultiUser selects the owner-scoped authorizer on the control API:
+	// each user sees and mutates only the rows they own; catalog rows stay
+	// readable by all and admin-mutable. Off (the default) keeps the
+	// single-user always-allow behavior.
+	MultiUser bool
+
 	// Behavior knobs
 	CHRetentionDays int
 	AutoSeedIfEmpty bool
@@ -146,6 +152,16 @@ func Load() (*Config, error) {
 
 	// --- Auth ---
 	cfg.AdminToken = os.Getenv("RELAY_ADMIN_TOKEN")
+
+	// --- RELAY_MULTI_USER ---
+	switch v := os.Getenv("RELAY_MULTI_USER"); v {
+	case "", "off":
+		cfg.MultiUser = false
+	case "on":
+		cfg.MultiUser = true
+	default:
+		return nil, fmt.Errorf(`RELAY_MULTI_USER must be "on" or "off", got %q`, v)
+	}
 
 	// --- Behavior knobs ---
 	cfg.CHRetentionDays = envInt("RELAY_CH_RETENTION_DAYS", 90)

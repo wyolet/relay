@@ -45,17 +45,18 @@ func registerPolicyRelayKeys(api huma.API, d Deps, protect huma.Middlewares) {
 			"is the common case).",
 		Tags:        []string{"policies"},
 		Middlewares: protect,
-		Errors:      []int{401, 404, 500},
+		Errors:      []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *policyRelayKeyInput) (*policyRelayKeyResponse, error) {
-		if err := d.Authz.Authorize(ctx, "relay-keys.update", authz.Resource{Kind: "relay-key", ID: in.RelayKeyID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
-		if _, err := d.Stores.Policy.Get(ctx, in.PolicyID); err != nil {
+		pol, err := d.Stores.Policy.Get(ctx, in.PolicyID)
+		if err != nil || pol == nil || !visibleTo(ctx, d.Authz, "policy", pol.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("policy %q not found", in.PolicyID))
 		}
 		rk, err := d.Stores.RelayKey.Get(ctx, in.RelayKeyID)
-		if err != nil || rk == nil {
+		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "relay-key", rk.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("relay-key %q not found", in.RelayKeyID))
+		}
+		if err := d.Authz.Authorize(ctx, "relay-keys.update", authz.Resource{Kind: "relay-key", ID: in.RelayKeyID, Owner: &rk.Meta.Owner}); err != nil {
+			return nil, mapAuthzErr(err)
 		}
 		rk.Spec.PolicyID = in.PolicyID
 		if err := d.Stores.RelayKey.Upsert(ctx, rk); err != nil {
@@ -78,14 +79,14 @@ func registerPolicyRelayKeys(api huma.API, d Deps, protect huma.Middlewares) {
 			"acting on stale state).",
 		Tags:        []string{"policies"},
 		Middlewares: protect,
-		Errors:      []int{401, 404, 409, 500},
+		Errors:      []int{401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *policyRelayKeyInput) (*policyRelayKeyResponse, error) {
-		if err := d.Authz.Authorize(ctx, "relay-keys.update", authz.Resource{Kind: "relay-key", ID: in.RelayKeyID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		rk, err := d.Stores.RelayKey.Get(ctx, in.RelayKeyID)
-		if err != nil || rk == nil {
+		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "relay-key", rk.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("relay-key %q not found", in.RelayKeyID))
+		}
+		if err := d.Authz.Authorize(ctx, "relay-keys.update", authz.Resource{Kind: "relay-key", ID: in.RelayKeyID, Owner: &rk.Meta.Owner}); err != nil {
+			return nil, mapAuthzErr(err)
 		}
 		if rk.Spec.PolicyID != in.PolicyID {
 			return nil, huma.Error409Conflict(fmt.Sprintf(

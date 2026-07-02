@@ -52,7 +52,7 @@ func registerHostKeyHealth(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError("circuit-breaker state is unavailable")
 		}
 		existing, err := d.Stores.HostKey.Get(ctx, in.ID)
-		if err != nil || existing == nil {
+		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "host-key", existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
 		}
 

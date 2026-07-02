@@ -57,11 +57,8 @@ func registerRelayKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		Tags:          []string{"relay-keys"},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusCreated,
-		Errors:        []int{400, 401, 500},
+		Errors:        []int{400, 401, 403, 500},
 	}, func(ctx context.Context, in *createRelayKeyInput) (*createRelayKeyResponse, error) {
-		if err := d.Authz.Authorize(ctx, "relay-keys.create", authz.Resource{Kind: "relay-key"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		gen, err := relaykey.Generate()
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -81,6 +78,13 @@ func registerRelayKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		k.Meta.Owner.Kind = meta.OwnerUser
 		if err := stampOwnerID(ctx, &k.Meta.Owner); err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
+		}
+		// Authorize AFTER owner stamping, same as the generic create path.
+		if err := d.Authz.Authorize(ctx, "relay-keys.create", authz.Resource{Kind: "relay-key", Owner: &k.Meta.Owner}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
+		if err := checkPolicyRefVisible(ctx, d, in.Body.Spec.PolicyID); err != nil {
+			return nil, err
 		}
 
 		k.Spec.PolicyID = in.Body.Spec.PolicyID

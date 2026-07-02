@@ -97,7 +97,7 @@ var errSlugNotFound = errors.New("not found")
 // mutationGuard runs before create/update/delete. action is "create",
 // "update", or "delete". For create, existing is nil. For delete,
 // incoming is nil. Return a non-nil error to block the mutation with 403.
-type mutationGuard[T any] func(action string, existing, incoming *T) error
+type mutationGuard[T any] func(ctx context.Context, action string, existing, incoming *T) error
 
 // enrichFn populates derived (non-stored) fields on a freshly-loaded entity
 // before it's returned by list/get/create/update. Per the derived-field
@@ -173,6 +173,17 @@ func registerKind[T any](
 		if items == nil {
 			items = []*T{}
 		}
+		// Owner-scope BEFORE pagination so Total reflects the set the caller
+		// may see, and before enrich so hidden rows aren't enriched.
+		if s, ok := authzr.(authz.Scoper); ok {
+			visible := items[:0:0]
+			for _, it := range items {
+				if s.Visible(ctx, singular, metaOf(it).Owner) {
+					visible = append(visible, it)
+				}
+			}
+			items = visible
+		}
 		if enrich != nil {
 			for _, it := range items {
 				enrich(ctx, it)
@@ -226,6 +237,11 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
+		// 404, not 403 — a row the caller may not see must not confirm its
+		// existence.
+		if !visibleTo(ctx, authzr, singular, metaOf(v).Owner) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
+		}
 		if enrich != nil {
 			enrich(ctx, v)
 		}
@@ -244,11 +260,8 @@ func registerKind[T any](
 			Tags:          []string{tag},
 			Middlewares:   protect,
 			DefaultStatus: http.StatusCreated,
-			Errors:        []int{400, 401, 500},
+			Errors:        []int{400, 401, 403, 500},
 		}, func(ctx context.Context, in *createRequest[T]) (*itemResponse[T], error) {
-			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular}); err != nil {
-				return nil, mapAuthzErr(err)
-			}
 			v := &in.Body
 			m := metaOf(v)
 			// Server stamps id+slug. Client-supplied id is discarded so id
@@ -276,6 +289,12 @@ func registerKind[T any](
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
+			// Authorize AFTER owner stamping so an owner-aware Authorizer can
+			// decide on the row's final provenance (user-owned rows are open to
+			// any authenticated caller; anything else is an admin operation).
+			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
+				return nil, mapAuthzErr(err)
+			}
 			// Validate AFTER stamping id+slug so the entity's Validate() sees
 			// the same shape the store will persist. Rejecting here keeps bad
 			// rows out of PG (which would otherwise break Bootstrap).
@@ -285,7 +304,7 @@ func registerKind[T any](
 				}
 			}
 			if guard != nil {
-				if err := guard("create", nil, v); err != nil {
+				if err := guard(ctx, "create", nil, v); err != nil {
 					return nil, mapGuardErr(err)
 				}
 			}
@@ -311,18 +330,20 @@ func registerKind[T any](
 		Summary:     "Update " + singular + " by id",
 		Tags:        []string{tag},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *updateRequest[T]) (*itemResponse[T], error) {
-		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		// TODO(rbac): when multi-tenant RBAC lands, also enforce owner.id ==
-		// caller for user-owned rows. Today the relay is single-user, so the
-		// Authorizer above is permissive and Governs is the only guardrail.
+		if !visibleTo(ctx, authzr, singular, metaOf(existing).Owner) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
+		}
+		// Authorize with the fetched row's owner so an owner-aware Authorizer
+		// can enforce owner.id == caller for user-owned rows.
+		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
 		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).Owner.Kind)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
@@ -340,7 +361,7 @@ func registerKind[T any](
 			}
 		}
 		if guard != nil {
-			if err := guard("update", existing, v); err != nil {
+			if err := guard(ctx, "update", existing, v); err != nil {
 				return nil, mapGuardErr(err)
 			}
 		}
@@ -372,21 +393,21 @@ func registerKind[T any](
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
-		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		// TODO(rbac): when multi-tenant RBAC lands, also enforce owner.id ==
-		// caller for user-owned rows. Today the relay is single-user, so the
-		// Authorizer above is permissive and Governs is the only guardrail.
+		if !visibleTo(ctx, authzr, singular, metaOf(existing).Owner) {
+			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
+		}
+		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
+			return nil, mapAuthzErr(err)
+		}
 		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).Owner.Kind)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		if guard != nil {
-			if err := guard("delete", existing, nil); err != nil {
+			if err := guard(ctx, "delete", existing, nil); err != nil {
 				return nil, huma.Error403Forbidden(err.Error())
 			}
 		}
@@ -423,6 +444,17 @@ func stampOwnerID(ctx context.Context, o *meta.Owner) error {
 		return errors.New("owner.id must be empty or match the calling user")
 	}
 	return nil
+}
+
+// visibleTo reports whether the actor in ctx may see a row with the given
+// owner. True whenever the configured Authorizer doesn't scope reads (the
+// single-user default).
+func visibleTo(ctx context.Context, a authz.Authorizer, kind string, owner meta.Owner) bool {
+	s, ok := a.(authz.Scoper)
+	if !ok {
+		return true
+	}
+	return s.Visible(ctx, kind, owner)
 }
 
 // slugTakenFn returns the existence predicate slug.Unique needs to mint a
@@ -490,7 +522,7 @@ func listScanResolver[T any](store entityStore[T], metaOf func(*T) *meta.Metadat
 // considered too — a hostkey rebound to a disabled tier policy is still
 // a structural mismatch, not just a soft drop. Delete is unaffected.
 func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
-	return func(action string, _, incoming *hostkey.HostKey) error {
+	return func(ctx context.Context, action string, _, incoming *hostkey.HostKey) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
@@ -506,7 +538,7 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 		if d.Stores == nil || d.Stores.Policy == nil {
 			return nil
 		}
-		pol, err := d.Stores.Policy.Get(context.Background(), incoming.Spec.PolicyID)
+		pol, err := d.Stores.Policy.Get(ctx, incoming.Spec.PolicyID)
 		if err != nil || pol == nil {
 			return fmt.Errorf("policy %q does not exist", incoming.Spec.PolicyID)
 		}
@@ -516,6 +548,63 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 		}
 		return nil
 	}
+}
+
+// guardRelayKeyPolicy rejects a relay-key mutation whose Spec.PolicyID
+// points at a policy the caller may not see — a relay-key inherits its
+// policy's host-keys, so binding to a foreign policy would route traffic
+// through someone else's credentials. Reported as "not found" to avoid
+// confirming the row exists. Existence of the policy is otherwise still
+// not checked here (the inference path handles missing policies).
+func guardRelayKeyPolicy(d Deps) mutationGuard[relaykey.RelayKey] {
+	return func(ctx context.Context, action string, _, incoming *relaykey.RelayKey) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID)
+	}
+}
+
+func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
+	if policyID == "" {
+		return nil
+	}
+	s, ok := d.Authz.(authz.Scoper)
+	if !ok || d.Stores == nil || d.Stores.Policy == nil {
+		return nil
+	}
+	p, err := d.Stores.Policy.Get(ctx, policyID)
+	if err != nil || p == nil {
+		return nil
+	}
+	if !s.Visible(ctx, "policy", p.Meta.Owner) {
+		return huma.Error400BadRequest(fmt.Sprintf("policy %q not found", policyID))
+	}
+	return nil
+}
+
+// checkHostKeyRefsVisible rejects host-key ids the caller may not see — a
+// policy referencing a foreign host-key would spend someone else's upstream
+// credential. Missing rows pass through (host-key existence is deliberately
+// not checked at policy write time; the inference path handles it).
+func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string) error {
+	if len(keyIDs) == 0 {
+		return nil
+	}
+	s, ok := d.Authz.(authz.Scoper)
+	if !ok || d.Stores == nil || d.Stores.HostKey == nil {
+		return nil
+	}
+	for _, id := range keyIDs {
+		k, err := d.Stores.HostKey.Get(ctx, id)
+		if err != nil || k == nil {
+			continue
+		}
+		if !s.Visible(ctx, "host-key", k.Meta.Owner) {
+			return huma.Error400BadRequest(fmt.Sprintf("host-key %q not found", id))
+		}
+	}
+	return nil
 }
 
 // enrichHostStatus returns an enrichFn that overlays observed runtime health
@@ -900,7 +989,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(k *relaykey.RelayKey) error { return k.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RelayKey, rkmeta),
-		nil,
+		guardRelayKeyPolicy(d),
 		nil,
 		nil,
 		// Credential material is server-managed: PUT can neither wipe nor

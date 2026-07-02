@@ -19,6 +19,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/meta"
 )
 
 type referenceItem struct {
@@ -26,6 +27,10 @@ type referenceItem struct {
 	ID   string `json:"id"   doc:"Resource id."`
 	Name string `json:"name" doc:"Resource slug."`
 	Via  string `json:"via"  doc:"Field path on the referencing row that points at the target."`
+
+	// owner is the referencing row's provenance, carried for scoping only
+	// (never serialized).
+	owner meta.Owner
 }
 
 type referencesOutput struct {
@@ -56,6 +61,17 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			items, err := scan(ctx, in.ID)
 			if err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
+			}
+			// Drop referencing rows the caller may not see — "in use by" must
+			// not leak other users' rows.
+			if s, ok := d.Authz.(authz.Scoper); ok {
+				visible := items[:0:0]
+				for _, it := range items {
+					if s.Visible(ctx, it.Kind, it.owner) {
+						visible = append(visible, it)
+					}
+				}
+				items = visible
 			}
 			sortReferences(items)
 			out := &referencesOutput{}
@@ -101,7 +117,7 @@ func scanProviderRefs(ctx context.Context, d Deps, id string) ([]referenceItem, 
 	}
 	for _, m := range models {
 		if m.Meta.Owner.ID == id {
-			out = append(out, referenceItem{Kind: "model", ID: m.Meta.ID, Name: m.Meta.Name, Via: "metadata.owner.id"})
+			out = append(out, referenceItem{Kind: "model", ID: m.Meta.ID, Name: m.Meta.Name, Via: "metadata.owner.id", owner: m.Meta.Owner})
 		}
 	}
 	return out, nil
@@ -115,7 +131,7 @@ func scanHostRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	}
 	for _, k := range keys {
 		if k.Spec.HostID == id {
-			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.hostId"})
+			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.hostId", owner: k.Meta.Owner})
 		}
 	}
 	bindings, err := d.Stores.Binding.List(ctx)
@@ -124,7 +140,7 @@ func scanHostRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	}
 	for _, b := range bindings {
 		if b.Spec.HostID == id {
-			out = append(out, referenceItem{Kind: "host-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.hostId"})
+			out = append(out, referenceItem{Kind: "host-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.hostId", owner: b.Meta.Owner})
 		}
 	}
 	pricings, err := d.Stores.Pricing.List(ctx)
@@ -133,7 +149,7 @@ func scanHostRefs(ctx context.Context, d Deps, id string) ([]referenceItem, erro
 	}
 	for _, p := range pricings {
 		if p.Meta.Owner.ID == id {
-			out = append(out, referenceItem{Kind: "pricing", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id"})
+			out = append(out, referenceItem{Kind: "pricing", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id", owner: p.Meta.Owner})
 		}
 	}
 	return out, nil
@@ -148,7 +164,7 @@ func scanModelRefs(ctx context.Context, d Deps, id string) ([]referenceItem, err
 	for _, p := range pols {
 		for _, mid := range p.Spec.ModelIDs {
 			if mid == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.modelIds"})
+				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.modelIds", owner: p.Meta.Owner})
 				break
 			}
 		}
@@ -160,7 +176,7 @@ func scanModelRefs(ctx context.Context, d Deps, id string) ([]referenceItem, err
 	for _, p := range pricings {
 		for _, mid := range p.Spec.TargetModelIDs {
 			if mid == id {
-				out = append(out, referenceItem{Kind: "pricing", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.targetModels"})
+				out = append(out, referenceItem{Kind: "pricing", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.targetModels", owner: p.Meta.Owner})
 				break
 			}
 		}
@@ -176,7 +192,7 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 	}
 	for _, k := range rks {
 		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "relay-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId"})
+			out = append(out, referenceItem{Kind: "relay-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
 		}
 	}
 	keys, err := d.Stores.HostKey.List(ctx)
@@ -185,7 +201,7 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 	}
 	for _, k := range keys {
 		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId"})
+			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
 		}
 	}
 	hosts, err := d.Stores.Host.List(ctx)
@@ -196,13 +212,13 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 		matched := false
 		for _, pid := range h.Spec.Policies {
 			if pid == id {
-				out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.policies"})
+				out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.policies", owner: h.Meta.Owner})
 				matched = true
 				break
 			}
 		}
 		if !matched && h.Spec.DefaultPolicy == id {
-			out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.defaultPolicy"})
+			out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.defaultPolicy", owner: h.Meta.Owner})
 		}
 	}
 	return out, nil
@@ -217,7 +233,7 @@ func scanHostKeyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	for _, p := range pols {
 		for _, kid := range p.Spec.HostKeyIDs {
 			if kid == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.hostKeyIds"})
+				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.hostKeyIds", owner: p.Meta.Owner})
 				break
 			}
 		}
@@ -233,12 +249,12 @@ func scanRateLimitRefs(ctx context.Context, d Deps, id string) ([]referenceItem,
 	}
 	for _, p := range pols {
 		if p.Spec.RateLimitID == id {
-			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rateLimitId"})
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rateLimitId", owner: p.Meta.Owner})
 			continue
 		}
 		for _, b := range p.Spec.RLBindings {
 			if b.RateLimitID == id {
-				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rlBindings[].rateLimitId"})
+				out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.rlBindings[].rateLimitId", owner: p.Meta.Owner})
 				break
 			}
 		}
