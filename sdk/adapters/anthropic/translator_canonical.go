@@ -99,26 +99,42 @@ type anthropicCanonTool struct {
 
 // anthropicEphemeralCacheControl is the breakpoint marker placed on the last
 // block of a cache-anchored section. Anthropic caches everything from the
-// start of the prompt up to and including the marked block.
-func anthropicEphemeralCacheControl() map[string]any {
-	return map[string]any{"type": "ephemeral"}
+// start of the prompt up to and including the marked block. ttl is the wire
+// ttl tier ("1h") or empty for the 5-minute default.
+func anthropicEphemeralCacheControl(ttl string) map[string]any {
+	cc := map[string]any{"type": "ephemeral"}
+	if ttl != "" {
+		cc["ttl"] = ttl
+	}
+	return cc
+}
+
+// anthropicCacheTTL maps canonical CacheConfig.TTL to Anthropic's wire ttl
+// tier: anything beyond the default 5 minutes upgrades to the 1-hour tier
+// (the only extended tier Anthropic offers; note 1h writes bill 2× vs 1.25×);
+// at or under 5m — or unset/unparseable — stays on the default (empty).
+func anthropicCacheTTL(cfg *v1.CacheConfig) string {
+	if d, ok := cfg.TTLDuration(); ok && d > 5*time.Minute {
+		return "1h"
+	}
+	return ""
 }
 
 // withCacheBreakpoint attaches an ephemeral cache_control marker to the last
 // content block, coercing string content into a single text block when needed
 // (cache_control can only ride on a block, not a bare string).
-func withCacheBreakpoint(content any) any {
+func withCacheBreakpoint(content any, ttl string) any {
 	switch c := content.(type) {
 	case string:
 		if c == "" {
 			return c
 		}
-		return []map[string]any{{"type": "text", "text": c, "cache_control": anthropicEphemeralCacheControl()}}
+		return []map[string]any{{"type": "text", "text": c, "cache_control": anthropicEphemeralCacheControl(ttl)}}
 	case []map[string]any:
 		if len(c) == 0 {
 			return c
 		}
-		c[len(c)-1]["cache_control"] = anthropicEphemeralCacheControl()
+		c[len(c)-1]["cache_control"] = anthropicEphemeralCacheControl(ttl)
 		return c
 	default:
 		return content
@@ -442,14 +458,18 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 
 	out.MaxTokens = maxTokens
 
+	// cache_config.ttl → retention tier applied to every breakpoint this
+	// request emits (tools / instructions / item anchors).
+	cacheTTL := anthropicCacheTTL(req.CacheConfig)
+
 	// cache_config.tools → breakpoint on the last tool (caches the tools block).
 	if req.CacheConfig != nil && req.CacheConfig.Tools && len(out.Tools) > 0 {
-		out.Tools[len(out.Tools)-1].CacheControl = anthropicEphemeralCacheControl()
+		out.Tools[len(out.Tools)-1].CacheControl = anthropicEphemeralCacheControl(cacheTTL)
 	}
 
 	// Build messages from canonical Input. Per-message cache anchors are applied
 	// inside (each Message carries its own ItemCacheConfig).
-	msgs, sysFromItems, err := canonicalItemsToAnthropic(req.Input)
+	msgs, sysFromItems, err := canonicalItemsToAnthropic(req.Input, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic serialize_request: %w", err)
 	}
@@ -466,7 +486,7 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// system string to a single text block so cache_control can ride on it.
 	if systemText != "" {
 		if req.CacheConfig != nil && req.CacheConfig.Instructions {
-			out.System = withCacheBreakpoint(systemText)
+			out.System = withCacheBreakpoint(systemText, cacheTTL)
 		} else {
 			out.System = systemText
 		}
@@ -1713,7 +1733,8 @@ func anthropicImageBlockToURL(raw json.RawMessage) string {
 
 // canonicalItemsToAnthropic converts canonical []v1.Item to Anthropic messages.
 // Returns also any additional system text from developer-role messages.
-func canonicalItemsToAnthropic(items []v1.Item) ([]anthropicCanonMsg, string, error) {
+// cacheTTL is the request-level retention tier applied to item-anchor breakpoints.
+func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCanonMsg, string, error) {
 	var msgs []anthropicCanonMsg
 	var systemParts []string
 
@@ -1799,7 +1820,7 @@ func canonicalItemsToAnthropic(items []v1.Item) ([]anthropicCanonMsg, string, er
 					return nil, "", err
 				}
 				if v.CacheConfig != nil && v.CacheConfig.Anchor {
-					content = withCacheBreakpoint(content)
+					content = withCacheBreakpoint(content, cacheTTL)
 				}
 				msgs = append(msgs, anthropicCanonMsg{Role: "user", Content: content})
 			case v1.RoleAssistant:
@@ -1808,7 +1829,7 @@ func canonicalItemsToAnthropic(items []v1.Item) ([]anthropicCanonMsg, string, er
 					return nil, "", err
 				}
 				if v.CacheConfig != nil && v.CacheConfig.Anchor {
-					content = withCacheBreakpoint(content)
+					content = withCacheBreakpoint(content, cacheTTL)
 				}
 				msgs = append(msgs, anthropicCanonMsg{Role: "assistant", Content: content})
 			}

@@ -20,22 +20,24 @@ type FullChatRequest struct {
 	TopP        *float64          `json:"top_p,omitempty"`
 	User        string            `json:"user,omitempty"`
 
-	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
-	N                *int            `json:"n,omitempty"`
-	Seed             *int64          `json:"seed,omitempty"`
-	LogitBias        map[string]int  `json:"logit_bias,omitempty"`
-	Logprobs         *bool           `json:"logprobs,omitempty"`
-	TopLogprobs      *int            `json:"top_logprobs,omitempty"`
-	MaxTokens        *int            `json:"max_tokens,omitempty"`            // deprecated but widely used
-	MaxCompletion    *int            `json:"max_completion_tokens,omitempty"` // includes reasoning tokens
-	Stop             json.RawMessage `json:"stop,omitempty"`                  // string | []string
-	Stream           *bool           `json:"stream,omitempty"`
-	StreamOptions    *StreamOptions  `json:"stream_options,omitempty"`
-	ServiceTier      string          `json:"service_tier,omitempty"`
-	ReasoningEffort  string          `json:"reasoning_effort,omitempty"`
-	Store            *bool           `json:"store,omitempty"`
-	ResponseFormat   *ResponseFormat `json:"response_format,omitempty"`
+	FrequencyPenalty     *float64        `json:"frequency_penalty,omitempty"`
+	PresencePenalty      *float64        `json:"presence_penalty,omitempty"`
+	N                    *int            `json:"n,omitempty"`
+	Seed                 *int64          `json:"seed,omitempty"`
+	LogitBias            map[string]int  `json:"logit_bias,omitempty"`
+	Logprobs             *bool           `json:"logprobs,omitempty"`
+	TopLogprobs          *int            `json:"top_logprobs,omitempty"`
+	MaxTokens            *int            `json:"max_tokens,omitempty"`            // deprecated but widely used
+	MaxCompletion        *int            `json:"max_completion_tokens,omitempty"` // includes reasoning tokens
+	Stop                 json.RawMessage `json:"stop,omitempty"`                  // string | []string
+	Stream               *bool           `json:"stream,omitempty"`
+	StreamOptions        *StreamOptions  `json:"stream_options,omitempty"`
+	ServiceTier          string          `json:"service_tier,omitempty"`
+	ReasoningEffort      string          `json:"reasoning_effort,omitempty"`
+	Store                *bool           `json:"store,omitempty"`
+	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"` // "in_memory" | "24h"
+	ResponseFormat       *ResponseFormat `json:"response_format,omitempty"`
 
 	Tools             []Tool          `json:"tools,omitempty"`
 	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"` // "none" | "auto" | "required" | object

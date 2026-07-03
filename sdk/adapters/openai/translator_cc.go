@@ -50,6 +50,7 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 	if wire.Metadata != nil {
 		req.Metadata = wire.Metadata
 	}
+	req.CacheConfig = openaiCacheConfigFromWire(wire.PromptCacheKey, wire.PromptCacheRetention)
 
 	// Build model_config for this model.
 	opts := &v1.ModelOpts{}
@@ -225,6 +226,10 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		Model:    model,
 		User:     req.User,
 		Metadata: req.Metadata,
+	}
+	if req.CacheConfig != nil {
+		out.PromptCacheKey = req.CacheConfig.Key
+		out.PromptCacheRetention = openaiCacheRetention(req.CacheConfig)
 	}
 
 	// Extract model-specific options.

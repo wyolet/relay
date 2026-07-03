@@ -16,9 +16,11 @@ import (
 // background, etc.). Translation is near-identity for the core fields.
 //
 // Stateful OpenAI-isms (previous_response_id, store, conversation, background,
-// include[], context_management, service_tier, safety_identifier, prompt_cache_key)
+// include[], context_management, service_tier, safety_identifier)
 // are rejected at ParseRequest with an explicit error so the caller can map to 400.
-// These fields have no canonical equivalent in v1.
+// These fields have no canonical equivalent in v1. prompt_cache_key and
+// prompt_cache_retention are NOT among them: they map to the canonical cache
+// intent (v1.CacheConfig.Key / .TTL) both ways.
 //
 // Request-echo fields required by the OpenAI spec (instructions, temperature, top_p,
 // tools, tool_choice, parallel_tool_calls, metadata) are passed explicitly through
@@ -80,12 +82,14 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		Text      *ResponsesTextConfig      `json:"text,omitempty"`
 		Reasoning *ResponsesReasoningConfig `json:"reasoning,omitempty"`
 
-		ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
-		Metadata          map[string]string `json:"metadata,omitempty"`
-		User              string            `json:"user,omitempty"`
-		Stream            *bool             `json:"stream,omitempty"`
-		Store             *bool             `json:"store,omitempty"`
-		Include           []string          `json:"include,omitempty"`
+		ParallelToolCalls    *bool             `json:"parallel_tool_calls,omitempty"`
+		Metadata             map[string]string `json:"metadata,omitempty"`
+		User                 string            `json:"user,omitempty"`
+		Stream               *bool             `json:"stream,omitempty"`
+		Store                *bool             `json:"store,omitempty"`
+		Include              []string          `json:"include,omitempty"`
+		PromptCacheKey       string            `json:"prompt_cache_key,omitempty"`
+		PromptCacheRetention string            `json:"prompt_cache_retention,omitempty"`
 	}
 	// Stateless reasoning round-trip: relay's canonical protocol is stateless
 	// (it rejects previous_response_id / store / conversation), so the ONLY way
@@ -97,22 +101,24 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// a function_call comes back without its required reasoning sibling (400).
 	storeFalse := false
 	return json.Marshal(wireReq{
-		Model:             req.Model[0],
-		Input:             inputJSON,
-		Instructions:      req.Instructions,
-		Tools:             rreq.Tools,
-		ToolChoice:        rreq.ToolChoice,
-		Temperature:       rreq.Temperature,
-		TopP:              rreq.TopP,
-		MaxOutputTokens:   rreq.MaxOutputTokens,
-		Text:              rreq.Text,
-		Reasoning:         rreq.Reasoning,
-		ParallelToolCalls: rreq.ParallelToolCalls,
-		Metadata:          req.Metadata,
-		User:              req.User,
-		Stream:            rreq.Stream,
-		Store:             &storeFalse,
-		Include:           []string{"reasoning.encrypted_content"},
+		Model:                req.Model[0],
+		Input:                inputJSON,
+		Instructions:         req.Instructions,
+		Tools:                rreq.Tools,
+		ToolChoice:           rreq.ToolChoice,
+		Temperature:          rreq.Temperature,
+		TopP:                 rreq.TopP,
+		MaxOutputTokens:      rreq.MaxOutputTokens,
+		Text:                 rreq.Text,
+		Reasoning:            rreq.Reasoning,
+		ParallelToolCalls:    rreq.ParallelToolCalls,
+		Metadata:             req.Metadata,
+		User:                 req.User,
+		Stream:               rreq.Stream,
+		Store:                &storeFalse,
+		Include:              []string{"reasoning.encrypted_content"},
+		PromptCacheKey:       rreq.PromptCacheKey,
+		PromptCacheRetention: rreq.PromptCacheRetention,
 	})
 }
 
@@ -214,9 +220,6 @@ func responsesRejectStatefulFields(req *ResponsesRequest) error {
 	if req.SafetyIdentifier != "" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "safety_identifier")
 	}
-	if req.PromptCacheKey != "" {
-		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "prompt_cache_key")
-	}
 	if len(req.ContextManagement) > 0 && string(req.ContextManagement) != "null" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "context_management")
 	}
@@ -241,6 +244,8 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 		User:         req.User,
 		Metadata:     req.Metadata,
 	}
+
+	cr.CacheConfig = openaiCacheConfigFromWire(req.PromptCacheKey, req.PromptCacheRetention)
 
 	if req.Stream != nil && *req.Stream {
 		cr.OutputMode = v1.OutputModeStream
@@ -361,6 +366,11 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 		Instructions: req.Instructions,
 		User:         req.User,
 		Metadata:     req.Metadata,
+	}
+
+	if req.CacheConfig != nil {
+		rreq.PromptCacheKey = req.CacheConfig.Key
+		rreq.PromptCacheRetention = openaiCacheRetention(req.CacheConfig)
 	}
 
 	if req.OutputMode == v1.OutputModeStream {
