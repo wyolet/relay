@@ -548,6 +548,77 @@ func TestAnthropicSerializeRequest_CacheConfig(t *testing.T) {
 	}
 }
 
+func TestAnthropicSerializeRequest_CacheTTL(t *testing.T) {
+	mkReq := func(ttl string) *v1.Request {
+		return &v1.Request{
+			Model:        v1.ModelRefs{"claude-3-5-sonnet-20241022"},
+			Instructions: "You are Scarlet.",
+			OutputMode:   v1.OutputModeSync,
+			CacheConfig:  &v1.CacheConfig{Instructions: true, Tools: true, TTL: ttl},
+			Tools: &v1.ToolsConfig{
+				Definitions: v1.Tools{&v1.FunctionTool{Name: "a", Parameters: json.RawMessage(`{}`)}},
+			},
+			Input: []v1.Item{
+				&v1.Message{
+					Role:        v1.RoleUser,
+					Content:     []v1.Part{&v1.TextPart{Text: "stable history"}},
+					CacheConfig: &v1.ItemCacheConfig{Anchor: true},
+				},
+			},
+		}
+	}
+	ccOf := func(t *testing.T, m map[string]any, path string) map[string]any {
+		t.Helper()
+		var block map[string]any
+		switch path {
+		case "system":
+			blocks := m["system"].([]any)
+			block = blocks[len(blocks)-1].(map[string]any)
+		case "tools":
+			tools := m["tools"].([]any)
+			block = tools[len(tools)-1].(map[string]any)
+		case "anchor":
+			msgs := m["messages"].([]any)
+			blocks := msgs[0].(map[string]any)["content"].([]any)
+			block = blocks[len(blocks)-1].(map[string]any)
+		}
+		cc, _ := block["cache_control"].(map[string]any)
+		if cc == nil {
+			t.Fatalf("no cache_control at %s: %v", path, block)
+		}
+		return cc
+	}
+
+	// TTL beyond 5m upgrades every breakpoint to the 1h tier — including 24h,
+	// which clamps down to Anthropic's largest tier.
+	for _, ttl := range []string{"1h", "24h"} {
+		out, err := (AnthropicTranslator{}).SerializeRequest(mkReq(ttl))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := decodeMap(t, out)
+		for _, path := range []string{"system", "tools", "anchor"} {
+			if got := ccOf(t, m, path)["ttl"]; got != "1h" {
+				t.Errorf("TTL %s: cache_control.ttl at %s = %v, want 1h", ttl, path, got)
+			}
+		}
+	}
+
+	// TTL at/under the 5m default (and unset) emits no ttl field.
+	for _, ttl := range []string{"", "5m"} {
+		out, err := (AnthropicTranslator{}).SerializeRequest(mkReq(ttl))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := decodeMap(t, out)
+		for _, path := range []string{"system", "tools", "anchor"} {
+			if got, present := ccOf(t, m, path)["ttl"]; present {
+				t.Errorf("TTL %q: unexpected cache_control.ttl at %s: %v", ttl, path, got)
+			}
+		}
+	}
+}
+
 func TestAnthropicSerializeRequest_NoCacheConfig_NoBreakpoints(t *testing.T) {
 	req := &v1.Request{
 		Model:        v1.ModelRefs{"claude-3-5-sonnet-20241022"},

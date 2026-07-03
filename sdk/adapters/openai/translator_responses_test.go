@@ -152,11 +152,6 @@ func TestResponsesParseRequest_StatefulFieldsRejected(t *testing.T) {
 			"safety_identifier",
 		},
 		{
-			"prompt_cache_key",
-			func(m map[string]any) { m["prompt_cache_key"] = "pck_123" },
-			"prompt_cache_key",
-		},
-		{
 			"include",
 			func(m map[string]any) { m["include"] = []string{"reasoning"} },
 			"include",
@@ -183,6 +178,74 @@ func TestResponsesParseRequest_StatefulFieldsRejected(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestResponsesCacheKeyRoundTrip(t *testing.T) {
+	// Inbound: prompt_cache_key / prompt_cache_retention map to canonical
+	// CacheConfig.Key / CacheConfig.TTL.
+	body := mustJSON(map[string]any{
+		"model":                  "gpt-5",
+		"input":                  "hi",
+		"prompt_cache_key":       "conv-abc123",
+		"prompt_cache_retention": "24h",
+	})
+	req, err := (ResponsesTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	if req.CacheConfig == nil || req.CacheConfig.Key != "conv-abc123" {
+		t.Fatalf("CacheConfig = %+v, want Key=conv-abc123", req.CacheConfig)
+	}
+	if req.CacheConfig.TTL != "24h" {
+		t.Errorf("CacheConfig.TTL = %q, want 24h", req.CacheConfig.TTL)
+	}
+
+	// Outbound: canonical Key/TTL are emitted as prompt_cache_key/_retention.
+	out, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("SerializeRequest: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["prompt_cache_key"] != "conv-abc123" {
+		t.Errorf("wire prompt_cache_key = %v, want conv-abc123", wire["prompt_cache_key"])
+	}
+	if wire["prompt_cache_retention"] != "24h" {
+		t.Errorf("wire prompt_cache_retention = %v, want 24h", wire["prompt_cache_retention"])
+	}
+
+	// Short TTL maps to the in-memory tier and round-trips.
+	req.CacheConfig.TTL = "5m"
+	out, err = (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("SerializeRequest (5m): %v", err)
+	}
+	wire = nil
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["prompt_cache_retention"] != "in_memory" {
+		t.Errorf("wire prompt_cache_retention = %v, want in_memory", wire["prompt_cache_retention"])
+	}
+
+	// No key → field absent on the wire.
+	req.CacheConfig = nil
+	out, err = (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("SerializeRequest (no key): %v", err)
+	}
+	wire = nil
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := wire["prompt_cache_key"]; present {
+		t.Errorf("prompt_cache_key present without CacheConfig.Key: %v", wire["prompt_cache_key"])
+	}
+	if _, present := wire["prompt_cache_retention"]; present {
+		t.Errorf("prompt_cache_retention present without CacheConfig.TTL: %v", wire["prompt_cache_retention"])
 	}
 }
 

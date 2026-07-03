@@ -31,18 +31,19 @@ type ResponsesRequest struct {
 	StopSequences     []string          `json:"stop_sequences,omitempty"`
 
 	// Forward-compat fields: parsed but left opaque for Phase 2.
-	PreviousResponseID string          `json:"previous_response_id,omitempty"`
-	Store              *bool           `json:"store,omitempty"`
-	Conversation       string          `json:"conversation,omitempty"`
-	Background         *bool           `json:"background,omitempty"`
-	Truncation         string          `json:"truncation,omitempty"`
-	ServiceTier        string          `json:"service_tier,omitempty"`
-	SafetyIdentifier   string          `json:"safety_identifier,omitempty"`
-	PromptCacheKey     string          `json:"prompt_cache_key,omitempty"`
-	Logprobs           *bool           `json:"logprobs,omitempty"`
-	TopLogprobs        *int            `json:"top_logprobs,omitempty"`
-	Include            []string        `json:"include,omitempty"`
-	ContextManagement  json.RawMessage `json:"context_management,omitempty"`
+	PreviousResponseID   string          `json:"previous_response_id,omitempty"`
+	Store                *bool           `json:"store,omitempty"`
+	Conversation         string          `json:"conversation,omitempty"`
+	Background           *bool           `json:"background,omitempty"`
+	Truncation           string          `json:"truncation,omitempty"`
+	ServiceTier          string          `json:"service_tier,omitempty"`
+	SafetyIdentifier     string          `json:"safety_identifier,omitempty"`
+	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"` // "in_memory" | "24h"
+	Logprobs             *bool           `json:"logprobs,omitempty"`
+	TopLogprobs          *int            `json:"top_logprobs,omitempty"`
+	Include              []string        `json:"include,omitempty"`
+	ContextManagement    json.RawMessage `json:"context_management,omitempty"`
 }
 
 // ResponsesTextConfig controls the output text format and verbosity.

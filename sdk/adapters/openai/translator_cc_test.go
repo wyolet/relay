@@ -69,6 +69,74 @@ func TestCCParseRequest_SimpleMessage(t *testing.T) {
 	}
 }
 
+func TestCCCacheKeyRoundTrip(t *testing.T) {
+	// Inbound: prompt_cache_key / prompt_cache_retention map to canonical
+	// CacheConfig.Key / CacheConfig.TTL ("in_memory" → "5m").
+	body := mustJSON(map[string]any{
+		"model":                  "gpt-4o",
+		"messages":               []any{map[string]any{"role": "user", "content": "hi"}},
+		"prompt_cache_key":       "conv-abc123",
+		"prompt_cache_retention": "in_memory",
+	})
+	req, err := (CCTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.CacheConfig == nil || req.CacheConfig.Key != "conv-abc123" {
+		t.Fatalf("CacheConfig = %+v, want Key=conv-abc123", req.CacheConfig)
+	}
+	if req.CacheConfig.TTL != "5m" {
+		t.Errorf("CacheConfig.TTL = %q, want 5m", req.CacheConfig.TTL)
+	}
+
+	// Outbound: canonical Key/TTL are emitted as prompt_cache_key/_retention.
+	out, err := (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["prompt_cache_key"] != "conv-abc123" {
+		t.Errorf("wire prompt_cache_key = %v, want conv-abc123", wire["prompt_cache_key"])
+	}
+	if wire["prompt_cache_retention"] != "in_memory" {
+		t.Errorf("wire prompt_cache_retention = %v, want in_memory", wire["prompt_cache_retention"])
+	}
+
+	// Long TTL upgrades to the 24h tier.
+	req.CacheConfig.TTL = "1h"
+	out, err = (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire = nil
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire["prompt_cache_retention"] != "24h" {
+		t.Errorf("wire prompt_cache_retention = %v, want 24h", wire["prompt_cache_retention"])
+	}
+
+	// No key → field absent on the wire.
+	req.CacheConfig = nil
+	out, err = (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire = nil
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := wire["prompt_cache_key"]; present {
+		t.Errorf("prompt_cache_key present without CacheConfig.Key: %v", wire["prompt_cache_key"])
+	}
+	if _, present := wire["prompt_cache_retention"]; present {
+		t.Errorf("prompt_cache_retention present without CacheConfig.TTL: %v", wire["prompt_cache_retention"])
+	}
+}
+
 func TestCCParseRequest_SystemUserAssistantTurns(t *testing.T) {
 	body := mustJSON(map[string]any{
 		"model": "gpt-4o",

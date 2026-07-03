@@ -39,18 +39,19 @@ func ParseResponsesRequest(body []byte) (*ResponsesRequest, error) {
 		Stream            *bool             `json:"stream"`
 		StopSequences     []string          `json:"stop_sequences"`
 
-		PreviousResponseID string          `json:"previous_response_id"`
-		Store              *bool           `json:"store"`
-		Conversation       string          `json:"conversation"`
-		Background         *bool           `json:"background"`
-		Truncation         string          `json:"truncation"`
-		ServiceTier        string          `json:"service_tier"`
-		SafetyIdentifier   string          `json:"safety_identifier"`
-		PromptCacheKey     string          `json:"prompt_cache_key"`
-		Logprobs           *bool           `json:"logprobs"`
-		TopLogprobs        *int            `json:"top_logprobs"`
-		Include            []string        `json:"include"`
-		ContextManagement  json.RawMessage `json:"context_management"`
+		PreviousResponseID   string          `json:"previous_response_id"`
+		Store                *bool           `json:"store"`
+		Conversation         string          `json:"conversation"`
+		Background           *bool           `json:"background"`
+		Truncation           string          `json:"truncation"`
+		ServiceTier          string          `json:"service_tier"`
+		SafetyIdentifier     string          `json:"safety_identifier"`
+		PromptCacheKey       string          `json:"prompt_cache_key"`
+		PromptCacheRetention string          `json:"prompt_cache_retention"`
+		Logprobs             *bool           `json:"logprobs"`
+		TopLogprobs          *int            `json:"top_logprobs"`
+		Include              []string        `json:"include"`
+		ContextManagement    json.RawMessage `json:"context_management"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
@@ -117,18 +118,19 @@ func ParseResponsesRequest(body []byte) (*ResponsesRequest, error) {
 		Stream:            wire.Stream,
 		StopSequences:     wire.StopSequences,
 
-		PreviousResponseID: wire.PreviousResponseID,
-		Store:              wire.Store,
-		Conversation:       wire.Conversation,
-		Background:         wire.Background,
-		Truncation:         wire.Truncation,
-		ServiceTier:        wire.ServiceTier,
-		SafetyIdentifier:   wire.SafetyIdentifier,
-		PromptCacheKey:     wire.PromptCacheKey,
-		Logprobs:           wire.Logprobs,
-		TopLogprobs:        wire.TopLogprobs,
-		Include:            wire.Include,
-		ContextManagement:  wire.ContextManagement,
+		PreviousResponseID:   wire.PreviousResponseID,
+		Store:                wire.Store,
+		Conversation:         wire.Conversation,
+		Background:           wire.Background,
+		Truncation:           wire.Truncation,
+		ServiceTier:          wire.ServiceTier,
+		SafetyIdentifier:     wire.SafetyIdentifier,
+		PromptCacheKey:       wire.PromptCacheKey,
+		PromptCacheRetention: wire.PromptCacheRetention,
+		Logprobs:             wire.Logprobs,
+		TopLogprobs:          wire.TopLogprobs,
+		Include:              wire.Include,
+		ContextManagement:    wire.ContextManagement,
 	}, nil
 }
 
