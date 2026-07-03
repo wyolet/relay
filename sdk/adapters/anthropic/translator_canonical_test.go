@@ -669,17 +669,17 @@ func TestAnthropicSerializeRequest_ThinkingConfig(t *testing.T) {
 	}
 }
 
-// Regression: effort-only reasoning (no explicit budget, as the agent sends) must
-// still emit a concrete budget_tokens — Anthropic 400s on thinking.type=enabled
-// without it. max_tokens must exceed the budget, and the custom temperature that
-// thinking forbids must be dropped.
-func TestAnthropicSerializeRequest_ThinkingEffortBudget(t *testing.T) {
+// Effort-only reasoning (no explicit budget, as the agent sends) maps to
+// adaptive thinking — the only mode the 4.7+/Sonnet 5/Fable 5 family accepts
+// (budget_tokens 400s there). Summary requested → display "summarized", and
+// the custom temperature that thinking forbids must be dropped.
+func TestAnthropicSerializeRequest_ThinkingAdaptive(t *testing.T) {
 	temp := 0.7
 	req := &v1.Request{
-		Model:      v1.ModelRefs{"claude-3-7-sonnet-20250219"},
+		Model:      v1.ModelRefs{"claude-opus-4-8"},
 		OutputMode: v1.OutputModeSync,
 		ModelConfig: map[string]*v1.ModelOpts{
-			"claude-3-7-sonnet-20250219": {
+			"claude-opus-4-8": {
 				Reasoning: &v1.ReasoningConfig{Effort: "medium", Summary: "auto"},
 				Sampling:  &v1.SamplingParams{Temperature: &temp},
 			},
@@ -697,19 +697,191 @@ func TestAnthropicSerializeRequest_ThinkingEffortBudget(t *testing.T) {
 	if !ok {
 		t.Fatalf("no thinking block: %v", m["thinking"])
 	}
-	if thinking["type"] != "enabled" {
-		t.Errorf("thinking type: %v", thinking["type"])
+	if thinking["type"] != "adaptive" {
+		t.Errorf("thinking type: %v, want adaptive", thinking["type"])
 	}
-	budget, ok := thinking["budget_tokens"].(float64)
-	if !ok || int(budget) < 1024 {
-		t.Errorf("budget_tokens must be present and >= 1024, got %v", thinking["budget_tokens"])
+	if _, present := thinking["budget_tokens"]; present {
+		t.Errorf("budget_tokens must be absent on adaptive, got %v", thinking["budget_tokens"])
 	}
-	maxTokens := m["max_tokens"].(float64)
-	if maxTokens <= budget {
-		t.Errorf("max_tokens %v must exceed budget_tokens %v", maxTokens, budget)
+	if thinking["display"] != "summarized" {
+		t.Errorf("display: %v, want summarized (Summary was requested)", thinking["display"])
 	}
 	if _, present := m["temperature"]; present {
 		t.Errorf("temperature must be dropped when thinking is enabled, got %v", m["temperature"])
+	}
+}
+
+// Explicit BudgetTokens keeps the legacy manual mode — the escape hatch for
+// pre-4.6 models that reject adaptive. Budget floor and max_tokens headroom
+// still apply.
+func TestAnthropicSerializeRequest_ThinkingExplicitBudget(t *testing.T) {
+	budget := 3000
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-3-7-sonnet-20250219"},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			"claude-3-7-sonnet-20250219": {
+				Reasoning: &v1.ReasoningConfig{BudgetTokens: &budget},
+			},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	thinking, ok := m["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("no thinking block: %v", m["thinking"])
+	}
+	if thinking["type"] != "enabled" {
+		t.Errorf("thinking type: %v, want enabled", thinking["type"])
+	}
+	got, ok := thinking["budget_tokens"].(float64)
+	if !ok || int(got) != 3000 {
+		t.Errorf("budget_tokens: %v, want 3000", thinking["budget_tokens"])
+	}
+	if maxTokens := m["max_tokens"].(float64); maxTokens <= got {
+		t.Errorf("max_tokens %v must exceed budget_tokens %v", maxTokens, got)
+	}
+}
+
+// Empty-text thinking blocks (the 4.7+/Sonnet 5/Fable 5 default under display
+// "omitted") must survive ParseResponse as Reasoning items carrying the
+// signature — same-model replay echoes them back verbatim.
+func TestAnthropicParseResponse_EmptyThinkingKeepsSignature(t *testing.T) {
+	body := []byte(`{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-4-8",
+		"content": [
+			{"type": "thinking", "thinking": "", "signature": "SIG123"},
+			{"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}
+		],
+		"stop_reason": "tool_use",
+		"usage": {"input_tokens": 10, "output_tokens": 20}
+	}`)
+	resp, err := (AnthropicTranslator{}).ParseResponse(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r *v1.Reasoning
+	for _, item := range resp.Output {
+		if v, ok := item.(*v1.Reasoning); ok {
+			r = v
+		}
+	}
+	if r == nil {
+		t.Fatalf("empty-text thinking block dropped; output: %#v", resp.Output)
+	}
+	if !strings.Contains(string(r.ProviderData), "SIG123") {
+		t.Errorf("signature missing from ProviderData: %s", r.ProviderData)
+	}
+}
+
+// Replay: a Reasoning item with a signed thinking payload must be re-emitted
+// in the SAME assistant message as its tool_use sibling — Anthropic requires
+// the pairing on multi-turn tool loops.
+func TestAnthropicSerializeRequest_ReasoningReplayWithToolUse(t *testing.T) {
+	pd, _ := json.Marshal(map[string]string{
+		"type": "thinking", "thinking": "", "signature": "SIG123",
+	})
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-opus-4-8"},
+		OutputMode: v1.OutputModeSync,
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+			&v1.Reasoning{ID: "rs_0", Status: v1.StatusCompleted, ProviderData: pd},
+			&v1.FunctionCall{ID: "fc_1", CallID: "toolu_1", Name: "f", Arguments: "{}"},
+			&v1.FunctionCallOutput{CallID: "toolu_1", Output: "ok"},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	msgs := m["messages"].([]any)
+	// messages: [user "go", assistant [thinking, tool_use], user [tool_result]]
+	if len(msgs) != 3 {
+		t.Fatalf("messages: got %d, want 3: %v", len(msgs), msgs)
+	}
+	asst := msgs[1].(map[string]any)
+	if asst["role"] != "assistant" {
+		t.Fatalf("messages[1] role: %v", asst["role"])
+	}
+	blocks := asst["content"].([]any)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant blocks: got %d, want 2 (thinking + tool_use): %v", len(blocks), blocks)
+	}
+	first := blocks[0].(map[string]any)
+	if first["type"] != "thinking" || first["signature"] != "SIG123" {
+		t.Errorf("first block must be the signed thinking: %v", first)
+	}
+	if second := blocks[1].(map[string]any); second["type"] != "tool_use" {
+		t.Errorf("second block must be tool_use: %v", second)
+	}
+}
+
+// Cross-vendor reasoning (no signed Anthropic payload) is not replayable —
+// unsigned thinking blocks are rejected upstream, so it must be dropped
+// without corrupting the message sequence.
+func TestAnthropicSerializeRequest_UnsignedReasoningDropped(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-opus-4-8"},
+		OutputMode: v1.OutputModeSync,
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+			&v1.Reasoning{ID: "rs_0", Content: "openai reasoning text", Status: v1.StatusCompleted},
+			&v1.Message{Role: v1.RoleAssistant, Content: []v1.Part{&v1.OutputTextPart{Text: "answer"}}},
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "next"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	if strings.Contains(string(out), `"thinking"`) {
+		t.Errorf("unsigned reasoning must not emit a thinking block: %s", out)
+	}
+	if msgs := m["messages"].([]any); len(msgs) != 3 {
+		t.Errorf("messages: got %d, want 3: %v", len(msgs), msgs)
+	}
+}
+
+// Inbound adaptive thinking round-trips: {type:"adaptive", display:"summarized"}
+// → ReasoningConfig{Summary:"auto"} → back out as adaptive+summarized.
+func TestAnthropicParseRequest_AdaptiveThinkingRoundTrip(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-opus-4-8", "max_tokens": 1024,
+		"thinking": {"type": "adaptive", "display": "summarized"},
+		"messages": [{"role": "user", "content": "hi"}]
+	}`)
+	req, err := (AnthropicTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := req.ModelConfig["claude-opus-4-8"].Reasoning
+	if rc == nil {
+		t.Fatal("adaptive thinking dropped at ParseRequest")
+	}
+	if rc.BudgetTokens != nil {
+		t.Errorf("BudgetTokens must be nil for adaptive, got %v", *rc.BudgetTokens)
+	}
+	if rc.Summary == "" {
+		t.Error("display summarized must map to a Summary request")
+	}
+
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	thinking := m["thinking"].(map[string]any)
+	if thinking["type"] != "adaptive" || thinking["display"] != "summarized" {
+		t.Errorf("round-trip thinking: %v", thinking)
 	}
 }
 

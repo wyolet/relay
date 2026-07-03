@@ -34,26 +34,6 @@ import (
 
 const defaultMaxTokensCanonical = 4096
 
-// anthropicEffortBudget maps a canonical reasoning "effort" level to an Anthropic
-// thinking budget_tokens. Anthropic has no effort knob, so the relay canonical
-// effort levels translate to concrete token budgets (all at/above the 1024 floor).
-func anthropicEffortBudget(effort string) int {
-	switch effort {
-	case "minimal":
-		return 1024
-	case "low":
-		return 2048
-	case "medium":
-		return 4096
-	case "high":
-		return 8192
-	case "xhigh", "max":
-		return 16384
-	default:
-		return 4096
-	}
-}
-
 // structuredOutputToolName is the synthetic tool injected to implement
 // Output.Format (json_schema / json_object) via the forced-tool trick.
 // The double-underscore prefix and "relay" namespace make collisions with
@@ -148,6 +128,7 @@ type anthropicCanonMetadata struct {
 type anthropicCanonThinking struct {
 	Type         string `json:"type"`
 	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"` // "summarized" | "omitted" (4.7+ family)
 }
 
 // anthropicFullResp is the full Anthropic response shape used by ParseResponse.
@@ -299,15 +280,26 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			Type         string `json:"type"`
 			BudgetTokens int    `json:"budget_tokens"`
 			Effort       string `json:"effort"`
+			Display      string `json:"display"`
 		}
 		if err := json.Unmarshal(wire.Thinking, &thinking); err == nil {
-			if thinking.Type == "enabled" {
+			switch thinking.Type {
+			case "enabled":
 				rc := &v1.ReasoningConfig{}
 				if thinking.BudgetTokens > 0 {
 					rc.BudgetTokens = &thinking.BudgetTokens
 				}
 				if thinking.Effort != "" {
 					rc.Effort = thinking.Effort
+				}
+				opts.Reasoning = rc
+				hasOpts = true
+			case "adaptive":
+				// Adaptive round-trips as a budget-less ReasoningConfig; display
+				// "summarized" surfaces as the canonical Summary request.
+				rc := &v1.ReasoningConfig{Effort: thinking.Effort}
+				if thinking.Display == "summarized" {
+					rc.Summary = "auto"
 				}
 				opts.Reasoning = rc
 				hasOpts = true
@@ -396,28 +388,34 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		if opts.Reasoning != nil {
 			rc := opts.Reasoning
-			// Anthropic's extended thinking takes an explicit budget_tokens — it has
-			// NO "effort" knob (that's OpenAI). So map effort→budget when the caller
-			// gave no explicit budget, clamp to Anthropic's 1024 floor, and ensure
-			// max_tokens leaves room past the budget (Anthropic requires
-			// max_tokens > budget_tokens). Without this, thinking.type=enabled goes
-			// out with budget_tokens omitted → 400 "budget_tokens: Field required".
-			budget := 0
-			if rc.BudgetTokens != nil {
-				budget = *rc.BudgetTokens
+			if rc.BudgetTokens != nil && *rc.BudgetTokens > 0 {
+				// Explicit budget → legacy manual extended thinking. This is the
+				// escape hatch for pre-4.6 models, which reject type "adaptive";
+				// clamp to Anthropic's 1024 floor and ensure max_tokens leaves room
+				// past the budget (Anthropic requires max_tokens > budget_tokens).
+				budget := *rc.BudgetTokens
+				if budget < 1024 {
+					budget = 1024
+				}
+				if maxTokens <= budget {
+					maxTokens = budget + 4096 // headroom for the visible answer beyond the thinking
+				}
+				out.Thinking = &anthropicCanonThinking{Type: "enabled", BudgetTokens: budget}
+			} else {
+				// No explicit budget → adaptive thinking, the only mode the
+				// 4.7+/Sonnet 5/Fable 5 family accepts (budget_tokens 400s there).
+				// Anthropic has no effort knob on the wire, so canonical Effort maps
+				// to adaptive and the model self-calibrates depth. Summary requested
+				// → display "summarized" (the family's default "omitted" streams
+				// thinking blocks with empty text).
+				t := &anthropicCanonThinking{Type: "adaptive"}
+				if rc.Summary != "" {
+					t.Display = "summarized"
+				}
+				out.Thinking = t
 			}
-			if budget <= 0 {
-				budget = anthropicEffortBudget(rc.Effort)
-			}
-			if budget < 1024 {
-				budget = 1024
-			}
-			if maxTokens <= budget {
-				maxTokens = budget + 4096 // headroom for the visible answer beyond the thinking
-			}
-			out.Thinking = &anthropicCanonThinking{Type: "enabled", BudgetTokens: budget}
-			// Extended thinking is incompatible with custom sampling — Anthropic
-			// rejects temperature/top_p/top_k alongside an enabled thinking block.
+			// Thinking is incompatible with custom sampling — Anthropic rejects
+			// temperature/top_p/top_k alongside an enabled/adaptive thinking block.
 			out.Temperature, out.TopP, out.TopK = nil, nil, nil
 		}
 
@@ -576,7 +574,11 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			outputIndex++
 
 		case "thinking":
-			if block.Thinking == "" {
+			// Empty-text blocks are NOT skipped: on the 4.7+/Sonnet 5/Fable 5
+			// family display defaults to "omitted", so thinking arrives with empty
+			// text but a signature that same-model replay must echo back verbatim.
+			// Dropping the block loses the signature and the item entirely.
+			if block.Thinking == "" && block.Signature == "" {
 				continue
 			}
 			// Carry the full thinking block (including signature) in ProviderData for
@@ -593,9 +595,11 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 			r := &v1.Reasoning{
 				ID:           fmt.Sprintf("rs_%d", outputIndex),
 				Content:      block.Thinking,
-				Summary:      []v1.SummaryText{{Text: block.Thinking}},
 				Status:       v1.StatusCompleted,
 				ProviderData: providerData,
+			}
+			if block.Thinking != "" {
+				r.Summary = []v1.SummaryText{{Text: block.Thinking}}
 			}
 			resp.Output = append(resp.Output, r)
 			outputIndex++
@@ -1740,12 +1744,19 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 
 	var pendingToolUses []v1.FunctionCall
 	var pendingToolResults []v1.FunctionCallOutput
+	// pendingThinking holds signed thinking blocks awaiting the assistant turn
+	// they belong to. Anthropic requires the thinking block that preceded a
+	// tool_use to be replayed in the SAME assistant message on the next turn —
+	// same contract as OpenAI's reasoning/function_call sibling pairing.
+	var pendingThinking []map[string]any
 
 	flushToolUses := func() {
 		if len(pendingToolUses) == 0 {
 			return
 		}
-		blocks := make([]map[string]any, 0, len(pendingToolUses))
+		blocks := make([]map[string]any, 0, len(pendingThinking)+len(pendingToolUses))
+		blocks = append(blocks, pendingThinking...)
+		pendingThinking = nil
 		for _, fc := range pendingToolUses {
 			var inputObj any
 			if fc.Arguments != "" {
@@ -1828,6 +1839,21 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 				if err != nil {
 					return nil, "", err
 				}
+				if len(pendingThinking) > 0 {
+					// The preceding Reasoning item belongs to this assistant turn:
+					// coerce content to blocks and lead with the thinking blocks.
+					blocks := pendingThinking
+					pendingThinking = nil
+					switch c := content.(type) {
+					case string:
+						if c != "" {
+							blocks = append(blocks, map[string]any{"type": "text", "text": c})
+						}
+					case []map[string]any:
+						blocks = append(blocks, c...)
+					}
+					content = blocks
+				}
 				if v.CacheConfig != nil && v.CacheConfig.Anchor {
 					content = withCacheBreakpoint(content, cacheTTL)
 				}
@@ -1843,13 +1869,37 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 			pendingToolResults = append(pendingToolResults, *v)
 
 		case *v1.Reasoning:
-			// Drop reasoning items when serializing to Anthropic upstream.
-			// Anthropic manages its own thinking; we don't echo it back.
+			flushToolResults()
+			// Replay signed thinking verbatim: Anthropic requires the thinking
+			// block back in the assistant turn that carries its tool_use, and
+			// rejects modified or unsigned blocks. Only ProviderData payloads
+			// qualify — they hold the exact block (text may legitimately be
+			// empty under display "omitted").
+			if len(v.ProviderData) > 0 {
+				var pd struct {
+					Type      string `json:"type"`
+					Thinking  string `json:"thinking"`
+					Signature string `json:"signature"`
+				}
+				if err := json.Unmarshal(v.ProviderData, &pd); err == nil && pd.Type == "thinking" && pd.Signature != "" {
+					pendingThinking = append(pendingThinking, map[string]any{
+						"type":      "thinking",
+						"thinking":  pd.Thinking,
+						"signature": pd.Signature,
+					})
+					continue
+				}
+			}
+			// canonical: reasoning dropped — no signed Anthropic thinking payload
+			// (cross-vendor item, or signature absent); unsigned blocks are
+			// rejected upstream, so there is nothing valid to emit.
 		}
 	}
 
 	flushToolUses()
 	flushToolResults()
+	// canonical: trailing reasoning dropped — no subsequent assistant turn to
+	// carry it, and Anthropic only requires thinking replay within a turn.
 
 	return msgs, strings.Join(systemParts, "\n"), nil
 }
