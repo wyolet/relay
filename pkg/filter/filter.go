@@ -443,6 +443,9 @@ func (f *Field[T]) compile(key, suffix string, vals []string) (func(*T) bool, er
 		if suffix != "" {
 			return nil, &Error{Key: key, Msg: "range suffix not valid on a boolean field"}
 		}
+		if len(vals) == 0 {
+			return nil, nil
+		}
 		raw := vals[len(vals)-1]
 		if raw == "" {
 			return nil, nil
@@ -456,6 +459,9 @@ func (f *Field[T]) compile(key, suffix string, vals []string) (func(*T) bool, er
 	case Int:
 		if suffix != "_min" && suffix != "_max" {
 			return nil, &Error{Key: key, Msg: "use " + f.Name + "_min / " + f.Name + "_max"}
+		}
+		if len(vals) == 0 {
+			return nil, nil
 		}
 		raw := vals[len(vals)-1]
 		if raw == "" {
@@ -473,6 +479,9 @@ func (f *Field[T]) compile(key, suffix string, vals []string) (func(*T) bool, er
 	case Time:
 		if suffix != "_from" && suffix != "_to" {
 			return nil, &Error{Key: key, Msg: "use " + f.Name + "_from / " + f.Name + "_to"}
+		}
+		if len(vals) == 0 {
+			return nil, nil
 		}
 		raw := vals[len(vals)-1]
 		if raw == "" {

@@ -293,9 +293,12 @@ if redis.call('EXISTS', guard_key) == 1 then
   return "noop"
 end
 
--- decrement concurrency counters (always, even on cancel)
+-- decrement concurrency counters (always, even on cancel), but never below zero
 for i = 2, 1 + n_con do
-  redis.call('INCRBY', KEYS[i], -1)
+  local cur = tonumber(redis.call('GET', KEYS[i]) or "0") or 0
+  if cur > 0 then
+    redis.call('INCRBY', KEYS[i], -1)
+  end
 end
 
 -- post-hoc token increment (only when not cancelled)
@@ -867,70 +870,81 @@ func memCommitImpl(ctx context.Context, store *kv.Mem, keys []string, args []any
 	guardTTL := time.Duration(guardTTLMs) * time.Millisecond
 	tokTTL := time.Duration(tokTTLMs) * time.Millisecond
 
-	if _, err := store.Get(ctx, guardKey); err == nil {
-		return []byte("noop"), nil
-	}
+	var result []byte
+	lockErr := store.WithLock(ctx, keys, func(ctx context.Context) error {
+		if _, err := store.Get(ctx, guardKey); err == nil {
+			result = []byte("noop")
+			return nil
+		}
 
-	for i := int64(1); i <= nCon; i++ {
-		_, _ = store.Incr(ctx, keys[i], -1)
-	}
-
-	if !cancelled {
-		for j := int64(0); j < nTok; j++ {
-			var amount int64
-			if int(j) < len(tokAmounts) {
-				amount = tokAmounts[j]
+		for i := int64(1); i <= nCon; i++ {
+			if cur, err := memReadCounter(ctx, store, keys[i]); err == nil && cur > 0 {
+				_, _ = store.Incr(ctx, keys[i], -1)
 			}
-			if amount > 0 {
-				keyIdx := 1 + nCon + j
-				if _, err := store.Incr(ctx, keys[keyIdx], amount); err == nil && tokTTL > 0 {
-					_ = store.Expire(ctx, keys[keyIdx], tokTTL)
+		}
+
+		if !cancelled {
+			for j := int64(0); j < nTok; j++ {
+				var amount int64
+				if int(j) < len(tokAmounts) {
+					amount = tokAmounts[j]
+				}
+				if amount > 0 {
+					keyIdx := 1 + nCon + j
+					if _, err := store.Incr(ctx, keys[keyIdx], amount); err == nil && tokTTL > 0 {
+						_ = store.Expire(ctx, keys[keyIdx], tokTTL)
+					}
 				}
 			}
 		}
-	}
 
-	if cancelled {
-		// tbRefunds: [key_idx, cost_scaled, burst]
-		for _, entry := range tbRefunds {
-			stateKey := keys[entry[0]-1]
-			curI, _ := memHGetInt(ctx, store, stateKey, "tokens")
-			if curI >= 0 {
-				newT := curI + entry[1]
-				if newT > entry[2]*1000 {
-					newT = entry[2] * 1000
+		if cancelled {
+			// tbRefunds: [key_idx, cost_scaled, burst]
+			for _, entry := range tbRefunds {
+				stateKey := keys[entry[0]-1]
+				curI, _ := memHGetInt(ctx, store, stateKey, "tokens")
+				if curI >= 0 {
+					newT := curI + entry[1]
+					if newT > entry[2]*1000 {
+						newT = entry[2] * 1000
+					}
+					_ = store.HSet(ctx, stateKey, "tokens", []byte(strconv.FormatInt(newT, 10)), 0)
 				}
-				_ = store.HSet(ctx, stateKey, "tokens", []byte(strconv.FormatInt(newT, 10)), 0)
+			}
+			// lbRefunds: [key_idx, cost_scaled]
+			for _, entry := range lbRefunds {
+				stateKey := keys[entry[0]-1]
+				curI, _ := memHGetInt(ctx, store, stateKey, "level")
+				if curI >= 0 {
+					newL := curI - entry[1]
+					if newL < 0 {
+						newL = 0
+					}
+					_ = store.HSet(ctx, stateKey, "level", []byte(strconv.FormatInt(newL, 10)), 0)
+				}
+			}
+			// swRefunds: [key_idx, count]
+			for _, entry := range swRefunds {
+				stateKey := keys[entry[0]-1]
+				curI, _ := memHGetInt(ctx, store, stateKey, "count")
+				if curI >= 0 {
+					newC := curI - entry[1]
+					if newC < 0 {
+						newC = 0
+					}
+					_ = store.HSet(ctx, stateKey, "count", []byte(strconv.FormatInt(newC, 10)), 0)
+				}
 			}
 		}
-		// lbRefunds: [key_idx, cost_scaled]
-		for _, entry := range lbRefunds {
-			stateKey := keys[entry[0]-1]
-			curI, _ := memHGetInt(ctx, store, stateKey, "level")
-			if curI >= 0 {
-				newL := curI - entry[1]
-				if newL < 0 {
-					newL = 0
-				}
-				_ = store.HSet(ctx, stateKey, "level", []byte(strconv.FormatInt(newL, 10)), 0)
-			}
-		}
-		// swRefunds: [key_idx, count]
-		for _, entry := range swRefunds {
-			stateKey := keys[entry[0]-1]
-			curI, _ := memHGetInt(ctx, store, stateKey, "count")
-			if curI >= 0 {
-				newC := curI - entry[1]
-				if newC < 0 {
-					newC = 0
-				}
-				_ = store.HSet(ctx, stateKey, "count", []byte(strconv.FormatInt(newC, 10)), 0)
-			}
-		}
-	}
 
-	_ = store.Set(ctx, guardKey, []byte(tok), guardTTL)
-	return []byte("ok"), nil
+		_ = store.Set(ctx, guardKey, []byte(tok), guardTTL)
+		result = []byte("ok")
+		return nil
+	})
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	return result, nil
 }
 
 func toInt64(v any) (int64, error) {
