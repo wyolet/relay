@@ -266,23 +266,25 @@ func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, ke
 }
 
 // pickRoundRobin selects a candidate using a modular counter stored in Redis.
+// Incr is atomic on every backend, so the index derives directly from the
+// counter value — no distributed lock, no extra round-trip on the hot path
+// (audit 2026-07-04 P1 tracker #9: the old WithLock wrapper collapsed
+// rotation to healthy[0] under contention on the non-blocking Redis lock).
 func (s *Selector) pickRoundRobin(ctx context.Context, scope string, healthy []candidate) (*hostkey.HostKey, error) {
-	var idx int64
-	err := s.state.WithLock(ctx, []string{roundRobinKey(scope)}, func(ctx context.Context) error {
-		var ierr error
-		idx, ierr = s.state.Incr(ctx, roundRobinKey(scope), 1)
-		if ierr == nil {
-			// Refresh 30-day TTL on every increment. Redis reclaims counters for
-			// deleted pools without affecting modular-index correctness.
-			_ = s.state.Expire(ctx, roundRobinKey(scope), ttlRoundRobin)
-		}
-		return ierr
-	})
+	idx, err := s.state.Incr(ctx, roundRobinKey(scope), 1)
 	if err != nil {
 		idx = 1
+	} else {
+		// Refresh 30-day TTL on every increment. Redis reclaims counters for
+		// deleted pools; a counter that expires merely restarts the rotation
+		// at healthy[0], which is harmless.
+		_ = s.state.Expire(ctx, roundRobinKey(scope), ttlRoundRobin)
 	}
-	chosen := healthy[(idx-1)%int64(len(healthy))]
-	return chosen.key, nil
+	i := (idx - 1) % int64(len(healthy))
+	if i < 0 { // negative counter (int64 wraparound or external edit)
+		i += int64(len(healthy))
+	}
+	return healthy[i].key, nil
 }
 
 // pickLRU selects the healthy candidate with the oldest last-use timestamp

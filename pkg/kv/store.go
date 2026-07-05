@@ -18,6 +18,13 @@ type Store interface {
 	Incr(ctx context.Context, key string, delta int64) (int64, error)
 	Expire(ctx context.Context, key string, ttl time.Duration) error
 	Range(ctx context.Context, prefix string) ([]Entry, error)
+	// WithLock runs fn while holding an advisory lock over all keys.
+	// BLOCKING contract: under contention the call waits (retrying with
+	// backoff on distributed backends) until the lock is acquired — every
+	// contender eventually runs fn, or returns the ctx error if ctx is
+	// cancelled/expires while waiting. It never returns a "busy" error
+	// without running fn. Mutual exclusion holds across all keys for the
+	// duration of fn.
 	WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error
 	Close() error
 }
