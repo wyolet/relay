@@ -365,8 +365,9 @@ func TestResolve_NoAuthHostInjectsAnonKey(t *testing.T) {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "qwen3-on-ollama", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: binding.Spec{ModelID: modID, HostID: hostID, Adapter: adapters.OpenAI},
 	}
-	// Wildcard customer policy, NO host keys for the host.
-	pol := &policy.Policy{Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: policy.Spec{}}
+	// Explicit model grant, NO host keys for the host. (Implicit wildcards
+	// no longer cover NoAuth hosts — see wildcard_noauth_test.go.)
+	pol := &policy.Policy{Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: policy.Spec{ModelIDs: []string{modID}}}
 	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"}}
 
 	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m}, keyListR{}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b})
