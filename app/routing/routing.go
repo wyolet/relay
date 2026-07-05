@@ -238,7 +238,8 @@ candidates:
 			// model (or all, with IncludeDeprecated).
 			var allowed bool
 			if wildcardGrant {
-				allowed = !deprecated || pol.Spec.IncludeDeprecated
+				// NoAuth hosts skip the hostkey-coverage gate — the implicit wildcard's only real authz — so reaching one requires an explicit grant.
+				allowed = (!deprecated || pol.Spec.IncludeDeprecated) && !h.Spec.NoAuth
 			} else {
 				allowed = snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.Spec.HostID)
 			}
@@ -428,6 +429,9 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 			}
 			anyEnabledBnd = true
 			keys := snap.HostKeysForHost(h.Meta.ID)
+			if h.Spec.NoAuth {
+				keys = []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
+			}
 			if len(keys) == 0 {
 				continue
 			}
