@@ -53,10 +53,17 @@ func outboundModelRefs(m *model.Model) []refKey {
 }
 
 func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {
+	refs := make([]refKey, 0, 2)
 	if k.Spec.HostID != "" {
-		return []refKey{{Kind: refHost, ID: k.Spec.HostID}}
+		refs = append(refs, refKey{Kind: refHost, ID: k.Spec.HostID})
 	}
-	return nil
+	if k.Spec.PolicyID != "" {
+		refs = append(refs, refKey{Kind: refPolicy, ID: k.Spec.PolicyID})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
 }
 
 func outboundPolicyRefs(p *policy.Policy) []refKey {

@@ -56,8 +56,6 @@ func build(
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
-	modelIDs := setFromIDs(models, func(m *model.Model) string { return m.Meta.ID })
-	keyIDs := setFromIDs(keys, func(k *hostkey.HostKey) string { return k.Meta.ID })
 	rlIDs := setFromIDs(rls, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
 	polByID := make(map[string]*policy.Policy, len(pols))
 	polIDSet := make(idSet, len(pols))
@@ -69,16 +67,23 @@ func build(
 	s.addProviders(provs)
 	s.addRateLimits(rls)
 	s.addHosts(hosts, polByID)
-	s.addPolicies(pols, modelIDs, keyIDs, rlIDs)
 	s.addModels(models, providerIDs)
 	// Overlays swap templates for effective rows BEFORE indexing, so
 	// aliases/refs below index the merged spec.
 	s.applyOverlays(ovls)
 	s.addHostKeys(keys, hostIDs, polByID)
+	// Droppable kinds (models: missing provider; hostkeys: missing host /
+	// tier policy) are in place now, so dependents sanitize against the
+	// post-drop snapshot membership — the input enabled-id sets would keep
+	// refs to rows the pass above dropped, diverging from the incremental
+	// cascade's fixpoint.
+	memberModelIDs := snapIDs(s.modelsByID)
+	memberKeyIDs := snapIDs(s.hostKeysByID)
+	s.addPolicies(pols, memberModelIDs, memberKeyIDs, rlIDs)
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()
-	s.addPricings(pricings, hostIDs, modelIDs)
-	s.addBindings(bindings, modelIDs, hostIDs)
+	s.addPricings(pricings, hostIDs, memberModelIDs)
+	s.addBindings(bindings, memberModelIDs, hostIDs)
 	// Aliases + policy allow-sets read bindings (BindingsForModel), so they
 	// must run after bindings are indexed.
 	for _, m := range s.modelsByID {

@@ -64,6 +64,16 @@ type MapReverseResolver struct {
 	RateLimits map[string]string
 	Pricings   map[string]string
 	Bindings   map[string]string
+	// ModelProviders maps modelID -> providerID, letting FromPolicy emit the
+	// provider-qualified "provider/model" ref for legacy ModelIDs grants
+	// (a bare modelref token means "provider", so a bare model slug would
+	// re-import as the wrong grant). Optional; unset falls back to bare name.
+	ModelProviders map[string]string
+}
+
+func (m MapReverseResolver) ModelProviderID(modelID string) (string, bool) {
+	v, ok := m.ModelProviders[modelID]
+	return v, ok
 }
 
 func (m MapReverseResolver) ProviderName(id string) (string, bool) {
