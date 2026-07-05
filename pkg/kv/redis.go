@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	mrand "math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,8 +16,6 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
-
-var ErrLockBusy = errors.New("state: lock busy")
 
 // RedisConfig configures a Redis store.
 // Exactly one of Addr, Sentinel, or ClusterAddrs should be set.
@@ -184,6 +183,11 @@ end
 return n`
 )
 
+// WithLock implements the blocking Store contract over SET NX PX: acquisition
+// is retried with jittered backoff (5-25ms) until it succeeds or ctx is done,
+// matching Mem's block-until-acquired semantics. The all-or-nothing Lua
+// acquire (partial holds are rolled back before returning 0) keeps opposite
+// key orders deadlock-free while polling.
 // Cluster safety: all keys must share the same hash tag, else CROSSSLOT.
 func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
 	sorted := make([]string, len(keys))
@@ -204,12 +208,19 @@ func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Con
 	token := hex.EncodeToString(tokenBytes)
 	ttlMs := strconv.FormatInt(int64(30*time.Second/time.Millisecond), 10)
 
-	acquired, err := r.runLua(ctx, "state.withlock.acquire", luaAcquire, deduped, token, ttlMs)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(string(acquired)) == "0" {
-		return ErrLockBusy
+	for {
+		acquired, err := r.runLua(ctx, "state.withlock.acquire", luaAcquire, deduped, token, ttlMs)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(acquired)) != "0" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(5+mrand.IntN(21)) * time.Millisecond):
+		}
 	}
 	defer func() {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
