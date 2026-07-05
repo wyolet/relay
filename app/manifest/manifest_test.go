@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policy"
 )
 
 // testResolver is a fixed-set Resolver for unit tests.
@@ -110,6 +112,48 @@ func TestFromPolicy_RoundTrip(t *testing.T) {
 	}
 	if dto.Spec.RateLimit != "cheap-tier-rpm" {
 		t.Errorf("rateLimit: want cheap-tier-rpm, got %q", dto.Spec.RateLimit)
+	}
+}
+
+func TestFromPolicy_LegacyModelIDsUseProviderQualifiedRefs(t *testing.T) {
+	pol := &policy.Policy{
+		Meta: meta.Metadata{Name: "legacy-grant"},
+		Spec: policy.Spec{ModelIDs: []string{"model-fff"}},
+	}
+
+	tests := []struct {
+		name string
+		rev  manifest.MapReverseResolver
+		want string
+	}{
+		{
+			name: "provider known",
+			rev: manifest.MapReverseResolver{
+				Providers:      map[string]string{"provider-aaa": "anthropic"},
+				Models:         map[string]string{"model-fff": "claude-3-5-sonnet"},
+				ModelProviders: map[string]string{"model-fff": "provider-aaa"},
+			},
+			want: "anthropic/claude-3-5-sonnet",
+		},
+		{
+			name: "provider unknown falls back to bare model name",
+			rev: manifest.MapReverseResolver{
+				Providers: map[string]string{"provider-aaa": "anthropic"},
+				Models:    map[string]string{"model-fff": "claude-3-5-sonnet"},
+			},
+			want: "claude-3-5-sonnet",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dto := manifest.FromPolicy(pol, tt.rev)
+			if len(dto.Spec.Models) != 1 {
+				t.Fatalf("models = %v, want one ref %q", dto.Spec.Models, tt.want)
+			}
+			if got := dto.Spec.Models[0]; got != tt.want {
+				t.Fatalf("models[0] = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

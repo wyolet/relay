@@ -132,6 +132,17 @@ func (c *Catalog) markReady() { c.ready.Store(true) }
 // validation, builds a fresh Snapshot, and atomic-swaps it in. On any
 // error the existing Snapshot stays live — callers can retry.
 func (c *Catalog) Reload(ctx context.Context) error {
+	// Serialize with the COW reconciler (and other reloads): every Apply*
+	// does clone→mutate→Store under rmu; publishing here without it lets a
+	// concurrent Apply clone the pre-reload snapshot and clobber this one.
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	return c.reloadLocked(ctx)
+}
+
+// reloadLocked is Reload's body. Caller must hold c.rmu — Apply* uses it
+// directly to recover from an absent-id upsert without re-locking.
+func (c *Catalog) reloadLocked(ctx context.Context) error {
 	provs, err := c.providers.List(ctx)
 	if err != nil {
 		return fmt.Errorf("catalog reload: providers: %w", err)
@@ -205,15 +216,14 @@ func (c *Catalog) Reload(ctx context.Context) error {
 	return nil
 }
 
+// filter never compacts in place: a Lister may hand back a shared slice
+// (in-memory stores, test fixtures) and Apply-triggered rebuilds re-List it.
 func filter[T any](items []T, keep func(T) bool) []T {
-	out := items[:0]
+	out := make([]T, 0, len(items))
 	for _, it := range items {
 		if keep(it) {
 			out = append(out, it)
 		}
 	}
-	// Detach so the input slice isn't aliased.
-	cp := make([]T, len(out))
-	copy(cp, out)
-	return cp
+	return out
 }

@@ -189,12 +189,15 @@ func (s *Snapshot) indexModelSnapshots(m *model.Model) {
 }
 
 // deindexModelSnapshots removes a model's snapshots from both indices. Bare
-// names are deleted by key; aliases are swept by owning-model id so deletion
-// is robust even if the model's hosts were already evicted (the alias keys
-// can no longer be recomputed in that case).
+// names are deleted only when this model still owns the entry; aliases are
+// swept by owning-model id so deletion is robust even if the model's hosts
+// were already evicted (the alias keys can no longer be recomputed in that
+// case).
 func (s *Snapshot) deindexModelSnapshots(m *model.Model) {
 	for _, snap := range m.Spec.Snapshots {
-		delete(s.snapshotsByName, snap.Name)
+		if ref, ok := s.snapshotsByName[snap.Name]; ok && ref.Model.Meta.ID == m.Meta.ID {
+			delete(s.snapshotsByName, snap.Name)
+		}
 	}
 	for k, ref := range s.snapshotAliases {
 		if ref.Model.Meta.ID == m.Meta.ID {

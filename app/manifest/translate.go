@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
@@ -364,17 +365,13 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 }
 
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
-	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs
-	// is the legacy literal-ID grant; emit its rows as bare model names
-	// for backward-compat with operator-authored YAML.
+	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs is the
+	// legacy literal-ID grant; emit those rows as model refs, not bare model
+	// slugs, because a bare modelref token means "provider".
 	models := make([]string, 0, len(p.Spec.Models)+len(p.Spec.ModelIDs))
 	models = append(models, p.Spec.Models...)
 	for _, id := range p.Spec.ModelIDs {
-		name, _ := rev.ModelName(id)
-		if name == "" {
-			name = id
-		}
-		models = append(models, name)
+		models = append(models, legacyModelRef(id, rev))
 	}
 
 	hostKeys := make([]string, 0, len(p.Spec.HostKeyIDs))
@@ -423,6 +420,32 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 			PayloadLoggingEnabled: p.Spec.PayloadLoggingEnabled,
 		},
 	}
+}
+
+type modelProviderIDResolver interface {
+	ModelProviderID(modelID string) (string, bool)
+}
+
+// legacyModelRef renders a legacy ModelIDs grant as a modelref. A bare token
+// means "provider" in the DSL, so a bare model slug would re-import as the
+// wrong grant; emit the provider-qualified "provider/model" form when the
+// resolver can supply the model's provider, else fall back to the name.
+func legacyModelRef(id string, rev ReverseResolver) string {
+	name, _ := rev.ModelName(id)
+	if name == "" {
+		return id
+	}
+	if strings.Contains(name, "/") {
+		return name
+	}
+	if r, ok := rev.(modelProviderIDResolver); ok {
+		if providerID, ok := r.ModelProviderID(id); ok {
+			if provider, ok := rev.ProviderName(providerID); ok && provider != "" {
+				return provider + "/" + name
+			}
+		}
+	}
+	return name
 }
 
 // ---------------------------------------------------------------------------

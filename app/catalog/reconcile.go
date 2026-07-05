@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/wyolet/relay/app/binding"
@@ -23,6 +24,21 @@ func (c *Catalog) commitWithGrants(s *Snapshot) {
 	c.snap.Store(s)
 }
 
+// recoverAbsentLocked degrades an upsert for an id the snapshot doesn't hold
+// to a full rebuild from the stores: an insert is indistinguishable from a
+// re-appearance whose earlier delete-cascade stripped dependents (policy
+// grants, relay keys, host keys) that only source truth still records, so an
+// incremental patch would leave them permanently lost. Leaf kinds with no
+// dependents (pricing, relaykey) skip this and stay incremental. Caller must
+// hold c.rmu; returns (handled, err).
+func (c *Catalog) recoverAbsentLocked(kind refKind, id string) (bool, error) {
+	if rowPresent(c.snap.Load(), refKey{Kind: kind, ID: id}) {
+		return false, nil
+	}
+	// Apply* carries no ctx; this is a rare control-plane recovery path.
+	return true, c.reloadLocked(context.Background())
+}
+
 func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {
 	if !p.IsEnabled() {
 		return c.ApplyProviderDelete(p.Meta.ID)
@@ -32,6 +48,9 @@ func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refProvider, p.Meta.ID); handled {
+		return err
+	}
 	s := c.snap.Load().clone()
 
 	// Remove old entry if present.
@@ -75,6 +94,9 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refHost, h.Meta.ID); handled {
+		return err
+	}
 	s := c.snap.Load().clone()
 
 	clean := sanitizeHost(h, s.policiesByID)
@@ -119,6 +141,9 @@ func (c *Catalog) ApplyModelUpsert(m *model.Model) error {
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refModel, m.Meta.ID); handled {
+		return err
+	}
 	s := c.snap.Load().clone()
 	clean, keep := sanitizeModel(m, snapIDs(s.providersByID))
 	if !keep {
@@ -201,6 +226,9 @@ func (c *Catalog) ApplyHostKeyUpsert(k *hostkey.HostKey) error {
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refHostKey, k.Meta.ID); handled {
+		return err
+	}
 	s := c.snap.Load().clone()
 	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), s.policiesByID)
 	if !keep {
@@ -260,6 +288,9 @@ func (c *Catalog) ApplyRateLimitUpsert(r *ratelimit.RateLimit) error {
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refRateLimit, r.Meta.ID); handled {
+		return err
+	}
 	s := c.snap.Load().clone()
 	// Strip stale name index when slug changed for the same id.
 	if prev, ok := s.rateLimitsByID[r.Meta.ID]; ok && prev.Meta.Name != r.Meta.Name {
@@ -308,6 +339,9 @@ func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refPolicy, p.Meta.ID); handled {
+		return err
+	}
 	s := c.snap.Load().clone()
 	clean := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID))
 	insertPolicy(s, clean)
@@ -551,9 +585,8 @@ func cascadeDelete(s *Snapshot, kind refKind, id string) {
 }
 
 // dependentStillValid returns true only when the row's cross-refs all still
-// resolve in s. Pricings: always invalidate when a target is gone (handled by
-// deleteModel/deleteHost clearing pricingByModelHost, but we still need to
-// evict the Pricing row).
+// resolve in s. Pricings stay valid while their owning host and at least one
+// target model still resolve, matching full snapshot sanitization.
 func dependentStillValid(s *Snapshot, k refKey) bool {
 	switch k.Kind {
 	case refModel:
@@ -580,16 +613,16 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 			return true
 		}
 		// For cascade, check refs without duplicate check (we already cleaned
-		// pricingByModelHost) — just check host and model presence.
+		// pricingByModelHost) — just check host and any model presence.
 		if _, ok := s.hostsByID[p.Meta.Owner.ID]; !ok {
 			return false
 		}
 		for _, modelID := range p.Spec.TargetModelIDs {
-			if _, ok := s.modelsByID[modelID]; !ok {
-				return false
+			if _, ok := s.modelsByID[modelID]; ok {
+				return true
 			}
 		}
-		return true
+		return false
 	case refRelayKey:
 		rk, ok := s.relayKeysByID[k.ID]
 		if !ok {

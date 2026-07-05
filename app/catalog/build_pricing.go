@@ -16,7 +16,7 @@ func (s *Snapshot) addPricings(pricings []*pricing.Pricing, hosts, models idSet)
 			}
 			s.pricingByModelHost[modelID+"|"+hostID] = clean
 		}
-		s.registerRefs(refKey{Kind: refPricing, ID: clean.Meta.ID}, outboundPricingRefs(p))
+		s.registerRefs(refKey{Kind: refPricing, ID: clean.Meta.ID}, outboundPricingRefs(clean))
 	}
 }
 

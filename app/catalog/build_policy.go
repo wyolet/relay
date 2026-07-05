@@ -7,9 +7,11 @@ func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls idSet) {
 		clean := sanitizePolicy(p, models, keys, rls)
 		s.policiesByID[clean.Meta.ID] = clean
 		s.policiesByName[clean.Meta.Name] = clean
-		// outbound refs use the original spec so the COW reconciler can
-		// reattach this policy when a previously-missing dependency returns.
-		s.registerRefs(refKey{Kind: refPolicy, ID: clean.Meta.ID}, outboundPolicyRefs(p))
+		// Refs mirror the stored (sanitized) row so incremental delete/replace
+		// unregisters exactly what was registered. Re-appearance of a missing
+		// dependency is handled by the absent-id full reload in reconcile, not
+		// by ref-web reattachment.
+		s.registerRefs(refKey{Kind: refPolicy, ID: clean.Meta.ID}, outboundPolicyRefs(clean))
 	}
 }
 
