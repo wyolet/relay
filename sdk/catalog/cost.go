@@ -39,10 +39,12 @@ func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []st
 				switch rate.Unit {
 				case "per_million":
 					cost += float64(count) / 1_000_000 * rate.Amount
+					continue
 				case "per_unit":
 					cost += float64(count) * rate.Amount
+					continue
 				}
-				continue
+				// unknown unit: fall through to unpriced rather than $0
 			}
 		}
 		unpriced = append(unpriced, key)

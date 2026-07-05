@@ -57,12 +57,12 @@ func (ts *TokenSource) Token(ctx context.Context) (*Token, error) {
 		return nil, err
 	}
 	if ts.changed(nt) {
+		ts.cur = nt
 		if ts.p != nil {
 			if err := ts.p.Save(ctx, nt); err != nil {
 				return nil, err
 			}
 		}
-		ts.cur = nt
 	}
 	return ts.cur, nil
 }

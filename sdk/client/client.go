@@ -327,7 +327,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 		return nil, parseAPIError(c.host(), resp.status, body)
 	}
 	sc := bufio.NewScanner(resp.body)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	sc.Split(splitSSEFrames)
 	return c.wrapStream(&Stream{
 		body:    resp.body,
@@ -572,8 +572,13 @@ func splitSSEFrames(data []byte, atEOF bool) (advance int, token []byte, err err
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
 	}
-	if i := bytes.Index(data, []byte("\n\n")); i >= 0 {
-		return i + 2, data[:i], nil
+	lf := bytes.Index(data, []byte("\n\n"))
+	crlf := bytes.Index(data, []byte("\r\n\r\n"))
+	switch {
+	case lf >= 0 && (crlf < 0 || lf <= crlf):
+		return lf + 2, data[:lf], nil
+	case crlf >= 0:
+		return crlf + 4, data[:crlf], nil
 	}
 	if atEOF {
 		return len(data), data, nil
