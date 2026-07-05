@@ -522,14 +522,12 @@ func listScanResolver[T any](store entityStore[T], metaOf func(*T) *meta.Metadat
 // considered too — a hostkey rebound to a disabled tier policy is still
 // a structural mismatch, not just a soft drop. Delete is unaffected.
 func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
-	return func(ctx context.Context, action string, _, incoming *hostkey.HostKey) error {
+	return func(ctx context.Context, action string, existing, incoming *hostkey.HostKey) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		// Rotation must go through POST /host-keys/by-id/{id}/rotate,
-		// not PUT — a stray value field on update would silently rotate
-		// the credential.
-		if action == "update" && incoming.Spec.Value != "" &&
+		rotating := incoming.Spec.Value != "" && (existing == nil || incoming.Spec.Value != existing.Resolved)
+		if action == "update" && rotating &&
 			(incoming.Spec.ValueFrom.Kind == hostkey.ValueKindStored || incoming.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth) {
 			return fmt.Errorf("value cannot be set on update — use POST /host-keys/by-id/{id}/rotate to rotate the credential")
 		}

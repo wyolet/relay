@@ -126,6 +126,29 @@ func scopeReq(t *testing.T, h http.Handler, who, method, path, body string) *htt
 	return w
 }
 
+func TestRequireActor_UnauthenticatedWritesJSON401(t *testing.T) {
+	nextCalled := false
+	h := RequireActor(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		nextCalled = true
+	}))
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/protected", nil))
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got, want := strings.TrimSpace(w.Body.String()), `{"error":{"type":"authentication_error","message":"unauthenticated"}}`; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+	if nextCalled {
+		t.Fatal("next handler was called for an unauthenticated request")
+	}
+}
+
 func seedThings() []*scopedThing {
 	return []*scopedThing{
 		{Meta: meta.Metadata{ID: catalogID, Name: "catalog-row", Owner: meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}}},
