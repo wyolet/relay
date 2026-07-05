@@ -1,31 +1,45 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/wyolet/relay/sdk/usage"
 )
 
-// ExtractTokens reads OpenAI usage from a response body chunk and emits
-// a Tokens map. Returns nil if the body has no usage block (e.g. mid-stream
-// SSE chunks before the final one).
-//
-// Maps OpenAI's fields to our convention:
-//
-//	prompt_tokens                                                  -> input
-//	completion_tokens                                              -> output
-//	total_tokens                                                   -> (skipped; computed from sum)
-//	prompt_tokens_details.cached_tokens                            -> cache_read
-//	prompt_tokens_details.audio_tokens                             -> audio_input
-//	completion_tokens_details.reasoning_tokens                     -> reasoning
-//	completion_tokens_details.audio_tokens                         -> audio_output
-//	completion_tokens_details.accepted_prediction_tokens           -> accepted_prediction
-//	completion_tokens_details.rejected_prediction_tokens           -> rejected_prediction
-//
-// This also handles the streaming case where usage appears in the final
-// chunk only (when stream_options.include_usage: true). The chunk shape
-// is {... "usage": {...}} at the message level — same path, same parser.
+// ExtractTokens reads OpenAI usage from a response body. It accepts either a
+// single non-streaming JSON object or a complete streaming SSE body. For
+// streaming (stream_options.include_usage: true) the usage block appears only
+// in the final chunk, so we walk every `data:` frame and keep the last one
+// that carries usage.
 func ExtractTokens(body []byte) usage.Tokens {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) == 0 {
+		return nil
+	}
+	if trimmed[0] == '{' {
+		return extractTokensObject(trimmed)
+	}
+	var last usage.Tokens
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(line[len("data:"):])
+		if len(payload) == 0 || payload[0] != '{' {
+			continue
+		}
+		if frame := extractTokensObject(payload); frame != nil {
+			last = frame
+		}
+	}
+	return last
+}
+
+// extractTokensObject reads a usage block out of a single JSON object (a
+// non-streaming response or one SSE data frame).
+func extractTokensObject(body []byte) usage.Tokens {
 	var resp struct {
 		Usage struct {
 			PromptTokens        int64 `json:"prompt_tokens"`
@@ -50,15 +64,19 @@ func ExtractTokens(body []byte) usage.Tokens {
 	}
 
 	t := usage.Tokens{}
-	if v := resp.Usage.PromptTokens; v > 0 {
+	cached := int64(0)
+	if d := resp.Usage.PromptTokensDetails; d != nil {
+		cached = d.CachedTokens
+	}
+	if v := resp.Usage.PromptTokens - cached; v > 0 {
 		t["input"] = v
 	}
 	if v := resp.Usage.CompletionTokens; v > 0 {
 		t["output"] = v
 	}
 	if d := resp.Usage.PromptTokensDetails; d != nil {
-		if d.CachedTokens > 0 {
-			t["cache_read"] = d.CachedTokens
+		if cached > 0 {
+			t["cache_read"] = cached
 		}
 		if d.AudioTokens > 0 {
 			t["audio_input"] = d.AudioTokens

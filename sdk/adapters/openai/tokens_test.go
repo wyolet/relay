@@ -20,8 +20,8 @@ func TestExtractTokens_FullResponse(t *testing.T) {
 	if tok == nil {
 		t.Fatal("expected non-nil Tokens")
 	}
-	if tok["input"] != 100 {
-		t.Errorf("input: want 100, got %d", tok["input"])
+	if tok["input"] != 80 {
+		t.Errorf("input: want 80, got %d", tok["input"])
 	}
 	if tok["output"] != 50 {
 		t.Errorf("output: want 50, got %d", tok["output"])
@@ -86,6 +86,86 @@ func TestExtractTokens_StreamingFinalChunk(t *testing.T) {
 	}
 	if tok["output"] != 15 {
 		t.Errorf("output: want 15, got %d", tok["output"])
+	}
+}
+
+func TestExtractTokens_StreamedSSEFinalUsage(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       []byte
+		wantInput  int64
+		wantOutput int64
+		wantCache  int64
+		wantReason int64
+	}{
+		{
+			name: "usage only in terminal frame",
+			body: []byte(`data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","choices":[{"delta":{"content":"hel"}}]}
+
+data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","choices":[{"delta":{"content":"lo"}}]}
+
+data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7,"total_tokens":49,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens_details":{"reasoning_tokens":3}}}
+
+data: [DONE]
+
+`),
+			wantInput:  30,
+			wantOutput: 7,
+			wantCache:  12,
+			wantReason: 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := ExtractTokens(tc.body)
+			if tok == nil {
+				t.Fatal("expected non-nil Tokens from full SSE stream")
+			}
+			if tok["input"] != tc.wantInput {
+				t.Errorf("input: want %d, got %d", tc.wantInput, tok["input"])
+			}
+			if tok["output"] != tc.wantOutput {
+				t.Errorf("output: want %d, got %d", tc.wantOutput, tok["output"])
+			}
+			if tok["cache_read"] != tc.wantCache {
+				t.Errorf("cache_read: want %d, got %d", tc.wantCache, tok["cache_read"])
+			}
+			if tok["reasoning"] != tc.wantReason {
+				t.Errorf("reasoning: want %d, got %d", tc.wantReason, tok["reasoning"])
+			}
+		})
+	}
+}
+
+func TestExtractTokens_CacheReadDoesNotOverlapInput(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   []byte
+		prompt int64
+		cached int64
+	}{
+		{
+			name:   "buffered usage",
+			body:   []byte(`{"usage":{"prompt_tokens":64,"completion_tokens":8,"prompt_tokens_details":{"cached_tokens":9}}}`),
+			prompt: 64,
+			cached: 9,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := ExtractTokens(tc.body)
+			if tok == nil {
+				t.Fatal("expected non-nil Tokens")
+			}
+			if tok["cache_read"] != tc.cached {
+				t.Fatalf("cache_read: want %d, got %d", tc.cached, tok["cache_read"])
+			}
+			if got := tok["input"] + tok["cache_read"]; got != tc.prompt {
+				t.Errorf("input + cache_read: want provider prompt %d, got %d (tokens=%v)", tc.prompt, got, tok)
+			}
+		})
 	}
 }
 

@@ -429,7 +429,7 @@ func TestParseResponse_UsageMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Usage["input"] != 100 {
+	if resp.Usage["input"] != 80 {
 		t.Errorf("input: %d", resp.Usage["input"])
 	}
 	if resp.Usage["output"] != 50 {
@@ -482,6 +482,98 @@ func makeGeminiSSEChunk(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return []byte("data: " + string(b) + "\n\n")
+}
+
+func TestExtractTokens_StreamedSSEFinalUsage(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       []byte
+		wantInput  int64
+		wantOutput int64
+		wantCache  int64
+		wantReason int64
+	}{
+		{
+			name: "usage only in terminal frame",
+			body: append(
+				makeGeminiSSEChunk(t, map[string]any{
+					"candidates": []any{map[string]any{
+						"content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": "hel"}}},
+						"index":   0,
+					}},
+				}),
+				makeGeminiSSEChunk(t, map[string]any{
+					"candidates": []any{map[string]any{
+						"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": "lo"}}},
+						"finishReason": "STOP",
+						"index":        0,
+					}},
+					"usageMetadata": map[string]any{
+						"promptTokenCount":        90,
+						"candidatesTokenCount":    11,
+						"cachedContentTokenCount": 25,
+						"thoughtsTokenCount":      5,
+					},
+				})...,
+			),
+			wantInput:  65,
+			wantOutput: 11,
+			wantCache:  25,
+			wantReason: 5,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := ExtractTokens(tc.body)
+			if tok == nil {
+				t.Fatal("expected non-nil Tokens from full SSE stream")
+			}
+			if tok["input"] != tc.wantInput {
+				t.Errorf("input: want %d, got %d", tc.wantInput, tok["input"])
+			}
+			if tok["output"] != tc.wantOutput {
+				t.Errorf("output: want %d, got %d", tc.wantOutput, tok["output"])
+			}
+			if tok["cache_read"] != tc.wantCache {
+				t.Errorf("cache_read: want %d, got %d", tc.wantCache, tok["cache_read"])
+			}
+			if tok["reasoning"] != tc.wantReason {
+				t.Errorf("reasoning: want %d, got %d", tc.wantReason, tok["reasoning"])
+			}
+		})
+	}
+}
+
+func TestExtractTokens_CacheReadDoesNotOverlapInput(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   []byte
+		prompt int64
+		cached int64
+	}{
+		{
+			name:   "buffered usage",
+			body:   []byte(`{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":50,"cachedContentTokenCount":20}}`),
+			prompt: 100,
+			cached: 20,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := ExtractTokens(tc.body)
+			if tok == nil {
+				t.Fatal("expected non-nil Tokens")
+			}
+			if tok["cache_read"] != tc.cached {
+				t.Fatalf("cache_read: want %d, got %d", tc.cached, tok["cache_read"])
+			}
+			if got := tok["input"] + tok["cache_read"]; got != tc.prompt {
+				t.Errorf("input + cache_read: want provider prompt %d, got %d (tokens=%v)", tc.prompt, got, tok)
+			}
+		})
+	}
 }
 
 func TestStreamGeminiToCanonical_TextSequence(t *testing.T) {

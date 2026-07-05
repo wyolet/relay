@@ -894,6 +894,9 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	}
 
 	blockType := cbs.ContentBlock.Type
+	if blockType == "" {
+		return nil, nil
+	}
 
 	// Drop server_tool_use and redacted_thinking.
 	if blockType == "server_tool_use" || blockType == "redacted_thinking" {
@@ -941,6 +944,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	startData, _ := json.Marshal(v1.ItemStartedEvent{
 		ItemID:   b.itemID,
 		ItemType: itemType,
+		Name:     b.toolName,
 		Index:    outputIndex,
 	})
 	return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}}), nil
@@ -1154,10 +1158,11 @@ func (s *anthropicToCanonicalStream) handleError(data []byte) ([]byte, error) {
 // ---- stream: canonical → Anthropic ----
 
 type canonicalToAnthropicStream struct {
-	responseID   string
-	model        string
-	blockIndex   int
-	startEmitted bool
+	responseID            string
+	model                 string
+	blockIndex            int
+	blockIndexByCanonical map[int]int
+	startEmitted          bool
 }
 
 func (s *canonicalToAnthropicStream) translate(chunk []byte) ([]byte, error) {
@@ -1246,6 +1251,10 @@ func (s *canonicalToAnthropicStream) handleItemStarted(data []byte) ([]byte, err
 	default:
 		return nil, nil
 	}
+	if s.blockIndexByCanonical == nil {
+		s.blockIndexByCanonical = make(map[int]int)
+	}
+	s.blockIndexByCanonical[e.Index] = idx
 
 	cbs, _ := json.Marshal(map[string]any{
 		"type":          "content_block_start",
@@ -1261,7 +1270,10 @@ func (s *canonicalToAnthropicStream) handleItemDelta(data []byte) ([]byte, error
 		return nil, fmt.Errorf("canonical→anthropic: item.delta: %w", err)
 	}
 
-	// block index is e.Index (matches our started index).
+	idx, ok := s.blockIndexByCanonical[e.Index]
+	if !ok {
+		return nil, nil
+	}
 	var deltaType string
 	var deltaKey string
 	switch e.Kind {
@@ -1280,7 +1292,7 @@ func (s *canonicalToAnthropicStream) handleItemDelta(data []byte) ([]byte, error
 
 	cbd, _ := json.Marshal(map[string]any{
 		"type":  "content_block_delta",
-		"index": e.Index,
+		"index": idx,
 		"delta": map[string]string{
 			"type":   deltaType,
 			deltaKey: e.Delta,
@@ -1297,10 +1309,14 @@ func (s *canonicalToAnthropicStream) handleItemCompleted(data []byte) ([]byte, e
 	if err := json.Unmarshal(data, &e); err != nil {
 		return nil, fmt.Errorf("canonical→anthropic: item.completed: %w", err)
 	}
+	idx, ok := s.blockIndexByCanonical[e.Index]
+	if !ok {
+		return nil, nil
+	}
 
 	cbe, _ := json.Marshal(map[string]any{
 		"type":  "content_block_stop",
-		"index": e.Index,
+		"index": idx,
 	})
 	return anthropicSSEBytes("content_block_stop", string(cbe)), nil
 }
@@ -1742,22 +1758,45 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	var msgs []anthropicCanonMsg
 	var systemParts []string
 
-	var pendingToolUses []v1.FunctionCall
+	// Assistant-run accumulator: consecutive assistant-side items (Reasoning /
+	// assistant Message / FunctionCall) coalesce into ONE Anthropic assistant
+	// message — Anthropic validates per message that a tool_use-bearing
+	// assistant turn leads with its signed thinking block, so splitting a
+	// [Reasoning, Message, FunctionCall] run (exactly what ParseResponse yields
+	// for a thinking+text+tool_use turn) across two messages 400s on replay.
+	// A non-assistant item (user Message, FunctionCallOutput, system) breaks
+	// the run. Thinking blocks are hoisted to the front of the flushed message
+	// regardless of where the Reasoning items sat in the run — Anthropic
+	// requires thinking first when thinking is enabled.
+	var runThinking []map[string]any
+	var runContents []any // per assistant Message: string or []map[string]any, cache breakpoints pre-applied
+	var runToolUses []v1.FunctionCall
 	var pendingToolResults []v1.FunctionCallOutput
-	// pendingThinking holds signed thinking blocks awaiting the assistant turn
-	// they belong to. Anthropic requires the thinking block that preceded a
-	// tool_use to be replayed in the SAME assistant message on the next turn —
-	// same contract as OpenAI's reasoning/function_call sibling pairing.
-	var pendingThinking []map[string]any
 
-	flushToolUses := func() {
-		if len(pendingToolUses) == 0 {
+	flushAssistant := func() {
+		if len(runThinking) == 0 && len(runContents) == 0 && len(runToolUses) == 0 {
 			return
 		}
-		blocks := make([]map[string]any, 0, len(pendingThinking)+len(pendingToolUses))
-		blocks = append(blocks, pendingThinking...)
-		pendingThinking = nil
-		for _, fc := range pendingToolUses {
+		// A lone assistant Message keeps its original content form
+		// (all-text stays a plain string on the wire).
+		if len(runThinking) == 0 && len(runToolUses) == 0 && len(runContents) == 1 {
+			msgs = append(msgs, anthropicCanonMsg{Role: "assistant", Content: runContents[0]})
+			runContents = runContents[:0]
+			return
+		}
+		blocks := make([]map[string]any, 0, len(runThinking)+len(runContents)+len(runToolUses))
+		blocks = append(blocks, runThinking...)
+		for _, c := range runContents {
+			switch c := c.(type) {
+			case string:
+				if c != "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": c})
+				}
+			case []map[string]any:
+				blocks = append(blocks, c...)
+			}
+		}
+		for _, fc := range runToolUses {
 			var inputObj any
 			if fc.Arguments != "" {
 				if err := json.Unmarshal([]byte(fc.Arguments), &inputObj); err != nil {
@@ -1774,7 +1813,9 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 			})
 		}
 		msgs = append(msgs, anthropicCanonMsg{Role: "assistant", Content: blocks})
-		pendingToolUses = pendingToolUses[:0]
+		runThinking = runThinking[:0]
+		runContents = runContents[:0]
+		runToolUses = runToolUses[:0]
 	}
 
 	flushToolResults := func() {
@@ -1806,7 +1847,9 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	for _, item := range items {
 		switch v := item.(type) {
 		case *v1.Message:
-			flushToolUses()
+			if v.Role != v1.RoleAssistant {
+				flushAssistant()
+			}
 			flushToolResults()
 
 			switch v.Role {
@@ -1839,33 +1882,18 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 				if err != nil {
 					return nil, "", err
 				}
-				if len(pendingThinking) > 0 {
-					// The preceding Reasoning item belongs to this assistant turn:
-					// coerce content to blocks and lead with the thinking blocks.
-					blocks := pendingThinking
-					pendingThinking = nil
-					switch c := content.(type) {
-					case string:
-						if c != "" {
-							blocks = append(blocks, map[string]any{"type": "text", "text": c})
-						}
-					case []map[string]any:
-						blocks = append(blocks, c...)
-					}
-					content = blocks
-				}
 				if v.CacheConfig != nil && v.CacheConfig.Anchor {
 					content = withCacheBreakpoint(content, cacheTTL)
 				}
-				msgs = append(msgs, anthropicCanonMsg{Role: "assistant", Content: content})
+				runContents = append(runContents, content)
 			}
 
 		case *v1.FunctionCall:
 			flushToolResults()
-			pendingToolUses = append(pendingToolUses, *v)
+			runToolUses = append(runToolUses, *v)
 
 		case *v1.FunctionCallOutput:
-			flushToolUses()
+			flushAssistant()
 			pendingToolResults = append(pendingToolResults, *v)
 
 		case *v1.Reasoning:
@@ -1882,7 +1910,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 					Signature string `json:"signature"`
 				}
 				if err := json.Unmarshal(v.ProviderData, &pd); err == nil && pd.Type == "thinking" && pd.Signature != "" {
-					pendingThinking = append(pendingThinking, map[string]any{
+					runThinking = append(runThinking, map[string]any{
 						"type":      "thinking",
 						"thinking":  pd.Thinking,
 						"signature": pd.Signature,
@@ -1896,10 +1924,14 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 		}
 	}
 
-	flushToolUses()
+	if len(runContents) > 0 || len(runToolUses) > 0 {
+		flushAssistant()
+	}
+	// canonical: trailing reasoning dropped — a thinking-only assistant message
+	// at the END of the request would be a thinking prefill, which Anthropic
+	// rejects when thinking is enabled; mid-history thinking-only runs (broken
+	// by a user turn) ARE emitted above.
 	flushToolResults()
-	// canonical: trailing reasoning dropped — no subsequent assistant turn to
-	// carry it, and Anthropic only requires thinking replay within a turn.
 
 	return msgs, strings.Join(systemParts, "\n"), nil
 }

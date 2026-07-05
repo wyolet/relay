@@ -560,6 +560,9 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 				})
 				out = append(out, marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemStarted, Data: startData}})...)
 			}
+			if p.ThoughtSignature != "" {
+				s.currentThoughtSig = p.ThoughtSignature
+			}
 			s.thinkBuf.WriteString(p.Text)
 			deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 				ItemID: s.currentItemID,
@@ -998,11 +1001,19 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 				resp = sb.String()
 			}
 			// Gemini functionResponse.response must be a JSON object.
+			trimmedResp := []byte(strings.TrimSpace(resp))
 			var respRaw json.RawMessage
-			if json.Unmarshal([]byte(resp), &respRaw) != nil {
-				// Wrap plain string in an object.
-				b, _ := json.Marshal(map[string]string{"output": resp})
-				respRaw = b
+			if len(trimmedResp) > 0 && trimmedResp[0] == '{' && json.Unmarshal(trimmedResp, &respRaw) == nil {
+				// Already a JSON object.
+			} else {
+				var raw json.RawMessage
+				if json.Unmarshal(trimmedResp, &raw) == nil {
+					b, _ := json.Marshal(map[string]json.RawMessage{"output": raw})
+					respRaw = b
+				} else {
+					b, _ := json.Marshal(map[string]string{"output": resp})
+					respRaw = b
+				}
 			}
 			parts = append(parts, geminiPart{FunctionResponse: &geminiFR{
 				Name:     geminiFuncNameFromCallID(fco.CallID),
