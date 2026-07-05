@@ -1,22 +1,51 @@
 package gemini
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/wyolet/relay/sdk/usage"
 )
 
-// ExtractTokens reads Gemini usage from a generateContent response body.
+// ExtractTokens reads Gemini usage from a generateContent response body. It
+// accepts either a single non-streaming JSON object or a complete streaming SSE
+// body. For streaming, we walk every `data:` frame and keep the last one that
+// carries usageMetadata.
 // Maps:
 //
-//	promptTokenCount         -> input
-//	candidatesTokenCount     -> output
-//	cachedContentTokenCount  -> cache_read
-//	thoughtsTokenCount       -> reasoning
+//	promptTokenCount - cachedContentTokenCount -> input
+//	candidatesTokenCount                       -> output
+//	cachedContentTokenCount                    -> cache_read
+//	thoughtsTokenCount                         -> reasoning
 //
-// Dimensions are orthogonal (non-overlapping). Returns nil when usageMetadata
-// is absent or all counts are zero.
+// Dimensions are orthogonal (input excludes cache_read). Returns nil when
+// usageMetadata is absent or all counts are zero.
 func ExtractTokens(body []byte) usage.Tokens {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) == 0 {
+		return nil
+	}
+	if trimmed[0] == '{' {
+		return extractTokensObject(trimmed)
+	}
+	var last usage.Tokens
+	for _, line := range bytes.Split(body, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		payload := bytes.TrimSpace(line[len("data:"):])
+		if len(payload) == 0 || payload[0] != '{' {
+			continue
+		}
+		if frame := extractTokensObject(payload); frame != nil {
+			last = frame
+		}
+	}
+	return last
+}
+
+func extractTokensObject(body []byte) usage.Tokens {
 	var resp struct {
 		UsageMetadata *usageMetadata `json:"usageMetadata,omitempty"`
 	}
@@ -31,8 +60,9 @@ func geminiUsageToTokens(u *usageMetadata) usage.Tokens {
 		return nil
 	}
 	t := usage.Tokens{}
-	if u.PromptTokenCount > 0 {
-		t["input"] = int64(u.PromptTokenCount)
+	cached := u.CachedContentTokenCount
+	if v := u.PromptTokenCount - cached; v > 0 {
+		t["input"] = int64(v)
 	}
 	if u.CandidatesTokenCount > 0 {
 		t["output"] = int64(u.CandidatesTokenCount)

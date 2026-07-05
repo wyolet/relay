@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/wyolet/relay/sdk/usage"
@@ -996,6 +997,46 @@ type ccToCanonicalStream struct {
 	lifecycleEmitted bool
 	status           v1.Status
 	finishReason     v1.FinishReason
+	errorEmitted     bool
+}
+
+func ccStreamErrorFrame(data []byte) (v1.SSEFrame, bool) {
+	var probe struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return v1.SSEFrame{}, false
+	}
+	errRaw := bytes.TrimSpace(probe.Error)
+	if len(errRaw) == 0 || bytes.Equal(errRaw, []byte("null")) {
+		return v1.SSEFrame{}, false
+	}
+
+	var ccErr struct {
+		Type    string          `json:"type"`
+		Message string          `json:"message"`
+		Code    json.RawMessage `json:"code"`
+	}
+	_ = json.Unmarshal(errRaw, &ccErr)
+
+	code := ccErr.Type
+	if code == "" && len(ccErr.Code) > 0 {
+		var codeString string
+		if err := json.Unmarshal(ccErr.Code, &codeString); err == nil {
+			code = codeString
+		} else {
+			code = string(bytes.TrimSpace(ccErr.Code))
+		}
+	}
+	msg := ccErr.Message
+	if msg == "" {
+		msg = string(data)
+	}
+	errData, _ := json.Marshal(v1.ErrorEvent{
+		Code:    code,
+		Message: msg,
+	})
+	return v1.SSEFrame{Event: v1.EventError, Data: errData}, true
 }
 
 func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
@@ -1004,9 +1045,17 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	if !ok {
 		return nil, nil
 	}
+	if s.errorEmitted {
+		return nil, nil
+	}
 
 	if bytes.Equal(data, []byte("[DONE]")) {
 		return s.handleDone()
+	}
+
+	if errFrame, ok := ccStreamErrorFrame(data); ok {
+		s.errorEmitted = true
+		return marshalCanonicalFrames([]v1.SSEFrame{errFrame}), nil
 	}
 
 	var ccChunk ChatStreamChunk
@@ -1114,10 +1163,26 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 	}
 
 	// Close open tool call items.
-	for idx, ti := range s.toolItems {
-		f := s.closeToolItem(ti)
-		frames = append(frames, f...)
-		delete(s.toolItems, idx)
+	if len(s.toolItems) > 0 {
+		type toolItemEntry struct {
+			key  int
+			item *ccStreamItem
+		}
+		toolItems := make([]toolItemEntry, 0, len(s.toolItems))
+		for key, ti := range s.toolItems {
+			toolItems = append(toolItems, toolItemEntry{key: key, item: ti})
+		}
+		sort.Slice(toolItems, func(i, j int) bool {
+			if toolItems[i].item.outputIndex == toolItems[j].item.outputIndex {
+				return toolItems[i].key < toolItems[j].key
+			}
+			return toolItems[i].item.outputIndex < toolItems[j].item.outputIndex
+		})
+		for _, entry := range toolItems {
+			f := s.closeToolItem(entry.item)
+			frames = append(frames, f...)
+			delete(s.toolItems, entry.key)
+		}
 	}
 
 	// generation.completed
