@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -35,6 +36,10 @@ const (
 	activeName    = "active.jsonl"
 	segmentGlob   = "segment-*.jsonl"
 	segmentPrefix = "segment-"
+
+	// scanBuf bounds a single WAL line. Keep this high enough for large usage
+	// metadata fields while still treating pathological lines as droppable.
+	scanBuf = 48 << 20
 )
 
 // segmentQueue is the WAL layer. It knows nothing about ClickHouse — the
@@ -231,7 +236,7 @@ func (q *segmentQueue) flushPending() {
 	}
 
 	for _, seg := range segments {
-		events, err := readSegment(seg)
+		events, err := readSegment(seg, q.log)
 		if err != nil {
 			q.log.Warn("usage/clickhouse: read segment", "file", filepath.Base(seg), "err", err)
 			return
@@ -298,7 +303,7 @@ func (q *segmentQueue) Dropped() uint64 {
 	return q.dropped.Load()
 }
 
-func readSegment(path string) ([]usage.Event, error) {
+func readSegment(path string, log *slog.Logger) ([]usage.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -306,19 +311,31 @@ func readSegment(path string) ([]usage.Event, error) {
 	defer f.Close()
 
 	var events []usage.Event
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Bytes()
+	r := bufio.NewReader(f)
+	lineNo := 0
+	for {
+		line, tooLong, err := readWALLine(r)
+		if err != nil {
+			if err == io.EOF {
+				return events, nil
+			}
+			return events, err
+		}
+		lineNo++
+		if tooLong {
+			log.Warn("usage/clickhouse: skip oversized WAL line", "file", filepath.Base(path), "line", lineNo)
+			continue
+		}
 		if len(line) == 0 {
 			continue
 		}
 		var ev usage.Event
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return nil, fmt.Errorf("decode line: %w", err)
+			log.Warn("usage/clickhouse: skip undecodable WAL line", "file", filepath.Base(path), "line", lineNo, "err", err)
+			continue
 		}
 		events = append(events, ev)
 	}
-	return events, sc.Err()
 }
 
 func countLines(path string) (int, error) {
@@ -332,11 +349,60 @@ func countLines(path string) (int, error) {
 	defer f.Close()
 
 	n := 0
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		if len(sc.Bytes()) > 0 {
+	r := bufio.NewReader(f)
+	for {
+		line, tooLong, err := readWALLine(r)
+		if err != nil {
+			if err == io.EOF {
+				return n, nil
+			}
+			return n, err
+		}
+		if tooLong || len(line) > 0 {
 			n++
 		}
 	}
-	return n, sc.Err()
+}
+
+func readWALLine(r *bufio.Reader) ([]byte, bool, error) {
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(line)+len(frag) > scanBuf {
+			if err == bufio.ErrBufferFull {
+				for err == bufio.ErrBufferFull {
+					_, err = r.ReadSlice('\n')
+				}
+			}
+			if err != nil && err != io.EOF {
+				return nil, false, err
+			}
+			return nil, true, nil
+		}
+		line = append(line, frag...)
+
+		switch err {
+		case nil:
+			return trimWALLine(line), false, nil
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			if len(line) == 0 {
+				return nil, false, io.EOF
+			}
+			return trimWALLine(line), false, nil
+		default:
+			return nil, false, err
+		}
+	}
+}
+
+func trimWALLine(line []byte) []byte {
+	if len(line) > 0 && line[len(line)-1] == '\n' {
+		line = line[:len(line)-1]
+	}
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
+	return line
 }

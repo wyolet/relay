@@ -106,16 +106,20 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 	}
 	// Pre-compute key/rule lists for Commit.
 	for _, rule := range rules {
+		strategy := rule.Strategy
+		if strategy == "" {
+			strategy = StrategyTokenBucket
+		}
 		switch {
 		case rule.Meter == "concurrency":
 			reservation.conKeys = append(reservation.conKeys, concurrencyKey(scope, rule))
 		case rule.Meter == "tokens" || strings.HasPrefix(rule.Meter, "tokens."):
 			reservation.tokRules = append(reservation.tokRules, rule)
-		case rule.Strategy == StrategyTokenBucket:
+		case strategy == StrategyTokenBucket:
 			reservation.tbRules = append(reservation.tbRules, rule)
-		case rule.Strategy == StrategyLeakyBucket:
+		case strategy == StrategyLeakyBucket:
 			reservation.lbRules = append(reservation.lbRules, rule)
-		case rule.Strategy == StrategySessionWindow:
+		case strategy == StrategySessionWindow:
 			reservation.swRules = append(reservation.swRules, rule)
 		}
 	}

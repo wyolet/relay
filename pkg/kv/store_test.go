@@ -61,6 +61,27 @@ func TestIncrAtomic(t *testing.T) {
 	}
 }
 
+func TestIncrExpiredKeyCreatesPersistentCounter(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	s.data.Store("counter", entry{value: []byte("41"), deadline: time.Now().Add(-time.Second)})
+
+	got, err := s.Incr(ctx, "counter", 1)
+	if err != nil {
+		t.Fatalf("Incr: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("Incr returned %d, want 1 from a fresh counter", got)
+	}
+	v, err := s.Get(ctx, "counter")
+	if err != nil {
+		t.Fatalf("Get after Incr: %v", err)
+	}
+	if string(v) != "1" {
+		t.Fatalf("Get after Incr = %q, want %q", v, "1")
+	}
+}
+
 func TestTTLEviction(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)

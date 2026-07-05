@@ -256,6 +256,57 @@ func TestConcurrency_CommitOnCancel_DecreasesCounter(t *testing.T) {
 	_ = l.Commit(ctx, res2, Observations{})
 }
 
+func TestConcurrencyCommitDoesNotCreateNegativeCounterAfterTTLReclaim(t *testing.T) {
+	cases := []struct {
+		name       string
+		reclaimKey func(context.Context, *kv.Mem, string) error
+	}{
+		{
+			name: "absent",
+			reclaimKey: func(ctx context.Context, s *kv.Mem, key string) error {
+				return s.Del(ctx, key)
+			},
+		},
+		{
+			name: "zero",
+			reclaimKey: func(ctx context.Context, s *kv.Mem, key string) error {
+				return s.Set(ctx, key, []byte("0"), 0)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+			s := newTestStore(t)
+			l := New(s, discardLog(), func() time.Time { return now })
+			ctx := context.Background()
+			rule := conRule("Route:test-route:rl-concurrency-"+tc.name, "concurrency", 1, time.Minute)
+			rules := []Rule{rule}
+
+			res, err := l.Reserve(ctx, testScope, rules)
+			if err != nil {
+				t.Fatalf("reserve: %v", err)
+			}
+			if err := tc.reclaimKey(ctx, s, concurrencyKey(testScope, rule)); err != nil {
+				t.Fatalf("reclaim key: %v", err)
+			}
+			if err := l.Commit(ctx, res, Observations{}); err != nil {
+				t.Fatalf("commit after reclaim: %v", err)
+			}
+
+			res2, err := l.Reserve(ctx, testScope, rules)
+			if err != nil {
+				t.Fatalf("reserve after commit: %v", err)
+			}
+			defer func() { _ = l.Commit(ctx, res2, Observations{}) }()
+			if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
+				t.Fatalf("second reserve after commit got %v, want ErrExceeded", err)
+			}
+		})
+	}
+}
+
 // TestComposition_FirstViolationShortCircuits
 func TestComposition_FirstViolationShortCircuits(t *testing.T) {
 	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
@@ -504,6 +555,37 @@ func TestTokenBucket_RefundOnCancel(t *testing.T) {
 	res2, err := l.Reserve(ctx, testScope, rules)
 	if err != nil {
 		t.Fatalf("expected success after refund, got %v", err)
+	}
+	_ = l.Commit(ctx, res2, Observations{})
+}
+
+func TestTokenBucket_EmptyStrategyRefundsOnCancel(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	l := newTestLimiter(t, &now)
+	ctx := context.Background()
+	rule := Rule{
+		Key:    "Route:test-route:rl-tb-default",
+		Name:   "requests on rl-tb-default",
+		Meter:  "requests",
+		Amount: 1,
+		Window: time.Minute,
+	}
+	rules := []Rule{rule}
+
+	res, err := l.Reserve(ctx, testScope, rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	if _, err := l.Reserve(ctx, testScope, rules); !errors.Is(err, ErrExceeded) {
+		t.Fatalf("expected exhausted bucket before refund, got %v", err)
+	}
+
+	if err := l.Commit(ctx, res, Observations{Cancelled: true}); err != nil {
+		t.Fatalf("commit cancel: %v", err)
+	}
+	res2, err := l.Reserve(ctx, testScope, rules)
+	if err != nil {
+		t.Fatalf("reserve after cancel refund: %v", err)
 	}
 	_ = l.Commit(ctx, res2, Observations{})
 }

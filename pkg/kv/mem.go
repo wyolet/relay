@@ -111,6 +111,7 @@ func (m *Mem) Incr(_ context.Context, key string, delta int64) (int64, error) {
 	defer mu.Unlock()
 
 	var cur int64
+	var deadline time.Time
 	if v, ok := m.data.Load(key); ok {
 		e := v.(entry)
 		if !e.expired() {
@@ -119,19 +120,22 @@ func (m *Mem) Incr(_ context.Context, key string, delta int64) (int64, error) {
 				return 0, fmt.Errorf("state: Incr on non-integer key %q: %w", key, err)
 			}
 			cur = n
+			deadline = e.deadline
 		}
 	}
 	cur += delta
-	// preserve existing deadline
-	var deadline time.Time
-	if v, ok := m.data.Load(key); ok {
-		deadline = v.(entry).deadline
-	}
 	m.data.Store(key, entry{value: []byte(strconv.FormatInt(cur, 10)), deadline: deadline})
 	return cur, nil
 }
 
 func (m *Mem) Expire(_ context.Context, key string, ttl time.Duration) error {
+	// Share Incr's per-key mutex: Expire re-stores the whole entry, and an
+	// unlocked load→store here would clobber a concurrent Incr's new value.
+	// Redis EXPIRE never touches the value; this keeps Mem equivalent.
+	mu := m.keyMu(&m.incrMu, key)
+	mu.Lock()
+	defer mu.Unlock()
+
 	v, ok := m.data.Load(key)
 	if !ok {
 		return ErrNotFound

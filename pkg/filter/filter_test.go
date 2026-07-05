@@ -244,6 +244,32 @@ func TestEmptyValueIsNoConstraint(t *testing.T) {
 	}
 }
 
+func TestEmptyValueSlicesAreNoConstraint(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  url.Values
+	}{
+		{name: "bool", raw: url.Values{"enabled": []string{}}},
+		{name: "int_min", raw: url.Values{"context_window_min": []string{}}},
+		{name: "int_max", raw: url.Values{"context_window_max": []string{}}},
+		{name: "time_from", raw: url.Values{"created_from": []string{}}},
+		{name: "time_to", raw: url.Values{"created_to": []string{}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := schema().Parse(tc.raw)
+			if err != nil {
+				t.Fatalf("Parse returned error: %v", err)
+			}
+			got, total := q.Apply(data)
+			if total != len(data) || len(got) != len(data) {
+				t.Fatalf("empty value slice filtered rows: got len=%d total=%d, want %d", len(got), total, len(data))
+			}
+		})
+	}
+}
+
 func TestDefaultLimit(t *testing.T) {
 	s := schema()
 	s.DefaultLimit = 2
