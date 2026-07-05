@@ -181,6 +181,10 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	req.Lifecycle.MarkUpstreamStart()
 	resp, err := p.Client.Do(upstream)
 	if err != nil {
+		if reservation != nil && p.Limiter != nil {
+			detached := context.WithoutCancel(ctx)
+			_ = p.Limiter.Commit(detached, reservation, pkgratelimit.Observations{Cancelled: true})
+		}
 		return nil, fmt.Errorf("proxy: upstream call: %w", err)
 	}
 
