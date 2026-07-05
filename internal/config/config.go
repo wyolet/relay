@@ -164,7 +164,11 @@ func Load() (*Config, error) {
 	}
 
 	// --- Behavior knobs ---
-	cfg.CHRetentionDays = envInt("RELAY_CH_RETENTION_DAYS", 90)
+	if v, err := envPositiveInt("RELAY_CH_RETENTION_DAYS", 90); err != nil {
+		return nil, fmt.Errorf("RELAY_CH_RETENTION_DAYS must be >= 1")
+	} else {
+		cfg.CHRetentionDays = v
+	}
 	cfg.AutoSeedIfEmpty = os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
 
 	cfg.ConfigDir = os.Getenv("RELAY_CONFIG_DIR")
@@ -199,8 +203,16 @@ func Load() (*Config, error) {
 		cfg.MaxRequestBytes = v
 	}
 
-	cfg.HealthzDeadlineMS = envInt("RELAY_HEALTHZ_DEADLINE_MS", 500)
-	cfg.ShutdownDeadlineS = envInt("RELAY_SHUTDOWN_DEADLINE_S", 15)
+	if v, err := envPositiveInt("RELAY_HEALTHZ_DEADLINE_MS", 500); err != nil {
+		return nil, fmt.Errorf("RELAY_HEALTHZ_DEADLINE_MS must be >= 1")
+	} else {
+		cfg.HealthzDeadlineMS = v
+	}
+	if v, err := envPositiveInt("RELAY_SHUTDOWN_DEADLINE_S", 15); err != nil {
+		return nil, fmt.Errorf("RELAY_SHUTDOWN_DEADLINE_S must be >= 1")
+	} else {
+		cfg.ShutdownDeadlineS = v
+	}
 
 	cfg.DevTrustEventTime = os.Getenv("RELAY_DEV_TRUST_EVENT_TIME") == "1"
 

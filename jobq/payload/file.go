@@ -43,12 +43,40 @@ func (s *FileStore) Put(ctx context.Context, key string, data []byte) (string, e
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	dir := filepath.Dir(full)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("payload: mkdir: %w", err)
 	}
-	if err := os.WriteFile(full, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(full)+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("payload: create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return "", fmt.Errorf("payload: write: %w", err)
 	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("payload: chmod: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("payload: fsync: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("payload: close: %w", err)
+	}
+	if err := os.Rename(tmpName, full); err != nil {
+		return "", fmt.Errorf("payload: rename: %w", err)
+	}
+	committed = true
 	return filePrefix + filepath.ToSlash(key), nil
 }
 

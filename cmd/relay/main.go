@@ -51,6 +51,7 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
+	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
@@ -65,6 +66,12 @@ import (
 func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -424,6 +431,11 @@ func main() {
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
+	maxBody := cfg.MaxRequestBytes
+	if maxBody <= 0 {
+		maxBody = httpmw.DefaultMaxRequestBytes
+	}
+	inferRouter.Use(httpmw.LimitBody(maxBody))
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:         st,
 		Catalog:        cat,
@@ -458,6 +470,7 @@ func main() {
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
 	// RELAY_CONTROL_PORT. Disabled when empty or "off".
 	var ctrlSrv *http.Server
+	var ctrlErr <-chan error
 	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
 		ctrlRouter := chi.NewRouter()
 		if len(cfg.ControlAllowOrigins) > 0 {
@@ -502,11 +515,9 @@ func main() {
 		}
 		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
-		go func() {
-			if err := ctrlSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("relay control: server error", "err", err)
-			}
-		}()
+		ch := make(chan error, 1)
+		ctrlErr = ch
+		go func() { ch <- ctrlSrv.ListenAndServe() }()
 	}
 
 	quit := make(chan os.Signal, 1)
@@ -516,7 +527,13 @@ func main() {
 		slog.Info("relay: received signal, shutting down", "signal", sig.String())
 	case err := <-inferErr:
 		if err != nil && err != http.ErrServerClosed {
+			exitCode = 1
 			slog.Error("relay inference: server error", "err", err)
+		}
+	case err := <-ctrlErr:
+		if err != nil && err != http.ErrServerClosed {
+			exitCode = 1
+			slog.Error("relay control: server error", "err", err)
 		}
 	}
 
@@ -531,6 +548,10 @@ func main() {
 	}
 	_ = inferSrv.Shutdown(shutCtx)
 	cancelListener()
+	// Drain in-flight batch jobs so the graceful-requeue path can run;
+	// without this the process exits mid-handler and interrupted jobs sit
+	// `running` until the rescuer discards them (MaxAttempts=1).
+	batchQueue.Wait()
 }
 
 // hydrateLoop runs Catalog.Hydrate with exponential backoff until it

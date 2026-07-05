@@ -97,43 +97,43 @@ func (s *store) get(ctx context.Context, id string) (*Job, error) {
 	return j, nil
 }
 
-func (s *store) markCompleted(ctx context.Context, id, resultURI string) error {
+func (s *store) markCompleted(ctx context.Context, id string, attempt int, resultURI string) error {
 	return s.exec(ctx, "complete", `
 		UPDATE jobq_jobs
-		SET state = 'completed', result_uri = $2, last_error = '', finalized_at = NOW()
-		WHERE id = $1 AND state = 'running'`, id, resultURI)
+		SET state = 'completed', result_uri = $3, last_error = '', finalized_at = NOW()
+		WHERE id = $1 AND state = 'running' AND attempt = $2`, id, attempt, resultURI)
 }
 
-func (s *store) markRetryable(ctx context.Context, id string, next time.Time, lastErr string) error {
+func (s *store) markRetryable(ctx context.Context, id string, attempt int, next time.Time, lastErr string) error {
 	return s.exec(ctx, "retry", `
 		UPDATE jobq_jobs
-		SET state = 'retryable', scheduled_at = $2, last_error = $3
-		WHERE id = $1 AND state = 'running'`, id, next, lastErr)
+		SET state = 'retryable', scheduled_at = $3, last_error = $4
+		WHERE id = $1 AND state = 'running' AND attempt = $2`, id, attempt, next, lastErr)
 }
 
-func (s *store) markDiscarded(ctx context.Context, id, lastErr string) error {
+func (s *store) markDiscarded(ctx context.Context, id string, attempt int, lastErr string) error {
 	return s.exec(ctx, "discard", `
 		UPDATE jobq_jobs
-		SET state = 'discarded', last_error = $2, finalized_at = NOW()
-		WHERE id = $1 AND state = 'running'`, id, lastErr)
+		SET state = 'discarded', last_error = $3, finalized_at = NOW()
+		WHERE id = $1 AND state = 'running' AND attempt = $2`, id, attempt, lastErr)
 }
 
 // markRequeue returns a running job to 'available' without consuming the
 // attempt — used when a graceful shutdown interrupts a job mid-flight (not a
 // failure, so it shouldn't count against MaxAttempts).
-func (s *store) markRequeue(ctx context.Context, id string) error {
+func (s *store) markRequeue(ctx context.Context, id string, attempt int) error {
 	return s.exec(ctx, "requeue", `
 		UPDATE jobq_jobs
 		SET state = 'available', attempt = GREATEST(attempt - 1, 0), scheduled_at = NOW()
-		WHERE id = $1 AND state = 'running'`, id)
+		WHERE id = $1 AND state = 'running' AND attempt = $2`, id, attempt)
 }
 
 // markCancelledRunning finalizes a running job as cancelled (caller-requested).
-func (s *store) markCancelledRunning(ctx context.Context, id, lastErr string) error {
+func (s *store) markCancelledRunning(ctx context.Context, id string, attempt int, lastErr string) error {
 	return s.exec(ctx, "cancel-running", `
 		UPDATE jobq_jobs
-		SET state = 'cancelled', last_error = $2, finalized_at = NOW()
-		WHERE id = $1 AND state = 'running'`, id, lastErr)
+		SET state = 'cancelled', last_error = $3, finalized_at = NOW()
+		WHERE id = $1 AND state = 'running' AND attempt = $2`, id, attempt, lastErr)
 }
 
 // cancelPending cancels a not-yet-running job (available/scheduled/retryable).
