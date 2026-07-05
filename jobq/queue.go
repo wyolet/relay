@@ -89,6 +89,11 @@ func (q *Queue) Enqueue(ctx context.Context, input []byte, opts EnqueueOpts) (st
 		ScheduledAt: sched,
 	}
 	if err := q.store.insert(ctx, j); err != nil {
+		if inputURI != "" {
+			if derr := q.payload.Delete(ctx, inputURI); derr != nil {
+				q.opts.Logger.Warn("jobq: delete orphaned input failed", "id", id, "uri", inputURI, "err", derr)
+			}
+		}
 		return "", err
 	}
 	return id, nil
@@ -241,6 +246,10 @@ func (q *Queue) execute(parent context.Context, job *Job) {
 	if job.InputURI != "" {
 		in, err := q.payload.Get(parent, job.InputURI)
 		if err != nil {
+			if parent.Err() != nil {
+				q.finalizeRequeue(job)
+				return
+			}
 			q.finalizeFailure(job, fmt.Errorf("load input: %w", err))
 			return
 		}
@@ -266,7 +275,7 @@ func (q *Queue) execute(parent context.Context, job *Job) {
 			q.finalizeFailure(job, fmt.Errorf("store result: %w", perr))
 			return
 		}
-		if err := q.store.markCompleted(fctx, job.ID, uri); err != nil {
+		if err := q.store.markCompleted(fctx, job.ID, job.Attempt, uri); err != nil {
 			q.opts.Logger.Warn("jobq: mark completed failed", "id", job.ID, "err", err)
 		}
 	case rj.cancelled.Load():
@@ -284,13 +293,13 @@ func (q *Queue) finalizeFailure(job *Job, cause error) {
 	fctx, cancel := finalizeCtx()
 	defer cancel()
 	if job.Attempt >= job.MaxAttempts {
-		if err := q.store.markDiscarded(fctx, job.ID, cause.Error()); err != nil {
+		if err := q.store.markDiscarded(fctx, job.ID, job.Attempt, cause.Error()); err != nil {
 			q.opts.Logger.Warn("jobq: mark discarded failed", "id", job.ID, "err", err)
 		}
 		return
 	}
 	next := time.Now().Add(q.opts.Backoff(job.Attempt))
-	if err := q.store.markRetryable(fctx, job.ID, next, cause.Error()); err != nil {
+	if err := q.store.markRetryable(fctx, job.ID, job.Attempt, next, cause.Error()); err != nil {
 		q.opts.Logger.Warn("jobq: mark retryable failed", "id", job.ID, "err", err)
 	}
 }
@@ -298,7 +307,7 @@ func (q *Queue) finalizeFailure(job *Job, cause error) {
 func (q *Queue) finalizeDiscard(job *Job, msg string) {
 	fctx, cancel := finalizeCtx()
 	defer cancel()
-	if err := q.store.markDiscarded(fctx, job.ID, msg); err != nil {
+	if err := q.store.markDiscarded(fctx, job.ID, job.Attempt, msg); err != nil {
 		q.opts.Logger.Warn("jobq: mark discarded failed", "id", job.ID, "err", err)
 	}
 }
@@ -306,7 +315,7 @@ func (q *Queue) finalizeDiscard(job *Job, msg string) {
 func (q *Queue) finalizeCancel(job *Job) {
 	fctx, cancel := finalizeCtx()
 	defer cancel()
-	if err := q.store.markCancelledRunning(fctx, job.ID, "jobq: cancelled by caller"); err != nil {
+	if err := q.store.markCancelledRunning(fctx, job.ID, job.Attempt, "jobq: cancelled by caller"); err != nil {
 		q.opts.Logger.Warn("jobq: mark cancelled failed", "id", job.ID, "err", err)
 	}
 }
@@ -314,7 +323,7 @@ func (q *Queue) finalizeCancel(job *Job) {
 func (q *Queue) finalizeRequeue(job *Job) {
 	fctx, cancel := finalizeCtx()
 	defer cancel()
-	if err := q.store.markRequeue(fctx, job.ID); err != nil {
+	if err := q.store.markRequeue(fctx, job.ID, job.Attempt); err != nil {
 		q.opts.Logger.Warn("jobq: requeue failed", "id", job.ID, "err", err)
 	}
 }

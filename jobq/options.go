@@ -65,6 +65,9 @@ func (o Options) withDefaults() Options {
 	if o.JobTimeout <= 0 {
 		o.JobTimeout = 5 * time.Minute
 	}
+	if o.RescueAfter <= o.JobTimeout {
+		panic("jobq: RescueAfter must exceed JobTimeout")
+	}
 	if o.Backoff == nil {
 		o.Backoff = defaultBackoff
 	}

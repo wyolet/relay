@@ -13,6 +13,8 @@ import (
 //go:embed migrations/*.up.sql
 var migrationsFS embed.FS
 
+const migrationAdvisoryLockKey int64 = 0x6a6f627100000001
+
 // Migrate applies jobq's pending schema migrations to the database behind pool.
 // It is idempotent and safe to call at every boot. Applied versions are
 // tracked in jobq_schema_migrations — jobq's own lineage, independent of any
@@ -89,6 +91,23 @@ func applyOne(ctx context.Context, pool *pgxpool.Pool, version, body string) err
 		return fmt.Errorf("jobq: begin migration %s: %w", version, err)
 	}
 	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationAdvisoryLockKey); err != nil {
+		return fmt.Errorf("jobq: lock migration %s: %w", version, err)
+	}
+
+	var alreadyApplied bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM jobq_schema_migrations WHERE version = $1)`, version,
+	).Scan(&alreadyApplied); err != nil {
+		return fmt.Errorf("jobq: recheck migration %s: %w", version, err)
+	}
+	if alreadyApplied {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("jobq: commit migration %s: %w", version, err)
+		}
+		return nil
+	}
 
 	if _, err := tx.Exec(ctx, body); err != nil {
 		return fmt.Errorf("jobq: apply migration %s: %w", version, err)

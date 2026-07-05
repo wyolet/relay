@@ -171,13 +171,19 @@ func resolveAll(store *Store) error {
 }
 
 func validate(store *Store) error {
+	usernames := map[string]string{}
 	for name, u := range store.users {
 		if _, err := mail.ParseAddress(u.Spec.Email.Get()); err != nil {
 			return fmt.Errorf("User %q: invalid email: %w", name, err)
 		}
-		if len(u.Spec.Username.Get()) < 1 {
+		username := u.Spec.Username.Get()
+		if len(username) < 1 {
 			return fmt.Errorf("User %q: username empty after resolution", name)
 		}
+		if prev, dup := usernames[username]; dup {
+			return fmt.Errorf("User %q: duplicate username %q (already used by User %q)", name, username, prev)
+		}
+		usernames[username] = name
 		if len(u.Spec.Password.Get()) < 8 {
 			return fmt.Errorf("User %q: password must be at least 8 characters", name)
 		}
