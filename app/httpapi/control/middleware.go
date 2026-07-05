@@ -39,8 +39,9 @@ func AdminTokenMiddleware(adminToken string) func(http.Handler) http.Handler {
 func RequireActor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !actor.From(r.Context()).IsAuthenticated() {
-			http.Error(w, `{"error":{"type":"authentication_error","message":"unauthenticated"}}`, http.StatusUnauthorized)
 			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"type":"authentication_error","message":"unauthenticated"}}`))
 			return
 		}
 		next.ServeHTTP(w, r)

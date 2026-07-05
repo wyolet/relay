@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/pkg/httpmw"
 )
 
 // MountRegistry returns a RouteMounter that registers one POST route per
@@ -75,6 +76,10 @@ func extractModelStream(body []byte) (model string, stream bool, err error) {
 func handleShape(spec *adapter.Spec, d Deps, w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		if httpmw.IsBodyTooLargeError(err) {
+			WriteAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large", err.Error())
+			return
+		}
 		WriteAPIError(w, http.StatusBadRequest, "invalid_request_error", "read_body", err.Error())
 		return
 	}
