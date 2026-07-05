@@ -137,13 +137,23 @@ var (
 // Run orchestrates one request. Caller MUST Close the returned
 // Result.Body to release the connection and trigger post-flight.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
-	// Failure telemetry: any error return (guard, reservation, routing
-	// of keys, all-keys-exhausted, upstream failure) fires a post-flight
-	// observer event so failed requests aren't invisible to usage
-	// tracking. Success returns nil err here and fires post-flight later
-	// on Body.Close instead — the two are mutually exclusive.
+	// Reservations are committed by post-flight on success; on any error
+	// return they're rolled back here so a failed request never leaks a
+	// concurrency slot or bucket cost. The failure also fires a post-flight
+	// observer event (success fires it on Body.Close instead).
+	var (
+		inbound *pkgratelimit.Reservation
+		acq     *policy.Acquisition
+	)
 	defer func() {
 		if err != nil {
+			detached := context.WithoutCancel(ctx)
+			if inbound != nil {
+				_ = p.Policy.CommitInbound(detached, inbound, pkgratelimit.Observations{Cancelled: true})
+			}
+			if acq != nil {
+				_ = p.Policy.Commit(detached, acq, pkgratelimit.Observations{Cancelled: true})
+			}
 			go p.fireFailure(req, err)
 		}
 	}()
@@ -174,14 +184,13 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		hostSlug = req.Host.Meta.Name
 	}
 
-	inbound, err := p.Policy.ReserveInbound(ctx, req.Policy, req.Provider, modelSlug, hostSlug)
+	inbound, err = p.Policy.ReserveInbound(ctx, req.Policy, req.Provider, modelSlug, hostSlug)
 	if err != nil {
 		return nil, err // handler maps ExceededError → 429
 	}
 
 	var (
 		excluded     []*hostkey.HostKey
-		acq          *policy.Acquisition
 		resp         *http.Response
 		keyValue     string // current secret for acq.Key; overridden on a heal-retry
 		attempts     int    // distinct keys tried (a same-key retry doesn't count)
@@ -335,6 +344,9 @@ func shouldRetry(a Adapter, resp *http.Response) bool {
 
 func classify(a Adapter, resp *http.Response, callErr error) (bool, keypool.FailureKind, time.Duration) {
 	if callErr != nil {
+		if errors.Is(callErr, context.Canceled) || errors.Is(callErr, context.DeadlineExceeded) {
+			return false, keypool.FailureNetwork, 0 // caller went away — not the key's fault
+		}
 		if isConnError(callErr) {
 			return true, keypool.FailureUpstreamUnreachable, 0
 		}
