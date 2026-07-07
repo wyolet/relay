@@ -82,12 +82,11 @@ jobs:
         env:
           VERSION: ${{ steps.v.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UI_VERSION: ${{ steps.v.outputs.ui_version }}
           CATALOG_REF: ${{ steps.v.outputs.catalog_ref }}
         run: |
-          # Args, the gh_token secret, dual-registry tags, and no-cache-filter
-          # (force a fresh asset fetch) are all declared in docker-bake.hcl.
+          # Args, dual-registry tags, and no-cache-filter (force a fresh
+          # asset fetch) are all declared in docker-bake.hcl.
           # `release` = the prod + standalone bake group (same set `make
           # release` publishes locally).
           docker buildx bake -f docker-bake.hcl --push release

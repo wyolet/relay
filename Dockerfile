@@ -8,10 +8,6 @@
 # Build args:
 #   UI_VERSION   relay-ui release tag to embed (default below)
 #   CATALOG_REF  relay-catalog git ref (tag/branch/sha) to seed (default below)
-# Build secret (optional):
-#   gh_token     GitHub token for fetching the relay-ui release while that repo
-#                is private. Omit once relay-ui is public.
-#     docker buildx build --secret id=gh_token,env=GH_TOKEN ...
 
 # UI_VERSION has no literal default — it's the Makefile's job (UI_VERSION ?= ...),
 # threaded through docker-bake.hcl. A bare `docker build` must pass --build-arg
@@ -26,32 +22,14 @@ ARG UI_VERSION
 ARG CATALOG_REF
 WORKDIR /assets
 
-# UI dist (relay-ui release tarball). With a gh_token secret the GitHub API
-# asset endpoint authenticates against the still-private repo; failure is then
-# fatal (you have access — a miss is a real error). Without a token the build
-# is best-effort: relay-ui is private, so the fetch will miss and the image
-# ships with an empty dist (relay boots API-only; UI not served). This keeps a
-# tokenless `docker compose up --build` working for strangers today; once
-# relay-ui is public the tokenless path fetches it too. The published image is
-# built WITH a token, so it always carries the UI.
-RUN --mount=type=secret,id=gh_token,required=false sh -eu -c '\
-  REPO=wyolet/relay-ui; TAG='"$UI_VERSION"'; ASSET="relay-ui-$TAG.tar.gz"; \
-  TOKEN=$(cat /run/secrets/gh_token 2>/dev/null || true); \
+# UI dist (relay-ui release tarball, public repo). A miss is a real error —
+# a silent fallback here ships an API-only image that looks healthy until
+# someone opens the admin UI.
+RUN set -eu; \
   mkdir -p /assets/ui; \
-  if [ -n "$TOKEN" ]; then \
-    AID=$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
-            "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
-          | jq -r ".assets[] | select(.name==\"$ASSET\") | .id"); \
-    [ -n "$AID" ] || { echo "FATAL: asset $ASSET not found in $REPO@$TAG"; exit 1; }; \
-    curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" \
-      "https://api.github.com/repos/$REPO/releases/assets/$AID" \
-      | tar -xz -C /assets/ui --strip-components=1; \
-  elif curl -fsSL "https://github.com/$REPO/releases/download/$TAG/$ASSET" \
-         | tar -xz -C /assets/ui --strip-components=1; then \
-    echo "fetched UI $TAG (public)"; \
-  else \
-    echo "WARN: no gh_token and UI fetch failed (relay-ui private?) — building without embedded UI"; \
-  fi'
+  curl -fsSL "https://github.com/wyolet/relay-ui/releases/download/${UI_VERSION}/relay-ui-${UI_VERSION}.tar.gz" \
+    | tar -xz -C /assets/ui --strip-components=1; \
+  echo "fetched UI ${UI_VERSION}"
 
 # Catalog data (public repo). No release tarballs yet, so fetch the source
 # archive at the pinned ref and keep only the live data tree (drafts/ are
