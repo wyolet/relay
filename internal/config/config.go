@@ -27,6 +27,8 @@ type Config struct {
 
 	// Connections
 	PGDSN        string
+	PGMaxConns   int // RELAY_PG_MAX_CONNS; 0 = storage default (10)
+	PGMinConns   int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
 	RedisAddr    string
 	CHDSN        string
 	OTLPEndpoint string
@@ -146,6 +148,19 @@ func Load() (*Config, error) {
 
 	// --- Connections ---
 	cfg.PGDSN = os.Getenv("RELAY_PG_DSN")
+	// Pool sizing (0 = storage default). A higher MinConns keeps connections
+	// pre-warmed so bursty control-plane load never pays cold-connection dial +
+	// DNS latency on the request path.
+	if v, err := envPositiveInt("RELAY_PG_MAX_CONNS", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_PG_MAX_CONNS must be >= 1")
+	} else {
+		cfg.PGMaxConns = v
+	}
+	if v, err := envPositiveInt("RELAY_PG_MIN_CONNS", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_PG_MIN_CONNS must be >= 1")
+	} else {
+		cfg.PGMinConns = v
+	}
 	cfg.RedisAddr = os.Getenv("RELAY_REDIS_ADDR")
 	cfg.CHDSN = os.Getenv("RELAY_CH_DSN")
 	cfg.OTLPEndpoint = os.Getenv("RELAY_OTLP_ENDPOINT")
