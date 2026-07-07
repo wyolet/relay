@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	mrand "math/rand/v2"
 	"sort"
 	"strconv"
@@ -88,8 +89,30 @@ func (r *Redis) Ping(ctx context.Context) error {
 	return r.client.Ping(ctx).Err()
 }
 
+// slowOpThreshold is the duration past which a single redis op is logged
+// with the client pool's counters. The counters discriminate the failure
+// mode a raw "context deadline exceeded" hides: rising pool_timeouts =
+// acquire queued behind a saturated pool, rising pool_misses = the op paid
+// a fresh dial (TCP + DNS), neither = an established connection stalled
+// (server latency or a network-level retransmit stall).
+const slowOpThreshold = 500 * time.Millisecond
+
+func (r *Redis) trackSlow(op, key string, start time.Time, err error) {
+	d := time.Since(start)
+	if d < slowOpThreshold {
+		return
+	}
+	st := r.client.PoolStats()
+	slog.Warn("kv: slow redis op",
+		"op", op, "key", key, "dur_ms", d.Milliseconds(), "err", err,
+		"pool_hits", st.Hits, "pool_misses", st.Misses, "pool_timeouts", st.Timeouts,
+		"pool_total", st.TotalConns, "pool_idle", st.IdleConns)
+}
+
 func (r *Redis) Get(ctx context.Context, key string) ([]byte, error) {
+	start := time.Now()
 	v, err := r.client.Get(ctx, key).Bytes()
+	r.trackSlow("get", key, start, err)
 	if errors.Is(err, redis.Nil) {
 		return nil, ErrNotFound
 	}
@@ -97,19 +120,30 @@ func (r *Redis) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (r *Redis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
-	return r.client.Set(ctx, key, value, ttl).Err()
+	start := time.Now()
+	err := r.client.Set(ctx, key, value, ttl).Err()
+	r.trackSlow("set", key, start, err)
+	return err
 }
 
 func (r *Redis) Del(ctx context.Context, key string) error {
-	return r.client.Del(ctx, key).Err()
+	start := time.Now()
+	err := r.client.Del(ctx, key).Err()
+	r.trackSlow("del", key, start, err)
+	return err
 }
 
 func (r *Redis) Incr(ctx context.Context, key string, delta int64) (int64, error) {
-	return r.client.IncrBy(ctx, key, delta).Result()
+	start := time.Now()
+	n, err := r.client.IncrBy(ctx, key, delta).Result()
+	r.trackSlow("incr", key, start, err)
+	return n, err
 }
 
 func (r *Redis) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	start := time.Now()
 	ok, err := r.client.Expire(ctx, key, ttl).Result()
+	r.trackSlow("expire", key, start, err)
 	if err != nil {
 		return err
 	}
