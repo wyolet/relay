@@ -47,7 +47,10 @@ func dist() fs.FS {
 // resolve. Intended to be registered as the control router's NotFound handler,
 // after all API operations — matched API paths never reach it.
 func Handler() http.Handler {
-	root := dist()
+	return handlerFor(dist())
+}
+
+func handlerFor(root fs.FS) http.Handler {
 	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
@@ -59,6 +62,18 @@ func Handler() http.Handler {
 			info, statErr := f.Stat()
 			_ = f.Close()
 			if statErr == nil && !info.IsDir() {
+				// go:embed files carry no modtime, so FileServer emits no
+				// validator (Last-Modified/ETag) — without an explicit policy
+				// the browser re-downloads every bundle on every visit. Vite
+				// content-hashes everything under assets/, so a week of
+				// immutable caching is safe (a release changes the hashes and
+				// index.html — no-cache below — points at the new ones);
+				// other real files (favicon, manifest) revalidate hourly.
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "public, max-age=3600")
+				}
 				files.ServeHTTP(w, r)
 				return
 			}

@@ -99,3 +99,66 @@ func TestMiddlewareHealthyStore(t *testing.T) {
 		t.Fatalf("Find(missing) = found=%v err=%v, want miss with nil error", found, errFind)
 	}
 }
+
+// commitFailStore reads fine but fails writes — exercises scs's mid-response
+// commit-error path (ErrorFunc fires from inside WriteHeader).
+type commitFailStore struct {
+	kv.Store
+	err error
+}
+
+func (c *commitFailStore) Set(context.Context, string, []byte, time.Duration) error { return c.err }
+
+func TestCommitFailure_CleanErrorResponse(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	m := New(&commitFailStore{Store: kv.NewMem(), err: context.DeadlineExceeded}, false, "sess:")
+	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.Login(r.Context(), "u-1", "admin"); err != nil {
+			t.Fatalf("Login: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/auth/login", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (commit failed before headers flushed)", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"status":500`) || strings.Contains(body, `"ok":true`) {
+		t.Errorf("body = %q, want error payload with NO trailing handler body", body)
+	}
+	if !strings.Contains(logBuf.String(), "session commit (kv set)") {
+		t.Errorf("log = %q, want op-named commit error", logBuf.String())
+	}
+}
+
+func TestDuplicateWriteHeader_SuppressedAndAttributed(t *testing.T) {
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(prev)
+
+	m := New(kv.NewMem(), false, "sess:")
+	h := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusTeapot) // buggy double write
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/buggy", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want first write (200) to win", rec.Code)
+	}
+	logged := logBuf.String()
+	if !strings.Contains(logged, "duplicate WriteHeader suppressed") || !strings.Contains(logged, "/api/buggy") {
+		t.Errorf("log = %q, want suppression warn with offender path", logged)
+	}
+}

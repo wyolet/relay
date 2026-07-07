@@ -60,21 +60,88 @@ func New(store kv.Store, secure bool, keyPrefix string) *Manager {
 	sm.Store = &kvStore{kv: store, prefix: keyPrefix}
 	// scs's default ErrorFunc logs the bare error via the stdlib logger —
 	// which the slog bridge renders as an attribute-less INFO line — and
-	// writes a text/plain 500. Ours keeps the failure attributable.
+	// writes a text/plain 500. Ours keeps the failure attributable. On the
+	// commit path scs invokes this mid-response and then still writes the
+	// handler's original status; onceWriter absorbs that duplicate and any
+	// post-error body.
 	sm.ErrorFunc = func(w http.ResponseWriter, r *http.Request, err error) {
 		slog.Error("session middleware failure", "err", err, "method", r.Method, "path", r.URL.Path)
+		const body = `{"title":"Internal Server Error","status":500,"detail":"session layer failure"}`
+		if ow, ok := w.(*onceWriter); ok {
+			ow.fail(http.StatusInternalServerError, "application/problem+json", []byte(body))
+			return
+		}
 		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"title":"Internal Server Error","status":500,"detail":"session layer failure"}`))
+		_, _ = w.Write([]byte(body))
 	}
 	return &Manager{sm: sm}
 }
+
+// onceWriter guards the response writer under the session middleware.
+// Two jobs: (1) absorb duplicate WriteHeader calls — scs's wrapper relays
+// them to the stdlib writer, so every double-write in ANY control handler
+// surfaces as a "superfluous WriteHeader ... (session.go)" warning that
+// masks the real culprit; we suppress the duplicate and log the offender's
+// method/path instead. (2) after ErrorFunc has produced an error response
+// mid-request, drop the handler's remaining body bytes so the 500 payload
+// isn't followed by junk.
+type onceWriter struct {
+	http.ResponseWriter
+	req    *http.Request
+	status int
+	wrote  bool
+	failed bool
+}
+
+func (o *onceWriter) WriteHeader(code int) {
+	if o.wrote {
+		slog.Warn("duplicate WriteHeader suppressed",
+			"method", o.req.Method, "path", o.req.URL.Path,
+			"first", o.status, "second", code)
+		return
+	}
+	o.wrote, o.status = true, code
+	o.ResponseWriter.WriteHeader(code)
+}
+
+func (o *onceWriter) Write(b []byte) (int, error) {
+	if o.failed {
+		// Pretend success: the handler keeps running harmlessly while the
+		// client only ever sees the error response.
+		return len(b), nil
+	}
+	if !o.wrote {
+		o.wrote, o.status = true, http.StatusOK
+	}
+	return o.ResponseWriter.Write(b)
+}
+
+// fail emits an error response if the header hasn't gone out yet, then
+// swallows everything the handler writes afterwards.
+func (o *onceWriter) fail(code int, contentType string, body []byte) {
+	if !o.wrote {
+		o.Header().Set("Content-Type", contentType)
+		o.WriteHeader(code)
+		_, _ = o.ResponseWriter.Write(body)
+	}
+	o.failed = true
+}
+
+func (o *onceWriter) Unwrap() http.ResponseWriter { return o.ResponseWriter }
 
 // Middleware wraps h with scs's LoadAndSave middleware (reads cookie,
 // loads session from kv, persists changes on response). It also reads the
 // session payload after load and stamps an Actor onto the request context
 // so handlers can call actor.From(ctx) directly.
 func (m *Manager) Middleware(h http.Handler) http.Handler {
+	inner := m.loadAndSave(h)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inner.ServeHTTP(&onceWriter{ResponseWriter: w, req: r}, r)
+	})
+}
+
+func (m *Manager) loadAndSave(h http.Handler) http.Handler {
 	return m.sm.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		uid := m.sm.GetString(ctx, keyUserID)
