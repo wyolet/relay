@@ -16,6 +16,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -56,6 +58,15 @@ func New(store kv.Store, secure bool, keyPrefix string) *Manager {
 	sm.Cookie.SameSite = http.SameSiteStrictMode
 	sm.Cookie.Path = "/"
 	sm.Store = &kvStore{kv: store, prefix: keyPrefix}
+	// scs's default ErrorFunc logs the bare error via the stdlib logger —
+	// which the slog bridge renders as an attribute-less INFO line — and
+	// writes a text/plain 500. Ours keeps the failure attributable.
+	sm.ErrorFunc = func(w http.ResponseWriter, r *http.Request, err error) {
+		slog.Error("session middleware failure", "err", err, "method", r.Method, "path", r.URL.Path)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"title":"Internal Server Error","status":500,"detail":"session layer failure"}`))
+	}
 	return &Manager{sm: sm}
 }
 
@@ -126,14 +137,14 @@ func (s *kvStore) Find(token string) ([]byte, bool, error) {
 		if errors.Is(err, kv.ErrNotFound) {
 			return nil, false, nil
 		}
-		return nil, false, err
+		return nil, false, fmt.Errorf("session find (kv get): %w", err)
 	}
 	if raw == nil {
 		return nil, false, nil
 	}
 	var e kvEntry
 	if err := json.Unmarshal(raw, &e); err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("session find (decode): %w", err)
 	}
 	if time.Now().After(e.Expiry) {
 		return nil, false, nil
@@ -146,13 +157,19 @@ func (s *kvStore) Commit(token string, b []byte, expiry time.Time) error {
 	defer cancel()
 	raw, err := json.Marshal(kvEntry{Data: b, Expiry: expiry})
 	if err != nil {
-		return err
+		return fmt.Errorf("session commit (encode): %w", err)
 	}
-	return s.kv.Set(ctx, s.key(token), raw, time.Until(expiry))
+	if err := s.kv.Set(ctx, s.key(token), raw, time.Until(expiry)); err != nil {
+		return fmt.Errorf("session commit (kv set): %w", err)
+	}
+	return nil
 }
 
 func (s *kvStore) Delete(token string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	return s.kv.Del(ctx, s.key(token))
+	if err := s.kv.Del(ctx, s.key(token)); err != nil {
+		return fmt.Errorf("session delete (kv del): %w", err)
+	}
+	return nil
 }
