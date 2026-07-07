@@ -30,8 +30,15 @@ type Config struct {
 	PGMaxConns   int // RELAY_PG_MAX_CONNS; 0 = storage default (10)
 	PGMinConns   int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
 	RedisAddr    string
-	CHDSN        string
-	OTLPEndpoint string
+	// RedisPoolSize / RedisMinIdleConns tune the go-redis client pool.
+	// 0 = library defaults (pool 10×GOMAXPROCS, NO idle floor). A warm
+	// floor keeps connections pre-dialed so request bursts never pay
+	// cold-dial (TCP + uncached DNS) latency inside a request budget —
+	// same rationale as the PG warm floor above.
+	RedisPoolSize     int // RELAY_REDIS_POOL_SIZE
+	RedisMinIdleConns int // RELAY_REDIS_MIN_IDLE_CONNS
+	CHDSN             string
+	OTLPEndpoint      string
 
 	// Auth
 	AdminToken string
@@ -162,6 +169,16 @@ func Load() (*Config, error) {
 		cfg.PGMinConns = v
 	}
 	cfg.RedisAddr = os.Getenv("RELAY_REDIS_ADDR")
+	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_REDIS_POOL_SIZE must be >= 1")
+	} else {
+		cfg.RedisPoolSize = v
+	}
+	if v, err := envPositiveInt("RELAY_REDIS_MIN_IDLE_CONNS", 0); err != nil {
+		return nil, fmt.Errorf("RELAY_REDIS_MIN_IDLE_CONNS must be >= 1")
+	} else {
+		cfg.RedisMinIdleConns = v
+	}
 	cfg.CHDSN = os.Getenv("RELAY_CH_DSN")
 	cfg.OTLPEndpoint = os.Getenv("RELAY_OTLP_ENDPOINT")
 
