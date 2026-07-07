@@ -9,7 +9,8 @@
 // + fail-fast is the planned follow-up). All writes happen in the pipeline's
 // detached post-flight goroutines, never on the request latency path.
 //
-// Expected kv ops: Reachable = 1 Set; Unreachable = 1 Get + 1 Set; Read = 1 Get.
+// Expected kv ops: Reachable = 1 Set; Unreachable = 1 Get + 1 Set; Read = 1 Get;
+// ReadAll = 1 Range (SCAN + batched MGET on Redis).
 package hosthealth
 
 import (
@@ -32,6 +33,7 @@ const maxErrLen = 256
 type store interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	Set(ctx context.Context, key string, val []byte, ttl time.Duration) error
+	Range(ctx context.Context, prefix string) ([]kv.Entry, error)
 }
 
 // Recorder persists host reachability to kv. Construct once at boot and share
@@ -100,6 +102,32 @@ func (r *Recorder) Read(ctx context.Context, hostID string) (host.Status, bool) 
 		return host.Status{}, false
 	}
 	return st, true
+}
+
+// ReadAll returns every stored host Status keyed by host id in one kv Range —
+// the batch counterpart to Read for list endpoints, avoiding a Get per host.
+// Undecodable records are skipped, mirroring Read's lenient contract.
+func (r *Recorder) ReadAll(ctx context.Context) map[string]host.Status {
+	if r == nil || r.state == nil {
+		return nil
+	}
+	entries, err := r.state.Range(ctx, "host_health:")
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+	out := make(map[string]host.Status, len(entries))
+	for _, e := range entries {
+		id := hostIDFromKey(e.Key)
+		if id == "" {
+			continue
+		}
+		var st host.Status
+		if json.Unmarshal(e.Value, &st) != nil {
+			continue
+		}
+		out[id] = st
+	}
+	return out
 }
 
 func (r *Recorder) write(ctx context.Context, hostID string, st host.Status) {

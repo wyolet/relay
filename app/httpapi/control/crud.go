@@ -106,6 +106,12 @@ type mutationGuard[T any] func(ctx context.Context, action string, existing, inc
 // example). Nil enrichFn is a no-op.
 type enrichFn[T any] func(ctx context.Context, t *T)
 
+// enrichListFn is the batch counterpart of enrichFn for list responses.
+// When non-nil it replaces the per-item enrich loop on GET /{plural}, so
+// derived fields that need a backend read (kv, another store) cost one
+// batched read per request instead of one per row.
+type enrichListFn[T any] func(ctx context.Context, items []*T)
+
 // cascadeFn runs after the delete authz check and before store.Delete. It
 // detaches the soon-to-be-deleted row from any referencing entities so the
 // underlying FK constraints don't reject the delete. A non-nil error
@@ -131,6 +137,7 @@ func registerKind[T any](
 	resolveSlug func(slug string) (string, error),
 	guard mutationGuard[T],
 	enrich enrichFn[T],
+	enrichList enrichListFn[T],
 	cascade cascadeFn[T],
 	mergeUpdate mergeOnUpdateFn[T],
 	gov settings.Reader,
@@ -184,7 +191,9 @@ func registerKind[T any](
 			}
 			items = visible
 		}
-		if enrich != nil {
+		if enrichList != nil {
+			enrichList(ctx, items)
+		} else if enrich != nil {
 			for _, it := range items {
 				enrich(ctx, it)
 			}
@@ -621,6 +630,26 @@ func enrichHostStatus(d Deps) enrichFn[host.Host] {
 	}
 }
 
+// enrichHostStatusAll is the list-path variant: one kv Range for every host's
+// health record instead of a Get per row.
+func enrichHostStatusAll(d Deps) enrichListFn[host.Host] {
+	return func(ctx context.Context, hosts []*host.Host) {
+		if len(hosts) == 0 || d.HostHealth == nil {
+			return
+		}
+		statuses := d.HostHealth.ReadAll(ctx)
+		if len(statuses) == 0 {
+			return
+		}
+		for _, h := range hosts {
+			if st, found := statuses[h.Meta.ID]; found {
+				s := st
+				h.Status = &s
+			}
+		}
+	}
+}
+
 // enrichHostKeyPolicies returns an enrichFn that fills HostKey.Policies
 // with the user Policies that reference this key via Spec.HostKeyIDs,
 // read off the current catalog snapshot. Reverse-ref summary for the
@@ -645,6 +674,34 @@ func enrichHostKeyPolicies(d Deps) enrichFn[hostkey.HostKey] {
 			}
 		}
 		k.Policies = refs
+	}
+}
+
+// enrichHostKeyPoliciesAll is the list-path variant: one Policy.List for the
+// whole page instead of one per key row (the former N+1 on /api/host-keys).
+func enrichHostKeyPoliciesAll(d Deps) enrichListFn[hostkey.HostKey] {
+	return func(ctx context.Context, keys []*hostkey.HostKey) {
+		if len(keys) == 0 || d.Stores == nil || d.Stores.Policy == nil {
+			return
+		}
+		pols, err := d.Stores.Policy.List(ctx)
+		if err != nil {
+			return
+		}
+		byKey := map[string][]hostkey.PolicyRef{}
+		for _, p := range pols {
+			seen := map[string]bool{}
+			for _, id := range p.Spec.HostKeyIDs {
+				if seen[id] {
+					continue
+				}
+				seen[id] = true
+				byKey[id] = append(byKey[id], hostkey.PolicyRef{ID: p.Meta.ID, Name: p.Meta.Name})
+			}
+		}
+		for _, k := range keys {
+			k.Policies = byKey[k.Meta.ID]
+		}
 	}
 }
 
@@ -868,6 +925,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		nil,
 		d.Catalog,
 		false,
 		protect,
@@ -881,6 +939,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		listScanResolver(d.Stores.Host, hmeta),
 		nil,
 		enrichHostStatus(d),
+		enrichHostStatusAll(d),
 		nil,
 		nil,
 		d.Catalog,
@@ -898,6 +957,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		nil,
 		d.Catalog,
 		false,
 		protect,
@@ -911,6 +971,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		listScanResolver(d.Stores.HostKey, kmeta),
 		guardHostKey(d),
 		enrichHostKeyPolicies(d),
+		enrichHostKeyPoliciesAll(d),
 		cascadeHostKeyDetach(d),
 		mergeHostKeyPreserveValue,
 		d.Catalog,
@@ -924,6 +985,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(r *ratelimit.RateLimit) error { return r.Validate() },
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RateLimit, rlmeta),
+		nil,
 		nil,
 		nil,
 		cascadeRateLimitDetach(d),
@@ -941,6 +1003,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		listScanResolver(d.Stores.Policy, polmeta),
 		guardPolicyModels(d),
 		nil,
+		nil,
 		cascadePolicyDetach(d),
 		nil,
 		d.Catalog,
@@ -954,6 +1017,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(p *pricing.Pricing) error { return p.Validate() },
 		"",
 		listScanResolver(d.Stores.Pricing, prmeta),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -973,6 +1037,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		nil,
 		nil,
 		nil,
+		nil,
 		d.Catalog,
 		false,
 		protect,
@@ -988,6 +1053,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		meta.OwnerUser,
 		listScanResolver(d.Stores.RelayKey, rkmeta),
 		guardRelayKeyPolicy(d),
+		nil,
 		nil,
 		nil,
 		// Credential material is server-managed: PUT can neither wipe nor
