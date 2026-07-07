@@ -20,10 +20,54 @@ type Storage struct {
 	pool *pgxpool.Pool
 }
 
+// PoolOption tunes the connection pool. A zero/negative value is ignored, so
+// callers can pass config knobs directly and unset ones keep the defaults.
+type PoolOption func(*poolSettings)
+
+type poolSettings struct {
+	maxConns int32
+	minConns int32
+}
+
+// WithMaxConns overrides the pool's maximum connections (ignored if n <= 0).
+func WithMaxConns(n int) PoolOption {
+	return func(s *poolSettings) {
+		if n > 0 {
+			s.maxConns = int32(n)
+		}
+	}
+}
+
+// WithMinConns overrides the pool's warm-floor connections (ignored if n <= 0).
+// A higher floor keeps connections pre-established, so bursty load never pays
+// cold-connection (dial + DNS) latency on the request path.
+func WithMinConns(n int) PoolOption {
+	return func(s *poolSettings) {
+		if n > 0 {
+			s.minConns = int32(n)
+		}
+	}
+}
+
+// resolvePoolSettings applies the sizing defaults (MaxConns 10 / MinConns 2),
+// then the caller's overrides, and clamps the warm floor to the ceiling so a
+// misconfigured MinConns > MaxConns can't wedge pool creation.
+func resolvePoolSettings(opts ...PoolOption) poolSettings {
+	s := poolSettings{maxConns: 10, minConns: 2}
+	for _, o := range opts {
+		o(&s)
+	}
+	if s.minConns > s.maxConns {
+		s.minConns = s.maxConns
+	}
+	return s
+}
+
 // Open opens a connection pool, runs pending migrations, and returns a
 // ready-to-use *Storage. The returned Storage must be closed with Close
-// when no longer needed.
-func Open(ctx context.Context, dsn string) (*Storage, error) {
+// when no longer needed. Pool sizing defaults to MaxConns 10 / MinConns 2;
+// pass WithMaxConns / WithMinConns to override.
+func Open(ctx context.Context, dsn string, opts ...PoolOption) (*Storage, error) {
 	if err := runMigrations(dsn); err != nil {
 		return nil, fmt.Errorf("storage.Open: %w", err)
 	}
@@ -32,8 +76,10 @@ func Open(ctx context.Context, dsn string) (*Storage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("storage.Open: parse DSN: %w", err)
 	}
-	cfg.MaxConns = 10
-	cfg.MinConns = 2
+
+	s := resolvePoolSettings(opts...)
+	cfg.MaxConns = s.maxConns
+	cfg.MinConns = s.minConns
 	cfg.MaxConnLifetime = 30 * time.Minute
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

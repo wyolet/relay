@@ -99,7 +99,9 @@ func main() {
 
 	bootCtx := context.Background()
 
-	st, err := storagemod.Open(bootCtx, cfg.PGDSN)
+	st, err := storagemod.Open(bootCtx, cfg.PGDSN,
+		storagemod.WithMaxConns(cfg.PGMaxConns),
+		storagemod.WithMinConns(cfg.PGMinConns))
 	if err != nil {
 		slog.Error("storage.Open failed", "err", err)
 		os.Exit(1)
