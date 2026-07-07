@@ -26,13 +26,8 @@ target "_common" {
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
   }
-  // UI fetch token for the (private) relay-ui repo, read from the GH_TOKEN env.
-  // Optional in the Dockerfile (required=false) — unset env yields an empty
-  // secret and a UI-less build; CI sets it to embed the UI.
-  secret = ["id=gh_token,env=GH_TOKEN"]
-  // Always rebuild the asset-fetch stage: BuildKit excludes secret VALUES from
-  // the cache key, so a cached `assets` layer could reuse a stale (e.g. UI-less)
-  // fetch. This also guarantees the pinned UI/catalog are re-pulled each build.
+  // Always rebuild the asset-fetch stage so the pinned UI/catalog are
+  // re-pulled each build rather than served from a stale cached layer.
   no-cache-filter = ["assets"]
 }
 
@@ -92,7 +87,6 @@ target "local" {
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
   }
-  secret = ["id=gh_token,env=GH_TOKEN"]
 }
 
 // Local standalone, for smoke-testing `docker run`.
@@ -110,7 +104,6 @@ target "local-standalone" {
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
   }
-  secret = ["id=gh_token,env=GH_TOKEN"]
 }
 
 group "all"     { targets = ["prod", "dev", "standalone"] }
