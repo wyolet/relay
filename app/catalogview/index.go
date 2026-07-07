@@ -3,6 +3,8 @@ package catalogview
 import (
 	"context"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -28,11 +30,31 @@ type index struct {
 	providerSlug       string // the resolved model's provider slug, for DSL/RL matching
 }
 
+// indexConcurrency caps the parallel store reads per index build so a burst
+// of admin requests can't drain the shared PG pool (default MaxConns 10).
+const indexConcurrency = 4
+
 // load resolves the model {ref} (id or slug) and builds the index. Returns
-// ErrNotFound when ref matches no model.
+// ErrNotFound when ref matches no model. The model list and the index build
+// run concurrently — an unknown ref pays the index reads too, which is fine
+// on the admin plane where a miss is a rare stale-ref/typo case.
 func (s *Service) load(ctx context.Context, ref string) (*model.Model, *index, error) {
-	models, err := s.Models.List(ctx)
-	if err != nil {
+	var (
+		models []*model.Model
+		idx    *index
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		models, err = s.Models.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		idx, err = s.buildIndex(gctx)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, nil, err
 	}
 	var m *model.Model
@@ -45,10 +67,6 @@ func (s *Service) load(ctx context.Context, ref string) (*model.Model, *index, e
 	if m == nil {
 		return nil, nil, ErrNotFound
 	}
-	idx, err := s.buildIndex(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
 	if p, ok := idx.providerByID[m.Meta.Owner.ID]; ok {
 		idx.providerSlug = p.Meta.Name
 	}
@@ -56,32 +74,53 @@ func (s *Service) load(ctx context.Context, ref string) (*model.Model, *index, e
 }
 
 func (s *Service) buildIndex(ctx context.Context) (*index, error) {
-	hosts, err := s.Hosts.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	bindings, err := s.Bindings.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	pricings, err := s.Pricings.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	pols, err := s.Policies.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	rls, err := s.RateLimits.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	provs, err := s.Providers.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	keys, err := s.HostKeys.List(ctx)
-	if err != nil {
+	var (
+		hosts    []*host.Host
+		bindings []*binding.Binding
+		pricings []*pricing.Pricing
+		pols     []*policy.Policy
+		rls      []*ratelimit.RateLimit
+		provs    []*provider.Provider
+		keys     []*hostkey.HostKey
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(indexConcurrency)
+	g.Go(func() error {
+		var err error
+		hosts, err = s.Hosts.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		bindings, err = s.Bindings.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		pricings, err = s.Pricings.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		pols, err = s.Policies.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		rls, err = s.RateLimits.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		provs, err = s.Providers.List(gctx)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		keys, err = s.HostKeys.List(gctx)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
