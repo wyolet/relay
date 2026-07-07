@@ -181,7 +181,11 @@ func main() {
 			slog.Error("RELAY_REDIS_ADDR required when RELAY_STATE_BACKEND=redis")
 			os.Exit(1)
 		}
-		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{Addr: cfg.RedisAddr})
+		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{
+			Addr:         cfg.RedisAddr,
+			PoolSize:     cfg.RedisPoolSize,
+			MinIdleConns: cfg.RedisMinIdleConns,
+		})
 		if err != nil {
 			slog.Error("state(redis) init failed", "err", err)
 			os.Exit(1)
