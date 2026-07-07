@@ -89,6 +89,7 @@ type Deps struct {
 // app/hosthealth.Recorder.
 type HostHealthReader interface {
 	Read(ctx context.Context, hostID string) (host.Status, bool)
+	ReadAll(ctx context.Context) map[string]host.Status
 }
 
 // Mount installs the control-plane huma API on r and registers all

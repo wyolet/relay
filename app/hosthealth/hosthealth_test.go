@@ -62,3 +62,36 @@ func TestNilRecorder_Safe(t *testing.T) {
 		t.Error("nil recorder must report no record")
 	}
 }
+
+func TestReadAll_BatchMatchesRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := hosthealth.New(kv.NewMem(), nil)
+
+	if all := r.ReadAll(ctx); len(all) != 0 {
+		t.Fatalf("ReadAll on empty store = %v, want empty", all)
+	}
+
+	r.Reachable(ctx, "h1")
+	r.Unreachable(ctx, "h2", "dial tcp: connection refused")
+
+	all := r.ReadAll(ctx)
+	if len(all) != 2 {
+		t.Fatalf("ReadAll returned %d records, want 2", len(all))
+	}
+	for _, id := range []string{"h1", "h2"} {
+		single, found := r.Read(ctx, id)
+		if !found {
+			t.Fatalf("Read(%s) missing", id)
+		}
+		batch, ok := all[id]
+		if !ok || batch.Health != single.Health {
+			t.Errorf("ReadAll[%s] = %+v, want %+v", id, batch, single)
+		}
+	}
+
+	var nilRec *hosthealth.Recorder
+	if all := nilRec.ReadAll(ctx); all != nil {
+		t.Errorf("nil recorder ReadAll = %v, want nil", all)
+	}
+}

@@ -97,7 +97,7 @@ func newScopeHarness(t *testing.T, authzr authz.Authorizer, seed ...*scopedThing
 		nil, // validate
 		meta.OwnerUser,
 		listScanResolver[scopedThing](store, tmeta),
-		nil, nil, nil, nil,
+		nil, nil, nil, nil, nil,
 		noSettings{},
 		false,
 		nil, // protect — actor injection above stands in for the auth chain
