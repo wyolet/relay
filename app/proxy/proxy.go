@@ -204,6 +204,9 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		Reader: req.Lifecycle.FirstByteReader(tee),
 		closer: func() error {
 			pfTriggered.Do(func() {
+				// End = response closed. Stamped here, not in the post-flight
+				// goroutine — see pipeline.makeResult for the rationale.
+				req.Lifecycle.MarkEnd()
 				go p.runPostFlight(req, reservation, collected.Bytes(), status)
 			})
 			return resp.Body.Close()
@@ -249,7 +252,6 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 	// Fan out to lifecycle observers. lc carries persistent identity;
 	// the event carries this-request's outcome.
 	if p.Lifecycle != nil && req.Lifecycle != nil {
-		req.Lifecycle.MarkEnd()
 		ev := &lifecycle.PostFlightEvent{
 			Status:       status,
 			ResponseBody: body,

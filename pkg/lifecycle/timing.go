@@ -74,8 +74,11 @@ func (c *Context) MarkReasoningEnd() {
 	}
 }
 
-// MarkEnd records request completion (response closed / post-flight
-// dispatch). Called by the runner in the post-flight goroutine. Nil-safe.
+// MarkEnd records request completion: the response closed, before
+// post-flight dispatch. Called by the runner at post-flight trigger
+// (response close), so End never includes bookkeeping time — that
+// belongs to relay_post_flight_seconds. Failure paths without a
+// response body stamp it at failure classification instead. Nil-safe.
 func (c *Context) MarkEnd() {
 	if c != nil {
 		c.Timing.End = c.sinceStart()

@@ -492,6 +492,11 @@ func (p *Pipeline) makeResult(
 	status := resp.StatusCode
 	postFlight := func() {
 		pfTriggered.Do(func() {
+			// End = response closed. Stamped here, not in the post-flight
+			// goroutine: bookkeeping time (rate-limit commits, observer
+			// fan-out) is relay_post_flight_seconds, never duration_ms /
+			// relay_overhead_seconds.
+			req.Lifecycle.MarkEnd()
 			go p.runPostFlight(req, inbound, acq, collected.Bytes(), status)
 		})
 	}
@@ -542,7 +547,6 @@ func (p *Pipeline) runPostFlight(
 	// the event carries this-request's outcome. Observers see both.
 	if p.Lifecycle != nil && req.Lifecycle != nil {
 		req.Lifecycle.HostKeyID = acq.KeyHash()
-		req.Lifecycle.MarkEnd()
 		ev := &lifecycle.PostFlightEvent{
 			Status:       status,
 			ResponseBody: body,
