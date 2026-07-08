@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/usage"
 )
 
@@ -216,6 +217,9 @@ func (q *segmentQueue) background() {
 func (q *segmentQueue) flushPending() {
 	q.flushMu.Lock()
 	defer q.flushMu.Unlock()
+	// Report after the pass so a failed flush (early return below) shows
+	// as rising lag — the whole point of the gauge.
+	defer q.reportFlushLag()
 
 	segments, err := q.listSegments()
 	if err != nil {
@@ -250,6 +254,26 @@ func (q *segmentQueue) flushPending() {
 			q.log.Warn("usage/clickhouse: remove segment", "file", filepath.Base(seg), "err", err)
 		}
 	}
+}
+
+// reportFlushLag publishes the age of the oldest un-flushed segment
+// (relay_flush_lag_seconds{kind="usage"}) — "how stale is my usage data".
+// Called under flushMu after every flush pass, so a sink outage shows as
+// monotonically rising lag on each tick and a drained queue reads 0. The
+// age comes from the unix-nano rotation timestamp in the filename — no
+// stat calls.
+func (q *segmentQueue) reportFlushLag() {
+	segments, err := q.listSegments()
+	if err != nil {
+		return
+	}
+	var lag float64
+	if len(segments) > 0 {
+		if nano := segmentNano(segments[0]); nano > 0 {
+			lag = time.Since(time.Unix(0, int64(nano))).Seconds()
+		}
+	}
+	metrics.ReportFlushLag("usage", lag)
 }
 
 // listSegments returns segment paths sorted oldest-first (by the embedded

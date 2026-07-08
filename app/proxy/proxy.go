@@ -33,6 +33,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wyolet/relay/pkg/contentcoding"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
@@ -200,6 +201,10 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	}
 	pfTriggered := &sync.Once{}
 	status := resp.StatusCode
+	// The tee'd copy arrives however the upstream compressed it — the
+	// proxy forwards Accept-Encoding verbatim, so unlike the pipeline
+	// path nothing decompressed it. Post-flight decodes by this value.
+	respEncoding := resp.Header.Get("Content-Encoding")
 
 	body := &postFlightReadCloser{
 		Reader: req.Lifecycle.FirstByteReader(tee),
@@ -208,7 +213,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 				// End = response closed. Stamped here, not in the post-flight
 				// goroutine — see pipeline.makeResult for the rationale.
 				req.Lifecycle.MarkEnd()
-				go p.runPostFlight(req, reservation, collected.Bytes(), status)
+				go p.runPostFlight(req, reservation, collected.Bytes(), status, respEncoding)
 			})
 			return resp.Body.Close()
 		},
@@ -221,7 +226,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 	}, nil
 }
 
-func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int) {
+func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int, encoding string) {
 	// post_flight_seconds spans this whole goroutine — extraction, observer
 	// fan-out, and the commit RTT below — not just the Finalize fan-out.
 	pfStart := time.Now()
@@ -229,6 +234,20 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	// Decode ONCE, before every consumer: the extractor would otherwise
+	// parse compressed bytes (silent zero tokens on br/zstd upstreams) and
+	// payload capture would store — and worse, MaxBytes-clip — compressed
+	// data, leaving records permanently undecodable. Decode failure keeps
+	// the raw bytes: a garbled capture beats no capture.
+	if len(body) > 0 {
+		if decoded, err := contentcoding.Decode(body, encoding); err == nil {
+			body = decoded
+		} else if p.Logger != nil {
+			p.Logger.Warn("proxy: response body decode failed; keeping raw bytes",
+				"err", err, "content_encoding", encoding)
+		}
+	}
 
 	if p.Logger != nil {
 		reqID := ""

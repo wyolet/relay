@@ -1,9 +1,30 @@
 package adapter
 
 import (
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/wyolet/relay/pkg/metrics"
 )
+
+// baseTransport unwraps the conn-tracking layer down to the tuned
+// *http.Transport the pooling assertions inspect.
+func baseTransport(t *testing.T, rt http.RoundTripper) *http.Transport {
+	t.Helper()
+	ct, ok := rt.(connTrackingTransport)
+	if !ok {
+		t.Fatalf("transport = %T, want connTrackingTransport", rt)
+	}
+	tr, ok := ct.base.(*http.Transport)
+	if !ok {
+		t.Fatalf("tracked base = %T, want *http.Transport", ct.base)
+	}
+	return tr
+}
 
 // Build must give every spec a tuned, connection-pooling transport — not the
 // stdlib default whose MaxIdleConnsPerHost of 2 re-dials nearly every request
@@ -14,10 +35,7 @@ func TestBuild_TunedTransport(t *testing.T) {
 	if s.client.Timeout != defaultTimeout {
 		t.Fatalf("client timeout = %v, want %v (streamed responses run minutes)", s.client.Timeout, defaultTimeout)
 	}
-	tr, ok := s.client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport = %T, want *http.Transport", s.client.Transport)
-	}
+	tr := baseTransport(t, s.client.Transport)
 	if tr.MaxIdleConnsPerHost != defaultMaxIdleConnsPerHost {
 		t.Errorf("MaxIdleConnsPerHost = %d, want %d", tr.MaxIdleConnsPerHost, defaultMaxIdleConnsPerHost)
 	}
@@ -42,7 +60,7 @@ func TestBuild_TunedTransport(t *testing.T) {
 func TestBuild_UseHTTP1_KeepsTuningAndDisablesH2(t *testing.T) {
 	s := (&Spec{UseHTTP1: true}).Build()
 
-	tr := s.client.Transport.(*http.Transport)
+	tr := baseTransport(t, s.client.Transport)
 	if tr.TLSNextProto == nil || len(tr.TLSNextProto) != 0 {
 		t.Errorf("TLSNextProto = %v, want non-nil empty map (HTTP/2 disabled)", tr.TLSNextProto)
 	}
@@ -62,12 +80,43 @@ func TestSetUpstreamMaxIdleConnsPerHost(t *testing.T) {
 	t.Cleanup(func() { maxIdleConnsPerHost = defaultMaxIdleConnsPerHost })
 
 	SetUpstreamMaxIdleConnsPerHost(256)
-	if tr := (&Spec{}).Build().client.Transport.(*http.Transport); tr.MaxIdleConnsPerHost != 256 {
+	if tr := baseTransport(t, (&Spec{}).Build().client.Transport); tr.MaxIdleConnsPerHost != 256 {
 		t.Fatalf("MaxIdleConnsPerHost = %d, want 256 after override", tr.MaxIdleConnsPerHost)
 	}
 
 	SetUpstreamMaxIdleConnsPerHost(0) // ignored
 	if maxIdleConnsPerHost != 256 {
 		t.Fatalf("maxIdleConnsPerHost = %d, want 256 (a <1 override must be ignored)", maxIdleConnsPerHost)
+	}
+}
+
+// Every upstream attempt must count its connection as new (dialed) or
+// reused (keep-alive pool) — the churn tripwire. Two sequential requests
+// over one keep-alive connection: one new, one reused.
+func TestUpstreamTransport_CountsConnectionReuse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	newBefore := testutil.ToFloat64(metrics.UpstreamConnections.WithLabelValues("new"))
+	reusedBefore := testutil.ToFloat64(metrics.UpstreamConnections.WithLabelValues("reused"))
+
+	client := &http.Client{Transport: NewUpstreamTransport(false)}
+	for range 2 {
+		resp, err := client.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		// Drain fully so the connection returns to the idle pool.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	if got := testutil.ToFloat64(metrics.UpstreamConnections.WithLabelValues("new")) - newBefore; got != 1 {
+		t.Errorf("new connections = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.UpstreamConnections.WithLabelValues("reused")) - reusedBefore; got != 1 {
+		t.Errorf("reused connections = %v, want 1", got)
 	}
 }

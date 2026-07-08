@@ -25,7 +25,8 @@ type PayloadLogging struct {
 	// Backend selects the sink: "file" (default), "s3", or "clickhouse".
 	Backend string `json:"backend"`
 
-	// MaxBytes caps each stored body; 0 = unlimited.
+	// MaxBytes caps each stored body, measured on the DECODED plaintext
+	// (compressed upstream bodies are decoded before capture); 0 = unlimited.
 	MaxBytes int `json:"maxBytes"`
 
 	File PayloadFile       `json:"file"`
@@ -117,7 +118,11 @@ func init() {
 		Name:        SectionPayloadLogging,
 		Description: "Request/response body capture sink config (toggle, backend file|s3|clickhouse, size cap, S3 settings with secret-ref credentials, ClickHouse retention/WAL overrides). Hot-reloaded — changes take effect without a restart.",
 		Defaults: func() any {
-			return &PayloadLogging{Backend: "file", MaxBytes: 1 << 20, File: PayloadFile{Path: "relay-payloads.jsonl"}}
+			// 4 MiB default: a large model response (long output + thinking)
+			// clears 1 MiB of plaintext easily, and the cap applies to the
+			// DECODED body. 0 disables the cap — reasonable when the backend
+			// is s3; inline backends (file/clickhouse) should keep one.
+			return &PayloadLogging{Backend: "file", MaxBytes: 4 << 20, File: PayloadFile{Path: "relay-payloads.jsonl"}}
 		},
 		Decode: decodeAndValidate[PayloadLogging, *PayloadLogging],
 	})
