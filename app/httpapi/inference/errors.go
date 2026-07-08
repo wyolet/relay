@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // WriteAPIError emits an OpenAI-shape error envelope. Exported so
@@ -106,11 +109,35 @@ func routingErrKind(err error) string {
 	}
 }
 
+// setRetryAfter writes a Retry-After header from a bucket-refill duration,
+// rounded up to whole seconds with a floor of 1 so an SDK never reads "0"
+// as retry-immediately. Zero/negative durations still emit the floor: a 429
+// without Retry-After sends well-behaved clients into their fallback
+// backoff, which in practice is a hammer (observed: Claude Code at ~10
+// retries/s against a naked 429).
+func setRetryAfter(w http.ResponseWriter, d time.Duration) {
+	secs := int64(1)
+	if d > 0 {
+		secs = int64((d + time.Second - 1) / time.Second)
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
+}
+
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
 	var upstream *pipeline.UpstreamFailureError
 	var unreachable *pipeline.UpstreamUnreachableError
+	var exceeded *pkgratelimit.ExceededError
 	switch {
+	case errors.As(err, &exceeded):
+		// Relay's own inbound rate limit rejected the request before any
+		// upstream call. This MUST be a 429 with Retry-After from the
+		// limiter's bucket-refill timing — it previously fell through to the
+		// default 502 "upstream_error", blaming a provider that was never
+		// contacted and giving clients no backoff signal.
+		setRetryAfter(w, exceeded.RetryAfter)
+		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
+			exceeded.Error())
 	case errors.As(err, &unreachable):
 		// Dial failure against the host — likely a misconfigured baseURL or a
 		// down upstream, not a key problem. Surface it distinctly so operators
