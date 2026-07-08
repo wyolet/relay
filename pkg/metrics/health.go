@@ -20,6 +20,21 @@ var (
 		[]string{"kind"},
 	)
 
+	// FlushLag is the age of the oldest un-flushed WAL segment, by kind
+	// (usage/payload). RecordsLost fires only when data is already gone
+	// and emit_queue_depth watches the in-memory channel — but a sink
+	// outage (ClickHouse down) grows the on-disk WAL for hours with both
+	// of those green. This gauge answers "how stale is my usage/billing
+	// data": 0 = fully drained; rising = the sink is not accepting.
+	FlushLag = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "flush_lag_seconds",
+			Help:      "Age in seconds of the oldest un-flushed WAL segment, by kind (usage/payload). 0 = drained; rising = the sink is not accepting data.",
+		},
+		[]string{"kind"},
+	)
+
 	// ProviderKeysDown counts the times a pooled provider key was placed
 	// into cooldown by a failure — the leading indicator of heading
 	// toward "no healthy keys in pool". `reason` is the failure class
@@ -40,11 +55,17 @@ var (
 )
 
 func init() {
-	Register(RecordsLost, ProviderKeysDown)
+	Register(RecordsLost, FlushLag, ProviderKeysDown)
 }
 
 // RecordLost is the one-liner an emitter calls at its drop site.
 func RecordLost(kind string) { RecordsLost.WithLabelValues(SafeLabel(kind)).Inc() }
+
+// ReportFlushLag is the one-liner a WAL queue calls after each flush pass
+// with the age of its oldest remaining segment (0 when drained).
+func ReportFlushLag(kind string, seconds float64) {
+	FlushLag.WithLabelValues(SafeLabel(kind)).Set(seconds)
+}
 
 // ProviderKeyDown is the one-liner keypool calls when a key transitions
 // into cooldown.

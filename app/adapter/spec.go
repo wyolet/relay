@@ -19,12 +19,14 @@ import (
 	"context"
 	"crypto/tls"
 	"net/http"
+	"net/http/httptrace"
 	"time"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/pkg/metrics"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -176,7 +178,11 @@ func SetUpstreamMaxIdleConnsPerHost(n int) {
 // shapes that trip Go's HTTP/2 client bugs (see Spec.UseHTTP1). Exported for
 // the composition root, which applies the same pooling to the proxy runner's
 // client (its upstreams are just as hot as the pipeline's).
-func NewUpstreamTransport(http1 bool) *http.Transport {
+//
+// The returned RoundTripper wraps the transport with connection-reuse
+// accounting (relay_upstream_connections_total) — the tripwire for the
+// MaxIdleConnsPerHost-style churn this pooling exists to prevent.
+func NewUpstreamTransport(http1 bool) http.RoundTripper {
 	perHost := maxIdleConnsPerHost
 	tr := &http.Transport{
 		MaxIdleConns:          perHost * maxIdleConnsScale,
@@ -188,7 +194,23 @@ func NewUpstreamTransport(http1 bool) *http.Transport {
 	if http1 {
 		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	}
-	return tr
+	return connTrackingTransport{base: tr}
+}
+
+// connTrackingTransport counts whether each upstream attempt got a fresh
+// dial or a pooled connection. httptrace composes with any trace already
+// on the context, so this is transparent to callers.
+type connTrackingTransport struct {
+	base http.RoundTripper
+}
+
+var connTrace = &httptrace.ClientTrace{
+	GotConn: func(info httptrace.GotConnInfo) { metrics.UpstreamConn(info.Reused) },
+}
+
+func (t connTrackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(
+		req.WithContext(httptrace.WithClientTrace(req.Context(), connTrace)))
 }
 
 // Build finalises the Spec by constructing its shared HTTP client. The client

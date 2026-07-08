@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/usage"
 )
 
@@ -302,4 +305,30 @@ func TestCloseFlushesFinalActiveSegment(t *testing.T) {
 			t.Fatalf("expected empty active after Close, got %d lines", c)
 		}
 	}
+}
+
+// relay_flush_lag_seconds must rise while the sink refuses segments and
+// return to 0 once a flush pass drains them — the "how stale is my usage
+// data" gauge a ClickHouse outage is otherwise invisible to.
+func TestFlushLagRisesOnSinkFailureAndClearsOnDrain(t *testing.T) {
+	dir := t.TempDir()
+	lag := func() float64 {
+		return testutil.ToFloat64(metrics.FlushLag.WithLabelValues("usage"))
+	}
+
+	failing := newQueue(t, dir, 1, func([]usage.Event) error { return errors.New("sink down") })
+	failing.Write(makeEvent("lag-1")) // maxLines=1 → rotates to a segment immediately
+	failing.flushPending()            // flush fails, segment remains
+	if got := lag(); got <= 0 {
+		t.Fatalf("flush lag = %v after failed flush, want > 0", got)
+	}
+	// Close would run flushPending again (still failing) — fine.
+	failing.Close()
+
+	draining := newQueue(t, dir, 1, func([]usage.Event) error { return nil })
+	draining.flushPending()
+	if got := lag(); got != 0 {
+		t.Fatalf("flush lag = %v after successful drain, want 0", got)
+	}
+	draining.Close()
 }

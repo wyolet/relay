@@ -37,6 +37,8 @@ time split. All are labelled by `source` — the runner that handled the request
 | `relay_overhead_seconds` | histogram | `source` | **Relay's own time** = total handler time minus the upstream call. |
 | `relay_admission_seconds` | histogram | `source` | Time from request accept to upstream handoff — auth + rate-limit reserve + key selection. |
 | `relay_inflight_requests` | gauge | `source` | Currently-open requests. A streamed request counts until its body closes. |
+| `relay_inflight_limit` | gauge | _(none)_ | The configured per-pod admission cap (`RELAY_MAX_INFLIGHT`). Plot `inflight_requests / inflight_limit` as shed headroom. |
+| `relay_requests_shed_total` | counter | _(none)_ | Requests refused at admission (429 + `Retry-After`) because the in-flight cap was reached — load shedding. Distinguishes "pod at capacity" from quota 429s. |
 | `relay_post_flight_seconds` | histogram | _(none)_ | Duration of the post-flight observer fan-out per request. |
 
 <Info>
@@ -63,6 +65,8 @@ records, and provider keys dying off.
 | `relay_records_lost_total` | counter | `kind` | Background records (`usage` / `payload`) dropped because a bounded emitter queue was full. A drop you can't see is a billing or audit hole — so it's counted. |
 | `relay_emit_queue_depth` | gauge | `kind` | Events waiting in a bounded emitter queue (`usage` / `payload`) — the leading signal for the drops above, before they happen. |
 | `relay_provider_keys_down_total` | counter | `reason` | Times a pooled provider key was put into cooldown by a failure. `reason` is the failure class, e.g. `auth`, `rate_limit`, `server_error`, `network`, `local_rl`. |
+| `relay_flush_lag_seconds` | gauge | `kind` | Age of the oldest un-flushed WAL segment (`usage` / `payload`). 0 = drained. Rising = the sink (ClickHouse) is not accepting data — your usage/billing view is going stale even while nothing is being *lost*. |
+| `relay_upstream_connections_total` | counter | `kind` | Upstream connections per attempt: `new` (dialed) vs `reused` (keep-alive pool). A `new` rate approaching the request rate means connection churn — the failure mode connection pooling exists to prevent. |
 
 <Note>
 `relay_provider_keys_down_total` is a counter of cooldown **transitions**, not a

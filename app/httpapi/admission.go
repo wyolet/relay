@@ -83,6 +83,10 @@ func NewAdmission(max int) *Admission {
 	if max <= 0 {
 		max = DefaultMaxInflight
 	}
+	// Publish the cap so dashboards can plot inflight/limit headroom —
+	// requests_shed_total fires when it's already too late; the ratio is
+	// the leading signal.
+	metrics.SetInflightLimit(max)
 	return &Admission{sem: make(chan struct{}, max)}
 }
 

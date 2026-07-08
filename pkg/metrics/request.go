@@ -67,6 +67,18 @@ var (
 		[]string{"source"},
 	)
 
+	// InflightLimit is the configured admission cap — the denominator that
+	// turns InflightRequests into headroom ("how close am I to shedding").
+	// Without it the cap lives only in an env var and no dashboard can
+	// plot inflight/limit or alert on approach. Constant after boot.
+	InflightLimit = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "inflight_limit",
+			Help:      "Configured per-pod in-flight admission cap. Compare against relay_inflight_requests for shed headroom.",
+		},
+	)
+
 	// AdmissionSeconds is Timing.Start → upstream handoff: auth +
 	// rate-limit reserve + key selection — the Redis-contention proxy
 	// (Q5). Skipped when the request never reached upstream. Same
@@ -108,8 +120,12 @@ var (
 )
 
 func init() {
-	Register(RequestsTotal, RequestSeconds, OverheadSeconds, InflightRequests, AdmissionSeconds, PostFlightSeconds)
+	Register(RequestsTotal, RequestSeconds, OverheadSeconds, InflightRequests, InflightLimit, AdmissionSeconds, PostFlightSeconds)
 }
+
+// SetInflightLimit publishes the admission cap. Called once at boot where
+// the Admission semaphore is constructed.
+func SetInflightLimit(n int) { InflightLimit.Set(float64(n)) }
 
 func inflightGauge(source string) prometheus.Gauge {
 	switch source {
