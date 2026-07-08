@@ -3,12 +3,14 @@ package inference
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -81,5 +83,43 @@ func TestSetRetryAfter_FloorsAtOneSecond(t *testing.T) {
 	setRetryAfter(rec, 0)
 	if got := rec.Header().Get("Retry-After"); got != "1" {
 		t.Fatalf("Retry-After: %q, want %q", got, "1")
+	}
+}
+
+// Every response must declare which side produced it: relay-minted errors
+// carry origin "relay"; pass-through responses carry origin "upstream", and
+// an upstream cannot spoof the relay claim.
+func TestErrorAttribution_OriginHeaders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeAPIError(rec, 401, "authentication_error", "bad_key", "invalid relay key")
+	if got := rec.Header().Get(HeaderOrigin); got != "relay" {
+		t.Fatalf("relay-minted origin: %q", got)
+	}
+
+	rec = httptest.NewRecorder()
+	src := http.Header{"X-Foo": {"bar"}, HeaderOrigin: {"relay"}} // spoof attempt
+	ForwardUpstreamHeaders(rec.Header(), src)
+	if got := rec.Header().Get(HeaderOrigin); got != "upstream" {
+		t.Fatalf("pass-through origin: %q (spoof must lose)", got)
+	}
+	if rec.Header().Get("X-Foo") != "bar" {
+		t.Fatal("regular upstream headers must still forward")
+	}
+}
+
+// A relay-minted error ABOUT an upstream failure keeps the two statuses
+// separate: envelope status is relay's verdict, the provider's status rides
+// X-WR-Upstream-Status.
+func TestMapPipelineErr_UpstreamFailure_CarriesUpstreamStatus(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mapPipelineErr(rec, &pipeline.UpstreamFailureError{Status: 401, Body: "invalid x-api-key"})
+	if rec.Code != 502 {
+		t.Fatalf("status: %d", rec.Code)
+	}
+	if got := rec.Header().Get(HeaderUpstreamStatus); got != "401" {
+		t.Fatalf("upstream status header: %q", got)
+	}
+	if got := rec.Header().Get(HeaderOrigin); got != "relay" {
+		t.Fatalf("origin: %q", got)
 	}
 }
