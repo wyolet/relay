@@ -108,10 +108,11 @@ const (
 
 // Selector picks HostKeys from Pools and tracks per-key circuit-breaker state.
 type Selector struct {
-	state kv.Store
-	log   *slog.Logger
-	clock func() time.Time
-	rng   *rand.Rand
+	state  kv.Store
+	runner kv.Scripter // set when state supports server-side scripts
+	log    *slog.Logger
+	clock  func() time.Time
+	rng    *rand.Rand
 }
 
 // New constructs a Selector. clock and rng may be nil.
@@ -123,7 +124,14 @@ func New(s kv.Store, log *slog.Logger, clock func() time.Time, rng *rand.Rand) *
 	if rng == nil {
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
-	return &Selector{state: s, log: log, clock: clock, rng: rng}
+	sel := &Selector{state: s, log: log, clock: clock, rng: rng}
+	if sr, ok := s.(kv.Scripter); ok {
+		sel.runner = sr
+	}
+	if ms, ok := s.(*kv.Mem); ok {
+		RegisterScripts(ms)
+	}
+	return sel
 }
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord {
@@ -353,20 +361,48 @@ func ClearCircuit(ctx context.Context, store kv.Store, keyHash string) error {
 }
 
 // RecordSuccess transitions a key to CircuitClosed and resets backoff.
+//
+// The read (prior state, for logging) and the write happen atomically in a
+// single Lua round trip so a concurrent RecordFailure on another pod cannot be
+// lost between our GET and SET. Falls back to the non-atomic Go-side GET+SET
+// only when the store has no script runner (custom test doubles).
 func (s *Selector) RecordSuccess(ctx context.Context, keyHash string) {
 	now := s.clock()
-	prior := s.readRecord(ctx, keyHash)
 	rec := CircuitRecord{
 		State:          CircuitClosed,
 		BackoffStep:    0,
 		LastTransition: now,
 		Reason:         "", // clear: key is healthy, prior reason no longer relevant
 	}
-	s.writeRecord(ctx, keyHash, rec)
+
+	prior := CircuitState(CircuitClosed)
+	if s.runner != nil {
+		b, err := encodeRecord(rec)
+		if err != nil {
+			s.log.Error("keypool: encode record failed", "key_hash", keyHash, "err", err)
+			return
+		}
+		ttlMs := ttlFlat.Milliseconds()
+		raw, rerr := s.runner.RunScript(ctx, scriptRecordSuccess, recordSuccessScript,
+			[]string{circuitKey(keyHash)}, string(b), ttlMs)
+		if rerr != nil {
+			s.log.Error("keypool: record success script failed", "key_hash", keyHash, "err", rerr)
+			return
+		}
+		if len(raw) > 0 {
+			if old, derr := decodeRecord(raw); derr == nil {
+				prior = old.State
+			}
+		}
+	} else {
+		prior = s.readRecord(ctx, keyHash).State
+		s.writeRecord(ctx, keyHash, rec)
+	}
+
 	s.log.Debug("keypool transition",
 		"request_id", reqid.From(ctx),
 		"key_hash", keyHash,
-		"from_state", stateName(prior.State),
+		"from_state", stateName(prior),
 		"to_state", stateName(rec.State),
 		"reason", "success",
 		"backoff_step", rec.BackoffStep,

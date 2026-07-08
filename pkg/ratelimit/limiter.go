@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -137,7 +138,77 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
 //   - meter "concurrency":   decremented (not incremented)
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
+	call, err := l.buildCommitCall(res, obs, l.clock())
+	if err != nil {
+		return err
+	}
+
+	raw, err := l.runner.RunScript(ctx, call.Name, call.Script, call.Keys, call.Args...)
+	if err != nil {
+		return fmt.Errorf("limit: commit script: %w", err)
+	}
+	l.logCommit(res, obs, raw)
+	return nil
+}
+
+// CommitBoth finalizes two reservations. When both are present and the runner
+// supports batching, it commits them in a single round trip (one Redis
+// pipeline) — the reservations live under different hash tags (inbound policy
+// scope vs. upstream hostkey scope) so a single CROSSSLOT script is impossible;
+// batching the two independent, individually-atomic commit scripts is the
+// Cluster-safe way to collapse the two sequential round trips into one. Both
+// reservations receive the same obs, matching the sequential Commit call pair.
+//
+// Falls back to sequential Commit when only one reservation exists, when the
+// runner is not batch-capable, or (returning joined errors) when a batched
+// call fails. Semantics are byte-identical to two Commit calls because the
+// per-reservation script and args are produced by the same builder.
+func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observations) error {
+	present := make([]*Reservation, 0, 2)
+	if a != nil {
+		present = append(present, a)
+	}
+	if b != nil {
+		present = append(present, b)
+	}
+	switch len(present) {
+	case 0:
+		return nil
+	case 1:
+		return l.Commit(ctx, present[0], obs)
+	}
+
+	batcher, ok := l.runner.(kv.BatchScripter)
+	if !ok {
+		return errors.Join(l.Commit(ctx, present[0], obs), l.Commit(ctx, present[1], obs))
+	}
+
 	now := l.clock()
+	calls := make([]kv.ScriptCall, len(present))
+	for i, res := range present {
+		call, err := l.buildCommitCall(res, obs, now)
+		if err != nil {
+			return err
+		}
+		calls[i] = call
+	}
+
+	results := batcher.RunScriptBatch(ctx, calls)
+	var errs []error
+	for i, r := range results {
+		if r.Err != nil {
+			errs = append(errs, fmt.Errorf("limit: commit script: %w", r.Err))
+			continue
+		}
+		l.logCommit(present[i], obs, r.Value)
+	}
+	return errors.Join(errs...)
+}
+
+// buildCommitCall produces the limit.commit script invocation for one
+// reservation. It is the single source of truth for Commit and CommitBoth, so
+// the batched path is guaranteed identical to the sequential one.
+func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.Time) (kv.ScriptCall, error) {
 	guardKey := commitGuardKey(res.scope, res.ID)
 	guardTTLMs := commitGuardTTL.Milliseconds()
 
@@ -200,19 +271,19 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 	// Encode per-rule token amounts as JSON array.
 	tokAmountsJSON, err := json.Marshal(tokAmounts)
 	if err != nil {
-		return fmt.Errorf("limit: marshal tok_amounts: %w", err)
+		return kv.ScriptCall{}, fmt.Errorf("limit: marshal tok_amounts: %w", err)
 	}
 	tbRefundsJSON, err := json.Marshal(tbRefunds)
 	if err != nil {
-		return fmt.Errorf("limit: marshal tb_refunds: %w", err)
+		return kv.ScriptCall{}, fmt.Errorf("limit: marshal tb_refunds: %w", err)
 	}
 	lbRefundsJSON, err := json.Marshal(lbRefunds)
 	if err != nil {
-		return fmt.Errorf("limit: marshal lb_refunds: %w", err)
+		return kv.ScriptCall{}, fmt.Errorf("limit: marshal lb_refunds: %w", err)
 	}
 	swRefundsJSON, err := json.Marshal(swRefunds)
 	if err != nil {
-		return fmt.Errorf("limit: marshal sw_refunds: %w", err)
+		return kv.ScriptCall{}, fmt.Errorf("limit: marshal sw_refunds: %w", err)
 	}
 
 	cancelledInt := int64(0)
@@ -220,27 +291,32 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		cancelledInt = 1
 	}
 
-	raw, err := l.runner.RunScript(ctx, "limit.commit", commitLuaScript, keys,
-		res.ID,
-		guardTTLMs,
-		int64(len(res.conKeys)),
-		int64(len(res.tokRules)),
-		string(tokAmountsJSON),
-		tokTTLMs,
-		cancelledInt,
-		string(tbRefundsJSON),
-		string(lbRefundsJSON),
-		string(swRefundsJSON),
-	)
-	if err != nil {
-		return fmt.Errorf("limit: commit script: %w", err)
-	}
+	return kv.ScriptCall{
+		Name:   "limit.commit",
+		Script: commitLuaScript,
+		Keys:   keys,
+		Args: []any{
+			res.ID,
+			guardTTLMs,
+			int64(len(res.conKeys)),
+			int64(len(res.tokRules)),
+			string(tokAmountsJSON),
+			tokTTLMs,
+			cancelledInt,
+			string(tbRefundsJSON),
+			string(lbRefundsJSON),
+			string(swRefundsJSON),
+		},
+	}, nil
+}
 
+// logCommit emits the post-commit debug line, treating "noop" (duplicate
+// guard) as a no-op success — identical to the prior inline handling.
+func (l *Limiter) logCommit(res *Reservation, obs Observations, raw []byte) {
 	if string(raw) == "noop" {
 		l.log.Debug("limit commit duplicate", "reservation_id", res.ID)
-		return nil
+		return
 	}
-
 	tokSum := int64(0)
 	for _, v := range obs.Tokens {
 		tokSum += v
@@ -250,7 +326,6 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 		"tokens_sum", tokSum,
 		"cancelled", obs.Cancelled,
 	)
-	return nil
 }
 
 // findRule looks up a rule by its identifying fields; returns a synthesized Rule

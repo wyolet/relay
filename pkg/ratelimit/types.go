@@ -8,8 +8,13 @@
 // internal/ratelimit.
 //
 // Expected kv ops per request:
-//   - Reserve:  1 RunScript call (all counter checks + increments atomic).
-//   - Commit:   1 RunScript call (concurrency decrement + token post-increment).
+//   - Reserve:    1 RunScript call (all counter checks + increments atomic).
+//   - Commit:     1 RunScript call (concurrency decrement + token post-increment).
+//   - CommitBoth: 1 batched round trip committing two reservations that live
+//     under different hash tags (inbound policy scope + upstream hostkey scope),
+//     replacing two sequential Commit calls. Each reservation's script is
+//     individually atomic; the batch is not cross-atomic (a single CROSSSLOT
+//     script across the two tags is impossible on Redis Cluster).
 package ratelimit
 
 import (
