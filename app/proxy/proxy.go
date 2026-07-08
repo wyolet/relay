@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -221,6 +222,11 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 }
 
 func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, body []byte, status int) {
+	// post_flight_seconds spans this whole goroutine — extraction, observer
+	// fan-out, and the commit RTT below — not just the Finalize fan-out.
+	pfStart := time.Now()
+	defer func() { metrics.RecordPostFlightTotal(time.Since(pfStart)) }()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -241,22 +247,26 @@ func (p *Pipeline) runPostFlight(req *Request, res *pkgratelimit.Reservation, bo
 		tokens = req.Extractor.ExtractTokens(body)
 	}
 
+	// Finalize before the commit: usage/payload hooks need the response body.
+	// lc carries persistent identity; the event carries this-request's outcome.
+	if p.Lifecycle != nil && req.Lifecycle != nil {
+		p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+			Status:       status,
+			ResponseBody: body,
+		})
+	}
+
+	// Body consumed. Drop the reference so the buffered response is GC-eligible
+	// during the slower Valkey commit below. The commit runs after Finalize:
+	// post-flight is off the client path, so ordering it last is safe.
+	body = nil
+
 	if res != nil && p.Limiter != nil {
 		obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
 		if err := p.Limiter.Commit(ctx, res, obs); err != nil && p.Logger != nil {
 			p.Logger.Warn("proxy: limiter commit failed",
 				"err", err, "scope", req.RateScope)
 		}
-	}
-
-	// Fan out to lifecycle observers. lc carries persistent identity;
-	// the event carries this-request's outcome.
-	if p.Lifecycle != nil && req.Lifecycle != nil {
-		ev := &lifecycle.PostFlightEvent{
-			Status:       status,
-			ResponseBody: body,
-		}
-		p.Lifecycle.Finalize(ctx, req.Lifecycle, ev)
 	}
 }
 

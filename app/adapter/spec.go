@@ -139,23 +139,67 @@ type InboundPath struct {
 	Summary string
 }
 
-const defaultTimeout = 5 * time.Minute
+const (
+	defaultTimeout = 5 * time.Minute
 
-// http1Transport returns a transport that disables HTTP/2 negotiation.
-func http1Transport() *http.Transport {
-	return &http.Transport{
-		TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{},
+	// defaultMaxIdleConnsPerHost keeps hot upstream connections warm. The
+	// stdlib default (2) re-dials nearly every request at high per-host RPS.
+	// Overridable per deployment via SetUpstreamMaxIdleConnsPerHost.
+	defaultMaxIdleConnsPerHost = 128
+
+	// maxIdleConnsScale gives the total idle pool headroom over the per-host
+	// cap so several hot hosts can each keep a full keep-alive pool.
+	maxIdleConnsScale = 8
+
+	idleConnTimeout       = 90 * time.Second
+	tlsHandshakeTimeout   = 10 * time.Second
+	expectContinueTimeout = 1 * time.Second
+)
+
+// maxIdleConnsPerHost is the per-host idle-connection ceiling applied to
+// every upstream transport built after it is set. Read at Build time.
+var maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
+
+// SetUpstreamMaxIdleConnsPerHost overrides the per-host idle-connection cap
+// used by every Spec built afterwards (the composition root wires the
+// RELAY_UPSTREAM_MAX_IDLE_PER_HOST value here). Values < 1 are ignored so a
+// zero config default leaves the built-in 128. Not safe to call concurrently
+// with Build — invoke once at boot, before specs are constructed.
+func SetUpstreamMaxIdleConnsPerHost(n int) {
+	if n >= 1 {
+		maxIdleConnsPerHost = n
 	}
 }
 
-// Build finalises the Spec by constructing its shared HTTP client.
-// Must be called once after all fields are set, before the spec is added to
-// a Registry. Returns s for chaining.
+// NewUpstreamTransport builds the tuned upstream transport. http1 empties
+// TLSNextProto on the same tuned base to disable HTTP/2 negotiation for
+// shapes that trip Go's HTTP/2 client bugs (see Spec.UseHTTP1). Exported for
+// the composition root, which applies the same pooling to the proxy runner's
+// client (its upstreams are just as hot as the pipeline's).
+func NewUpstreamTransport(http1 bool) *http.Transport {
+	perHost := maxIdleConnsPerHost
+	tr := &http.Transport{
+		MaxIdleConns:          perHost * maxIdleConnsScale,
+		MaxIdleConnsPerHost:   perHost,
+		IdleConnTimeout:       idleConnTimeout,
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ExpectContinueTimeout: expectContinueTimeout,
+	}
+	if http1 {
+		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	}
+	return tr
+}
+
+// Build finalises the Spec by constructing its shared HTTP client. The client
+// pools upstream connections via a tuned transport (per-host idle ceiling from
+// SetUpstreamMaxIdleConnsPerHost) and keeps the 5-minute client timeout for
+// long streamed responses. Must be called once after all fields are set,
+// before the spec is added to a Registry. Returns s for chaining.
 func (s *Spec) Build() *Spec {
-	if s.UseHTTP1 {
-		s.client = &http.Client{Timeout: defaultTimeout, Transport: http1Transport()}
-	} else {
-		s.client = &http.Client{Timeout: defaultTimeout}
+	s.client = &http.Client{
+		Timeout:   defaultTimeout,
+		Transport: NewUpstreamTransport(s.UseHTTP1),
 	}
 	return s
 }

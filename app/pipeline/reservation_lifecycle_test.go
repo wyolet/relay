@@ -54,7 +54,23 @@ type observedKV struct {
 func newObservedKV() *observedKV {
 	mem := kv.NewMem()
 	pkgratelimit.RegisterScripts(mem)
+	// keypool.New only auto-registers on a bare *kv.Mem; this double embeds
+	// one, so the atomic record-success emulator must be installed here.
+	keypool.RegisterScripts(mem)
 	return &observedKV{Mem: mem, commitCh: make(chan observedCommit, 8)}
+}
+
+// RunScriptBatch must shadow the embedded Mem's implementation: the batched
+// commit path (Limiter.CommitBoth) would otherwise bypass the RunScript
+// override below and the test would never observe its commits. Sequential
+// per-call execution matches Mem semantics.
+func (s *observedKV) RunScriptBatch(ctx context.Context, calls []kv.ScriptCall) []kv.ScriptResult {
+	results := make([]kv.ScriptResult, len(calls))
+	for i, c := range calls {
+		v, err := s.RunScript(ctx, c.Name, c.Script, c.Keys, c.Args...)
+		results[i] = kv.ScriptResult{Value: v, Err: err}
+	}
+	return results
 }
 
 func (s *observedKV) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {

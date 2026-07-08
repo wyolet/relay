@@ -27,6 +27,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
@@ -221,6 +222,11 @@ func main() {
 	}
 	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
 
+	// Upstream connection pooling: applies to every adapter Spec built below
+	// and to the proxy runner's client. Must run before the specs.
+	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
+	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
+
 	// Adapter specs — one Spec per supported wire shape. The composition
 	// root is the only place vendor names appear; everything else looks
 	// up by adapters.Name via the registry.
@@ -373,6 +379,18 @@ func main() {
 	go payloadCtl.Run(listenerCtx)
 	slog.Debug("payloadlog: observer wired (config via settings: payload-logging)")
 
+	// Admission control: a per-pod in-flight cap on inference requests. Rides
+	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
+	// pre-flight so a shed request is never counted as in-flight, Collect
+	// (release) fires from Finalize at response-body close so a streamed request
+	// holds its slot for the whole stream. Scope is Dispatch only (inference +
+	// each WS frame), never /healthz or the control plane. RELAY_MAX_INFLIGHT
+	// tunes the cap; 0 = httpapi.DefaultMaxInflight.
+	admission := httpapi.NewAdmission(cfg.MaxInflight)
+	lifecycleReg.RegisterPreFlight(admission.PreFlight)
+	lifecycleReg.RegisterCollector(admission)
+	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
+
 	// Metrics: the Prometheus observer. Reads request outcome + timing in
 	// post-flight and emits the request-flow metrics via pkg/metrics. Pure
 	// boot wiring — no runner changes. The data-loss
@@ -381,7 +399,8 @@ func main() {
 	lifecycleReg.RegisterPreFlight(metricsObs.PreFlight)
 	lifecycleReg.RegisterHook(metricsObs)
 	lifecycleReg.RegisterCollector(metricsObs)
-	lifecycleReg.SetFinalizeObserver(metrics.RecordPostFlight)
+	// post_flight_seconds is emitted by the runners themselves (whole detached
+	// goroutine incl. commit RTTs) — no finalize observer needed.
 	metrics.RegisterQueueDepth("usage", func() float64 { return float64(usageCtl.Emitter().QueueDepth()) })
 	metrics.RegisterQueueDepth("payload", func() float64 { return float64(payloadCtl.Emitter().QueueDepth()) })
 	slog.Debug("metricslog: observer wired (/metrics on control plane)")
@@ -468,7 +487,17 @@ func main() {
 	if p := os.Getenv("RELAY_PORT"); p != "" {
 		inferAddr = ":" + p
 	}
-	inferSrv := &http.Server{Addr: inferAddr, Handler: inferRouter}
+	inferSrv := &http.Server{
+		Addr:              inferAddr,
+		Handler:           inferRouter,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+		// WriteTimeout stays 0 (unbounded): SSE responses are long-lived streams,
+		// and a write deadline is absolute — it would truncate a generation
+		// mid-flight. Header/idle limits plus the in-flight admission cap bound
+		// resource use instead of a response-duration cap.
+	}
 	slog.Info("relay inference listening", "addr", inferAddr)
 	inferErr := make(chan error, 1)
 	go func() { inferErr <- inferSrv.ListenAndServe() }()
@@ -519,7 +548,16 @@ func main() {
 			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
 			slog.Debug("relay control: serving embedded UI")
 		}
-		ctrlSrv = &http.Server{Addr: ":" + cfg.ControlPort, Handler: ctrlRouter}
+		ctrlSrv = &http.Server{
+			Addr:              ":" + cfg.ControlPort,
+			Handler:           ctrlRouter,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			MaxHeaderBytes:    1 << 20, // 1 MiB
+			// WriteTimeout stays 0: the control plane serves /metrics scrapes and
+			// admin CRUD, but shares the process with the data plane's SSE
+			// constraint and gains nothing from a response-duration cap here.
+		}
 		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
 		ch := make(chan error, 1)
 		ctrlErr = ch

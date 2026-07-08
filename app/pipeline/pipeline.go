@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -524,34 +525,44 @@ func (p *Pipeline) runPostFlight(
 	body []byte,
 	status int,
 ) {
+	// post_flight_seconds spans this whole goroutine — extraction, observer
+	// fan-out, and the commit RTTs below — not just the Finalize fan-out.
+	pfStart := time.Now()
+	defer func() { metrics.RecordPostFlightTotal(time.Since(pfStart)) }()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	tokens := req.Adapter.ExtractTokens(body)
-	obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
 
-	if err := p.Policy.CommitInbound(ctx, inbound, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: inbound commit failed", "err", err)
+	// Finalize before the commits: usage/payload hooks need the response body.
+	// lc carries persistent identity; the event carries this-request's outcome.
+	if p.Lifecycle != nil && req.Lifecycle != nil {
+		req.Lifecycle.HostKeyID = acq.KeyHash()
+		p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+			Status:       status,
+			ResponseBody: body,
+		})
 	}
-	if err := p.Policy.Commit(ctx, acq, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: upstream commit failed", "err", err)
+
+	// Body consumed. Drop the reference so the buffered response is GC-eligible
+	// during the slower Valkey commit RTTs below — before this reorder it
+	// survived all of them. Commits run after Finalize: post-flight is off the
+	// client path, so ordering them last is safe.
+	body = nil
+
+	obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
+	// Both reservations commit in one batched round trip (they live under
+	// different hash tags, so this is a pipeline, not one script — see
+	// Limiter.CommitBoth).
+	if err := p.Policy.CommitBoth(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
+		p.Logger.Warn("pipeline: post-flight commit failed", "err", err)
 	}
 	p.Policy.RecordSuccess(ctx, acq)
 
 	// The host answered — record reachability (off the latency path).
 	if p.HostHealth != nil && req.Host != nil {
 		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
-	}
-
-	// Fan out to lifecycle observers. lc carries persistent identity;
-	// the event carries this-request's outcome. Observers see both.
-	if p.Lifecycle != nil && req.Lifecycle != nil {
-		req.Lifecycle.HostKeyID = acq.KeyHash()
-		ev := &lifecycle.PostFlightEvent{
-			Status:       status,
-			ResponseBody: body,
-		}
-		p.Lifecycle.Finalize(ctx, req.Lifecycle, ev)
 	}
 }
 
