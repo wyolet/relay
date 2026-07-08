@@ -81,14 +81,16 @@ var (
 		[]string{"source"},
 	)
 
-	// PostFlightSeconds is the duration of one full post-flight fan-out
-	// (Registry.Finalize): is post-flight keeping up with stream closes,
-	// or building a goroutine backlog (Q5)?
+	// PostFlightSeconds is the duration of one full detached post-flight
+	// goroutine — token extraction, the observer fan-out (Registry.Finalize),
+	// and the rate-limit / host-health commit phase that runs after it. Same
+	// Q5 question ("how long does relay's bookkeeping run after a request"),
+	// now including the Valkey commit RTTs that dominate it.
 	PostFlightSeconds = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: Namespace,
 			Name:      "post_flight_seconds",
-			Help:      "Duration of the post-flight observer fan-out (hooks + collectors) per request.",
+			Help:      "Duration of the detached post-flight goroutine (token extraction + observer fan-out + rate-limit/host-health commits) per request.",
 			Buckets:   []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
 		},
 	)
@@ -137,9 +139,20 @@ func RecordAdmission(source string, admission time.Duration) {
 	AdmissionSeconds.WithLabelValues(SafeLabel(source)).Observe(admission.Seconds())
 }
 
-// RecordPostFlight is the Finalize-duration observer wired onto
-// lifecycle.Registry at boot (the Registry stays metrics-free).
-func RecordPostFlight(d time.Duration) { PostFlightSeconds.Observe(d.Seconds()) }
+// RecordPostFlight was the lifecycle.Registry finalize-observer feed for
+// post_flight_seconds, timing only the Registry.Finalize fan-out. The metric
+// now spans the whole detached post-flight goroutine — including the
+// rate-limit / host-health commit phase that runs *after* Finalize returns,
+// which an observer firing inside Finalize cannot see. The runners record it
+// via RecordPostFlightTotal; this callback is retained as a deliberate no-op
+// so the existing SetFinalizeObserver wiring can't double-count the histogram.
+// Drop the SetFinalizeObserver call when convenient.
+func RecordPostFlight(time.Duration) {}
+
+// RecordPostFlightTotal records the wall-clock duration of one detached
+// post-flight goroutine (token extraction + observer fan-out + commits),
+// called by the runners once the goroutine finishes.
+func RecordPostFlightTotal(d time.Duration) { PostFlightSeconds.Observe(d.Seconds()) }
 
 // RecordServed is the one-liner the post-flight metrics observer calls
 // once per finalized request. total is the full handler time; upstream

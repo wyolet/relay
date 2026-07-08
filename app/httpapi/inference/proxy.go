@@ -251,11 +251,12 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "missing_upstream_auth",
 			"proxy mode requires Authorization: Bearer <upstream-key>")
 	default:
-		// Limiter exceeded → 429 mapping happens at this layer too. The
-		// pkg/ratelimit ExceededError carries Retry-After info; here we
-		// keep it simple.
+		// Limiter exceeded → 429 with Retry-After from the limiter's
+		// bucket-refill timing, so SDK clients back off correctly instead of
+		// falling into their naked-429 hammer loop.
 		var ex *pkgratelimit.ExceededError
 		if errors.As(err, &ex) {
+			setRetryAfter(w, ex.RetryAfter)
 			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "rate_limit",
 				ex.Error())
 			return

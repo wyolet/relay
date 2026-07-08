@@ -43,6 +43,18 @@ func (m *Mem) RunScript(ctx context.Context, name, _ string, keys []string, args
 	return v.(ScriptImpl)(ctx, m, keys, args)
 }
 
+// RunScriptBatch runs each call sequentially. Mem is in-process, so there is
+// no round-trip to batch away; running the emulators in order is semantically
+// identical to a Redis pipeline of independent single-slot scripts.
+func (m *Mem) RunScriptBatch(ctx context.Context, calls []ScriptCall) []ScriptResult {
+	results := make([]ScriptResult, len(calls))
+	for i, c := range calls {
+		v, err := m.RunScript(ctx, c.Name, c.Script, c.Keys, c.Args...)
+		results[i] = ScriptResult{Value: v, Err: err}
+	}
+	return results
+}
+
 // NewMem constructs a Mem and starts the TTL janitor.
 func NewMem() *Mem {
 	m := &Mem{

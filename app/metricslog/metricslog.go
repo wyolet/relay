@@ -5,10 +5,12 @@
 // metrics (Q1–Q2, Q5); no runner (pipeline/proxy/ws/
 // batch) changes, because every runner already feeds the lifecycle spine.
 //
-// It registers on three phases: pre-flight (inflight gauge up), the
-// post-flight Hook (request-flow histograms), and a Collector (inflight
-// gauge down — Collect runs on every Finalize, unlike Fill which a
-// pre-send stream fill can mark done).
+// It registers on four seams: pre-flight (inflight gauge up), the
+// post-flight Hook (request-flow histograms for buffered requests), a
+// stream observer (the same histograms for streamed requests, whose Fill is
+// skipped once a stream session pre-fills the collected set), and a
+// Collector (inflight gauge down — Collect runs on every Finalize, unlike
+// Fill which a pre-send stream fill can mark done).
 //
 // Out of scope: the data-loss and provider-key-health metrics (Q3/Q4)
 // are emitted at their sources (the emitters, keypool) — they don't pass
@@ -70,6 +72,32 @@ func (*Hook) Collect(lc *lifecycle.Context) {
 	if _, ok := lc.Metadata[inflightKey]; ok {
 		metrics.InflightDec(lc.Source)
 	}
+}
+
+// NewObserver makes the metrics observer also a StreamObserverFactory. A
+// streamed request pre-fills its collected set, which marks the Context
+// filled and skips the post-flight Fill fan-out — so the request-flow
+// histograms Fill emits would be lost for every stream. This observer
+// re-emits them at end-of-stream instead. It stores nothing (returns nil),
+// so it never collides with a real producer under the "metrics" name.
+func (*Hook) NewObserver(lc *lifecycle.Context) lifecycle.StreamObserver {
+	return &streamObserver{lc: lc}
+}
+
+// streamObserver emits the request-flow metrics for one streamed request at
+// Result (end-of-stream), reading the outcome from the Context — the status
+// the runner stamped and the timing marks. It ignores frames.
+type streamObserver struct{ lc *lifecycle.Context }
+
+func (*streamObserver) Observe([]byte) {}
+
+func (o *streamObserver) Result() (any, error) {
+	lc := o.lc
+	metrics.RecordServed(lc.Source, lc.ResponseStatus, lc.Timing.End, upstreamDuration(lc))
+	if adm := lc.Timing.Upstream.Start; adm > 0 {
+		metrics.RecordAdmission(lc.Source, adm)
+	}
+	return nil, nil
 }
 
 // upstreamDuration is the upstream-call leg, or 0 when upstream wasn't

@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // WriteAPIError emits an OpenAI-shape error envelope. Exported so
@@ -19,6 +22,21 @@ import (
 func WriteAPIError(w http.ResponseWriter, status int, errType, code, msg string, attrs ...any) {
 	writeAPIError(w, status, errType, code, msg, attrs...)
 }
+
+// Error-attribution headers. Relay's error envelope and an OpenAI-shaped
+// upstream's envelope are indistinguishable by body alone, so every response
+// declares which side produced it: a 401 with origin "relay" means your
+// relay key; origin "upstream" means the provider rejected the upstream key.
+const (
+	// HeaderOrigin is "relay" when relay minted the response (auth,
+	// routing, rate limit, admission — or a relay verdict about an upstream
+	// failure), "upstream" when the provider's bytes passed through.
+	HeaderOrigin = "X-WR-Origin"
+	// HeaderUpstreamStatus carries the provider's HTTP status on
+	// relay-minted errors that report an upstream failure, so the two
+	// layers' statuses are never conflated.
+	HeaderUpstreamStatus = "X-WR-Upstream-Status"
+)
 
 // writeAPIError is the internal form used by handlers inside this
 // package; WriteAPIError is the exported wrapper for adapter packages.
@@ -30,6 +48,7 @@ func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string,
 		append([]any{"status", status, "type", errType, "code", code, "msg", msg}, attrs...)...,
 	)
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(HeaderOrigin, "relay")
 	w.WriteHeader(status)
 	env := httpapi.OpenAIError{
 		Err:        httpapi.OpenAIErrorInner{Type: errType, Code: code, Message: msg},
@@ -106,11 +125,35 @@ func routingErrKind(err error) string {
 	}
 }
 
+// setRetryAfter writes a Retry-After header from a bucket-refill duration,
+// rounded up to whole seconds with a floor of 1 so an SDK never reads "0"
+// as retry-immediately. Zero/negative durations still emit the floor: a 429
+// without Retry-After sends well-behaved clients into their fallback
+// backoff, which in practice is a hammer (observed: Claude Code at ~10
+// retries/s against a naked 429).
+func setRetryAfter(w http.ResponseWriter, d time.Duration) {
+	secs := int64(1)
+	if d > 0 {
+		secs = int64((d + time.Second - 1) / time.Second)
+	}
+	w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
+}
+
 // mapPipelineErr translates pipeline sentinels to HTTP responses.
 func mapPipelineErr(w http.ResponseWriter, err error) {
 	var upstream *pipeline.UpstreamFailureError
 	var unreachable *pipeline.UpstreamUnreachableError
+	var exceeded *pkgratelimit.ExceededError
 	switch {
+	case errors.As(err, &exceeded):
+		// Relay's own inbound rate limit rejected the request before any
+		// upstream call. This MUST be a 429 with Retry-After from the
+		// limiter's bucket-refill timing — it previously fell through to the
+		// default 502 "upstream_error", blaming a provider that was never
+		// contacted and giving clients no backoff signal.
+		setRetryAfter(w, exceeded.RetryAfter)
+		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
+			exceeded.Error())
 	case errors.As(err, &unreachable):
 		// Dial failure against the host — likely a misconfigured baseURL or a
 		// down upstream, not a key problem. Surface it distinctly so operators
@@ -121,6 +164,11 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 	case errors.As(err, &upstream):
 		// Surface the upstream's actual status + body so callers see auth /
 		// quota / bad-model messages instead of a generic "keys exhausted".
+		// The envelope is relay-minted (origin "relay"), so the provider's
+		// own status rides the attribution header.
+		if upstream.Status > 0 {
+			w.Header().Set(HeaderUpstreamStatus, strconv.Itoa(upstream.Status))
+		}
 		msg := "all upstream keys failed; " + upstream.Error()
 		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unavailable", msg)
 	case errors.Is(err, pipeline.ErrAllKeysExhausted):
@@ -142,10 +190,12 @@ func isHopByHop(k string) bool {
 	return false
 }
 
-// ForwardUpstreamHeaders copies src → dst, dropping hop-by-hop. The caller
-// is responsible for any further adjustments (e.g. clearing Content-Length
-// when the body size will change between upstream and client). Exported so
-// adapter packages can use it from their own cross-shape handlers.
+// ForwardUpstreamHeaders copies src → dst, dropping hop-by-hop, and stamps
+// the response origin as "upstream" (Set, not Add — an upstream must not be
+// able to spoof a relay-origin claim). The caller is responsible for any
+// further adjustments (e.g. clearing Content-Length when the body size will
+// change between upstream and client). Exported so adapter packages can use
+// it from their own cross-shape handlers.
 func ForwardUpstreamHeaders(dst, src http.Header) {
 	for k, vs := range src {
 		if isHopByHop(k) {
@@ -155,6 +205,7 @@ func ForwardUpstreamHeaders(dst, src http.Header) {
 			dst.Add(k, v)
 		}
 	}
+	dst.Set(HeaderOrigin, "upstream")
 }
 
 // MapPipelineErr is the exported form for adapter-side cross-shape handlers

@@ -27,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -479,20 +480,61 @@ func (p *Pipeline) makeResult(
 	acq *policy.Acquisition,
 	resp *http.Response,
 ) *Result {
-	// Tee the body so post-flight can read what the caller read. The
-	// first-byte reader stamps the upstream TTFT + response-end marks as
-	// the caller drains the tee.
-	var collected bytes.Buffer
-	tee := io.TeeReader(resp.Body, &collected)
+	status := resp.StatusCode
 	if req.Lifecycle != nil {
 		req.Lifecycle.Streamed = req.Stream
+		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
+		// a stream session skips) can read it at end-of-stream.
+		req.Lifecycle.ResponseStatus = status
 	}
 
+	// The first-byte reader stamps the upstream TTFT + response-end marks as
+	// the caller drains the tee. What the tee feeds differs by mode:
+	//
+	//   - streamed: tee into a StreamSession, which frames the SSE bytes and
+	//     extracts usage/payload/tokens INCREMENTALLY, retaining only the
+	//     current partial frame — never the whole stream. This is the memory
+	//     fix: a 1000-frame stream no longer sits buffered until post-flight.
+	//   - buffered (non-streamed, or streamed with no observers registered):
+	//     tee into a full bytes.Buffer that post-flight re-parses. The buffer
+	//     escapes into the post-flight goroutine, so it stays unpooled.
+	var (
+		collected *bytes.Buffer
+		teeDst    io.Writer
+		sess      *lifecycle.StreamSession
+	)
+	if req.Stream && p.Lifecycle != nil {
+		sess = p.Lifecycle.NewStreamSession(req.Lifecycle) // nil when no factories
+	}
+	if sess != nil {
+		req.Lifecycle.SetStreamSession(sess)
+		teeDst = sess
+	} else {
+		collected = &bytes.Buffer{}
+		teeDst = collected
+	}
+	tee := io.TeeReader(resp.Body, teeDst)
+
 	pfTriggered := &sync.Once{}
-	status := resp.StatusCode
 	postFlight := func() {
 		pfTriggered.Do(func() {
-			go p.runPostFlight(req, inbound, acq, collected.Bytes(), status)
+			// End = response closed. Stamped here, not in the post-flight
+			// goroutine: bookkeeping time (rate-limit commits, observer
+			// fan-out) is relay_post_flight_seconds, never duration_ms /
+			// relay_overhead_seconds.
+			req.Lifecycle.MarkEnd()
+			// Finish attaches usage/payload and stashes rate-limit tokens on
+			// the Context. Idempotent: the echo response-writer finishes it
+			// early (to splice usage into the terminal frame); this is a no-op
+			// then.
+			if sess != nil {
+				sess.Finish()
+			}
+			var body []byte
+			if collected != nil {
+				body = collected.Bytes()
+			}
+			go p.runPostFlight(req, inbound, acq, body, status)
 		})
 	}
 
@@ -505,7 +547,7 @@ func (p *Pipeline) makeResult(
 	}
 
 	return &Result{
-		Status:  resp.StatusCode,
+		Status:  status,
 		Headers: resp.Header,
 		Body:    body,
 		KeyHash: acq.KeyHash(),
@@ -519,35 +561,53 @@ func (p *Pipeline) runPostFlight(
 	body []byte,
 	status int,
 ) {
+	// post_flight_seconds spans this whole goroutine — extraction, observer
+	// fan-out, and the commit RTTs below — not just the Finalize fan-out.
+	pfStart := time.Now()
+	defer func() { metrics.RecordPostFlightTotal(time.Since(pfStart)) }()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	tokens := req.Adapter.ExtractTokens(body)
-	obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
-
-	if err := p.Policy.CommitInbound(ctx, inbound, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: inbound commit failed", "err", err)
+	// Rate-limit tokens: for streamed requests the StreamSession already
+	// extracted them incrementally (no buffered body to parse); the buffered
+	// path re-parses the full body via the adapter. body is nil in the stream
+	// case, so ExtractTokens is never handed an empty buffer.
+	var tokens sdkusage.Tokens
+	if t, ok := req.Lifecycle.StreamTokens(); ok {
+		tokens = sdkusage.Tokens(t)
+	} else {
+		tokens = req.Adapter.ExtractTokens(body)
 	}
-	if err := p.Policy.Commit(ctx, acq, obs); err != nil && p.Logger != nil {
-		p.Logger.Warn("pipeline: upstream commit failed", "err", err)
+
+	// Finalize before the commits: usage/payload hooks need the response body.
+	// lc carries persistent identity; the event carries this-request's outcome.
+	if p.Lifecycle != nil && req.Lifecycle != nil {
+		req.Lifecycle.HostKeyID = acq.KeyHash()
+		p.Lifecycle.Finalize(ctx, req.Lifecycle, &lifecycle.PostFlightEvent{
+			Status:       status,
+			ResponseBody: body,
+		})
+	}
+
+	// Body consumed. Drop the reference so the buffered response is GC-eligible
+	// during the slower Valkey commit RTTs below — before this reorder it
+	// survived all of them. Commits run after Finalize: post-flight is off the
+	// client path, so ordering them last is safe.
+	body = nil
+
+	obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
+	// Both reservations commit in one batched round trip (they live under
+	// different hash tags, so this is a pipeline, not one script — see
+	// Limiter.CommitBoth).
+	if err := p.Policy.CommitBoth(ctx, inbound, acq, obs); err != nil && p.Logger != nil {
+		p.Logger.Warn("pipeline: post-flight commit failed", "err", err)
 	}
 	p.Policy.RecordSuccess(ctx, acq)
 
 	// The host answered — record reachability (off the latency path).
 	if p.HostHealth != nil && req.Host != nil {
 		p.HostHealth.Reachable(ctx, req.Host.Meta.ID)
-	}
-
-	// Fan out to lifecycle observers. lc carries persistent identity;
-	// the event carries this-request's outcome. Observers see both.
-	if p.Lifecycle != nil && req.Lifecycle != nil {
-		req.Lifecycle.HostKeyID = acq.KeyHash()
-		req.Lifecycle.MarkEnd()
-		ev := &lifecycle.PostFlightEvent{
-			Status:       status,
-			ResponseBody: body,
-		}
-		p.Lifecycle.Finalize(ctx, req.Lifecycle, ev)
 	}
 }
 

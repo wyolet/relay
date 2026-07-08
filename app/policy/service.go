@@ -125,6 +125,23 @@ func (s *Service) Commit(ctx context.Context, acq *Acquisition, obs pkgratelimit
 	return s.limiter.Commit(ctx, acq.Reservation, obs)
 }
 
+// CommitBoth returns the inbound and upstream reservations to their buckets in
+// a single round trip when both exist, falling back to a single commit when
+// only one is present (and a no-op when neither is). Both reservations receive
+// the same observed usage, exactly as the two separate CommitInbound + Commit
+// calls did. Prefer this over calling CommitInbound and Commit in sequence on
+// the success post-flight path: it collapses two Valkey round trips into one.
+func (s *Service) CommitBoth(ctx context.Context, inbound *pkgratelimit.Reservation, acq *Acquisition, obs pkgratelimit.Observations) error {
+	if s.limiter == nil {
+		return nil
+	}
+	var upstream *pkgratelimit.Reservation
+	if acq != nil {
+		upstream = acq.Reservation
+	}
+	return s.limiter.CommitBoth(ctx, inbound, upstream, obs)
+}
+
 // Release rolls back the upstream reservation (zero observations) and
 // records the key failure.
 func (s *Service) Release(ctx context.Context, acq *Acquisition, kind keypool.FailureKind, retryAfter time.Duration) {
