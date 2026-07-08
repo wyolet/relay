@@ -121,6 +121,30 @@ type Context struct {
 	// repeated by the post-send Finalize. Registry-only.
 	filled bool
 
+	// streamSession is the active stream session for a streamed request,
+	// created by the runner (pipeline.makeResult) and driven by feeding the
+	// tee'd upstream bytes into it. Stored here so the response-writer's echo
+	// path can Finish it early — before the terminal frame is written — to
+	// splice relay_usage; the runner's post-flight Finishes it too
+	// (idempotent). nil for non-streamed requests. Set/read via
+	// SetStreamSession / StreamSession.
+	streamSession *StreamSession
+
+	// streamTokens carries the rate-limit token counts the StreamSession
+	// extracted incrementally from the upstream SSE stream, so the runner's
+	// post-flight commits them without re-parsing a buffered body. Set by
+	// StreamSession.Finish (streamed requests only); read by the runner via
+	// StreamTokens. streamTokensSet distinguishes "extracted, zero tokens"
+	// from "not extracted".
+	streamTokens    map[string]int64
+	streamTokensSet bool
+
+	// ResponseStatus is the upstream HTTP status the runner stamps at
+	// post-flight, so an observer that runs when the post-flight Hook fan-out
+	// is skipped (a streamed request pre-fills the collected set) can still
+	// read the outcome. 0 until stamped.
+	ResponseStatus int
+
 	// Translator is the per-request vendor adapter, set by the runner
 	// when routing decides the upstream. Observers that want a
 	// canonical view of the response (usage, finish reason, output
@@ -166,4 +190,42 @@ func (c *Context) Collected(name string) (any, bool) {
 	}
 	v, ok := c.collected[name]
 	return v, ok
+}
+
+// SetStreamSession records the active stream session so the response-writer
+// (echo path) can Finish it early. Nil-safe.
+func (c *Context) SetStreamSession(s *StreamSession) {
+	if c != nil {
+		c.streamSession = s
+	}
+}
+
+// StreamSession returns the active stream session, or nil for a
+// non-streamed request (or when no stream observers are registered).
+// Nil-safe.
+func (c *Context) StreamSession() *StreamSession {
+	if c == nil {
+		return nil
+	}
+	return c.streamSession
+}
+
+// StreamTokens returns the rate-limit token counts the StreamSession
+// extracted, and whether extraction ran at all. When ok is false the runner
+// falls back to parsing the buffered body (non-streamed path). Nil-safe.
+func (c *Context) StreamTokens() (map[string]int64, bool) {
+	if c == nil {
+		return nil, false
+	}
+	return c.streamTokens, c.streamTokensSet
+}
+
+// setStreamTokens records the incrementally-extracted rate-limit tokens.
+// Package-private: only StreamSession.Finish writes it.
+func (c *Context) setStreamTokens(t map[string]int64) {
+	if c == nil {
+		return
+	}
+	c.streamTokens = t
+	c.streamTokensSet = true
 }

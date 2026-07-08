@@ -398,6 +398,7 @@ func main() {
 	metricsObs := metricslog.New()
 	lifecycleReg.RegisterPreFlight(metricsObs.PreFlight)
 	lifecycleReg.RegisterHook(metricsObs)
+	lifecycleReg.RegisterStreamObserver(metricsObs) // streamed requests skip Fill; emit here
 	lifecycleReg.RegisterCollector(metricsObs)
 	// post_flight_seconds is emitted by the runners themselves (whole detached
 	// goroutine incl. commit RTTs) — no finalize observer needed.

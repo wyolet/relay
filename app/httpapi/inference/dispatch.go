@@ -432,7 +432,9 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, echo, trackReasoning bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	sbufp := scannerBufPool.Get().(*[]byte)
+	defer scannerBufPool.Put(sbufp)
+	scanner.Buffer(*sbufp, 1024*1024)
 	scanner.Split(splitSSEChunks)
 
 	var sess *lifecycle.StreamSession
@@ -440,8 +442,13 @@ func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 	if (echo || trackReasoning) && d.Lifecycle != nil {
 		lc = lifecycle.FromContext(r.Context())
 	}
+	// The pipeline already created the stream session and tees the raw
+	// upstream frames into it (incremental usage/payload/token extraction),
+	// so this path does NOT observe frames itself — it only Finishes the
+	// session early, before the terminal frame is written, so relay_usage can
+	// be spliced in. Double-observing would double-count.
 	if echo && lc != nil {
-		sess = d.Lifecycle.NewStreamSession(lc)
+		sess = lc.StreamSession()
 	}
 
 	writeFrame := func(f []byte) {
@@ -454,8 +461,9 @@ func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.Rea
 
 	var held []byte // one-frame lookahead so the terminal frame can carry relay_usage
 	for scanner.Scan() {
+		// The raw upstream frame is observed via the pipeline tee (into the
+		// session), not here — see above. We only translate + forward it.
 		chunk := append([]byte(nil), scanner.Bytes()...)
-		sess.Observe(chunk) // nil-safe; raw upstream frame (for ExtractSummary)
 		chunk = append(chunk, '\n', '\n')
 
 		var out []byte

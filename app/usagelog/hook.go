@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/lifecycle"
+	sdkusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -38,12 +39,28 @@ func (h *UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (
 }
 
 // buildEvent assembles the canonical usage Event from the per-request
-// Context plus this-request outcome (status/error/body). Shared by the
-// post-flight UsageHook and the streaming observer (which passes the
-// accumulated stream bytes as body); both land the same Event under the
-// same Namespace so echo + sink see one shape regardless of stream vs
-// buffered.
+// Context plus this-request outcome (status/error/body). Used by the
+// post-flight UsageHook (buffered path): it re-parses the whole body via
+// v1.ExtractSummary. The streaming observer instead harvests the Summary
+// incrementally and calls buildEventWithSummary — same Event, same
+// Namespace, no retained body.
 func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body []byte, pricer *Pricer) *Event {
+	var tokens sdkusage.Tokens
+	var finish string
+	if lc.Translator != nil && len(body) > 0 {
+		if s, err := v1.ExtractSummary(lc.Translator, body); err == nil {
+			tokens = s.Tokens
+			finish = string(s.FinishReason)
+		}
+	}
+	return buildEventWithSummary(lc, status, errKind, errMsg, tokens, finish, pricer)
+}
+
+// buildEventWithSummary assembles the Event from an already-extracted token
+// map + finish reason. Shared by buildEvent (buffered) and the streaming
+// observer (which harvests the Summary frame-by-frame) so both land the
+// identical Event regardless of stream vs buffered.
+func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg string, tokens sdkusage.Tokens, finishReason string, pricer *Pricer) *Event {
 	out := Event{
 		RequestID:      lc.RequestID,
 		Source:         lc.Source,
@@ -92,12 +109,8 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 		}
 	}
 
-	if lc.Translator != nil && len(body) > 0 {
-		if s, err := v1.ExtractSummary(lc.Translator, body); err == nil {
-			out.Tokens = s.Tokens
-			out.FinishReason = string(s.FinishReason)
-		}
-	}
+	out.Tokens = tokens
+	out.FinishReason = finishReason
 
 	// Emit-time cost: priced only when a rate sheet was stamped AND tokens
 	// matched its meters — anything else stays unpriced (CostNanos nil),

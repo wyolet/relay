@@ -1,8 +1,10 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -307,6 +309,73 @@ func TestNewStreamSession_NilWhenNoFactories(t *testing.T) {
 	}
 }
 
+// The tee path: raw upstream bytes written to the session (io.Writer) are
+// reframed on the SSE "\n\n" separator and delivered to observers as whole
+// frames — across arbitrary Write boundaries — with only the trailing
+// partial frame flushed at Finish.
+func TestStreamSession_WriteReframesAcrossBoundaries(t *testing.T) {
+	r := New()
+	f := &recordingFactory{}
+	r.RegisterStreamObserver(f)
+
+	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
+	// Two complete frames + a trailing partial, split mid-frame across Writes.
+	io.WriteString(sess, "event: a\ndata: 1\n\nev")
+	io.WriteString(sess, "ent: b\ndata: 2\n\ndata: tail-no-sep")
+	sess.Finish()
+
+	want := []string{"event: a\ndata: 1", "event: b\ndata: 2", "data: tail-no-sep"}
+	if len(f.obs.frames) != len(want) {
+		t.Fatalf("frames: got %q want %q", f.obs.frames, want)
+	}
+	for i, w := range want {
+		if f.obs.frames[i] != w {
+			t.Fatalf("frame %d: got %q want %q", i, f.obs.frames[i], w)
+		}
+	}
+}
+
+// Finish is idempotent (echo finishes early, then the runner finishes again)
+// and stashes the summarizer's tokens for the runner. With no translator the
+// summarizer yields nothing, but StreamTokens must still report "extracted".
+func TestStreamSession_FinishIdempotentStashesTokens(t *testing.T) {
+	r := New()
+	f := &recordingFactory{}
+	r.RegisterStreamObserver(f)
+
+	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
+	lc := sess.lc
+	io.WriteString(sess, "event: a\ndata: 1\n\n")
+	sess.Finish()
+	sess.Finish() // no-op
+
+	if got := f.obs.results; got != 1 {
+		t.Fatalf("Result called %d times, want 1 (idempotent Finish)", got)
+	}
+	if _, ok := lc.StreamTokens(); !ok {
+		t.Fatal("Finish must mark stream tokens extracted")
+	}
+}
+
+type recordingFactory struct{ obs *recordingObserver }
+
+func (f *recordingFactory) Name() string { return "rec" }
+func (f *recordingFactory) NewObserver(_ *Context) StreamObserver {
+	f.obs = &recordingObserver{}
+	return f.obs
+}
+
+type recordingObserver struct {
+	frames  []string
+	results int
+}
+
+func (o *recordingObserver) Observe(f []byte) { o.frames = append(o.frames, string(f)) }
+func (o *recordingObserver) Result() (any, error) {
+	o.results++
+	return len(o.frames), nil
+}
+
 // --- concurrent register / finalize ---
 
 func TestConcurrentRegisterAndFinalize(t *testing.T) {
@@ -345,4 +414,49 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// CRLF-separated SSE (spec-legal) must reframe identically to LF, with
+// frames normalized to LF before observers see them.
+func TestStreamSession_WriteReframesCRLF(t *testing.T) {
+	r := New()
+	f := &recordingFactory{}
+	r.RegisterStreamObserver(f)
+
+	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
+	io.WriteString(sess, "event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2\r\n\r\n")
+	sess.Finish()
+
+	want := []string{"event: a\ndata: 1", "event: b\ndata: 2"}
+	if len(f.obs.frames) != len(want) {
+		t.Fatalf("frames: got %q want %q", f.obs.frames, want)
+	}
+	for i, w := range want {
+		if f.obs.frames[i] != w {
+			t.Fatalf("frame %d: got %q want %q", i, f.obs.frames[i], w)
+		}
+	}
+}
+
+// Input that never yields a separator must not grow the partial buffer past
+// maxPartialFrameBytes — the bound is the invariant the whole redesign rests
+// on. Overflow feeds the oversized chunk best-effort and resets.
+func TestStreamSession_WritePartialBufferBounded(t *testing.T) {
+	r := New()
+	f := &recordingFactory{}
+	r.RegisterStreamObserver(f)
+
+	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
+	chunk := bytes.Repeat([]byte("x"), 256*1024) // no separator anywhere
+	for i := 0; i < 8; i++ {                     // 2 MiB total
+		if _, err := sess.Write(chunk); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if len(sess.buf) > maxPartialFrameBytes {
+			t.Fatalf("partial buffer grew to %d, cap is %d", len(sess.buf), maxPartialFrameBytes)
+		}
+	}
+	if len(f.obs.frames) == 0 {
+		t.Fatal("overflow chunk was never fed best-effort")
+	}
 }

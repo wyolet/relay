@@ -480,17 +480,42 @@ func (p *Pipeline) makeResult(
 	acq *policy.Acquisition,
 	resp *http.Response,
 ) *Result {
-	// Tee the body so post-flight can read what the caller read. The
-	// first-byte reader stamps the upstream TTFT + response-end marks as
-	// the caller drains the tee.
-	var collected bytes.Buffer
-	tee := io.TeeReader(resp.Body, &collected)
+	status := resp.StatusCode
 	if req.Lifecycle != nil {
 		req.Lifecycle.Streamed = req.Stream
+		// Stamp the outcome so the metrics stream observer (whose Fill fan-out
+		// a stream session skips) can read it at end-of-stream.
+		req.Lifecycle.ResponseStatus = status
 	}
 
+	// The first-byte reader stamps the upstream TTFT + response-end marks as
+	// the caller drains the tee. What the tee feeds differs by mode:
+	//
+	//   - streamed: tee into a StreamSession, which frames the SSE bytes and
+	//     extracts usage/payload/tokens INCREMENTALLY, retaining only the
+	//     current partial frame — never the whole stream. This is the memory
+	//     fix: a 1000-frame stream no longer sits buffered until post-flight.
+	//   - buffered (non-streamed, or streamed with no observers registered):
+	//     tee into a full bytes.Buffer that post-flight re-parses. The buffer
+	//     escapes into the post-flight goroutine, so it stays unpooled.
+	var (
+		collected *bytes.Buffer
+		teeDst    io.Writer
+		sess      *lifecycle.StreamSession
+	)
+	if req.Stream && p.Lifecycle != nil {
+		sess = p.Lifecycle.NewStreamSession(req.Lifecycle) // nil when no factories
+	}
+	if sess != nil {
+		req.Lifecycle.SetStreamSession(sess)
+		teeDst = sess
+	} else {
+		collected = &bytes.Buffer{}
+		teeDst = collected
+	}
+	tee := io.TeeReader(resp.Body, teeDst)
+
 	pfTriggered := &sync.Once{}
-	status := resp.StatusCode
 	postFlight := func() {
 		pfTriggered.Do(func() {
 			// End = response closed. Stamped here, not in the post-flight
@@ -498,7 +523,18 @@ func (p *Pipeline) makeResult(
 			// fan-out) is relay_post_flight_seconds, never duration_ms /
 			// relay_overhead_seconds.
 			req.Lifecycle.MarkEnd()
-			go p.runPostFlight(req, inbound, acq, collected.Bytes(), status)
+			// Finish attaches usage/payload and stashes rate-limit tokens on
+			// the Context. Idempotent: the echo response-writer finishes it
+			// early (to splice usage into the terminal frame); this is a no-op
+			// then.
+			if sess != nil {
+				sess.Finish()
+			}
+			var body []byte
+			if collected != nil {
+				body = collected.Bytes()
+			}
+			go p.runPostFlight(req, inbound, acq, body, status)
 		})
 	}
 
@@ -511,7 +547,7 @@ func (p *Pipeline) makeResult(
 	}
 
 	return &Result{
-		Status:  resp.StatusCode,
+		Status:  status,
 		Headers: resp.Header,
 		Body:    body,
 		KeyHash: acq.KeyHash(),
@@ -533,7 +569,16 @@ func (p *Pipeline) runPostFlight(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	tokens := req.Adapter.ExtractTokens(body)
+	// Rate-limit tokens: for streamed requests the StreamSession already
+	// extracted them incrementally (no buffered body to parse); the buffered
+	// path re-parses the full body via the adapter. body is nil in the stream
+	// case, so ExtractTokens is never handed an empty buffer.
+	var tokens sdkusage.Tokens
+	if t, ok := req.Lifecycle.StreamTokens(); ok {
+		tokens = sdkusage.Tokens(t)
+	} else {
+		tokens = req.Adapter.ExtractTokens(body)
+	}
 
 	// Finalize before the commits: usage/payload hooks need the response body.
 	// lc carries persistent identity; the event carries this-request's outcome.
