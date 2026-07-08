@@ -26,10 +26,10 @@ type Config struct {
 	EventlogBackend string
 
 	// Connections
-	PGDSN        string
-	PGMaxConns   int // RELAY_PG_MAX_CONNS; 0 = storage default (10)
-	PGMinConns   int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
-	RedisAddr    string
+	PGDSN      string
+	PGMaxConns int // RELAY_PG_MAX_CONNS; 0 = storage default (10)
+	PGMinConns int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
+	RedisAddr  string
 	// RedisPoolSize / RedisMinIdleConns tune the go-redis client pool.
 	// 0 = library defaults (pool 10×GOMAXPROCS, NO idle floor). A warm
 	// floor keeps connections pre-dialed so request bursts never pay
@@ -60,6 +60,13 @@ type Config struct {
 	InstanceID      string
 	EventlogDir     string
 	MaxRequestBytes int64 // 0 = use httpmw.DefaultMaxRequestBytes
+	MaxInflight     int   // RELAY_MAX_INFLIGHT per-pod in-flight cap; 0 = httpapi.DefaultMaxInflight
+
+	// UpstreamMaxIdlePerHost caps idle keep-alive connections the upstream
+	// transport pools per host (RELAY_UPSTREAM_MAX_IDLE_PER_HOST, default 128).
+	// The stdlib default (2) forces a fresh dial on nearly every request at
+	// high per-host RPS; a higher ceiling keeps hot upstream connections warm.
+	UpstreamMaxIdlePerHost int
 
 	// Payload logging has no env knobs — its config (enable, backend, S3
 	// settings, credentials) lives in the runtime "payload-logging" settings
@@ -233,6 +240,17 @@ func Load() (*Config, error) {
 
 	if v := envInt64("RELAY_MAX_REQUEST_BYTES", 0); v > 0 {
 		cfg.MaxRequestBytes = v
+	}
+
+	// RELAY_MAX_INFLIGHT bounds concurrent in-flight inference requests per pod
+	// (the admission cap). 0 = derived default (app/httpapi.DefaultMaxInflight),
+	// applied where the Admission is constructed.
+	cfg.MaxInflight = envInt("RELAY_MAX_INFLIGHT", 0)
+
+	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 128); err != nil {
+		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
+	} else {
+		cfg.UpstreamMaxIdlePerHost = v
 	}
 
 	if v, err := envPositiveInt("RELAY_HEALTHZ_DEADLINE_MS", 500); err != nil {

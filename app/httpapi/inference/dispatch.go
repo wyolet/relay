@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
@@ -94,6 +96,17 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// fireUsageFailure — so pre-flight and post-flight stay paired.
 	if d.Lifecycle != nil {
 		if err := d.Lifecycle.RunPreFlight(ctx, lc, &lifecycle.PreFlightEvent{}); err != nil {
+			// In-flight cap reached → shed with a retriable 429 + Retry-After so
+			// OpenAI-shape clients back off instead of hammering a saturated pod.
+			// The slot was never acquired, so no release is owed. Any other
+			// pre-flight abort stays a 500.
+			if errors.Is(err, httpapi.ErrShed) {
+				d.fireUsageFailure(ctx, "shed", err.Error())
+				w.Header().Set("Retry-After", httpapi.RetryAfterShed)
+				writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
+					"relay is at capacity; retry shortly")
+				return
+			}
 			d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
 			writeAPIError(w, http.StatusInternalServerError, "server_error", "pre_flight_aborted", err.Error())
 			return
