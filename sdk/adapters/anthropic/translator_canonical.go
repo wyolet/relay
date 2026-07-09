@@ -75,6 +75,13 @@ type anthropicCanonTool struct {
 	Description  string          `json:"description,omitempty"`
 	InputSchema  json.RawMessage `json:"input_schema"`
 	CacheControl map[string]any  `json:"cache_control,omitempty"`
+	// EagerInputStreaming disables Anthropic's server-side buffering of
+	// input_json_delta. Set on every tool of a streaming request: eager
+	// delivery is canonical semantics (OpenAI/Gemini stream args unbuffered),
+	// so the buffering is normalized away rather than exposed as a knob. The
+	// cost is that accumulated args are no longer server-validated JSON —
+	// handleContentBlockStop marks unparseable args StatusIncomplete.
+	EagerInputStreaming bool `json:"eager_input_streaming,omitempty"`
 }
 
 // anthropicEphemeralCacheControl is the breakpoint marker placed on the last
@@ -364,9 +371,10 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				schema = json.RawMessage(`{}`)
 			}
 			out.Tools = append(out.Tools, anthropicCanonTool{
-				Name:        ft.Name,
-				Description: ft.Description,
-				InputSchema: schema,
+				Name:                ft.Name,
+				Description:         ft.Description,
+				InputSchema:         schema,
+				EagerInputStreaming: out.Stream,
 			})
 		}
 		if tc.Choice != nil {
@@ -436,9 +444,10 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 						schema = defaultJSONObjectSchema
 					}
 					out.Tools = append(out.Tools, anthropicCanonTool{
-						Name:        structuredOutputToolName,
-						Description: "Return the response as JSON.",
-						InputSchema: schema,
+						Name:                structuredOutputToolName,
+						Description:         "Return the response as JSON.",
+						InputSchema:         schema,
+						EagerInputStreaming: out.Stream,
 					})
 					out.ToolChoice = map[string]any{
 						"type": "tool",
@@ -1041,7 +1050,7 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 				CallID:    b.callID,
 				Name:      b.toolName,
 				Arguments: b.argsBuf.String(),
-				Status:    v1.StatusCompleted,
+				Status:    functionCallStatus(b.argsBuf.String()),
 			}
 		}
 	case "thinking":
@@ -1074,6 +1083,19 @@ func (s *anthropicToCanonicalStream) handleContentBlockStop(_ []byte) ([]byte, e
 		Item:   completedItem,
 	})
 	return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventItemCompleted, Data: completedData}}), nil
+}
+
+// functionCallStatus reports the terminal status for a streamed function
+// call's accumulated arguments. With eager_input_streaming the upstream no
+// longer validates tool-input JSON, so a truncated (max_tokens) or malformed
+// argument string reaches us verbatim; surface it as StatusIncomplete rather
+// than masquerade as a runnable call. Empty args stay completed — a no-arg
+// tool may stream zero input_json_delta frames.
+func functionCallStatus(args string) v1.Status {
+	if args == "" || json.Valid([]byte(args)) {
+		return v1.StatusCompleted
+	}
+	return v1.StatusIncomplete
 }
 
 func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, error) {
@@ -1434,6 +1456,10 @@ func anthropicParseTool(raw json.RawMessage) (v1.Tool, error) {
 	if schema == nil {
 		schema = json.RawMessage(`{}`)
 	}
+	// canonical: eager_input_streaming dropped — eager arg delivery is the
+	// canonical default (other vendors never buffer), and serialize-side
+	// re-adds it on every streaming anthropic request, so the intent survives
+	// both cross-vendor and anthropic→anthropic round trips.
 	return &v1.FunctionTool{
 		Name:        probe.Name,
 		Description: probe.Description,
@@ -1611,23 +1637,35 @@ func splitToolResults(parts []v1.Part, raw json.RawMessage) ([]*v1.FunctionCallO
 		}
 		if probe.Type == "tool_result" {
 			output := ""
+			var mediaParts []v1.Part
 			if len(probe.Content) > 0 {
-				// content can be string or array of text blocks
+				// content can be string or array of blocks
 				if probe.Content[0] == '"' {
 					_ = json.Unmarshal(probe.Content, &output)
 				} else {
 					var contentParts []v1.Part
 					contentParts, _ = anthropicContentToCanonicalParts(probe.Content)
+					hasMedia := false
 					for _, p := range contentParts {
 						if tp, ok := p.(*v1.TextPart); ok {
 							output += tp.Text
+						} else {
+							hasMedia = true
 						}
+					}
+					// Media-carrying tool results (image blocks — e.g. a file
+					// read returning a PNG) keep the full part list on Content
+					// so downstream serializers can emit it; text-only results
+					// stay on the plain Output string as before.
+					if hasMedia {
+						mediaParts = contentParts
 					}
 				}
 			}
 			toolResults = append(toolResults, &v1.FunctionCallOutput{
-				CallID: probe.ToolUseID,
-				Output: output,
+				CallID:  probe.ToolUseID,
+				Output:  output,
+				Content: mediaParts,
 			})
 		} else {
 			// Re-extract as part
@@ -1824,15 +1862,48 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 		}
 		blocks := make([]map[string]any, 0, len(pendingToolResults))
 		for _, fco := range pendingToolResults {
-			content := fco.Output
-			if content == "" && len(fco.Content) > 0 {
-				var sb strings.Builder
+			// Media-carrying results (image parts in fco.Content) emit a block
+			// array in part order; text-only results stay a plain string. When
+			// Content holds the full part list (anthropic parse keeps text
+			// there too), Output duplicates the text — prefer the parts.
+			hasMedia := false
+			for _, p := range fco.Content {
+				if _, ok := p.(*v1.ImagePart); ok {
+					hasMedia = true
+					break
+				}
+			}
+			var content any
+			if hasMedia {
+				var contentBlocks []map[string]any
+				hasText := false
 				for _, p := range fco.Content {
-					if tp, ok := p.(*v1.TextPart); ok {
-						sb.WriteString(tp.Text)
+					switch p := p.(type) {
+					case *v1.TextPart:
+						if p.Text != "" {
+							contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": p.Text})
+							hasText = true
+						}
+					case *v1.ImagePart:
+						contentBlocks = append(contentBlocks, canonicalImageURLToAnthropicBlock(p.ImageURL))
 					}
 				}
-				content = sb.String()
+				if !hasText && fco.Output != "" {
+					contentBlocks = append(contentBlocks, map[string]any{"type": "text", "text": fco.Output})
+				}
+				content = contentBlocks
+			} else {
+				text := fco.Output
+				if text == "" && len(fco.Content) > 0 {
+					var sb strings.Builder
+					for _, p := range fco.Content {
+						if tp, ok := p.(*v1.TextPart); ok {
+							sb.WriteString(tp.Text)
+						}
+					}
+					text = sb.String()
+				}
+				content = text
 			}
 			blocks = append(blocks, map[string]any{
 				"type":        "tool_result",

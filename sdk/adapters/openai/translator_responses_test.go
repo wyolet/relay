@@ -2005,3 +2005,139 @@ func TestResponsesStream_FunctionCallItemStartedCarriesName(t *testing.T) {
 	}
 	t.Fatal("no item.started frame emitted")
 }
+
+// Cross-provider replay: canonical transcripts carry relay-scoped item ids
+// (the anthropic adapter mints t_0/m_0/r_0...), but the Responses API treats
+// input[N].id as a reference to an object IT minted and 400s on foreign ids
+// ("Invalid 'input[5].id': 't_0'. Expected an ID that begins with 'rs'").
+// Serialize must strip ids from message/function_call input items, drop
+// foreign reasoning items (provider-signed, no cross-vendor round-trip), and
+// keep OpenAI-native reasoning (encrypted_content) with its original rs_ id.
+func TestResponsesSerializeRequest_ForeignItemIDs(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"gpt-5.5"},
+		OutputMode: v1.OutputModeSync,
+		Input: []v1.Item{
+			&v1.Message{ID: "m_0", Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}},
+			&v1.Reasoning{ID: "r_0", Content: "thinking...", Status: v1.StatusCompleted,
+				ProviderData: json.RawMessage(`{"type":"thinking","thinking":"...","signature":"anthropic-signed"}`)},
+			&v1.FunctionCall{ID: "t_0", CallID: "toolu_01", Name: "search", Arguments: `{"q":"x"}`, Status: v1.StatusCompleted},
+			&v1.FunctionCallOutput{CallID: "toolu_01", Output: "result"},
+			&v1.Reasoning{ID: "rs_native1", Status: v1.StatusCompleted,
+				ProviderData: json.RawMessage(`{"encrypted_content":"BLOB123"}`)},
+		},
+	}
+
+	body, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+
+	var wire struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal wire: %v", err)
+	}
+
+	var types []string
+	for _, item := range wire.Input {
+		typ, _ := item["type"].(string)
+		types = append(types, typ)
+		id, _ := item["id"].(string)
+		switch typ {
+		case "message", "function_call":
+			if id != "" {
+				t.Errorf("%s input item carries id %q — foreign ids must be stripped", typ, id)
+			}
+		case "reasoning":
+			if id != "rs_native1" {
+				t.Errorf("reasoning input item id: got %q want rs_native1", id)
+			}
+			if ec, _ := item["encrypted_content"].(string); ec != "BLOB123" {
+				t.Errorf("reasoning encrypted_content: got %q", ec)
+			}
+		}
+	}
+
+	want := []string{"message", "function_call", "function_call_output", "reasoning"}
+	if len(types) != len(want) {
+		t.Fatalf("input items: got %v want %v (foreign reasoning must be dropped)", types, want)
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("input item order: got %v want %v", types, want)
+		}
+	}
+
+	// FunctionCall linkage must survive via call_id.
+	if wire.Input[1]["call_id"] != "toolu_01" || wire.Input[2]["call_id"] != "toolu_01" {
+		t.Errorf("call_id linkage lost: %v / %v", wire.Input[1]["call_id"], wire.Input[2]["call_id"])
+	}
+}
+
+// FunctionCallOutput must always emit exactly one of output/content. A non-nil
+// empty Content (parse round-trip of "content":[], or every part dropped in
+// conversion) used to take the content branch, where omitempty erased it —
+// wire item with NEITHER form → 400 missing_required_parameter 'input[N].output'.
+func TestResponsesFunctionCallOutput_NeverBodiless(t *testing.T) {
+	cases := map[string]*ResponsesFunctionCallOutput{
+		"empty output, nil content":   {CallID: "call_1"},
+		"empty output, empty content": {CallID: "call_1", Content: []ResponsesPart{}},
+	}
+	for name, fco := range cases {
+		b, err := fco.MarshalJSON()
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", name, err)
+		}
+		var wire map[string]json.RawMessage
+		_ = json.Unmarshal(b, &wire)
+		_, hasOutput := wire["output"]
+		_, hasContent := wire["content"]
+		if !hasOutput && !hasContent {
+			t.Errorf("%s: neither output nor content emitted: %s", name, b)
+		}
+	}
+}
+
+// A media-carrying tool result (image part from e.g. a file read of a PNG)
+// must reach the Responses wire as a content array with input_image — not be
+// dropped, and never yield a bodiless function_call_output.
+func TestResponsesSerializeRequest_ToolResultWithImage(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"gpt-5.5"},
+		Input: []v1.Item{
+			&v1.FunctionCall{CallID: "call_img", Name: "fs_read", Arguments: `{"path":"a.png"}`, Status: v1.StatusCompleted},
+			&v1.FunctionCallOutput{CallID: "call_img", Content: []v1.Part{
+				&v1.ImagePart{ImageURL: "data:image/png;base64,AAAA"},
+			}},
+		},
+	}
+	body, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	var wire struct {
+		Input []map[string]json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, item := range wire.Input {
+		var typ string
+		_ = json.Unmarshal(item["type"], &typ)
+		if typ != "function_call_output" {
+			continue
+		}
+		content, hasContent := item["content"]
+		_, hasOutput := item["output"]
+		if !hasContent && !hasOutput {
+			t.Fatalf("bodiless function_call_output: %v", item)
+		}
+		if !hasContent || !strings.Contains(string(content), "input_image") {
+			t.Fatalf("image part lost from tool result: content=%s", content)
+		}
+		return
+	}
+	t.Fatal("no function_call_output in input")
+}

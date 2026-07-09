@@ -1317,6 +1317,12 @@ func (s *ccToCanonicalStream) handleToolCallDelta(tc ToolCallChunk) ([]v1.SSEFra
 		frames = append(frames, v1.SSEFrame{Event: v1.EventItemStarted, Data: startData})
 	}
 
+	// Some OpenAI-compatible upstreams (vLLM, aggregators) send the id-only
+	// fragment first and the function name in a later one; backfill so the
+	// completed item carries it even when item.started went out nameless.
+	if ti.name == "" && tc.Function != nil && tc.Function.Name != "" {
+		ti.name = tc.Function.Name
+	}
 	if tc.Function != nil && tc.Function.Arguments != "" {
 		ti.argsBuf += tc.Function.Arguments
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
@@ -1367,12 +1373,20 @@ func (s *ccToCanonicalStream) closeReasoningItem(ti *ccStreamItem) []v1.SSEFrame
 }
 
 func (s *ccToCanonicalStream) closeToolItem(ti *ccStreamItem) []v1.SSEFrame {
+	// OpenAI streams tool args unbuffered, so a length-truncated turn can
+	// close with malformed argument JSON. Mark it incomplete rather than
+	// hand the caller a runnable-looking call. Empty args stay completed
+	// (no-arg tools may stream zero argument fragments).
+	status := v1.StatusCompleted
+	if ti.argsBuf != "" && !json.Valid([]byte(ti.argsBuf)) {
+		status = v1.StatusIncomplete
+	}
 	finalItem := &v1.FunctionCall{
 		ID:        ti.itemID,
 		CallID:    ti.callID,
 		Name:      ti.name,
 		Arguments: ti.argsBuf,
-		Status:    v1.StatusCompleted,
+		Status:    status,
 	}
 	completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 		ItemID: ti.itemID,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/sdk/usage"
@@ -52,7 +53,11 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// Serialize Input as a JSON array.
 	inputRaws := make([]json.RawMessage, 0, len(req.Input))
 	for _, item := range req.Input {
-		b, err := json.Marshal(responsesItemFromCanonical(item))
+		ritem := responsesInputItemFromCanonical(item)
+		if ritem == nil {
+			continue
+		}
+		b, err := json.Marshal(ritem)
 		if err != nil {
 			return nil, fmt.Errorf("responses serialize_request: input item: %w", err)
 		}
@@ -583,7 +588,41 @@ func responsesAnnotationToCanonical(a ResponsesAnnotation) v1.Annotation {
 	}
 }
 
-// responsesItemFromCanonical converts a canonical v1.Item to a ResponsesItem.
+// responsesInputItemFromCanonical converts a canonical item for the request
+// input array. Input differs from output in one load-bearing way: the
+// Responses API treats input[N].id as a reference to an object IT minted and
+// 400s on foreign ids ("Invalid 'input[5].id': 't_0'. Expected an ID that
+// begins with 'rs'"). Canonical item ids are relay-scoped — adapters mint them
+// when translating other vendors' streams — so they must never go upstream:
+//
+//   - message / function_call: id kept only with the OpenAI per-type prefix
+//     (msg_/fc_ — same-vendor round-trip), stripped otherwise; tool linkage
+//     rides call_id, which the API treats as an opaque client string.
+//   - reasoning: forwarded only when ProviderData restored OpenAI's own
+//     encrypted_content blob (same-vendor stateless round-trip), where the
+//     original rs_ id pairs it with its function_call sibling.
+//     canonical: foreign reasoning items dropped on Responses input — they
+//     are provider-signed (e.g. Anthropic thinking signatures) and cannot
+//     round-trip cross-vendor (rule 8); their relay-minted id would 400.
+func responsesInputItemFromCanonical(item v1.Item) ResponsesItem {
+	ritem := responsesItemFromCanonical(item)
+	switch v := ritem.(type) {
+	case *ResponsesMessage:
+		if !strings.HasPrefix(v.ID, "msg_") {
+			v.ID = ""
+		}
+	case *ResponsesFunctionCall:
+		if !strings.HasPrefix(v.ID, "fc_") {
+			v.ID = ""
+		}
+	case *ResponsesReasoning:
+		if v.EncryptedContent == "" {
+			return nil
+		}
+	}
+	return ritem
+}
+
 // responsesItemFromCanonical converts a canonical v1.Item to a ResponsesItem.
 func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 	switch v := item.(type) {
@@ -1086,6 +1125,13 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			if acc := s.reasoningSummary[responsesItemID(wireItem)]; acc != "" {
 				r.Summary = []v1.SummaryText{{Text: acc}}
 			}
+		}
+		// A truncated (max_output_tokens) turn can close a function_call with
+		// malformed argument JSON; downgrade to incomplete so the caller never
+		// sees a runnable-looking call with broken args.
+		if fc, ok := ci.(*v1.FunctionCall); ok && fc.Status == v1.StatusCompleted &&
+			fc.Arguments != "" && !json.Valid([]byte(fc.Arguments)) {
+			fc.Status = v1.StatusIncomplete
 		}
 		completedData, _ := json.Marshal(v1.ItemCompletedEvent{
 			ItemID: responsesItemID(wireItem),

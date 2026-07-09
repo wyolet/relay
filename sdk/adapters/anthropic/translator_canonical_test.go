@@ -2426,3 +2426,173 @@ func TestStream_StructuredOutputTool_TextDeltas(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicSerializeRequest_EagerInputStreaming(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"claude-sonnet-5"},
+		Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "hi"}}}},
+		Tools: &v1.ToolsConfig{Definitions: v1.Tools{
+			&v1.FunctionTool{Name: "search", Parameters: json.RawMessage(`{"type":"object"}`)},
+		}},
+	}
+
+	decode := func(body []byte) []map[string]any {
+		var wire struct {
+			Tools []map[string]any `json:"tools"`
+		}
+		if err := json.Unmarshal(body, &wire); err != nil {
+			t.Fatalf("unmarshal wire: %v", err)
+		}
+		return wire.Tools
+	}
+
+	req.OutputMode = v1.OutputModeStream
+	body, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("serialize stream: %v", err)
+	}
+	tools := decode(body)
+	if len(tools) != 1 || tools[0]["eager_input_streaming"] != true {
+		t.Errorf("streaming request: want eager_input_streaming=true on tool, got %v", tools[0])
+	}
+
+	req.OutputMode = v1.OutputModeSync
+	body, err = (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("serialize sync: %v", err)
+	}
+	tools = decode(body)
+	if _, present := tools[0]["eager_input_streaming"]; present {
+		t.Errorf("sync request: eager_input_streaming must be omitted, got %v", tools[0])
+	}
+}
+
+// completedFunctionCallStatus runs chunks through the stream translator and
+// returns the status of the first completed function_call item.
+func completedFunctionCallStatus(t *testing.T, chunks [][]byte) string {
+	t.Helper()
+	fn := (AnthropicTranslator{}).NewToCanonicalStream()
+	for _, c := range chunks {
+		out, err := fn(c)
+		if err != nil {
+			t.Fatalf("stream translate: %v", err)
+		}
+		for _, f := range splitFrames(out) {
+			ev, data, ok := v1.ParseSSEChunk(f)
+			if !ok || ev != v1.EventItemCompleted {
+				continue
+			}
+			var raw struct {
+				Item struct {
+					Type   string `json:"type"`
+					Status string `json:"status"`
+				} `json:"item"`
+			}
+			_ = json.Unmarshal(data, &raw)
+			if raw.Item.Type == string(v1.ItemTypeFunctionCall) {
+				return raw.Item.Status
+			}
+		}
+	}
+	t.Fatal("no completed function_call item in stream")
+	return ""
+}
+
+func TestAnthropicToCanonical_ToolUseStream_ArgsStatus(t *testing.T) {
+	toolChunks := func(fragments ...string) [][]byte {
+		chunks := [][]byte{
+			messageStartChunk("msg_eager", "claude-sonnet-5"),
+			sseChunk("content_block_start", map[string]any{
+				"type":  "content_block_start",
+				"index": 0,
+				"content_block": map[string]any{
+					"type": "tool_use",
+					"id":   "toolu_eager",
+					"name": "search",
+				},
+			}),
+		}
+		for _, frag := range fragments {
+			chunks = append(chunks, sseChunk("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": 0,
+				"delta": map[string]any{"type": "input_json_delta", "partial_json": frag},
+			}))
+		}
+		return append(chunks,
+			contentBlockStopChunk(0),
+			messageDeltaChunk("max_tokens", 10),
+			messageStopChunk(),
+		)
+	}
+
+	// Eager streaming means a truncated turn closes the block with
+	// unterminated JSON — the completed item must say incomplete.
+	if got := completedFunctionCallStatus(t, toolChunks(`{"q":`, `"unter`)); got != string(v1.StatusIncomplete) {
+		t.Errorf("truncated args: status got %q want incomplete", got)
+	}
+	if got := completedFunctionCallStatus(t, toolChunks(`{"q":`, `"ok"}`)); got != string(v1.StatusCompleted) {
+		t.Errorf("valid args: status got %q want completed", got)
+	}
+	// No-arg tools may stream zero input_json_delta frames; empty stays completed.
+	if got := completedFunctionCallStatus(t, toolChunks()); got != string(v1.StatusCompleted) {
+		t.Errorf("empty args: status got %q want completed", got)
+	}
+}
+
+// A media-carrying tool_result (image block — e.g. a file read returning a
+// PNG) must survive anthropic→canonical→anthropic: parse keeps the parts on
+// FunctionCallOutput.Content, serialize re-emits the image block. Previously
+// parse text-flattened the content and the image silently vanished.
+func TestAnthropicToolResultImage_RoundTrip(t *testing.T) {
+	body := `{
+		"model": "claude-sonnet-5",
+		"max_tokens": 100,
+		"messages": [
+			{"role": "user", "content": "read a.png"},
+			{"role": "assistant", "content": [
+				{"type": "tool_use", "id": "toolu_img", "name": "fs_read", "input": {"path": "a.png"}}
+			]},
+			{"role": "user", "content": [
+				{"type": "tool_result", "tool_use_id": "toolu_img", "content": [
+					{"type": "text", "text": "here it is"},
+					{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+				]}
+			]}
+		]
+	}`
+	req, err := (AnthropicTranslator{}).ParseRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	var fco *v1.FunctionCallOutput
+	for _, item := range req.Input {
+		if v, ok := item.(*v1.FunctionCallOutput); ok {
+			fco = v
+		}
+	}
+	if fco == nil {
+		t.Fatal("no FunctionCallOutput parsed")
+	}
+	hasImage := false
+	for _, p := range fco.Content {
+		if _, ok := p.(*v1.ImagePart); ok {
+			hasImage = true
+		}
+	}
+	if !hasImage {
+		t.Fatalf("image part lost at parse; content=%v output=%q", fco.Content, fco.Output)
+	}
+
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	if !strings.Contains(string(out), `"type":"image"`) {
+		t.Fatalf("image block lost at serialize: %s", out)
+	}
+	if !strings.Contains(string(out), "here it is") {
+		t.Fatalf("tool result text lost at serialize: %s", out)
+	}
+}

@@ -105,9 +105,12 @@ func (*ResponsesFunctionCallOutput) ResponsesItemType() ResponsesItemType {
 }
 
 // MarshalJSON emits exactly one of output (string) or content (array). output
-// is REQUIRED on the wire, and an empty tool result ("") is valid — so when no
-// content array is set, emit output unconditionally (a *string, non-nil even
-// for ""). omitempty on a plain string would drop a required field and 400
+// is REQUIRED on the wire, and an empty tool result ("") is valid — so unless
+// the content array actually has parts, emit output unconditionally (a
+// *string, non-nil even for ""). Keying on non-emptiness rather than non-nil
+// matters: a non-nil empty Content (parse round-trip of "content":[], or
+// every part dropped in conversion) would take the content branch, omitempty
+// would erase it, and the item would ship with NEITHER form — 400
 // ("Missing required parameter: 'input[N].output'").
 func (f *ResponsesFunctionCallOutput) MarshalJSON() ([]byte, error) {
 	type wire struct {
@@ -117,7 +120,7 @@ func (f *ResponsesFunctionCallOutput) MarshalJSON() ([]byte, error) {
 		Content []ResponsesPart   `json:"content,omitempty"`
 	}
 	w := wire{Type: ResponsesItemTypeFunctionCallOutput, CallID: f.CallID}
-	if f.Content != nil {
+	if len(f.Content) > 0 {
 		w.Content = f.Content
 	} else {
 		w.Output = &f.Output
