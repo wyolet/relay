@@ -1806,3 +1806,96 @@ func TestCCParseResponse_ContentArray(t *testing.T) {
 		t.Errorf("usage not flattened to canonical: %v", resp.Usage)
 	}
 }
+
+// ccToolCallChunk builds one CC chunk carrying a single tool_calls delta.
+func ccToolCallChunk(id, name, args string) []byte {
+	fn := map[string]any{}
+	if name != "" {
+		fn["name"] = name
+	}
+	if args != "" {
+		fn["arguments"] = args
+	}
+	tc := map[string]any{"index": 0, "type": "function", "function": fn}
+	if id != "" {
+		tc["id"] = id
+	}
+	return ccSSEChunk(map[string]any{
+		"id":      "chatcmpl-tc",
+		"object":  "chat.completion.chunk",
+		"created": int64(1700000000),
+		"model":   "gpt-4o",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"delta": map[string]any{"tool_calls": []any{tc}},
+		}},
+	})
+}
+
+// ccCompletedFunctionCall drains chunks and returns the first completed
+// function_call item's name and status.
+func ccCompletedFunctionCall(t *testing.T, chunks [][]byte) (name, status string) {
+	t.Helper()
+	fn := (CCTranslator{}).NewToCanonicalStream()
+	for _, c := range chunks {
+		out, err := fn(c)
+		if err != nil {
+			t.Fatalf("translate: %v", err)
+		}
+		for _, frame := range splitCanonicalFrames(out) {
+			ev, data, ok := v1.ParseSSEChunk(frame)
+			if !ok || ev != v1.EventItemCompleted {
+				continue
+			}
+			var raw struct {
+				Item struct {
+					Type   string `json:"type"`
+					Name   string `json:"name"`
+					Status string `json:"status"`
+				} `json:"item"`
+			}
+			_ = json.Unmarshal(data, &raw)
+			if raw.Item.Type == string(v1.ItemTypeFunctionCall) {
+				return raw.Item.Name, raw.Item.Status
+			}
+		}
+	}
+	t.Fatal("no completed function_call item in stream")
+	return "", ""
+}
+
+func TestCCNewToCanonicalStream_ToolCall_TruncatedArgsIncomplete(t *testing.T) {
+	_, status := ccCompletedFunctionCall(t, [][]byte{
+		ccToolCallChunk("call_1", "search", `{"q":`),
+		ccToolCallChunk("", "", `"unter`),
+		ccDoneChunk(),
+	})
+	if status != string(v1.StatusIncomplete) {
+		t.Errorf("truncated args: status got %q want incomplete", status)
+	}
+
+	_, status = ccCompletedFunctionCall(t, [][]byte{
+		ccToolCallChunk("call_1", "search", `{"q":`),
+		ccToolCallChunk("", "", `"ok"}`),
+		ccDoneChunk(),
+	})
+	if status != string(v1.StatusCompleted) {
+		t.Errorf("valid args: status got %q want completed", status)
+	}
+}
+
+// Some OpenAI-compatible upstreams send the id-only fragment first and the
+// function name in a later one; the completed item must still carry it.
+func TestCCNewToCanonicalStream_ToolCall_NameBackfill(t *testing.T) {
+	name, status := ccCompletedFunctionCall(t, [][]byte{
+		ccToolCallChunk("call_late", "", ""),
+		ccToolCallChunk("", "search", `{"q":"hi"}`),
+		ccDoneChunk(),
+	})
+	if name != "search" {
+		t.Errorf("name: got %q want search", name)
+	}
+	if status != string(v1.StatusCompleted) {
+		t.Errorf("status: got %q want completed", status)
+	}
+}
