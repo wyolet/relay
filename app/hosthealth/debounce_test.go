@@ -19,7 +19,9 @@ type countingStore struct {
 	sets  int
 }
 
-func (c *countingStore) Get(ctx context.Context, k string) ([]byte, error) { return c.inner.Get(ctx, k) }
+func (c *countingStore) Get(ctx context.Context, k string) ([]byte, error) {
+	return c.inner.Get(ctx, k)
+}
 func (c *countingStore) Set(ctx context.Context, k string, v []byte, ttl time.Duration) error {
 	c.mu.Lock()
 	c.sets++
