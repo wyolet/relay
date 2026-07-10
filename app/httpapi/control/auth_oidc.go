@@ -230,7 +230,11 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session create failed", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	target := cfg.PostLoginURL
+	if target == "" {
+		target = "/"
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // provider fills endpoints from issuer metadata and shapes the oauth config.

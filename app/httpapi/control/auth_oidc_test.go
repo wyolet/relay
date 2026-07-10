@@ -162,6 +162,28 @@ func driveStart(t *testing.T, od *oidcDeps) (*url.URL, *http.Cookie) {
 	return loc, flow
 }
 
+// A configured PostLoginURL wins over the default "/" redirect — the
+// cross-origin-UI topology sends the browser back to the UI origin instead
+// of stranding it on the control origin.
+func TestOIDCFlow_PostLoginURLRedirect(t *testing.T) {
+	idp := newFakeIdP(t)
+	od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "open")
+	od.cfg().PostLoginURL = "https://ui.test/welcome"
+
+	loc, flow := driveStart(t, od)
+	cb := httptest.NewRequest("GET",
+		"/auth/callback?code="+idp.issuedCode+"&state="+loc.Query().Get("state"), nil)
+	cb.AddCookie(flow)
+	rec := httptest.NewRecorder()
+	od.callback(rec, cb)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("callback: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != "https://ui.test/welcome" {
+		t.Fatalf("post-login redirect: want configured URL, got %q", got)
+	}
+}
+
 func TestOIDCFlow_ProvisionsAndLogsIn(t *testing.T) {
 	idp := newFakeIdP(t)
 	users := newFakeUsers()

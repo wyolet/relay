@@ -50,6 +50,18 @@ func TestAuthOIDCEnv_ActiveAndDefaultsOpen(t *testing.T) {
 	}
 }
 
+func TestAuthOIDCEnv_PostLoginURL(t *testing.T) {
+	setOIDCEnv(t)
+	t.Setenv("WYOLET_OIDC_POST_LOGIN_URL", "https://ui.example.com/")
+	c, err := AuthOIDCEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PostLoginURL != "https://ui.example.com/" {
+		t.Errorf("PostLoginURL = %q", c.PostLoginURL)
+	}
+}
+
 func TestAuthOIDCEnv_RegistrationOverride(t *testing.T) {
 	setOIDCEnv(t)
 	t.Setenv("WYOLET_OIDC_REGISTRATION", "closed")

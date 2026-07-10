@@ -45,6 +45,13 @@ type AuthOIDC struct {
 	// user row on first successful OIDC login; "closed" (default) rejects
 	// subjects with no existing user row.
 	Registration string `json:"registration,omitempty"`
+
+	// PostLoginURL is where the callback sends the browser after minting
+	// the session. Empty means "/" — correct when the admin UI is embedded
+	// (same origin as the callback). Set it to the UI's origin when the UI
+	// is served from a different hostname than the control API, so a login
+	// doesn't strand the user on the API origin.
+	PostLoginURL string `json:"postLoginUrl,omitempty"`
 }
 
 // EffectiveScopes returns Scopes or the OIDC default set.
@@ -116,6 +123,7 @@ func AuthOIDCEnv() (*AuthOIDC, error) {
 		ClientSecretEnv: "WYOLET_OIDC_CLIENT_SECRET",
 		RedirectURL:     os.Getenv("WYOLET_OIDC_REDIRECT_URL"),
 		Registration:    os.Getenv("WYOLET_OIDC_REGISTRATION"),
+		PostLoginURL:    os.Getenv("WYOLET_OIDC_POST_LOGIN_URL"),
 	}
 	if c.Registration == "" {
 		c.Registration = "open"
