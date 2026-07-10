@@ -53,4 +53,27 @@ func TestCORS_NoOrigin_PassesThrough(t *testing.T) {
 	if !called {
 		t.Fatal("non-CORS request should pass through")
 	}
+	// The Origin-less response must still declare Vary: Origin — cacheable
+	// endpoints behind this middleware (/config.json) are otherwise stored
+	// ACAO-less and replayed to cross-origin callers, failing CORS until the
+	// cache entry expires.
+	if got := rec.Header().Get("Vary"); got != "Origin" {
+		t.Fatalf("Vary on no-Origin response: want %q, got %q", "Origin", got)
+	}
+}
+
+func TestCORS_AllowedOrigin_GetVaries(t *testing.T) {
+	h := CORS("https://relay.wyolet.dev")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/config.json", nil)
+	req.Header.Set("Origin", "https://relay.wyolet.dev")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://relay.wyolet.dev" {
+		t.Fatalf("allow-origin: %q", got)
+	}
+	if got := rec.Header().Get("Vary"); got != "Origin" {
+		t.Fatalf("Vary: %q", got)
+	}
 }
