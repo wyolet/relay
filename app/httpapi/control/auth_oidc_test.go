@@ -69,7 +69,7 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 		}
 		header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
 		payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(
-			`{"sub":%q,"email":%q}`, f.sub, f.email)))
+			`{"sub":%q,"email":%q,"sid":"sid-42"}`, f.sub, f.email)))
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "at-xyz",
 			"token_type":   "bearer",
@@ -105,15 +105,17 @@ func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
 	return nil
 }
 
-// fakeSessions records the Login call.
+// fakeSessions records the LoginOIDC call.
 type fakeSessions struct {
 	userID, username string
+	subject, sid     string
 	roles            []string
 	calls            int
 }
 
-func (f *fakeSessions) Login(_ context.Context, userID, username string, roles ...string) error {
+func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error {
 	f.userID, f.username, f.roles = userID, username, roles
+	f.subject, f.sid = oidcSubject, idpSessionID
 	f.calls++
 	return nil
 }
@@ -193,6 +195,9 @@ func TestOIDCFlow_ProvisionsAndLogsIn(t *testing.T) {
 	}
 	if sess.calls != 1 || sess.userID != u.ID {
 		t.Errorf("session login wrong: %+v", sess)
+	}
+	if sess.subject != idp.srv.URL+"|"+idp.sub || sess.sid != "sid-42" {
+		t.Errorf("session missing IdP sub/sid: subject=%q sid=%q", sess.subject, sess.sid)
 	}
 
 	// Second login with the same subject reuses the row.
