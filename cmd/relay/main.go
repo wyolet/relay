@@ -200,6 +200,18 @@ func main() {
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.New(kvStore, cookieSecure, "sess:")
 
+	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
+	// the boot, not the first login attempt.
+	if oidcEnv, err := settings.AuthOIDCEnv(); err != nil {
+		slog.Error("auth: invalid WYOLET_* OIDC env overlay", "err", err)
+		os.Exit(1)
+	} else if oidcEnv != nil {
+		slog.Info("auth: oidc login enabled via WYOLET_AUTH_MODE",
+			"issuer", oidcEnv.Issuer, "registration", oidcEnv.Registration)
+	} else if mode := os.Getenv("WYOLET_AUTH_MODE"); mode != "" && mode != "oidc" {
+		slog.Warn("auth: WYOLET_AUTH_MODE not implemented by relay; password login remains the no-IdP path", "mode", mode)
+	}
+
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
@@ -524,23 +536,29 @@ func main() {
 		if cfg.MultiUser {
 			authorizer = authz.OwnerScoped{}
 		}
+		ctrlDeps := control.Deps{
+			Identity:      idStore,
+			Users:         usersStore,
+			Sessions:      sessMgr,
+			AdminToken:    cfg.AdminToken,
+			Authz:         authorizer,
+			Catalog:       cat,
+			Stores:        stores,
+			CookieSecure:  cookieSecure,
+			UsageReader:   usageReader,
+			PayloadReader: payloadReader,
+			Selector:      selector,
+			HostHealth:    hostHealth,
+			RuntimeConfig: runtimeConfig(cfg),
+		}
 		ctrlRouter.Route("/api", func(r chi.Router) {
-			control.Mount(r, control.Deps{
-				Identity:      idStore,
-				Users:         usersStore,
-				Sessions:      sessMgr,
-				AdminToken:    cfg.AdminToken,
-				Authz:         authorizer,
-				Catalog:       cat,
-				Stores:        stores,
-				CookieSecure:  cookieSecure,
-				UsageReader:   usageReader,
-				PayloadReader: payloadReader,
-				Selector:      selector,
-				HostHealth:    hostHealth,
-				RuntimeConfig: runtimeConfig(cfg),
-			})
+			control.Mount(r, ctrlDeps)
 		})
+		// OIDC callback at the listener ROOT: redirect URIs are registered
+		// as <origin>/auth/callback, and a registered URI must match
+		// byte-exactly — it can't carry the /api prefix the rest of the
+		// control API mounts under.
+		control.MountOIDCCallbackRoot(ctrlRouter, ctrlDeps)
 		ctrlRouter.Handle("/metrics", metrics.Handler())
 		// Embedded admin UI: same-origin SPA served as the fallback after all
 		// API operations. Only mounted when a real dist was baked in (image

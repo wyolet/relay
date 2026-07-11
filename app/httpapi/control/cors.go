@@ -17,12 +17,18 @@ func CORS(allowedOrigins ...string) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Vary on every response, not just allowed-origin ones: cacheable
+			// endpoints (/config.json is public, max-age=60, swr=600) are
+			// fetched both without an Origin (same-origin embedded UI) and
+			// cross-origin. Without Vary the browser cache serves the
+			// ACAO-less variant to the cross-origin caller, which then fails
+			// CORS intermittently until the entry expires.
+			w.Header().Set("Vary", "Origin")
 			origin := r.Header.Get("Origin")
 			if _, ok := allowed[origin]; ok {
 				h := w.Header()
 				h.Set("Access-Control-Allow-Origin", origin)
 				h.Set("Access-Control-Allow-Credentials", "true")
-				h.Set("Vary", "Origin")
 				if r.Method == http.MethodOptions {
 					h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
 					h.Set("Access-Control-Allow-Headers", "content-type, x-relay-admin-token, authorization")

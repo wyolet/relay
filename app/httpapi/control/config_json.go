@@ -44,10 +44,7 @@ func ConfigJSONHandler(rc RuntimeConfig, settingsSrc settings.Reader) http.Handl
 // withFeatures overlays settings-driven feature flags onto the static
 // runtime config. The rc value is copied; its Features map is never mutated.
 func withFeatures(rc RuntimeConfig, settingsSrc settings.Reader) RuntimeConfig {
-	if settingsSrc == nil {
-		return rc
-	}
-	if !settings.AuthOIDCFrom(settingsSrc).Enabled {
+	if !settings.EffectiveAuthOIDC(settingsSrc).Enabled {
 		return rc
 	}
 	f := make(map[string]bool, len(rc.Features)+1)

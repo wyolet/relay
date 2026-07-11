@@ -28,11 +28,13 @@ import (
 )
 
 const (
-	cookieName    = "relay_session"
-	keyUserID     = "user_id"
-	keyUsername   = "username"
-	keyRoles      = "roles"
-	defaultExpiry = 24 * time.Hour
+	cookieName     = "relay_session"
+	keyUserID      = "user_id"
+	keyUsername    = "username"
+	keyRoles       = "roles"
+	keyOIDCSubject = "oidc_subject"
+	keyOIDCSid     = "oidc_sid"
+	defaultExpiry  = 24 * time.Hour
 )
 
 // Manager is the session layer. Construct via New(); attach the chi
@@ -172,6 +174,23 @@ func (m *Manager) Login(ctx context.Context, userID, username string, roles ...s
 	if len(roles) > 0 {
 		b, _ := json.Marshal(roles)
 		m.sm.Put(ctx, keyRoles, string(b))
+	}
+	return nil
+}
+
+// LoginOIDC is Login for the OIDC path: it additionally records the IdP
+// subject ("issuer|sub") and IdP session id (the id_token sid claim) on the
+// session — the lookup keys a back-channel-logout receiver needs to find
+// and destroy the relay sessions minted from a given IdP session.
+func (m *Manager) LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error {
+	if err := m.Login(ctx, userID, username, roles...); err != nil {
+		return err
+	}
+	if oidcSubject != "" {
+		m.sm.Put(ctx, keyOIDCSubject, oidcSubject)
+	}
+	if idpSessionID != "" {
+		m.sm.Put(ctx, keyOIDCSid, idpSessionID)
 	}
 	return nil
 }

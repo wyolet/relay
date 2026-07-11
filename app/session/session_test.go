@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -98,6 +99,48 @@ func TestMiddlewareHealthyStore(t *testing.T) {
 	if errFind != nil || found {
 		t.Fatalf("Find(missing) = found=%v err=%v, want miss with nil error", found, errFind)
 	}
+}
+
+// LoginOIDC persists the IdP subject + sid alongside the normal payload and
+// the session round-trips like a password login.
+func TestLoginOIDC_StoresSubjectAndSid(t *testing.T) {
+	store := kv.NewMem()
+	m := New(store, false, "sess:")
+
+	login := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := m.LoginOIDC(r.Context(), "u-1", "alice", "https://idp|sub-1", "sid-42", "admin"); err != nil {
+			t.Fatalf("LoginOIDC: %v", err)
+		}
+	}))
+	rec := httptest.NewRecorder()
+	login.ServeHTTP(rec, httptest.NewRequest("GET", "/auth/callback", nil))
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("no session cookie set")
+	}
+
+	// The committed scs payload (gob-encoded) must carry both keys and both
+	// values — and the actor must round-trip on the next request.
+	raw, found, err := (&kvStore{kv: store, prefix: "sess:"}).Find(cookies[0].Value)
+	if err != nil || !found {
+		t.Fatalf("committed session not found: %v", err)
+	}
+	for _, want := range []string{keyOIDCSubject, keyOIDCSid, "https://idp|sub-1", "sid-42"} {
+		if !bytes.Contains(raw, []byte(want)) {
+			t.Errorf("session payload missing %q", want)
+		}
+	}
+
+	next := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a := actor.From(r.Context())
+		if a == nil || a.UserID != "u-1" || a.Username != "alice" {
+			t.Errorf("actor did not round-trip: %+v", a)
+		}
+	}))
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookies[0])
+	next.ServeHTTP(httptest.NewRecorder(), req)
 }
 
 // commitFailStore reads fine but fails writes — exercises scs's mid-response

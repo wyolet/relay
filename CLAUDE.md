@@ -238,11 +238,43 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
 - The recursive `manifest.LoadDir` is layout-agnostic — dispatches on
   each YAML's `kind` field, so the nested catalog tree just works.
 
-## Codebase rules (non-negotiable)
+## Conventions
 
-These are the load-bearing rules every change must obey. Authoritative
-source: `.tmp/design/canonical-protocol.md` "Codebase rules" section (11 rules).
-Condensed here because new sessions must inherit them.
+Treat this as an open-source codebase: nothing internal — plans, private
+hosts, decision history — belongs in a tracked file. Every change obeys these.
+
+1. **This file stays minimal and stable.** It holds never-violate rules and
+   durable orientation, not a changelog. Current state, roadmaps, and planned
+   structure go stale — they live in `.tmp/` (plans) and README/docs (facts),
+   not here.
+2. **Comments are minimal — the *why*, never the *what*.** One to three lines,
+   only where the code can't say it: a hidden constraint, an invariant, a
+   workaround, behaviour that would surprise a reader. No changelogs or history
+   in comments; they stay neutral about the dev environment. New packages get a
+   top-of-file doc comment stating intent, scope, and what's deliberately out
+   of scope.
+3. **Commits and PRs are minimal and specific to the change.** What happened,
+   why, what was decided — nothing the diff already shows. Reference issues and
+   related PRs. Technical tone, zero marketing, no internal context a public
+   reader couldn't follow.
+4. **Docs answer *how to do it* or *how/why it's done this way* — never *what
+   is done*** (the code states that). Minimal and technical. No marketing or
+   AI-slop vocabulary (stamp, sweep, ledger, and that register).
+5. **Names are direct.** Functions and methods describe what the body does;
+   variables give intuition for what they hold. No abstract concepts or
+   marketing words baked into identifiers — the code must be navigable without
+   external context.
+6. **Plans, designs, and roadmaps live in `.tmp/`** — gitignored, never
+   committed. `docs/` states facts only. Every config point ships through
+   `.env` (or the stack's config idiom), never hardcoded; concrete hosts stay
+   in `.env`, and `.env.example` uses neutral placeholders.
+
+### Codebase rules (architecture, non-negotiable)
+
+The six above are universal; these are relay's architecture — just as
+load-bearing. Authoritative source: `.tmp/design/canonical-protocol.md`
+"Codebase rules" section (11 rules). Condensed here because new sessions must
+inherit them.
 
 1. **Canonical knows nothing.** `sdk/v1/` declares its own types,
    `Translator` interface, `Name` + `Registry`, and nothing else. Zero
@@ -634,7 +666,7 @@ use live numbers for SLO conversations.
 - Tier-3 totals via horizontal scale, not per-pod heroics.
 - **Post-flight runs in a detached goroutine — never blocks the response.**
 
-## Code style and conventions
+## Code style (Go)
 
 - Go 1.25+. Module: `github.com/wyolet/relay` (sdk + jobq are separate
   modules under the root `go.work`).
@@ -646,11 +678,7 @@ use live numbers for SLO conversations.
   the hot path.
 - gRPC is reserved for **internal** control-plane ↔ data-plane traffic only.
   The customer-facing edge is HTTP/JSON.
-- Comments: default to NONE. Write a comment only when the WHY is
-  non-obvious — a hidden constraint, an invariant, a workaround, behaviour
-  that would surprise a reader. Don't narrate what code does.
-- New packages get a top-of-file doc comment that explains intent, scope,
-  and what's deliberately out of scope.
+- Comment and doc-comment policy: Conventions rule 2.
 
 ## Workflow conventions
 

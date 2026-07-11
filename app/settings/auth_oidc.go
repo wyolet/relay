@@ -3,6 +3,7 @@ package settings
 import (
 	"fmt"
 	"net/url"
+	"os"
 )
 
 // AuthOIDC is the auth:oidc settings section: inbound OpenID Connect login
@@ -44,6 +45,13 @@ type AuthOIDC struct {
 	// user row on first successful OIDC login; "closed" (default) rejects
 	// subjects with no existing user row.
 	Registration string `json:"registration,omitempty"`
+
+	// PostLoginURL is where the callback sends the browser after minting
+	// the session. Empty means "/" — correct when the admin UI is embedded
+	// (same origin as the callback). Set it to the UI's origin when the UI
+	// is served from a different hostname than the control API, so a login
+	// doesn't strand the user on the API origin.
+	PostLoginURL string `json:"postLoginUrl,omitempty"`
 }
 
 // EffectiveScopes returns Scopes or the OIDC default set.
@@ -95,6 +103,49 @@ func init() {
 		Defaults: func() any { return &AuthOIDC{} },
 		Decode:   decodeAndValidate[AuthOIDC, *AuthOIDC],
 	})
+}
+
+// AuthOIDCEnv reads the WYOLET_* environment overlay. WYOLET_AUTH_MODE=oidc
+// returns a fully-formed enabled section that short-circuits the DB-backed
+// one — deployment env is the platform's config channel, and turning SSO on
+// must not require a live DB write. Any other mode value (including the
+// platform-contract "insecure-dev", which relay covers with password login)
+// returns (nil, nil): overlay inactive. A malformed active overlay returns
+// an error; callers on the boot path should treat it as fatal.
+func AuthOIDCEnv() (*AuthOIDC, error) {
+	if os.Getenv("WYOLET_AUTH_MODE") != "oidc" {
+		return nil, nil
+	}
+	c := &AuthOIDC{
+		Enabled:         true,
+		Issuer:          os.Getenv("WYOLET_OIDC_ISSUER"),
+		ClientID:        os.Getenv("WYOLET_OIDC_CLIENT_ID"),
+		ClientSecretEnv: "WYOLET_OIDC_CLIENT_SECRET",
+		RedirectURL:     os.Getenv("WYOLET_OIDC_REDIRECT_URL"),
+		Registration:    os.Getenv("WYOLET_OIDC_REGISTRATION"),
+		PostLoginURL:    os.Getenv("WYOLET_OIDC_POST_LOGIN_URL"),
+	}
+	if c.Registration == "" {
+		c.Registration = "open"
+	}
+	if os.Getenv(c.ClientSecretEnv) == "" {
+		return nil, fmt.Errorf("WYOLET_AUTH_MODE=oidc: WYOLET_OIDC_CLIENT_SECRET is not set")
+	}
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("WYOLET_AUTH_MODE=oidc: %w (set the matching WYOLET_OIDC_* var)", err)
+	}
+	return c, nil
+}
+
+// EffectiveAuthOIDC is what handlers obey: the env overlay when active, else
+// the DB-backed section. A malformed overlay resolves to the DB path here —
+// the boot path has already fatal'd on it, so a running process never
+// carries one.
+func EffectiveAuthOIDC(r Reader) *AuthOIDC {
+	if c, err := AuthOIDCEnv(); err == nil && c != nil {
+		return c
+	}
+	return AuthOIDCFrom(r)
 }
 
 // AuthOIDCFrom reads the typed section from a settings Reader, tolerating

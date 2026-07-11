@@ -52,7 +52,7 @@ type oidcUserStore interface {
 
 // sessionLogin is the slice of session.Manager the callback needs.
 type sessionLogin interface {
-	Login(ctx context.Context, userID, username string, roles ...string) error
+	LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error
 }
 
 // oidcDeps carries the seams the two handlers use, injectable for tests.
@@ -67,21 +67,43 @@ type oidcDeps struct {
 	discover func(ctx context.Context, pc oauth.ProviderConfig) (oauth.ProviderConfig, error)
 }
 
+func newOIDCDeps(d Deps) *oidcDeps {
+	return &oidcDeps{
+		cfg:          func() *settings.AuthOIDC { return settings.EffectiveAuthOIDC(d.Catalog) },
+		users:        d.Users,
+		sessions:     d.Sessions,
+		cookieSecure: d.CookieSecure,
+		discover:     cachedDiscover(),
+	}
+}
+
 // registerAuthOIDC mounts the two routes. Callers guarantee r already has
 // the session middleware installed (Login needs scs context).
 func registerAuthOIDC(r chi.Router, d Deps) {
 	if d.Users == nil || d.Sessions == nil || d.Catalog == nil {
 		return
 	}
-	od := &oidcDeps{
-		cfg:          func() *settings.AuthOIDC { return settings.AuthOIDCFrom(d.Catalog) },
-		users:        d.Users,
-		sessions:     d.Sessions,
-		cookieSecure: d.CookieSecure,
-		discover:     cachedDiscover(),
-	}
+	od := newOIDCDeps(d)
 	r.Get("/auth/oidc/start", od.start)
 	r.Get("/auth/oidc/callback", od.callback)
+}
+
+// MountOIDCCallbackRoot mounts GET /auth/callback at the listener root —
+// the conventional shape for a registered redirect URI is
+// https://<origin>/auth/callback, not an /api-prefixed path. It runs outside
+// the /api group where Mount installs the session middleware, so it wraps
+// the handler in that middleware itself (Login needs scs context). The
+// /api/auth/oidc/callback mount stays for deployments whose IdP
+// registration predates this path.
+func MountOIDCCallbackRoot(r chi.Router, d Deps) {
+	if d.Users == nil || d.Sessions == nil || d.Catalog == nil {
+		return
+	}
+	od := newOIDCDeps(d)
+	r.Group(func(g chi.Router) {
+		g.Use(d.Sessions.Middleware)
+		g.Get("/auth/callback", od.callback)
+	})
 }
 
 // flowState is the per-dance payload carried in the flow cookie.
@@ -203,12 +225,16 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := od.sessions.Login(ctx, u.ID, u.Username, u.Roles...); err != nil {
+	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, subject, claims.Sid, u.Roles...); err != nil {
 		slog.Error("oidc callback: session create failed", "err", err)
 		http.Error(w, "session create failed", http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusFound)
+	target := cfg.PostLoginURL
+	if target == "" {
+		target = "/"
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // provider fills endpoints from issuer metadata and shapes the oauth config.
@@ -270,11 +296,14 @@ func (od *oidcDeps) provision(ctx context.Context, subject string, c *idClaims) 
 	return u, nil
 }
 
-// idClaims is the subset of ID-token claims login consumes.
+// idClaims is the subset of ID-token claims login consumes. Sid is the IdP
+// session id — stored on the relay session so a back-channel-logout receiver
+// can find sessions minted from a given IdP session.
 type idClaims struct {
 	Sub               string `json:"sub"`
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`
+	Sid               string `json:"sid"`
 }
 
 // idTokenClaims extracts claims from the token response's id_token. The
