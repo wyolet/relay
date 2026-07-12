@@ -119,6 +119,7 @@ func main() {
 	if cfg.CatalogVersion != "" {
 		bootOpts.CatalogVersion = cfg.CatalogVersion
 		bootOpts.CatalogURL = cfg.CatalogURL
+		bootOpts.CatalogIndexURL = cfg.CatalogIndexURL
 		slog.Info("catalog: version pinned", "version", cfg.CatalogVersion)
 	}
 

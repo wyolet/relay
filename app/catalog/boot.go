@@ -46,12 +46,15 @@ type BootstrapOptions struct {
 	AutoSeedDir string
 
 	// CatalogVersion, when non-empty, pins the seeded catalog to a
-	// published relay-catalog ref (tag). At hydrate the stored
-	// "catalog-source" marker is compared against it; on mismatch (or an
-	// empty catalog) the archive is fetched from CatalogURL, seeded, and
-	// the marker updated — no image rebuild needed to move catalog
-	// versions. The seed is layering-safe: operator-edited (dirty) rows
-	// are skipped and overlays re-merge at snapshot load. A fetch failure
+	// published relay-catalog ref (tag), or — as "latest"/"auto" —
+	// resolves the newest release for this binary's schema channel via
+	// the channel index (CatalogIndexURL) at every hydrate. Once
+	// concrete, the stored "catalog-source" marker is compared against
+	// it; on mismatch (or an empty catalog) the tree is seeded — from
+	// AutoSeedDir when its .version stamp matches (no network), else
+	// fetched from CatalogURL — and the marker updated. The seed is
+	// layering-safe: operator-edited (dirty) rows are skipped and
+	// overlays re-merge at snapshot load. A resolve/fetch failure
 	// against a non-empty catalog logs and continues with the existing
 	// rows (never blocks boot); against an empty catalog it falls back to
 	// AutoSeedDir when set, else fails hydrate (retried by the caller).
@@ -62,6 +65,10 @@ type BootstrapOptions struct {
 	// seed.DefaultCatalogURLTemplate (the wyolet/relay-catalog GitHub
 	// archive). Point it at a mirror for airgapped deployments.
 	CatalogURL string
+
+	// CatalogIndexURL overrides where "latest"/"auto" resolves the
+	// channel index from. Empty uses seed.DefaultCatalogIndexURL.
+	CatalogIndexURL string
 }
 
 // Stores bundles the eight entity stores constructed by Bootstrap. Exposed
@@ -170,6 +177,13 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 			}); err != nil {
 				return nil, fmt.Errorf("catalog.Hydrate: auto-seed: %w", err)
 			}
+			// A stamped tree (baked image) makes the seeded version known;
+			// record it so a later matching version pin no-ops.
+			if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
+				if err := writeCatalogSource(ctx, stores, v); err != nil {
+					return nil, fmt.Errorf("catalog.Hydrate: %w", err)
+				}
+			}
 		}
 	}
 	if err := c.Reload(ctx); err != nil {
@@ -206,9 +220,12 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 }
 
 // seedVersioned reconciles the seeded catalog with opts.CatalogVersion:
-// fetch + seed + marker update when the stored catalog-source marker
-// disagrees (or the catalog is empty), no-op otherwise. See the
-// BootstrapOptions.CatalogVersion doc for the failure policy.
+// resolve "latest"/"auto" to a concrete release via the channel index,
+// then seed + marker update when the stored catalog-source marker
+// disagrees (or the catalog is empty), no-op otherwise. A version that
+// matches the local tree's .version stamp seeds from disk without a
+// fetch. See the BootstrapOptions.CatalogVersion doc for the failure
+// policy.
 func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) error {
 	row, err := stores.Settings.Get(ctx, settings.SectionCatalogSource)
 	if err != nil {
@@ -219,8 +236,29 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 	if err != nil {
 		return fmt.Errorf("check empty: %w", err)
 	}
-	if cur != nil && cur.Version == opts.CatalogVersion && !empty {
+
+	version := opts.CatalogVersion
+	if seed.IsLatestAlias(version) {
+		resolved, err := seed.ResolveLatest(ctx, opts.CatalogIndexURL, seed.Channel())
+		if err != nil {
+			if !empty {
+				slog.Error("catalog: latest resolution failed; keeping existing catalog",
+					"channel", seed.Channel(), "err", err)
+				return nil
+			}
+			return seedLocalFallback(ctx, stores, opts, err)
+		}
+		version = resolved
+	}
+
+	if cur != nil && cur.Version == version && !empty {
 		return nil
+	}
+
+	// The baked/local tree already holds this exact release — seed from
+	// disk, no network.
+	if v := seed.DirVersion(opts.AutoSeedDir); v != "" && v == version {
+		return seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local")
 	}
 
 	tmp, err := os.MkdirTemp("", "relay-catalog-*")
@@ -229,38 +267,70 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 	}
 	defer os.RemoveAll(tmp)
 
-	dataDir, fetchErr := seed.FetchCatalog(ctx, opts.CatalogURL, opts.CatalogVersion, tmp)
+	dataDir, fetchErr := seed.FetchCatalog(ctx, opts.CatalogURL, version, tmp)
 	if fetchErr != nil {
 		if !empty {
 			// Availability over freshness: the existing rows keep serving;
 			// the mismatch is retried on the next boot.
 			slog.Error("catalog: versioned fetch failed; keeping existing catalog",
-				"version", opts.CatalogVersion, "err", fetchErr)
+				"version", version, "err", fetchErr)
 			return nil
 		}
 		if opts.AutoSeedDir != "" {
-			slog.Error("catalog: versioned fetch failed on empty catalog; seeding local dir instead",
-				"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", fetchErr)
-			if _, err := seed.Run(ctx, seed.Options{
-				Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
-			}); err != nil {
-				return fmt.Errorf("fallback seed: %w", err)
-			}
-			// Marker deliberately not written: the local tree's version is
-			// unknown, so the fetch is retried until it succeeds.
-			return nil
+			return seedLocalFallback(ctx, stores, opts, fetchErr)
 		}
-		return fmt.Errorf("fetch catalog %s: %w", opts.CatalogVersion, fetchErr)
+		return fmt.Errorf("fetch catalog %s: %w", version, fetchErr)
 	}
+	return seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched")
+}
 
+// seedLocalFallback seeds AutoSeedDir after a resolve/fetch failure on an
+// empty catalog. The marker is written only when the tree is stamped —
+// an unstamped tree's version stays unknown, so the fetch is retried
+// until it succeeds.
+func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOptions, cause error) error {
+	if opts.AutoSeedDir == "" {
+		return fmt.Errorf("resolve catalog %s: %w", opts.CatalogVersion, cause)
+	}
+	slog.Error("catalog: versioned fetch failed on empty catalog; seeding local dir instead",
+		"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", cause)
+	if _, err := seed.Run(ctx, seed.Options{
+		Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
+	}); err != nil {
+		return fmt.Errorf("fallback seed: %w", err)
+	}
+	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
+		return writeCatalogSource(ctx, stores, v)
+	}
+	return nil
+}
+
+// seedAndMark runs the seed from dataDir and records version in the
+// catalog-source marker.
+func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
 	res, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
 	})
 	if err != nil {
-		return fmt.Errorf("seed catalog %s: %w", opts.CatalogVersion, err)
+		return fmt.Errorf("seed catalog %s: %w", version, err)
 	}
+	if err := writeCatalogSource(ctx, stores, version); err != nil {
+		return err
+	}
+	prev := ""
+	if cur != nil {
+		prev = cur.Version
+	}
+	slog.Info("catalog: seeded version",
+		"version", version, "previous", prev, "source", source,
+		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
+		"skipped_dirty", res.Skipped)
+	return nil
+}
+
+func writeCatalogSource(ctx context.Context, stores *Stores, version string) error {
 	marker, err := json.Marshal(settings.CatalogSource{
-		Version:  opts.CatalogVersion,
+		Version:  version,
 		SeededAt: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
@@ -269,14 +339,6 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 	if _, err := stores.Settings.Upsert(ctx, settings.SectionCatalogSource, marker); err != nil {
 		return fmt.Errorf("write catalog-source marker: %w", err)
 	}
-	prev := ""
-	if cur != nil {
-		prev = cur.Version
-	}
-	slog.Info("catalog: seeded version",
-		"version", opts.CatalogVersion, "previous", prev,
-		"models", res.Models, "bindings", res.HostBindings, "pricings", res.Pricings,
-		"skipped_dirty", res.Skipped)
 	return nil
 }
 
