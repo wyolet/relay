@@ -57,6 +57,13 @@ func For(ref, apiKey string, opts ...TargetOption) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("relay client: catalog: %w", err)
 	}
+	return ForFrom(cat, ref, apiKey, opts...)
+}
+
+// ForFrom is For against a caller-supplied catalog (catalog.LoadFile /
+// LoadBytes) instead of the embedded one — newer or self-curated catalog
+// data without upgrading the lib.
+func ForFrom(cat *catalog.IndexedCatalog, ref, apiKey string, opts ...TargetOption) (*Client, error) {
 	binding, host, err := cat.Resolve(ref)
 	if err != nil {
 		return nil, err

@@ -8,10 +8,13 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/catalogembed"
@@ -55,6 +58,21 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "marshal: %v\n", err)
 		os.Exit(2)
+	}
+	// A .gz output is compressed — the committed sdk embed ships gzipped so
+	// regenerations swap one small blob instead of a 25k-line JSON diff.
+	if strings.HasSuffix(out, ".gz") {
+		var buf bytes.Buffer
+		gz, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		if _, err := gz.Write(data); err != nil {
+			fmt.Fprintf(os.Stderr, "gzip: %v\n", err)
+			os.Exit(2)
+		}
+		if err := gz.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "gzip: %v\n", err)
+			os.Exit(2)
+		}
+		data = buf.Bytes()
 	}
 	if err := os.WriteFile(out, data, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write %s: %v\n", out, err)
