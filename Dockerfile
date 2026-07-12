@@ -39,7 +39,8 @@ RUN set -eu; \
     | tar -xz -C /tmp; \
   mkdir -p /assets/catalog; \
   mv /tmp/relay-catalog-*/data/* /assets/catalog/; \
-  rm -rf /assets/catalog/drafts
+  rm -rf /assets/catalog/drafts; \
+  printf '%s\n' "${CATALOG_REF}" > /assets/catalog/.version
 
 # --- builder: compile the binary with the UI embedded ---
 FROM golang:1.25-alpine AS builder

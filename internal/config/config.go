@@ -57,6 +57,7 @@ type Config struct {
 	CatalogDir      string
 	CatalogVersion  string
 	CatalogURL      string
+	CatalogIndexURL string
 	InstanceID      string
 	EventlogDir     string
 	MaxRequestBytes int64 // 0 = use httpmw.DefaultMaxRequestBytes
@@ -226,14 +227,19 @@ func Load() (*Config, error) {
 	cfg.CatalogDir = os.Getenv("RELAY_CATALOG_DIR")
 
 	// CatalogVersion pins the seeded catalog to a published relay-catalog
-	// ref (e.g. "v0.1.0"). At boot the stored catalog-source marker is
-	// compared against it; on mismatch the archive is fetched (from
-	// CatalogURL, default the wyolet/relay-catalog GitHub archive) and
-	// re-seeded — no image rebuild to move catalog versions. Re-seeds skip
+	// ref (e.g. "v0.1.0"), or tracks the newest release for this binary's
+	// schema channel as "latest"/"auto" (resolved via CatalogIndexURL at
+	// every boot). At boot the stored catalog-source marker is compared
+	// against the concrete version; on mismatch the tree is seeded — from
+	// the local CatalogDir when its .version stamp matches (baked image
+	// or self-stamped custom catalog, no network), else fetched from
+	// CatalogURL (default the wyolet/relay-catalog GitHub archive) — no
+	// image rebuild to move catalog versions. Re-seeds skip
 	// operator-edited (dirty) rows and overlays re-merge at snapshot load,
 	// so user changes survive. Unset = seed-if-empty from CatalogDir only.
 	cfg.CatalogVersion = os.Getenv("RELAY_CATALOG_VERSION")
 	cfg.CatalogURL = os.Getenv("RELAY_CATALOG_URL")
+	cfg.CatalogIndexURL = os.Getenv("RELAY_CATALOG_INDEX_URL")
 
 	cfg.InstanceID = os.Getenv("RELAY_INSTANCE_ID")
 	cfg.EventlogDir = os.Getenv("RELAY_EVENTLOG_DIR")
