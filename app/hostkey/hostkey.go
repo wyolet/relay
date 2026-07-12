@@ -21,6 +21,7 @@
 package hostkey
 
 import (
+	"time"
 	"fmt"
 
 	"github.com/wyolet/relay/app/meta"
@@ -29,6 +30,10 @@ import (
 // HostKey is a credential bound to a Host.
 type HostKey struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
+
+	// Status is observed state (see Status type) — API-visible, never
+	// round-tripped through YAML manifests.
+	Status Status `json:"status,omitzero" yaml:"-"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
 
 	// Resolved is the cleartext value reconstructed at load time (read from
@@ -204,4 +209,34 @@ func (k *HostKey) Validate() error {
 		}
 	}
 	return nil
+}
+
+// Status is the entity's observed state — written by relay components
+// (never by the operator, never seeded from YAML), returned on the same
+// hostkey the UI already reads. Spec stays desired-state.
+type Status struct {
+	// Credential reports the OAuth credential's refresh lifecycle. Nil for
+	// api-key hostkeys and for oauth keys with no observation yet.
+	Credential *CredentialStatus `json:"credential,omitempty" yaml:"-"`
+}
+
+// CredentialState classifies an OAuth credential's refresh health.
+type CredentialState string
+
+const (
+	// CredentialOK: last renewal succeeded; ExpiresAt is the new expiry.
+	CredentialOK CredentialState = "ok"
+	// CredentialRevoked: the provider rejected the grant itself — renewal
+	// stops until the operator re-authorizes (uploading a new value clears
+	// the status).
+	CredentialRevoked CredentialState = "revoked"
+)
+
+// CredentialStatus is one observation of the credential's refresh health.
+type CredentialStatus struct {
+	State     CredentialState `json:"state"               yaml:"-"`
+	ExpiresAt time.Time       `json:"expiresAt,omitempty" yaml:"-"`
+	RenewedAt time.Time       `json:"renewedAt,omitempty" yaml:"-"`
+	LastError string          `json:"lastError,omitempty" yaml:"-"`
+	At        time.Time       `json:"at"                  yaml:"-"`
 }

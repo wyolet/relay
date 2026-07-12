@@ -530,7 +530,7 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 }
 
 const getSecret = `-- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1
 `
 
 type GetSecretRow struct {
@@ -539,6 +539,7 @@ type GetSecretRow struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
+	Status          []byte             `db:"status" json:"status"`
 	ValueKind       string             `db:"value_kind" json:"value_kind"`
 	ValueFromEnv    pgtype.Text        `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte             `db:"value_ciphertext" json:"value_ciphertext"`
@@ -557,6 +558,7 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 		&i.DisplayName,
 		&i.Metadata,
 		&i.Spec,
+		&i.Status,
 		&i.ValueKind,
 		&i.ValueFromEnv,
 		&i.ValueCiphertext,
@@ -1463,7 +1465,7 @@ func (q *Queries) ListSecretValuesForRotation(ctx context.Context) ([]ListSecret
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
@@ -1472,6 +1474,7 @@ type ListSecretsRow struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	Metadata        []byte             `db:"metadata" json:"metadata"`
 	Spec            []byte             `db:"spec" json:"spec"`
+	Status          []byte             `db:"status" json:"status"`
 	ValueKind       string             `db:"value_kind" json:"value_kind"`
 	ValueFromEnv    pgtype.Text        `db:"value_from_env" json:"value_from_env"`
 	ValueCiphertext []byte             `db:"value_ciphertext" json:"value_ciphertext"`
@@ -1496,6 +1499,7 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 			&i.DisplayName,
 			&i.Metadata,
 			&i.Spec,
+			&i.Status,
 			&i.ValueKind,
 			&i.ValueFromEnv,
 			&i.ValueCiphertext,
@@ -1749,6 +1753,20 @@ func (q *Queries) UpdateSecretEnv(ctx context.Context, arg UpdateSecretEnvParams
 	return i, err
 }
 
+const updateSecretStatus = `-- name: UpdateSecretStatus :exec
+UPDATE secrets SET status = $2 WHERE id = $1
+`
+
+type UpdateSecretStatusParams struct {
+	ID     string `db:"id" json:"id"`
+	Status []byte `db:"status" json:"status"`
+}
+
+func (q *Queries) UpdateSecretStatus(ctx context.Context, arg UpdateSecretStatusParams) error {
+	_, err := q.db.Exec(ctx, updateSecretStatus, arg.ID, arg.Status)
+	return err
+}
+
 const updateSecretStored = `-- name: UpdateSecretStored :one
 UPDATE secrets
 SET value_kind        = 'stored',
@@ -1756,6 +1774,7 @@ SET value_kind        = 'stored',
     value_ciphertext  = $2,
     value_nonce       = $3,
     value_key_version = $4,
+    status            = NULL,
     updated_at        = NOW()
 WHERE id = $1
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec

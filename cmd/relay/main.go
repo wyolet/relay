@@ -202,8 +202,9 @@ func main() {
 
 	// Proactive OAuth renewal: keeps subscription tokens fresh ahead of
 	// expiry so requests never pay refresh latency. Cluster-safe via the kv
-	// lock; rotations broadcast through the catalog hostkey NOTIFY so every
-	// pod reloads the credential (secret_values has no trigger of its own).
+	// lock; outcomes persist on the hostkey status (UI-visible on the same
+	// key) and broadcast through the catalog hostkey NOTIFY so every pod
+	// reloads the credential (secret_values has no trigger of its own).
 	oauthRefs := func(ctx context.Context) ([]pkgsecret.Ref, error) {
 		keys, err := stores.HostKey.List(ctx)
 		if err != nil {
@@ -211,11 +212,17 @@ func main() {
 		}
 		var refs []pkgsecret.Ref
 		for _, k := range keys {
-			if k.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth {
-				refs = append(refs, pkgsecret.Ref{
-					Kind: pkgsecret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
-				})
+			if k.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
+				continue
 			}
+			// Revoked grants wait for operator re-auth (a value update
+			// clears the status) — the refresher contract excludes them.
+			if c := k.Status.Credential; c != nil && c.State == hostkey.CredentialRevoked {
+				continue
+			}
+			refs = append(refs, pkgsecret.Ref{
+				Kind: pkgsecret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
+			})
 		}
 		return refs, nil
 	}
@@ -223,7 +230,26 @@ func main() {
 		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
 		return err
 	}
-	go secretoauth.NewRefresher(oauthRefs, stores.OAuthResolver, kvStore, oauthNotify, slog.Default()).
+	oauthHooks := secretoauth.Hooks{
+		OnRenewed: func(ctx context.Context, id string, expiresAt time.Time) error {
+			now := time.Now().UTC()
+			if err := stores.HostKey.SetCredentialStatus(ctx, id, hostkey.CredentialStatus{
+				State: hostkey.CredentialOK, ExpiresAt: expiresAt, RenewedAt: now, At: now,
+			}); err != nil {
+				return err
+			}
+			return oauthNotify(ctx, id)
+		},
+		OnRevoked: func(ctx context.Context, id string, cause error) error {
+			if err := stores.HostKey.SetCredentialStatus(ctx, id, hostkey.CredentialStatus{
+				State: hostkey.CredentialRevoked, LastError: cause.Error(), At: time.Now().UTC(),
+			}); err != nil {
+				return err
+			}
+			return oauthNotify(ctx, id)
+		},
+	}
+	go secretoauth.NewRefresher(oauthRefs, stores.OAuthResolver, kvStore, oauthHooks, slog.Default()).
 		Run(listenerCtx)
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"

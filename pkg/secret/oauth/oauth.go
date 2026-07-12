@@ -103,59 +103,72 @@ func (r *Resolver) load(ctx context.Context, id string) (*sdkoauth.Token, error)
 }
 
 func (r *Resolver) refresh(ctx context.Context, ref secret.Ref, tok *sdkoauth.Token) (string, bool, error) {
+	nt, rotated, err := r.refreshTok(ctx, ref, tok)
+	if err != nil {
+		return "", false, err
+	}
+	return nt.AccessToken, rotated, nil
+}
+
+func (r *Resolver) refreshTok(ctx context.Context, ref secret.Ref, tok *sdkoauth.Token) (*sdkoauth.Token, bool, error) {
 	cfg, ok := r.cfg(ref.Provider)
 	if !ok {
-		return "", false, fmt.Errorf("secret/oauth: no config for provider %q", ref.Provider)
+		return nil, false, fmt.Errorf("secret/oauth: no config for provider %q", ref.Provider)
 	}
 	if tok.RefreshToken == "" {
-		return "", false, fmt.Errorf("secret/oauth: token %q expired with no refresh token", ref.ID)
+		return nil, false, fmt.Errorf("secret/oauth: token %q expired with no refresh token", ref.ID)
 	}
 	nt, err := sdkoauth.New(cfg.OAuth2()).Refresh(ctx, tok)
 	if err != nil {
-		return "", false, fmt.Errorf("secret/oauth: refresh %q: %w", ref.ID, err)
+		return nil, false, fmt.Errorf("secret/oauth: refresh %q: %w", ref.ID, err)
 	}
 	if nt.AccessToken == "" {
-		return "", false, fmt.Errorf("secret/oauth: refresh %q returned empty access token", ref.ID)
+		return nil, false, fmt.Errorf("secret/oauth: refresh %q returned empty access token", ref.ID)
 	}
 	rotated := nt.AccessToken != tok.AccessToken || nt.RefreshToken != tok.RefreshToken || !nt.Expiry.Equal(tok.Expiry)
 	if rotated {
 		blob, err := json.Marshal(nt)
 		if err != nil {
-			return "", false, fmt.Errorf("secret/oauth: marshal refreshed token: %w", err)
+			return nil, false, fmt.Errorf("secret/oauth: marshal refreshed token: %w", err)
 		}
 		if _, err := r.vault.Create(ctx, ref.ID, blob); err != nil {
-			return "", false, fmt.Errorf("secret/oauth: persist refreshed token %q: %w", ref.ID, err)
+			return nil, false, fmt.Errorf("secret/oauth: persist refreshed token %q: %w", ref.ID, err)
 		}
 	}
-	return nt.AccessToken, rotated, nil
+	return nt, rotated, nil
 }
 
 // Renew proactively refreshes the credential when its expiry falls within
 // lead, persisting the rotated blob. Reports whether a new blob was
-// persisted. A token with no expiry, or one still comfortably valid, is a
-// no-op. Callers coordinating across processes must hold their own lock —
-// the in-process single-flight only dedupes within this resolver.
-func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration) (bool, error) {
+// persisted and the credential's current expiry. A token with no expiry,
+// or one still comfortably valid, is a no-op. Callers coordinating across
+// processes must hold their own lock — the in-process single-flight only
+// dedupes within this resolver.
+func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration) (bool, time.Time, error) {
 	if ref.Kind != secret.KindOAuth {
-		return false, fmt.Errorf("secret/oauth: wrong kind %q", ref.Kind)
+		return false, time.Time{}, fmt.Errorf("secret/oauth: wrong kind %q", ref.Kind)
 	}
 	due := func(tok *sdkoauth.Token) bool {
 		return !tok.Expiry.IsZero() && tok.Expiry.Before(r.now().Add(lead))
 	}
 	tok, err := r.load(ctx, ref.ID)
 	if err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
 	if !due(tok) {
-		return false, nil
+		return false, tok.Expiry, nil
+	}
+	type renewed struct {
+		rotated bool
+		expiry  time.Time
 	}
 	v, err, _ := r.sf.Do("renew:"+ref.ID, func() (any, error) {
 		cur, err := r.load(ctx, ref.ID)
 		if err != nil {
-			return false, err
+			return renewed{}, err
 		}
 		if !due(cur) {
-			return false, nil
+			return renewed{false, cur.Expiry}, nil
 		}
 		// The oauth2 TokenSource only exchanges a token its own Valid()
 		// deems expired (~10s delta) — a proactive renewal inside the lead
@@ -163,13 +176,17 @@ func (r *Resolver) Renew(ctx context.Context, ref secret.Ref, lead time.Duration
 		// already past. Rotation still compares against the persisted blob.
 		force := *cur
 		force.Expiry = r.now().Add(-time.Hour)
-		_, rotated, err := r.refresh(ctx, ref, &force)
-		return rotated, err
+		nt, rotated, err := r.refreshTok(ctx, ref, &force)
+		if err != nil {
+			return renewed{}, err
+		}
+		return renewed{rotated, nt.Expiry}, nil
 	})
 	if err != nil {
-		return false, err
+		return false, time.Time{}, err
 	}
-	return v.(bool), nil
+	res := v.(renewed)
+	return res.rotated, res.expiry, nil
 }
 
 // IsPermanent reports whether a refresh error is unrecoverable without

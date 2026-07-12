@@ -69,19 +69,34 @@ func testRefresher(t *testing.T, tokenURL string) (*Refresher, *memVault, *[]str
 	res := NewResolver(vault, func(string) (sdkoauth.ProviderConfig, bool) {
 		return sdkoauth.ProviderConfig{ClientID: "c", AuthURL: tokenURL, TokenURL: tokenURL}, true
 	})
-	var notified []string
+	var events []string
+	revoked := map[string]bool{}
 	source := func(context.Context) ([]secret.Ref, error) {
 		refs := make([]secret.Ref, 0, len(vault.blobs))
 		for id := range vault.blobs {
+			if revoked[id] { // composition-root contract: revoked stay out
+				continue
+			}
 			refs = append(refs, secret.Ref{Kind: secret.KindOAuth, ID: id, Provider: "p"})
 		}
 		return refs, nil
 	}
-	f := NewRefresher(source, res, kv.NewMem(), func(_ context.Context, id string) error {
-		notified = append(notified, id)
-		return nil
-	}, slog.Default())
-	return f, vault, &notified
+	hooks := Hooks{
+		OnRenewed: func(_ context.Context, id string, expiresAt time.Time) error {
+			if expiresAt.Before(time.Now()) {
+				return fmt.Errorf("OnRenewed got past expiry %v", expiresAt)
+			}
+			events = append(events, "renewed:"+id)
+			return nil
+		},
+		OnRevoked: func(_ context.Context, id string, cause error) error {
+			revoked[id] = true
+			events = append(events, "revoked:"+id)
+			return nil
+		},
+	}
+	f := NewRefresher(source, res, kv.NewMem(), hooks, slog.Default())
+	return f, vault, &events
 }
 
 func TestRefresher_RenewsDueCredential(t *testing.T) {
@@ -100,8 +115,8 @@ func TestRefresher_RenewsDueCredential(t *testing.T) {
 	if hits != 1 {
 		t.Fatalf("token endpoint hits = %d, want 1", hits)
 	}
-	if len(*notified) != 1 || (*notified)[0] != "k1" {
-		t.Fatalf("notify = %v, want [k1]", *notified)
+	if len(*notified) != 1 || (*notified)[0] != "renewed:k1" {
+		t.Fatalf("events = %v, want [renewed:k1]", *notified)
 	}
 	var tok sdkoauth.Token
 	if err := json.Unmarshal(vault.blobs["k1"], &tok); err != nil {
@@ -151,13 +166,10 @@ func TestRefresher_PermanentFailureParks(t *testing.T) {
 	f.sweep(context.Background())
 
 	if hits != 1 {
-		t.Fatalf("token endpoint hits = %d, want 1 (parked after invalid_grant)", hits)
+		t.Fatalf("token endpoint hits = %d, want 1 (revoked keys leave the source)", hits)
 	}
-	if len(*notified) != 0 {
-		t.Fatalf("notify = %v, want none", *notified)
-	}
-	if _, parked := f.dead["k1"]; !parked {
-		t.Fatal("credential not parked in dead map")
+	if len(*notified) != 1 || (*notified)[0] != "revoked:k1" {
+		t.Fatalf("events = %v, want [revoked:k1]", *notified)
 	}
 }
 
@@ -181,7 +193,5 @@ func TestRefresher_TransientFailureRetries(t *testing.T) {
 	if hits != 2 {
 		t.Fatalf("token endpoint hits = %d, want 2 (transient errors retry every sweep)", hits)
 	}
-	if _, parked := f.dead["k1"]; parked {
-		t.Fatal("transient failure must not park the credential")
-	}
+	_ = f // transient failures never fire OnRevoked — the source keeps listing the key
 }

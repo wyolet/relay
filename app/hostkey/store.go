@@ -155,6 +155,7 @@ func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
 		Name:            r.Name,
 		DisplayName:     r.DisplayName,
 		Metadata:        r.Metadata,
+		Status:          r.Status,
 		Spec:            r.Spec,
 		ValueKind:       r.ValueKind,
 		ValueFromEnv:    r.ValueFromEnv,
@@ -218,6 +219,11 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 		return nil, fmt.Errorf("spec: %w", err)
 	}
 	k := &HostKey{Meta: md, Spec: spec}
+	if len(r.Status) > 0 {
+		if err := json.Unmarshal(r.Status, &k.Status); err != nil {
+			return nil, fmt.Errorf("status: %w", err)
+		}
+	}
 
 	var ref secret.Ref
 	switch r.ValueKind {
@@ -263,4 +269,18 @@ func marshalSpec(s *Spec) ([]byte, error) {
 	cp := *s
 	cp.Value = ""
 	return json.Marshal(cp)
+}
+
+// SetCredentialStatus persists the observed credential state on the
+// hostkey row (the refresher's renewed/revoked reports). A later value
+// update (operator re-auth) clears it — see UpdateSecretStored.
+func (s *Store) SetCredentialStatus(ctx context.Context, id string, cs CredentialStatus) error {
+	st, err := json.Marshal(Status{Credential: &cs})
+	if err != nil {
+		return fmt.Errorf("hostkey.SetCredentialStatus: %w", err)
+	}
+	if err := s.q.UpdateSecretStatus(ctx, gen.UpdateSecretStatusParams{ID: id, Status: st}); err != nil {
+		return fmt.Errorf("hostkey.SetCredentialStatus: %w", err)
+	}
+	return nil
 }

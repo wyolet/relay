@@ -24,8 +24,23 @@ import (
 )
 
 // RefSource enumerates the OAuth credentials to keep fresh. Injected by
-// the composition root (the hostkey store in practice).
+// the composition root (the hostkey store in practice). It MUST exclude
+// credentials whose stored status is revoked — renewal resumes when the
+// operator re-authorizes (a value update clears the status), and the
+// refresher itself keeps no memory of them.
 type RefSource func(ctx context.Context) ([]secret.Ref, error)
+
+// Hooks receive renewal outcomes so the composition root can persist
+// observed credential state (hostkey status) and broadcast rotations.
+// Either hook may be nil.
+type Hooks struct {
+	// OnRenewed fires after a rotated blob was persisted; expiresAt is the
+	// fresh token's expiry.
+	OnRenewed func(ctx context.Context, id string, expiresAt time.Time) error
+	// OnRevoked fires when the provider rejected the grant itself
+	// (IsPermanent) — re-authorization is an operator action.
+	OnRevoked func(ctx context.Context, id string, cause error) error
+}
 
 // Locker serializes a critical section across processes. pkg/kv.Store
 // satisfies it; every key this package passes shares one credential-scoped
@@ -41,33 +56,21 @@ type Refresher struct {
 	resolver *Resolver
 	locks    Locker
 
-	// notify broadcasts a rotated credential id so peers reload it (the
-	// composition root wires a catalog hostkey NOTIFY emit). Optional.
-	notify func(ctx context.Context, id string) error
+	hooks Hooks
 
 	log      *slog.Logger
 	interval time.Duration
 	lead     time.Duration
-	deadFor  time.Duration
-
-	// dead parks credentials whose refresh failed permanently
-	// (IsPermanent) until deadFor elapses or the process restarts —
-	// re-authorization is an operator action; hammering the token endpoint
-	// only risks provider-side lockouts. Per-process by design: the
-	// cross-process lock already serializes the (rare) retries.
-	dead map[string]time.Time
 }
 
 const (
 	defaultInterval = time.Minute
 	defaultLead     = 10 * time.Minute
-	defaultDeadFor  = time.Hour
 )
 
 // NewRefresher builds a Refresher. source, resolver, and locks are
-// required; notify may be nil (single-pod deployments heal via their own
-// resolve path).
-func NewRefresher(source RefSource, resolver *Resolver, locks Locker, notify func(ctx context.Context, id string) error, log *slog.Logger) *Refresher {
+// required.
+func NewRefresher(source RefSource, resolver *Resolver, locks Locker, hooks Hooks, log *slog.Logger) *Refresher {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -75,12 +78,10 @@ func NewRefresher(source RefSource, resolver *Resolver, locks Locker, notify fun
 		source:   source,
 		resolver: resolver,
 		locks:    locks,
-		notify:   notify,
+		hooks:    hooks,
 		log:      log,
 		interval: defaultInterval,
 		lead:     defaultLead,
-		deadFor:  defaultDeadFor,
-		dead:     map[string]time.Time{},
 	}
 }
 
@@ -107,42 +108,45 @@ func (f *Refresher) sweep(ctx context.Context) {
 		f.log.Error("oauth refresher: list credentials", "err", err)
 		return
 	}
-	now := time.Now()
 	for _, ref := range refs {
 		if ref.Kind != secret.KindOAuth || ref.ID == "" {
 			continue
-		}
-		if until, parked := f.dead[ref.ID]; parked {
-			if now.Before(until) {
-				continue
-			}
-			delete(f.dead, ref.ID)
 		}
 		f.renewOne(ctx, ref)
 	}
 }
 
 func (f *Refresher) renewOne(ctx context.Context, ref secret.Ref) {
-	var rotated bool
+	var (
+		rotated   bool
+		expiresAt time.Time
+	)
 	lockKey := "{oauthrenew:" + ref.ID + "}"
 	err := f.locks.WithLock(ctx, []string{lockKey}, func(ctx context.Context) error {
 		var err error
-		rotated, err = f.resolver.Renew(ctx, ref, f.lead)
+		rotated, expiresAt, err = f.resolver.Renew(ctx, ref, f.lead)
 		return err
 	})
 	switch {
 	case err == nil && rotated:
-		f.log.Info("oauth refresher: credential renewed", "id", ref.ID, "provider", ref.Provider)
-		if f.notify != nil {
-			if nerr := f.notify(ctx, ref.ID); nerr != nil {
-				f.log.Error("oauth refresher: rotation broadcast failed; peers heal on their next resolve",
-					"id", ref.ID, "err", nerr)
+		f.log.Info("oauth refresher: credential renewed",
+			"id", ref.ID, "provider", ref.Provider, "expires_at", expiresAt)
+		if f.hooks.OnRenewed != nil {
+			if herr := f.hooks.OnRenewed(ctx, ref.ID, expiresAt); herr != nil {
+				f.log.Error("oauth refresher: renewal hook failed; peers heal on their next resolve",
+					"id", ref.ID, "err", herr)
 			}
 		}
 	case err != nil && IsPermanent(err):
-		f.dead[ref.ID] = time.Now().Add(f.deadFor)
+		// The stored status keeps this credential out of the source until
+		// the operator re-authorizes; no refresher-side memory.
 		f.log.Error("oauth refresher: grant rejected — re-authorization required",
-			"id", ref.ID, "provider", ref.Provider, "retry_after", f.deadFor, "err", err)
+			"id", ref.ID, "provider", ref.Provider, "err", err)
+		if f.hooks.OnRevoked != nil {
+			if herr := f.hooks.OnRevoked(ctx, ref.ID, err); herr != nil {
+				f.log.Error("oauth refresher: revocation hook failed", "id", ref.ID, "err", herr)
+			}
+		}
 	case err != nil:
 		// Transient: the next sweep retries; the token stays valid until
 		// its real expiry, and the KeyAgent heal covers the worst case.
