@@ -80,6 +80,7 @@ func ToHost(d HostDTO, idx Resolver) (*host.Host, error) {
 		Meta: d.Metadata.toMeta(),
 		Spec: host.Spec{
 			BaseURL:           d.Spec.BaseURL,
+			Path:              d.Spec.Path,
 			Backend:           d.Spec.Backend,
 			Policies:          policies,
 			DefaultPolicy:     defaultPolicy,
@@ -121,6 +122,7 @@ func FromHost(h *host.Host, rev ReverseResolver) HostDTO {
 		Metadata:   metaToWire(h.Meta),
 		Spec: HostSpec{
 			BaseURL:           h.Spec.BaseURL,
+			Path:              h.Spec.Path,
 			Backend:           h.Spec.Backend,
 			Policies:          policies,
 			DefaultPolicy:     defaultPolicy,

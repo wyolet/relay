@@ -54,7 +54,7 @@ type fakeAdapter struct {
 	lastOAuth atomic.Bool
 }
 
-func (f *fakeAdapter) Call(ctx context.Context, baseURL, key string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
+func (f *fakeAdapter) Call(ctx context.Context, baseURL string, _ *string, key string, body []byte, hdr http.Header, _ string, _, oauth bool) (*http.Response, error) {
 	f.callCount.Add(1)
 	f.lastOAuth.Store(oauth)
 	if f.callFn != nil {

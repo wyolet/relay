@@ -156,7 +156,7 @@ func (stubV1Translator) NewFromCanonicalStream() func([]byte) ([]byte, error) { 
 func buildTestRegistry() *adapter.Registry {
 	openaiSpec := (&adapter.Spec{
 		Name:         adapters.OpenAI,
-		UpstreamPath: "/v1/chat/completions",
+		DefaultPath: "/v1/chat/completions",
 		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		Translator:   stubV1Translator{},
 	}).Build()
@@ -164,7 +164,7 @@ func buildTestRegistry() *adapter.Registry {
 	// Responses: IsNativePath returns true only when host name == "openai".
 	responsesSpec := (&adapter.Spec{
 		Name:         adapters.OpenAIResponses,
-		UpstreamPath: "/v1/responses",
+		DefaultPath: "/v1/responses",
 		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		Translator:   stubV1Translator{},
 		IsNativePath: func(plan *routing.Plan) bool {
@@ -174,14 +174,14 @@ func buildTestRegistry() *adapter.Registry {
 
 	embeddingsSpec := (&adapter.Spec{
 		Name:         adapters.OpenAIEmbeddings,
-		UpstreamPath: "/v1/embeddings",
+		DefaultPath: "/v1/embeddings",
 		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		BytePass:     true,
 	}).Build()
 
 	anthropicSpec := (&adapter.Spec{
 		Name:         adapters.Anthropic,
-		UpstreamPath: "/v1/messages",
+		DefaultPath: "/v1/messages",
 		Auth:         adapter.AuthStrategy{Header: "x-api-key"},
 		Translator:   stubV1Translator{},
 	}).Build()

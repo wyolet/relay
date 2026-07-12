@@ -93,6 +93,7 @@ func TestGeminiIntegration_Sync_PathAuthAndCanonicalShape(t *testing.T) {
 	resp, err := spec.PipelineAdapter().Call(
 		context.Background(),
 		srv.URL,
+		nil, // hostPath — shape default
 		testGeminiKey,
 		minimalGeminiBody(t),
 		nil,
@@ -185,6 +186,7 @@ func TestGeminiIntegration_Stream_PathAuthAndCanonicalShape(t *testing.T) {
 	resp, err := spec.PipelineAdapter().Call(
 		context.Background(),
 		srv.URL,
+		nil, // hostPath — shape default
 		testGeminiKey,
 		minimalGeminiBody(t),
 		nil,

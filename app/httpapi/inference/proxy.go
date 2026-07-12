@@ -185,16 +185,15 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 }
 
 func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) string {
-	upstreamPath := inboundPath
-	if spec != nil && spec.UpstreamPath != "" {
-		upstreamPath = spec.UpstreamPath
+	// The host's own path wins verbatim (explicit "" = baseURL is the whole
+	// endpoint), mirroring the pipeline flow's Host.Spec.Path semantics.
+	if host != nil && host.Spec.Path != nil {
+		return *host.Spec.Path
 	}
-	if host != nil && host.Spec.Backend != nil {
-		if override := host.Spec.Backend["upstreamPath"]; override != "" {
-			return override
-		}
+	if spec != nil && spec.DefaultPath != "" {
+		return spec.DefaultPath
 	}
-	return upstreamPath
+	return inboundPath
 }
 
 // extractorFor returns the per-shape token extractor used by proxy

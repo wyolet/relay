@@ -20,7 +20,7 @@ func newBearerSpec(t *testing.T, path string, opts ...func(*adapter.Spec)) *adap
 	t.Helper()
 	s := &adapter.Spec{
 		Name:         adapters.OpenAI,
-		UpstreamPath: path,
+		DefaultPath: path,
 		Auth: adapter.AuthStrategy{
 			Header: "Authorization",
 			Scheme: "Bearer",
@@ -47,7 +47,7 @@ func TestSpecAdapter_Call_URLAndAuth(t *testing.T) {
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "sk-test", []byte(`{}`), nil, "", false, false)
+	resp, err := a.Call(context.Background(), srv.URL, nil, "sk-test", []byte(`{}`), nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestSpecAdapter_Call_HeaderForwarding(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	hdr := http.Header{"X-Relay-Test": []string{"hello"}}
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false, false)
+	resp, err := a.Call(context.Background(), srv.URL, nil, "key", []byte(`{}`), hdr, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
 
 	s := &adapter.Spec{
 		Name:         adapters.Anthropic,
-		UpstreamPath: "/v1/messages",
+		DefaultPath: "/v1/messages",
 		Auth: adapter.AuthStrategy{
 			Header: "x-api-key",
 			ExtraHeaders: map[string]string{
@@ -108,7 +108,7 @@ func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
 	s.Build()
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), nil, "", false, false)
+	resp, err := a.Call(context.Background(), srv.URL, nil, "key", []byte(`{}`), nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 
 	s := &adapter.Spec{
 		Name:         adapters.Anthropic,
-		UpstreamPath: "/v1/messages",
+		DefaultPath: "/v1/messages",
 		Auth: adapter.AuthStrategy{
 			Header: "x-api-key",
 			ExtraHeaders: map[string]string{
@@ -142,7 +142,7 @@ func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	hdr := http.Header{"Anthropic-Version": []string{"2024-12-01"}}
-	resp, err := a.Call(context.Background(), srv.URL, "key", []byte(`{}`), hdr, "", false, false)
+	resp, err := a.Call(context.Background(), srv.URL, nil, "key", []byte(`{}`), hdr, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestSpecAdapter_Call_EmptyAPIKey(t *testing.T) {
 	s := newBearerSpec(t, "/v1/chat/completions")
 	a := s.PipelineAdapter()
 
-	resp, err := a.Call(context.Background(), srv.URL, "", []byte(`{}`), nil, "", false, false)
+	resp, err := a.Call(context.Background(), srv.URL, nil, "", []byte(`{}`), nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSpecAdapter_Call_BodyForwarded(t *testing.T) {
 	a := s.PipelineAdapter()
 
 	want := []byte(`{"model":"gpt-4o","messages":[]}`)
-	resp, err := a.Call(context.Background(), srv.URL, "key", want, nil, "", false, false)
+	resp, err := a.Call(context.Background(), srv.URL, nil, "key", want, nil, "", false, false)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestSpecAdapter_ExtractTokens_Custom(t *testing.T) {
 	called := false
 	s := &adapter.Spec{
 		Name:         adapters.OpenAI,
-		UpstreamPath: "/v1/chat/completions",
+		DefaultPath: "/v1/chat/completions",
 		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		ExtractTokens: func(_ []byte) pkgusage.Tokens {
 			called = true
@@ -298,7 +298,7 @@ func TestSpecAdapter_ExtractTokens_Custom(t *testing.T) {
 func dualAuthSpec() *adapter.Spec {
 	return (&adapter.Spec{
 		Name:         adapters.Anthropic,
-		UpstreamPath: "/v1/messages",
+		DefaultPath: "/v1/messages",
 		Auth: adapter.AuthStrategy{
 			Header:       "x-api-key",
 			ExtraHeaders: map[string]string{"x-api-version": "v1"},
@@ -328,7 +328,7 @@ func callCapture(t *testing.T, s *adapter.Spec, key string, hdr http.Header, oau
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	resp, err := s.PipelineAdapter().Call(context.Background(), srv.URL, key, []byte(`{}`), hdr, "", false, oauth)
+	resp, err := s.PipelineAdapter().Call(context.Background(), srv.URL, nil, key, []byte(`{}`), hdr, "", false, oauth)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestSpecAdapter_NotOAuth_UsesAPIKey(t *testing.T) {
 func TestSpecAdapter_OAuth_FallsBackWhenNoVariant(t *testing.T) {
 	s := (&adapter.Spec{
 		Name:         adapters.OpenAI,
-		UpstreamPath: "/v1/chat/completions",
+		DefaultPath: "/v1/chat/completions",
 		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 	}).Build()
 	got := callCapture(t, s, "sk-tok", nil, true)
@@ -386,5 +386,49 @@ func TestSpecAdapter_OAuth_OverridesForwardedAuthHeader(t *testing.T) {
 	got := callCapture(t, dualAuthSpec(), "sk-ant-oat01-upstream", hdr, true)
 	if got.auth != "Bearer sk-ant-oat01-upstream" {
 		t.Errorf("Authorization = %q, want the upstream credential to override the forwarded one", got.auth)
+	}
+}
+
+func TestSpecAdapter_Call_HostPathOverride(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	a := newBearerSpec(t, "/v1/responses").PipelineAdapter()
+
+	// Non-nil host path wins verbatim over the shape default.
+	p := "/backend-api/codex/responses"
+	resp, err := a.Call(context.Background(), srv.URL, &p, "k", []byte(`{}`), nil, "", false, false)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	resp.Body.Close()
+	if gotPath != p {
+		t.Fatalf("path: got %q, want %q", gotPath, p)
+	}
+
+	// Explicit "" appends nothing — baseURL is the complete endpoint.
+	empty := ""
+	resp, err = a.Call(context.Background(), srv.URL, &empty, "k", []byte(`{}`), nil, "", false, false)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	resp.Body.Close()
+	if gotPath != "/" {
+		t.Fatalf("path: got %q, want / (nothing appended)", gotPath)
+	}
+
+	// Nil keeps the shape default.
+	resp, err = a.Call(context.Background(), srv.URL, nil, "k", []byte(`{}`), nil, "", false, false)
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	resp.Body.Close()
+	if gotPath != "/v1/responses" {
+		t.Fatalf("path: got %q, want /v1/responses", gotPath)
 	}
 }

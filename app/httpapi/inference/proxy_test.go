@@ -19,7 +19,7 @@ import (
 )
 
 func TestProxyUpstreamPath_DefaultsToSpecPath(t *testing.T) {
-	spec := (&adapter.Spec{UpstreamPath: "/v1/responses"}).Build()
+	spec := (&adapter.Spec{DefaultPath: "/v1/responses"}).Build()
 
 	got := proxyUpstreamPath("/openai/v1/responses", spec, nil)
 
@@ -28,16 +28,20 @@ func TestProxyUpstreamPath_DefaultsToSpecPath(t *testing.T) {
 	}
 }
 
-func TestProxyUpstreamPath_HostBackendOverride(t *testing.T) {
-	spec := (&adapter.Spec{UpstreamPath: "/v1/responses"}).Build()
-	host := &apphost.Host{
-		Spec: apphost.Spec{Backend: map[string]string{"upstreamPath": "/responses"}},
+func TestProxyUpstreamPath_HostPathWins(t *testing.T) {
+	spec := (&adapter.Spec{DefaultPath: "/v1/responses"}).Build()
+	p := "/backend-api/codex/responses"
+	host := &apphost.Host{Spec: apphost.Spec{Path: &p}}
+
+	if got := proxyUpstreamPath("/openai/v1/responses", spec, host); got != p {
+		t.Fatalf("path: got %q", got)
 	}
 
-	got := proxyUpstreamPath("/openai/v1/responses", spec, host)
-
-	if got != "/responses" {
-		t.Fatalf("path: got %q", got)
+	// Explicit "" is a real value: baseURL is the whole endpoint.
+	empty := ""
+	host.Spec.Path = &empty
+	if got := proxyUpstreamPath("/openai/v1/responses", spec, host); got != "" {
+		t.Fatalf("path: got %q, want empty", got)
 	}
 }
 

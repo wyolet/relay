@@ -61,16 +61,17 @@ type Spec struct {
 	// Example: ["/v1/chat/completions", "/openai/v1/chat/completions"].
 	InboundPaths []InboundPath
 
-	// UpstreamPath is the path used when calling the upstream host.
-	// Example: "/v1/chat/completions", "/v1/responses", "/v1/embeddings".
+	// DefaultPath is the shape-canonical upstream path, used when the host
+	// doesn't set its own (Host.Spec.Path, which wins verbatim — including
+	// an explicit ""). Example: "/v1/chat/completions", "/v1/responses".
 	// Ignored when UpstreamPathFn is set.
-	UpstreamPath string
+	DefaultPath string
 
 	// UpstreamPathFn resolves the upstream path per request from the upstream
 	// model name and the sync/stream choice. Set only for shapes that encode
 	// the model and/or stream selection in the URL rather than the body —
 	// Gemini's "/v1beta/models/{model}:generateContent" vs
-	// ":streamGenerateContent". When nil, UpstreamPath is used verbatim.
+	// ":streamGenerateContent". When nil, DefaultPath is used verbatim.
 	UpstreamPathFn func(upstreamModel string, stream bool) string
 
 	// Auth configures how the upstream is authenticated with an API-key
@@ -239,14 +240,19 @@ type specAdapter struct {
 
 var _ pipeline.Adapter = (*specAdapter)(nil)
 
-// Call issues POST {baseURL}{spec.UpstreamPath} with the supplied body.
-// Auth headers are set per spec.Auth (or spec.OAuthAuth when oauth is true and
-// the spec defines an OAuth variant); forwarded headers are applied first so
-// Relay's own headers win on conflict.
-func (a *specAdapter) Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
-	path := a.spec.UpstreamPath
+// Call issues POST {baseURL}{path}: the host's own path when set (hostPath
+// non-nil, verbatim — an explicit "" appends nothing), else the shape default
+// (spec.UpstreamPathFn / spec.DefaultPath). Auth headers are set per spec.Auth
+// (or spec.OAuthAuth when oauth is true and the spec defines an OAuth
+// variant); forwarded headers are applied first so Relay's own headers win on
+// conflict.
+func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
+	path := a.spec.DefaultPath
 	if a.spec.UpstreamPathFn != nil {
 		path = a.spec.UpstreamPathFn(upstreamModel, stream)
+	}
+	if hostPath != nil {
+		path = *hostPath
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {

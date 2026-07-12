@@ -40,7 +40,10 @@ import (
 // that encode them in the URL path — Gemini's generateContent vs
 // streamGenerateContent — need them to build the upstream URL.
 type Adapter interface {
-	Call(ctx context.Context, baseURL, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
+	// hostPath is the host's upstream-path override (Host.Spec.Path): used
+	// verbatim when non-nil (explicit "" appends nothing to baseURL); nil
+	// keeps the adapter's shape default.
+	Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error)
 	ExtractTokens(body []byte) sdkusage.Tokens
 	Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration)
 }
@@ -240,7 +243,7 @@ loop:
 		// to an api key (or vice versa) authenticates each correctly.
 		oauth := acq != nil && acq.Key != nil && acq.Key.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
 		req.Lifecycle.MarkUpstreamStart()
-		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
+		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, hostPath(req), keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
 			return p.makeResult(req, inbound, acq, resp), nil
 		}
@@ -722,4 +725,13 @@ func (r *Request) String() string {
 	}
 	return fmt.Sprintf("pipeline.Request{model=%q policy=%q host=%s keys=%d}",
 		r.ModelName, policyName, r.HostBaseURL, len(r.Keys))
+}
+
+// hostPath returns the request host's upstream-path override, nil when the
+// host is absent (tests / legacy callers) or sets none.
+func hostPath(req *Request) *string {
+	if req.Host == nil {
+		return nil
+	}
+	return req.Host.Spec.Path
 }
