@@ -58,6 +58,8 @@ import (
 	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/reqid"
+	pkgsecret "github.com/wyolet/relay/pkg/secret"
+	secretoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
@@ -197,6 +199,32 @@ func main() {
 		kvStore = kv.NewMem()
 	}
 	defer kvStore.Close()
+
+	// Proactive OAuth renewal: keeps subscription tokens fresh ahead of
+	// expiry so requests never pay refresh latency. Cluster-safe via the kv
+	// lock; rotations broadcast through the catalog hostkey NOTIFY so every
+	// pod reloads the credential (secret_values has no trigger of its own).
+	oauthRefs := func(ctx context.Context) ([]pkgsecret.Ref, error) {
+		keys, err := stores.HostKey.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var refs []pkgsecret.Ref
+		for _, k := range keys {
+			if k.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth {
+				refs = append(refs, pkgsecret.Ref{
+					Kind: pkgsecret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
+				})
+			}
+		}
+		return refs, nil
+	}
+	oauthNotify := func(ctx context.Context, id string) error {
+		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
+		return err
+	}
+	go secretoauth.NewRefresher(oauthRefs, stores.OAuthResolver, kvStore, oauthNotify, slog.Default()).
+		Run(listenerCtx)
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.New(kvStore, cookieSecure, "sess:")

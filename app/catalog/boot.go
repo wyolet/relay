@@ -91,6 +91,11 @@ type Stores struct {
 	// backends). Exposed so data-plane components (e.g. the payload-logging
 	// controller resolving S3 credentials) resolve through the same seam.
 	Secrets *pkgsecret.Registry
+
+	// OAuthResolver is the KindOAuth resolver registered in Secrets,
+	// exposed so the composition root can drive the proactive
+	// pkgoauth.Refresher against the same instance (shared single-flight).
+	OAuthResolver *pkgoauth.Resolver
 }
 
 // BootstrapStores wires the eight entity stores against the pool and
@@ -132,7 +137,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	// which only exists once cat is built. Refresh is off the hot path (load /
 	// post-401 heal), so the cache (populated by Hydrate before any resolve) is
 	// always ready by the time a token actually needs refreshing.
-	secReg.Register(pkgsecret.KindOAuth, pkgoauth.NewResolver(secStored,
+	oauthResolver := pkgoauth.NewResolver(secStored,
 		func(provider string) (sdkoauth.ProviderConfig, bool) {
 			v, ok := cat.Setting(settings.OAuthSection(provider))
 			if !ok {
@@ -143,7 +148,9 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 				return sdkoauth.ProviderConfig{}, false
 			}
 			return pc.ProviderConfig, true
-		}))
+		})
+	secReg.Register(pkgsecret.KindOAuth, oauthResolver)
+	stores.OAuthResolver = oauthResolver
 
 	return cat, stores, nil
 }
