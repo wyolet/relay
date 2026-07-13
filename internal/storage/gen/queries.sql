@@ -5,7 +5,7 @@ SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM provi
 SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name;
 
 -- name: ListStoredSecretsForRotation :many
 SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id;
@@ -106,6 +106,7 @@ SET value_kind        = 'stored',
     value_ciphertext  = $2,
     value_nonce       = $3,
     value_key_version = $4,
+    status            = NULL,
     updated_at        = NOW()
 WHERE id = $1
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
@@ -308,7 +309,7 @@ SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts
 SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models WHERE id = $1;
 
 -- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1;
 
 -- name: GetRateLimit :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits WHERE id = $1;
@@ -419,3 +420,6 @@ ON CONFLICT (id) DO UPDATE SET
 
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;
+
+-- name: UpdateSecretStatus :exec
+UPDATE secrets SET status = $2 WHERE id = $1;

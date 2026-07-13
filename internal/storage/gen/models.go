@@ -150,6 +150,7 @@ type Secret struct {
 	ID              string             `db:"id" json:"id"`
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
+	Status          []byte             `db:"status" json:"status"`
 }
 
 type SecretValue struct {
