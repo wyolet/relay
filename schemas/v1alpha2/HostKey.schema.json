@@ -37,6 +37,9 @@
         },
         "kind": {
           "type": "string"
+        },
+        "provider": {
+          "type": "string"
         }
       },
       "required": [

@@ -90,7 +90,10 @@ type HostDTO struct {
 }
 
 type HostSpec struct {
-	BaseURL string            `json:"baseURL"               yaml:"baseURL"`
+	BaseURL string `json:"baseURL" yaml:"baseURL"`
+	// Path overrides the adapter's shape-default upstream path. Verbatim when
+	// set; explicit "" appends nothing; absent keeps the shape default.
+	Path    *string           `json:"path,omitempty"        yaml:"path,omitempty"`
 	Backend map[string]string `json:"backend,omitempty"     yaml:"backend,omitempty"`
 	// Policies holds policy *names* (wire form), resolved to ids on parse.
 	Policies []string `json:"policies,omitempty"    yaml:"policies,omitempty"`

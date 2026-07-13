@@ -155,35 +155,35 @@ func (stubV1Translator) NewFromCanonicalStream() func([]byte) ([]byte, error) { 
 // without a live upstream.
 func buildTestRegistry() *adapter.Registry {
 	openaiSpec := (&adapter.Spec{
-		Name:         adapters.OpenAI,
-		UpstreamPath: "/v1/chat/completions",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:   stubV1Translator{},
+		Name:        adapters.OpenAI,
+		DefaultPath: "/v1/chat/completions",
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:  stubV1Translator{},
 	}).Build()
 
 	// Responses: IsNativePath returns true only when host name == "openai".
 	responsesSpec := (&adapter.Spec{
-		Name:         adapters.OpenAIResponses,
-		UpstreamPath: "/v1/responses",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:   stubV1Translator{},
+		Name:        adapters.OpenAIResponses,
+		DefaultPath: "/v1/responses",
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:  stubV1Translator{},
 		IsNativePath: func(plan *routing.Plan) bool {
 			return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
 		},
 	}).Build()
 
 	embeddingsSpec := (&adapter.Spec{
-		Name:         adapters.OpenAIEmbeddings,
-		UpstreamPath: "/v1/embeddings",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		BytePass:     true,
+		Name:        adapters.OpenAIEmbeddings,
+		DefaultPath: "/v1/embeddings",
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		BytePass:    true,
 	}).Build()
 
 	anthropicSpec := (&adapter.Spec{
-		Name:         adapters.Anthropic,
-		UpstreamPath: "/v1/messages",
-		Auth:         adapter.AuthStrategy{Header: "x-api-key"},
-		Translator:   stubV1Translator{},
+		Name:        adapters.Anthropic,
+		DefaultPath: "/v1/messages",
+		Auth:        adapter.AuthStrategy{Header: "x-api-key"},
+		Translator:  stubV1Translator{},
 	}).Build()
 
 	// Canonical inbound shape — real identity translator (not a stub).

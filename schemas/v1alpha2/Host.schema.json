@@ -33,6 +33,9 @@
         "noAuth": {
           "type": "boolean"
         },
+        "path": {
+          "type": "string"
+        },
         "policies": {
           "items": {
             "type": "string"

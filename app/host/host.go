@@ -68,6 +68,12 @@ type Spec struct {
 	// BaseURL is the upstream root. Required.
 	BaseURL string `json:"baseURL" yaml:"baseURL" validate:"required,http_url"`
 
+	// Path overrides the adapter's shape-default upstream path (Spec.DefaultPath)
+	// when this host's endpoint doesn't follow the vendor-canonical layout.
+	// Used verbatim when set — an explicit "" means BaseURL is the complete
+	// endpoint URL and nothing is appended. Unset (nil) keeps the shape default.
+	Path *string `json:"path,omitempty" yaml:"path,omitempty"`
+
 	// Backend is the free-form bag of backend-specific config (Bedrock region,
 	// Azure deployment, Vertex project/location, etc.). Each provider client
 	// reads the keys it needs and ignores the rest. Optional.

@@ -32,16 +32,16 @@ import (
 // / ParseResponse actually run.
 func buildRealCrossShapeRegistry() *adapter.Registry {
 	cc := (&adapter.Spec{
-		Name:         adapters.OpenAI,
-		UpstreamPath: "/v1/chat/completions",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:   openai.CCTranslator{},
+		Name:        adapters.OpenAI,
+		DefaultPath: "/v1/chat/completions",
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:  openai.CCTranslator{},
 	}).Build()
 	responses := (&adapter.Spec{
-		Name:         adapters.OpenAIResponses,
-		UpstreamPath: "/v1/responses",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
-		Translator:   openai.ResponsesTranslator{},
+		Name:        adapters.OpenAIResponses,
+		DefaultPath: "/v1/responses",
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:  openai.ResponsesTranslator{},
 		IsNativePath: func(plan *routing.Plan) bool {
 			return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
 		},
