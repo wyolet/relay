@@ -143,7 +143,7 @@ func newStack(t *testing.T) *stack {
 		(&adapter.Spec{
 			Name:          adapters.OpenAI,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/chat/completions", OperationID: "chat_completions", Summary: "Create a chat completion (OpenAI-compatible)"}},
-			UpstreamPath:  "/v1/chat/completions",
+			DefaultPath:   "/v1/chat/completions",
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -151,7 +151,7 @@ func newStack(t *testing.T) *stack {
 		(&adapter.Spec{
 			Name:          adapters.OpenAIResponses,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/responses", OperationID: "responses_create", Summary: "Create a response (OpenAI Responses API)"}},
-			UpstreamPath:  "/v1/responses",
+			DefaultPath:   "/v1/responses",
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.ResponsesTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -163,7 +163,7 @@ func newStack(t *testing.T) *stack {
 		(&adapter.Spec{
 			Name:          adapters.OpenAIEmbeddings,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/embeddings", OperationID: "embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"}},
-			UpstreamPath:  "/v1/embeddings",
+			DefaultPath:   "/v1/embeddings",
 			Auth:          openaiAuth,
 			BytePass:      true,
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -171,7 +171,7 @@ func newStack(t *testing.T) *stack {
 		(&adapter.Spec{
 			Name:          adapters.Anthropic,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"}},
-			UpstreamPath:  "/v1/messages",
+			DefaultPath:   "/v1/messages",
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
