@@ -21,8 +21,8 @@
 package hostkey
 
 import (
-	"time"
 	"fmt"
+	"time"
 
 	"github.com/wyolet/relay/app/meta"
 )
@@ -34,7 +34,7 @@ type HostKey struct {
 	// Status is observed state (see Status type) — API-visible, never
 	// round-tripped through YAML manifests.
 	Status Status `json:"status,omitzero" yaml:"-"`
-	Spec Spec          `json:"spec"     yaml:"spec"`
+	Spec   Spec   `json:"spec"     yaml:"spec"`
 
 	// Resolved is the cleartext value reconstructed at load time (read from
 	// the env var or decrypted from PG). Runtime-only; never serialized.
