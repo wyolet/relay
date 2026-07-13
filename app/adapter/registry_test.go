@@ -9,9 +9,9 @@ import (
 
 func buildSpec(name adapters.Name) *adapter.Spec {
 	return (&adapter.Spec{
-		Name:         name,
+		Name:        name,
 		DefaultPath: "/v1/test",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 	}).Build()
 }
 

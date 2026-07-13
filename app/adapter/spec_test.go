@@ -19,7 +19,7 @@ import (
 func newBearerSpec(t *testing.T, path string, opts ...func(*adapter.Spec)) *adapter.Spec {
 	t.Helper()
 	s := &adapter.Spec{
-		Name:         adapters.OpenAI,
+		Name:        adapters.OpenAI,
 		DefaultPath: path,
 		Auth: adapter.AuthStrategy{
 			Header: "Authorization",
@@ -96,7 +96,7 @@ func TestSpecAdapter_Call_ExtraHeaders(t *testing.T) {
 	defer srv.Close()
 
 	s := &adapter.Spec{
-		Name:         adapters.Anthropic,
+		Name:        adapters.Anthropic,
 		DefaultPath: "/v1/messages",
 		Auth: adapter.AuthStrategy{
 			Header: "x-api-key",
@@ -129,7 +129,7 @@ func TestSpecAdapter_Call_ExtraHeaders_NotOverrideForwarded(t *testing.T) {
 	defer srv.Close()
 
 	s := &adapter.Spec{
-		Name:         adapters.Anthropic,
+		Name:        adapters.Anthropic,
 		DefaultPath: "/v1/messages",
 		Auth: adapter.AuthStrategy{
 			Header: "x-api-key",
@@ -270,9 +270,9 @@ func TestSpecAdapter_ExtractTokens_Nil(t *testing.T) {
 func TestSpecAdapter_ExtractTokens_Custom(t *testing.T) {
 	called := false
 	s := &adapter.Spec{
-		Name:         adapters.OpenAI,
+		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		ExtractTokens: func(_ []byte) pkgusage.Tokens {
 			called = true
 			return pkgusage.Tokens{"input": 10, "output": 5}
@@ -297,7 +297,7 @@ func TestSpecAdapter_ExtractTokens_Custom(t *testing.T) {
 // oauth beta header when the credential is an OAuth token.
 func dualAuthSpec() *adapter.Spec {
 	return (&adapter.Spec{
-		Name:         adapters.Anthropic,
+		Name:        adapters.Anthropic,
 		DefaultPath: "/v1/messages",
 		Auth: adapter.AuthStrategy{
 			Header:       "x-api-key",
@@ -369,9 +369,9 @@ func TestSpecAdapter_NotOAuth_UsesAPIKey(t *testing.T) {
 // its default Auth even when the credential is oauth-kind.
 func TestSpecAdapter_OAuth_FallsBackWhenNoVariant(t *testing.T) {
 	s := (&adapter.Spec{
-		Name:         adapters.OpenAI,
+		Name:        adapters.OpenAI,
 		DefaultPath: "/v1/chat/completions",
-		Auth:         adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 	}).Build()
 	got := callCapture(t, s, "sk-tok", nil, true)
 	if got.auth != "Bearer sk-tok" {

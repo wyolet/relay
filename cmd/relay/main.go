@@ -264,7 +264,7 @@ func main() {
 			InboundPaths: []adapter.InboundPath{
 				{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion (OpenAI Chat Completions shape)"},
 			},
-			DefaultPath:  "/v1/chat/completions",
+			DefaultPath:   "/v1/chat/completions",
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -274,7 +274,7 @@ func main() {
 			InboundPaths: []adapter.InboundPath{
 				{Path: "/openai/v1/responses", OperationID: "openai_responses_create", Summary: "Create a response (OpenAI Responses API)"},
 			},
-			DefaultPath:  "/v1/responses",
+			DefaultPath:   "/v1/responses",
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.ResponsesTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -288,7 +288,7 @@ func main() {
 			InboundPaths: []adapter.InboundPath{
 				{Path: "/openai/v1/embeddings", OperationID: "openai_embeddings_create", Summary: "Create embeddings (OpenAI-compatible)"},
 			},
-			DefaultPath:  "/v1/embeddings",
+			DefaultPath:   "/v1/embeddings",
 			Auth:          openaiAuth,
 			BytePass:      true,
 			ExtractTokens: pkgopenai.ExtractTokens,
@@ -298,7 +298,7 @@ func main() {
 			InboundPaths: []adapter.InboundPath{
 				{Path: "/anthropic/v1/messages", OperationID: "anthropic_messages", Summary: "Create a message (Anthropic Messages shape)"},
 			},
-			DefaultPath:  "/v1/messages",
+			DefaultPath:   "/v1/messages",
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
