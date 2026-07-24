@@ -35,11 +35,13 @@ type Spec struct {
 // Rate is one priced meter. AboveTokens=0 is the base tier; AboveTokens>0 is
 // the rate charged once the request's billable token count exceeds that
 // threshold. The billing-time picker walks rates for the meter and applies
-// the largest qualifying threshold.
+// the largest qualifying threshold. Amount 0 is valid: a free meter (e.g.
+// an embedding model's output tokens) is an explicit zero rate, not a
+// missing one.
 type Rate struct {
 	Meter       Meter   `json:"meter"                 yaml:"meter"                 validate:"required,oneof=tokens.input tokens.output tokens.cache_read tokens.cache_creation tokens.reasoning tokens.audio_input tokens.audio_output tokens.accepted_prediction tokens.rejected_prediction tokens.server_tool_use_input tokens.server_tool_use_output"`
 	Unit        Unit    `json:"unit"                  yaml:"unit"                  validate:"required,oneof=per_million per_unit"`
-	Amount      float64 `json:"amount"                yaml:"amount"                validate:"required,gt=0"`
+	Amount      float64 `json:"amount"                yaml:"amount"                validate:"gte=0"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty" validate:"gte=0"`
 }
 

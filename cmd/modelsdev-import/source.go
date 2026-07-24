@@ -98,8 +98,9 @@ func Fetch(ctx context.Context, url, file string) ([]MDProvider, error) {
 			return nil, fmt.Errorf("read %s: %w", file, err)
 		}
 	} else {
+		// No explicit Accept-Encoding: setting it disables the transport's
+		// transparent gzip decompression, and models.dev serves gzip.
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		req.Header.Set("Accept-Encoding", "gzip")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("fetch %s: %w", url, err)

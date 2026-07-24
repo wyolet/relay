@@ -31,6 +31,24 @@ func TestValidate_Ok(t *testing.T) {
 	}
 }
 
+func TestValidate_ZeroAmountOK(t *testing.T) {
+	p := valid()
+	p.Spec.Rates = append(p.Spec.Rates, Rate{
+		Meter: MeterTokensCacheCreation, Unit: UnitPerMillion, Amount: 0,
+	})
+	if err := p.Validate(); err != nil {
+		t.Fatalf("explicit zero amount: %v", err)
+	}
+}
+
+func TestValidate_NegativeAmount(t *testing.T) {
+	p := valid()
+	p.Spec.Rates[0].Amount = -1
+	if err := p.Validate(); err == nil {
+		t.Fatal("negative amount must fail validation")
+	}
+}
+
 func TestValidate_OwnerMustBeHost(t *testing.T) {
 	p := valid()
 	p.Meta.Owner.Kind = meta.OwnerUser
