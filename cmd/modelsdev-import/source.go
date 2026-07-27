@@ -30,13 +30,15 @@ type MDProvider struct {
 // MDModel is one model entry. We capture every field models.dev carries so
 // nothing is silently dropped; unmapped-but-useful bits land in labels/tags.
 type MDModel struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Family      string `json:"family"`
-	Attachment  bool   `json:"attachment"`
-	Reasoning   bool   `json:"reasoning"`
-	ToolCall    bool   `json:"tool_call"`
-	Temperature bool   `json:"temperature"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Family     string `json:"family"`
+	Attachment bool   `json:"attachment"`
+	Reasoning  bool   `json:"reasoning"`
+	ToolCall   bool   `json:"tool_call"`
+	// Temperature is a pointer so an absent field stays distinguishable from
+	// an explicit false — only explicit false marks the param unsupported.
+	Temperature *bool  `json:"temperature"`
 	Knowledge   string `json:"knowledge"`
 	ReleaseDate string `json:"release_date"`
 	LastUpdated string `json:"last_updated"`

@@ -109,6 +109,17 @@ type Spec struct {
 	// OpenAI /v1/responses sends GOAWAY mid-request over HTTP/2).
 	UseHTTP1 bool
 
+	// ParamPaths maps canonical sampling-param names ("temperature",
+	// "top_p", "top_k") to their dot-separated location in this shape's
+	// request JSON (e.g. "temperature" top-level for the OpenAI/Anthropic
+	// shapes, "generationConfig.temperature" for Gemini). Used by the
+	// byte-pass dispatch to strip params a routed model declares
+	// unsupported without invoking the translator; params absent from the
+	// map cannot be stripped on the byte-pass path. Wire-shape knowledge,
+	// so it lives here on the Spec literal (composition root), not in
+	// dispatch code.
+	ParamPaths map[string]string
+
 	// IsNativePath reports whether the resolved routing plan implies that the
 	// upstream host natively speaks this inbound shape — making byte-pass to
 	// this spec's UpstreamPath the correct strategy, regardless of whether

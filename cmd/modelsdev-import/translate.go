@@ -328,6 +328,9 @@ func capabilities(m MDModel) model.Capabilities {
 	if m.Cost.CacheRead != nil || m.Cost.CacheWrite != nil {
 		c.PromptCache = true
 	}
+	if m.Temperature != nil && !*m.Temperature {
+		c.UnsupportedParams = []string{"temperature"}
+	}
 	return c
 }
 

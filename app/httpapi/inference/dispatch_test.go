@@ -61,8 +61,9 @@ func (l rcListD) List(context.Context) ([]*pricing.Pricing, error)     { return 
 
 // buildDispatchCatalog creates a catalog with a model bound to the given
 // hostName (Meta.Name) with the provided adapter. Returns the catalog and
-// the relay key that authorises access.
-func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name) (*catalog.Catalog, *relaykey.RelayKey) {
+// the relay key that authorises access. An optional Capabilities value is
+// applied to the model.
+func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name, caps ...model.Capabilities) (*catalog.Catalog, *relaykey.RelayKey) {
 	t.Helper()
 
 	provID := meta.NewID()
@@ -89,6 +90,9 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 			Snapshots: []model.Snapshot{{Name: slug.From("test-model")}},
 			Pointer:   slug.From("test-model"),
 		},
+	}
+	if len(caps) > 0 {
+		m.Spec.Capabilities = caps[0]
 	}
 	b := &binding.Binding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "test-model-binding", Owner: meta.Owner{Kind: meta.OwnerSystem}},
@@ -159,6 +163,7 @@ func buildTestRegistry() *adapter.Registry {
 		DefaultPath: "/v1/chat/completions",
 		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
 		Translator:  stubV1Translator{},
+		ParamPaths:  map[string]string{"temperature": "temperature", "top_p": "top_p"},
 	}).Build()
 
 	// Responses: IsNativePath returns true only when host name == "openai".

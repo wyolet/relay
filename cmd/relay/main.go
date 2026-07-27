@@ -322,6 +322,7 @@ func main() {
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
+			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p"},
 		}).Build(),
 		(&adapter.Spec{
 			Name: adapters.OpenAIResponses,
@@ -332,6 +333,7 @@ func main() {
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.ResponsesTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
+			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p"},
 			UseHTTP1:      true,
 			IsNativePath: func(plan *routing.Plan) bool {
 				return plan.HostBinding.Spec.Adapter == adapters.OpenAI && plan.Host.Meta.Name == "openai"
@@ -356,6 +358,7 @@ func main() {
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
+			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p", "top_k": "top_k"},
 		}).Build(),
 		// Gemini native shape — upstream-only for now (HostBinding.Adapter:
 		// gemini), reachable via the canonical / OpenAI / Anthropic inbound
@@ -368,6 +371,11 @@ func main() {
 			Auth:           geminiAuth,
 			Translator:     pkggemini.GeminiTranslator{},
 			ExtractTokens:  pkggemini.ExtractTokens,
+			ParamPaths: map[string]string{
+				"temperature": "generationConfig.temperature",
+				"top_p":       "generationConfig.topP",
+				"top_k":       "generationConfig.topK",
+			},
 		}).Build(),
 		// Canonical shape — relay's own protocol (pkg/relay/v1), served at /v1.
 		// Inbound-only: callers POST canonical, relay routes + translates

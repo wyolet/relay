@@ -177,3 +177,16 @@ func assertBindingSnapshotsDeclared(t *testing.T, r *TranslateResult) {
 		}
 	}
 }
+
+func TestCapabilitiesTemperatureFlag(t *testing.T) {
+	f, tr := false, true
+	if c := capabilities(MDModel{Temperature: &f}); len(c.UnsupportedParams) != 1 || c.UnsupportedParams[0] != "temperature" {
+		t.Errorf("explicit false: UnsupportedParams = %v, want [temperature]", c.UnsupportedParams)
+	}
+	if c := capabilities(MDModel{Temperature: &tr}); c.UnsupportedParams != nil {
+		t.Errorf("explicit true: UnsupportedParams = %v, want none", c.UnsupportedParams)
+	}
+	if c := capabilities(MDModel{}); c.UnsupportedParams != nil {
+		t.Errorf("absent field: UnsupportedParams = %v, want none", c.UnsupportedParams)
+	}
+}

@@ -131,25 +131,32 @@ func AliasPattern(alias string) (prefix, suffix string, ok bool) {
 // Open-ended over time; new flags can be added without a migration since
 // the whole struct lives in JSONB.
 type Capabilities struct {
-	Chat              bool `json:"chat,omitempty"              yaml:"chat,omitempty"`
-	Embeddings        bool `json:"embeddings,omitempty"        yaml:"embeddings,omitempty"`
-	Streaming         bool `json:"streaming,omitempty"         yaml:"streaming,omitempty"`
-	Tools             bool `json:"tools,omitempty"             yaml:"tools,omitempty"`
-	ParallelTools     bool `json:"parallelTools,omitempty"     yaml:"parallelTools,omitempty"`
-	Vision            bool `json:"vision,omitempty"            yaml:"vision,omitempty"`
-	Audio             bool `json:"audio,omitempty"             yaml:"audio,omitempty"`
-	PromptCache       bool `json:"promptCache,omitempty"       yaml:"promptCache,omitempty"`
-	Reasoning         bool `json:"reasoning,omitempty"         yaml:"reasoning,omitempty"`
-	JSONMode          bool `json:"jsonMode,omitempty"          yaml:"jsonMode,omitempty"`
-	StructuredOutputs bool `json:"structuredOutputs,omitempty" yaml:"structuredOutputs,omitempty"`
-	Batch             bool `json:"batch,omitempty"             yaml:"batch,omitempty"`
-	ComputerUse       bool `json:"computerUse,omitempty"       yaml:"computerUse,omitempty"`
-	WebSearch         bool `json:"webSearch,omitempty"         yaml:"webSearch,omitempty"`
-	FileInput         bool `json:"fileInput,omitempty"         yaml:"fileInput,omitempty"`
-	AudioInput        bool `json:"audioInput,omitempty"        yaml:"audioInput,omitempty"`
-	AudioOutput       bool `json:"audioOutput,omitempty"       yaml:"audioOutput,omitempty"`
-	SystemMessages    bool `json:"systemMessages,omitempty"    yaml:"systemMessages,omitempty"`
-	AssistantPrefill  bool `json:"assistantPrefill,omitempty"  yaml:"assistantPrefill,omitempty"`
+	// UnsupportedParams lists request parameters (canonical sampling names:
+	// "temperature", "top_p", "top_k") the upstream rejects for this model.
+	// Inverted so the zero value means "everything supported" — only flagged
+	// models carry it. The pipeline strips listed params pre-upstream and
+	// surfaces the drop; unknown names are inert, so catalog data may flag
+	// params an older relay doesn't yet gate.
+	UnsupportedParams []string `json:"unsupportedParams,omitempty" yaml:"unsupportedParams,omitempty"`
+	Chat              bool     `json:"chat,omitempty"              yaml:"chat,omitempty"`
+	Embeddings        bool     `json:"embeddings,omitempty"        yaml:"embeddings,omitempty"`
+	Streaming         bool     `json:"streaming,omitempty"         yaml:"streaming,omitempty"`
+	Tools             bool     `json:"tools,omitempty"             yaml:"tools,omitempty"`
+	ParallelTools     bool     `json:"parallelTools,omitempty"     yaml:"parallelTools,omitempty"`
+	Vision            bool     `json:"vision,omitempty"            yaml:"vision,omitempty"`
+	Audio             bool     `json:"audio,omitempty"             yaml:"audio,omitempty"`
+	PromptCache       bool     `json:"promptCache,omitempty"       yaml:"promptCache,omitempty"`
+	Reasoning         bool     `json:"reasoning,omitempty"         yaml:"reasoning,omitempty"`
+	JSONMode          bool     `json:"jsonMode,omitempty"          yaml:"jsonMode,omitempty"`
+	StructuredOutputs bool     `json:"structuredOutputs,omitempty" yaml:"structuredOutputs,omitempty"`
+	Batch             bool     `json:"batch,omitempty"             yaml:"batch,omitempty"`
+	ComputerUse       bool     `json:"computerUse,omitempty"       yaml:"computerUse,omitempty"`
+	WebSearch         bool     `json:"webSearch,omitempty"         yaml:"webSearch,omitempty"`
+	FileInput         bool     `json:"fileInput,omitempty"         yaml:"fileInput,omitempty"`
+	AudioInput        bool     `json:"audioInput,omitempty"        yaml:"audioInput,omitempty"`
+	AudioOutput       bool     `json:"audioOutput,omitempty"       yaml:"audioOutput,omitempty"`
+	SystemMessages    bool     `json:"systemMessages,omitempty"    yaml:"systemMessages,omitempty"`
+	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"  yaml:"assistantPrefill,omitempty"`
 }
 
 // Modalities lists input/output media types ("text", "image", "audio", ...).

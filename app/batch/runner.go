@@ -96,8 +96,13 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 	}
 	lc.Translator = upstreamSpec.Translator
 
+	wireBody := inference.RewriteModelField(body, plan.UpstreamModel())
+	// Same-shape only (guarded above), so the body stays inbound-shaped and
+	// the inbound spec's ParamPaths address it — mirrors runBytePass.
+	wireBody, _ = inference.StripUnsupportedParams(wireBody, plan.Model, inboundSpec.ParamPaths)
+
 	preq := &pipeline.Request{
-		Body:          inference.RewriteModelField(body, plan.UpstreamModel()),
+		Body:          wireBody,
 		Headers:       http.Header{},
 		HostBaseURL:   plan.Host.Spec.BaseURL,
 		Adapter:       upstreamAdapter,

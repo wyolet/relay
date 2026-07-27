@@ -186,7 +186,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 					" (adapter="+string(plan.HostBinding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec.ParamPaths)
 		return
 	}
 
@@ -201,7 +201,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec.ParamPaths)
 		return
 	}
 
@@ -226,7 +226,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	sameShape := in.Inbound == plan.HostBinding.Spec.Adapter
 
 	if sameShape {
-		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator, inboundSpec.ParamPaths)
 		return
 	}
 
@@ -245,11 +245,18 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 
 // runBytePass handles same-shape or byte-pass dispatch: forward the body
 // (with model field rewritten to the upstream model name) to the upstream
-// and stream or buffer the response back.
-func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator) {
+// and stream or buffer the response back. paramPaths is the inbound spec's
+// param→JSON-path map (the body stays inbound-shaped on every byte-pass
+// variant), used to strip params the routed model declares unsupported.
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, paramPaths map[string]string) {
 	ctx := r.Context()
 
 	wireBody := rewriteModelField(in.Body, plan.UpstreamModel())
+	if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
+		var dropped []string
+		wireBody, dropped = stripWireParams(wireBody, u, paramPaths)
+		surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
+	}
 
 	lc := lifecycle.FromContext(ctx)
 	applyPlanIdentity(lc, plan)
@@ -344,6 +351,9 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	}
 	canonReq.Model = v1.ModelRefs{plan.UpstreamModel()}
 	applyOutputDefaults(canonReq, plan.Model.Spec.MaxOutputTokens)
+	if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
+		surfaceDroppedParams(w, plan.Model.Meta.Name, stripCanonicalParams(canonReq, u))
+	}
 
 	wireBody, err := upstreamV1.SerializeRequest(canonReq)
 	if err != nil {
