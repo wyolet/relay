@@ -65,25 +65,26 @@ type Rate struct {
 
 // Capabilities mirrors catalog.Capabilities field-for-field (convertible).
 type Capabilities struct {
-	Chat              bool `json:"chat,omitempty"`
-	Embeddings        bool `json:"embeddings,omitempty"`
-	Streaming         bool `json:"streaming,omitempty"`
-	Tools             bool `json:"tools,omitempty"`
-	ParallelTools     bool `json:"parallelTools,omitempty"`
-	Vision            bool `json:"vision,omitempty"`
-	Audio             bool `json:"audio,omitempty"`
-	PromptCache       bool `json:"promptCache,omitempty"`
-	Reasoning         bool `json:"reasoning,omitempty"`
-	JSONMode          bool `json:"jsonMode,omitempty"`
-	StructuredOutputs bool `json:"structuredOutputs,omitempty"`
-	Batch             bool `json:"batch,omitempty"`
-	ComputerUse       bool `json:"computerUse,omitempty"`
-	WebSearch         bool `json:"webSearch,omitempty"`
-	FileInput         bool `json:"fileInput,omitempty"`
-	AudioInput        bool `json:"audioInput,omitempty"`
-	AudioOutput       bool `json:"audioOutput,omitempty"`
-	SystemMessages    bool `json:"systemMessages,omitempty"`
-	AssistantPrefill  bool `json:"assistantPrefill,omitempty"`
+	UnsupportedParams []string `json:"unsupportedParams,omitempty"`
+	Chat              bool     `json:"chat,omitempty"`
+	Embeddings        bool     `json:"embeddings,omitempty"`
+	Streaming         bool     `json:"streaming,omitempty"`
+	Tools             bool     `json:"tools,omitempty"`
+	ParallelTools     bool     `json:"parallelTools,omitempty"`
+	Vision            bool     `json:"vision,omitempty"`
+	Audio             bool     `json:"audio,omitempty"`
+	PromptCache       bool     `json:"promptCache,omitempty"`
+	Reasoning         bool     `json:"reasoning,omitempty"`
+	JSONMode          bool     `json:"jsonMode,omitempty"`
+	StructuredOutputs bool     `json:"structuredOutputs,omitempty"`
+	Batch             bool     `json:"batch,omitempty"`
+	ComputerUse       bool     `json:"computerUse,omitempty"`
+	WebSearch         bool     `json:"webSearch,omitempty"`
+	FileInput         bool     `json:"fileInput,omitempty"`
+	AudioInput        bool     `json:"audioInput,omitempty"`
+	AudioOutput       bool     `json:"audioOutput,omitempty"`
+	SystemMessages    bool     `json:"systemMessages,omitempty"`
+	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"`
 }
 
 // Modalities mirrors catalog.Modalities (convertible).

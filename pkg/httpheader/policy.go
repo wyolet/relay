@@ -35,6 +35,11 @@ const (
 	// on the usage Event's tags field. Stripped from the upstream request
 	// by the X-WR-* denylist.
 	HeaderRequestTags = "X-WR-Request-Tags"
+
+	// HeaderWarnings is a response header carrying non-fatal request
+	// adjustments the relay made (e.g. params stripped because the routed
+	// model declares them unsupported) so drops are surfaced, never silent.
+	HeaderWarnings = "X-WR-Warnings"
 )
 
 // SafeUpstreamError returns a user-safe error message for an upstream failure,
