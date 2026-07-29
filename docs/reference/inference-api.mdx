@@ -88,6 +88,29 @@ Anthropic upstream) are translated per chunk through Relay's canonical
 protocol.
 </Info>
 
+## System messages
+
+Start-of-conversation system instructions map to the upstream's native
+form: the top-level `system` field (Anthropic), `systemInstruction`
+(Gemini), or a leading `system` message (OpenAI-compatible).
+
+System messages that appear **mid-conversation** keep their position —
+they are never merged into the start-of-conversation system prompt, so
+the upstream's prompt-cache prefix is not invalidated by a late
+instruction. On upstreams that accept a `system` role inside the message
+history (Anthropic's mid-conversation system messages), they are sent
+natively. Where the wire shape or the message's placement cannot express
+a system turn, it is delivered as a user turn wholly wrapped in
+`<system>` markers:
+
+```json
+{"role": "user", "content": "<system>\nFrom now on, answer in French.\n</system>"}
+```
+
+The marker round-trips: a user turn that is exactly this form is restored
+to a system message when Relay parses the conversation back. A `<system>`
+tag embedded inside longer user text is never promoted.
+
 ## Models
 
 The `model` field is resolved against your catalog. A model is reachable
