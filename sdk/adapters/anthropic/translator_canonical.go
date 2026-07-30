@@ -475,17 +475,23 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	}
 
 	// Build messages from canonical Input. Per-message cache anchors are applied
-	// inside (each Message carries its own ItemCacheConfig).
-	msgs, sysFromItems, err := canonicalItemsToAnthropic(req.Input, cacheTTL)
+	// inside (each Message carries its own ItemCacheConfig). The system prefix
+	// merges, in order: Instructions, leading system/developer items, then
+	// hoist-flagged items; non-hoisted positional system items ride in msgs.
+	input, hoistedSys := v1.SplitHoistedSystem(req.Input)
+	msgs, sysFromItems, err := canonicalItemsToAnthropic(input, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic serialize_request: %w", err)
 	}
 	out.Messages = msgs
-	if sysFromItems != "" {
+	for _, extra := range []string{sysFromItems, hoistedSys} {
+		if extra == "" {
+			continue
+		}
 		if systemText != "" {
-			systemText = systemText + "\n" + sysFromItems
+			systemText = systemText + "\n" + extra
 		} else {
-			systemText = sysFromItems
+			systemText = extra
 		}
 	}
 
@@ -1544,8 +1550,21 @@ func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 			for _, tr := range toolResults {
 				items = append(items, tr)
 			}
-			if len(textParts) > 0 {
+			if sysItem := unwrapSystemUserTurn(toolResults, textParts); sysItem != nil {
+				items = append(items, sysItem)
+			} else if len(textParts) > 0 {
 				items = append(items, &v1.Message{Role: v1.RoleUser, Content: textParts})
+			}
+
+		case "system":
+			// Mid-conversation system message (role:system inside the messages
+			// array, distinct from the top-level system field) — kept positional.
+			parts, err := anthropicContentToCanonicalParts(msg.Content)
+			if err != nil {
+				return nil, err
+			}
+			if len(parts) > 0 {
+				items = append(items, &v1.Message{Role: v1.RoleSystem, Content: parts})
 			}
 
 		case "assistant":
@@ -1790,7 +1809,12 @@ func anthropicImageBlockToURL(raw json.RawMessage) string {
 }
 
 // canonicalItemsToAnthropic converts canonical []v1.Item to Anthropic messages.
-// Returns also any additional system text from developer-role messages.
+// Returns also the system text merged from LEADING system/developer messages
+// (instructions that apply from the start belong in the top-level system
+// field). Mid-conversation system/developer items stay positional as
+// marker-wrapped user turns, so the cached prefix before them is untouched —
+// merging them into the system field would invalidate it. Hoist-flagged items
+// must be split off by the caller (v1.SplitHoistedSystem) before this runs.
 // cacheTTL is the request-level retention tier applied to item-anchor breakpoints.
 func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCanonMsg, string, error) {
 	var msgs []anthropicCanonMsg
@@ -1810,6 +1834,16 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	var runContents []any // per assistant Message: string or []map[string]any, cache breakpoints pre-applied
 	var runToolUses []v1.FunctionCall
 	var pendingToolResults []v1.FunctionCallOutput
+
+	// Positional system turns deferred past an open tool round: any message
+	// between a tool_use and its tool_result splits the pair (the API rejects
+	// anything in that gap), so the turn re-emits right after the tool_result
+	// user turn — the slot the API documents for mid-loop instructions.
+	var pendingSystem []anthropicCanonMsg
+	// seenConversation flips once any non-system item produced or buffered
+	// wire content; system/developer items before that merge into the
+	// top-level system field, everything after stays positional.
+	seenConversation := false
 
 	flushAssistant := func() {
 		if len(runThinking) == 0 && len(runContents) == 0 && len(runToolUses) == 0 {
@@ -1913,19 +1947,14 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 		}
 		msgs = append(msgs, anthropicCanonMsg{Role: "user", Content: blocks})
 		pendingToolResults = pendingToolResults[:0]
+		msgs = append(msgs, pendingSystem...)
+		pendingSystem = pendingSystem[:0]
 	}
 
 	for _, item := range items {
 		switch v := item.(type) {
 		case *v1.Message:
-			if v.Role != v1.RoleAssistant {
-				flushAssistant()
-			}
-			flushToolResults()
-
-			switch v.Role {
-			case v1.RoleDeveloper, v1.RoleSystem:
-				// Collect as additional system text.
+			if v.Role == v1.RoleDeveloper || v.Role == v1.RoleSystem {
 				var sb strings.Builder
 				for _, p := range v.Content {
 					switch tp := p.(type) {
@@ -1935,10 +1964,40 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 						sb.WriteString(tp.Text)
 					}
 				}
-				if s := sb.String(); s != "" {
-					systemParts = append(systemParts, s)
+				s := sb.String()
+				if s == "" {
+					continue
 				}
+				if !seenConversation {
+					systemParts = append(systemParts, s)
+					continue
+				}
+				// Positional system items ride as marker-wrapped user turns:
+				// works on every model, keeps position, leaves the cached
+				// prefix untouched. Real system authority is the caller's
+				// explicit choice via hoist (start-of-conversation merge,
+				// split off before this loop).
+				var content any = v1.WrapSystemMarker(s)
+				if v.CacheConfig != nil && v.CacheConfig.Anchor {
+					content = withCacheBreakpoint(content, cacheTTL)
+				}
+				turn := anthropicCanonMsg{Role: "user", Content: content}
+				if len(runToolUses) > 0 || len(pendingToolResults) > 0 {
+					pendingSystem = append(pendingSystem, turn)
+					continue
+				}
+				flushAssistant()
+				msgs = append(msgs, turn)
 				continue
+			}
+
+			seenConversation = true
+			if v.Role != v1.RoleAssistant {
+				flushAssistant()
+			}
+			flushToolResults()
+
+			switch v.Role {
 			case v1.RoleUser:
 				content, err := canonicalPartsToAnthropicContent(v.Content)
 				if err != nil {
@@ -1960,10 +2019,12 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 			}
 
 		case *v1.FunctionCall:
+			seenConversation = true
 			flushToolResults()
 			runToolUses = append(runToolUses, *v)
 
 		case *v1.FunctionCallOutput:
+			seenConversation = true
 			flushAssistant()
 			pendingToolResults = append(pendingToolResults, *v)
 
@@ -1981,6 +2042,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 					Signature string `json:"signature"`
 				}
 				if err := json.Unmarshal(v.ProviderData, &pd); err == nil && pd.Type == "thinking" && pd.Signature != "" {
+					seenConversation = true
 					runThinking = append(runThinking, map[string]any{
 						"type":      "thinking",
 						"thinking":  pd.Thinking,
@@ -2003,6 +2065,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	// rejects when thinking is enabled; mid-history thinking-only runs (broken
 	// by a user turn) ARE emitted above.
 	flushToolResults()
+	msgs = append(msgs, pendingSystem...)
 
 	return msgs, strings.Join(systemParts, "\n"), nil
 }

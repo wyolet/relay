@@ -88,6 +88,38 @@ Anthropic upstream) are translated per chunk through Relay's canonical
 protocol.
 </Info>
 
+## System messages
+
+Start-of-conversation system instructions map to the upstream's native
+form: the top-level `system` field (Anthropic), `systemInstruction`
+(Gemini), or a leading `system` message (OpenAI-compatible).
+
+System messages that appear **mid-conversation** keep their position —
+they are never merged into the start-of-conversation system prompt, so
+the upstream's prompt-cache prefix is not invalidated by a late
+instruction. Relay's canonical semantics follow the OpenAI shape here:
+on OpenAI-compatible upstreams the message is sent as a real `system`
+turn in place. Anthropic and Gemini upstreams cannot express that on
+every model, so there the message is delivered in place as a user turn
+wholly wrapped in `<system>` markers:
+
+```json
+{"role": "user", "content": "<system>\nFrom now on, answer in French.\n</system>"}
+```
+
+The marker round-trips: a user turn that is exactly this form is restored
+to a system message when Relay parses the conversation back. A `<system>`
+tag embedded inside longer user text is never promoted. Inbound Anthropic
+requests may also carry `role: "system"` messages (supported by recent
+Claude models); Relay accepts them and keeps them positional.
+
+A canonical system message can instead opt into full system authority
+with `"hoist": true`: at serialization it merges into the upstream's
+start-of-conversation system form on every shape. Hoisting changes the
+very beginning of the prompt, so it invalidates the upstream's cached
+prefix for that conversation — use it for instructions that must
+override user content, not for routine mid-session notes.
+
 ## Models
 
 The `model` field is resolved against your catalog. A model is reachable

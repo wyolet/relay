@@ -228,18 +228,24 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 	}
 
-	// Build contents from canonical Input. System/developer role messages are
-	// appended to systemInstruction rather than contents.
-	contents, extraSys, err := canonicalItemsToGemini(req.Input)
+	// Build contents from canonical Input. LEADING system/developer items and
+	// hoist-flagged items merge into systemInstruction; other positional ones
+	// stay in contents (marker-wrapped user turns) so the prefix stays
+	// cache-stable.
+	input, hoistedSys := v1.SplitHoistedSystem(req.Input)
+	contents, extraSys, err := canonicalItemsToGemini(input)
 	if err != nil {
 		return nil, fmt.Errorf("gemini serialize_request: %w", err)
 	}
 	out.Contents = contents
-	if extraSys != "" {
+	for _, extra := range []string{extraSys, hoistedSys} {
+		if extra == "" {
+			continue
+		}
 		if out.SystemInstruction != nil {
-			out.SystemInstruction.Parts = append(out.SystemInstruction.Parts, geminiPart{Text: extraSys})
+			out.SystemInstruction.Parts = append(out.SystemInstruction.Parts, geminiPart{Text: extra})
 		} else {
-			out.SystemInstruction = &geminiContent{Parts: []geminiPart{{Text: extraSys}}}
+			out.SystemInstruction = &geminiContent{Parts: []geminiPart{{Text: extra}}}
 		}
 	}
 
@@ -886,8 +892,10 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 		case "user":
 			// user may have text parts or functionResponse parts
 			var textParts []v1.Part
+			hasFunctionResponse := false
 			for _, p := range c.Parts {
 				if p.FunctionResponse != nil {
+					hasFunctionResponse = true
 					output := ""
 					if len(p.FunctionResponse.Response) > 0 {
 						output = string(p.FunctionResponse.Response)
@@ -906,6 +914,17 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 						FileURL:   p.FileData.FileURI,
 						MediaType: p.FileData.MIMEType,
 					})
+				}
+			}
+			if len(textParts) == 1 && !hasFunctionResponse {
+				// A whole-turn marker wrap is a positional system item that had
+				// to ride as user text (no system role on this wire) — restore
+				// the role so the marker never surfaces as user text on replay.
+				if tp, ok := textParts[0].(*v1.TextPart); ok {
+					if inner, ok := v1.UnwrapSystemMarker(tp.Text); ok {
+						items = append(items, &v1.Message{Role: v1.RoleSystem, Content: []v1.Part{&v1.TextPart{Text: inner}}})
+						continue
+					}
 				}
 			}
 			if len(textParts) > 0 {
@@ -952,7 +971,9 @@ func geminiContentsToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 }
 
 // canonicalItemsToGemini converts canonical []v1.Item to Gemini contents.
-// System/developer role messages are returned separately as extraSys text.
+// System/developer text from LEADING items is returned separately for
+// systemInstruction; positional system items stay in contents as
+// marker-wrapped user turns.
 func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 	var contents []geminiContent
 	var sysExtra []string
@@ -961,6 +982,13 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 	// function calls and results into the appropriate role content.
 	var pendingFCs []v1.FunctionCall
 	var pendingFCOs []v1.FunctionCallOutput
+
+	// Positional system turns deferred past an open tool round; drained
+	// right after the functionResponse user turn.
+	var pendingSystem []geminiContent
+	// seenConversation flips once any non-system item lands in contents;
+	// system/developer items before that merge into systemInstruction.
+	seenConversation := false
 
 	flushFCs := func() {
 		if len(pendingFCs) == 0 {
@@ -1022,16 +1050,14 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 		}
 		contents = append(contents, geminiContent{Role: "user", Parts: parts})
 		pendingFCOs = pendingFCOs[:0]
+		contents = append(contents, pendingSystem...)
+		pendingSystem = pendingSystem[:0]
 	}
 
 	for _, item := range items {
 		switch v := item.(type) {
 		case *v1.Message:
-			flushFCs()
-			flushFCOs()
-
-			switch v.Role {
-			case v1.RoleSystem, v1.RoleDeveloper:
+			if v.Role == v1.RoleSystem || v.Role == v1.RoleDeveloper {
 				var sb strings.Builder
 				for _, p := range v.Content {
 					switch tp := p.(type) {
@@ -1041,10 +1067,35 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 						sb.WriteString(tp.Text)
 					}
 				}
-				if s := sb.String(); s != "" {
-					sysExtra = append(sysExtra, s)
+				s := sb.String()
+				if s == "" {
+					continue
 				}
+				// Leading system/developer items merge into systemInstruction;
+				// positional ones stay in place as marker-wrapped user turns
+				// (the wire has no mid-conversation system concept) so the
+				// instruction keeps its position and the prefix stays stable
+				// for context caching. Round-trips via v1.UnwrapSystemMarker.
+				if !seenConversation {
+					sysExtra = append(sysExtra, s)
+					continue
+				}
+				sysTurn := geminiContent{Role: "user", Parts: []geminiPart{{Text: v1.WrapSystemMarker(s)}}}
+				// Never split a functionCall from its functionResponse: an open
+				// tool round defers the turn to just after the responses.
+				if len(pendingFCs) > 0 || len(pendingFCOs) > 0 {
+					pendingSystem = append(pendingSystem, sysTurn)
+					continue
+				}
+				contents = append(contents, sysTurn)
+				continue
+			}
 
+			seenConversation = true
+			flushFCs()
+			flushFCOs()
+
+			switch v.Role {
 			case v1.RoleUser:
 				parts, err := canonicalPartsToGemini(v.Content)
 				if err != nil {
@@ -1061,10 +1112,12 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 			}
 
 		case *v1.FunctionCall:
+			seenConversation = true
 			flushFCOs()
 			pendingFCs = append(pendingFCs, *v)
 
 		case *v1.FunctionCallOutput:
+			seenConversation = true
 			flushFCs()
 			pendingFCOs = append(pendingFCOs, *v)
 
@@ -1078,6 +1131,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 				text = v.Summary[0].Text
 			}
 			if text != "" {
+				seenConversation = true
 				p := geminiPart{Text: text, Thought: true}
 				if sig := thoughtSignatureFrom(v.ProviderData); sig != "" {
 					p.ThoughtSignature = sig
@@ -1089,6 +1143,7 @@ func canonicalItemsToGemini(items []v1.Item) ([]geminiContent, string, error) {
 
 	flushFCs()
 	flushFCOs()
+	contents = append(contents, pendingSystem...)
 
 	return contents, strings.Join(sysExtra, "\n"), nil
 }
