@@ -27,3 +27,42 @@ func UnwrapSystemMarker(text string) (string, bool) {
 	}
 	return text[len(SystemMarkerOpen) : len(text)-len(SystemMarkerClose)], true
 }
+
+// SplitHoistedSystem removes hoist-flagged system/developer messages from
+// items and returns their texts joined with "\n". Serializers merge the text
+// into the shape's start-of-conversation system form (top-level system,
+// systemInstruction, leading system message). The original slice is returned
+// untouched when nothing is flagged.
+func SplitHoistedSystem(items []Item) ([]Item, string) {
+	flagged := false
+	for _, it := range items {
+		if m, ok := it.(*Message); ok && m.Hoist && (m.Role == RoleSystem || m.Role == RoleDeveloper) {
+			flagged = true
+			break
+		}
+	}
+	if !flagged {
+		return items, ""
+	}
+	var texts []string
+	rest := make([]Item, 0, len(items))
+	for _, it := range items {
+		if m, ok := it.(*Message); ok && m.Hoist && (m.Role == RoleSystem || m.Role == RoleDeveloper) {
+			var sb strings.Builder
+			for _, p := range m.Content {
+				switch tp := p.(type) {
+				case *TextPart:
+					sb.WriteString(tp.Text)
+				case *OutputTextPart:
+					sb.WriteString(tp.Text)
+				}
+			}
+			if s := sb.String(); s != "" {
+				texts = append(texts, s)
+			}
+			continue
+		}
+		rest = append(rest, it)
+	}
+	return rest, strings.Join(texts, "\n")
+}

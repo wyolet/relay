@@ -64,16 +64,16 @@ func TestSystemLeading_MergesTopLevelSystem(t *testing.T) {
 	assertRoles(t, wireMessages(t, m), "user")
 }
 
-func TestSystemMid_StaysPositional(t *testing.T) {
+func TestSystemMid_MarkerUserTurnInPlace(t *testing.T) {
 	m := serializeItems(t,
 		userMsgItem("a"), asstMsgItem("b"), userMsgItem("c"), sysMsgItem("new rule"))
 	if _, present := m["system"]; present {
 		t.Errorf("top-level system should be absent, got %v", m["system"])
 	}
 	msgs := wireMessages(t, m)
-	assertRoles(t, msgs, "user", "assistant", "user", "system")
-	if msgs[3]["content"] != "new rule" {
-		t.Errorf("system content: got %v", msgs[3]["content"])
+	assertRoles(t, msgs, "user", "assistant", "user", "user")
+	if msgs[3]["content"] != v1.WrapSystemMarker("new rule") {
+		t.Errorf("marker turn content: got %v", msgs[3]["content"])
 	}
 }
 
@@ -109,33 +109,25 @@ func TestSystemMid_CachePrefixStable(t *testing.T) {
 	}
 }
 
-func TestSystemMid_BeforeAssistantStaysSystem(t *testing.T) {
-	m := serializeItems(t, userMsgItem("q"), sysMsgItem("rule"), asstMsgItem("a"))
-	assertRoles(t, wireMessages(t, m), "user", "system", "assistant")
-}
-
-func TestSystemMid_AfterAssistantFallsBackToUserMarker(t *testing.T) {
+func TestSystemMid_AllPositionsBecomeMarkerTurns(t *testing.T) {
+	// Between user turns, before an assistant turn, after an assistant turn,
+	// consecutive at the end — every positional slot takes the marker form.
 	m := serializeItems(t,
-		userMsgItem("q"), asstMsgItem("a"), sysMsgItem("rule"), asstMsgItem("b"))
+		userMsgItem("a"),
+		sysMsgItem("r1"),
+		asstMsgItem("b"),
+		sysMsgItem("r2"),
+		userMsgItem("c"),
+		sysMsgItem("r3"),
+		sysMsgItem("r4"),
+	)
 	msgs := wireMessages(t, m)
-	assertRoles(t, msgs, "user", "assistant", "user", "assistant")
-	if msgs[2]["content"] != v1.WrapSystemMarker("rule") {
-		t.Errorf("fallback content: got %v", msgs[2]["content"])
+	assertRoles(t, msgs, "user", "user", "assistant", "user", "user", "user", "user")
+	for i, want := range map[int]string{1: "r1", 3: "r2", 5: "r3", 6: "r4"} {
+		if msgs[i]["content"] != v1.WrapSystemMarker(want) {
+			t.Errorf("messages[%d]: got %v", i, msgs[i]["content"])
+		}
 	}
-}
-
-func TestSystemMid_BetweenUserTurnsFallsBack(t *testing.T) {
-	m := serializeItems(t, userMsgItem("a"), sysMsgItem("rule"), userMsgItem("b"))
-	msgs := wireMessages(t, m)
-	assertRoles(t, msgs, "user", "user", "user")
-	if msgs[1]["content"] != v1.WrapSystemMarker("rule") {
-		t.Errorf("fallback content: got %v", msgs[1]["content"])
-	}
-}
-
-func TestSystemMid_ConsecutiveTrailingStay(t *testing.T) {
-	m := serializeItems(t, userMsgItem("a"), sysMsgItem("r1"), sysMsgItem("r2"))
-	assertRoles(t, wireMessages(t, m), "user", "system", "system")
 }
 
 func TestSystemMid_DeferredPastToolResults(t *testing.T) {
@@ -146,11 +138,14 @@ func TestSystemMid_DeferredPastToolResults(t *testing.T) {
 		&v1.FunctionCallOutput{CallID: "c1", Output: "done"},
 	)
 	msgs := wireMessages(t, m)
-	assertRoles(t, msgs, "user", "assistant", "user", "system")
+	assertRoles(t, msgs, "user", "assistant", "user", "user")
 	// the tool_result user turn must directly follow its tool_use turn
 	blocks := msgs[2]["content"].([]any)
 	if blocks[0].(map[string]any)["type"] != "tool_result" {
 		t.Errorf("expected tool_result turn at [2], got %v", msgs[2])
+	}
+	if msgs[3]["content"] != v1.WrapSystemMarker("user sent more input meanwhile") {
+		t.Errorf("deferred marker turn: got %v", msgs[3]["content"])
 	}
 }
 
@@ -159,14 +154,36 @@ func TestSystemMid_AnchorKeepsBreakpoint(t *testing.T) {
 	sys.CacheConfig = &v1.ItemCacheConfig{Anchor: true}
 	m := serializeItems(t, userMsgItem("a"), sys)
 	msgs := wireMessages(t, m)
-	assertRoles(t, msgs, "user", "system")
+	assertRoles(t, msgs, "user", "user")
 	blocks, ok := msgs[1]["content"].([]any)
 	if !ok {
-		t.Fatalf("anchored system content should be block form, got %T", msgs[1]["content"])
+		t.Fatalf("anchored marker content should be block form, got %T", msgs[1]["content"])
 	}
-	if blocks[0].(map[string]any)["cache_control"] == nil {
-		t.Errorf("cache_control missing on anchored system block")
+	block := blocks[0].(map[string]any)
+	if block["cache_control"] == nil {
+		t.Errorf("cache_control missing on anchored marker block")
 	}
+	if block["text"] != v1.WrapSystemMarker("rule") {
+		t.Errorf("anchored marker text: got %v", block["text"])
+	}
+}
+
+func TestSystemHoist_MergesTopLevelSystem(t *testing.T) {
+	hoisted := sysMsgItem("typed queries only")
+	hoisted.Hoist = true
+	body, err := (AnthropicTranslator{}).SerializeRequest(&v1.Request{
+		Model:        v1.ModelRefs{"claude-opus-5"},
+		Instructions: "base",
+		Input:        []v1.Item{userMsgItem("a"), asstMsgItem("b"), hoisted},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, body)
+	if m["system"] != "base\ntyped queries only" {
+		t.Errorf("system: got %v", m["system"])
+	}
+	assertRoles(t, wireMessages(t, m), "user", "assistant")
 }
 
 func TestParseRequest_SystemRoleInMessages(t *testing.T) {
@@ -235,15 +252,15 @@ func TestParseRequest_MarkerSubstringStaysUser(t *testing.T) {
 	}
 }
 
-// Round-trip: canonical → wire → canonical preserves system role + position,
-// through both the native role:system form and the marker fallback form.
+// Round-trip: canonical → wire → canonical preserves system role + position
+// through the marker form.
 func TestSystemRoundTrip(t *testing.T) {
 	items := []v1.Item{
 		userMsgItem("a"),
 		asstMsgItem("b"),
-		sysMsgItem("rule after assistant"), // fallback form (follows assistant)
+		sysMsgItem("rule after assistant"),
 		userMsgItem("c"),
-		sysMsgItem("trailing rule"), // native form (follows user, ends array)
+		sysMsgItem("trailing rule"),
 	}
 	body, err := (AnthropicTranslator{}).SerializeRequest(&v1.Request{
 		Model: v1.ModelRefs{"claude-opus-5"},
@@ -267,6 +284,6 @@ func TestSystemRoundTrip(t *testing.T) {
 		}
 	}
 	if tp := req.Input[2].(*v1.Message).Content[0].(*v1.TextPart); tp.Text != "rule after assistant" {
-		t.Errorf("fallback round-trip text: %q", tp.Text)
+		t.Errorf("round-trip text: %q", tp.Text)
 	}
 }

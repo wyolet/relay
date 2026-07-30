@@ -128,6 +128,23 @@ func TestGeminiSystemMid_DeferredPastToolRound(t *testing.T) {
 	}
 }
 
+func TestGeminiSystemHoist_MergesSystemInstruction(t *testing.T) {
+	hoisted := sysMsgItem("typed queries only")
+	hoisted.Hoist = true
+	m := serializeItems(t, userMsgItem("a"), asstMsgItem("b"), hoisted)
+	si, ok := m["systemInstruction"].(map[string]any)
+	if !ok {
+		t.Fatalf("systemInstruction missing: %v", m["systemInstruction"])
+	}
+	if contentText(si) != "typed queries only" {
+		t.Errorf("systemInstruction: %v", si)
+	}
+	cs := wireContents(t, m)
+	if len(cs) != 2 {
+		t.Errorf("hoisted item must not stay in contents: %v", cs)
+	}
+}
+
 func TestGeminiParse_UnwrapsMarkerUserTurn(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"contents": []map[string]any{

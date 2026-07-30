@@ -300,8 +300,19 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		out.StreamOptions = &StreamOptions{IncludeUsage: true}
 	}
 
-	// Messages: instructions → system message; items → messages.
-	msgs, err := canonicalItemsToCC(req.Instructions, req.Input)
+	// Messages: instructions (+ hoist-flagged system items) → leading system
+	// message; other items → messages. Non-hoisted system items stay
+	// positional — CC supports the system role anywhere natively.
+	input, hoistedSys := v1.SplitHoistedSystem(req.Input)
+	instructions := req.Instructions
+	if hoistedSys != "" {
+		if instructions != "" {
+			instructions = instructions + "\n" + hoistedSys
+		} else {
+			instructions = hoistedSys
+		}
+	}
+	msgs, err := canonicalItemsToCC(instructions, input)
 	if err != nil {
 		return nil, fmt.Errorf("cc serialize_request: %w", err)
 	}

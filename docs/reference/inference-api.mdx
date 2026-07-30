@@ -97,11 +97,11 @@ form: the top-level `system` field (Anthropic), `systemInstruction`
 System messages that appear **mid-conversation** keep their position —
 they are never merged into the start-of-conversation system prompt, so
 the upstream's prompt-cache prefix is not invalidated by a late
-instruction. On upstreams that accept a `system` role inside the message
-history (Anthropic's mid-conversation system messages), they are sent
-natively. Where the wire shape or the message's placement cannot express
-a system turn, it is delivered as a user turn wholly wrapped in
-`<system>` markers:
+instruction. Relay's canonical semantics follow the OpenAI shape here:
+on OpenAI-compatible upstreams the message is sent as a real `system`
+turn in place. Anthropic and Gemini upstreams cannot express that on
+every model, so there the message is delivered in place as a user turn
+wholly wrapped in `<system>` markers:
 
 ```json
 {"role": "user", "content": "<system>\nFrom now on, answer in French.\n</system>"}
@@ -109,7 +109,16 @@ a system turn, it is delivered as a user turn wholly wrapped in
 
 The marker round-trips: a user turn that is exactly this form is restored
 to a system message when Relay parses the conversation back. A `<system>`
-tag embedded inside longer user text is never promoted.
+tag embedded inside longer user text is never promoted. Inbound Anthropic
+requests may also carry `role: "system"` messages (supported by recent
+Claude models); Relay accepts them and keeps them positional.
+
+A canonical system message can instead opt into full system authority
+with `"hoist": true`: at serialization it merges into the upstream's
+start-of-conversation system form on every shape. Hoisting changes the
+very beginning of the prompt, so it invalidates the upstream's cached
+prefix for that conversation — use it for instructions that must
+override user content, not for routine mid-session notes.
 
 ## Models
 

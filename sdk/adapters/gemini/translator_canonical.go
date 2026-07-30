@@ -228,19 +228,24 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 	}
 
-	// Build contents from canonical Input. Only LEADING system/developer
-	// items merge into systemInstruction; positional ones stay in contents
-	// (marker-wrapped user turns) so the prefix stays cache-stable.
-	contents, extraSys, err := canonicalItemsToGemini(req.Input)
+	// Build contents from canonical Input. LEADING system/developer items and
+	// hoist-flagged items merge into systemInstruction; other positional ones
+	// stay in contents (marker-wrapped user turns) so the prefix stays
+	// cache-stable.
+	input, hoistedSys := v1.SplitHoistedSystem(req.Input)
+	contents, extraSys, err := canonicalItemsToGemini(input)
 	if err != nil {
 		return nil, fmt.Errorf("gemini serialize_request: %w", err)
 	}
 	out.Contents = contents
-	if extraSys != "" {
+	for _, extra := range []string{extraSys, hoistedSys} {
+		if extra == "" {
+			continue
+		}
 		if out.SystemInstruction != nil {
-			out.SystemInstruction.Parts = append(out.SystemInstruction.Parts, geminiPart{Text: extraSys})
+			out.SystemInstruction.Parts = append(out.SystemInstruction.Parts, geminiPart{Text: extra})
 		} else {
-			out.SystemInstruction = &geminiContent{Parts: []geminiPart{{Text: extraSys}}}
+			out.SystemInstruction = &geminiContent{Parts: []geminiPart{{Text: extra}}}
 		}
 	}
 

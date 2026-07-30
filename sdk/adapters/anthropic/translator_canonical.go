@@ -475,18 +475,23 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	}
 
 	// Build messages from canonical Input. Per-message cache anchors are applied
-	// inside (each Message carries its own ItemCacheConfig). sysFromItems holds
-	// only LEADING system/developer items; positional ones ride in msgs.
-	msgs, sysFromItems, err := canonicalItemsToAnthropic(req.Input, cacheTTL)
+	// inside (each Message carries its own ItemCacheConfig). The system prefix
+	// merges, in order: Instructions, leading system/developer items, then
+	// hoist-flagged items; non-hoisted positional system items ride in msgs.
+	input, hoistedSys := v1.SplitHoistedSystem(req.Input)
+	msgs, sysFromItems, err := canonicalItemsToAnthropic(input, cacheTTL)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic serialize_request: %w", err)
 	}
 	out.Messages = msgs
-	if sysFromItems != "" {
+	for _, extra := range []string{sysFromItems, hoistedSys} {
+		if extra == "" {
+			continue
+		}
 		if systemText != "" {
-			systemText = systemText + "\n" + sysFromItems
+			systemText = systemText + "\n" + extra
 		} else {
-			systemText = sysFromItems
+			systemText = extra
 		}
 	}
 
@@ -1805,11 +1810,11 @@ func anthropicImageBlockToURL(raw json.RawMessage) string {
 
 // canonicalItemsToAnthropic converts canonical []v1.Item to Anthropic messages.
 // Returns also the system text merged from LEADING system/developer messages
-// (Anthropic requires instructions that apply from the start in the top-level
-// system field; a role:system message cannot open the messages array).
-// Mid-conversation system/developer items stay positional: they emit as
-// role:system wire messages so the cached prefix before them is untouched —
-// hoisting them into the system field would invalidate it.
+// (instructions that apply from the start belong in the top-level system
+// field). Mid-conversation system/developer items stay positional as
+// marker-wrapped user turns, so the cached prefix before them is untouched —
+// merging them into the system field would invalidate it. Hoist-flagged items
+// must be split off by the caller (v1.SplitHoistedSystem) before this runs.
 // cacheTTL is the request-level retention tier applied to item-anchor breakpoints.
 func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCanonMsg, string, error) {
 	var msgs []anthropicCanonMsg
@@ -1830,11 +1835,10 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	var runToolUses []v1.FunctionCall
 	var pendingToolResults []v1.FunctionCallOutput
 
-	// Positional system messages deferred past an open tool round: a system
-	// item between a tool_use and its tool_result would split the pair (the
-	// API rejects anything in that gap), so it re-emits right after the
-	// tool_result user turn — the slot the API documents for mid-loop
-	// instructions.
+	// Positional system turns deferred past an open tool round: any message
+	// between a tool_use and its tool_result splits the pair (the API rejects
+	// anything in that gap), so the turn re-emits right after the tool_result
+	// user turn — the slot the API documents for mid-loop instructions.
 	var pendingSystem []anthropicCanonMsg
 	// seenConversation flips once any non-system item produced or buffered
 	// wire content; system/developer items before that merge into the
@@ -1968,17 +1972,22 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 					systemParts = append(systemParts, s)
 					continue
 				}
-				var content any = s
+				// Positional system items ride as marker-wrapped user turns:
+				// works on every model, keeps position, leaves the cached
+				// prefix untouched. Real system authority is the caller's
+				// explicit choice via hoist (start-of-conversation merge,
+				// split off before this loop).
+				var content any = v1.WrapSystemMarker(s)
 				if v.CacheConfig != nil && v.CacheConfig.Anchor {
 					content = withCacheBreakpoint(content, cacheTTL)
 				}
-				sysMsg := anthropicCanonMsg{Role: "system", Content: content}
+				turn := anthropicCanonMsg{Role: "user", Content: content}
 				if len(runToolUses) > 0 || len(pendingToolResults) > 0 {
-					pendingSystem = append(pendingSystem, sysMsg)
+					pendingSystem = append(pendingSystem, turn)
 					continue
 				}
 				flushAssistant()
-				msgs = append(msgs, sysMsg)
+				msgs = append(msgs, turn)
 				continue
 			}
 
@@ -2058,7 +2067,7 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	flushToolResults()
 	msgs = append(msgs, pendingSystem...)
 
-	return legalizeSystemPlacement(msgs), strings.Join(systemParts, "\n"), nil
+	return msgs, strings.Join(systemParts, "\n"), nil
 }
 
 // canonicalPartsToAnthropicContent converts canonical []v1.Part to Anthropic content.

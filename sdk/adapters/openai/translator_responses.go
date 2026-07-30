@@ -50,9 +50,11 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		return nil, err
 	}
 
-	// Serialize Input as a JSON array.
-	inputRaws := make([]json.RawMessage, 0, len(req.Input))
-	for _, item := range req.Input {
+	// Serialize Input as a JSON array. Hoist-flagged system items were merged
+	// into instructions by canonicalToResponsesRequest — skip them here.
+	input, _ := v1.SplitHoistedSystem(req.Input)
+	inputRaws := make([]json.RawMessage, 0, len(input))
+	for _, item := range input {
 		ritem := responsesInputItemFromCanonical(item)
 		if ritem == nil {
 			continue
@@ -108,7 +110,7 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	return json.Marshal(wireReq{
 		Model:                req.Model[0],
 		Input:                inputJSON,
-		Instructions:         req.Instructions,
+		Instructions:         rreq.Instructions,
 		Tools:                rreq.Tools,
 		ToolChoice:           rreq.ToolChoice,
 		Temperature:          rreq.Temperature,
@@ -366,9 +368,22 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	}
 	model := req.Model[0]
 
+	// Hoist-flagged system items merge into instructions; non-hoisted ones
+	// stay positional — Responses supports system/developer items natively.
+	// (SerializeRequest drops the hoisted items from input.)
+	_, hoistedSys := v1.SplitHoistedSystem(req.Input)
+	instructions := req.Instructions
+	if hoistedSys != "" {
+		if instructions != "" {
+			instructions = instructions + "\n" + hoistedSys
+		} else {
+			instructions = hoistedSys
+		}
+	}
+
 	rreq := &ResponsesRequest{
 		Model:        model,
-		Instructions: req.Instructions,
+		Instructions: instructions,
 		User:         req.User,
 		Metadata:     req.Metadata,
 	}
