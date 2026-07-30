@@ -18,7 +18,10 @@ target "_common" {
   context    = "."
   dockerfile = "Dockerfile"
   target     = "lean"
-  platforms  = ["linux/amd64", "linux/arm64"]
+  // arm64 disabled while the shared builder has no native arm node — the
+  // emulated leg dominates release time; arm images are built natively on
+  // an arm machine instead.
+  platforms  = ["linux/amd64"] // , "linux/arm64"
   args = {
     UI_VERSION  = "${UI_VERSION}"
     CATALOG_REF = "${CATALOG_REF}"
