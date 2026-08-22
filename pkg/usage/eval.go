@@ -419,7 +419,10 @@ func inList(set []string, val string) bool {
 }
 
 func groupKey(ev Event, groupBy string) string {
-	if key, ok := TagGroupKey(groupBy); ok {
+	if column, key, ok := MapGroupKey(groupBy); ok {
+		if column == "extras" {
+			return ev.Extras[key]
+		}
 		return ev.Tags[key]
 	}
 	switch groupBy {

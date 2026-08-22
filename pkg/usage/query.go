@@ -260,8 +260,8 @@ const MaxBuckets = 5_000
 
 // ValidGroupBy lists the accepted static GroupBy values. Used by the HTTP
 // endpoint to reject typos with a clear 400 instead of silently
-// grouping on nothing. "tags.<key>" is additionally accepted as a
-// dynamic dimension — see TagGroupKey.
+// grouping on nothing. "tags.<key>" and "extras.<key>" are additionally
+// accepted as dynamic dimensions — see MapGroupKey.
 var ValidGroupBy = []string{
 	"relay_key_hash",
 	"policy_id",
@@ -278,30 +278,38 @@ var ValidGroupBy = []string{
 }
 
 // MaxTagKeyLen caps a single tag key. Enforced at write time
-// (app/usagelog tag validation) and reused by TagGroupKey so an
+// (app/usagelog tag validation) and reused by MapGroupKey so an
 // unwritable key can't become a group dimension.
 const MaxTagKeyLen = 64
 
-// TagGroupKey extracts the tag key from a dynamic "tags.<key>" group
-// dimension. ok is false when g isn't tag-shaped or the key is empty /
-// over MaxTagKeyLen. Backends MUST bind the returned key as a query
-// parameter, never splice it into SQL text.
-func TagGroupKey(g string) (string, bool) {
-	key, found := strings.CutPrefix(g, "tags.")
-	if !found || key == "" || len(key) > MaxTagKeyLen {
-		return "", false
+// MapGroupKey splits a dynamic map group dimension — "tags.<key>" (caller
+// tags) or "extras.<key>" (relay-stamped provenance: instance, client_ip,
+// resolved_via) — into the Event map column and the key within it. ok is
+// false when g isn't map-shaped or the key is empty / over MaxTagKeyLen.
+// Backends MUST bind the returned key as a query parameter, never splice
+// it into SQL text; column is one of the two fixed names and safe to embed.
+func MapGroupKey(g string) (column, key string, ok bool) {
+	for _, column = range []string{"tags", "extras"} {
+		key, found := strings.CutPrefix(g, column+".")
+		if !found {
+			continue
+		}
+		if key == "" || len(key) > MaxTagKeyLen {
+			return "", "", false
+		}
+		return column, key, true
 	}
-	return key, true
+	return "", "", false
 }
 
 // IsValidGroupBy reports whether g is one of the supported group
-// dimensions (a ValidGroupBy entry or a "tags.<key>" dynamic one).
+// dimensions (a ValidGroupBy entry or a dynamic map one).
 func IsValidGroupBy(g string) bool {
 	for _, v := range ValidGroupBy {
 		if g == v {
 			return true
 		}
 	}
-	_, ok := TagGroupKey(g)
+	_, _, ok := MapGroupKey(g)
 	return ok
 }
