@@ -34,7 +34,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RELAY_CLUSTER_MODE` | `off` | `on` enables the Postgres `LISTEN` consumer so every pod's snapshot stays in sync. Turn `on` for any multi-pod deployment. |
-| `RELAY_INSTANCE_ID` | _(empty)_ | Stable pod/instance identity, surfaced in logs and metrics. |
+| `RELAY_INSTANCE_ID` | _(empty)_ | Stable pod/instance identity, surfaced in logs, metrics, and usage events (`extras.instance`). |
 | `RELAY_MAX_REQUEST_BYTES` | _(unlimited)_ | Reject inbound request bodies larger than this many bytes. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Timeout for the `/healthz` dependency checks. |
 
@@ -45,7 +45,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CATALOG_BACKEND` | _(empty)_ | Catalog source strategy (`pg` for Postgres-backed). |
 | `RELAY_EVENTLOG_BACKEND` | `file` | Usage/event sink: `file` \| `clickhouse` \| `postgres` \| `valkey`. |
 | `RELAY_EVENTLOG_DIR` | _(empty)_ | Directory for the `file` event-log backend. |
-| `RELAY_CH_DSN` | _(empty)_ | ClickHouse DSN; required when an event/usage backend is `clickhouse`. |
+| `RELAY_CH_DSN` | _(empty)_ | ClickHouse DSN; required when an event/usage backend is `clickhouse`. Connections use zstd compression unless the DSN sets `compress=`. |
 | `RELAY_CH_RETENTION_DAYS` | `90` | TTL for ClickHouse-stored usage events. |
 
 ### Observability
