@@ -191,6 +191,12 @@ func New(cfg Config) (*Sink, error) {
 	opts.MaxOpenConns = 4
 	opts.MaxIdleConns = 2
 	opts.ConnMaxLifetime = time.Hour
+	// zstd unless the DSN sets compress= explicitly: consecutive agent
+	// requests repeat long prefixes, so block compression on batched
+	// inserts cuts relay→CH bandwidth sharply.
+	if opts.Compression == nil {
+		opts.Compression = &clickhouse.Compression{Method: clickhouse.CompressionZSTD}
+	}
 
 	// Server-side async insert: CH coalesces concurrent INSERTs into larger
 	// MergeTree parts, avoiding one-part-per-INSERT merge amplification.
