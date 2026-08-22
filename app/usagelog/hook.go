@@ -23,19 +23,42 @@ const Namespace = "usage"
 // v1.ExtractSummary on the buffered body using the per-request
 // Translator — no vendor-specific JSON/SSE branching at this layer.
 type UsageHook struct {
-	pricer *Pricer
+	pricer   *Pricer
+	instance string
 }
 
 // NewUsageHook constructs the usage producer. pricer may be nil (events
-// stay unpriced).
-func NewUsageHook(pricer *Pricer) *UsageHook { return &UsageHook{pricer: pricer} }
+// stay unpriced); instanceID may be empty (no instance stamp).
+func NewUsageHook(pricer *Pricer, instanceID string) *UsageHook {
+	return &UsageHook{pricer: pricer, instance: instanceID}
+}
 
 func (*UsageHook) Name() string { return Namespace }
 
 // Fill builds the Event. Always returns one (error rows are valid usage
 // records), so every finalized request yields exactly one row.
 func (h *UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (any, error) {
-	return buildEvent(lc, ev.Status, ev.ErrorKind, ev.ErrorMessage, ev.ResponseBody, h.pricer), nil
+	out := buildEvent(lc, ev.Status, ev.ErrorKind, ev.ErrorMessage, ev.ResponseBody, h.pricer)
+	stampInstance(out, h.instance)
+	return out, nil
+}
+
+// ExtrasKeyInstance is the Extras key carrying the emitting relay's
+// RELAY_INSTANCE_ID — relay-stamped provenance, so it lives in Extras, not
+// the caller-owned Tags.
+const ExtrasKeyInstance = "instance"
+
+// stampInstance records which relay instance emitted the event. Stamped
+// here rather than per runner so every source (pipeline/proxy/ws/batch)
+// carries it without each runner knowing the config.
+func stampInstance(ev *Event, instance string) {
+	if instance == "" {
+		return
+	}
+	if ev.Extras == nil {
+		ev.Extras = map[string]string{}
+	}
+	ev.Extras[ExtrasKeyInstance] = instance
 }
 
 // buildEvent assembles the canonical usage Event from the per-request

@@ -168,6 +168,12 @@ func openConn(cfg Config) (clickhouse.Conn, error) {
 	opts.MaxOpenConns = 4
 	opts.MaxIdleConns = 2
 	opts.ConnMaxLifetime = time.Hour
+	// zstd unless the DSN sets compress= explicitly: consecutive agent
+	// requests repeat long prefixes, so block compression on batched
+	// inserts cuts relay→CH bandwidth sharply.
+	if opts.Compression == nil {
+		opts.Compression = &clickhouse.Compression{Method: clickhouse.CompressionZSTD}
+	}
 	if opts.Settings == nil {
 		opts.Settings = clickhouse.Settings{}
 	}

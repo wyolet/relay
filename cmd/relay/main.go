@@ -427,9 +427,9 @@ func main() {
 	usagePricer := usagelog.NewPricer(func(id string) (*pricing.Pricing, bool) {
 		return cat.Current().Pricing(id)
 	})
-	lifecycleReg.RegisterHook(usagelog.NewUsageHook(usagePricer))
+	lifecycleReg.RegisterHook(usagelog.NewUsageHook(usagePricer, cfg.InstanceID))
 	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageCtl.Emitter()))
-	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory(usagePricer))
+	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory(usagePricer, cfg.InstanceID))
 	usageCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go usageCtl.Run(listenerCtx)
 	slog.Debug("usagelog: observer wired (backend via settings: usage-logging)")
