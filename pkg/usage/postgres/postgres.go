@@ -913,13 +913,13 @@ func (t ttftCols) stats() *usage.DurationStats {
 }
 
 // groupExpr returns the SQL grouping expression for groupBy. Static
-// dimensions are column names; the dynamic "tags.<key>" dimension binds
-// the key as a positional arg (never spliced into SQL text) and groups on
-// the tag's value, missing key folded to ”.
+// dimensions are column names; the dynamic "tags.<key>" / "extras.<key>"
+// dimensions bind the key as a positional arg (never spliced into SQL text)
+// and group on the map value, missing key folded to ”.
 func groupExpr(groupBy string, args []any) (string, []any) {
-	if key, ok := usage.TagGroupKey(groupBy); ok {
+	if column, key, ok := usage.MapGroupKey(groupBy); ok {
 		args = append(args, key)
-		return fmt.Sprintf("COALESCE(tags->>$%d, '')", len(args)), args
+		return fmt.Sprintf("COALESCE(%s->>$%d, '')", column, len(args)), args
 	}
 	return groupBy, args
 }

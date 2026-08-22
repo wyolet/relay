@@ -181,12 +181,15 @@ func TestTags_FilterAndGroupBy(t *testing.T) {
 	}
 }
 
-func TestTagGroupKey(t *testing.T) {
-	if key, ok := TagGroupKey("tags.session_id"); !ok || key != "session_id" {
-		t.Fatalf("tags.session_id: got %q, %v", key, ok)
+func TestMapGroupKey(t *testing.T) {
+	if col, key, ok := MapGroupKey("tags.session_id"); !ok || col != "tags" || key != "session_id" {
+		t.Fatalf("tags.session_id: got %q %q, %v", col, key, ok)
 	}
-	for _, bad := range []string{"tags.", "tags", "session_id", "tags." + strings.Repeat("k", MaxTagKeyLen+1)} {
-		if _, ok := TagGroupKey(bad); ok {
+	if col, key, ok := MapGroupKey("extras.instance"); !ok || col != "extras" || key != "instance" {
+		t.Fatalf("extras.instance: got %q %q, %v", col, key, ok)
+	}
+	for _, bad := range []string{"tags.", "tags", "extras.", "extras", "session_id", "tags." + strings.Repeat("k", MaxTagKeyLen+1)} {
+		if _, _, ok := MapGroupKey(bad); ok {
 			t.Fatalf("want invalid: %q", bad)
 		}
 	}

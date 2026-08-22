@@ -467,10 +467,10 @@ func (s *Sink) Summary(ctx context.Context, q usage.SummaryQuery) (usage.Summary
 
 	grpExpr := groupBy // column name matches the GroupBy value in this schema
 	var preArgs []any
-	if key, ok := usage.TagGroupKey(groupBy); ok {
-		// tags[?] binds the key (never spliced into SQL text); a missing
+	if column, key, ok := usage.MapGroupKey(groupBy); ok {
+		// <map>[?] binds the key (never spliced into SQL text); a missing
 		// key yields '' (Map default), matching the other backends.
-		grpExpr = "tags[?]"
+		grpExpr = column + "[?]"
 		preArgs = []any{key}
 	}
 
@@ -576,8 +576,8 @@ func (s *Sink) TimeSeries(ctx context.Context, q usage.TimeSeriesQuery) (usage.T
 	groupOrder := "bucket"
 	if groupBy != "" {
 		grpExpr := groupBy
-		if key, ok := usage.TagGroupKey(groupBy); ok {
-			grpExpr = "tags[?]"
+		if column, key, ok := usage.MapGroupKey(groupBy); ok {
+			grpExpr = column + "[?]"
 			// clickhouse-go substitutes ? placeholders in text order — the
 			// group key appears in the SELECT list, ahead of the WHERE args.
 			args = append([]any{key}, args...)
