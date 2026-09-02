@@ -8,6 +8,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuditEvent struct {
+	ID            string             `db:"id" json:"id"`
+	Ts            pgtype.Timestamptz `db:"ts" json:"ts"`
+	ActorKind     string             `db:"actor_kind" json:"actor_kind"`
+	ActorID       pgtype.Text        `db:"actor_id" json:"actor_id"`
+	ActorName     pgtype.Text        `db:"actor_name" json:"actor_name"`
+	SessionID     pgtype.Text        `db:"session_id" json:"session_id"`
+	Ip            pgtype.Text        `db:"ip" json:"ip"`
+	Action        string             `db:"action" json:"action"`
+	ResourceKind  string             `db:"resource_kind" json:"resource_kind"`
+	ResourceID    pgtype.Text        `db:"resource_id" json:"resource_id"`
+	ResourceName  pgtype.Text        `db:"resource_name" json:"resource_name"`
+	OwnerKind     pgtype.Text        `db:"owner_kind" json:"owner_kind"`
+	OwnerID       pgtype.Text        `db:"owner_id" json:"owner_id"`
+	Scope         []string           `db:"scope" json:"scope"`
+	Status        string             `db:"status" json:"status"`
+	Code          int32              `db:"code" json:"code"`
+	RequestID     pgtype.Text        `db:"request_id" json:"request_id"`
+	Method        pgtype.Text        `db:"method" json:"method"`
+	Path          pgtype.Text        `db:"path" json:"path"`
+	ChangedFields []string           `db:"changed_fields" json:"changed_fields"`
+}
+
 type Batch struct {
 	ID           string             `db:"id" json:"id"`
 	RelayKeyHash string             `db:"relay_key_hash" json:"relay_key_hash"`

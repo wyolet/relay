@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/hostkey"
 )
@@ -49,6 +50,7 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error400BadRequest("rotate is supported only for stored- and oauth-mode host-keys")
 		}
 		existing.Spec.Value = in.Body.Value
+		audit.Changed(ctx, []string{"spec.value", "spec.valueKeyVersion"})
 		if err := d.Stores.HostKey.Upsert(ctx, existing); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

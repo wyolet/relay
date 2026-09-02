@@ -464,3 +464,36 @@ ON CONFLICT (id) DO UPDATE SET
 
 -- name: DeleteProject :exec
 DELETE FROM projects WHERE id = $1;
+
+-- ── audit events (migration 0028) ────────────────────────────────────────────
+
+-- name: InsertAuditEvent :copyfrom
+INSERT INTO audit_events (
+    id, ts, actor_kind, actor_id, actor_name, session_id, ip,
+    action, resource_kind, resource_id, resource_name, owner_kind, owner_id,
+    scope, status, code, request_id, method, path, changed_fields
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+);
+
+-- name: ListAuditEvents :many
+SELECT id, ts, actor_kind, actor_id, actor_name, session_id, ip,
+       action, resource_kind, resource_id, resource_name, owner_kind, owner_id,
+       scope, status, code, request_id, method, path, changed_fields
+FROM audit_events
+WHERE (sqlc.narg('actor_id')::text IS NULL OR actor_id = sqlc.narg('actor_id')::text)
+  AND (sqlc.narg('actor_name')::text IS NULL OR actor_name = sqlc.narg('actor_name')::text)
+  AND (cardinality(@actions::text[]) = 0 OR action = ANY(@actions::text[]))
+  AND (cardinality(@resource_kinds::text[]) = 0 OR resource_kind = ANY(@resource_kinds::text[]))
+  AND (sqlc.narg('resource_id')::text IS NULL OR resource_id = sqlc.narg('resource_id')::text)
+  AND (cardinality(@scopes::text[]) = 0 OR scope && @scopes::text[])
+  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('from_ts')::timestamptz IS NULL OR ts >= sqlc.narg('from_ts')::timestamptz)
+  AND (sqlc.narg('to_ts')::timestamptz IS NULL OR ts <= sqlc.narg('to_ts')::timestamptz)
+  AND (sqlc.narg('cursor_ts')::timestamptz IS NULL
+       OR (ts, id) < (sqlc.narg('cursor_ts')::timestamptz, @cursor_id::text))
+ORDER BY ts DESC, id DESC
+LIMIT @row_limit;
+
+-- name: PruneAuditEvents :execrows
+DELETE FROM audit_events WHERE ts < $1;
