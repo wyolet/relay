@@ -11,6 +11,7 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"sort"
 	"strings"
@@ -180,8 +181,9 @@ func policylessCatalog(t *testing.T, allow bool) (*appcatalog.Catalog, string) {
 func TestIntegration_ListModelsPolicylessMatchesResolve(t *testing.T) {
 	cat, sfx := policylessCatalog(t, true)
 	d := Deps{Catalog: cat, Resolver: routing.New(cat)}
+	userID := meta.NewID()
 	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, &Principal{
-		CredentialKind: CredentialKey, CredentialID: meta.NewID(), UserID: meta.NewID(),
+		CredentialKind: CredentialKey, CredentialID: meta.NewID(), UserID: userID,
 	})
 
 	out, err := listModels(ctx, d, "")
@@ -204,7 +206,7 @@ func TestIntegration_ListModelsPolicylessMatchesResolve(t *testing.T) {
 		if !strings.HasSuffix(name, sfx) {
 			continue
 		}
-		if _, err := d.Resolver.Resolve(routing.Request{ModelName: name, Snapshot: snap}); err == nil {
+		if _, err := d.Resolver.Resolve(routing.Request{ModelName: name, UserID: userID, Snapshot: snap}); err == nil {
 			served = append(served, name)
 		}
 	}
@@ -240,13 +242,38 @@ func TestIntegration_ListModelsPolicylessMatchesResolve(t *testing.T) {
 	}
 }
 
+// D82: under rbac authorization the flag is not read at all — the listing
+// refuses and the flow answers the same missing-policy error, so a key with
+// no policy sees nothing either way.
+func TestIntegration_ListModelsPolicylessRefusedUnderRBAC(t *testing.T) {
+	cat, sfx := policylessCatalog(t, true)
+	d := Deps{Catalog: cat, Resolver: routing.New(cat, routing.RequirePolicy())}
+	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, &Principal{
+		CredentialKind: CredentialKey, CredentialID: meta.NewID(), UserID: meta.NewID(),
+	})
+	if _, err := listModels(ctx, d, ""); err == nil {
+		t.Fatal("listModels served a policy-less caller under rbac authorization")
+	}
+	snap := cat.Current()
+	for _, m := range snap.AllModels() {
+		name := m.Spec.Snapshots[0].Name
+		if !strings.HasSuffix(name, sfx) {
+			continue
+		}
+		if _, err := d.Resolver.Resolve(routing.Request{ModelName: name, Snapshot: snap}); !errors.Is(err, routing.ErrPolicyless) {
+			t.Fatalf("model %q: err = %v, want ErrPolicyless", name, err)
+		}
+	}
+}
+
 // With the flag off the endpoint refuses rather than listing a reduced set,
 // matching the flow, which answers policyless_disabled.
 func TestIntegration_ListModelsPolicylessRefusedWhenDisabled(t *testing.T) {
 	cat, sfx := policylessCatalog(t, false)
 	d := Deps{Catalog: cat, Resolver: routing.New(cat)}
+	userID := meta.NewID()
 	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, &Principal{
-		CredentialKind: CredentialKey, CredentialID: meta.NewID(), UserID: meta.NewID(),
+		CredentialKind: CredentialKey, CredentialID: meta.NewID(), UserID: userID,
 	})
 	if _, err := listModels(ctx, d, ""); err == nil {
 		t.Fatal("listModels served a policy-less caller while the flag is off")
@@ -257,7 +284,7 @@ func TestIntegration_ListModelsPolicylessRefusedWhenDisabled(t *testing.T) {
 		if !strings.HasSuffix(name, sfx) {
 			continue
 		}
-		if _, err := d.Resolver.Resolve(routing.Request{ModelName: name, Snapshot: snap}); err == nil {
+		if _, err := d.Resolver.Resolve(routing.Request{ModelName: name, UserID: userID, Snapshot: snap}); err == nil {
 			t.Fatalf("model %q resolved policy-less while the flag is off", m.Meta.Name)
 		}
 	}

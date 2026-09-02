@@ -165,7 +165,7 @@ func TestResolvePolicyless_SkipsProjectOwnedKeys(t *testing.T) {
 		t.Fatal("the project-owned key was dropped before the pool filter could be tested")
 	}
 
-	_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "")
+	_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
 	if !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys — a project key must not serve policy-less traffic", err)
 	}
@@ -193,7 +193,7 @@ func TestResolvePolicyless_AppliesTierGate(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA, otherBnd},
 	)
-	_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "")
+	_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
 	if !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys — the tier does not grant this model", err)
 	}
@@ -405,7 +405,7 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if !PolicylessAllows(shared, f.model, "") {
+	if !PolicylessAllows(shared, f.model, "", "") {
 		t.Fatal("a system-owned key's model is not listed")
 	}
 
@@ -420,10 +420,10 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		nil, nil, nil,
 		[]*binding.Binding{noAuth.bindingA},
 	)
-	if !PolicylessAllows(open, noAuth.model, "") {
+	if !PolicylessAllows(open, noAuth.model, "", "") {
 		t.Error("a NoAuth host's model is not listed, but the flow serves it with the anonymous key")
 	}
-	if _, err := (&Resolver{}).resolvePolicyless(open, []*model.Model{noAuth.model}, &noAuth.model.Spec.Snapshots[0], ""); err != nil {
+	if _, err := (&Resolver{}).resolvePolicyless(open, []*model.Model{noAuth.model}, &noAuth.model.Spec.Snapshots[0], "", ""); err != nil {
 		t.Errorf("resolvePolicyless on the NoAuth host: %v", err)
 	}
 
@@ -447,13 +447,37 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		[]*hostkey.HostKey{gated.keyA}, nil, nil,
 		[]*binding.Binding{gated.bindingA, otherBnd},
 	)
-	if PolicylessAllows(tiered, gated.model, "") {
+	if PolicylessAllows(tiered, gated.model, "", "") {
 		t.Error("a model the key's tier does not grant is listed anyway")
 	}
 
 	// The adapter filter narrows without changing the pool rule.
-	if PolicylessAllows(shared, f.model, "not-a-registered-shape") {
+	if PolicylessAllows(shared, f.model, "not-a-registered-shape", "") {
 		t.Error("the adapter filter is ignored")
+	}
+
+	// A user-owned key is listed to its owner and to nobody else, matching
+	// which of them the flow would actually serve.
+	owned := newTwoHostParts()
+	owner := meta.NewID()
+	owned.keyA.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: owner}
+	personal := catalog.Build(
+		[]*provider.Provider{owned.provider},
+		[]*host.Host{owned.hostRowA},
+		[]*policy.Policy{owned.tierA}, nil,
+		[]*model.Model{owned.model},
+		[]*hostkey.HostKey{owned.keyA}, nil, nil,
+		[]*binding.Binding{owned.bindingA},
+	)
+	for _, tc := range []struct {
+		caller string
+		want   bool
+	}{{caller: owner, want: true}, {caller: meta.NewID()}, {caller: ""}} {
+		listed := PolicylessAllows(personal, owned.model, "", tc.caller)
+		_, err := (&Resolver{}).resolvePolicyless(personal, []*model.Model{owned.model}, &owned.model.Spec.Snapshots[0], "", tc.caller)
+		if served := err == nil; listed != tc.want || served != tc.want {
+			t.Errorf("caller %q: listed=%v served=%v, want %v for both (err %v)", tc.caller, listed, served, tc.want, err)
+		}
 	}
 }
 
@@ -502,7 +526,7 @@ func BenchmarkResolvePolicyless(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := r.resolvePolicyless(snap, models, &f.model.Spec.Snapshots[0], ""); err != nil {
+		if _, err := r.resolvePolicyless(snap, models, &f.model.Spec.Snapshots[0], "", ""); err != nil {
 			b.Fatal(err)
 		}
 	}
