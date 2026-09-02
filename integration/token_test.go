@@ -86,12 +86,12 @@ func (f *tokenFixture) mint(us *userSession) (int, string, []byte) {
 	return code, out.Token, raw
 }
 
-// chat spends a bearer on the data plane and returns the status plus the
-// error code the body carries (empty on success).
-func (f *tokenFixture) chat(bearer string) (int, string) {
+// chat spends a bearer on the data plane for a named model and returns the
+// status plus the error code the body carries (empty on success).
+func (f *tokenFixture) chat(bearer, modelName string) (int, string) {
 	f.t.Helper()
 	req, err := http.NewRequest(http.MethodPost, f.inference.URL+"/v1/chat/completions",
-		bytes.NewReader([]byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)))
+		bytes.NewReader([]byte(`{"model":"`+modelName+`","messages":[{"role":"user","content":"hi"}]}`)))
 	if err != nil {
 		f.t.Fatalf("new request: %v", err)
 	}
@@ -121,7 +121,7 @@ func (f *tokenFixture) waitForRejection(bearer string, within time.Duration) (in
 	f.t.Helper()
 	deadline := time.Now().Add(within)
 	for {
-		code, reason := f.chat(bearer)
+		code, reason := f.chat(bearer, "test-model")
 		if code != http.StatusOK {
 			return code, reason
 		}
@@ -143,7 +143,7 @@ func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
 	if token == "" {
 		t.Fatalf("mint returned no token: %s", raw)
 	}
-	if got, reason := f.chat(token); got != http.StatusOK {
+	if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
 		t.Fatalf("chat with a fresh token = %d (%s)", got, reason)
 	}
 }
@@ -158,7 +158,7 @@ func TestRevokeAllInvalidatesTokensWithinTwoSeconds(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("mint = %d: %s", code, raw)
 	}
-	if got, reason := f.chat(token); got != http.StatusOK {
+	if got, reason := f.chat(token, "test-model"); got != http.StatusOK {
 		t.Fatalf("chat before revoke = %d (%s)", got, reason)
 	}
 
