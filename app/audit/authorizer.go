@@ -42,12 +42,12 @@ func (a Authorizer) Authorize(ctx context.Context, action string, res authz.Reso
 // Visible implements authz.Scoper by delegation. An inner authorizer that
 // doesn't scope reads stays unscoped — wrapping must not change what a
 // caller can see.
-func (a Authorizer) Visible(ctx context.Context, kind string, owner meta.Owner) bool {
+func (a Authorizer) Visible(ctx context.Context, kind, id string, owner meta.Owner) bool {
 	s, ok := a.Inner.(authz.Scoper)
 	if !ok {
 		return true
 	}
-	return s.Visible(ctx, kind, owner)
+	return s.Visible(ctx, kind, id, owner)
 }
 
 // scopeOf renders the owner's scope chain as "<kind>:<id>", most specific

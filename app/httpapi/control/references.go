@@ -4,8 +4,9 @@
 // admin UI for blast-radius confirmation dialogs ("deleting this rate
 // limit will affect N policies") and for inline "in use by" lists.
 //
-// Walks the relevant stores per kind; admin-only, no SLO. Indices come
-// later if scan time matters. Reading PG (not the catalog snapshot) so
+// Walks the relevant stores per kind; no SLO. Referencing rows the caller
+// may not see are dropped, so the endpoint needs no gate of its own.
+// Indices come later if scan time matters. Reading PG (not the catalog snapshot) so
 // disabled / soft-dropped refs are still visible — they exist in PG even
 // when the data plane has filtered them out.
 package control
@@ -57,9 +58,6 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			Middlewares: protect,
 			Errors:      []int{401, 500},
 		}, func(ctx context.Context, in *referencesInput) (*referencesOutput, error) {
-			if err := d.Authz.Authorize(ctx, plural+".read", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
-				return nil, mapAuthzErr(err)
-			}
 			items, err := scan(ctx, in.ID)
 			if err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
@@ -69,7 +67,7 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			if s, ok := d.Authz.(authz.Scoper); ok {
 				visible := items[:0:0]
 				for _, it := range items {
-					if s.Visible(ctx, it.Kind, it.owner) {
+					if s.Visible(ctx, it.Kind, it.ID, it.owner) {
 						visible = append(visible, it)
 					}
 				}

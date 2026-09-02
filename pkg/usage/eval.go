@@ -295,6 +295,9 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if q.RequestID != "" && ev.RequestID != q.RequestID {
 		return false
 	}
+	if !inScope(q, ev) {
+		return false
+	}
 	if !inList(q.RelayKeyHash, ev.RelayKeyHash) {
 		return false
 	}
@@ -525,4 +528,23 @@ func percentile(sortedAsc []int64, p float64) int64 {
 	}
 	idx := int(float64(len(sortedAsc)-1) * p)
 	return sortedAsc[idx]
+}
+
+// inScope applies the read-scope disjunction: within the caller's projects
+// OR from one of the caller's own keys. No scope set means no narrowing.
+func inScope(q EventQuery, ev Event) bool {
+	if len(q.ScopeProjectID) == 0 && len(q.ScopeRelayKeyHash) == 0 {
+		return true
+	}
+	for _, p := range q.ScopeProjectID {
+		if p != "" && p == ev.ProjectID {
+			return true
+		}
+	}
+	for _, h := range q.ScopeRelayKeyHash {
+		if h != "" && h == ev.RelayKeyHash {
+			return true
+		}
+	}
+	return false
 }

@@ -41,7 +41,6 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/audit"
-	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
@@ -61,6 +60,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/ids"
@@ -87,7 +87,13 @@ type stack struct {
 // newStack boots the relay against the supplied DSN. The compose pg
 // must already be up. Returns a stack with two httptest servers for
 // the two planes; t.Cleanup tears everything down.
-func newStack(t *testing.T) *stack {
+func newStack(t *testing.T) *stack { return newStackAuthz(t, "") }
+
+// newStackAuthz boots the stack under the named authorizer mode; the empty
+// mode is the single-user default every other test runs under. An optional
+// identity dir wires the YAML user store and seeds it into the users table,
+// the way the binary does at boot.
+func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	t.Helper()
 
 	dsn := os.Getenv("RELAY_TEST_PG_DSN")
@@ -132,6 +138,7 @@ func newStack(t *testing.T) *stack {
 	t.Cleanup(func() { _ = kvStore.Close() })
 
 	sessMgr := session.New(kvStore, false, "sess:")
+	sessMgr.UseGroups(func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	policySvc := policy.NewService(catSnapReader{cat: cat}, selector, limiter)
@@ -190,14 +197,26 @@ func newStack(t *testing.T) *stack {
 	t.Cleanup(auditEmitter.Close)
 	usersStore := user.NewStore(gen.New(st.Pool()))
 
+	var idStore *identity.Store
+	if len(identityDir) > 0 && identityDir[0] != "" {
+		var err error
+		if idStore, err = identity.LoadYAML(identityDir[0]); err != nil {
+			t.Fatalf("identity.LoadYAML: %v", err)
+		}
+		if err := user.SeedFromIdentity(ctx, usersStore, idStore, slog.Default()); err != nil {
+			t.Fatalf("seed users from identity: %v", err)
+		}
+	}
+
 	ctrlRouter := chi.NewRouter()
 	// Mirror prod: control API under /api so SPA routes aren't shadowed.
 	ctrlRouter.Route("/api", func(r chi.Router) {
 		control.Mount(r, control.Deps{
+			Identity:    idStore,
 			Users:       usersStore,
 			Sessions:    sessMgr,
 			AdminToken:  adminToken,
-			Authz:       audit.Authorizer{Inner: authz.AlwaysAllowAuthenticated{}, Snap: cat.Current},
+			Authz:       audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
 			Catalog:     cat,
 			Stores:      stores,
 			Audit:       auditEmitter,

@@ -1011,6 +1011,22 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	if q.RequestID != "" {
 		add("request_id = $%d", q.RequestID)
 	}
+	// Read scope is a disjunction, not another membership filter: the
+	// caller's projects OR the caller's own keys.
+	if len(q.ScopeProjectID) > 0 || len(q.ScopeRelayKeyHash) > 0 {
+		var or []string
+		if len(q.ScopeProjectID) > 0 {
+			n++
+			or = append(or, fmt.Sprintf("project_id = ANY($%d)", n))
+			args = append(args, q.ScopeProjectID)
+		}
+		if len(q.ScopeRelayKeyHash) > 0 {
+			n++
+			or = append(or, fmt.Sprintf("relay_key_hash = ANY($%d)", n))
+			args = append(args, q.ScopeRelayKeyHash)
+		}
+		clauses = append(clauses, "("+strings.Join(or, " OR ")+")")
+	}
 	any("relay_key_hash", q.RelayKeyHash)
 	any("policy_id", q.PolicyID)
 	any("project_id", q.ProjectID)

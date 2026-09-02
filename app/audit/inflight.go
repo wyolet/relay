@@ -87,8 +87,9 @@ func (f *inflight) event(code int) (Event, bool) {
 // markDecision applies the marking rule to a request's Authorize calls.
 //
 // A mutating verb always wins, and the last one does: a handler may probe
-// broader permissions before deciding (usage checks read_all, then read),
-// and only the decision the handler acted on describes the request. On a
+// broader permissions before deciding (the usage scope check asks for the
+// global read first, then per-project get), and only the decision the
+// handler acted on describes the request. On a
 // read route a denied probe is therefore invisible — only the final call's
 // denial marks. Off a read route any denial marks, because a non-read
 // request that was refused anywhere did not do what it set out to do.

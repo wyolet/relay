@@ -187,6 +187,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerExport(api, d, protect)
 	registerSchemas(r) // public: the JSON Schemas the manifests reference
 	registerTokens(api, d, protect)
+	registerUsers(api, d, protect)
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in app/ratelimit). The spec is

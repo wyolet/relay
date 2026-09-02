@@ -48,8 +48,8 @@ func TestMarkDecision(t *testing.T) {
 			wantMarked: true, wantAction: "settings.read", wantStatus: StatusDenied,
 		},
 		{
-			name:      "usage probe: denied read_all then allowed read does not mark",
-			decisions: []decision{deny("usage.read_all"), allow("usage.read")},
+			name:      "usage probe: denied global read then allowed project get does not mark",
+			decisions: []decision{deny("usage.read"), allow("usage.get")},
 			readRoute: true,
 		},
 		{

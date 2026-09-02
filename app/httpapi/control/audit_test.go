@@ -87,7 +87,7 @@ func newAuditHarness(t *testing.T, inner authz.Authorizer, seed ...*scopedThing)
 }
 
 func TestAuditDeniedMutationByNonOwner(t *testing.T) {
-	h, sink, em := newAuditHarness(t, authz.OwnerScoped{}, seedThings()...)
+	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
 
 	// A catalog-owned row is visible to everyone but mutable by admins
 	// only, so the Authorizer itself denies and the status is 403.
@@ -116,7 +116,7 @@ func TestAuditDeniedMutationByNonOwner(t *testing.T) {
 // A row owned by another user is invisible, so the handler 404s before any
 // Authorize call — the middleware's route fallback is what records it.
 func TestAuditMutationRefusedByVisibility(t *testing.T) {
-	h, sink, em := newAuditHarness(t, authz.OwnerScoped{}, seedThings()...)
+	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
 
 	w := scopeReq(t, h, "bob", http.MethodDelete, "/rate-limits/by-id/"+aliceID, "")
 	if w.Code != http.StatusNotFound {
@@ -141,7 +141,7 @@ func TestAuditMutationRefusedByVisibility(t *testing.T) {
 }
 
 func TestAuditAllowedUpdateRecordsChangedPaths(t *testing.T) {
-	h, sink, em := newAuditHarness(t, authz.OwnerScoped{}, seedThings()...)
+	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
 
 	body := `{"metadata":{"id":"` + aliceID + `","name":"alice-row","displayName":"Renamed"}}`
 	w := scopeReq(t, h, "alice", http.MethodPut, "/rate-limits/by-id/"+aliceID, body)
@@ -164,7 +164,7 @@ func TestAuditAllowedUpdateRecordsChangedPaths(t *testing.T) {
 }
 
 func TestAuditSkipsAllowedRead(t *testing.T) {
-	h, sink, em := newAuditHarness(t, authz.OwnerScoped{}, seedThings()...)
+	h, sink, em := newAuditHarness(t, testRBAC(), seedThings()...)
 	if w := scopeReq(t, h, "alice", http.MethodGet, "/rate-limits", ""); w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -268,18 +268,18 @@ func TestAuditLogout(t *testing.T) {
 	}
 }
 
-// audit.read has no owner-scoped read path, so OwnerScoped reserves it for
-// admins — the same rule that gates settings and debug.
-func TestAuditReadIsAdminOnlyUnderOwnerScoped(t *testing.T) {
+// audit.read is granted only by a binding; with no bindings in the snapshot
+// it stays admin-only, the same rule that gates settings and debug.
+func TestAuditReadIsAdminOnlyUnderRBAC(t *testing.T) {
 	for _, who := range []string{"alice", "bob"} {
 		ctx := actor.WithActor(t.Context(), scopeActors[who])
-		if err := (authz.OwnerScoped{}).Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err == nil {
+		if err := testRBAC().Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err == nil {
 			t.Fatalf("%s: audit.read allowed, want denied", who)
 		}
 	}
 	for _, who := range []string{"root", "token"} {
 		ctx := actor.WithActor(t.Context(), scopeActors[who])
-		if err := (authz.OwnerScoped{}).Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err != nil {
+		if err := testRBAC().Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err != nil {
 			t.Fatalf("%s: audit.read denied (%v), want allowed", who, err)
 		}
 	}

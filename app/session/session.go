@@ -24,6 +24,7 @@ import (
 	"github.com/alexedwards/scs/v2"
 
 	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -42,6 +43,10 @@ const (
 // middleware via Middleware(); use Login/Logout/Actor in handlers.
 type Manager struct {
 	sm *scs.SessionManager
+	// groupsOf resolves a user's local group names. Set once at
+	// composition (from the catalog snapshot); nil means "no local
+	// groups", which is correct for deployments without the tenancy rows.
+	groupsOf func(userID string) []string
 }
 
 // New constructs a Manager backed by store. Cookies use the supplied
@@ -80,6 +85,10 @@ func New(store kv.Store, secure bool, keyPrefix string) *Manager {
 	}
 	return &Manager{sm: sm}
 }
+
+// UseGroups attaches the local-group source used to build each session
+// actor's RBAC subjects. Called once at composition, before serving.
+func (m *Manager) UseGroups(fn func(userID string) []string) { m.groupsOf = fn }
 
 // onceWriter guards the response writer under the session middleware.
 // Two jobs: (1) absorb duplicate WriteHeader calls — scs's wrapper relays
@@ -160,6 +169,11 @@ func (m *Manager) loadAndSave(h http.Handler) http.Handler {
 			if raw := m.sm.GetString(ctx, keyGroups); raw != "" {
 				_ = json.Unmarshal([]byte(raw), &a.IdPGroups)
 			}
+			var local []string
+			if m.groupsOf != nil {
+				local = m.groupsOf(uid)
+			}
+			a.Subjects = catalog.UserSubjects(uid, local, a.IdPGroups)
 			ctx = actor.WithActor(ctx, a)
 		}
 		h.ServeHTTP(w, r.WithContext(ctx))

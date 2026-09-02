@@ -680,6 +680,34 @@ func (s *Snapshot) ScopeChain(o *meta.Owner) []meta.Owner {
 	return []meta.Owner{global}
 }
 
+// ScopeChainFor is ScopeChain for a row that is itself a scope. A Team and
+// a Project define the scope they live in; their owner does not name it (a
+// Team is system-owned, a Project team-owned), so a binding at the scope a
+// row defines would otherwise never reach that row. Every other kind
+// delegates to ScopeChain.
+func (s *Snapshot) ScopeChainFor(kind, id string, o *meta.Owner) []meta.Owner {
+	if id == "" {
+		return s.ScopeChain(o)
+	}
+	switch kind {
+	case "team":
+		return []meta.Owner{{Kind: meta.OwnerTeam, ID: id}, global}
+	case "project":
+		if p, ok := s.projectsByID[id]; ok {
+			return []meta.Owner{
+				{Kind: meta.OwnerProject, ID: id},
+				{Kind: meta.OwnerTeam, ID: p.Spec.TeamID},
+				global,
+			}
+		}
+		// Not in the snapshot yet (a create) or no longer in it (disabled):
+		// the owner still names the team, and that is the scope the write
+		// has to be authorized at.
+		return s.ScopeChain(o)
+	}
+	return s.ScopeChain(o)
+}
+
 // ServiceAccount returns the enabled ServiceAccount with this id, or false.
 func (s *Snapshot) ServiceAccount(id string) (*serviceaccount.ServiceAccount, bool) {
 	sa, ok := s.serviceAccountsByID[id]

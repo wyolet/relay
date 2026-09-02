@@ -127,7 +127,7 @@ func stampKeyOwner(ctx context.Context, d Deps, k *key.Key) error {
 			return huma.Error400BadRequest("service accounts are not available on this relay")
 		}
 		sa, err := d.Stores.ServiceAccount.Get(ctx, k.Spec.Principal.ID)
-		if err != nil || sa == nil || !visibleTo(ctx, d.Authz, "service-account", sa.Meta.Owner) {
+		if err != nil || sa == nil || !visibleTo(ctx, d.Authz, "service-account", sa.Meta.ID, sa.Meta.Owner) {
 			return huma.Error404NotFound(fmt.Sprintf("service-account %q not found", k.Spec.Principal.ID))
 		}
 		k.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}

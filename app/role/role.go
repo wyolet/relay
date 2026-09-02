@@ -24,7 +24,7 @@ var Kinds = []string{
 	"keys", "license", "logs", "master-key", "models", "policies",
 	"policy-bindings", "pricings", "projects", "providers", "rate-limits",
 	"role-bindings", "roles", "service-accounts", "settings", "system",
-	"teams", "tokens", "usage",
+	"teams", "tokens", "usage", "users",
 }
 
 // Verbs is the closed set a rule may name. Wider than CRUD because the

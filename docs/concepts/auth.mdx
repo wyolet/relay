@@ -84,10 +84,118 @@ log a deprecation warning.
 
 ## Authorization
 
-Every authenticated control-plane caller has full access. Access is controlled
-at the network boundary you run — keep the control plane on its own port and
-off the public internet. Granular, role-based permissions arrive with the
-multi-user version.
+`RELAY_AUTHZ` picks how the control plane authorizes a caller:
+
+| Value | Behaviour |
+| --- | --- |
+| `single` (default) | Every authenticated caller may perform every action. Access is controlled at your network boundary. |
+| `rbac` | Each action is checked against the caller's role bindings. Anything not granted is denied. |
+
+The admin bearer (`RELAY_ADMIN_TOKEN`) and any user carrying the `admin` role
+bypass the check in both modes — that is the break-glass path, and it is why a
+fresh `rbac` deployment is never locked out.
+
+### The model
+
+Four pieces, and one rule that connects them:
+
+- A **Role** is a set of `(kinds, verbs)` rules. It carries no scope.
+- A **RoleBinding** grants one Role to subjects — users, groups, or service
+  accounts — at one **scope**: a project, a team, or global (`{kind: system}`).
+- Every resource resolves to a **scope chain**: a project-owned row lives in
+  `[project, team, global]`, a team-owned row in `[team, global]`, and catalog
+  or personal rows in `[global]`.
+- A binding at scope *S* grants its Role on every resource whose chain
+  contains *S*. A team binding therefore covers every project in that team,
+  current and future; a project binding never reaches a sibling project.
+
+Two rules need no binding at all:
+
+- **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every
+  verb on it.
+- **Catalog reads.** Providers, hosts, models, host bindings, pricings, and
+  system rate limits are readable by any authenticated caller. Mutating them
+  needs a binding (and still passes the governance settings).
+
+A row whose project or team is disabled or deleted collapses to `[global]`, so
+only an admin can reach it to repair it.
+
+### Built-in roles
+
+Seeded as system rows on boot; bind them, don't edit them.
+
+| Role | Bind at | Grants |
+| --- | --- | --- |
+| `admin` | global | every verb on every kind |
+| `auditor` | global | read audit, usage, and request logs everywhere |
+| `catalog-editor` | global | mutate the shared catalog layer |
+| `team-admin` | team | everything scoped under the team, plus its projects, bindings, and `apply` |
+| `project-admin` | project | everything inside one project |
+| `developer` | project | read the project's configuration; own its keys and service accounts; mint tokens |
+| `viewer` | project or team | read-only, plus usage |
+
+### Writing bindings
+
+Roles and bindings are ordinary manifests — `POST /api/apply` them from a repo
+or create them through the API.
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: RoleBinding
+metadata:
+  name: platform-admins
+  owner: {kind: team, name: platform}   # = scope target; system for global bindings
+spec:
+  role: team-admin
+  scope:
+    kind: team                 # system (= global) | team | project
+    name: platform             # omitted for system
+  subjects:
+    - {kind: group, name: platform-eng}          # IdP or local group
+    - {kind: user, name: alice}
+    - {kind: serviceaccount, name: ci-deployer}  # SA slug; project inferred
+```
+
+A custom Role, if the built-ins don't fit (licensed feature):
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: developer
+  owner: {kind: system}        # system = built-in; user = custom
+spec:
+  rules:
+    - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits]
+      verbs: [get, list]
+    - kinds: [keys, service-accounts]
+      verbs: [get, list, create, update, delete, rotate]
+    - kinds: [tokens]
+      verbs: [mint]
+    - kinds: [usage, logs]
+      verbs: [read]
+```
+
+`kinds` are the API plurals (`providers`, `keys`, `policies`, …) plus `*`;
+`verbs` are `get list create update delete rotate health attach detach read
+mint reload generate snapshot apply` plus `*`.
+
+### Groups
+
+A binding names a group by name. The name is satisfied by a local `Group` row
+(for deployments without an identity provider) **and** by a group claim your
+IdP asserts at login — the two union, so you can start local and move to SSO
+without rewriting bindings. Three virtual groups always exist and never need a
+row: `system:authenticated`, `system:serviceaccounts`, and
+`system:serviceaccounts:<project>`.
+
+### Reads
+
+List endpoints return only the rows the caller could `get`, and a row they may
+not see answers `404`, not `403` — existence is not leaked. Usage and request
+logs narrow the same way: a caller with a global binding reads the whole
+stream, everyone else reads the events of the projects they can see plus the
+events their own keys produced.
 
 <Note>
 Run the control plane on its own port behind your network controls, and use
