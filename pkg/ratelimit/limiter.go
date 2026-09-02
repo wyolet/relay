@@ -152,7 +152,7 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 // post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
 //
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
-//   - meter "tokens":        sum of all values in obs.Tokens (backward compat)
+//   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]
 //   - meter "tokens.<key>":  obs.Tokens["<key>"]
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
 //   - meter "concurrency":   decremented (not incremented)
@@ -240,12 +240,12 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		for i, rule := range res.tokRules {
 			m := rule.Meter
 			if m == "tokens" {
-				// sum all values
-				var sum int64
-				for _, v := range obs.Tokens {
-					sum += v
-				}
-				tokAmounts[i] = sum
+				// Input and output are the uncached counts, and their sum is
+				// what a provider reports as the total; the cache, reasoning
+				// and server-tool counters are metered by their own
+				// tokens.<key> meters. Summing the whole map billed one
+				// request several times over.
+				tokAmounts[i] = obs.Tokens["input"] + obs.Tokens["output"]
 			} else if strings.HasPrefix(m, "tokens.") {
 				key := m[len("tokens."):]
 				tokAmounts[i] = obs.Tokens[key]

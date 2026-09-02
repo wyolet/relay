@@ -40,8 +40,8 @@ type modelsOutput struct {
 // Spec.Models grants, and the implicit-wildcard case (both fields empty).
 //
 // Policy-less key (Spec.PolicyID empty + settings.Inference.
-// AllowMissingPolicy on): returns every enabled model that has at least
-// one enabled host binding to a host the relay has hostkeys for.
+// AllowMissingPolicy on): asks routing.PolicylessAllows, so the listing and
+// the flow that would serve the request read one definition of the pool.
 func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
 	registerModelsAt(api, d, mw, "/v1/models", "")
 	registerModelsAt(api, d, mw, "/openai/v1/models", adapters.OpenAI)
@@ -90,7 +90,7 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 		}
 		seen := map[string]struct{}{}
 		for _, m := range snap.AllModels() {
-			if !modelHasReachableBinding(snap, m, adapterFilter) {
+			if !routing.PolicylessAllows(snap, m, adapterFilter) {
 				continue
 			}
 			appendModelRows(&out.Body.Data, snap, m, seen)
@@ -148,25 +148,6 @@ func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
 		return fallback
 	}
 	return t.UTC().Unix()
-}
-
-// modelHasReachableBinding returns true iff the model has at least one
-// enabled host binding to a host with credentials, optionally restricted
-// to a specific adapter kind.
-func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Name) bool {
-	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if !hb.IsEnabled() {
-			continue
-		}
-		if adapterFilter != "" && hb.Spec.Adapter != adapterFilter {
-			continue
-		}
-		if len(snap.HostKeysForHost(hb.Spec.HostID)) == 0 {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 // modelHasAdapter returns true iff the model has at least one enabled

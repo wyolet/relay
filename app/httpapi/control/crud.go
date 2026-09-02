@@ -420,7 +420,7 @@ func registerKind[T any](
 		Tags:          []string{tag},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusNoContent,
-		Errors:        []int{401, 403, 404, 500},
+		Errors:        []int{401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
@@ -437,7 +437,7 @@ func registerKind[T any](
 		}
 		if guard != nil {
 			if err := guard(ctx, "delete", existing, nil); err != nil {
-				return nil, huma.Error403Forbidden(err.Error())
+				return nil, mapGuardErr(err)
 			}
 		}
 		audit.Changed(ctx, []string{audit.AnyField})
@@ -625,7 +625,7 @@ func checkProjectRefVisible(ctx context.Context, d Deps, projectID string) error
 		return nil
 	}
 	if !s.Visible(ctx, "project", p.Meta.ID, p.Meta.Owner) {
-		return huma.Error404NotFound(fmt.Sprintf("project %q not found", projectID))
+		return errRefNotVisible("project", projectID)
 	}
 	return nil
 }
@@ -681,7 +681,7 @@ func checkTeamRefVisible(ctx context.Context, d Deps, teamID string) error {
 		return nil
 	}
 	if !s.Visible(ctx, "team", t.Meta.ID, t.Meta.Owner) {
-		return huma.Error404NotFound(fmt.Sprintf("team %q not found", teamID))
+		return errRefNotVisible("team", teamID)
 	}
 	return nil
 }
@@ -696,16 +696,22 @@ func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwne
 	if policyID == "" {
 		return nil
 	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok || d.Stores == nil || d.Stores.Policy == nil {
+	if d.Stores == nil || d.Stores.Policy == nil {
 		return nil
 	}
 	p, err := d.Stores.Policy.Get(ctx, policyID)
 	if err != nil || p == nil {
-		return nil
+		return huma.Error400BadRequest(fmt.Sprintf("policy %q does not exist", policyID))
 	}
-	if !s.Visible(ctx, "policy", p.Meta.ID, p.Meta.Owner) {
-		return huma.Error400BadRequest(fmt.Sprintf("policy %q not found", policyID))
+	if s, ok := d.Authz.(authz.Scoper); ok && !s.Visible(ctx, "policy", p.Meta.ID, p.Meta.Owner) {
+		return errRefNotVisible("policy", policyID)
+	}
+	// A host-owned policy is a tier definition — the menu an upstream
+	// publishes, carrying rules and no inbound grants. Binding one would give
+	// a caller a policy with no host keys behind it.
+	if p.Meta.Owner.Kind == meta.OwnerHost {
+		return huma.Error400BadRequest(fmt.Sprintf(
+			"policy %q is a host tier policy and cannot be bound", p.Meta.Name))
 	}
 	if refOwner.Kind == meta.OwnerUser && p.Meta.Owner.Kind == meta.OwnerProject {
 		owner := p.Meta.Owner
@@ -713,7 +719,70 @@ func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwne
 			return huma.Error400BadRequest("personal rows cannot reference project resources")
 		}
 	}
-	return nil
+	return checkSharedOwner("policy", p.Meta.Name, p.Meta.Owner, refOwner)
+}
+
+// checkRateLimitRefVisible applies the policy-ref rule to a RateLimit named
+// by a policy: it must exist, be visible, and belong to the referrer's own
+// scope or be shared.
+func checkRateLimitRefVisible(ctx context.Context, d Deps, rateLimitID string, refOwner meta.Owner) error {
+	if rateLimitID == "" {
+		return nil
+	}
+	if d.Stores == nil || d.Stores.RateLimit == nil {
+		return nil
+	}
+	rl, err := d.Stores.RateLimit.Get(ctx, rateLimitID)
+	if err != nil || rl == nil {
+		return huma.Error400BadRequest(fmt.Sprintf("rate-limit %q does not exist", rateLimitID))
+	}
+	if s, ok := d.Authz.(authz.Scoper); ok && !s.Visible(ctx, "rate-limit", rl.Meta.ID, rl.Meta.Owner) {
+		return errRefNotVisible("rate-limit", rateLimitID)
+	}
+	// The rule the policy ref already follows: a personal row must not meter
+	// itself against a project's limits (D51/D70).
+	if refOwner.Kind == meta.OwnerUser && refOwner.ID != "" && rl.Meta.Owner.Kind == meta.OwnerProject {
+		owner := rl.Meta.Owner
+		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &owner}); err != nil {
+			return huma.Error400BadRequest("personal rows cannot reference project resources")
+		}
+	}
+	return checkSharedOwner("rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
+}
+
+// checkSharedOwner enforces D74 for a project-owned referrer: the row it
+// names must live in the same project or be system-owned (shared). Visible
+// is not enough — a `get` grant on another tenant's row must not become
+// inference through that tenant's credentials and limits. Referrers owned by
+// the catalog tiers (system, host, provider) are unconstrained.
+func checkSharedOwner(kind, name string, owner, refOwner meta.Owner) error {
+	if refOwner.Kind != meta.OwnerProject {
+		return nil
+	}
+	switch owner.Kind {
+	case meta.OwnerSystem:
+		return nil
+	case meta.OwnerUser:
+		// A user owner with no id names nobody: an operator/shared row (the
+		// admin token carries no user id), which every scope may reference.
+		if owner.ID == "" {
+			return nil
+		}
+	case meta.OwnerProject:
+		if owner.ID == refOwner.ID {
+			return nil
+		}
+	}
+	return huma.Error400BadRequest(fmt.Sprintf(
+		"%s %q belongs to another scope (%s) and cannot be referenced from this project", kind, name, owner.Kind))
+}
+
+// errRefNotVisible is the shared answer for a referenced row the caller may
+// not see: 404, because confirming its existence is itself the leak. A row
+// that exists for nobody answers 400 at each call site — an id naming
+// nothing is a bad request, not a hidden row.
+func errRefNotVisible(kind, id string) error {
+	return huma.Error404NotFound(fmt.Sprintf("%s %q not found", kind, id))
 }
 
 // checkHostKeyRefsVisible rejects host-key ids the caller may not see — a
@@ -734,7 +803,7 @@ func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string, refOw
 			continue
 		}
 		if !s.Visible(ctx, "host-key", k.Meta.ID, k.Meta.Owner) {
-			return huma.Error400BadRequest(fmt.Sprintf("host-key %q not found", id))
+			return errRefNotVisible("host-key", id)
 		}
 		// Same rule as checkPolicyRefVisible: a personal policy must not
 		// spend a project's upstream credential (D51).
@@ -873,95 +942,36 @@ func cascadeHostKeyDetach(d Deps) cascadeFn[hostkey.HostKey] {
 	}
 }
 
-// cascadePolicyDetach scrubs every JSONB reference to the deleted Policy
-// before the row is removed:
-//   - relay_keys.spec.policyId → cleared; the key becomes policy-less and
-//     follows settings.Inference.AllowMissingPolicy on the hot path.
-//   - host_keys.spec.policyId → cleared; the key is left without a tier
-//     policy and is dropped from the snapshot by sanitizeHostKey until
-//     reattached.
-//   - hosts.spec.policies[] entries equal to this id → removed.
-//   - hosts.spec.defaultPolicy equal to this id → cleared.
-//
-// PG-side FKs only cover the join tables (policy_models, policy_host_keys
-// — both CASCADE). Everything else lives in spec JSONB and needs app-
-// level cleanup.
+// detachStores adapts Deps to the write surface app/policy.Detach needs.
+func detachStores(d Deps) policy.DetachStores {
+	var s policy.DetachStores
+	if d.Stores == nil {
+		return s
+	}
+	if d.Stores.Key != nil {
+		s.Keys = d.Stores.Key
+	}
+	if d.Stores.ServiceAccount != nil {
+		s.ServiceAccounts = d.Stores.ServiceAccount
+	}
+	if d.Stores.HostKey != nil {
+		s.HostKeys = d.Stores.HostKey
+	}
+	if d.Stores.Host != nil {
+		s.Hosts = d.Stores.Host
+	}
+	return s
+}
+
+// cascadePolicyDetach scrubs every stored reference to the deleted Policy
+// before the row is removed. Shared with apply's prune so both removal paths
+// leave the same state behind.
 func cascadePolicyDetach(d Deps) cascadeFn[policy.Policy] {
 	return func(ctx context.Context, p *policy.Policy) error {
 		if p == nil || d.Stores == nil {
 			return nil
 		}
-		id := p.Meta.ID
-
-		if d.Stores.Key != nil {
-			rks, err := d.Stores.Key.List(ctx)
-			if err != nil {
-				return fmt.Errorf("list keys: %w", err)
-			}
-			for _, k := range rks {
-				if k.Spec.PolicyID != id {
-					continue
-				}
-				k.Spec.PolicyID = ""
-				if err := d.Stores.Key.Upsert(ctx, k); err != nil {
-					return fmt.Errorf("detach from key %q: %w", k.Meta.Name, err)
-				}
-			}
-		}
-
-		if d.Stores.HostKey != nil {
-			keys, err := d.Stores.HostKey.List(ctx)
-			if err != nil {
-				return fmt.Errorf("list host-keys: %w", err)
-			}
-			for _, k := range keys {
-				if k.Spec.PolicyID != id {
-					continue
-				}
-				k.Spec.PolicyID = ""
-				if err := d.Stores.HostKey.Upsert(ctx, k); err != nil {
-					return fmt.Errorf("detach from host-key %q: %w", k.Meta.Name, err)
-				}
-			}
-		}
-
-		if d.Stores.Host != nil {
-			hosts, err := d.Stores.Host.List(ctx)
-			if err != nil {
-				return fmt.Errorf("list hosts: %w", err)
-			}
-			for _, h := range hosts {
-				changed := false
-				if h.Spec.DefaultPolicy == id {
-					h.Spec.DefaultPolicy = ""
-					changed = true
-				}
-				if len(h.Spec.Policies) > 0 {
-					filtered := make([]string, 0, len(h.Spec.Policies))
-					for _, pid := range h.Spec.Policies {
-						if pid == id {
-							changed = true
-							continue
-						}
-						filtered = append(filtered, pid)
-					}
-					if changed {
-						if len(filtered) == 0 {
-							h.Spec.Policies = nil
-						} else {
-							h.Spec.Policies = filtered
-						}
-					}
-				}
-				if !changed {
-					continue
-				}
-				if err := d.Stores.Host.Upsert(ctx, h); err != nil {
-					return fmt.Errorf("detach from host %q: %w", h.Meta.Name, err)
-				}
-			}
-		}
-		return nil
+		return policy.Detach(ctx, detachStores(d), p.Meta.ID)
 	}
 }
 
@@ -1108,7 +1118,7 @@ func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
 			return err
 		}
-		if err := checkPolicyRefExists(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner); err != nil {
+		if err := checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner); err != nil {
 			return err
 		}
 		return checkSubjectsExist(ctx, d, incoming.Spec.Subjects)
@@ -1131,22 +1141,9 @@ func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) (*role.Role
 		return r, nil
 	}
 	if !s.Visible(ctx, "role", r.Meta.ID, r.Meta.Owner) {
-		return nil, huma.Error404NotFound(fmt.Sprintf("role %q not found", roleID))
+		return nil, errRefNotVisible("role", roleID)
 	}
 	return r, nil
-}
-
-// checkPolicyRefExists rejects a binding whose policy does not exist, then
-// applies the same visibility rule the other policy refs use.
-func checkPolicyRefExists(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
-	if d.Stores == nil || d.Stores.Policy == nil {
-		return nil
-	}
-	p, err := d.Stores.Policy.Get(ctx, policyID)
-	if err != nil || p == nil {
-		return huma.Error400BadRequest(fmt.Sprintf("policy %q does not exist", policyID))
-	}
-	return checkPolicyRefVisible(ctx, d, policyID, refOwner)
 }
 
 // checkSubjectsExist rejects an id-bearing subject that names no row. Group

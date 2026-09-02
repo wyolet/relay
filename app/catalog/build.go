@@ -74,11 +74,19 @@ func build(
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
+	// pols carries disabled rows too — addPolicies routes them aside (D77).
+	// A host's tier menu lists only the ones still switched on. A host key
+	// keeps its tier policy either way, so its lookup reads the full map: the
+	// key stays put across a disable and comes back with it, and the tier
+	// gate is what denies it meanwhile (D79).
 	polByID := make(map[string]*policy.Policy, len(pols))
+	enabledPolByID := make(map[string]*policy.Policy, len(pols))
 	for _, p := range pols {
 		polByID[p.Meta.ID] = p
+		if p.IsEnabled() {
+			enabledPolByID[p.Meta.ID] = p
+		}
 	}
-	polIDSet := snapIDs(polByID)
 
 	s.addProviders(provs)
 	// Tenancy first: every kind below can be project-owned and sanitizes
@@ -86,12 +94,13 @@ func build(
 	s.addTeams(teams)
 	s.addProjects(projects, snapIDs(s.teamsByID))
 	s.addRateLimits(rls, snapIDs(s.projectsByID))
-	s.addHosts(hosts, polByID)
+	s.addHosts(hosts, enabledPolByID)
 	s.addModels(models, providerIDs)
 	// Overlays swap templates for effective rows BEFORE indexing, so
 	// aliases/refs below index the merged spec.
 	s.applyOverlays(ovls)
-	s.addHostKeys(keys, hostIDs, snapIDs(s.projectsByID), polByID)
+	s.addHostKeys(keys, hostIDs, snapIDs(s.projectsByID), func(id string) (*policy.Policy, bool) { p, ok := polByID[id]; return p, ok })
+	s.rebuildHostKeysByHost()
 	// Droppable kinds (models: missing provider; hostkeys: missing host /
 	// tier policy) are in place now, so dependents sanitize against the
 	// post-drop snapshot membership — the input enabled-id sets would keep
@@ -104,8 +113,11 @@ func build(
 	s.addRoles(roles)
 	// Service accounts sanitize against the policies just indexed; keys
 	// then sanitize against the accounts.
-	s.addServiceAccounts(sas, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
-	s.addKeys(rks, polIDSet, snapIDs(s.serviceAccountsByID))
+	s.addServiceAccounts(sas, snapIDs(s.projectsByID), s.policyResolvable)
+	// Against snapshot membership, not the input ids: addPolicies may have
+	// dropped a policy whose project is missing, and a key naming it must go
+	// too — the incremental cascade reaches that fixpoint.
+	s.addKeys(rks, s.policyResolvable, snapIDs(s.serviceAccountsByID))
 	s.computePolicyReverseJoins()
 	s.addPricings(pricings, hostIDs, memberModelIDs)
 	s.addBindings(bindings, memberModelIDs, hostIDs)
@@ -118,7 +130,7 @@ func build(
 	// Bindings last: they sanitize against the roles, tenancy rows and
 	// policies already indexed above.
 	s.addRoleBindings(roleBindings, snapIDs(s.rolesByID), snapIDs(s.teamsByID), snapIDs(s.projectsByID))
-	s.addPolicyBindings(policyBindings, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
+	s.addPolicyBindings(policyBindings, snapIDs(s.projectsByID), s.policyResolvable)
 
 	return s
 }
@@ -132,6 +144,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		hostsByName:           make(map[string]*host.Host, nHosts),
 		policiesByID:          make(map[string]*policy.Policy, nPols),
 		policiesByName:        make(map[string]*policy.Policy, nPols),
+		disabledPoliciesByID:  map[string]*policy.Policy{},
 		modelsByID:            make(map[string]*model.Model, nModels),
 		modelsByName:          map[string][]*model.Model{},
 		snapshotsByName:       map[string]snapshotRef{},
@@ -140,6 +153,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		overlaysByTarget:      map[string]*overlay.Overlay{},
 		modelTemplates:        map[string]*model.Model{},
 		hostKeysByID:          make(map[string]*hostkey.HostKey, nKeys),
+		hostKeysByHost:        map[string][]*hostkey.HostKey{},
 		rateLimitsByID:        make(map[string]*ratelimit.RateLimit, nRLs),
 		rateLimitsByName:      make(map[string]*ratelimit.RateLimit, nRLs),
 		keysByID:              make(map[string]*key.Key, nRks),

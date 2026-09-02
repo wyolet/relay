@@ -239,7 +239,7 @@ func (c *Catalog) ApplyHostKeyUpsert(k *hostkey.HostKey) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), snapIDs(s.projectsByID), s.policiesByID)
+	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), snapIDs(s.projectsByID), s.policyLookup)
 	if !keep {
 		deleteHostKey(s, k.Meta.ID)
 		c.snap.Store(s)
@@ -270,6 +270,7 @@ func insertHostKey(s *Snapshot, k *hostkey.HostKey) {
 	s.hostKeysByID[k.Meta.ID] = k
 	s.registerRefs(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
 	rebuildHostKeysByPolicy(s)
+	s.rebuildHostKeysByHost()
 }
 
 func deleteHostKey(s *Snapshot, id string) {
@@ -282,6 +283,7 @@ func deleteHostKey(s *Snapshot, id string) {
 	for polID, keys := range s.hostKeysByPolicy {
 		s.hostKeysByPolicy[polID] = removeHostKeyFromSlice(keys, id)
 	}
+	s.rebuildHostKeysByHost()
 	cascadeDelete(s, refHostKey, id)
 	resanitizePoliciesAfterParentChange(s)
 }
@@ -351,14 +353,14 @@ func deleteRateLimit(s *Snapshot, id string) {
 // ── Policy ────────────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
-	if !p.IsEnabled() {
-		return c.ApplyPolicyDelete(p.Meta.ID)
-	}
 	if err := p.Validate(); err != nil {
 		return err
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	// Absent means the row was never here, or a delete-cascade stripped
+	// dependents only source truth still records — true whether or not the
+	// arriving row is enabled, so a policy created disabled recovers too.
 	if handled, err := c.recoverAbsentLocked(refPolicy, p.Meta.ID); handled {
 		return err
 	}
@@ -369,7 +371,15 @@ func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
 		c.commitWithGrants(s)
 		return nil
 	}
+	if !clean.IsEnabled() {
+		disablePolicy(s, clean)
+		c.commitWithGrants(s)
+		return nil
+	}
 	insertPolicy(s, clean)
+	// The row that just landed may invalidate its dependents — an owner or
+	// host change can leave a host key's tier policy no longer its host's.
+	cascadeDelete(s, refPolicy, clean.Meta.ID)
 	c.commitWithGrants(s)
 	return nil
 }
@@ -383,7 +393,33 @@ func (c *Catalog) ApplyPolicyDelete(id string) error {
 	return nil
 }
 
+// disablePolicy takes the row out of every routing index but keeps it, and
+// every row naming it, in the snapshot: those requests answer 403
+// policy_disabled instead of falling through to a broader grant (D77).
+func disablePolicy(s *Snapshot, p *policy.Policy) {
+	if old, ok := s.policiesByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
+		delete(s.policiesByID, old.Meta.ID)
+		delete(s.policiesByName, old.Meta.Name)
+		delete(s.modelsByPolicy, old.Meta.ID)
+		delete(s.hostKeysByPolicy, old.Meta.ID)
+		delete(s.rateLimitByPolicy, old.Meta.ID)
+	}
+	if old, ok := s.disabledPoliciesByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
+	}
+	s.disabledPoliciesByID[p.Meta.ID] = p
+	// Still a ref holder: losing its project has to evict it, or the rows
+	// naming it keep answering 403 against a policy nothing can reach.
+	s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
+	resanitizeHostsAfterPolicyChange(s)
+}
+
 func insertPolicy(s *Snapshot, p *policy.Policy) {
+	if off, ok := s.disabledPoliciesByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(off))
+		delete(s.disabledPoliciesByID, p.Meta.ID)
+	}
 	if old, ok := s.policiesByID[p.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
 		delete(s.policiesByID, old.Meta.ID)
@@ -414,8 +450,13 @@ func insertPolicy(s *Snapshot, p *policy.Policy) {
 }
 
 func deletePolicy(s *Snapshot, id string) {
+	if off, ok := s.disabledPoliciesByID[id]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(off))
+		delete(s.disabledPoliciesByID, id)
+	}
 	p, ok := s.policiesByID[id]
 	if !ok {
+		cascadeDelete(s, refPolicy, id)
 		return
 	}
 	s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(p))
@@ -524,7 +565,7 @@ func (c *Catalog) ApplyKeyUpsert(k *key.Key) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeKey(k, snapIDs(s.policiesByID), snapIDs(s.serviceAccountsByID))
+	clean, keep := sanitizeKey(k, s.policyResolvable, snapIDs(s.serviceAccountsByID))
 	if !keep {
 		deleteKey(s, k.Meta.ID)
 		c.snap.Store(s)
@@ -619,7 +660,7 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
+	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), s.policyResolvable)
 	if !keep {
 		deleteServiceAccount(s, sa.Meta.ID)
 		c.snap.Store(s)
@@ -910,7 +951,7 @@ func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizePolicyBinding(b, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
+	clean, keep := sanitizePolicyBinding(b, snapIDs(s.projectsByID), s.policyResolvable)
 	if !keep {
 		deletePolicyBinding(s, b.Meta.ID)
 		c.snap.Store(s)
@@ -1173,7 +1214,10 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 		}
 		return validateHostKeyInSnap(hk, s) == nil
 	case refPolicy:
-		p, ok := s.policiesByID[k.ID]
+		// Disabled rows are checked too: one whose project disappears has to
+		// be evicted, or the keys naming it answer 403 against a policy no
+		// operator can reach any more.
+		p, ok := s.policyLookup(k.ID)
 		if !ok {
 			return true
 		}
@@ -1261,8 +1305,9 @@ func rowPresent(s *Snapshot, k refKey) bool {
 		_, ok := s.rateLimitsByID[k.ID]
 		return ok
 	case refPolicy:
-		_, ok := s.policiesByID[k.ID]
-		return ok
+		// Disabled counts as present: the row is in the snapshot, just out of
+		// the routing indices, so re-enabling it is a patch, not a recovery.
+		return s.policyResolvable(k.ID)
 	case refPricing:
 		_, ok := s.pricingsByID[k.ID]
 		return ok

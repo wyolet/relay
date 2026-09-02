@@ -37,6 +37,10 @@ type Runner struct {
 // silently mis-dispatched (canonical rule 11).
 var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 
+// ErrPolicyUnavailable is returned when the policy the submission resolved to
+// is no longer in the snapshot. The item fails rather than running policy-less.
+var ErrPolicyUnavailable = errors.New("batch: policy_unavailable")
+
 // Run executes one item. requestID ties the usage event to the item (the jobq
 // job id); policyID is the policy the submission already resolved to (the
 // resolution order lives in the auth layer, not here), tokenJTI is the
@@ -55,7 +59,15 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID, to
 
 	var pol *policy.Policy
 	if policyID != "" {
-		pol, _ = snap.Policy(policyID)
+		var ok bool
+		if pol, ok = snap.Policy(policyID); !ok {
+			// The submission resolved to this policy; running the item without
+			// one would silently execute it under the policy-less rules
+			// instead, unmetered and against a pool the caller never had.
+			if pol, ok = snap.DisabledPolicy(policyID); !ok {
+				return 0, nil, fmt.Errorf("%w: policy %q", ErrPolicyUnavailable, policyID)
+			}
+		}
 	}
 	// Payload logging is a per-key opt-in; a token-submitted batch has no key
 	// row to read it from and stays off.
@@ -68,6 +80,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID, to
 		RawModelName:          modelName,
 		Policy:                pol,
 		PayloadLoggingEnabled: payloadLogging,
+		Snapshot:              snap,
 	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)

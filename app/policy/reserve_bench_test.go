@@ -50,12 +50,13 @@ func BenchmarkReserveInboundKey(b *testing.B) {
 // BenchmarkResolveRules isolates the rule-key rendering the request path
 // runs once per rule.
 func BenchmarkResolveRules(b *testing.B) {
+	pol := fix("prod-policy")
 	rl := &appratelimit.RateLimit{}
 	rl.Meta.ID, rl.Meta.Name = "rl-1", "rl-1"
 	rl.Spec.Rules = benchRules()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = appratelimit.ResolveWithScope("policy", "prod-policy", rl)
+		_ = pol.ResolveRules(rl, "model-1")
 	}
 }

@@ -262,7 +262,7 @@ func buildPrincipal(snap *appcatalog.Snapshot, k *key.Key, hash string) *Princip
 		PayloadLogging:     k.Spec.PayloadLoggingEnabled,
 	}
 	if k.Spec.PolicyID != "" {
-		if pol, ok := snap.Policy(k.Spec.PolicyID); ok {
+		if pol, ok := policyOrDisabled(snap, k.Spec.PolicyID); ok {
 			p.Policy = pol
 		}
 	}
@@ -298,7 +298,7 @@ func buildPrincipal(snap *appcatalog.Snapshot, k *key.Key, hash string) *Princip
 // the policy-less flow.
 func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principal) bool {
 	if p.Policy == nil && p.ServiceAccount != nil && p.ServiceAccount.Spec.PolicyID != "" {
-		if pol, ok := snap.Policy(p.ServiceAccount.Spec.PolicyID); ok {
+		if pol, ok := policyOrDisabled(snap, p.ServiceAccount.Spec.PolicyID); ok {
 			p.Policy = pol
 		}
 	}
@@ -307,13 +307,20 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 			if !bindingMatches(b, p.Subjects) {
 				continue
 			}
-			if pol, ok := snap.Policy(b.Spec.PolicyID); ok {
+			if pol, ok := policyOrDisabled(snap, b.Spec.PolicyID); ok {
 				p.Policy = pol
 				break
 			}
 		}
 	}
 	if p.Policy != nil {
+		// A resolved-but-disabled policy is an answer, not a miss: falling
+		// through to a broader binding, or to the policy-less flow, would
+		// hand the caller more than the operator left switched on.
+		if !p.Policy.IsEnabled() {
+			writeForbidden(w, "policy_disabled", "policy is disabled")
+			return false
+		}
 		return true
 	}
 	// A personal key with no project falls through to the policy-less flow,
@@ -324,6 +331,16 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 	}
 	writeForbidden(w, "no_policy", "no policy is bound to this principal")
 	return false
+}
+
+// policyOrDisabled resolves a policy id, falling back to the disabled row so
+// a credential pointing at a switched-off policy is answered rather than
+// treated as pointing at nothing (D77).
+func policyOrDisabled(snap *appcatalog.Snapshot, id string) (*policy.Policy, bool) {
+	if pol, ok := snap.Policy(id); ok {
+		return pol, true
+	}
+	return snap.DisabledPolicy(id)
 }
 
 // bindingMatches reports whether the binding names a subject the principal

@@ -518,3 +518,25 @@ func TestAlwaysAllowAuthenticated(t *testing.T) {
 		t.Fatalf("authenticated = %v, want allowed", err)
 	}
 }
+
+// A policy owned by the system or by a host is shared configuration —
+// the tier menu an upstream publishes, the relay-wide defaults. A scoped
+// caller has to read them to bind or reference one; a project's own policy
+// still needs a binding.
+func TestSharedPoliciesGetTheCatalogRead(t *testing.T) {
+	cat := newFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	stranger := actorOf(ids.New(), subjectsOf(ids.New()))
+
+	for _, owner := range []meta.Owner{
+		{Kind: meta.OwnerSystem},
+		{Kind: meta.OwnerHost, ID: ids.New()},
+	} {
+		if !rbac.Visible(ctxOf(stranger), "policy", ids.New(), owner) {
+			t.Errorf("a %s-owned policy is not readable by a scoped caller", owner.Kind)
+		}
+	}
+	if rbac.Visible(ctxOf(stranger), "policy", ids.New(), *projectOwner(p1ID)) {
+		t.Error("a project's own policy is readable without a binding")
+	}
+}

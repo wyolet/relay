@@ -124,7 +124,7 @@ func (s *Service) PolicyModels(ctx context.Context, ref string) (PolicyRef, []Po
 	}
 	rows := []PolicyBindingRow{}
 	for _, gb := range idx.grantedBindings(p, models) {
-		rlID := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
+		rlID, _ := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
 		rows = append(rows, PolicyBindingRow{
 			Provider:  providerRefOf(gb.prov),
 			Host:      hostRefOf(gb.host),
@@ -413,7 +413,7 @@ func (s *Service) PolicyRateLimits(ctx context.Context, ref string) (PolicyRef, 
 		}
 		// Unthrottled bookkeeping: a model is capped if ANY granted binding
 		// resolves to a non-empty limit set.
-		rlID := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
+		rlID, _ := p.SelectRateLimitID(gb.provSlug, gb.model.Meta.Name, gb.host.Meta.Name)
 		if len(idx.limitsOf(rlID)) > 0 {
 			capped[gb.model.Meta.ID] = true
 		} else {

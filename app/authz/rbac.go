@@ -126,6 +126,13 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 		(res.Owner == nil || isCatalogOwner(*res.Owner)) {
 		return nil
 	}
+	// A policy owned by the system or by a host is shared configuration, not
+	// tenant data — the tier menu an upstream publishes and the relay-wide
+	// defaults. A scoped admin has to read them to bind or reference one.
+	if (verb == "get" || verb == "list") && kind == "policies" && res.Owner != nil &&
+		(res.Owner.Kind == meta.OwnerSystem || res.Owner.Kind == meta.OwnerHost) {
+		return nil
+	}
 	// A system-owned Role is a shared rule set, not tenant data: creating a
 	// binding means reading the role it names, and a scoped admin holds no
 	// binding at the global scope the row lives in.

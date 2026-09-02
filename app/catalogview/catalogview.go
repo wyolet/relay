@@ -254,7 +254,7 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 		if !granted {
 			continue
 		}
-		rlID := p.SelectRateLimitID(provSlug, m.Meta.Name, hostSlug)
+		rlID, _ := p.SelectRateLimitID(provSlug, m.Meta.Name, hostSlug)
 		rows = append(rows, ModelPolicyRow{
 			ID:     p.Meta.ID,
 			Name:   p.Meta.Name,
