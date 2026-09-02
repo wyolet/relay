@@ -67,6 +67,7 @@ var kinds = []kind{
 	{Name: "Role", Type: reflect.TypeOf(manifest.RoleDTO{})},
 	{Name: "RoleBinding", Type: reflect.TypeOf(manifest.RoleBindingDTO{})},
 	{Name: "PolicyBinding", Type: reflect.TypeOf(manifest.PolicyBindingDTO{})},
+	{Name: "Overlay", Type: reflect.TypeOf(manifest.OverlayDTO{})},
 }
 
 func main() {

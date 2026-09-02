@@ -29,6 +29,7 @@
               "concepts/architecture",
               "concepts/catalog",
               "concepts/overlays",
+              "concepts/gitops",
               "concepts/key-pooling",
               "concepts/proxy-mode",
               "concepts/observability",
