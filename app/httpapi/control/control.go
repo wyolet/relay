@@ -156,10 +156,10 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerMisc(api, d, protect) // /master-key/generate, /reload
 	registerCRUD(api, d, protect) // 8 kinds × CRUD
 	registerHostKeyRotate(api, d, protect)
-	registerRelayKeyRotate(api, d, protect)
+	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
 	registerReferences(api, d, protect)
-	registerPolicyRelayKeys(api, d, protect)
+	registerPolicyKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models

@@ -11,8 +11,8 @@ import (
 
 // scopedReadKinds are the kinds whose read handlers scope rows to the
 // caller: catalog kinds per-row via Visible on meta.Owner, and the
-// usage/logs read surface via the caller's owned relay-key hashes
-// (relayKeyScope in httpapi/control). Reads on any other kind (settings,
+// usage/logs read surface via the caller's owned key hashes
+// (keyScope in httpapi/control). Reads on any other kind (settings,
 // debug, ...) have no scoped read path, so OwnerScoped grants them to
 // admins only.
 var scopedReadKinds = map[string]bool{
@@ -24,7 +24,7 @@ var scopedReadKinds = map[string]bool{
 	"policy":       true,
 	"pricing":      true,
 	"host-binding": true,
-	"relay-key":    true,
+	"key":          true,
 	"usage":        true,
 	"logs":         true,
 }

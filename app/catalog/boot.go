@@ -11,8 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -20,9 +22,9 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -85,11 +87,14 @@ type Stores struct {
 	Policy    *policy.Store
 	Pricing   *pricing.Store
 	Binding   *binding.Store
-	RelayKey  *relaykey.Store
+	Key       *key.Store
 	Overlay   *overlay.Store
 	Settings  *settings.Store
 	Team      *team.Store
 	Project   *project.Store
+
+	ServiceAccount *serviceaccount.Store
+	Group          *group.Store
 
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
@@ -121,20 +126,24 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),
 		Binding:   binding.NewStore(opts.Pool),
-		RelayKey:  relaykey.NewStore(q),
+		Key:       key.NewStore(q),
 		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),
 		Team:      team.NewStore(q),
 		Project:   project.NewStore(q),
-		Secrets:   secReg,
+
+		ServiceAccount: serviceaccount.NewStore(q),
+		Group:          group.NewStore(opts.Pool),
+
+		Secrets: secReg,
 	}
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
-		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
+		stores.HostKey, stores.RateLimit, stores.Key, stores.Pricing,
 		stores.Binding,
 	)
 	cat.UseOverlays(stores.Overlay)
-	cat.UseTenancy(stores.Team, stores.Project)
+	cat.UseTenancy(stores.Team, stores.Project, stores.ServiceAccount, stores.Group)
 	cat.settings.store = stores.Settings
 
 	// OAuth credential resolver: stores its token blob via the same AES-GCM
@@ -211,11 +220,14 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		ratelimit: stores.RateLimit,
 		policy:    stores.Policy,
 		pricing:   stores.Pricing,
-		relaykey:  stores.RelayKey,
+		key:       stores.Key,
 		overlay:   stores.Overlay,
 		settings:  stores.Settings,
 		team:      stores.Team,
 		project:   stores.Project,
+
+		serviceAccount: stores.ServiceAccount,
+		group:          stores.Group,
 	})
 	return listener, nil
 }
@@ -410,7 +422,7 @@ func isCatalogEmpty(ctx context.Context, s *Stores) (bool, error) {
 	if len(prs) > 0 {
 		return false, nil
 	}
-	rks, err := s.RelayKey.List(ctx)
+	rks, err := s.Key.List(ctx)
 	if err != nil {
 		return false, err
 	}

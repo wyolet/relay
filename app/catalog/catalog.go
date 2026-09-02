@@ -7,8 +7,10 @@ import (
 	"sync/atomic"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -16,7 +18,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -28,9 +30,9 @@ type Catalog struct {
 	hosts      HostLister
 	policies   PolicyLister
 	models     ModelLister
-	keys       HostKeyLister
+	hostKeys   HostKeyLister
 	rateLimits RateLimitLister
-	relayKeys  RelayKeyLister
+	keys       KeyLister
 	pricings   PricingLister
 	bindings   BindingLister
 
@@ -42,8 +44,10 @@ type Catalog struct {
 	// teams/projects are optional (nil = tenancy dormant): set via
 	// UseTenancy from the composition root so existing New callers stay
 	// untouched.
-	teams    TeamLister
-	projects ProjectLister
+	teams           TeamLister
+	projects        ProjectLister
+	serviceAccounts ServiceAccountLister
+	groups          GroupLister
 
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
@@ -74,8 +78,8 @@ type HostKeyLister interface {
 type RateLimitLister interface {
 	List(ctx context.Context) ([]*ratelimit.RateLimit, error)
 }
-type RelayKeyLister interface {
-	List(ctx context.Context) ([]*relaykey.RelayKey, error)
+type KeyLister interface {
+	List(ctx context.Context) ([]*key.Key, error)
 }
 type PricingLister interface {
 	List(ctx context.Context) ([]*pricing.Pricing, error)
@@ -92,6 +96,12 @@ type TeamLister interface {
 type ProjectLister interface {
 	List(ctx context.Context) ([]*project.Project, error)
 }
+type ServiceAccountLister interface {
+	List(ctx context.Context) ([]*serviceaccount.ServiceAccount, error)
+}
+type GroupLister interface {
+	List(ctx context.Context) ([]*group.Group, error)
+}
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
@@ -100,9 +110,9 @@ func New(
 	hosts HostLister,
 	policies PolicyLister,
 	models ModelLister,
-	keys HostKeyLister,
+	hostKeys HostKeyLister,
 	rateLimits RateLimitLister,
-	relayKeys RelayKeyLister,
+	keys KeyLister,
 	pricings PricingLister,
 	bindings BindingLister,
 ) *Catalog {
@@ -111,9 +121,9 @@ func New(
 		hosts:      hosts,
 		policies:   policies,
 		models:     models,
-		keys:       keys,
+		hostKeys:   hostKeys,
 		rateLimits: rateLimits,
-		relayKeys:  relayKeys,
+		keys:       keys,
 		pricings:   pricings,
 		bindings:   bindings,
 	}
@@ -125,10 +135,12 @@ func New(
 // time before the first Reload; nil (the default) keeps overlays dormant.
 func (c *Catalog) UseOverlays(l OverlayLister) { c.overlays = l }
 
-// UseTenancy attaches the Team + Project sources. Called once at
-// composition time before the first Reload; nil (the default) keeps
-// tenancy dormant.
-func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister) { c.teams, c.projects = t, p }
+// UseTenancy attaches the Team, Project, ServiceAccount and Group
+// sources. Called once at composition time before the first Reload; nil
+// (the default) keeps tenancy dormant.
+func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister, sa ServiceAccountLister, g GroupLister) {
+	c.teams, c.projects, c.serviceAccounts, c.groups = t, p, sa, g
+}
 
 // Current returns the live Snapshot. Safe to call from any goroutine; the
 // returned pointer is immutable until the next successful Reload.
@@ -178,7 +190,7 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: models: %w", err)
 	}
-	keys, err := c.keys.List(ctx)
+	hostKeys, err := c.hostKeys.List(ctx)
 	if err != nil {
 		return fmt.Errorf("catalog reload: providerkeys: %w", err)
 	}
@@ -186,9 +198,9 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: ratelimits: %w", err)
 	}
-	rks, err := c.relayKeys.List(ctx)
+	rks, err := c.keys.List(ctx)
 	if err != nil {
-		return fmt.Errorf("catalog reload: relaykeys: %w", err)
+		return fmt.Errorf("catalog reload: keys: %w", err)
 	}
 	pricingsAll, err := c.pricings.List(ctx)
 	if err != nil {
@@ -212,6 +224,20 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 			return fmt.Errorf("catalog reload: projects: %w", err)
 		}
 	}
+	var sas []*serviceaccount.ServiceAccount
+	if c.serviceAccounts != nil {
+		sas, err = c.serviceAccounts.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: service accounts: %w", err)
+		}
+	}
+	var groups []*group.Group
+	if c.groups != nil {
+		groups, err = c.groups.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: groups: %w", err)
+		}
+	}
 	var ovls []*overlay.Overlay
 	if c.overlays != nil {
 		ovls, err = c.overlays.List(ctx)
@@ -223,14 +249,16 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	enabledProvs := filter(provs, (*provider.Provider).IsEnabled)
 	enabledHosts := filter(hosts, (*host.Host).IsEnabled)
 	enabledPols := filter(pols, (*policy.Policy).IsEnabled)
-	enabledRKs := filter(rks, (*relaykey.RelayKey).IsEnabled)
+	enabledRKs := filter(rks, (*key.Key).IsEnabled)
 	enabledModels := filter(models, (*model.Model).IsEnabled)
-	enabledKeys := filter(keys, (*hostkey.HostKey).IsEnabled)
+	enabledKeys := filter(hostKeys, (*hostkey.HostKey).IsEnabled)
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 	enabledPricings := filter(pricingsAll, (*pricing.Pricing).IsEnabled)
 	enabledBindings := filter(bindingsAll, (*binding.Binding).IsEnabled)
 	enabledTeams := filter(teams, (*team.Team).IsEnabled)
 	enabledProjects := filter(projects, (*project.Project).IsEnabled)
+	enabledSAs := filter(sas, (*serviceaccount.ServiceAccount).IsEnabled)
+	enabledGroups := filter(groups, (*group.Group).IsEnabled)
 
 	providerIDs := make(map[string]struct{}, len(enabledProvs))
 	for _, p := range enabledProvs {
@@ -245,7 +273,7 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects)
+	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups)
 	c.snap.Store(snap)
 	c.markReady()
 	return nil

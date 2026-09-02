@@ -35,11 +35,11 @@ const (
 // or any settings; gating decisions happen later.
 type Classification struct {
 	Mode Mode
-	// RelayKey is the raw inbound relay-key token. Empty in
+	// Key is the raw inbound key token. Empty in
 	// ModeProxyAnonymous. In ModeNormal pulled from X-WR-API-Key first,
 	// then Authorization (Bearer). In ModeProxyAuthed pulled from
 	// X-WR-API-Key only.
-	RelayKey string
+	Key string
 	// UpstreamAuth is the verbatim Authorization header value (including
 	// the "Bearer " prefix when present) supplied by the caller for proxy
 	// mode. The proxy forwarder re-attaches it on the outbound request.
@@ -88,7 +88,7 @@ func Classify(r *http.Request) (Classification, error) {
 		}
 		return Classification{
 			Mode:         mode,
-			RelayKey:     relay,
+			Key:          relay,
 			UpstreamAuth: authz,
 			UpstreamHost: r.Header.Get(httpheader.HeaderUpstreamHost),
 			ClientIP:     httpmw.ClientIP(r, httpmw.TrustedProxies()),
@@ -107,7 +107,7 @@ func Classify(r *http.Request) (Classification, error) {
 	}
 	return Classification{
 		Mode:     ModeNormal,
-		RelayKey: relay,
+		Key:      relay,
 		ClientIP: httpmw.ClientIP(r, httpmw.TrustedProxies()),
 	}, nil
 }

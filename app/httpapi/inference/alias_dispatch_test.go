@@ -12,11 +12,11 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -45,7 +45,7 @@ func buildRunnableDeps(t *testing.T, cat *catalog.Catalog) Deps {
 // aliasDispatchCatalog rebuilds the standard dispatch fixture so the host
 // points at the given upstream URL with NoAuth (anonymous key — no secret
 // resolution in tests) and the model declares an exact + wildcard alias.
-func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *relaykey.RelayKey) {
+func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *key.Key) {
 	t.Helper()
 	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAI)
 	snap := cat.Current()

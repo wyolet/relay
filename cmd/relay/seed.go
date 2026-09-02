@@ -81,7 +81,9 @@ func runSeed(args []string) error {
 		"rate_limits", result.RateLimits,
 		"policies", result.Policies,
 		"pricings", result.Pricings,
-		"relay_keys", result.RelayKeys,
+		"service_accounts", result.ServiceAccounts,
+		"groups", result.Groups,
+		"relay_keys", result.Keys,
 		"skipped_dirty", result.Skipped,
 		"clear_dirty", *clearDirty,
 	)

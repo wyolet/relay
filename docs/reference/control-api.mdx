@@ -43,7 +43,8 @@ DELETE /api/{plural}/by-id/{id}      delete
 ```
 
 Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
-`policies`, `pricings`, `relay-keys`, `teams`, `projects`.
+`policies`, `pricings`, `keys`, `teams`, `projects`, `service-accounts`,
+`groups`.
 
 <Info>
 Every write triggers a Postgres `NOTIFY`; the change propagates to every
@@ -88,17 +89,26 @@ ciphertext is persisted.
 
 ## Relay keys
 
-A **relay key** is the inbound bearer your callers use. The server generates
-the plaintext via `crypto/rand`, stores only `sha256(plaintext)` + a short
-display prefix, and returns the plaintext **once** on create.
+A **key** is the inbound bearer your callers use. It is a credential of a
+principal — a service account or a user — so rotating it leaves everything
+bound to that principal alone. The server generates the plaintext via
+`crypto/rand`, stores only `sha256(plaintext)` + a short display prefix, and
+returns the plaintext **once** on create.
+
+`spec.principal` is required; `spec.expiresAt` (RFC3339) is optional and
+stops the key authenticating once passed.
 
 ```bash
-curl -X POST http://localhost:8081/api/relay-keys \
+curl -X POST http://localhost:8081/api/keys \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "metadata": { "displayName": "prod key" },
-    "spec": { "policyId": "<policy-id>" }
+    "spec": {
+      "principal": { "kind": "serviceaccount", "id": "<service-account-id>" },
+      "policyId": "<policy-id>",
+      "expiresAt": "2027-01-01T00:00:00Z"
+    }
   }'
 ```
 
@@ -107,7 +117,7 @@ Response:
 ```json
 {
   "plaintext": "rk_live_...",   // save this now — never retrievable again
-  "relayKey": { "metadata": { "id": "..." }, "spec": { "prefix": "rk_live" } }
+  "key": { "metadata": { "id": "..." }, "spec": { "prefix": "rk_live" } }
 }
 ```
 

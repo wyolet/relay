@@ -6,13 +6,13 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 )
 
 // snapshotFromFixture builds a Snapshot via Reload over the standard fixture
@@ -73,8 +73,8 @@ func TestRefs_EveryOutboundResolves(t *testing.T) {
 	for _, p := range s.pricingsByID {
 		check(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
 	}
-	for _, k := range s.relayKeysByID {
-		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
+	for _, k := range s.keysByID {
+		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
 	}
 }
 
@@ -124,8 +124,8 @@ func TestRefs_RegisterUnregisterNetsZero(t *testing.T) {
 	for _, p := range s.pricingsByID {
 		ops = append(ops, op{refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p)})
 	}
-	for _, k := range s.relayKeysByID {
-		ops = append(ops, op{refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k)})
+	for _, k := range s.keysByID {
+		ops = append(ops, op{refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k)})
 	}
 	for _, b := range s.bindingsByID {
 		ops = append(ops, op{refKey{Kind: refBinding, ID: b.Meta.ID}, outboundBindingRefs(b)})
@@ -194,7 +194,7 @@ func (s *Snapshot) rowExists(k refKey) bool {
 		_, ok := s.pricingsByID[k.ID]
 		return ok
 	case refRelayKey:
-		_, ok := s.relayKeysByID[k.ID]
+		_, ok := s.keysByID[k.ID]
 		return ok
 	case refBinding:
 		_, ok := s.bindingsByID[k.ID]
@@ -211,5 +211,5 @@ var (
 	_ = policy.Spec{}
 	_ = provider.Spec{}
 	_ = ratelimit.Spec{}
-	_ = relaykey.Spec{}
+	_ = key.Spec{}
 )

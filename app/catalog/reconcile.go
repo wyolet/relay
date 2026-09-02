@@ -4,23 +4,26 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
 // commitWithGrants recomputes the per-policy allowed-combo sets (a function of
 // providers + hosts + models + policies) then atomically publishes the clone.
-// Used by every Apply that can change a grant; hostkey/ratelimit/relaykey/
+// Used by every Apply that can change a grant; hostkey/ratelimit/key/
 // pricing writes don't affect grants and call c.snap.Store directly.
 func (c *Catalog) commitWithGrants(s *Snapshot) {
 	s.rebuildPolicyAllowSets()
@@ -32,7 +35,7 @@ func (c *Catalog) commitWithGrants(s *Snapshot) {
 // re-appearance whose earlier delete-cascade stripped dependents (policy
 // grants, relay keys, host keys) that only source truth still records, so an
 // incremental patch would leave them permanently lost. Leaf kinds with no
-// dependents (pricing, relaykey) skip this and stay incremental. Caller must
+// dependents (pricing, key) skip this and stay incremental. Caller must
 // hold c.rmu; returns (handled, err).
 func (c *Catalog) recoverAbsentLocked(kind refKind, id string) (bool, error) {
 	if rowPresent(c.snap.Load(), refKey{Kind: kind, ID: id}) {
@@ -496,11 +499,11 @@ func deletePricing(s *Snapshot, id string) {
 	delete(s.pricingsByID, id)
 }
 
-// ── RelayKey ──────────────────────────────────────────────────────────────
+// ── Key ──────────────────────────────────────────────────────────────
 
-func (c *Catalog) ApplyRelayKeyUpsert(k *relaykey.RelayKey) error {
+func (c *Catalog) ApplyKeyUpsert(k *key.Key) error {
 	if !k.IsEnabled() {
-		return c.ApplyRelayKeyDelete(k.Meta.ID)
+		return c.ApplyKeyDelete(k.Meta.ID)
 	}
 	if err := k.Validate(); err != nil {
 		return err
@@ -508,51 +511,212 @@ func (c *Catalog) ApplyRelayKeyUpsert(k *relaykey.RelayKey) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeRelayKey(k, snapIDs(s.policiesByID))
+	clean, keep := sanitizeKey(k, snapIDs(s.policiesByID), snapIDs(s.serviceAccountsByID))
 	if !keep {
-		deleteRelayKey(s, k.Meta.ID)
+		deleteKey(s, k.Meta.ID)
 		c.snap.Store(s)
 		return nil
 	}
-	insertRelayKey(s, clean)
+	insertKey(s, clean)
 	c.snap.Store(s)
 	return nil
 }
 
-func (c *Catalog) ApplyRelayKeyDelete(id string) error {
+func (c *Catalog) ApplyKeyDelete(id string) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	deleteRelayKey(s, id)
+	deleteKey(s, id)
 	c.snap.Store(s)
 	return nil
 }
 
-func insertRelayKey(s *Snapshot, k *relaykey.RelayKey) {
-	if old, ok := s.relayKeysByID[k.Meta.ID]; ok {
-		s.unregisterRefs(refKey{Kind: refRelayKey, ID: old.Meta.ID}, outboundRelayKeyRefs(old))
-		if old.Spec.KeyHash != "" {
-			delete(s.relayKeysByHash, old.Spec.KeyHash)
-		}
-		delete(s.relayKeysByID, old.Meta.ID)
+func insertKey(s *Snapshot, k *key.Key) {
+	if old, ok := s.keysByID[k.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refRelayKey, ID: old.Meta.ID}, outboundKeyRefs(old))
+		unindexKeyHashes(s, old)
+		delete(s.keysByID, old.Meta.ID)
 	}
-	s.relayKeysByID[k.Meta.ID] = k
+	s.keysByID[k.Meta.ID] = k
 	if k.Spec.KeyHash != "" {
-		s.relayKeysByHash[k.Spec.KeyHash] = k
+		s.keysByHash[k.Spec.KeyHash] = k
 	}
-	s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
+	// The pre-rotation hash is indexed only while its grace window is open,
+	// so an expired grace drops out on the next reconcile or reload.
+	if k.InGrace(time.Now()) {
+		s.keysByHash[k.Spec.PreviousKeyHash] = k
+	}
+	s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
 }
 
-func deleteRelayKey(s *Snapshot, id string) {
-	k, ok := s.relayKeysByID[id]
+func deleteKey(s *Snapshot, id string) {
+	k, ok := s.keysByID[id]
 	if !ok {
 		return
 	}
-	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundRelayKeyRefs(k))
+	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundKeyRefs(k))
+	unindexKeyHashes(s, k)
+	delete(s.keysByID, id)
+}
+
+func unindexKeyHashes(s *Snapshot, k *key.Key) {
 	if k.Spec.KeyHash != "" {
-		delete(s.relayKeysByHash, k.Spec.KeyHash)
+		delete(s.keysByHash, k.Spec.KeyHash)
 	}
-	delete(s.relayKeysByID, id)
+	if k.Spec.PreviousKeyHash != "" {
+		delete(s.keysByHash, k.Spec.PreviousKeyHash)
+	}
+}
+
+// ── ServiceAccount ────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) error {
+	if !sa.IsEnabled() {
+		return c.ApplyServiceAccountDelete(sa.Meta.ID)
+	}
+	if err := sa.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refServiceAccount, sa.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
+	if !keep {
+		deleteServiceAccount(s, sa.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	insertServiceAccount(s, clean)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyServiceAccountDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteServiceAccount(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertServiceAccount(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	if old, ok := s.serviceAccountsByID[sa.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refServiceAccount, ID: old.Meta.ID}, outboundServiceAccountRefs(old))
+		delete(s.serviceAccountsByName, old.Meta.Name)
+		delete(s.serviceAccountsByID, old.Meta.ID)
+		removeServiceAccountFromProject(s, old)
+	}
+	s.serviceAccountsByID[sa.Meta.ID] = sa
+	s.serviceAccountsByName[sa.Meta.Name] = sa
+	insertServiceAccountIntoProject(s, sa)
+	s.registerRefs(refKey{Kind: refServiceAccount, ID: sa.Meta.ID}, outboundServiceAccountRefs(sa))
+}
+
+func deleteServiceAccount(s *Snapshot, id string) {
+	sa, ok := s.serviceAccountsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refServiceAccount, ID: id}, outboundServiceAccountRefs(sa))
+	delete(s.serviceAccountsByID, id)
+	delete(s.serviceAccountsByName, sa.Meta.Name)
+	removeServiceAccountFromProject(s, sa)
+	cascadeDelete(s, refServiceAccount, id)
+}
+
+// insertServiceAccountIntoProject keeps serviceAccountsByProject sorted by
+// account name, the order build() produces.
+func insertServiceAccountIntoProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := append(s.serviceAccountsByProject[sa.Spec.ProjectID], sa)
+	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	s.serviceAccountsByProject[sa.Spec.ProjectID] = list
+}
+
+func removeServiceAccountFromProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := s.serviceAccountsByProject[sa.Spec.ProjectID]
+	out := make([]*serviceaccount.ServiceAccount, 0, len(list))
+	for _, cur := range list {
+		if cur.Meta.ID != sa.Meta.ID {
+			out = append(out, cur)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.serviceAccountsByProject, sa.Spec.ProjectID)
+		return
+	}
+	s.serviceAccountsByProject[sa.Spec.ProjectID] = out
+}
+
+// ── Group ─────────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyGroupUpsert(g *group.Group) error {
+	if !g.IsEnabled() {
+		return c.ApplyGroupDelete(g.Meta.ID)
+	}
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	insertGroup(s, g)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyGroupDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteGroup(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertGroup(s *Snapshot, g *group.Group) {
+	if old, ok := s.groupsByID[g.Meta.ID]; ok {
+		delete(s.groupsByName, old.Meta.Name)
+		delete(s.groupsByID, old.Meta.ID)
+		removeGroupFromUsers(s, old)
+	}
+	s.groupsByID[g.Meta.ID] = g
+	s.groupsByName[g.Meta.Name] = g
+	for _, uid := range g.Spec.MemberIDs {
+		list := append(s.groupsByUser[uid], g.Meta.Name)
+		sort.Strings(list)
+		s.groupsByUser[uid] = list
+	}
+}
+
+func deleteGroup(s *Snapshot, id string) {
+	g, ok := s.groupsByID[id]
+	if !ok {
+		return
+	}
+	delete(s.groupsByID, id)
+	delete(s.groupsByName, g.Meta.Name)
+	removeGroupFromUsers(s, g)
+}
+
+func removeGroupFromUsers(s *Snapshot, g *group.Group) {
+	for _, uid := range g.Spec.MemberIDs {
+		list := s.groupsByUser[uid]
+		out := make([]string, 0, len(list))
+		for _, name := range list {
+			if name != g.Meta.Name {
+				out = append(out, name)
+			}
+		}
+		if len(out) == 0 {
+			delete(s.groupsByUser, uid)
+			continue
+		}
+		s.groupsByUser[uid] = out
+	}
 }
 
 // ── Binding ───────────────────────────────────────────────────────────────
@@ -774,11 +938,11 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 		}
 		return false
 	case refRelayKey:
-		rk, ok := s.relayKeysByID[k.ID]
+		rk, ok := s.keysByID[k.ID]
 		if !ok {
 			return true
 		}
-		return validateRelayKeyInSnap(rk, s) == nil
+		return validateKeyInSnap(rk, s) == nil
 	case refBinding:
 		b, ok := s.bindingsByID[k.ID]
 		if !ok {
@@ -799,6 +963,12 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 			return true
 		}
 		return validateProjectInSnap(p, s) == nil
+	case refServiceAccount:
+		sa, ok := s.serviceAccountsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateServiceAccountInSnap(sa, s) == nil
 	}
 	return true
 }
@@ -828,7 +998,7 @@ func rowPresent(s *Snapshot, k refKey) bool {
 		_, ok := s.pricingsByID[k.ID]
 		return ok
 	case refRelayKey:
-		_, ok := s.relayKeysByID[k.ID]
+		_, ok := s.keysByID[k.ID]
 		return ok
 	case refBinding:
 		_, ok := s.bindingsByID[k.ID]
@@ -838,6 +1008,9 @@ func rowPresent(s *Snapshot, k refKey) bool {
 		return ok
 	case refProject:
 		_, ok := s.projectsByID[k.ID]
+		return ok
+	case refServiceAccount:
+		_, ok := s.serviceAccountsByID[k.ID]
 		return ok
 	}
 	return false
@@ -855,7 +1028,7 @@ func deleteDirect(s *Snapshot, k refKey) {
 	case refPricing:
 		deletePricing(s, k.ID)
 	case refRelayKey:
-		deleteRelayKey(s, k.ID)
+		deleteKey(s, k.ID)
 	case refRateLimit:
 		deleteRateLimit(s, k.ID)
 	case refProvider:
@@ -868,6 +1041,8 @@ func deleteDirect(s *Snapshot, k refKey) {
 		deleteTeam(s, k.ID)
 	case refProject:
 		deleteProject(s, k.ID)
+	case refServiceAccount:
+		deleteServiceAccount(s, k.ID)
 	}
 }
 

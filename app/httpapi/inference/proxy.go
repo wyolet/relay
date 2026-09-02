@@ -15,9 +15,9 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	apphost "github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/proxy"
 	apprl "github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -89,7 +89,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
-		plan, b, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx), lc != nil && lc.PayloadLog)
+		plan, b, err := resolveProxyHostByPolicy(r, d.Resolver, KeyFromContext(ctx), lc != nil && lc.PayloadLog)
 		if err != nil {
 			d.fireUsageFailure(ctx, "proxy_resolve_error", err.Error())
 			mapProxyResolveErr(w, err)
@@ -132,7 +132,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 			lc.HostID = host.Meta.ID
 			lc.HostName = host.Meta.Name
 		}
-		if rk := RelayKeyFromContext(ctx); rk != nil {
+		if rk := KeyFromContext(ctx); rk != nil {
 			lc.PolicyID = rk.Spec.PolicyID
 		}
 		applyPlanIdentity(lc, resolvedPlan) // Plan overrides when present
@@ -226,11 +226,11 @@ func resolveSystemRules(snap *appcatalog.Snapshot, bucketName, subject string) [
 	return apprl.ResolveWithScope("proxy", subject, rl)
 }
 
-// relayKeyHashSubject returns the SHA-256 hash of the relay-key token
+// relayKeyHashSubject returns the SHA-256 hash of the key token
 // from ctx, suitable as a per-key rate-limit subject. Empty when no
 // relay key is on ctx (proxy-anonymous path).
 func relayKeyHashSubject(ctx context.Context) string {
-	rk := RelayKeyFromContext(ctx)
+	rk := KeyFromContext(ctx)
 	if rk == nil {
 		return ""
 	}
@@ -238,9 +238,9 @@ func relayKeyHashSubject(ctx context.Context) string {
 	if rk.Spec.KeyHash != "" {
 		return rk.Spec.KeyHash
 	}
-	// Fallback shouldn't happen — RelayKeyByHash matched by hash.
+	// Fallback shouldn't happen — KeyByHash matched by hash.
 	cls := ClassificationFrom(ctx)
-	sum := sha256.Sum256([]byte(cls.RelayKey))
+	sum := sha256.Sum256([]byte(cls.Key))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -350,7 +350,7 @@ func (pb proxyBody) wrapResult(body io.ReadCloser, lc *lifecycle.Context) io.Rea
 // captureFull arms a tee on the streamed path so payload logging stores
 // the whole body (capped at proxyMaxBodyBuffer) instead of the bare
 // prefix — without serializing client upload and upstream send.
-func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey, captureFull bool) (*routing.Plan, proxyBody, error) {
+func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *key.Key, captureFull bool) (*routing.Plan, proxyBody, error) {
 	if rk == nil {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
@@ -399,7 +399,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *r
 	return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(full)), Prefix: full}, nil
 }
 
-func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, error) {
+func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, rk *key.Key) (*routing.Plan, error) {
 	var peek struct {
 		Model string `json:"model"`
 	}
@@ -412,10 +412,10 @@ func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, rk *relaykey
 	return resolveProxyPlan(peek.Model, resolver, rk)
 }
 
-func resolveProxyPlan(model string, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, error) {
+func resolveProxyPlan(model string, resolver *routing.Resolver, rk *key.Key) (*routing.Plan, error) {
 	plan, err := resolver.Resolve(routing.Request{
 		ModelName:    model,
-		RelayKey:     rk,
+		Key:          rk,
 		SkipKeyCheck: true,
 	})
 	if err != nil {

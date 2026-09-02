@@ -45,7 +45,7 @@ func TestOwnerScopedAuthorize(t *testing.T) {
 		{"user reads model overlay", alice, "models.overlay.read", Resource{Kind: "model", ID: "m-1"}, nil},
 
 		// Usage/logs reads pass authz; their handlers scope rows to the
-		// caller's relay-keys. The read_all probe stays admin-only.
+		// caller's keys. The read_all probe stays admin-only.
 		{"user reads usage (handler-scoped)", alice, "usage.read", Resource{Kind: "usage"}, nil},
 		{"user lists logs (handler-scoped)", alice, "logs.list", Resource{Kind: "logs"}, nil},
 		{"user denied usage read_all probe", alice, "usage.read_all", Resource{Kind: "usage"}, ErrForbidden},
@@ -72,9 +72,9 @@ func TestOwnerScopedAuthorize(t *testing.T) {
 		{"other user denied", bob, "policies.update", Resource{Kind: "policy", ID: "x", Owner: &aliceOwner}, ErrForbidden},
 		{"user denied catalog row update", alice, "models.update", Resource{Kind: "model", ID: "x", Owner: &providerOwner}, ErrForbidden},
 		{"user denied system row delete", alice, "providers.delete", Resource{Kind: "provider", ID: "x", Owner: &systemOwner}, ErrForbidden},
-		{"user denied operator row update", alice, "relay-keys.update", Resource{Kind: "relay-key", ID: "x", Owner: &operatorOwner}, ErrForbidden},
+		{"user denied operator row update", alice, "keys.update", Resource{Kind: "key", ID: "x", Owner: &operatorOwner}, ErrForbidden},
 		{"admin role updates any row", root, "policies.update", Resource{Kind: "policy", ID: "x", Owner: &aliceOwner}, nil},
-		{"admin token updates operator row", token, "relay-keys.update", Resource{Kind: "relay-key", ID: "x", Owner: &operatorOwner}, nil},
+		{"admin token updates operator row", token, "keys.update", Resource{Kind: "key", ID: "x", Owner: &operatorOwner}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

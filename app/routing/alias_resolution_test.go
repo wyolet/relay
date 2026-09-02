@@ -9,11 +9,11 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -22,7 +22,7 @@ import (
 // policy) declares an exact bracket alias + a wildcard; m2
 // ("secret-model", NOT granted) declares its own alias — proving the
 // policy gate runs on the resolved model, not on how it was addressed.
-func aliasCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
+func aliasCatalog(t *testing.T) (*catalog.Catalog, *key.Key) {
 	t.Helper()
 	provID, hostID := meta.NewID(), meta.NewID()
 	hkID, m1ID, m2ID, polID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
@@ -61,9 +61,9 @@ func aliasCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
 		Spec: policy.Spec{ModelIDs: []string{m1ID}, HostKeyIDs: []string{hkID}},
 	}
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
 	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m1, m2},
@@ -84,7 +84,7 @@ func TestResolve_AliasExactVerbatim(t *testing.T) {
 		"GPT-5-5.1m",
 	} {
 		t.Run(send, func(t *testing.T) {
-			plan, err := r.Resolve(routing.Request{ModelName: send, RawModelName: send, RelayKey: rk})
+			plan, err := r.Resolve(routing.Request{ModelName: send, RawModelName: send, Key: rk})
 			if err != nil {
 				t.Fatalf("Resolve(%q): %v", send, err)
 			}
@@ -109,7 +109,7 @@ func TestResolve_AliasPatternVerbatim(t *testing.T) {
 	r := routing.New(c)
 
 	raw := "gpt-5-5x[experimental-2027]"
-	plan, err := r.Resolve(routing.Request{ModelName: raw, RawModelName: raw, RelayKey: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: raw, RawModelName: raw, Key: rk})
 	if err != nil {
 		t.Fatalf("Resolve(%q): %v", raw, err)
 	}
@@ -125,7 +125,7 @@ func TestResolve_AliasPatternVerbatim(t *testing.T) {
 	}
 
 	// RawModelName empty → falls back to ModelName.
-	plan, err = r.Resolve(routing.Request{ModelName: raw, RelayKey: rk})
+	plan, err = r.Resolve(routing.Request{ModelName: raw, Key: rk})
 	if err != nil {
 		t.Fatalf("Resolve no-raw: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestResolve_AliasPinnedAndPatternPinSkip(t *testing.T) {
 
 	// Exact alias with a host pin resolves via the synthesized pinned form
 	// and still carries the clean declared alias upstream (no "@host").
-	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5-5[1m]@openai", RawModelName: "gpt-5-5[1m]@openai", RelayKey: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5-5[1m]@openai", RawModelName: "gpt-5-5[1m]@openai", Key: rk})
 	if err != nil {
 		t.Fatalf("pinned exact alias: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestResolve_AliasPinnedAndPatternPinSkip(t *testing.T) {
 
 	// A pinned ref never matches a wildcard (the pin segment would corrupt
 	// the match) — it 404s instead of routing with a mangled wire name.
-	_, err = r.Resolve(routing.Request{ModelName: "gpt-5-5x[thing]@openai", RawModelName: "gpt-5-5x[thing]@openai", RelayKey: rk})
+	_, err = r.Resolve(routing.Request{ModelName: "gpt-5-5x[thing]@openai", RawModelName: "gpt-5-5x[thing]@openai", Key: rk})
 	if !errors.Is(err, routing.ErrModelNotFound) {
 		t.Fatalf("pinned pattern ref: err = %v, want ErrModelNotFound", err)
 	}
@@ -165,7 +165,7 @@ func TestResolve_AliasPolicyGateStillApplies(t *testing.T) {
 
 	// m2's alias resolves the model, but the policy doesn't grant m2 —
 	// addressing via alias must not widen the grant.
-	_, err := r.Resolve(routing.Request{ModelName: "secret[1m]", RawModelName: "secret[1m]", RelayKey: rk})
+	_, err := r.Resolve(routing.Request{ModelName: "secret[1m]", RawModelName: "secret[1m]", Key: rk})
 	if !errors.Is(err, routing.ErrModelNotInPolicy) {
 		t.Fatalf("alias to ungranted model: err = %v, want ErrModelNotInPolicy", err)
 	}
@@ -175,7 +175,7 @@ func TestResolve_NoAliasNoOverride(t *testing.T) {
 	c, rk := aliasCatalog(t)
 	r := routing.New(c)
 
-	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5.5", RawModelName: "gpt-5.5", RelayKey: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5.5", RawModelName: "gpt-5.5", Key: rk})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestResolve_RealNameShadowsAlias(t *testing.T) {
 	if err := c.ApplyModelUpsert(&m2); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5-2026-04-23", RawModelName: "gpt-5.5-2026-04-23", RelayKey: rk})
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5-2026-04-23", RawModelName: "gpt-5.5-2026-04-23", Key: rk})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

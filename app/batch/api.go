@@ -11,8 +11,8 @@ import (
 )
 
 // Routes returns the /v1/batches HTTP surface. Mount it on the inference router
-// behind the readiness → classify → relay-key-auth chain so every handler sees
-// an authenticated relay key via inference.RelayKeyFromContext.
+// behind the readiness → classify → key-auth chain so every handler sees
+// an authenticated relay key via inference.KeyFromContext.
 //
 //	POST   /v1/batches            submit (JSON: {shape, requests:[...]})
 //	GET    /v1/batches/{id}       status + per-item states
@@ -33,7 +33,7 @@ type submitRequest struct {
 }
 
 func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	rk := inference.RelayKeyFromContext(r.Context())
+	rk := inference.KeyFromContext(r.Context())
 	if rk == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
@@ -66,7 +66,7 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
-	rk := inference.RelayKeyFromContext(r.Context())
+	rk := inference.KeyFromContext(r.Context())
 	if rk == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
@@ -80,7 +80,7 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleResults(w http.ResponseWriter, r *http.Request) {
-	rk := inference.RelayKeyFromContext(r.Context())
+	rk := inference.KeyFromContext(r.Context())
 	if rk == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
@@ -94,7 +94,7 @@ func (s *Service) handleResults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleCancel(w http.ResponseWriter, r *http.Request) {
-	rk := inference.RelayKeyFromContext(r.Context())
+	rk := inference.KeyFromContext(r.Context())
 	if rk == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return

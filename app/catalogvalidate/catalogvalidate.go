@@ -122,7 +122,8 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 	issues = append(issues, checkPolicyRefs(g)...)
 	issues = append(issues, checkPricingRefs(g)...)
 	issues = append(issues, checkBindingRefs(g)...)
-	issues = append(issues, checkRelayKeyRefs(g)...)
+	issues = append(issues, checkServiceAccountRefs(g)...)
+	issues = append(issues, checkKeyRefs(g)...)
 	// RateLimit has no other cross-refs, so its owning Project is checked
 	// here rather than in a check of its own.
 	for _, rl := range g.RateLimits {
@@ -144,11 +145,14 @@ type graph struct {
 	HostKeys     map[string]*manifest.HostKeyDTO
 	Policies     map[string]*manifest.PolicyDTO
 	RateLimits   map[string]*manifest.RateLimitDTO
-	RelayKeys    map[string]*manifest.RelayKeyDTO
+	Keys         map[string]*manifest.KeyDTO
 	Pricings     map[string]*manifest.PricingDTO
 	HostBindings map[string]*manifest.HostBindingDTO
 	Teams        map[string]*manifest.TeamDTO
 	Projects     map[string]*manifest.ProjectDTO
+
+	ServiceAccounts map[string]*manifest.ServiceAccountDTO
+	Groups          map[string]*manifest.GroupDTO
 
 	// duplicates tracks names that appeared more than once within a kind.
 	// Each entry holds the kind + name; checkDuplicateNames emits issues.
@@ -163,11 +167,14 @@ func buildGraph(docs []manifest.Document) *graph {
 		HostKeys:     map[string]*manifest.HostKeyDTO{},
 		Policies:     map[string]*manifest.PolicyDTO{},
 		RateLimits:   map[string]*manifest.RateLimitDTO{},
-		RelayKeys:    map[string]*manifest.RelayKeyDTO{},
+		Keys:         map[string]*manifest.KeyDTO{},
 		Pricings:     map[string]*manifest.PricingDTO{},
 		HostBindings: map[string]*manifest.HostBindingDTO{},
 		Teams:        map[string]*manifest.TeamDTO{},
 		Projects:     map[string]*manifest.ProjectDTO{},
+
+		ServiceAccounts: map[string]*manifest.ServiceAccountDTO{},
+		Groups:          map[string]*manifest.GroupDTO{},
 	}
 	for i := range docs {
 		d := &docs[i]
@@ -208,10 +215,10 @@ func buildGraph(docs []manifest.Document) *graph {
 				g.RateLimits[d.RateLimit.Metadata.Name] = d.RateLimit
 				return dup
 			})
-		case d.RelayKey != nil:
-			indexOne(g, "RelayKey", d.RelayKey.Metadata.Name, func() bool {
-				_, dup := g.RelayKeys[d.RelayKey.Metadata.Name]
-				g.RelayKeys[d.RelayKey.Metadata.Name] = d.RelayKey
+		case d.Key != nil:
+			indexOne(g, "Key", d.Key.Metadata.Name, func() bool {
+				_, dup := g.Keys[d.Key.Metadata.Name]
+				g.Keys[d.Key.Metadata.Name] = d.Key
 				return dup
 			})
 		case d.Pricing != nil:
@@ -230,6 +237,18 @@ func buildGraph(docs []manifest.Document) *graph {
 			indexOne(g, "Project", d.Project.Metadata.Name, func() bool {
 				_, dup := g.Projects[d.Project.Metadata.Name]
 				g.Projects[d.Project.Metadata.Name] = d.Project
+				return dup
+			})
+		case d.ServiceAccount != nil:
+			indexOne(g, "ServiceAccount", d.ServiceAccount.Metadata.Name, func() bool {
+				_, dup := g.ServiceAccounts[d.ServiceAccount.Metadata.Name]
+				g.ServiceAccounts[d.ServiceAccount.Metadata.Name] = d.ServiceAccount
+				return dup
+			})
+		case d.Group != nil:
+			indexOne(g, "Group", d.Group.Metadata.Name, func() bool {
+				_, dup := g.Groups[d.Group.Metadata.Name]
+				g.Groups[d.Group.Metadata.Name] = d.Group
 				return dup
 			})
 		case d.HostBinding != nil:

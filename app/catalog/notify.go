@@ -20,8 +20,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -29,14 +31,14 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
 // ── payload types ─────────────────────────────────────────────────────────────
 
 type notifyEvent struct {
-	Kind string // "team", "project", "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
+	Kind string // "team", "project", "serviceaccount", "group", "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
 	Op   string // "upsert" or "delete"
 	ID   string
 }
@@ -46,6 +48,7 @@ var validKinds = map[string]struct{}{
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
 	"hostbinding": {}, "settings": {}, "overlay": {},
 	"team": {}, "project": {},
+	"serviceaccount": {}, "group": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -144,14 +147,20 @@ type listenerStores struct {
 	pricing interface {
 		Get(ctx context.Context, id string) (*pricing.Pricing, error)
 	}
-	relaykey interface {
-		Get(ctx context.Context, id string) (*relaykey.RelayKey, error)
+	key interface {
+		Get(ctx context.Context, id string) (*key.Key, error)
 	}
 	overlay interface {
 		Get(ctx context.Context, kind, resourceID string) (*overlay.Overlay, error)
 	}
 	team interface {
 		Get(ctx context.Context, id string) (*team.Team, error)
+	}
+	serviceAccount interface {
+		Get(ctx context.Context, id string) (*serviceaccount.ServiceAccount, error)
+	}
+	group interface {
+		Get(ctx context.Context, id string) (*group.Group, error)
 	}
 	project interface {
 		Get(ctx context.Context, id string) (*project.Project, error)
@@ -261,7 +270,7 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 // cross-ref validation against the snapshot succeeds at each step.
 //
 // Order: team → project → provider → host → ratelimit → model → hostkey →
-// policy → pricing → relaykey. Deletes propagate via reverse-ref cascade
+// policy → pricing → key. Deletes propagate via reverse-ref cascade
 // inside the reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
@@ -276,19 +285,22 @@ func (l *Listener) applyDrained(ctx context.Context) {
 }
 
 var kindOrder = map[string]int{
-	"team":        0,
-	"project":     1,
-	"provider":    2,
-	"host":        3,
-	"ratelimit":   4,
-	"model":       5,
-	"hostkey":     6,
-	"policy":      7,
-	"pricing":     8,
-	"hostbinding": 9,
-	"relaykey":    10,
-	"overlay":     11, // after model upserts so re-merges see fresh templates
-	"settings":    12,
+	"team":      0,
+	"project":   1,
+	"provider":  2,
+	"host":      3,
+	"ratelimit": 4,
+	"model":     5,
+	"hostkey":   6,
+	"policy":    7,
+	// service accounts sanitize against policies, keys against accounts.
+	"serviceaccount": 8,
+	"group":          9,
+	"pricing":        10,
+	"hostbinding":    11,
+	"relaykey":       12,
+	"overlay":        13, // after model upserts so re-merges see fresh templates
+	"settings":       14,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -387,16 +399,16 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 
 	case "relaykey":
 		if e.Op == "delete" {
-			return l.cat.ApplyRelayKeyDelete(e.ID)
+			return l.cat.ApplyKeyDelete(e.ID)
 		}
-		k, err := l.stores.relaykey.Get(ctx, e.ID)
+		k, err := l.stores.key.Get(ctx, e.ID)
 		if err != nil {
 			return err
 		}
 		if k == nil {
-			return l.cat.ApplyRelayKeyDelete(e.ID)
+			return l.cat.ApplyKeyDelete(e.ID)
 		}
-		return l.cat.ApplyRelayKeyUpsert(k)
+		return l.cat.ApplyKeyUpsert(k)
 
 	case "team":
 		if e.Op == "delete" {
@@ -423,6 +435,32 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return l.cat.ApplyProjectDelete(e.ID)
 		}
 		return l.cat.ApplyProjectUpsert(p)
+
+	case "serviceaccount":
+		if e.Op == "delete" {
+			return l.cat.ApplyServiceAccountDelete(e.ID)
+		}
+		sa, err := l.stores.serviceAccount.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if sa == nil {
+			return l.cat.ApplyServiceAccountDelete(e.ID)
+		}
+		return l.cat.ApplyServiceAccountUpsert(sa)
+
+	case "group":
+		if e.Op == "delete" {
+			return l.cat.ApplyGroupDelete(e.ID)
+		}
+		g, err := l.stores.group.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if g == nil {
+			return l.cat.ApplyGroupDelete(e.ID)
+		}
+		return l.cat.ApplyGroupUpsert(g)
 
 	case "hostbinding":
 		// PR1: bindings aren't consumed by routing yet, and the COW

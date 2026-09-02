@@ -5,13 +5,14 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 )
 
 // "Required-ref" validators used by the COW reconciler. A required ref is
@@ -100,9 +101,28 @@ func validatePricingInSnap(p *pricing.Pricing, s *Snapshot) error {
 	return nil
 }
 
-func validateRelayKeyInSnap(k *relaykey.RelayKey, s *Snapshot) error {
-	if _, ok := s.policiesByID[k.Spec.PolicyID]; !ok {
-		return fmt.Errorf("relaykey %q: policyId %q does not resolve", k.Meta.Name, k.Spec.PolicyID)
+func validateKeyInSnap(k *key.Key, s *Snapshot) error {
+	if k.Spec.PolicyID != "" {
+		if _, ok := s.policiesByID[k.Spec.PolicyID]; !ok {
+			return fmt.Errorf("key %q: policyId %q does not resolve", k.Meta.Name, k.Spec.PolicyID)
+		}
+	}
+	if k.Spec.Principal.Kind == key.PrincipalServiceAccount {
+		if _, ok := s.serviceAccountsByID[k.Spec.Principal.ID]; !ok {
+			return fmt.Errorf("key %q: principal serviceaccount %q does not resolve", k.Meta.Name, k.Spec.Principal.ID)
+		}
+	}
+	return nil
+}
+
+func validateServiceAccountInSnap(sa *serviceaccount.ServiceAccount, s *Snapshot) error {
+	if _, ok := s.projectsByID[sa.Spec.ProjectID]; !ok {
+		return fmt.Errorf("serviceaccount %q: spec.projectId %q does not resolve", sa.Meta.Name, sa.Spec.ProjectID)
+	}
+	if sa.Spec.PolicyID != "" {
+		if _, ok := s.policiesByID[sa.Spec.PolicyID]; !ok {
+			return fmt.Errorf("serviceaccount %q: spec.policyId %q does not resolve", sa.Meta.Name, sa.Spec.PolicyID)
+		}
 	}
 	return nil
 }

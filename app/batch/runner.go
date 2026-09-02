@@ -40,8 +40,8 @@ var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 // status and the buffered response body. Usage emits automatically with
 // source="batch" when the pipeline body closes.
 func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbound adapters.Name, body []byte) (int, []byte, error) {
-	rk, ok := rn.Catalog.Current().RelayKeyByHash(relayKeyHash)
-	if !ok {
+	rk, _ := rn.Catalog.Current().KeyByHash(relayKeyHash)
+	if rk == nil {
 		return 0, nil, errors.New("batch: relay key not found (revoked or deleted)")
 	}
 
@@ -50,7 +50,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 		return 0, nil, fmt.Errorf("batch: parse model: %w", err)
 	}
 
-	plan, err := rn.Resolver.Resolve(routing.Request{ModelName: modelName, RawModelName: modelName, RelayKey: rk})
+	plan, err := rn.Resolver.Resolve(routing.Request{ModelName: modelName, RawModelName: modelName, Key: rk})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)
 	}

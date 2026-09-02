@@ -45,12 +45,12 @@ docker run -p 8080:8080 -p 8081:8081 wyolet/relay:standalone
 ```
 
 Open the admin UI at **http://localhost:8081**, then let the setup wizard walk you
-through adding a provider key and minting a relay key. Now call it like the
+through adding a provider key and minting a key. Now call it like the
 OpenAI API:
 
 ```bash
 curl http://localhost:8080/openai/v1/chat/completions \
-  -H "Authorization: Bearer <your-relay-key>" \
+  -H "Authorization: Bearer <your-key>" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}'
 ```
@@ -63,13 +63,13 @@ live at **[docs.wyolet.com](https://docs.wyolet.com)**.
 - **One API, every provider.** OpenAI- and Anthropic-shape endpoints in front of
   OpenAI, Anthropic, Bedrock, Vertex, Azure, Ollama, Groq — anything speaking
   either wire format. No code changes to switch upstreams.
-- **Disposable, rate-limited keys.** Mint relay keys scoped to whatever limits you
+- **Disposable, rate-limited keys.** Mint keys scoped to whatever limits you
   set. Hand them out freely — even if one leaks, the damage is capped at those
   limits and your real provider keys are never exposed.
 - **Pool accounts and providers.** Combine many keys, accounts, or providers into
   one pool behind a single endpoint. Relay load-balances and fails over across
   them, so per-account rate limits stop being your ceiling.
-- **Per-key access control.** Decide exactly which models and providers each relay
+- **Per-key access control.** Decide exactly which models and providers each
   key may reach — allow or deny at the key level via policies.
 - **400+ models, open catalog.** Ships knowing 400+ models out of the box, and the
   [catalog](https://github.com/wyolet/relay-catalog) is open and extensible — we
@@ -92,7 +92,7 @@ live at **[docs.wyolet.com](https://docs.wyolet.com)**.
 
 Relay runs two listeners: a **data plane** that accepts your inference requests
 and a **control plane** that serves the admin UI and API. Each request is
-authenticated by a relay key, matched to a **policy** that decides which models
+authenticated by a key, matched to a **policy** that decides which models
 and providers it may reach, rate-limited, and routed to a healthy upstream key
 from the **pool** — then streamed straight back to you. Provider, model, and
 pricing data comes from an open, versioned

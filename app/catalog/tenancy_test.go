@@ -5,11 +5,13 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -20,6 +22,14 @@ func (l teamList) List(context.Context) ([]*team.Team, error) { return l, nil }
 type projList []*project.Project
 
 func (l projList) List(context.Context) ([]*project.Project, error) { return l, nil }
+
+type saList []*serviceaccount.ServiceAccount
+
+func (l saList) List(context.Context) ([]*serviceaccount.ServiceAccount, error) { return l, nil }
+
+type grpList []*group.Group
+
+func (l grpList) List(context.Context) ([]*group.Group, error) { return l, nil }
 
 // tenancyFixture is one team with two projects (named so that insertion
 // order and sorted order differ) plus one project-owned row of every kind
@@ -66,7 +76,7 @@ func newTenancyFixture() tenancyFixture {
 func (f tenancyFixture) catalog(t *testing.T) *Catalog {
 	t.Helper()
 	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team, f.other}, projList{f.zeta, f.alpha, f.orphan})
+	c.UseTenancy(teamList{f.team, f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -185,7 +195,7 @@ func TestApplyTeamDelete_MatchesBuild(t *testing.T) {
 	reconciled := c.Current()
 
 	fresh := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
-	fresh.UseTenancy(teamList{f.other}, projList{f.zeta, f.alpha, f.orphan})
+	fresh.UseTenancy(teamList{f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{})
 	if err := fresh.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

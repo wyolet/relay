@@ -18,7 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/usagelog"
 )
 
@@ -26,26 +26,26 @@ import (
 //
 // Usage and log events carry the sha256 hash of the inbound bearer
 // (relay_key_hash), so "the caller's traffic" is exactly "events whose hash
-// belongs to a relay-key the caller owns". Under a scoping Authorizer,
+// belongs to a key the caller owns". Under a scoping Authorizer,
 // every usage/logs read is narrowed to that set; admins (and the
 // single-user default authorizer) read the whole stream.
 
-type relayKeyLister interface {
-	List(ctx context.Context) ([]*relaykey.RelayKey, error)
+type keyLister interface {
+	List(ctx context.Context) ([]*key.Key, error)
 }
 
-func relayKeysOf(d Deps) relayKeyLister {
-	if d.Stores == nil || d.Stores.RelayKey == nil {
+func keysOf(d Deps) keyLister {
+	if d.Stores == nil || d.Stores.Key == nil {
 		return nil
 	}
-	return d.Stores.RelayKey
+	return d.Stores.Key
 }
 
-// relayKeyScope decides what slice of the usage/log stream the caller may
+// keyScope decides what slice of the usage/log stream the caller may
 // read. unrestricted=true means the whole stream. Otherwise hashes lists
-// the bearer hashes of the caller's relay-keys — possibly empty, which
+// the bearer hashes of the caller's keys — possibly empty, which
 // means "no events at all", never "everything".
-func relayKeyScope(ctx context.Context, authzr authz.Authorizer, keys relayKeyLister) (hashes []string, unrestricted bool, err error) {
+func keyScope(ctx context.Context, authzr authz.Authorizer, keys keyLister) (hashes []string, unrestricted bool, err error) {
 	// Probe with a non-read verb: OwnerScoped grants it to admins only;
 	// the single-user authorizer grants any authenticated caller.
 	if authzr.Authorize(ctx, "usage.read_all", authz.Resource{Kind: "usage"}) == nil {
@@ -60,7 +60,7 @@ func relayKeyScope(ctx context.Context, authzr authz.Authorizer, keys relayKeyLi
 		return nil, false, huma.Error500InternalServerError(err.Error())
 	}
 	for _, k := range all {
-		if k.Spec.KeyHash != "" && s.Visible(ctx, "relay-key", k.Meta.Owner) {
+		if k.Spec.KeyHash != "" && s.Visible(ctx, "key", k.Meta.Owner) {
 			hashes = append(hashes, k.Spec.KeyHash)
 		}
 	}
@@ -330,7 +330,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
 		if err != nil {
 			return nil, err
 		}
@@ -380,7 +380,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
 		if err != nil {
 			return nil, err
 		}
@@ -422,7 +422,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
 		if err != nil {
 			return nil, err
 		}

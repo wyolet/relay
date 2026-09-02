@@ -15,9 +15,14 @@ Every inference request authenticates with a **relay key** as a bearer token:
 Authorization: Bearer <relay-key>
 ```
 
-Relay keys are minted in the admin UI or via the control plane
-(`POST /api/relay-keys`). The plaintext is shown exactly once on creation —
+Keys are minted in the admin UI or via the control plane
+(`POST /api/keys`). The plaintext is shown exactly once on creation —
 Relay stores only `sha256(plaintext)`.
+
+Rotating a key (`POST /api/keys/by-id/{id}/rotate`) accepts
+`{"graceSeconds": N}`: the previous plaintext keeps authenticating for that
+long, so callers can be redeployed without a window of 401s. `0` cuts over
+immediately; the ceiling is the `keyRotateMaxGrace` setting (24h default).
 
 ## Namespacing
 

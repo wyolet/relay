@@ -3,7 +3,9 @@ package catalog
 import (
 	"sort"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -46,4 +48,60 @@ func sanitizeProject(p *project.Project, teams idSet) (*project.Project, bool) {
 	}
 	clean := *p
 	return &clean, true
+}
+
+// addServiceAccounts folds ServiceAccounts into the snapshot.
+//
+// Indexes: serviceAccountsByID, serviceAccountsByName, and
+// serviceAccountsByProject (sorted by account name).
+func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, projects, policies idSet) {
+	for _, sa := range sas {
+		clean, keep := sanitizeServiceAccount(sa, projects, policies)
+		if !keep {
+			continue
+		}
+		s.serviceAccountsByID[clean.Meta.ID] = clean
+		s.serviceAccountsByName[clean.Meta.Name] = clean
+		s.serviceAccountsByProject[clean.Spec.ProjectID] = append(s.serviceAccountsByProject[clean.Spec.ProjectID], clean)
+		s.registerRefs(refKey{Kind: refServiceAccount, ID: clean.Meta.ID}, outboundServiceAccountRefs(clean))
+	}
+	for projectID := range s.serviceAccountsByProject {
+		list := s.serviceAccountsByProject[projectID]
+		sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	}
+}
+
+// sanitizeServiceAccount drops the account when its Project is missing, or
+// when a set policy override does not resolve — a dangling override would
+// silently fall through to a broader grant.
+func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects, policies idSet) (*serviceaccount.ServiceAccount, bool) {
+	if _, ok := projects[sa.Spec.ProjectID]; !ok {
+		return nil, false
+	}
+	if sa.Spec.PolicyID != "" {
+		if _, ok := policies[sa.Spec.PolicyID]; !ok {
+			return nil, false
+		}
+	}
+	clean := *sa
+	return &clean, true
+}
+
+// addGroups folds Groups into the snapshot. Groups have no outbound refs
+// (a member id that is not a user is inert, not invalid), so there is
+// nothing to sanitize.
+//
+// Indexes: groupsByID, groupsByName, and groupsByUser (user id → sorted
+// group names).
+func (s *Snapshot) addGroups(groups []*group.Group) {
+	for _, g := range groups {
+		s.groupsByID[g.Meta.ID] = g
+		s.groupsByName[g.Meta.Name] = g
+		for _, uid := range g.Spec.MemberIDs {
+			s.groupsByUser[uid] = append(s.groupsByUser[uid], g.Meta.Name)
+		}
+	}
+	for uid := range s.groupsByUser {
+		sort.Strings(s.groupsByUser[uid])
+	}
 }

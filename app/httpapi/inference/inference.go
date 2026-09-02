@@ -33,7 +33,7 @@ type Deps struct {
 	// this; tests can pass a stub.
 	Pinger Pinger
 
-	// Catalog is the in-memory snapshot used for relay-key auth lookup
+	// Catalog is the in-memory snapshot used for key auth lookup
 	// and the /v1/models listing.
 	Catalog *appcatalog.Catalog
 
@@ -107,7 +107,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	mw := huma.Middlewares{
 		httpapi.HumaAuth(ReadinessMiddleware(d.Catalog)),
 		httpapi.HumaAuth(ClassifyMiddleware()),
-		httpapi.HumaAuth(RelayKeyAuthMiddleware(d.Catalog)),
+		httpapi.HumaAuth(PrincipalMiddleware(d.Catalog)),
 	}
 	for _, mount := range d.RouteMounters {
 		mount(api, d, mw)
@@ -117,13 +117,13 @@ func Mount(r chi.Router, d Deps) huma.API {
 
 	// /v1/ws is a raw upgrade, not a huma POST operation, so it mounts
 	// directly on the chi router. It reuses the identical net/http
-	// middleware chain (readiness → classify → relay-key auth), so the
+	// middleware chain (readiness → classify → key auth), so the
 	// upgrade request is authed exactly like an HTTP /v1/* request and
 	// every multiplexed frame inherits the authed context.
 	r.With(
 		ReadinessMiddleware(d.Catalog),
 		ClassifyMiddleware(),
-		RelayKeyAuthMiddleware(d.Catalog),
+		PrincipalMiddleware(d.Catalog),
 	).Get("/v1/ws", wsHandler(d))
 
 	return api

@@ -12,8 +12,10 @@ package catalog
 
 import (
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -21,7 +23,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -32,21 +34,21 @@ func Build(
 	provs []*provider.Provider,
 	hosts []*host.Host,
 	pols []*policy.Policy,
-	rks []*relaykey.RelayKey,
+	rks []*key.Key,
 	models []*model.Model,
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil)
+	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil, nil, nil)
 }
 
 func build(
 	provs []*provider.Provider,
 	hosts []*host.Host,
 	pols []*policy.Policy,
-	rks []*relaykey.RelayKey,
+	rks []*key.Key,
 	models []*model.Model,
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
@@ -55,8 +57,10 @@ func build(
 	ovls []*overlay.Overlay,
 	teams []*team.Team,
 	projects []*project.Project,
+	sas []*serviceaccount.ServiceAccount,
+	groups []*group.Group,
 ) *Snapshot {
-	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects))
+	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects), len(sas), len(groups))
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
@@ -87,7 +91,11 @@ func build(
 	memberModelIDs := snapIDs(s.modelsByID)
 	memberKeyIDs := snapIDs(s.hostKeysByID)
 	s.addPolicies(pols, memberModelIDs, memberKeyIDs, snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
-	s.addRelayKeys(rks, polIDSet)
+	s.addGroups(groups)
+	// Service accounts sanitize against the policies just indexed; keys
+	// then sanitize against the accounts.
+	s.addServiceAccounts(sas, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
+	s.addKeys(rks, polIDSet, snapIDs(s.serviceAccountsByID))
 	s.computePolicyReverseJoins()
 	s.addPricings(pricings, hostIDs, memberModelIDs)
 	s.addBindings(bindings, memberModelIDs, hostIDs)
@@ -101,7 +109,7 @@ func build(
 	return s
 }
 
-func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects int) *Snapshot {
+func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects, nSAs, nGroups int) *Snapshot {
 	return &Snapshot{
 		providersByID:         make(map[string]*provider.Provider, nProvs),
 		providersByName:       make(map[string]*provider.Provider, nProvs),
@@ -119,8 +127,8 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		hostKeysByID:          make(map[string]*hostkey.HostKey, nKeys),
 		rateLimitsByID:        make(map[string]*ratelimit.RateLimit, nRLs),
 		rateLimitsByName:      make(map[string]*ratelimit.RateLimit, nRLs),
-		relayKeysByID:         make(map[string]*relaykey.RelayKey, nRks),
-		relayKeysByHash:       make(map[string]*relaykey.RelayKey, nRks),
+		keysByID:              make(map[string]*key.Key, nRks),
+		keysByHash:            make(map[string]*key.Key, nRks),
 		modelsByPolicy:        map[string][]*model.Model{},
 		hostKeysByPolicy:      map[string][]*hostkey.HostKey{},
 		rateLimitByPolicy:     map[string]*ratelimit.RateLimit{},
@@ -143,5 +151,14 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		projectsByID:          make(map[string]*project.Project, nProjects),
 		projectsByName:        make(map[string]*project.Project, nProjects),
 		projectsByTeam:        map[string][]*project.Project{},
+		refsByServiceAccount:  map[string]refSet{},
+
+		serviceAccountsByID:      make(map[string]*serviceaccount.ServiceAccount, nSAs),
+		serviceAccountsByName:    make(map[string]*serviceaccount.ServiceAccount, nSAs),
+		serviceAccountsByProject: map[string][]*serviceaccount.ServiceAccount{},
+
+		groupsByID:   make(map[string]*group.Group, nGroups),
+		groupsByName: make(map[string]*group.Group, nGroups),
+		groupsByUser: map[string][]string{},
 	}
 }

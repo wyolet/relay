@@ -1,34 +1,21 @@
 {
   "$defs": {
-    "RelayKeySpec": {
+    "GroupSpec": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
           "type": "boolean"
         },
-        "keyHash": {
-          "type": "string"
-        },
-        "passthroughAllowed": {
-          "type": "boolean"
-        },
-        "payloadLoggingEnabled": {
-          "type": "boolean"
-        },
-        "policy": {
-          "type": "string"
-        },
-        "prefix": {
-          "type": "string"
-        },
-        "revokedAt": {
-          "type": "string"
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
-      "required": [
-        "policy",
-        "keyHash"
-      ],
       "type": "object"
     },
     "WireMeta": {
@@ -83,7 +70,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/RelayKey.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Group.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -97,7 +84,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/RelayKeySpec"
+      "$ref": "#/$defs/GroupSpec"
     }
   },
   "required": [
@@ -106,6 +93,6 @@
     "metadata",
     "spec"
   ],
-  "title": "RelayKey",
+  "title": "Group",
   "type": "object"
 }

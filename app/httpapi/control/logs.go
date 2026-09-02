@@ -97,7 +97,7 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +148,7 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		// A record from someone else's traffic (or unattributed traffic) is
 		// 404, not 403 — don't confirm the request id exists. Gates the
 		// payload join below too.
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
 		if err != nil {
 			return nil, err
 		}
