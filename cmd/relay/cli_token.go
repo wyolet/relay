@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // runToken implements `relay token mint`. Tokens are minted for a user in a
@@ -24,7 +26,6 @@ func runToken(args []string) error {
 	project := fs.String("project", "", "Project slug the token is scoped to.")
 	ttl := fs.String("ttl", "", "Token lifetime, e.g. 1h. Server default applies when empty.")
 	username := fs.String("user", "", "Username. Default $RELAY_USER.")
-	password := fs.String("password", "", "Password. Default $RELAY_PASSWORD.")
 	serverURL := fs.String("url", "", "Control API base URL. Default $RELAY_URL, else "+DefaultControlURL+".")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -32,9 +33,15 @@ func runToken(args []string) error {
 	if *project == "" {
 		return fmt.Errorf("token mint: --project is required")
 	}
-	user, pass := orEnv(*username, "RELAY_USER"), orEnv(*password, "RELAY_PASSWORD")
-	if user == "" || pass == "" {
-		return fmt.Errorf("token mint: --user and --password (or $RELAY_USER / $RELAY_PASSWORD) are required")
+	user := orEnv(*username, "RELAY_USER")
+	if user == "" {
+		return fmt.Errorf("token mint: --user (or $RELAY_USER) is required")
+	}
+	// No password flag: argv is world-readable through the process table and
+	// lands in shell history.
+	pass, err := readPassword()
+	if err != nil {
+		return err
 	}
 
 	base := orEnv(*serverURL, "RELAY_URL")
@@ -72,6 +79,29 @@ func runToken(args []string) error {
 	}
 	fmt.Println(out.Token)
 	return nil
+}
+
+// readPassword takes the password from $RELAY_PASSWORD, else prompts on the
+// terminal with echo off. A non-interactive run with no env var is an error
+// rather than a silent empty password.
+func readPassword() (string, error) {
+	if p := os.Getenv("RELAY_PASSWORD"); p != "" {
+		return p, nil
+	}
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return "", fmt.Errorf("token mint: set $RELAY_PASSWORD (no terminal to prompt on)")
+	}
+	fmt.Fprint(os.Stderr, "Password: ")
+	raw, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("token mint: read password: %w", err)
+	}
+	if len(raw) == 0 {
+		return "", fmt.Errorf("token mint: empty password")
+	}
+	return string(raw), nil
 }
 
 func postJSON(c *http.Client, url string, body any) ([]byte, error) {

@@ -223,7 +223,7 @@ func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewar
 		if err != nil {
 			return nil, huma.Error400BadRequest("encode: " + err.Error())
 		}
-		audit.Changed(ctx, []string{"value"})
+		audit.Changed(ctx, []string{"sections." + section})
 		row, err := d.Stores.Settings.Upsert(ctx, section, raw)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())

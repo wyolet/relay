@@ -114,7 +114,12 @@ func toUpsertParams(k *Key) (gen.UpsertRelayKeyParams, error) {
 	if err != nil {
 		return gen.UpsertRelayKeyParams{}, fmt.Errorf("metadata: %w", err)
 	}
-	specJSON, err := json.Marshal(k.Spec)
+	// Relational fields live in columns; keep them out of the spec JSONB so
+	// there is one source of truth per field (applyColumns reads them back).
+	stored := k.Spec
+	stored.Principal = Principal{}
+	stored.PreviousKeyHash = ""
+	specJSON, err := json.Marshal(stored)
 	if err != nil {
 		return gen.UpsertRelayKeyParams{}, fmt.Errorf("spec: %w", err)
 	}

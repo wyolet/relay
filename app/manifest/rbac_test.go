@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/rolebinding"
 )
 
@@ -157,6 +158,24 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	}
 	if rendered := manifest.FromPolicyBinding(pb, rbacRev); rendered.Spec.Priority != 100 {
 		t.Errorf("rendered priority = %d, want the default 100", rendered.Spec.Priority)
+	}
+}
+
+// TestToPolicyBinding_OmittedPriorityStampsTheDefaultOnSpec pins the value
+// on Spec.Priority itself, not just what EffectivePriority reports:
+// re-applying the same document must produce the identical row the store
+// already stamped, or apply would see a spurious diff every run.
+func TestToPolicyBinding_OmittedPriorityStampsTheDefaultOnSpec(t *testing.T) {
+	docs, err := manifest.Parse(strings.NewReader(rbacYAML))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	pb, err := manifest.ToPolicyBinding(*docs[3].PolicyBinding, rbacResolver)
+	if err != nil {
+		t.Fatalf("ToPolicyBinding: %v", err)
+	}
+	if pb.Spec.Priority != policybinding.DefaultPriority {
+		t.Errorf("Spec.Priority = %d, want the default %d stamped directly", pb.Spec.Priority, policybinding.DefaultPriority)
 	}
 }
 

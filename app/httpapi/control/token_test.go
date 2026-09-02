@@ -292,7 +292,7 @@ func TestRevokeToken_ByJTI(t *testing.T) {
 		},
 	}}
 
-	if _, err := revokeTokenByJTI(actor.WithActor(context.Background(), a), f.deps, minted.Body.JTI); err != nil {
+	if _, err := revokeTokenByJTI(actor.WithActor(context.Background(), a), f.deps, minted.Body.JTI, "", ""); err != nil {
 		t.Fatalf("revokeTokenByJTI: %v", err)
 	}
 	want := policy.RevokedKey(f.team.Meta.ID, minted.Body.JTI)
@@ -305,7 +305,7 @@ func TestRevokeToken_ByJTI(t *testing.T) {
 	}
 
 	// A jti nothing minted is a 404, not a silent success.
-	if _, err := revokeTokenByJTI(actor.WithActor(context.Background(), a), f.deps, meta.NewID()); statusOf(t, err) != http.StatusNotFound {
+	if _, err := revokeTokenByJTI(actor.WithActor(context.Background(), a), f.deps, meta.NewID(), "", ""); statusOf(t, err) != http.StatusNotFound {
 		t.Errorf("unknown jti: err = %v, want 404", err)
 	}
 }
@@ -355,6 +355,83 @@ func TestRevokeAll_BumpsTokenVersion(t *testing.T) {
 	if _, err := bumpTokenVersion(context.Background(), f.deps, meta.NewID()); statusOf(t, err) != http.StatusNotFound {
 		t.Errorf("unknown user: err = %v, want 404", err)
 	}
+}
+
+func TestMintToken_ClampsMisconfiguredDefaultTTLToMax(t *testing.T) {
+	f := newTokenFixture(t)
+	a := &actor.Actor{UserID: f.userID, Username: "alice"}
+	f.deps.cfg = func() *settings.AuthTokens {
+		return &settings.AuthTokens{Enabled: true, DefaultTTL: 48 * time.Hour, MaxTTL: 24 * time.Hour}
+	}
+
+	out, err := mintToken(actor.WithActor(context.Background(), a), f.deps, mintBody(f.project.Meta.Name, ""))
+	if err != nil {
+		t.Fatalf("mintToken: %v", err)
+	}
+	if d := time.Until(out.Body.ExpiresAt); d > 24*time.Hour || d < 23*time.Hour {
+		t.Errorf("expiry in %v, want clamped to the 24h max, not the misconfigured 48h default", d)
+	}
+}
+
+func TestMintToken_ResponseCarriesProjectTeamID(t *testing.T) {
+	f := newTokenFixture(t)
+	a := &actor.Actor{UserID: f.userID, Username: "alice"}
+
+	out, err := mintToken(actor.WithActor(context.Background(), a), f.deps, mintBody(f.project.Meta.Name, ""))
+	if err != nil {
+		t.Fatalf("mintToken: %v", err)
+	}
+	if out.Body.TeamID != f.team.Meta.ID {
+		t.Errorf("teamId = %q, want %q", out.Body.TeamID, f.team.Meta.ID)
+	}
+}
+
+func TestRevokeToken_ByJTI_HintsPathRequiresAdminAndNoAuditRow(t *testing.T) {
+	f := newTokenFixture(t)
+	a := &actor.Actor{UserID: f.userID, Username: "alice"}
+
+	var minted *mintTokenOutput
+	audited(t, a, func(ctx context.Context) {
+		var err error
+		minted, err = mintToken(ctx, f.deps, mintBody(f.project.Meta.Name, ""))
+		if err != nil {
+			t.Fatalf("mintToken: %v", err)
+		}
+	})
+	// No audit row recorded for this jti — the lookup finds nothing, so the
+	// hints are the only way to revoke.
+	f.deps.audit = staticAudit{}
+	teamHint := minted.Body.TeamID
+	expHint := minted.Body.ExpiresAt.Format(time.RFC3339)
+
+	t.Run("no hints and no audit row is 404", func(t *testing.T) {
+		admin := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true})
+		if _, err := revokeTokenByJTI(admin, f.deps, minted.Body.JTI, "", ""); statusOf(t, err) != http.StatusNotFound {
+			t.Errorf("err = %v, want 404", err)
+		}
+	})
+
+	t.Run("non-admin caller with hints is 403", func(t *testing.T) {
+		nonAdmin := actor.WithActor(context.Background(), a)
+		if _, err := revokeTokenByJTI(nonAdmin, f.deps, minted.Body.JTI, teamHint, expHint); statusOf(t, err) != http.StatusForbidden {
+			t.Errorf("err = %v, want 403", err)
+		}
+	})
+
+	t.Run("admin caller with hints revokes and writes the denylist entry", func(t *testing.T) {
+		admin := actor.WithActor(context.Background(), &actor.Actor{AdminToken: true})
+		if _, err := revokeTokenByJTI(admin, f.deps, minted.Body.JTI, teamHint, expHint); err != nil {
+			t.Fatalf("revokeTokenByJTI: %v", err)
+		}
+		want := policy.RevokedKey(teamHint, minted.Body.JTI)
+		ttl, ok := f.denylist.entries[want]
+		if !ok {
+			t.Fatalf("denylist entries = %v, want one at %q", f.denylist.entries, want)
+		}
+		if ttl <= 0 || ttl > time.Hour {
+			t.Errorf("denylist ttl = %v, want the token's remaining life", ttl)
+		}
+	})
 }
 
 func mintBody(project, ttl string) *mintTokenInput {

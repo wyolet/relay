@@ -138,6 +138,15 @@ func adminActor(a *actor.Actor) bool {
 	return a.AdminToken || a.HasRole(user.RoleAdmin)
 }
 
+// IsAdmin reports whether the caller in ctx holds the bootstrap admin
+// identity (the break-glass token or the admin role). Exported for the few
+// call sites outside this package that must relax a rule for an operator —
+// they are not authorization decisions and must not grow into one.
+func IsAdmin(ctx context.Context) bool {
+	a := actor.From(ctx)
+	return a != nil && a.IsAuthenticated() && adminActor(a)
+}
+
 func isCatalogOwner(k meta.OwnerKind) bool {
 	return k == meta.OwnerSystem || k == meta.OwnerProvider || k == meta.OwnerHost
 }

@@ -75,13 +75,16 @@ type InboundInput struct {
 // Returns (nil, nil) when there is nothing to check: no applicable RL and no
 // token to check for revocation.
 func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgratelimit.Reservation, error) {
-	rules := s.rulesFor(in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug)
+	metered := s.rulesFor(in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug)
+	rules := metered
 	if in.TokenJTI != "" {
-		rules = append(rules, pkgratelimit.Rule{
+		// First in the slice: a revoked token must answer 401, not the 429 an
+		// over-limit rule evaluated ahead of it would produce.
+		rules = append([]pkgratelimit.Rule{{
 			Key:   revokedRuleKey(in.TokenJTI),
 			Name:  "token revocation",
 			Meter: pkgratelimit.MeterRevoked,
-		})
+		}}, metered...)
 	}
 	if len(rules) == 0 || s.limiter == nil {
 		return nil, nil
@@ -90,7 +93,16 @@ func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgrate
 	if in.Policy != nil {
 		policySlug = in.Policy.Meta.Name
 	}
-	return s.limiter.Reserve(ctx, reserveScope(in.TeamID, policySlug), rules)
+	res, err := s.limiter.Reserve(ctx, reserveScope(in.TeamID, policySlug), rules)
+	if err != nil {
+		return nil, err
+	}
+	if len(metered) == 0 {
+		// Revocation check only: nothing was metered, so the post-flight
+		// commit would be a second script call for no state.
+		res.SetNoCommit()
+	}
+	return res, nil
 }
 
 // CommitInbound returns the inbound reservation to the bucket with the

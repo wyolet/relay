@@ -786,7 +786,11 @@ func deleteRole(s *Snapshot, id string) {
 // ── RoleBinding ───────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyRoleBindingUpsert(b *rolebinding.RoleBinding) error {
-	if !b.IsEnabled() {
+	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
+		// A binding that names nobody grants nothing. It reaches us with an
+		// empty subject list when PG cascaded the last one away; treating it
+		// as a delete keeps the stale grant out of the snapshot, which
+		// Validate would otherwise reject and leave in place.
 		return c.ApplyRoleBindingDelete(b.Meta.ID)
 	}
 	if err := b.Validate(); err != nil {
@@ -862,7 +866,8 @@ func removeRoleBindingFromSubjects(s *Snapshot, b *rolebinding.RoleBinding) {
 // ── PolicyBinding ─────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error {
-	if !b.IsEnabled() {
+	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
+		// Same rule as ApplyRoleBindingUpsert: no subjects, no binding.
 		return c.ApplyPolicyBindingDelete(b.Meta.ID)
 	}
 	if err := b.Validate(); err != nil {

@@ -73,8 +73,13 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			Force:    in.Force,
 			Prune:    in.Prune,
 			Selector: in.Selector,
+			Gov:      d.Catalog,
 		})
 		if err != nil {
+			var ge *apply.GovernanceError
+			if errors.As(err, &ge) {
+				return nil, huma.Error403Forbidden(ge.Error())
+			}
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 

@@ -222,6 +222,8 @@ func TestRBACTable(t *testing.T) {
 		{"18 a project row lives in its team", alice, "projects.update", authz.Resource{Kind: "project", Owner: &meta.Owner{Kind: meta.OwnerTeam, ID: t2ID}}, authz.ErrForbidden},
 		{"19 create without an owner fails closed", bob, "policies.create", authz.Resource{Kind: "policy"}, authz.ErrForbidden},
 		{"20 mint is granted at a project, not globally", sa1, "tokens.mint", authz.Resource{Kind: "token"}, authz.ErrForbidden},
+		{"21 a project developer cannot create a system-owned group", bob, "groups.create", authz.Resource{Kind: "group", Owner: &globalScope}, authz.ErrForbidden},
+		{"22 admin creates a system-owned group", adminToken, "groups.create", authz.Resource{Kind: "group", Owner: &globalScope}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -398,5 +400,51 @@ func TestScopeDefiningRowsAreInTheirOwnScope(t *testing.T) {
 	}
 	if !rbac.Visible(ctxOf(alice), "project", p2ID, inT1) {
 		t.Error("team-admin cannot see a project of their team")
+	}
+}
+
+// Rotate is authorized as its own verb, distinct from update: a role
+// granting one must not imply the other.
+func TestRBACRotateIsNotUpdate(t *testing.T) {
+	rotateRole := &role.Role{Meta: meta.Metadata{ID: ids.New(), Name: "key-rotator", Owner: globalScope}}
+	rotateRole.Spec.Rules = []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"rotate"}}}
+	rotateRole.Spec.Enabled = &yes
+	updateRole := &role.Role{Meta: meta.Metadata{ID: ids.New(), Name: "key-updater", Owner: globalScope}}
+	updateRole.Spec.Rules = []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"update"}}}
+	updateRole.Spec.Enabled = &yes
+
+	rotatorID, updaterID := ids.New(), ids.New()
+	cat := catalog.New(
+		lister[provider.Provider](nil), lister[host.Host](nil), lister[policy.Policy](nil),
+		lister[model.Model](nil), lister[hostkey.HostKey](nil), lister[ratelimit.RateLimit](nil),
+		lister[key.Key](nil), lister[pricing.Pricing](nil), lister[binding.Binding](nil),
+	)
+	cat.UseTenancy(
+		lister[team.Team](nil), lister[project.Project](nil), lister[serviceaccount.ServiceAccount](nil),
+		lister[group.Group](nil),
+		lister[role.Role]{rotateRole, updateRole},
+		lister[rolebinding.RoleBinding]{
+			mkBinding("rotator", rotateRole.Meta.ID, globalScope, userSubject(rotatorID)),
+			mkBinding("updater", updateRole.Meta.ID, globalScope, userSubject(updaterID)),
+		},
+		lister[policybinding.PolicyBinding](nil),
+	)
+	if err := cat.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+
+	rotator := actorOf(rotatorID, subjectsOf(rotatorID))
+	updater := actorOf(updaterID, subjectsOf(updaterID))
+	res := authz.Resource{Kind: "key", Owner: &globalScope}
+
+	if err := rbac.Authorize(ctxOf(rotator), "keys.rotate", res); err != nil {
+		t.Errorf("rotate-only role denied keys.rotate: %v", err)
+	}
+	if err := rbac.Authorize(ctxOf(updater), "keys.rotate", res); !errors.Is(err, authz.ErrForbidden) {
+		t.Errorf("keys.rotate with an update-only role = %v, want forbidden", err)
+	}
+	if err := rbac.Authorize(ctxOf(rotator), "keys.update", res); !errors.Is(err, authz.ErrForbidden) {
+		t.Errorf("keys.update with a rotate-only role = %v, want forbidden", err)
 	}
 }

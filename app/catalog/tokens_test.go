@@ -3,7 +3,9 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
@@ -128,5 +130,60 @@ func TestSnapshot_TokenVersions(t *testing.T) {
 	}
 	if v, _ := c.Current().TokenVersion(f.alice); v != 4 {
 		t.Errorf("TokenVersion(alice) after bump = %d, want 4", v)
+	}
+}
+
+// blockingVersionLister lets a test hold TokenVersions open so it can probe
+// whether c.rmu is already held while the read is in flight. A full Reload
+// also consults the lister when one is configured, so a second call must
+// not re-close entered — only the first call's arrival matters to the test.
+type blockingVersionLister struct {
+	entered   chan struct{}
+	closeOnce sync.Once
+	release   chan struct{}
+}
+
+func (b *blockingVersionLister) TokenVersions(context.Context) (map[string]int, error) {
+	b.closeOnce.Do(func() { close(b.entered) })
+	<-b.release
+	return map[string]int{}, nil
+}
+
+// TestReloadTokenVersions_ReadHappensUnderTheLock proves the version read
+// is inside c.rmu, not before it: a full Reload racing the read would
+// otherwise land in between and get clobbered by the older versions this
+// call is about to publish. While TokenVersions is blocked mid-call, a
+// concurrent Reload (which also needs c.rmu) must not be able to complete.
+func TestReloadTokenVersions_ReadHappensUnderTheLock(t *testing.T) {
+	f := newSubjectsFixture()
+	lister := &blockingVersionLister{entered: make(chan struct{}), release: make(chan struct{})}
+	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{}, rcList{}, bndList{})
+	c.UseTenancy(teamList{f.team}, projList{f.project}, saList{f.sa}, grpList{f.group},
+		roleList{}, rbList{}, pbList{})
+	if err := c.Reload(context.Background()); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+	c.UseTokenVersions(lister)
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		<-lister.entered // wait until the version read is in flight
+		reloadDone <- c.Reload(context.Background())
+	}()
+
+	go func() { _ = c.ReloadTokenVersions(context.Background()) }()
+
+	<-lister.entered
+	select {
+	case <-reloadDone:
+		t.Fatal("a concurrent Reload completed while TokenVersions was still being read — the read is not under c.rmu")
+	case <-time.After(100 * time.Millisecond):
+		// Still blocked, as it must be: Reload needs the same c.rmu the
+		// in-flight read is holding.
+	}
+
+	close(lister.release)
+	if err := <-reloadDone; err != nil {
+		t.Fatalf("Reload after release: %v", err)
 	}
 }

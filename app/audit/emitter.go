@@ -107,12 +107,14 @@ func (e *Emitter) DroppedCount() uint64 { return e.dropped.Load() }
 // QueueDepth is the number of events waiting to be written.
 func (e *Emitter) QueueDepth() int { return len(e.queue) }
 
-// Close drains the queue and stops the prune loop.
+// Close drains what is queued and stops the prune loop. The queue channel is
+// never closed: a concurrent Emit would panic on the send, and an audit trail
+// must not be able to take the process down at shutdown.
 func (e *Emitter) Close() {
 	if e == nil || e.stopped.Swap(true) {
 		return
 	}
-	close(e.queue)
+	close(e.stop)
 	e.wg.Wait()
 }
 
@@ -126,11 +128,11 @@ func (e *Emitter) drain() {
 	batch := make([]Event, 0, batchSize)
 	for {
 		select {
-		case ev, ok := <-e.queue:
-			if !ok {
-				e.write(batch)
-				return
-			}
+		case <-e.stop:
+			batch = e.drainQueued(batch)
+			e.write(batch)
+			return
+		case ev := <-e.queue:
 			batch = append(batch, ev)
 			if len(batch) >= batchSize {
 				e.write(batch)
@@ -147,14 +149,39 @@ func (e *Emitter) drain() {
 	}
 }
 
+// drainQueued appends everything already queued without blocking, so a Close
+// loses only what arrives after it.
+func (e *Emitter) drainQueued(batch []Event) []Event {
+	for {
+		select {
+		case ev := <-e.queue:
+			batch = append(batch, ev)
+			if len(batch) >= batchSize {
+				e.write(batch)
+				batch = batch[:0]
+			}
+		default:
+			return batch
+		}
+	}
+}
+
 func (e *Emitter) write(batch []Event) {
 	if len(batch) == 0 || e.sink == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := e.sink.Write(ctx, batch); err != nil {
+	err := e.sink.Write(ctx, batch)
+	if err != nil {
+		// One immediate retry: a sink blip is the common failure and losing
+		// the rows silently is the one outcome an audit log may not have.
+		err = e.sink.Write(ctx, batch)
+	}
+	if err != nil {
 		e.log.Warn("audit: batch write failed", "err", err, "rows", len(batch))
+		Dropped.Add(float64(len(batch)))
+		e.dropped.Add(uint64(len(batch)))
 	}
 }
 

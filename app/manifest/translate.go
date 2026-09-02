@@ -1179,12 +1179,19 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 	if err != nil {
 		return nil, err
 	}
+	priority := d.Spec.Priority
+	if priority == 0 {
+		// The store and the control API both stamp this default, so a
+		// document that omits priority must translate to the same row or
+		// apply reports an update on every run.
+		priority = policybinding.DefaultPriority
+	}
 	b := &policybinding.PolicyBinding{
 		Meta: d.Metadata.toMeta(),
 		Spec: policybinding.Spec{
 			ProjectID: projectID,
 			PolicyID:  policyID,
-			Priority:  d.Spec.Priority,
+			Priority:  priority,
 			Subjects:  subjects,
 			Enabled:   d.Spec.Enabled,
 		},

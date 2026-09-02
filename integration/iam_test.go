@@ -354,6 +354,20 @@ func TestIntegration_KeyCreateAndRotate(t *testing.T) {
 	if code != http.StatusBadRequest {
 		t.Fatalf("rotate above the cap = %d: %s", code, raw)
 	}
+
+	// The principal and the previous hash live in columns. A copy in the spec
+	// JSONB is a second source of truth that a column-only write leaves stale.
+	p := testPool(t)
+	var specPrincipalID, specPrevious *string
+	if err := p.QueryRow(context.Background(),
+		`SELECT spec->'principal'->>'id', spec->>'previousKeyHash' FROM relay_keys WHERE id = $1`,
+		created.Key.Metadata.ID).Scan(&specPrincipalID, &specPrevious); err != nil {
+		t.Fatalf("read stored spec: %v", err)
+	}
+	if (specPrincipalID != nil && *specPrincipalID != "") || (specPrevious != nil && *specPrevious != "") {
+		t.Errorf("spec JSONB carries principal id %v and previousKeyHash %v, want both in columns only",
+			specPrincipalID, specPrevious)
+	}
 }
 
 func TestIntegration_KeyFilters(t *testing.T) {
@@ -667,7 +681,71 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 		t.Errorf("after a second run: %d legacy projects / %d accounts, want 1 / 1", projects, accounts)
 	}
 
+	// A down + up round trip converges: the down restores each key's owner
+	// from its principal column, so the second up re-derives the same rows
+	// instead of re-parenting the user key onto a generated account.
+	owned = read("owned")
+	if owned.userID != userID || owned.principal != "user" || owned.ownerKind != "user" {
+		t.Errorf("after a round trip the user key is %+v, want its user principal and owner", owned)
+	}
+
 	// Leave the schema at head: stepping to 26 dropped everything above it.
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate back up to head: %v", err)
+	}
+}
+
+// The backfill's tenancy rows are keyed by name, which is what carries the
+// UNIQUE constraint. An operator who already has a team called `system` keeps
+// it, and the generated project hangs off that id.
+func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T) {
+	st := newStack(t)
+	ctx := context.Background()
+
+	m := migrator(t)
+	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate down to 25: %v", err)
+	}
+	_ = st
+
+	p := testPool(t)
+	existingTeam := ids.New()
+	if _, err := p.Exec(ctx,
+		`INSERT INTO teams (id, name, display_name, metadata, spec)
+		 VALUES ($1, 'system', 'Operator System', '{"owner":{"kind":"user"}}'::jsonb, '{}'::jsonb)`,
+		existingTeam); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec)
+		 VALUES ($1, 'orphan', '', $2, '{"owner":{"kind":"user"}}'::jsonb, '{}'::jsonb)`,
+		ids.New(), sha256Hex("orphan")); err != nil {
+		t.Fatalf("insert key: %v", err)
+	}
+
+	if err := m.Migrate(26); err != nil {
+		t.Fatalf("migrate up to 26: %v", err)
+	}
+
+	var teams int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM teams WHERE name = 'system'`).Scan(&teams); err != nil {
+		t.Fatalf("count system teams: %v", err)
+	}
+	if teams != 1 {
+		t.Errorf("system teams = %d, want the operator's one", teams)
+	}
+	var teamID, displayName string
+	if err := p.QueryRow(ctx,
+		`SELECT tm.id, tm.display_name FROM projects pr
+		   JOIN teams tm ON tm.id = pr.team_id
+		  WHERE pr.name = 'legacy'`).Scan(&teamID, &displayName); err != nil {
+		t.Fatalf("read legacy project: %v", err)
+	}
+	if teamID != existingTeam || displayName != "Operator System" {
+		t.Errorf("legacy project hangs off %q (%q), want the existing team %q",
+			teamID, displayName, existingTeam)
+	}
+
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate back up to head: %v", err)
 	}

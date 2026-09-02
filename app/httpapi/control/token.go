@@ -123,6 +123,9 @@ type mintTokenOutput struct {
 		JTI       string    `json:"jti"`
 		ExpiresAt time.Time `json:"expiresAt"`
 		Project   string    `json:"project"`
+		// TeamID lets a caller revoke this jti even after the mint's audit
+		// row is pruned or dropped — the denylist entry is keyed by team.
+		TeamID string `json:"teamId"`
 	}
 }
 
@@ -161,9 +164,11 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 403, 404, 503},
 	}, func(ctx context.Context, in *struct {
-		JTI string `path:"jti"`
+		JTI    string `path:"jti"`
+		TeamID string `query:"team_id" doc:"Team the token was minted under, from the mint response. Used only when no mint is recorded; requires admin."`
+		Exp    string `query:"exp"     doc:"Token expiry (RFC3339), from the mint response. Used only when no mint is recorded; requires admin."`
 	}) (*emptyOutput, error) {
-		return revokeTokenByJTI(ctx, td, in.JTI)
+		return revokeTokenByJTI(ctx, td, in.JTI, in.TeamID, in.Exp)
 	})
 
 	huma.Register(api, huma.Operation{
@@ -240,6 +245,11 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 	}
 
 	ttl := cfg.DefaultTTL
+	if cfg.MaxTTL > 0 && ttl > cfg.MaxTTL {
+		// A default above the maximum is a misconfiguration, not a licence to
+		// exceed it.
+		ttl = cfg.MaxTTL
+	}
 	if in.Body.TTL != "" {
 		parsed, err := time.ParseDuration(in.Body.TTL)
 		if err != nil || parsed <= 0 {
@@ -295,6 +305,7 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 	out.Body.JTI = claims.Jti
 	out.Body.ExpiresAt = exp.UTC()
 	out.Body.Project = proj.Meta.Name
+	out.Body.TeamID = proj.Spec.TeamID
 	return out, nil
 }
 
@@ -313,20 +324,34 @@ func mintGroups(snap *appcatalog.Snapshot, a *actor.Actor) []string {
 	return out
 }
 
-func revokeTokenByJTI(ctx context.Context, d tokenDeps, jti string) (*emptyOutput, error) {
-	if d.audit == nil {
-		return nil, huma.Error503ServiceUnavailable("revoke by jti needs the audit log, which is disabled")
+// revokeTokenByJTI denies one token. The audit row of its mint is the lookup:
+// it carries the project and the expiry, and there is no token registry.
+// teamHint/expHint are the same two facts as returned by mint; they stand in
+// when the audit row is gone (dropped under load, or pruned). Because nothing
+// then proves who minted the token, the hint path is admin-only.
+func revokeTokenByJTI(ctx context.Context, d tokenDeps, jti, teamHint, expHint string) (*emptyOutput, error) {
+	var ev audit.Event
+	if d.audit != nil {
+		events, err := d.audit.Events(ctx, audit.Query{Actions: []string{"tokens.mint"}, ResourceID: jti, Limit: 1})
+		if err != nil {
+			return nil, huma.Error500InternalServerError("audit lookup failed: " + err.Error())
+		}
+		if len(events) > 0 {
+			ev = events[0]
+		}
 	}
-	events, err := d.audit.Events(ctx, audit.Query{Actions: []string{"tokens.mint"}, ResourceID: jti, Limit: 1})
-	if err != nil {
-		return nil, huma.Error500InternalServerError("audit lookup failed: " + err.Error())
-	}
-	if len(events) == 0 {
-		return nil, huma.Error404NotFound("no mint recorded for this token")
-	}
-	ev := events[0]
 	if ev.Resource.Owner == nil {
-		return nil, huma.Error404NotFound("the mint record names no project")
+		if teamHint == "" || expHint == "" {
+			return nil, huma.Error404NotFound("no mint recorded for this token")
+		}
+		if !authz.IsAdmin(ctx) {
+			return nil, huma.Error403Forbidden("revoking without a mint record requires an admin caller")
+		}
+		exp, err := time.Parse(time.RFC3339, expHint)
+		if err != nil {
+			return nil, huma.Error400BadRequest("exp must be an RFC3339 timestamp")
+		}
+		return denyToken(ctx, d, teamHint, jti, exp)
 	}
 	if err := d.authz.Authorize(ctx, "tokens.revoke",
 		authz.Resource{Kind: "token", ID: jti, Owner: ev.Resource.Owner}); err != nil {

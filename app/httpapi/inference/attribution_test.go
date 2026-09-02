@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policybinding"
 )
 
 // mintFor runs the auth stack for plaintext and mints the lifecycle Context
@@ -21,7 +22,7 @@ func mintFor(t *testing.T, st *principalStack, plaintext string) (*Principal, *l
 		t.Fatal("no principal resolved")
 	}
 	ctx := context.WithValue(context.Background(), ctxPrincipalT{}, p)
-	lc := mintLifecycle(ctx, st.cat, "pipeline", plaintext, "")
+	lc := mintLifecycle(ctx, st.cat, "pipeline", "")
 	return p, &lifecycleFields{
 		projectID: lc.ProjectID, project: lc.ProjectName,
 		teamID: lc.TeamID, team: lc.TeamName,
@@ -99,8 +100,33 @@ func TestMintLifecycle_PersonalKeyHasNoTenancy(t *testing.T) {
 	}
 }
 
+// A token presents no key, so relay_key_hash stays empty. Hashing the bearer
+// would stamp a hash that matches no key row and quietly pull token traffic
+// into a key's usage scope.
 func TestMintLifecycle_TokenCredential(t *testing.T) {
-	t.Skip("tokens land with M3: credential_kind=token, credential_id=jti, empty relay_key_hash")
+	f := newPrincipalFixture()
+	f.bindings = []*policybinding.PolicyBinding{
+		boundTo(f, "token-binding", 1, f.boundPol.Meta.ID, "user:"+f.user),
+	}
+	st := f.stack(t)
+	token := f.mint(t, nil)
+
+	_, got := mintFor(t, st, token)
+
+	if got.relayKeyHash != "" {
+		t.Fatalf("relay_key_hash = %q, want empty for a token", got.relayKeyHash)
+	}
+	if got.credentialKind != CredentialToken || got.credentialID == "" {
+		t.Fatalf("credential: %q / %q, want the token kind and its jti",
+			got.credentialKind, got.credentialID)
+	}
+	if got.principalKind != string(key.PrincipalUser) || got.principalID != f.user {
+		t.Fatalf("principal: %q / %q", got.principalKind, got.principalID)
+	}
+	if got.projectID != f.project.Meta.ID || got.teamID != f.team.Meta.ID {
+		t.Fatalf("tenancy: %q / %q, want the token's project and its team",
+			got.projectID, got.teamID)
+	}
 }
 
 // Slugs are event-time facts: a rename after the request must not reach a
