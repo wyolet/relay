@@ -53,6 +53,11 @@ const GraceWindow = 30 * 24 * time.Hour
 // issuer is the only accepted iss claim.
 const issuer = "wyolet"
 
+// rawURL decodes strictly: a segment whose length leaves unused trailing bits
+// (an Ed25519 signature leaves four) has many encodings of the same bytes, so
+// a non-strict decode would verify one license under several distinct strings.
+var rawURL = base64.RawURLEncoding.Strict()
+
 // License is a verified license file.
 type License struct {
 	Customer    string
@@ -132,7 +137,7 @@ func parseAt(value string, now func() time.Time) (*License, error) {
 	var hdr struct {
 		Alg string `json:"alg"`
 	}
-	if raw, err := base64.RawURLEncoding.DecodeString(parts[0]); err != nil {
+	if raw, err := rawURL.DecodeString(parts[0]); err != nil {
 		return nil, fmt.Errorf("license: header: %w", err)
 	} else if err := json.Unmarshal(raw, &hdr); err != nil {
 		return nil, fmt.Errorf("license: header: %w", err)
@@ -140,14 +145,14 @@ func parseAt(value string, now func() time.Time) (*License, error) {
 	if hdr.Alg != "EdDSA" {
 		return nil, fmt.Errorf("license: unsupported alg %q", hdr.Alg)
 	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	sig, err := rawURL.DecodeString(parts[2])
 	if err != nil {
 		return nil, fmt.Errorf("license: signature: %w", err)
 	}
 	if !ed25519.Verify(ed25519.PublicKey(key), []byte(parts[0]+"."+parts[1]), sig) {
 		return nil, fmt.Errorf("license: signature does not verify")
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	payload, err := rawURL.DecodeString(parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("license: payload: %w", err)
 	}
