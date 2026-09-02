@@ -71,6 +71,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
+	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // stack is the in-process relay under test: a control listener, an
@@ -84,6 +85,7 @@ type stack struct {
 	inference  *httptest.Server
 	adminToken string
 	audit      *audit.Store
+	lifecycle  *lifecycle.Registry
 }
 
 // newStack boots the relay against the supplied DSN. The compose pg
@@ -182,6 +184,13 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 			BytePass:      true,
 			ExtractTokens: pkgopenai.ExtractTokens,
 		}).Build(),
+		// The canonical shape, as the composition root registers it: /v1/ws
+		// serves it and refuses the upgrade when it is missing.
+		(&adapter.Spec{
+			Name:         adapters.Canonical,
+			InboundPaths: []adapter.InboundPath{{Path: "/v1/generate", OperationID: "generate", Summary: "Generate (relay canonical shape)"}},
+			Translator:   relayv1.IdentityTranslator{},
+		}).Build(),
 		(&adapter.Spec{
 			Name:          adapters.Anthropic,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"}},
@@ -275,6 +284,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		inference:  infSrv,
 		adminToken: adminToken,
 		audit:      auditStore,
+		lifecycle:  lifecycleReg,
 	}
 }
 
