@@ -135,6 +135,9 @@ func refusedRoute(method, path string, code int) (decision, bool) {
 	if len(segs) == 0 {
 		return decision{}, false
 	}
+	if d, ok := refusedTokenRoute(method, segs); ok {
+		return d, true
+	}
 	plural := segs[0]
 	verb, id := "", ""
 	for i := 1; i < len(segs); i++ {
@@ -164,6 +167,34 @@ func refusedRoute(method, path string, code int) (decision, bool) {
 	return decision{
 		Action:   plural + "." + verb,
 		Resource: Resource{Kind: authz.Singular(plural), ID: id},
+		Status:   StatusDenied,
+	}, true
+}
+
+// refusedTokenRoute names the token routes, which hang off /auth rather
+// than a plural of their own: without this they would read as auth.create.
+func refusedTokenRoute(method string, segs []string) (decision, bool) {
+	if len(segs) < 2 || segs[0] != "auth" || segs[1] != "token" {
+		return decision{}, false
+	}
+	action, id := "", ""
+	switch {
+	case len(segs) == 2 && method == http.MethodPost:
+		action = "tokens.mint"
+	case len(segs) == 3 && method == http.MethodDelete:
+		action, id = "tokens.revoke", segs[2]
+	case len(segs) == 3 && segs[2] == "revoke":
+		action = "tokens.revoke"
+	case len(segs) == 3 && segs[2] == "revoke-all":
+		action = "tokens.revoke-all"
+	case len(segs) == 4 && segs[2] == "keys" && segs[3] == "rotate":
+		action = "tokens.rotate"
+	default:
+		return decision{}, false
+	}
+	return decision{
+		Action:   action,
+		Resource: Resource{Kind: authz.Singular("tokens"), ID: id},
 		Status:   StatusDenied,
 	}, true
 }

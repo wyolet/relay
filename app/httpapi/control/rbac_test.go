@@ -95,8 +95,8 @@ func TestGuardPolicyBindingDefaultsPriority(t *testing.T) {
 	if err := guardPolicyBinding(Deps{})(context.Background(), "create", nil, b); err != nil {
 		t.Fatalf("guard: %v", err)
 	}
-	if b.Spec.Priority != policybinding.DefaultPriority {
-		t.Errorf("priority = %d, want %d", b.Spec.Priority, policybinding.DefaultPriority)
+	if b.Spec.Priority == nil || *b.Spec.Priority != policybinding.DefaultPriority {
+		t.Errorf("priority = %v, want %d", b.Spec.Priority, policybinding.DefaultPriority)
 	}
 	if b.Meta.Owner != (meta.Owner{Kind: meta.OwnerProject, ID: projectID}) {
 		t.Errorf("owner = %+v, want the project", b.Meta.Owner)

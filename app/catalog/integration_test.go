@@ -298,3 +298,82 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 		t.Errorf("secret_values key_version: got %d want 2", rows[0].KeyVersion)
 	}
 }
+
+// TestIntegration_UnresolvedEnvHostKey covers the control plane surviving a
+// host key whose env var is unset: the row still loads (marked unresolved),
+// the NOTIFY-driven reload succeeds, and the key is absent from the snapshot.
+func TestIntegration_UnresolvedEnvHostKey(t *testing.T) {
+	pool, ctx, cancel := setupDB(t)
+	defer cancel()
+
+	cat, listener, stores, err := Bootstrap(ctx, BootstrapOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	listenerCtx, listenerCancel := context.WithCancel(ctx)
+	defer listenerCancel()
+	go func() { _ = listener.Run(listenerCtx) }()
+	time.Sleep(200 * time.Millisecond)
+
+	hst := &host.Host{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "openai-unresolved", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: host.Spec{BaseURL: "https://api.openai.com"},
+	}
+	if err := stores.Host.Upsert(ctx, hst); err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+	tier := &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "openai-unresolved-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
+	}
+	if err := stores.Policy.Upsert(ctx, tier); err != nil {
+		t.Fatalf("upsert tier policy: %v", err)
+	}
+	k := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "unset-env-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Spec: hostkey.Spec{
+			HostID:    hst.Meta.ID,
+			PolicyID:  tier.Meta.ID,
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "RELAY_TEST_UNSET_ENV_KEY"},
+		},
+	}
+	if err := stores.HostKey.Upsert(ctx, k); err != nil {
+		t.Fatalf("upsert hostkey: %v", err)
+	}
+
+	rows2, err := stores.HostKey.List(ctx)
+	if err != nil {
+		t.Fatalf("list host keys with an unset env ref: %v", err)
+	}
+	var got *hostkey.HostKey
+	for _, r := range rows2 {
+		if r.Meta.ID == k.Meta.ID {
+			got = r
+		}
+	}
+	if got == nil {
+		t.Fatalf("unresolved key missing from List")
+	}
+	if got.Status.Unresolved == nil {
+		t.Errorf("List: status.unresolved not set")
+	}
+	if got.Resolved != "" {
+		t.Errorf("List: unresolved key carries a value")
+	}
+	one, err := stores.HostKey.Get(ctx, k.Meta.ID)
+	if err != nil {
+		t.Fatalf("get host key with an unset env ref: %v", err)
+	}
+	if one == nil || one.Status.Unresolved == nil {
+		t.Errorf("Get: status.unresolved not set")
+	}
+
+	// The reload the write's NOTIFY triggers must succeed, and a full
+	// rebuild must too — with the key dropped from the snapshot.
+	time.Sleep(flushPad)
+	if err := cat.Reload(ctx); err != nil {
+		t.Fatalf("reload with an unresolvable key: %v", err)
+	}
+	if _, ok := cat.Current().HostKey(k.Meta.ID); ok {
+		t.Errorf("unresolved key %s reached the snapshot", k.Meta.ID)
+	}
+}

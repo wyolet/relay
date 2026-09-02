@@ -194,7 +194,7 @@ func TestIntegration_BuiltinRolesUpsertChangedRules(t *testing.T) {
 		t.Fatalf("write the stale row: %v", err)
 	}
 
-	if err := role.SeedBuiltins(ctx, st.stores.Role, slog.Default()); err != nil {
+	if err := role.SeedBuiltins(ctx, st.stores.Role, slog.Default(), nil); err != nil {
 		t.Fatalf("re-seed: %v", err)
 	}
 	got, err := st.stores.Role.Get(ctx, admin.Meta.ID)

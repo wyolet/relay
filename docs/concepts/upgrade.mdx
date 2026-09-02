@@ -16,8 +16,8 @@ Migrations `000025`–`000030` add:
 | Migration | Adds |
 | --- | --- |
 | `000025_teams_projects` | `teams`, `projects` tables — the tenancy scope every project-owned row now hangs off. |
-| `000026_subjects_keys` | `service_accounts`, `groups`; `relay_keys` becomes `keys`, re-pointed at a principal (a service account or a user) instead of being its own identity. Existing keys are backfilled onto a generated service account in a system `legacy` project. |
-| `000027_rbac_kinds` | `roles`, `role_bindings`, `policy_bindings` — stored and validated, evaluated when `RELAY_AUTHZ=rbac`. |
+| `000026_subjects_keys` | `service_accounts`, `groups`, `group_members`; `relay_keys` gains `principal_sa_id` / `principal_user_id`, so a key is a credential of a principal (a service account or a user) instead of being its own identity. Existing keys are backfilled onto a generated service account in a system `legacy` project. |
+| `000027_rbac_kinds` | `roles`, `role_bindings`, `policy_bindings` (plus their subject tables) — stored and validated, evaluated when `RELAY_AUTHZ=rbac`. |
 | `000028_audit_events` | `audit_events` — the append-only admin audit log. |
 | `000029_token_version` | `users.token_version` — bumped to invalidate every inference token a user holds. |
 | `000030_batch_attribution` | Attribution columns on `batches` (project, team, principal, credential). |
@@ -39,13 +39,19 @@ rather than mixing versions.
 
 If the new version needs to be backed out:
 
-1. Stop every pod.
+1. Stop every pod — scale the deployment to 0, or set
+   `RELAY_MIGRATE_ON_BOOT=off` on it first. Every relay runs the pending
+   up-migrations at boot, so a pod that restarts mid-rollback re-applies what
+   you just undid.
 2. Run `relay migrate down <target-version>` against the same database,
    with `RELAY_PG_DSN` set — for example `relay migrate down 24` to
    return to the schema before this release's migrations. This runs the
    bundled down-migrations in reverse order down to (not including) the
-   target version.
-3. Deploy the previous image.
+   target version; `relay migrate down 0` unwinds all of them. A target
+   above the current schema version is refused rather than run as an
+   upgrade.
+3. Deploy the previous image (and drop `RELAY_MIGRATE_ON_BOOT` again, so the
+   next upgrade migrates on boot).
 
 <Warning>
 `relay migrate down` is destructive — it drops the tables and columns its

@@ -39,11 +39,13 @@ var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 
 // Run executes one item. requestID ties the usage event to the item (the jobq
 // job id); policyID is the policy the submission already resolved to (the
-// resolution order lives in the auth layer, not here), and attr is the
-// submission's attribution as recorded at submit. It returns the upstream
-// status and the buffered response body. Usage emits automatically with
-// source="batch" when the pipeline body closes.
-func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
+// resolution order lives in the auth layer, not here), tokenJTI is the
+// submitting token's jti (empty for a key) so the reservation refuses a
+// revoked one, and attr is the submission's attribution as recorded at
+// submit. It returns the upstream status and the buffered response body.
+// Usage emits automatically with source="batch" when the pipeline body
+// closes.
+func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID, tokenJTI string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
 	snap := rn.Catalog.Current()
 
 	modelName, _, err := inference.ExtractModelStream(body)
@@ -150,6 +152,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 		UpstreamModel: plan.UpstreamModel(),
 		Stream:        false,
 		TeamID:        attr.TeamID,
+		TokenJTI:      tokenJTI,
 		Lifecycle:     lc,
 	}
 

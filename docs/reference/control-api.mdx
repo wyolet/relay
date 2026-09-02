@@ -152,16 +152,27 @@ to one project and minted for the session holder — see
 
 ```
 POST   /api/auth/token               mint a token for a project (session auth only)
-DELETE /api/auth/token/{jti}         revoke one token by id (admin)
+DELETE /api/auth/token/{jti}         revoke one token by id
 POST   /api/auth/token/revoke        revoke the presented token (self-service)
 POST   /api/auth/token/revoke-all    bump the caller's token_version, revoking every token they hold
 POST   /api/auth/token/keys/rotate   rotate the signing key
-POST   /api/users/by-id/{id}/revoke-tokens   admin: bump another user's token_version
+POST   /api/users/by-id/{id}/revoke-tokens   bump another user's token_version
 ```
+
+Revoking by `jti` needs `tokens.revoke` at the scope of the project the token
+was minted for, and the user who minted a token may always revoke it. Only the
+fallback path — passing `team_id` and `exp` because the mint is no longer in
+the audit log — requires an admin caller, since nothing then proves who minted
+it. Bumping another user's `token_version` needs `users.update` at the global
+scope.
+
+A revoked token fails on the inference plane with `401` and the code
+`token_revoked`, whether it was the token's `jti` that landed on the denylist
+(revoke by jti or by value) or the user's `token_version` that moved.
 
 ```bash
 curl -X POST http://localhost:8081/api/auth/token \
-  -H "Authorization: Bearer <session-or-bearer-with-tokens.mint>" \
+  -H "Cookie: relay_session=<session from POST /api/auth/login>" \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "ttl": "1h"}'
 ```
@@ -170,9 +181,17 @@ curl -X POST http://localhost:8081/api/auth/token \
 
 ```
 GET  /api/users            list users (id, username, email, roles, disabled — never a password hash)
+PUT  /api/users/by-id/{id} edit `disabled` and `roles`; disabling also bumps token_version
 GET  /api/audit            the admin audit log; filter by actor_id, actor_name, action,
                             resource_kind, resource_id, scope, status, from, to
 ```
+
+Both user endpoints authorize at the global scope: an account belongs to the
+deployment, so a binding inside one team or project grants neither the list nor
+an edit. Disabling an account refuses its next login and invalidates every
+inference token it holds (the `token_version` bump), so re-enabling it does not
+bring those tokens back. A session already open is not destroyed — log the user
+out, or wait for the session to expire.
 
 See [Audit Log](/concepts/audit) for the audit event shape and retention.
 

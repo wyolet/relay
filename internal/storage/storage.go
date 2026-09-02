@@ -27,6 +27,14 @@ type PoolOption func(*poolSettings)
 type poolSettings struct {
 	maxConns int32
 	minConns int32
+	migrate  bool
+}
+
+// WithMigrateOnBoot(false) stops Open from running the up-migrations. An
+// operator rolling back runs `relay migrate down` and needs the pods that
+// restart meanwhile to leave the schema where they put it.
+func WithMigrateOnBoot(on bool) PoolOption {
+	return func(s *poolSettings) { s.migrate = on }
 }
 
 // WithMaxConns overrides the pool's maximum connections (ignored if n <= 0).
@@ -53,7 +61,7 @@ func WithMinConns(n int) PoolOption {
 // then the caller's overrides, and clamps the warm floor to the ceiling so a
 // misconfigured MinConns > MaxConns can't wedge pool creation.
 func resolvePoolSettings(opts ...PoolOption) poolSettings {
-	s := poolSettings{maxConns: 10, minConns: 2}
+	s := poolSettings{maxConns: 10, minConns: 2, migrate: true}
 	for _, o := range opts {
 		o(&s)
 	}
@@ -66,10 +74,14 @@ func resolvePoolSettings(opts ...PoolOption) poolSettings {
 // Open opens a connection pool, runs pending migrations, and returns a
 // ready-to-use *Storage. The returned Storage must be closed with Close
 // when no longer needed. Pool sizing defaults to MaxConns 10 / MinConns 2;
-// pass WithMaxConns / WithMinConns to override.
+// pass WithMaxConns / WithMinConns to override, WithMigrateOnBoot(false) to
+// skip the migrations.
 func Open(ctx context.Context, dsn string, opts ...PoolOption) (*Storage, error) {
-	if err := runMigrations(dsn); err != nil {
-		return nil, fmt.Errorf("storage.Open: %w", err)
+	s := resolvePoolSettings(opts...)
+	if s.migrate {
+		if err := runMigrations(dsn); err != nil {
+			return nil, fmt.Errorf("storage.Open: %w", err)
+		}
 	}
 
 	cfg, err := pgxpool.ParseConfig(dsn)
@@ -77,7 +89,6 @@ func Open(ctx context.Context, dsn string, opts ...PoolOption) (*Storage, error)
 		return nil, fmt.Errorf("storage.Open: parse DSN: %w", err)
 	}
 
-	s := resolvePoolSettings(opts...)
 	cfg.MaxConns = s.maxConns
 	cfg.MinConns = s.minConns
 	cfg.MaxConnLifetime = 30 * time.Minute

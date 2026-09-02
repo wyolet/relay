@@ -12,6 +12,7 @@
 package catalog
 
 import (
+	"slices"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -119,6 +120,10 @@ type Snapshot struct {
 	// instead of rebuilding it. Recomputed when a group, service account or
 	// project write can change it.
 	subjectsByKey map[string][]string
+	// hashesByUser holds every hash a user's own keys authenticate under,
+	// disabled keys included: the usage read scope answers "the rows my own
+	// keys produced", and disabling a key does not un-own its past traffic.
+	hashesByUser map[string][]string
 
 	// tokenVersionByUser mirrors users.token_version — the only user state
 	// the snapshot carries, so token verification stays a map read.
@@ -557,17 +562,54 @@ func (s *Snapshot) Generation() uint64 { return s.gen }
 // under, the pre-rotation one included. Read from the principal index, so it
 // costs the user's own keys rather than a walk of the deployment's.
 func (s *Snapshot) KeyHashesForUser(userID string) []string {
-	keys := s.keysByPrincipal[principalKey(key.PrincipalUser, userID)]
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		if k.Spec.KeyHash != "" {
-			out = append(out, k.Spec.KeyHash)
+	return s.hashesByUser[userID]
+}
+
+// indexUserKeyHashes records the hashes k authenticates under against its
+// user principal. Called for every key row, enabled or not, so a disabled
+// key stays inside its owner's read scope even though it is in no routing
+// index. A hard delete of a disabled key leaves its entry behind until the
+// next full reload rebuilds the map.
+func (s *Snapshot) indexUserKeyHashes(k *key.Key) {
+	if k.Spec.Principal.Kind != key.PrincipalUser || k.Spec.Principal.ID == "" {
+		return
+	}
+	have := s.hashesByUser[k.Spec.Principal.ID]
+	next := have
+	for _, h := range []string{k.Spec.KeyHash, k.Spec.PreviousKeyHash} {
+		if h == "" || slices.Contains(next, h) {
+			continue
 		}
-		if k.Spec.PreviousKeyHash != "" {
-			out = append(out, k.Spec.PreviousKeyHash)
+		if len(next) == len(have) {
+			// Copy on first append: the header is shared with the snapshot
+			// this one was cloned from.
+			next = append(append(make([]string, 0, len(have)+2), have...), h)
+			continue
+		}
+		next = append(next, h)
+	}
+	if len(next) != len(have) {
+		s.hashesByUser[k.Spec.Principal.ID] = next
+	}
+}
+
+// dropUserKeyHashes removes the hashes k held from its owner's list.
+func (s *Snapshot) dropUserKeyHashes(k *key.Key) {
+	if k.Spec.Principal.Kind != key.PrincipalUser || k.Spec.Principal.ID == "" {
+		return
+	}
+	have := s.hashesByUser[k.Spec.Principal.ID]
+	out := make([]string, 0, len(have))
+	for _, h := range have {
+		if h != k.Spec.KeyHash && h != k.Spec.PreviousKeyHash {
+			out = append(out, h)
 		}
 	}
-	return out
+	if len(out) == 0 {
+		delete(s.hashesByUser, k.Spec.Principal.ID)
+		return
+	}
+	s.hashesByUser[k.Spec.Principal.ID] = out
 }
 
 // SubjectsForKey returns the precomputed subjects the key's principal acts

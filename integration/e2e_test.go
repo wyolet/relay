@@ -1228,12 +1228,20 @@ func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
 // catSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader.
 type catSnapReader struct{ cat *appcatalog.Catalog }
 
-func (r catSnapReader) Policy(id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
+func (r catSnapReader) Policy(ctx context.Context, id string) (*policy.Policy, bool) {
+	return r.snap(ctx).Policy(id)
 }
 
-func (r catSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
+func (r catSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
+	return r.snap(ctx).RateLimit(id)
+}
+
+// snap mirrors the binary: the request's pinned snapshot when there is one.
+func (r catSnapReader) snap(ctx context.Context) *appcatalog.Snapshot {
+	if s := inference.SnapshotFrom(ctx); s != nil {
+		return s
+	}
+	return r.cat.Current()
 }
 
 // TestE2E_KeyRotate exercises POST /keys/by-id/{id}/rotate:

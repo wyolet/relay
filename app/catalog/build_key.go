@@ -7,6 +7,7 @@ import (
 func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
 	now := s.clock()
 	for _, k := range rks {
+		s.indexUserKeyHashes(k)
 		clean, keep := sanitizeKey(k, pols, sas)
 		if !keep {
 			continue

@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,8 +25,10 @@ import (
 // cmd/relay's catalogSnapReader, which lives in the composition root).
 type catSnapReader struct{ cat *catalog.Catalog }
 
-func (r catSnapReader) Policy(id string) (*policy.Policy, bool) { return r.cat.Current().Policy(id) }
-func (r catSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
+func (r catSnapReader) Policy(_ context.Context, id string) (*policy.Policy, bool) {
+	return r.cat.Current().Policy(id)
+}
+func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
 }
 

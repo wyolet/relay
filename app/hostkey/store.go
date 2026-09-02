@@ -253,7 +253,11 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 
 	plain, err := s.resolver.Resolve(ctx, ref)
 	if err != nil {
-		return nil, fmt.Errorf("resolve secret: %w", err)
+		// One unreadable secret must not take the whole catalog down: the row
+		// loads valueless and marked, so lists, edits and every other key keep
+		// working while an operator fixes it.
+		k.Status.Unresolved = &UnresolvedStatus{Reason: err.Error()}
+		return k, nil
 	}
 	k.Resolved = string(plain)
 	if k.Resolved != "" {

@@ -30,7 +30,8 @@ func benchFixture(bindings int) principalFixture {
 		pb := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "miss-" + meta.NewID()[:8]}}
 		pb.Spec.ProjectID = f.project.Meta.ID
 		pb.Spec.PolicyID = f.boundPol.Meta.ID
-		pb.Spec.Priority = i + 1
+		prio := i + 1
+		pb.Spec.Priority = &prio
 		pb.Spec.Subjects = []rolebinding.Subject{
 			{Kind: rolebinding.SubjectGroup, Name: "no-match-" + meta.NewID()[:8]},
 			{Kind: rolebinding.SubjectUser, ID: meta.NewID()},
@@ -41,7 +42,8 @@ func benchFixture(bindings int) principalFixture {
 	match := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "bind-all"}}
 	match.Spec.ProjectID = f.project.Meta.ID
 	match.Spec.PolicyID = f.boundPol.Meta.ID
-	match.Spec.Priority = bindings + 1
+	matchPrio := bindings + 1
+	match.Spec.Priority = &matchPrio
 	match.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "system:authenticated"}}
 	match.StampOwner()
 	f.bindings = append(f.bindings, match)

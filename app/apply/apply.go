@@ -39,6 +39,10 @@ const (
 	// ActionConflict is a row another writer changed between Plan and
 	// Execute. Nothing is written for it; re-planning picks up the change.
 	ActionConflict Action = "conflict"
+	// ActionForbidden is a row in the bundle the caller may not read.
+	// Nothing is written for it and nothing about the stored row is
+	// reported — the name is the caller's own.
+	ActionForbidden Action = "forbidden"
 )
 
 // Entry is one planned row change.
@@ -72,6 +76,7 @@ type Counts struct {
 	SkipDirty int `json:"skipDirty"`
 	Delete    int `json:"delete"`
 	Conflict  int `json:"conflict"`
+	Forbidden int `json:"forbidden"`
 }
 
 // Result is the full ordered set of entries one apply would run — the plan.
@@ -228,7 +233,7 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 
 	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
 		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License}
-	if err := b.run(docs); err != nil {
+	if err := b.run(ctx, docs); err != nil {
 		return nil, err
 	}
 
@@ -258,6 +263,8 @@ func recount(p *Result) {
 			p.Counts.Delete++
 		case ActionConflict:
 			p.Counts.Conflict++
+		case ActionForbidden:
+			p.Counts.Forbidden++
 		}
 	}
 }
@@ -315,8 +322,9 @@ func Execute(ctx context.Context, p *Result, authzr authz.Authorizer) ([]Entry, 
 // write nothing never sees the diff.
 //
 // Non-writing entries (unchanged, skip-dirty) are authorized under get and
-// silently dropped when denied: reporting a row the caller may not read would
-// make the plan an oracle for other tenants' state.
+// reported as forbidden when denied — the name comes from the caller's own
+// bundle, so saying "this one was ignored" leaks nothing, while dropping it
+// silently made a scoped apply look complete when half of it was skipped.
 func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 	if p == nil || authzr == nil {
 		return nil
@@ -327,7 +335,9 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 		res := authz.Resource{Kind: singularOf(e.plural), ID: e.ID, Name: e.Name, Owner: &owner}
 		if e.write == nil {
 			if authzr.Authorize(ctx, e.plural+".get", res) != nil {
-				continue
+				e.Action = ActionForbidden
+				e.ChangedFields = nil
+				e.ID = ""
 			}
 			kept = append(kept, e)
 			continue

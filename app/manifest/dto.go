@@ -460,7 +460,7 @@ type PolicyBindingDTO struct {
 type PolicyBindingSpec struct {
 	Project  string       `json:"project"            yaml:"project"`
 	Policy   string       `json:"policy"             yaml:"policy"`
-	Priority int          `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Priority *int         `json:"priority,omitempty" yaml:"priority,omitempty"`
 	Subjects []SubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
 	Enabled  *bool        `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
 }

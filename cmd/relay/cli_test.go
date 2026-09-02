@@ -122,6 +122,42 @@ func TestApplyDriftExitsOne(t *testing.T) {
 	}
 }
 
+// Rows outside the caller's scope are ignored by the server; the run has to
+// say so rather than exiting clean on a half-applied tree.
+func TestApplyForbiddenRowsExitOne(t *testing.T) {
+	srv := planServer(t, http.StatusOK, []apply.Entry{
+		{Kind: "Team", Name: "platform", Action: apply.ActionCreate},
+		{Kind: "Team", Name: "other", Action: apply.ActionForbidden},
+	})
+	var err error
+	out := captureStdout(t, func() {
+		err = runApply([]string{"-f", manifestDir(t), "--force", "--url", srv.URL})
+	})
+	if got := exitCode(t, err); got != exitDrift {
+		t.Fatalf("exit %d, want %d", got, exitDrift)
+	}
+	if !strings.Contains(out, "forbidden") {
+		t.Fatalf("plan output does not report the forbidden row:\n%s", out)
+	}
+}
+
+// The summary counts every action the plan can carry, conflicts included.
+func TestApplyPlanSummaryCountsConflicts(t *testing.T) {
+	srv := planServer(t, http.StatusOK, []apply.Entry{
+		{Kind: "Team", Name: "platform", Action: apply.ActionConflict},
+	})
+	var err error
+	out := captureStdout(t, func() {
+		err = runApply([]string{"-f", manifestDir(t), "--url", srv.URL})
+	})
+	if got := exitCode(t, err); got != exitDrift {
+		t.Fatalf("exit %d, want %d", got, exitDrift)
+	}
+	if !strings.Contains(out, "conflict=") {
+		t.Fatalf("summary line has no conflict count:\n%s", out)
+	}
+}
+
 func TestApplyServerErrorExitsTwo(t *testing.T) {
 	srv := planServer(t, http.StatusForbidden, nil)
 	err := runApply([]string{"-f", manifestDir(t), "--url", srv.URL})

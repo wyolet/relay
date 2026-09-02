@@ -506,7 +506,17 @@ func deletePricing(s *Snapshot, id string) {
 
 func (c *Catalog) ApplyKeyUpsert(k *key.Key) error {
 	if !k.IsEnabled() {
-		return c.ApplyKeyDelete(k.Meta.ID)
+		// Disabling stops the key routing but leaves its hashes in its
+		// owner's read scope — the traffic it already produced is theirs.
+		if err := c.ApplyKeyDelete(k.Meta.ID); err != nil {
+			return err
+		}
+		c.rmu.Lock()
+		defer c.rmu.Unlock()
+		s := c.snap.Load().clone()
+		s.indexUserKeyHashes(k)
+		c.snap.Store(s)
+		return nil
 	}
 	if err := k.Validate(); err != nil {
 		return err
@@ -542,6 +552,7 @@ func insertKey(s *Snapshot, k *key.Key) {
 		delete(s.keysByID, old.Meta.ID)
 	}
 	s.keysByID[k.Meta.ID] = k
+	s.indexUserKeyHashes(k)
 	indexKeyPrincipal(s, k)
 	s.subjectsByKey[k.Meta.ID] = keySubjects(s, k)
 	if k.Spec.KeyHash != "" {
@@ -574,6 +585,7 @@ func deleteKey(s *Snapshot, id string) {
 	}
 	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundKeyRefs(k))
 	unindexKeyHashes(s, k)
+	s.dropUserKeyHashes(k)
 	deindexKeyPrincipal(s, k)
 	delete(s.keysByID, id)
 	delete(s.subjectsByKey, id)

@@ -33,11 +33,11 @@ type fakeSnap struct {
 	rls  map[string]*ratelimit.RateLimit
 }
 
-func (f *fakeSnap) Policy(id string) (*policy.Policy, bool) {
+func (f *fakeSnap) Policy(_ context.Context, id string) (*policy.Policy, bool) {
 	p, ok := f.pols[id]
 	return p, ok
 }
-func (f *fakeSnap) RateLimit(id string) (*ratelimit.RateLimit, bool) {
+func (f *fakeSnap) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
 	r, ok := f.rls[id]
 	return r, ok
 }

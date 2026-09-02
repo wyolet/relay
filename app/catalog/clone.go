@@ -45,6 +45,8 @@ func (s *Snapshot) clone() *Snapshot {
 		// Subject lists are replaced wholesale by the reindex helpers, never
 		// appended to, so the slices themselves can be shared.
 		subjectsByKey: shallowMap(s.subjectsByKey),
+		// Replaced wholesale by the index helpers, never appended in place.
+		hashesByUser: shallowMap(s.hashesByUser),
 
 		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
 

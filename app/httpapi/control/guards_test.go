@@ -8,6 +8,8 @@ package control
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -135,7 +137,7 @@ func TestGuardsReDeriveTheOwnerFromSpec(t *testing.T) {
 
 // The default is applied to an absent priority, never to an explicit one.
 func TestGuardPolicyBindingKeepsAnExplicitPriority(t *testing.T) {
-	mk := func(priority int) *policybinding.PolicyBinding {
+	mk := func(priority *int) *policybinding.PolicyBinding {
 		b := &policybinding.PolicyBinding{}
 		b.Meta = meta.Metadata{ID: meta.NewID(), Name: "pb"}
 		b.Spec.ProjectID = meta.NewID()
@@ -143,17 +145,24 @@ func TestGuardPolicyBindingKeepsAnExplicitPriority(t *testing.T) {
 		b.Spec.Priority = priority
 		return b
 	}
-	for _, tc := range []struct{ in, want int }{
-		{0, policybinding.DefaultPriority},
-		{50, 50},
-		{policybinding.DefaultPriority, policybinding.DefaultPriority},
+	ptr := func(n int) *int { return &n }
+	for _, tc := range []struct {
+		name string
+		in   *int
+		want int
+	}{
+		{"absent", nil, policybinding.DefaultPriority},
+		// 0 is the highest-winning priority, not "not set".
+		{"explicit zero", ptr(0), 0},
+		{"explicit value", ptr(50), 50},
+		{"explicit default", ptr(policybinding.DefaultPriority), policybinding.DefaultPriority},
 	} {
 		b := mk(tc.in)
 		if err := guardPolicyBinding(Deps{})(context.Background(), "create", nil, b); err != nil {
 			t.Fatalf("guard: %v", err)
 		}
-		if b.Spec.Priority != tc.want {
-			t.Errorf("priority %d => %d, want %d", tc.in, b.Spec.Priority, tc.want)
+		if b.Spec.Priority == nil || *b.Spec.Priority != tc.want {
+			t.Errorf("%s priority => %v, want %d", tc.name, b.Spec.Priority, tc.want)
 		}
 	}
 }
@@ -249,13 +258,95 @@ func TestSystemOwnedRolesAreVisibleToAScopedCaller(t *testing.T) {
 }
 
 // D65: the binder must already hold everything the bound role grants at
-// that scope, or a team-admin can bind `admin` to himself.
+// that scope, or a team-admin can bind `admin` to himself. guardRoleBinding
+// reads the bound role from a concrete store, so the rule it hands that role
+// to is asserted here; the route itself is covered end to end by the
+// integration suite.
 func TestGuardRoleBindingRefusesEscalation(t *testing.T) {
-	t.Skip("D65 not implemented: guardRoleBinding never compares the bound role's rules against the binder's own grants, so a team-admin can bind the built-in admin role at their own team")
+	narrow := &role.Role{
+		Meta: meta.Metadata{ID: "r-narrow", Name: "team-reader", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"get"}}}},
+	}
+	wide := &role.Role{
+		Meta: meta.Metadata{ID: "r-wide", Name: "admin", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"*"}, Verbs: []string{"*"}}}},
+	}
+	scope := meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}
+	// alice holds exactly `narrow`, and only at that team.
+	rbac := authz.RBAC{Snap: func() authz.Snapshot {
+		return bindingSnapshot{scope: scope, role: narrow}
+	}}
+	alice := actor.WithActor(context.Background(),
+		&actor.Actor{UserID: "u-alice", Subjects: []string{"user:u-alice"}})
+
+	if err := authz.CheckGrant(alice, rbac, narrow, scope); err != nil {
+		t.Fatalf("binding the role she already holds: %v", err)
+	}
+	if err := authz.CheckGrant(alice, rbac, wide, scope); !errors.Is(err, authz.ErrForbidden) {
+		t.Fatalf("binding a wildcard role = %v, want forbidden", err)
+	}
+	if err := authz.CheckGrant(alice, rbac, narrow,
+		meta.Owner{Kind: meta.OwnerTeam, ID: "t-2"}); !errors.Is(err, authz.ErrForbidden) {
+		t.Fatalf("binding at a team she does not hold = %v, want forbidden", err)
+	}
+	root := actor.WithActor(context.Background(), scopeActors["root"])
+	if err := authz.CheckGrant(root, rbac, wide, scope); err != nil {
+		t.Fatalf("admin binding the wildcard role: %v", err)
+	}
 }
 
 // D67: an upgraded deployment carries no bindings at all, and a list there
 // must answer 200 with the caller's own rows.
 func TestZeroBindingListAnswersWithOwnRows(t *testing.T) {
-	t.Skip("D67 not implemented: keys.list with no owner requires a granting binding, so a binding-less user gets 403 instead of an empty 200")
+	mine := &scopedThing{Meta: meta.Metadata{ID: meta.NewID(), Name: "mine",
+		Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}}
+	theirs := &scopedThing{Meta: meta.Metadata{ID: meta.NewID(), Name: "theirs",
+		Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}}}
+	h := newScopedListHarness(t, "policies", "policy", mine, theirs)
+
+	w := scopeReq(t, h, "alice", http.MethodGet, "/policies", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list with no bindings = %d, want 200: %s", w.Code, w.Body)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if list.Total != 1 || len(list.Items) != 1 || list.Items[0].Metadata.Name != "mine" {
+		t.Fatalf("list = %+v, want only the caller's own row", list)
+	}
+}
+
+// newScopedListHarness mounts one scoped kind — a plural whose lists are
+// filtered row by row — behind the scope harness's actor middleware.
+func newScopedListHarness(t *testing.T, plural, singular string, seed ...*scopedThing) http.Handler {
+	t.Helper()
+	tmeta := func(v *scopedThing) *meta.Metadata { return &v.Meta }
+	store := &memStore[scopedThing]{metaOf: tmeta, items: map[string]*scopedThing{}}
+	for _, it := range seed {
+		store.items[it.Meta.ID] = it
+	}
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if a, ok := scopeActors[req.Header.Get("X-Test-Actor")]; ok {
+				req = req.WithContext(actor.WithActor(req.Context(), a))
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+	api := humachi.New(r, huma.DefaultConfig(plural+"-list-test", "0"))
+	registerKind[scopedThing](
+		api, plural, singular, store, testRBAC(), tmeta, nil,
+		meta.OwnerUser, listScanResolver[scopedThing](store, tmeta),
+		nil, nil, nil, nil, nil, noSettings{}, false, nil, nil,
+	)
+	return r
 }

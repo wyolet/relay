@@ -687,9 +687,11 @@ func checkTeamRefVisible(ctx context.Context, d Deps, teamID string) error {
 }
 
 // checkPolicyRefVisible rejects a policy the caller may not see, and a
-// project-owned policy referenced from a personal (user-owned) row: a
-// project's upstream credentials are reached through a ServiceAccount in
-// that project, so the traffic carries its attribution and limits (D51).
+// project-owned policy referenced from a personal (user-owned) row unless
+// the caller may create keys in that project. A project's upstream
+// credentials must stay inside the project's attribution and limits; a
+// member of the project is inside them, and their personal key then carries
+// the project (see buildPrincipal on the data plane).
 func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
 	if policyID == "" {
 		return nil
@@ -706,7 +708,10 @@ func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwne
 		return huma.Error400BadRequest(fmt.Sprintf("policy %q not found", policyID))
 	}
 	if refOwner.Kind == meta.OwnerUser && p.Meta.Owner.Kind == meta.OwnerProject {
-		return huma.Error400BadRequest("personal rows cannot reference project resources")
+		owner := p.Meta.Owner
+		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &owner}); err != nil {
+			return huma.Error400BadRequest("personal rows cannot reference project resources")
+		}
 	}
 	return nil
 }
@@ -1063,8 +1068,14 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 			return nil
 		}
 		incoming.StampOwner()
-		if err := checkRoleRefVisible(ctx, d, incoming.Spec.RoleID); err != nil {
+		r, err := checkRoleRefVisible(ctx, d, incoming.Spec.RoleID)
+		if err != nil {
 			return err
+		}
+		// Binding a role hands out every permission in it, so the binder
+		// must already hold each one at the scope being bound.
+		if err := authz.CheckGrant(ctx, d.Authz, r, incoming.Spec.Scope); err != nil {
+			return huma.Error403Forbidden(err.Error())
 		}
 		switch incoming.Spec.Scope.Kind {
 		case meta.OwnerTeam:
@@ -1081,16 +1092,18 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 }
 
 // guardPolicyBinding re-derives the binding's owner from spec.projectId,
-// rejects a project, policy, or subject the caller may not see, and applies
-// the default priority so the stored row orders against explicit values.
+// rejects a project, policy, or subject the caller may not see, and fills in
+// the default priority so the row reads back with the value it orders by.
 func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 	return func(ctx context.Context, action string, _, incoming *policybinding.PolicyBinding) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
 		incoming.StampOwner()
-		if incoming.Spec.Priority == 0 {
-			incoming.Spec.Priority = policybinding.DefaultPriority
+		// Absent means the default; an explicit 0 is a real priority.
+		if incoming.Spec.Priority == nil {
+			def := policybinding.DefaultPriority
+			incoming.Spec.Priority = &def
 		}
 		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
 			return err
@@ -1103,23 +1116,24 @@ func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 }
 
 // checkRoleRefVisible rejects a binding whose role does not exist (400) or
-// is not visible to the caller (404).
-func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) error {
+// is not visible to the caller (404), and returns the role so the caller can
+// check what binding it would grant.
+func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) (*role.Role, error) {
 	if d.Stores == nil || d.Stores.Role == nil {
-		return nil
+		return nil, nil
 	}
 	r, err := d.Stores.Role.Get(ctx, roleID)
 	if err != nil || r == nil {
-		return huma.Error400BadRequest(fmt.Sprintf("role %q does not exist", roleID))
+		return nil, huma.Error400BadRequest(fmt.Sprintf("role %q does not exist", roleID))
 	}
 	s, ok := d.Authz.(authz.Scoper)
 	if !ok {
-		return nil
+		return r, nil
 	}
 	if !s.Visible(ctx, "role", r.Meta.ID, r.Meta.Owner) {
-		return huma.Error404NotFound(fmt.Sprintf("role %q not found", roleID))
+		return nil, huma.Error404NotFound(fmt.Sprintf("role %q not found", roleID))
 	}
-	return nil
+	return r, nil
 }
 
 // checkPolicyRefExists rejects a binding whose policy does not exist, then

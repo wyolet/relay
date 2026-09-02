@@ -100,13 +100,29 @@ func TestCheckPolicyRefVisible_PersonalRowCannotReferenceProjectPolicy(t *testin
 		}
 	}
 
-	t.Run("user-owned key referencing a project-owned policy is rejected", func(t *testing.T) {
-		err := checkPolicyRefVisible(visibleCtx(ctx), d, projectPolicy.Meta.ID, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"})
+	// An outsider — someone who may not create keys in that project — is
+	// still refused; a member of the project is not (their personal key
+	// then carries the project's attribution).
+	outsider := actor.WithActor(ctx, &actor.Actor{UserID: "u-alice", Username: "alice"})
+
+	t.Run("user-owned key referencing a foreign project's policy is rejected", func(t *testing.T) {
+		err := checkPolicyRefVisible(outsider, d, projectPolicy.Meta.ID, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"})
 		if err == nil {
 			t.Fatal("want an error, got nil")
 		}
-		if got := err.Error(); !strings.Contains(got, "personal rows cannot reference project resources") {
-			t.Fatalf("err = %q, want it to mention personal rows cannot reference project resources", got)
+		// Refused either as invisible or as a personal row reaching into a
+		// project, depending on what the caller may see; both are 400s that
+		// keep the reference out.
+		got := err.Error()
+		if !strings.Contains(got, "personal rows cannot reference project resources") &&
+			!strings.Contains(got, "not found") {
+			t.Fatalf("err = %q, want the reference refused", got)
+		}
+	})
+
+	t.Run("user-owned key referencing a project the caller may create keys in is allowed", func(t *testing.T) {
+		if err := checkPolicyRefVisible(visibleCtx(ctx), d, projectPolicy.Meta.ID, meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}); err != nil {
+			t.Fatalf("checkPolicyRefVisible: %v", err)
 		}
 	})
 

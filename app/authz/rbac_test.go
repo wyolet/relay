@@ -250,7 +250,8 @@ func TestRBACTable(t *testing.T) {
 }
 
 // After the team is deleted every grant that hung off it is gone, and the
-// rows under it are no longer in the snapshot: cases 3, 5, 8 and 16 flip.
+// rows under it are no longer in the snapshot: cases 3, 5 and 16 flip. The
+// list call itself stays open — it is the rows it returns that are gone.
 func TestRBACAfterTeamDelete(t *testing.T) {
 	cat := newFixture(t)
 	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
@@ -271,7 +272,6 @@ func TestRBACAfterTeamDelete(t *testing.T) {
 	}{
 		{"3", alice, "keys.delete", authz.Resource{Kind: "key", Owner: projectOwner(p2ID)}},
 		{"5", bob, "keys.create", authz.Resource{Kind: "key", Owner: projectOwner(p1ID)}},
-		{"8", carol, "policies.list", authz.Resource{Kind: "policy"}},
 		{"16", frank, "service-accounts.delete", authz.Resource{Kind: "service-account", Owner: projectOwner(p2ID)}},
 	}
 	for _, tt := range flipped {
@@ -348,14 +348,21 @@ func TestBootstrapAdminNeedsNoBindings(t *testing.T) {
 }
 
 // Default deny: an authenticated caller with no bindings gets nothing but
-// the catalog reads and their own rows.
+// the catalog reads, their own rows, and empty lists.
 func TestDefaultDeny(t *testing.T) {
 	cat := newFixture(t)
 	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
 	stranger := actorOf(ids.New(), subjectsOf(ids.New()))
 
-	if err := rbac.Authorize(ctxOf(stranger), "keys.list", authz.Resource{Kind: "key"}); !errors.Is(err, authz.ErrForbidden) {
-		t.Fatalf("keys.list = %v, want forbidden", err)
+	if err := rbac.Authorize(ctxOf(stranger), "keys.get", authz.Resource{Kind: "key", Owner: projectOwner(p1ID)}); !errors.Is(err, authz.ErrForbidden) {
+		t.Fatalf("keys.get = %v, want forbidden", err)
+	}
+	// The list call is admitted (D67) but every row is filtered out.
+	if err := rbac.Authorize(ctxOf(stranger), "keys.list", authz.Resource{Kind: "key"}); err != nil {
+		t.Fatalf("keys.list = %v, want allowed with an empty result", err)
+	}
+	if rbac.Visible(ctxOf(stranger), "key", "", *projectOwner(p1ID)) {
+		t.Error("a binding-less caller sees a project row")
 	}
 	if err := rbac.Authorize(ctxOf(stranger), "models.list", authz.Resource{Kind: "model"}); err != nil {
 		t.Fatalf("models.list = %v, want allowed (catalog read)", err)

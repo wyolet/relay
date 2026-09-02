@@ -89,6 +89,18 @@ func (v *TokenVerifier) PublicKey() ed25519.PublicKey {
 	return k.current
 }
 
+// PreviousPublicKey returns the key a rotation retired, or nil.
+func (v *TokenVerifier) PreviousPublicKey() ed25519.PublicKey {
+	if v == nil {
+		return nil
+	}
+	k := v.keys.Load()
+	if k == nil {
+		return nil
+	}
+	return k.previous
+}
+
 // ErrTokensDisabled means no signing key is configured, so no token can be
 // trusted.
 var ErrTokensDisabled = errors.New("inference: tokens are not enabled")
@@ -156,7 +168,7 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 	// A version mismatch (or an unknown user) is the bulk-revocation path:
 	// the user signed out everywhere after this token was minted.
 	if ver, ok := snap.TokenVersion(userID); !ok || ver != claims.Ver {
-		writeAuthErr(w, "token revoked")
+		writeAuthErr(w, msgTokenRevoked)
 		return nil, false
 	}
 	proj, ok := snap.Project(claims.Prj)

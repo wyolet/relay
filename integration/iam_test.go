@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -650,8 +651,10 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 		  WHERE sa.id = $1`, orphan.saID).Scan(&saName, &projectName, &teamName); err != nil {
 		t.Fatalf("read generated account: %v", err)
 	}
-	if saName != "legacy-orphan" || projectName != "legacy" || teamName != "system" {
-		t.Errorf("generated tenancy = %s / %s / %s, want legacy-orphan / legacy / system", saName, projectName, teamName)
+	// The account name carries the key's name plus 8 chars of its id, so two
+	// long, similarly-named keys cannot collide onto one account.
+	if !strings.HasPrefix(saName, "legacy-orphan-") || projectName != "legacy" || teamName != "system" {
+		t.Errorf("generated tenancy = %s / %s / %s, want legacy-orphan-<id> / legacy / system", saName, projectName, teamName)
 	}
 
 	// The CHECK keeps exactly one principal per row.
@@ -692,6 +695,74 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 	// Leave the schema at head: stepping to 26 dropped everything above it.
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate back up to head: %v", err)
+	}
+}
+
+// TestIntegration_SlugOwnedKeyBackfill covers a pre-0026 key whose owner
+// carries the username rather than the user id: the backfill must rewrite
+// the owner to the uuid, or the row's principal and owner disagree and every
+// later write (PUT, rotate) and every catalog apply of it fails.
+func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
+	st := newStack(t)
+	ctx := context.Background()
+	userID := ids.New()
+	if err := st.users.Upsert(ctx, &user.User{ID: userID, Username: "sluggy"}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	m := migrator(t)
+	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate down to 25: %v", err)
+	}
+	p := testPool(t)
+	keyID := ids.New()
+	if _, err := p.Exec(ctx,
+		`INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec)
+		 VALUES ($1, 'slug-owned', '', $2, $3::jsonb, $4::jsonb)`,
+		keyID, sha256Hex("slug-owned"), `{"owner":{"kind":"user","id":"sluggy"}}`,
+		`{"keyHash":"`+sha256Hex("slug-owned")+`","prefix":"sk-wr-slug"}`); err != nil {
+		t.Fatalf("insert key: %v", err)
+	}
+	if err := m.Migrate(26); err != nil {
+		t.Fatalf("migrate up to 26: %v", err)
+	}
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate back up to head: %v", err)
+	}
+
+	var ownerID, principalID string
+	if err := p.QueryRow(ctx,
+		`SELECT metadata->'owner'->>'id', spec->'principal'->>'id' FROM relay_keys WHERE id = $1`,
+		keyID).Scan(&ownerID, &principalID); err != nil {
+		t.Fatalf("read backfilled key: %v", err)
+	}
+	if ownerID != userID || principalID != userID {
+		t.Fatalf("backfilled owner/principal = %q/%q, want the user id %q", ownerID, principalID, userID)
+	}
+
+	// The row now validates, so the write paths work on it.
+	code, raw := st.adminDo(http.MethodGet, "/api/keys/"+keyID, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET key = %d: %s", code, raw)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatalf("decode key: %v", err)
+	}
+	delete(row, "$schema")
+	body, _ := json.Marshal(row)
+	if code, raw = st.adminDo(http.MethodPut, "/api/keys/by-id/"+keyID, string(body)); code != http.StatusOK {
+		t.Fatalf("PUT key = %d: %s", code, raw)
+	}
+	if code, raw = st.adminDo(http.MethodPost, "/api/keys/by-id/"+keyID+"/rotate", `{"graceSeconds":60}`); code != http.StatusOK {
+		t.Fatalf("rotate key = %d: %s", code, raw)
+	}
+
+	// The catalog applies the rotated row (a NOTIFY reload runs the same
+	// Validate the write path just passed).
+	time.Sleep(1500 * time.Millisecond)
+	if _, ok := st.cat.Current().Key(keyID); !ok {
+		t.Errorf("backfilled key %s is absent from the snapshot", keyID)
 	}
 }
 

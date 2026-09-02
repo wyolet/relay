@@ -5,10 +5,12 @@
 -- principal columns are real FKs so deleting either end cascades without
 -- parsing JSONB, and the CHECK keeps exactly one of them set.
 --
--- Existing relay_keys are backfilled: user-owned rows whose owner id is a
--- real user become user principals; everything else is re-parented onto a
--- generated ServiceAccount inside a system Project `legacy`, so no key
--- stops working. Operators re-parent those from the UI afterwards.
+-- Existing relay_keys are backfilled: a row whose owner names a real user —
+-- by id or by the username older rows carried — becomes that user's
+-- principal and has its owner id rewritten to the user's uuid, because
+-- every later write validates the owner as an id. Everything else is
+-- re-parented onto a generated ServiceAccount inside a system Project
+-- `legacy`, so no key stops working. Operators re-parent those from the UI.
 
 CREATE TABLE IF NOT EXISTS service_accounts (
     id           TEXT PRIMARY KEY,
@@ -46,11 +48,15 @@ ALTER TABLE relay_keys
     ADD COLUMN IF NOT EXISTS previous_key_hash TEXT;
 
 -- Backfill 1: a key already owned by a real user keeps that user as its
--- principal.
+-- principal. The owner id is rewritten to the user's uuid: rows written
+-- before users had ids carry the username there, which no longer validates
+-- (and so would break PUT and rotate on that key).
 UPDATE relay_keys k
    SET principal_user_id = u.id,
        spec = jsonb_set(k.spec, '{principal}',
-                        jsonb_build_object('kind', 'user', 'id', u.id), true)
+                        jsonb_build_object('kind', 'user', 'id', u.id), true),
+       metadata = jsonb_set(k.metadata, '{owner}',
+                            jsonb_build_object('kind', 'user', 'id', u.id), true)
   FROM users u
  WHERE k.principal_sa_id IS NULL
    AND k.principal_user_id IS NULL
@@ -80,8 +86,13 @@ SELECT gen_random_uuid()::text, 'legacy', 'Legacy', t.id,
                 WHERE principal_sa_id IS NULL AND principal_user_id IS NULL)
 ON CONFLICT (name) DO NOTHING;
 
+-- The account name carries 8 chars of the key id: two keys whose names
+-- differ only past the truncation point would otherwise collide on the
+-- UNIQUE name and share one account. 54 + 1 + 8 keeps it inside the 63-char
+-- slug limit.
 INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec)
-SELECT gen_random_uuid()::text, left('legacy-' || k.name, 63), k.display_name, p.id,
+SELECT gen_random_uuid()::text,
+       left('legacy-' || k.name, 54) || '-' || left(k.id, 8), k.display_name, p.id,
        jsonb_build_object('owner', jsonb_build_object('kind', 'project', 'id', p.id)),
        jsonb_build_object('projectId', p.id)
   FROM relay_keys k
@@ -99,7 +110,7 @@ UPDATE relay_keys k
   FROM service_accounts sa
  WHERE k.principal_sa_id IS NULL
    AND k.principal_user_id IS NULL
-   AND sa.name = left('legacy-' || k.name, 63);
+   AND sa.name = left('legacy-' || k.name, 54) || '-' || left(k.id, 8);
 
 DO $$
 BEGIN

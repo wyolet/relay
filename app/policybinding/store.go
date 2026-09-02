@@ -159,7 +159,8 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	}
 	sp.ProjectID = r.ProjectID
 	sp.PolicyID = r.PolicyID
-	sp.Priority = int(r.Priority)
+	prio := int(r.Priority)
+	sp.Priority = &prio
 	sp.Subjects = nil
 	b := &PolicyBinding{Meta: md, Spec: sp}
 	b.StampOwner()
@@ -176,7 +177,7 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	stored := b.Spec
 	stored.ProjectID = ""
 	stored.PolicyID = ""
-	stored.Priority = 0
+	stored.Priority = nil
 	stored.Subjects = nil
 	specJSON, err := json.Marshal(stored)
 	if err != nil {

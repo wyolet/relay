@@ -179,22 +179,41 @@ func applyTokenSigningKey(ctx context.Context, secrets *pkgsecret.Registry, cfg 
 	if err != nil {
 		return fmt.Errorf("resolve signing key: %w", err)
 	}
+	if len(seed) != ed25519.SeedSize {
+		slog.Warn("auth: inference tokens disabled — the stored signing key is not an Ed25519 seed",
+			"secret", cfg.SigningKey.ID, "bytes", len(seed))
+	}
 	signer.SetSeed(seed)
-	verifier.SetKeys(signer.PublicKey(), previousPublicKey(ctx, secrets, cfg.PreviousSigningKey))
+	previous, err := previousPublicKey(ctx, secrets, cfg.PreviousSigningKey)
+	if err != nil {
+		// A resolve that failed transiently must not read as "there is no
+		// previous key": keep the key already on the verifier and resolve
+		// the ref again on the next delivery.
+		slog.Warn("auth: previous token signing key unresolved; keeping the current key set",
+			"secret", cfg.PreviousSigningKey.ID, "err", err)
+		previous = verifier.PreviousPublicKey()
+	}
+	signer.SetPreviousPublicKey(previous)
+	verifier.SetKeys(signer.PublicKey(), previous)
 	return nil
 }
 
-// previousPublicKey resolves the retired signing key's public half, or nil.
-func previousPublicKey(ctx context.Context, secrets *pkgsecret.Registry, ref pkgsecret.Ref) ed25519.PublicKey {
+// previousPublicKey resolves the retired signing key's public half. The
+// resolve error is returned so the caller can tell a transient failure from
+// a key that is genuinely absent or malformed (both nil, nil).
+func previousPublicKey(ctx context.Context, secrets *pkgsecret.Registry, ref pkgsecret.Ref) (ed25519.PublicKey, error) {
 	if ref.ID == "" {
-		return nil
+		return nil, nil
 	}
 	seed, err := secrets.Resolve(ctx, ref)
-	if err != nil || len(seed) != ed25519.SeedSize {
+	if err != nil {
+		return nil, err
+	}
+	if len(seed) != ed25519.SeedSize {
 		slog.Warn("auth: previous token signing key unusable; tokens minted under it will not verify",
-			"secret", ref.ID, "err", err)
-		return nil
+			"secret", ref.ID, "bytes", len(seed))
+		return nil, nil
 	}
 	pub, _ := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
-	return pub
+	return pub, nil
 }

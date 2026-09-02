@@ -14,6 +14,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -30,6 +31,13 @@ type ctxPrincipalT struct{}
 // ctxSnapshotT is the context-value key for the snapshot the credential was
 // resolved against.
 type ctxSnapshotT struct{}
+
+// WithSnapshot pins snap as the catalog view for everything downstream of
+// ctx. The credential middleware and the WebSocket per-frame path are the
+// only writers.
+func WithSnapshot(ctx context.Context, snap *appcatalog.Snapshot) context.Context {
+	return context.WithValue(ctx, ctxSnapshotT{}, snap)
+}
 
 // SnapshotFrom returns the catalog view this request was authenticated
 // against, or nil when no credential middleware ran (anonymous proxy).
@@ -80,12 +88,20 @@ func (p *Principal) Recheck(snap *appcatalog.Snapshot, now time.Time) error {
 	if p == nil || snap == nil {
 		return nil
 	}
+	// A credential scoped to a project stops working when the project (or
+	// the team above it) leaves the snapshot: its limits and attribution
+	// no longer exist.
+	if p.ProjectID != "" {
+		if _, ok := snap.Project(p.ProjectID); !ok {
+			return errors.New("project unavailable")
+		}
+	}
 	if p.CredentialKind == CredentialToken {
 		if p.TokenExp > 0 && p.TokenExp <= now.Unix() {
 			return errors.New("token expired")
 		}
 		if ver, ok := snap.TokenVersion(p.UserID); !ok || ver != p.TokenVer {
-			return errors.New("token revoked")
+			return errors.New(msgTokenRevoked)
 		}
 		return nil
 	}
@@ -195,7 +211,7 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 				writeForbidden(w, "passthrough_forbidden", "this credential may not forward upstream keys")
 				return
 			}
-			ctx := context.WithValue(r.Context(), ctxSnapshotT{}, snap)
+			ctx := WithSnapshot(r.Context(), snap)
 			if k != nil {
 				ctx = context.WithValue(ctx, ctxKeyT{}, k)
 			}
@@ -262,6 +278,15 @@ func buildPrincipal(snap *appcatalog.Snapshot, k *key.Key, hash string) *Princip
 		}
 	case key.PrincipalUser:
 		p.UserID = k.Spec.Principal.ID
+		// A personal key on a project-owned policy spends that project's
+		// upstream credentials (its owner was allowed to point it there), so
+		// the request carries the project's attribution and limits.
+		if p.Policy != nil && p.Policy.Meta.Owner.Kind == meta.OwnerProject {
+			p.ProjectID = p.Policy.Meta.Owner.ID
+			if proj, ok := snap.Project(p.ProjectID); ok {
+				p.TeamID = proj.Spec.TeamID
+			}
+		}
 	}
 	return p
 }
@@ -352,9 +377,19 @@ func writeForbidden(w http.ResponseWriter, code, msg string) {
 // writeAuthErr rejects an unauthenticated caller. msg doubles as the metric
 // reason: every call site passes one of a fixed set of literals.
 func writeAuthErr(w http.ResponseWriter, msg string) {
+	// Revocation answers one code whichever path caught it — the version
+	// bump here, the jti denylist inside the reservation.
+	code := "unauthenticated"
+	if msg == msgTokenRevoked {
+		code = "token_revoked"
+	}
 	authRejectedTotal.WithLabelValues(msg).Inc()
-	slog.Debug("inference: auth rejected", "status", 401, "code", "unauthenticated", "msg", msg)
+	slog.Debug("inference: auth rejected", "status", 401, "code", code, "msg", msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"unauthenticated","message":"` + msg + `"}}`))
+	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"` + code + `","message":"` + msg + `"}}`))
 }
+
+// msgTokenRevoked is the message the token-version check answers with; the
+// WebSocket recheck reuses it, so both report the same code.
+const msgTokenRevoked = "token revoked"
