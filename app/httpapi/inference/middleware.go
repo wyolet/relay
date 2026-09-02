@@ -4,16 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // ctxKeyT is the context-value key used to stash the authenticated
@@ -22,6 +26,21 @@ type ctxKeyT struct{}
 
 // ctxPrincipalT is the context-value key for the resolved Principal.
 type ctxPrincipalT struct{}
+
+// ctxSnapshotT is the context-value key for the snapshot the credential was
+// resolved against.
+type ctxSnapshotT struct{}
+
+// SnapshotFrom returns the catalog view this request was authenticated
+// against, or nil when no credential middleware ran (anonymous proxy).
+// Downstream phases read it rather than cat.Current() so a reload landing
+// mid-request cannot split one request across two snapshots.
+func SnapshotFrom(ctx context.Context) *appcatalog.Snapshot {
+	if v, ok := ctx.Value(ctxSnapshotT{}).(*appcatalog.Snapshot); ok {
+		return v
+	}
+	return nil
+}
 
 // Credential kinds a Principal can be authenticated by.
 const (
@@ -44,6 +63,46 @@ type Principal struct {
 	Policy                       *policy.Policy // nil → policy-less
 	PassthroughAllowed           bool
 	PayloadLogging               bool
+
+	// TokenExp/TokenVer are the claims a token credential was admitted
+	// under, kept so a long-lived connection can re-check them without the
+	// bearer. Zero for a key.
+	TokenExp int64
+	TokenVer int
+}
+
+// Recheck re-validates an already-admitted principal against the current
+// snapshot. The HTTP path resolves once per request and never needs it; a
+// WebSocket admits on the upgrade and then serves frames for hours, so
+// every frame re-runs the revocation checks the upgrade made. Snapshot
+// reads only — no signature work, no Postgres.
+func (p *Principal) Recheck(snap *appcatalog.Snapshot, now time.Time) error {
+	if p == nil || snap == nil {
+		return nil
+	}
+	if p.CredentialKind == CredentialToken {
+		if p.TokenExp > 0 && p.TokenExp <= now.Unix() {
+			return errors.New("token expired")
+		}
+		if ver, ok := snap.TokenVersion(p.UserID); !ok || ver != p.TokenVer {
+			return errors.New("token revoked")
+		}
+		return nil
+	}
+	k, matchedPrevious := snap.KeyByHash(p.KeyHash)
+	switch {
+	case k == nil:
+		return errors.New("invalid api key")
+	case !k.IsEnabled():
+		return errors.New("api key disabled")
+	case k.Spec.RevokedAt != nil:
+		return errors.New("api key revoked")
+	case k.Spec.ExpiresAt != nil && !now.Before(*k.Spec.ExpiresAt):
+		return errors.New("api key expired")
+	case matchedPrevious && !k.InGrace(now):
+		return errors.New("api key rotated")
+	}
+	return nil
 }
 
 // PolicyID returns the resolved policy's id, or "" for the policy-less
@@ -136,7 +195,7 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 				writeForbidden(w, "passthrough_forbidden", "this credential may not forward upstream keys")
 				return
 			}
-			ctx := r.Context()
+			ctx := context.WithValue(r.Context(), ctxSnapshotT{}, snap)
 			if k != nil {
 				ctx = context.WithValue(ctx, ctxKeyT{}, k)
 			}
@@ -246,8 +305,7 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 // carries. Both lists hold a handful of entries, so the nested scan beats
 // building a set per request.
 func bindingMatches(b *policybinding.PolicyBinding, subjects []string) bool {
-	for i := range b.Spec.Subjects {
-		want := b.Spec.Subjects[i].Key()
+	for _, want := range b.SubjectKeys {
 		for _, have := range subjects {
 			if have == want {
 				return true
@@ -270,16 +328,32 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// authRejectedTotal answers "are callers being turned away at the edge, and
+// why" without one log line per rejection: an unauthenticated flood would
+// otherwise amplify into the log pipeline.
+var authRejectedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: metrics.Namespace,
+	Subsystem: "inference",
+	Name:      "auth_rejected_total",
+	Help:      "Inference requests refused by the credential middleware, by reason.",
+}, []string{"reason"})
+
+func init() { metrics.Register(authRejectedTotal) }
+
 // writeForbidden reports a caller that authenticated but may not proceed.
 func writeForbidden(w http.ResponseWriter, code, msg string) {
-	slog.Warn("inference: auth rejected", "status", 403, "code", code, "msg", msg)
+	authRejectedTotal.WithLabelValues(code).Inc()
+	slog.Debug("inference: auth rejected", "status", 403, "code", code, "msg", msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"` + code + `","message":"` + msg + `"}}`))
 }
 
+// writeAuthErr rejects an unauthenticated caller. msg doubles as the metric
+// reason: every call site passes one of a fixed set of literals.
 func writeAuthErr(w http.ResponseWriter, msg string) {
-	slog.Warn("inference: auth rejected", "status", 401, "code", "unauthenticated", "msg", msg)
+	authRejectedTotal.WithLabelValues(msg).Inc()
+	slog.Debug("inference: auth rejected", "status", 401, "code", "unauthenticated", "msg", msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
 	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"unauthenticated","message":"` + msg + `"}}`))

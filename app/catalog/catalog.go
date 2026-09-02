@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
@@ -58,6 +59,11 @@ type Catalog struct {
 	// tokenVersions is optional (nil = every token version reads as
 	// absent, which rejects tokens): set via UseTokenVersions.
 	tokenVersions TokenVersionLister
+
+	// now is the clock every snapshot inherits. Nil is the wall clock;
+	// UseClock installs a test one so a key's grace-window transition is
+	// reachable without sleeping.
+	now func() time.Time
 
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
@@ -155,6 +161,10 @@ func New(
 	c.snap.Store(&Snapshot{})
 	return c
 }
+
+// UseClock replaces the wall clock every snapshot reads. Called once at
+// composition time, before the first Reload.
+func (c *Catalog) UseClock(now func() time.Time) { c.now = now }
 
 // UseOverlays attaches the overlay source. Called once at composition
 // time before the first Reload; nil (the default) keeps overlays dormant.
@@ -357,7 +367,7 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
+	snap := build(c.now, enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
 		enabledRoles, enabledRoleBindings, enabledPolicyBindings)
 	if tokenVersions != nil {
 		snap.tokenVersionByUser = tokenVersions

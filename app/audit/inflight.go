@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/wyolet/relay/app/authz"
 )
 
 // mutatingVerbs are the action verbs that earn a row whatever the outcome.
@@ -157,9 +159,11 @@ func refusedRoute(method, path string, code int) (decision, bool) {
 			return decision{}, false
 		}
 	}
+	// The action keeps the plural a Role rule names; the resource kind is
+	// the singular every handler stamps, so UI filters see one vocabulary.
 	return decision{
 		Action:   plural + "." + verb,
-		Resource: Resource{Kind: plural, ID: id},
+		Resource: Resource{Kind: authz.Singular(plural), ID: id},
 		Status:   StatusDenied,
 	}, true
 }

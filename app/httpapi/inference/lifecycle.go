@@ -36,8 +36,14 @@ func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientI
 		// presents no key. Re-hashing the bearer here would stamp a hash on
 		// token traffic that matches no key row.
 		lc.RelayKeyHash = p.KeyHash
-		if cat != nil {
-			applyPrincipalIdentity(lc, cat.Current(), p)
+		// The snapshot the credential resolved against, so the slugs named
+		// here describe the same rows the principal was built from.
+		snap := SnapshotFrom(ctx)
+		if snap == nil && cat != nil {
+			snap = cat.Current()
+		}
+		if snap != nil {
+			applyPrincipalIdentity(lc, snap, p)
 		}
 	}
 	return lc

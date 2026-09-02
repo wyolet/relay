@@ -65,7 +65,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	//   2. Header omitted → peek `model` from the body, resolve via
 	//      Policy + HostBinding (proxy-authed only — anonymous traffic
 	//      has no policy and must still pin a host).
-	snap := d.Catalog.Current()
+	snap := SnapshotFrom(ctx)
+	if snap == nil {
+		// Anonymous proxy: no credential middleware ran, so nothing pinned
+		// a snapshot for this request.
+		snap = d.Catalog.Current()
+	}
 	lc := lifecycle.FromContext(ctx)
 	var (
 		host         *apphost.Host
@@ -357,12 +362,13 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 	if p == nil {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
+	snap := SnapshotFrom(r.Context())
 	prefix, err := io.ReadAll(io.LimitReader(r.Body, proxyMaxBodyPeek+1))
 	if err != nil {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
 	}
 	if len(prefix) <= proxyMaxBodyPeek {
-		plan, err := resolveProxyModelJSON(prefix, resolver, p)
+		plan, err := resolveProxyModelJSON(prefix, resolver, p, snap)
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
@@ -370,7 +376,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 	}
 
 	if model, ok := scanTopLevelModel(prefix); ok {
-		plan, err := resolveProxyPlan(model, resolver, p)
+		plan, err := resolveProxyPlan(model, resolver, p, snap)
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
@@ -395,14 +401,14 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Pr
 	if len(full) > proxyMaxBodyBuffer {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_too_large", Detail: "request body exceeds proxy buffer limit"}
 	}
-	plan, err := resolveProxyModelJSON(full, resolver, p)
+	plan, err := resolveProxyModelJSON(full, resolver, p, snap)
 	if err != nil {
 		return nil, proxyBody{}, err
 	}
 	return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(full)), Prefix: full}, nil
 }
 
-func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal) (*routing.Plan, error) {
+func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
 	var peek struct {
 		Model string `json:"model"`
 	}
@@ -412,15 +418,16 @@ func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal
 	if peek.Model == "" {
 		return nil, &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
 	}
-	return resolveProxyPlan(peek.Model, resolver, p)
+	return resolveProxyPlan(peek.Model, resolver, p, snap)
 }
 
-func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal) (*routing.Plan, error) {
+func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
 	plan, err := resolver.Resolve(routing.Request{
 		ModelName:             model,
 		Policy:                p.Policy,
 		PayloadLoggingEnabled: p.PayloadLogging,
 		SkipKeyCheck:          true,
+		Snapshot:              snap,
 	})
 	if err != nil {
 		return nil, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Model: model, Inner: err}

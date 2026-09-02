@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -50,6 +51,12 @@ type applyFailure struct {
 func (e *applyFailure) Error() string  { return e.Message }
 func (e *applyFailure) GetStatus() int { return e.status }
 
+// applyMu serializes applies within this process. Plan reads every row and
+// Execute writes them back, so two overlapping runs interleave reads and
+// writes over the same rows; per-write re-reads (see apply.Execute) catch
+// what crosses pods, this catches the common single-pod case up front.
+var applyMu sync.Mutex
+
 func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 	huma.Register(api, huma.Operation{
 		OperationID: "apply",
@@ -69,6 +76,8 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
+		applyMu.Lock()
+		defer applyMu.Unlock()
 		plan, err := apply.Plan(ctx, docs, apply.Options{
 			Stores:   applyStores(d),
 			Force:    in.Force,
@@ -124,6 +133,10 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		_ = applied
+		// Execute may have downgraded entries to conflict; report the plan
+		// as it actually ran.
+		out.Body.Plan = plan.Entries
+		out.Body.Counts = plan.Counts
 		out.Body.Applied = true
 		return out, nil
 	})

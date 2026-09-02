@@ -2492,6 +2492,31 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 	return items, nil
 }
 
+const listUserIDsIn = `-- name: ListUserIDsIn :many
+SELECT id FROM users WHERE id = ANY($1::text[])
+`
+
+// Membership check for a whole id list in one round trip.
+func (q *Queries) ListUserIDsIn(ctx context.Context, dollar_1 []string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listUserIDsIn, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserTokenVersions = `-- name: ListUserTokenVersions :many
 SELECT id, token_version FROM users WHERE NOT disabled
 `
@@ -2603,6 +2628,42 @@ func (q *Queries) RelayKeyHashTaken(ctx context.Context, arg RelayKeyHashTakenPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const rotateRelayKey = `-- name: RotateRelayKey :execrows
+UPDATE relay_keys
+   SET key_hash          = $2,
+       previous_key_hash = $3,
+       metadata          = $4,
+       spec              = $5,
+       updated_at        = NOW()
+ WHERE id = $1 AND key_hash = $6
+`
+
+type RotateRelayKeyParams struct {
+	ID              string      `db:"id" json:"id"`
+	KeyHash         string      `db:"key_hash" json:"key_hash"`
+	PreviousKeyHash pgtype.Text `db:"previous_key_hash" json:"previous_key_hash"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	KeyHash_2       string      `db:"key_hash_2" json:"key_hash_2"`
+}
+
+// Conditional on the hash the caller read, so two concurrent rotations of
+// the same key cannot both win and lose one of the new plaintexts.
+func (q *Queries) RotateRelayKey(ctx context.Context, arg RotateRelayKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rotateRelayKey,
+		arg.ID,
+		arg.KeyHash,
+		arg.PreviousKeyHash,
+		arg.Metadata,
+		arg.Spec,
+		arg.KeyHash_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setBatchCompleted = `-- name: SetBatchCompleted :exec

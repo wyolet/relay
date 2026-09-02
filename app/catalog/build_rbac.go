@@ -44,16 +44,16 @@ func (s *Snapshot) addRoleBindings(bindings []*rolebinding.RoleBinding, roles, t
 // scope names a team/project that is not in the snapshot — with no scope
 // target there is nothing for the grant to apply to.
 func sanitizeRoleBinding(b *rolebinding.RoleBinding, roles, teams, projects idSet) (*rolebinding.RoleBinding, bool) {
-	if _, ok := roles[b.Spec.RoleID]; !ok {
+	if !roles(b.Spec.RoleID) {
 		return nil, false
 	}
 	switch b.Spec.Scope.Kind {
 	case meta.OwnerTeam:
-		if _, ok := teams[b.Spec.Scope.ID]; !ok {
+		if !teams(b.Spec.Scope.ID) {
 			return nil, false
 		}
 	case meta.OwnerProject:
-		if _, ok := projects[b.Spec.Scope.ID]; !ok {
+		if !projects(b.Spec.Scope.ID) {
 			return nil, false
 		}
 	}
@@ -84,13 +84,14 @@ func (s *Snapshot) addPolicyBindings(bindings []*policybinding.PolicyBinding, pr
 // missing: both edges are hard, a dangling one would resolve a principal to
 // nothing.
 func sanitizePolicyBinding(b *policybinding.PolicyBinding, projects, policies idSet) (*policybinding.PolicyBinding, bool) {
-	if _, ok := projects[b.Spec.ProjectID]; !ok {
+	if !projects(b.Spec.ProjectID) {
 		return nil, false
 	}
-	if _, ok := policies[b.Spec.PolicyID]; !ok {
+	if !policies(b.Spec.PolicyID) {
 		return nil, false
 	}
 	clean := *b
+	clean.IndexSubjects()
 	return &clean, true
 }
 

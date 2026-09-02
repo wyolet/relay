@@ -73,7 +73,7 @@ func TestLoadTokenSigningKey_UnresolvableRefDisablesTokensInsteadOfFailingBoot(t
 	signer := &control.TokenSigner{}
 	verifier := &inference.TokenVerifier{}
 
-	if err := loadTokenSigningKey(context.Background(), stores, nil, signer, verifier); err != nil {
+	if err := loadTokenSigningKey(context.Background(), nil, stores, nil, signer, verifier); err != nil {
 		t.Fatalf("loadTokenSigningKey returned %v, want nil — an unusable key must not fail boot", err)
 	}
 	if pub := signer.PublicKey(); pub != nil {

@@ -395,16 +395,17 @@ type reserveResult struct {
 
 // buildReserveArgs builds (keys, ruleArgs) for the Reserve script.
 func buildReserveArgs(scope string, rules []Rule, now time.Time) (keys []string, ruleArgs []ruleArg, err error) {
-	seen := make(map[string]int) // key -> 1-based index
-
+	// A request carries a handful of rules and at most two keys each, so a
+	// linear scan for the dedup beats allocating a map per request.
+	keys = make([]string, 0, 2*len(rules))
 	addKey := func(k string) int {
-		if idx, ok := seen[k]; ok {
-			return idx
+		for i, have := range keys {
+			if have == k {
+				return i + 1 // 1-based
+			}
 		}
 		keys = append(keys, k)
-		idx := len(keys) // 1-based
-		seen[k] = idx
-		return idx
+		return len(keys)
 	}
 
 	ruleArgs = make([]ruleArg, 0, len(rules))

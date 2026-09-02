@@ -72,6 +72,30 @@ func (s *Store) List(ctx context.Context) ([]*User, error) {
 	return out, nil
 }
 
+// MissingIDs returns the subset of ids with no users row, in one query.
+// Callers validating a membership list would otherwise issue a Get per
+// member.
+func (s *Store) MissingIDs(ctx context.Context, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	found, err := s.q.ListUserIDsIn(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("user.MissingIDs: %w", err)
+	}
+	have := make(map[string]struct{}, len(found))
+	for _, id := range found {
+		have[id] = struct{}{}
+	}
+	var missing []string
+	for _, id := range ids {
+		if _, ok := have[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
+}
+
 // Upsert writes u. Caller is responsible for stamping ID.
 func (s *Store) Upsert(ctx context.Context, u *User) error {
 	roles := u.Roles

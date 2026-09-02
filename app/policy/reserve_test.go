@@ -70,7 +70,7 @@ func (s reserveSnap) RateLimit(id string) (*appratelimit.RateLimit, bool) {
 	return s.rl, true
 }
 
-func reserveFixture(t *testing.T, rules ...appratelimit.Rule) (*Service, *countingKV, *Policy) {
+func reserveFixture(t testing.TB, rules ...appratelimit.Rule) (*Service, *countingKV, *Policy) {
 	t.Helper()
 	pol := fix("prod-policy")
 	pol.Meta.ID = "pol-1"

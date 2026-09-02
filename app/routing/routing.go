@@ -88,6 +88,11 @@ type Request struct {
 	// the (model, binding, host) tuple matters. Plan.Keys is nil in
 	// this mode.
 	SkipKeyCheck bool
+
+	// Snapshot pins the catalog view this resolution reads. Nil takes the
+	// live one; handlers pass the snapshot the auth middleware already
+	// resolved against, so one request never straddles two of them.
+	Snapshot *appcatalog.Snapshot
 }
 
 // Plan is the fully-resolved input the pipeline consumes. The handler
@@ -152,7 +157,10 @@ func New(cat *appcatalog.Catalog) *Resolver { return &Resolver{cat: cat} }
 // Resolve maps the inbound request to a Plan. Errors are typed; handlers
 // pick the appropriate HTTP status.
 func (r *Resolver) Resolve(req Request) (*Plan, error) {
-	snap := r.cat.Current()
+	snap := req.Snapshot
+	if snap == nil {
+		snap = r.cat.Current()
+	}
 
 	// 1. Snapshot lookup — customer-facing addressing is purely by
 	//    snapshot name (with declared aliases as last-priority matchers).

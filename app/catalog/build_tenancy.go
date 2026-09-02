@@ -43,7 +43,7 @@ func (s *Snapshot) addProjects(projects []*project.Project, teams idSet) {
 
 // sanitizeProject drops the project when its Team is missing.
 func sanitizeProject(p *project.Project, teams idSet) (*project.Project, bool) {
-	if _, ok := teams[p.Spec.TeamID]; !ok {
+	if !teams(p.Spec.TeamID) {
 		return nil, false
 	}
 	clean := *p
@@ -75,11 +75,11 @@ func (s *Snapshot) addServiceAccounts(sas []*serviceaccount.ServiceAccount, proj
 // when a set policy override does not resolve — a dangling override would
 // silently fall through to a broader grant.
 func sanitizeServiceAccount(sa *serviceaccount.ServiceAccount, projects, policies idSet) (*serviceaccount.ServiceAccount, bool) {
-	if _, ok := projects[sa.Spec.ProjectID]; !ok {
+	if !projects(sa.Spec.ProjectID) {
 		return nil, false
 	}
 	if sa.Spec.PolicyID != "" {
-		if _, ok := policies[sa.Spec.PolicyID]; !ok {
+		if !policies(sa.Spec.PolicyID) {
 			return nil, false
 		}
 	}

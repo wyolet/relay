@@ -3,6 +3,7 @@ package inference
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -38,6 +39,16 @@ func wsHandler(d Deps) http.HandlerFunc {
 		}
 
 		perFrame := func(fw http.ResponseWriter, fr *http.Request) {
+			// The credential was checked once, at the upgrade; a connection
+			// then lives for hours. Re-run the revocation checks per frame
+			// against the live snapshot so a revoked key or token stops
+			// working without waiting for the client to reconnect.
+			if p := PrincipalFrom(fr.Context()); p != nil && d.Catalog != nil {
+				if err := p.Recheck(d.Catalog.Current(), time.Now()); err != nil {
+					writeAuthErr(fw, err.Error())
+					return
+				}
+			}
 			handleShape(spec, d, fw, fr)
 		}
 

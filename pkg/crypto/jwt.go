@@ -6,7 +6,9 @@ package crypto
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,8 +50,21 @@ var (
 
 var jwtHeader = base64url([]byte(`{"alg":"EdDSA","typ":"JWT"}`))
 
-// SignToken returns the compact JWT for claims, signed with priv.
-func SignToken(priv ed25519.PrivateKey, claims TokenClaims) (string, error) {
+// KeyID names a public key in a token's `kid` header. Truncated sha256 of
+// the key bytes: stable across processes, and it reveals nothing the token
+// signature doesn't already.
+func KeyID(pub ed25519.PublicKey) string {
+	if len(pub) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(pub)
+	return hex.EncodeToString(sum[:8])
+}
+
+// SignToken returns the compact JWT for claims, signed with priv. kid names
+// the verification key so a rotation can keep the previous one live; an
+// empty kid writes the bare header.
+func SignToken(priv ed25519.PrivateKey, kid string, claims TokenClaims) (string, error) {
 	if len(priv) != ed25519.PrivateKeySize {
 		return "", fmt.Errorf("crypto: signing key is %d bytes, want %d", len(priv), ed25519.PrivateKeySize)
 	}
@@ -57,8 +72,41 @@ func SignToken(priv ed25519.PrivateKey, claims TokenClaims) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("crypto: encode claims: %w", err)
 	}
-	signing := jwtHeader + "." + base64url(payload)
+	header := jwtHeader
+	if kid != "" {
+		if strings.ContainsAny(kid, `"\`) {
+			return "", fmt.Errorf("crypto: kid must not contain quotes or backslashes")
+		}
+		header = base64url([]byte(`{"alg":"EdDSA","typ":"JWT","kid":"` + kid + `"}`))
+	}
+	signing := header + "." + base64url(payload)
 	return signing + "." + base64url(ed25519.Sign(priv, []byte(signing))), nil
+}
+
+// tokenHeader is the JOSE header relay writes and reads. Only these three
+// members are ever present.
+type tokenHeader struct {
+	Alg string `json:"alg"`
+	Typ string `json:"typ"`
+	Kid string `json:"kid,omitempty"`
+}
+
+// TokenKeyID reports the `kid` a token names, or "" when it carries none.
+// Reads the header only — nothing here is a trust decision.
+func TokenKeyID(token string) string {
+	header, _, ok := strings.Cut(token, ".")
+	if !ok || header == jwtHeader {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(header)
+	if err != nil {
+		return ""
+	}
+	var h tokenHeader
+	if json.Unmarshal(raw, &h) != nil {
+		return ""
+	}
+	return h.Kid
 }
 
 // ParseToken verifies the signature with pub and returns the claims. It
@@ -73,7 +121,7 @@ func ParseToken(pub ed25519.PublicKey, token string) (TokenClaims, error) {
 		return TokenClaims{}, ErrTokenMalformed
 	}
 	payload, sig, ok := strings.Cut(rest, ".")
-	if !ok || header != jwtHeader {
+	if !ok || !validHeader(header) {
 		return TokenClaims{}, ErrTokenMalformed
 	}
 	rawSig, err := base64.RawURLEncoding.DecodeString(sig)
@@ -93,5 +141,25 @@ func ParseToken(pub ed25519.PublicKey, token string) (TokenClaims, error) {
 	}
 	return claims, nil
 }
+
+// validHeader accepts the bare header verbatim and otherwise insists on
+// EdDSA/JWT: `alg` is a trust decision, so it is never taken on faith.
+func validHeader(header string) bool {
+	if header == jwtHeader {
+		return true
+	}
+	// A byte scan rather than a JSON decode: this runs per verification and
+	// the header is a fixed shape relay itself writes.
+	raw, err := base64.RawURLEncoding.DecodeString(header)
+	if err != nil || len(raw) > maxHeaderBytes {
+		return false
+	}
+	s := string(raw)
+	return strings.Contains(s, `"alg":"EdDSA"`) && strings.Contains(s, `"typ":"JWT"`)
+}
+
+// maxHeaderBytes bounds the JOSE header a token may carry. Relay's own is
+// well under 100 bytes; anything larger is not one of ours.
+const maxHeaderBytes = 256
 
 func base64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

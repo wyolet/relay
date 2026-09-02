@@ -9,7 +9,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"net/http"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -31,30 +31,34 @@ import (
 // key in when the auth:tokens section changes; an empty signer refuses to
 // mint, which is the posture of a deployment with no master key.
 type TokenSigner struct {
-	mu   sync.RWMutex
+	key atomic.Pointer[signingKey]
+}
+
+// signingKey pairs the private half with the `kid` the tokens it signs
+// carry, so the two can never be read out of step.
+type signingKey struct {
 	priv ed25519.PrivateKey
+	kid  string
 }
 
 // SetSeed installs the signing key from its 32-byte seed. A nil seed
 // disables minting.
 func (s *TokenSigner) SetSeed(seed []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if len(seed) != ed25519.SeedSize {
-		s.priv = nil
+		s.key.Store(nil)
 		return
 	}
-	s.priv = ed25519.NewKeyFromSeed(seed)
+	priv := ed25519.NewKeyFromSeed(seed)
+	s.key.Store(&signingKey{priv: priv, kid: crypto.KeyID(priv.Public().(ed25519.PublicKey))})
 }
 
 // PublicKey returns the verification half, or nil when no key is installed.
 func (s *TokenSigner) PublicKey() ed25519.PublicKey {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.priv == nil {
+	k := s.key.Load()
+	if k == nil {
 		return nil
 	}
-	return s.priv.Public().(ed25519.PublicKey)
+	return k.priv.Public().(ed25519.PublicKey)
 }
 
 // ErrNoSigningKey means the deployment has no token signing key — tokens
@@ -62,13 +66,11 @@ func (s *TokenSigner) PublicKey() ed25519.PublicKey {
 var ErrNoSigningKey = errors.New("control: no token signing key")
 
 func (s *TokenSigner) sign(claims crypto.TokenClaims) (string, error) {
-	s.mu.RLock()
-	priv := s.priv
-	s.mu.RUnlock()
-	if priv == nil {
+	k := s.key.Load()
+	if k == nil {
 		return "", ErrNoSigningKey
 	}
-	return crypto.SignToken(priv, claims)
+	return crypto.SignToken(k.priv, k.kid, claims)
 }
 
 // TokenDenylist writes the per-token revocation entries the data plane's
@@ -211,6 +213,21 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 
 	huma.Register(api, huma.Operation{
+		OperationID: "auth_token_key_rotate",
+		Method:      http.MethodPost,
+		Path:        "/auth/token/keys/rotate",
+		Summary:     "Rotate the inference-token signing key",
+		Description: "Generates a new signing key and records it in the auth:tokens " +
+			"section. The outgoing key stays on the verifier, so tokens already " +
+			"minted keep working until they expire.",
+		Tags:        []string{"auth"},
+		Middlewares: protect,
+		Errors:      []int{401, 403, 500, 503},
+	}, func(ctx context.Context, _ *struct{}) (*emptyOutput, error) {
+		return rotateTokenKey(ctx, d)
+	})
+
+	huma.Register(api, huma.Operation{
 		OperationID: "user_revoke_tokens",
 		Method:      http.MethodPost,
 		Path:        "/users/by-id/{id}/revoke-tokens",
@@ -226,6 +243,22 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		return bumpTokenVersion(ctx, td, in.ID)
 	})
+}
+
+// rotateTokenKey re-keys the signer. Deployment-wide and unscoped, so it is
+// gated on settings.update rather than a tenant verb.
+func rotateTokenKey(ctx context.Context, d Deps) (*emptyOutput, error) {
+	if err := d.Authz.Authorize(ctx, "settings.update", authz.Resource{Kind: "settings"}); err != nil {
+		return nil, mapAuthzErr(err)
+	}
+	if d.RotateTokenKey == nil {
+		return nil, huma.Error503ServiceUnavailable("tokens_disabled: no signing-key store is configured")
+	}
+	if err := d.RotateTokenKey(ctx); err != nil {
+		return nil, huma.Error500InternalServerError("signing-key rotation failed: " + err.Error())
+	}
+	audit.Record(ctx, "tokens.rotate", audit.Resource{Kind: "token", Name: "signing-key"}, audit.StatusAllowed)
+	return &emptyOutput{}, nil
 }
 
 func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintTokenOutput, error) {
@@ -373,7 +406,14 @@ func mintGroups(snap *appcatalog.Snapshot, a *actor.Actor) []string {
 func revokeTokenByJTI(ctx context.Context, d tokenDeps, jti, teamHint, expHint string) (*emptyOutput, error) {
 	var ev audit.Event
 	if d.audit != nil {
-		events, err := d.audit.Events(ctx, audit.Query{Actions: []string{"tokens.mint"}, ResourceID: jti, Limit: 1})
+		// ResourceKinds narrows to the indexed prefix; the resource-id
+		// predicate on its own is a sequential scan of the log.
+		events, err := d.audit.Events(ctx, audit.Query{
+			Actions:       []string{"tokens.mint"},
+			ResourceKinds: []string{"token"},
+			ResourceID:    jti,
+			Limit:         1,
+		})
 		if err != nil {
 			return nil, huma.Error500InternalServerError("audit lookup failed: " + err.Error())
 		}

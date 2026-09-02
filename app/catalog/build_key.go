@@ -1,13 +1,11 @@
 package catalog
 
 import (
-	"time"
-
 	"github.com/wyolet/relay/app/key"
 )
 
 func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
-	now := time.Now()
+	now := s.clock()
 	for _, k := range rks {
 		clean, keep := sanitizeKey(k, pols, sas)
 		if !keep {
@@ -20,6 +18,7 @@ func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
 		if clean.InGrace(now) {
 			s.keysByHash[clean.Spec.PreviousKeyHash] = clean
 		}
+		indexKeyPrincipal(s, clean)
 		s.subjectsByKey[clean.Meta.ID] = keySubjects(s, clean)
 		s.registerRefs(refKey{Kind: refRelayKey, ID: clean.Meta.ID}, outboundKeyRefs(clean))
 	}
@@ -31,12 +30,12 @@ func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
 // principals are unchecked because users aren't in the snapshot.
 func sanitizeKey(k *key.Key, pols, sas idSet) (*key.Key, bool) {
 	if k.Spec.Principal.Kind == key.PrincipalServiceAccount {
-		if _, ok := sas[k.Spec.Principal.ID]; !ok {
+		if !sas(k.Spec.Principal.ID) {
 			return nil, false
 		}
 	}
 	if k.Spec.PolicyID != "" {
-		if _, ok := pols[k.Spec.PolicyID]; !ok {
+		if !pols(k.Spec.PolicyID) {
 			return nil, false
 		}
 	}

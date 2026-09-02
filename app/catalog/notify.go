@@ -12,6 +12,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -288,6 +289,17 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 // inside the reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
+	// Every incremental apply clones the whole snapshot, so a bulk write
+	// (an apply of a large bundle) would clone once per row. Past this size
+	// one full rebuild is cheaper and reaches the same state.
+	if len(events) > reloadBatchThreshold {
+		if err := l.cat.Reload(ctx); err != nil {
+			slog.Error("catalog notify: bulk reload failed", "events", len(events), "err", err)
+			return
+		}
+		slog.Info("catalog notify: bulk change reloaded", "events", len(events))
+		return
+	}
 	sort.SliceStable(events, func(i, j int) bool {
 		return kindOrder[events[i].Kind] < kindOrder[events[j].Kind]
 	})
@@ -297,6 +309,10 @@ func (l *Listener) applyDrained(ctx context.Context) {
 		}
 	}
 }
+
+// reloadBatchThreshold is the drained-event count past which a full rebuild
+// replaces the per-event incremental applies.
+const reloadBatchThreshold = 64
 
 var kindOrder = map[string]int{
 	"team":      0,
@@ -560,5 +576,8 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 		}
 		return l.cat.settings.applyUpsert(ctx, e.ID)
 	}
-	return nil
+	// parseEvent already refused anything not in validKinds, so reaching
+	// here means a kind was added there without a case below — which would
+	// otherwise be a silently ignored NOTIFY.
+	return fmt.Errorf("catalog notify: no handler for kind %q", e.Kind)
 }

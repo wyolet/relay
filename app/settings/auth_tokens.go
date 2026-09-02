@@ -24,6 +24,28 @@ type AuthTokens struct {
 	// generated yet": boot mints one, stores it through the master-key path,
 	// and writes the ref back here.
 	SigningKey secret.Ref `json:"signingKey,omitempty"`
+
+	// VerifyCacheSize bounds how many verified tokens the data plane keeps
+	// so a repeat request skips the Ed25519 verify. 0 uses the default;
+	// negative disables the cache.
+	VerifyCacheSize int `json:"verifyCacheSize,omitempty"`
+}
+
+// DefaultVerifyCacheSize is the verified-claims cache bound when the
+// section names none.
+const DefaultVerifyCacheSize = 10000
+
+// EffectiveVerifyCacheSize resolves the configured bound, 0 meaning
+// "disabled".
+func (a *AuthTokens) EffectiveVerifyCacheSize() int {
+	switch {
+	case a == nil, a.VerifyCacheSize == 0:
+		return DefaultVerifyCacheSize
+	case a.VerifyCacheSize < 0:
+		return 0
+	default:
+		return a.VerifyCacheSize
+	}
 }
 
 // Validate is enforced before any write.
@@ -58,7 +80,8 @@ func init() {
 		Description: "Relay-signed inference tokens (EdDSA JWTs) a logged-in user mints for a project. " +
 			"defaultTTL applies when a mint request names none, maxTTL caps what it may ask for " +
 			"(both in nanoseconds). signingKey is filled in at boot with a generated key stored " +
-			"under the master key; without a master key tokens stay disabled.",
+			"under the master key; without a master key tokens stay disabled. " +
+			"verifyCacheSize bounds the data plane's verified-claims cache (0 = default, negative = off).",
 		Defaults: func() any { return defaultAuthTokens() },
 		Decode:   decodeAndValidate[AuthTokens, *AuthTokens],
 	})

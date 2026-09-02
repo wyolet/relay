@@ -65,14 +65,58 @@ func UserSubjects(userID string, localGroups, idpGroups []string) []string {
 	return append(subs, SubjectAuthenticated)
 }
 
-// reindexKeySubjects recomputes subjectsByKey for every key whose principal
-// matches kind+id. Keys are few and the walk only runs on a group, service
-// account or project write, never on the request path.
-func reindexKeySubjects(s *Snapshot, kind key.PrincipalKind, id string) {
-	for _, k := range s.keysByID {
-		if k.Spec.Principal.Kind != kind || k.Spec.Principal.ID != id {
+// principalKey is the keysByPrincipal index key. Kind is part of it so a
+// service account and a user can never collide on an id.
+func principalKey(kind key.PrincipalKind, id string) string {
+	if id == "" {
+		return ""
+	}
+	return string(kind) + ":" + id
+}
+
+// indexKeyPrincipal / deindexKeyPrincipal keep keysByPrincipal in step with
+// keysByID.
+func indexKeyPrincipal(s *Snapshot, k *key.Key) {
+	pk := principalKey(k.Spec.Principal.Kind, k.Spec.Principal.ID)
+	if pk == "" {
+		return
+	}
+	// A fresh slice, never append-in-place: clones share these headers, and
+	// appending into spare capacity would write through to a published
+	// snapshot.
+	old := s.keysByPrincipal[pk]
+	next := make([]*key.Key, len(old), len(old)+1)
+	copy(next, old)
+	s.keysByPrincipal[pk] = append(next, k)
+}
+
+func deindexKeyPrincipal(s *Snapshot, k *key.Key) {
+	pk := principalKey(k.Spec.Principal.Kind, k.Spec.Principal.ID)
+	if pk == "" {
+		return
+	}
+	list := s.keysByPrincipal[pk]
+	for i, have := range list {
+		if have.Meta.ID != k.Meta.ID {
 			continue
 		}
+		out := make([]*key.Key, 0, len(list)-1)
+		out = append(out, list[:i]...)
+		out = append(out, list[i+1:]...)
+		if len(out) == 0 {
+			delete(s.keysByPrincipal, pk)
+			return
+		}
+		s.keysByPrincipal[pk] = out
+		return
+	}
+}
+
+// reindexKeySubjects recomputes subjectsByKey for every key whose principal
+// matches kind+id. Indexed by principal so a group write costs its own
+// members' keys, not a walk of every key in the deployment.
+func reindexKeySubjects(s *Snapshot, kind key.PrincipalKind, id string) {
+	for _, k := range s.keysByPrincipal[principalKey(kind, id)] {
 		s.subjectsByKey[k.Meta.ID] = keySubjects(s, k)
 	}
 }

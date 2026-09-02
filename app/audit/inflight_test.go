@@ -116,37 +116,37 @@ func TestRefusedRoute(t *testing.T) {
 		{
 			name: "PUT by-id hidden by visibility", method: http.MethodPut,
 			path: "/api/policies/by-id/p-1", code: http.StatusNotFound,
-			wantMarked: true, wantAction: "policies.update", wantKind: "policies", wantID: "p-1",
+			wantMarked: true, wantAction: "policies.update", wantKind: "policy", wantID: "p-1",
 		},
 		{
 			name: "DELETE by-id forbidden", method: http.MethodDelete,
 			path: "/api/keys/by-id/k-9", code: http.StatusForbidden,
-			wantMarked: true, wantAction: "keys.delete", wantKind: "keys", wantID: "k-9",
+			wantMarked: true, wantAction: "keys.delete", wantKind: "key", wantID: "k-9",
 		},
 		{
 			name: "POST rotate hidden by visibility", method: http.MethodPost,
 			path: "/api/host-keys/by-id/h-2/rotate", code: http.StatusNotFound,
-			wantMarked: true, wantAction: "host-keys.rotate", wantKind: "host-keys", wantID: "h-2",
+			wantMarked: true, wantAction: "host-keys.rotate", wantKind: "host-key", wantID: "h-2",
 		},
 		{
 			name: "PUT sub-resource attach", method: http.MethodPut,
 			path: "/api/policies/by-id/p-1/keys/k-2/attach", code: http.StatusForbidden,
-			wantMarked: true, wantAction: "policies.attach", wantKind: "policies", wantID: "p-1",
+			wantMarked: true, wantAction: "policies.attach", wantKind: "policy", wantID: "p-1",
 		},
 		{
 			name: "POST collection", method: http.MethodPost,
 			path: "/api/policies", code: http.StatusUnauthorized,
-			wantMarked: true, wantAction: "policies.create", wantKind: "policies",
+			wantMarked: true, wantAction: "policies.create", wantKind: "policy",
 		},
 		{
 			name: "POST sub-resource with no trailing verb is a create", method: http.MethodPost,
 			path: "/api/policies/by-id/p-1/keys", code: http.StatusNotFound,
-			wantMarked: true, wantAction: "policies.create", wantKind: "policies", wantID: "p-1",
+			wantMarked: true, wantAction: "policies.create", wantKind: "policy", wantID: "p-1",
 		},
 		{
 			name: "path without the /api mount prefix", method: http.MethodDelete,
 			path: "/policies/by-id/p-1", code: http.StatusNotFound,
-			wantMarked: true, wantAction: "policies.delete", wantKind: "policies", wantID: "p-1",
+			wantMarked: true, wantAction: "policies.delete", wantKind: "policy", wantID: "p-1",
 		},
 		{
 			name: "GET 404 earns no row", method: http.MethodGet,

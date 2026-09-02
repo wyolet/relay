@@ -9,6 +9,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -54,7 +55,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 			"fleet-wide). Revoked keys cannot be rotated — create a new key instead.",
 		Tags:        []string{"keys"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 403, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *rotateKeyInput) (*rotateKeyResponse, error) {
 		existing, err := d.Stores.Key.Get(ctx, in.ID)
 		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "key", existing.Meta.ID, existing.Meta.Owner) {
@@ -84,6 +85,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		audit.Changed(ctx, []string{"spec.keyHash", "spec.prefix", "spec.previousKeyHash", "spec.graceUntil"})
+		readHash := existing.Spec.KeyHash
 		if grace > 0 {
 			until := time.Now().Add(time.Duration(grace) * time.Second)
 			existing.Spec.PreviousKeyHash = existing.Spec.KeyHash
@@ -97,7 +99,10 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		// A rotation is an operator edit: without the flag the next apply of
 		// the declaring manifest would write the pre-rotation hash back.
 		existing.Meta.Dirty = true
-		if err := d.Stores.Key.Upsert(ctx, existing); err != nil {
+		if err := d.Stores.Key.Rotate(ctx, existing, readHash); err != nil {
+			if errors.Is(err, key.ErrRotationRaced) {
+				return nil, huma.Error409Conflict("key was rotated concurrently; re-read it and retry")
+			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 		rotated, err := d.Stores.Key.Get(ctx, in.ID)
