@@ -14,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -53,7 +54,16 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, attr 
 		return 0, nil, fmt.Errorf("batch: parse model: %w", err)
 	}
 
-	plan, err := rn.Resolver.Resolve(routing.Request{ModelName: modelName, RawModelName: modelName, Key: rk})
+	var pol *policy.Policy
+	if rk.Spec.PolicyID != "" {
+		pol, _ = snap.Policy(rk.Spec.PolicyID)
+	}
+	plan, err := rn.Resolver.Resolve(routing.Request{
+		ModelName:             modelName,
+		RawModelName:          modelName,
+		Policy:                pol,
+		PayloadLoggingEnabled: rk.Spec.PayloadLoggingEnabled,
+	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)
 	}
@@ -136,6 +146,7 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, attr 
 		ModelName:     plan.Model.Meta.Name,
 		UpstreamModel: plan.UpstreamModel(),
 		Stream:        false,
+		TeamID:        attr.TeamID,
 		Lifecycle:     lc,
 	}
 

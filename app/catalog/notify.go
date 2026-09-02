@@ -53,6 +53,7 @@ var validKinds = map[string]struct{}{
 	"team": {}, "project": {},
 	"serviceaccount": {}, "group": {},
 	"role": {}, "rolebinding": {}, "policybinding": {},
+	"user": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -319,6 +320,7 @@ var kindOrder = map[string]int{
 	"relaykey":      15,
 	"overlay":       16, // after model upserts so re-merges see fresh templates
 	"settings":      17,
+	"user":          18,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -545,6 +547,11 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return l.cat.ApplyOverlayDelete(kind, resourceID)
 		}
 		return l.cat.ApplyOverlayUpsert(o)
+
+	case "user":
+		// Users are not catalog rows; only their token version reaches the
+		// snapshot, and the map is cheap enough to rebuild whole.
+		return l.cat.ReloadTokenVersions(ctx)
 
 	case "settings":
 		if e.Op == "delete" {

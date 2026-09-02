@@ -1,5 +1,6 @@
 // Package crypto provides AES-GCM-256 encryption primitives and master-key
-// helpers for Relay's stored-secret subsystem.
+// helpers for Relay's stored-secret subsystem, plus the EdDSA JWT format
+// inference tokens are signed with (jwt.go).
 // All functions are pure; the package has no state.
 package crypto
 

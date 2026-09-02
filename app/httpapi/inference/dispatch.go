@@ -123,17 +123,17 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
 		// Proxy bypasses routing.Resolve; the only opt-in surface is the
-		// authenticating relay key (anonymous proxy has none).
-		if rk := KeyFromContext(ctx); rk != nil {
-			lc.PayloadLog = rk.Spec.PayloadLoggingEnabled
+		// authenticated principal (anonymous proxy has none).
+		if p := PrincipalFrom(ctx); p != nil {
+			lc.PayloadLog = p.PayloadLogging
 		}
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
 		handleProxy(d, w, r, in.Inbound)
 		return
 	}
 
-	rk := KeyFromContext(ctx)
-	if rk == nil {
+	principal := PrincipalFrom(ctx)
+	if principal == nil {
 		d.fireUsageFailure(ctx, "unauthenticated", "missing relay key")
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated", "missing relay key")
 		return
@@ -147,13 +147,14 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 
 	plan, err := d.Resolver.Resolve(routing.Request{
-		ModelName:    modelRef,
-		RawModelName: in.ModelName,
-		Key:          rk,
+		ModelName:             modelRef,
+		RawModelName:          in.ModelName,
+		Policy:                principal.Policy,
+		PayloadLoggingEnabled: principal.PayloadLogging,
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
-		mapRoutingErr(w, err, modelRef, rk.Spec.PolicyID)
+		mapRoutingErr(w, err, modelRef, principal.PolicyID())
 		return
 	}
 	lc.PayloadLog = plan.PayloadLoggingEnabled
@@ -258,6 +259,7 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
 	}
 
+	teamID, tokenJTI := reserveIdentity(ctx)
 	lc := lifecycle.FromContext(ctx)
 	applyPlanIdentity(lc, plan)
 	if lc != nil {
@@ -276,6 +278,8 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 		ModelName:     plan.Model.Meta.Name,
 		UpstreamModel: plan.UpstreamModel(),
 		Stream:        in.Stream,
+		TeamID:        teamID,
+		TokenJTI:      tokenJTI,
 		Lifecycle:     lc,
 	}
 
@@ -362,6 +366,7 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		return
 	}
 
+	teamID, tokenJTI := reserveIdentity(ctx)
 	lc := lifecycle.FromContext(ctx)
 	applyPlanIdentity(lc, plan)
 	if lc != nil {
@@ -380,6 +385,8 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		ModelName:     plan.Model.Meta.Name,
 		UpstreamModel: plan.UpstreamModel(),
 		Stream:        in.Stream,
+		TeamID:        teamID,
+		TokenJTI:      tokenJTI,
 		Lifecycle:     lc,
 	}
 

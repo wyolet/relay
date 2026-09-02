@@ -1021,10 +1021,11 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string
 		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-key",
 			Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
 		Spec: key.Spec{
-			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
-			PolicyID:  pol.Meta.ID,
-			KeyHash:   sha256Hex(keyPlain),
-			Prefix:    "rk_test",
+			Principal:          key.Principal{Kind: key.PrincipalUser, ID: userID},
+			PolicyID:           pol.Meta.ID,
+			KeyHash:            sha256Hex(keyPlain),
+			Prefix:             "rk_test",
+			PassthroughAllowed: true,
 		},
 	}
 	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")

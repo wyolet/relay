@@ -109,13 +109,14 @@ func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
 type fakeSessions struct {
 	userID, username string
 	subject, sid     string
+	groups           []string
 	roles            []string
 	calls            int
 }
 
-func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error {
+func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error {
 	f.userID, f.username, f.roles = userID, username, roles
-	f.subject, f.sid = oidcSubject, idpSessionID
+	f.subject, f.sid, f.groups = oidcSubject, idpSessionID, groups
 	f.calls++
 	return nil
 }

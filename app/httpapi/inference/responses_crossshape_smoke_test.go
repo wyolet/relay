@@ -21,7 +21,6 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -53,15 +52,15 @@ func buildRealCrossShapeRegistry() *adapter.Registry {
 // crossShapeCatalog builds the standard dispatch fixture with the model bound to
 // the openai_responses adapter on a non-"openai" host (so IsNativePath is false
 // → the cross-shape canonical chain runs, not byte-pass), pointed at upstreamURL.
-func crossShapeCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *key.Key) {
+func crossShapeCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *Principal) {
 	t.Helper()
-	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAIResponses)
+	cat, pr := buildDispatchCatalog(t, "groq", adapters.OpenAIResponses)
 	h := *cat.Current().Hosts()[0]
 	h.Spec = host.Spec{BaseURL: upstreamURL, NoAuth: true}
 	if err := cat.ApplyHostUpsert(&h); err != nil {
 		t.Fatalf("host upsert: %v", err)
 	}
-	return cat, rk
+	return cat, pr
 }
 
 func buildCrossShapeDeps(t *testing.T, cat *catalog.Catalog) Deps {
@@ -110,7 +109,7 @@ func TestCrossShape_CCtoResponses_Buffered(t *testing.T) {
 	}))
 	defer up.Close()
 
-	cat, rk := crossShapeCatalog(t, up.URL)
+	cat, pr := crossShapeCatalog(t, up.URL)
 	d := buildCrossShapeDeps(t, cat)
 
 	ccReq := `{"model":"test-model","messages":[` +
@@ -121,7 +120,7 @@ func TestCrossShape_CCtoResponses_Buffered(t *testing.T) {
 		`],"tools":[{"type":"function","function":{"name":"get_weather","description":"w","parameters":{"type":"object"}}}],"stream":false}`
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -199,12 +198,12 @@ func TestCrossShape_CCtoResponses_Streaming(t *testing.T) {
 	}))
 	defer up.Close()
 
-	cat, rk := crossShapeCatalog(t, up.URL)
+	cat, pr := crossShapeCatalog(t, up.URL)
 	d := buildCrossShapeDeps(t, cat)
 
 	ccReq := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{

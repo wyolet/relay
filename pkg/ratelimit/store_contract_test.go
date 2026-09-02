@@ -192,6 +192,29 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			_ = l.Commit(ctx, res, Observations{})
 		}
 	})
+
+	t.Run(name+"/Revoked_DenylistKey", func(t *testing.T) {
+		now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+		l := factory(t, &now)
+		ctx := context.Background()
+		revoked := Rule{Key: "jti:contract-jti", Name: "token revocation", Meter: MeterRevoked}
+
+		// Absent denylist entry: the rule passes and writes nothing.
+		if _, err := l.Reserve(ctx, "team:contract-team", []Rule{revoked}); err != nil {
+			t.Fatalf("reserve with no denylist entry: %v", err)
+		}
+		if err := l.store.Set(ctx, "limit:{team:contract-team}:jti:contract-jti", []byte("1"), time.Minute); err != nil {
+			t.Fatalf("write denylist entry: %v", err)
+		}
+		if _, err := l.Reserve(ctx, "team:contract-team", []Rule{revoked}); !errors.Is(err, ErrRevoked) {
+			t.Fatalf("reserve with denylist entry: err = %v, want ErrRevoked", err)
+		}
+		// A rule-carrying request in the same team still reserves.
+		other := Rule{Key: "jti:other-jti", Name: "token revocation", Meter: MeterRevoked}
+		if _, err := l.Reserve(ctx, "team:contract-team", []Rule{other}); err != nil {
+			t.Fatalf("reserve for a different jti: %v", err)
+		}
+	})
 }
 
 func TestContractLimit_MemStore(t *testing.T) {

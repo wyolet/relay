@@ -50,7 +50,7 @@ func mkSnap(real string) model.Snapshot {
 	return model.Snapshot{Name: s, OriginalName: orig}
 }
 
-func realModelsCatalog(t *testing.T) (*catalog.Catalog, *key.Key) {
+func realModelsCatalog(t *testing.T) (*catalog.Catalog, *policy.Policy) {
 	t.Helper()
 	provID := meta.NewID()
 	hostID := meta.NewID()
@@ -109,11 +109,11 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *key.Key) {
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	return c, rk
+	return c, pol
 }
 
 func TestResolve_RealModelStrings(t *testing.T) {
-	c, rk := realModelsCatalog(t)
+	c, pol := realModelsCatalog(t)
 	r := routing.New(c)
 
 	cases := []struct {
@@ -145,7 +145,7 @@ func TestResolve_RealModelStrings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.customerSends, func(t *testing.T) {
-			plan, err := r.Resolve(routing.Request{ModelName: tc.customerSends, Key: rk})
+			plan, err := r.Resolve(routing.Request{ModelName: tc.customerSends, Policy: pol})
 			if err != nil {
 				t.Fatalf("Resolve(%q): %v", tc.customerSends, err)
 			}
@@ -159,7 +159,7 @@ func TestResolve_RealModelStrings(t *testing.T) {
 	}
 
 	t.Run("unknown name 404s", func(t *testing.T) {
-		_, err := r.Resolve(routing.Request{ModelName: "gpt-bogus", Key: rk})
+		_, err := r.Resolve(routing.Request{ModelName: "gpt-bogus", Policy: pol})
 		if err == nil {
 			t.Fatal("expected ErrModelNotFound for unknown name")
 		}
@@ -276,7 +276,7 @@ func TestResolve_ViaStandaloneBinding(t *testing.T) {
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5", Key: rk})
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5", Policy: pol})
 	if err != nil {
 		t.Fatalf("Resolve via standalone binding: %v", err)
 	}
@@ -332,7 +332,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	r := routing.New(c)
 
 	// @openai: keyA's tier (the customer policy) grants openai → succeeds.
-	plan, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@openai", Key: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@openai", Policy: custPol})
 	if err != nil {
 		t.Fatalf("@openai should resolve: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 
 	// @azure: customer policy allows the host, but azure's key tier (tierB)
 	// doesn't grant the openai model → key filtered → no usable key.
-	if _, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@azure", Key: rk}); err == nil {
+	if _, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@azure", Policy: custPol}); err == nil {
 		t.Fatal("@azure should fail: azure key tier doesn't grant this model")
 	}
 }
@@ -374,7 +374,7 @@ func TestResolve_NoAuthHostInjectsAnonKey(t *testing.T) {
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "qwen3", Key: rk})
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "qwen3", Policy: pol})
 	if err != nil {
 		t.Fatalf("no-auth host should resolve without a real key, got %v", err)
 	}

@@ -213,6 +213,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	cat.UseTokenVersions(usersStore)
+
+	// Inference tokens: the signing key is generated on first boot and kept
+	// under the master key; both planes hold it in memory and follow the
+	// auth:tokens section from there.
+	tokenSigner := &control.TokenSigner{}
+	tokenVerifier := &inference.TokenVerifier{}
+	if err := loadTokenSigningKey(bootCtx, stores, cfg.MasterKey, tokenSigner, tokenVerifier); err != nil {
+		slog.Error("auth: inference-token signing key unavailable", "err", err)
+		os.Exit(1)
+	}
+	settingswatch.New(cat, settings.AuthTokensSection, func(a settings.AuthTokens) {
+		ref := a.SigningKey
+		if !a.Enabled {
+			ref = pkgsecret.Ref{}
+		}
+		if err := applyTokenSigningKey(listenerCtx, stores.Secrets, ref, tokenSigner, tokenVerifier); err != nil {
+			slog.Error("auth: inference-token signing key reload failed", "err", err)
+		}
+	}, slog.Default()).Start()
+
 	// Built-in roles: seed-if-absent, so an operator's edits survive and a
 	// fresh deployment always has the seven system rows to bind against.
 	if err := role.SeedBuiltins(bootCtx, stores.Role, slog.Default()); err != nil {
@@ -596,6 +617,7 @@ func main() {
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:         st,
 		Catalog:        cat,
+		Tokens:         tokenVerifier,
 		Resolver:       routing.New(cat),
 		Pipeline:       pl,
 		Proxy:          proxyPipeline,
@@ -612,7 +634,7 @@ func main() {
 	inferRouter.With(
 		inference.ReadinessMiddleware(cat),
 		inference.ClassifyMiddleware(),
-		inference.PrincipalMiddleware(cat),
+		inference.PrincipalMiddleware(cat, tokenVerifier),
 	).Mount("/v1/batches", batchSvc.Routes())
 
 	inferAddr := ":8080"
@@ -658,6 +680,8 @@ func main() {
 		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
 			Identity:       idStore,
+			TokenSigner:    tokenSigner,
+			TokenDenylist:  kvStore,
 			Users:          usersStore,
 			Sessions:       sessMgr,
 			AdminToken:     cfg.AdminToken,

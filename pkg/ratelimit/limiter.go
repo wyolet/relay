@@ -86,6 +86,11 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 		return nil, fmt.Errorf("limit: decode reserve result: %w", err)
 	}
 
+	if res.Revoked {
+		l.log.Debug("limit reserve revoked", "request_id", reqid.From(ctx), "rule", res.RuleName)
+		return nil, ErrRevoked
+	}
+
 	if res.Exceeded {
 		exceeded := &ExceededError{
 			RetryAfter: time.Duration(res.RetryAfterMs) * time.Millisecond,
@@ -112,6 +117,8 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 			strategy = StrategyTokenBucket
 		}
 		switch {
+		case rule.Meter == MeterRevoked:
+			// Nothing to commit or refund: the rule wrote no state.
 		case rule.Meter == "concurrency":
 			reservation.conKeys = append(reservation.conKeys, concurrencyKey(scope, rule))
 		case rule.Meter == "tokens" || strings.HasPrefix(rule.Meter, "tokens."):

@@ -107,6 +107,11 @@ type Stores struct {
 	// controller resolving S3 credentials) resolve through the same seam.
 	Secrets *pkgsecret.Registry
 
+	// Stored is the AES-GCM stored-secret backend registered in Secrets,
+	// exposed so the composition root can write a secret (the generated
+	// token signing key) through the same master-key path.
+	Stored *pkgsecret.StoredResolver
+
 	// OAuthResolver is the KindOAuth resolver registered in Secrets,
 	// exposed so the composition root can drive the proactive
 	// pkgoauth.Refresher against the same instance (shared single-flight).
@@ -145,6 +150,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		PolicyBinding:  policybinding.NewStore(opts.Pool),
 
 		Secrets: secReg,
+		Stored:  secStored,
 	}
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,

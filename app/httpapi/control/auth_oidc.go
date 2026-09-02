@@ -52,7 +52,7 @@ type oidcUserStore interface {
 
 // sessionLogin is the slice of session.Manager the callback needs.
 type sessionLogin interface {
-	LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error
+	LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error
 }
 
 // oidcDeps carries the seams the two handlers use, injectable for tests.
@@ -225,7 +225,7 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, subject, claims.Sid, u.Roles...); err != nil {
+	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, subject, claims.Sid, claims.groups(cfg.EffectiveGroupsClaim()), u.Roles...); err != nil {
 		slog.Error("oidc callback: session create failed", "err", err)
 		http.Error(w, "session create failed", http.StatusInternalServerError)
 		return
@@ -304,6 +304,26 @@ type idClaims struct {
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`
 	Sid               string `json:"sid"`
+
+	// raw keeps the decoded payload so the groups claim — whose name is
+	// deployment config, not a fixed field — can be read out of it.
+	raw map[string]any
+}
+
+// groups returns the string values of the named claim. Providers render it
+// as an array of strings; anything else is ignored rather than guessed at.
+func (c *idClaims) groups(claim string) []string {
+	if c == nil || claim == "" {
+		return nil
+	}
+	list, _ := c.raw[claim].([]any)
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		if name, ok := v.(string); ok && name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // idTokenClaims extracts claims from the token response's id_token. The
@@ -335,6 +355,7 @@ func idTokenClaims(tok *oauth.Token) (*idClaims, error) {
 		if err := json.Unmarshal(payload, &c); err != nil {
 			return nil, fmt.Errorf("id_token claims: %w", err)
 		}
+		_ = json.Unmarshal(payload, &c.raw)
 		if c.Sub == "" {
 			return nil, fmt.Errorf("id_token has no sub")
 		}

@@ -427,6 +427,12 @@ ON CONFLICT (id) DO UPDATE SET
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;
 
+-- name: ListUserTokenVersions :many
+SELECT id, token_version FROM users;
+
+-- name: BumpUserTokenVersion :exec
+UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1;
+
 -- name: UpdateSecretStatus :exec
 UPDATE secrets SET status = $2 WHERE id = $1;
 

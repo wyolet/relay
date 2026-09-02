@@ -96,7 +96,7 @@ func TestResolve_WildcardPolicyDoesNotReachUngrantedNoAuthHost(t *testing.T) {
 	}
 	r := routing.New(c)
 
-	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Key: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Policy: pol})
 	if err == nil {
 		t.Fatalf("authz widening: wildcard policy with zero grants for host %q routed to it anyway: plan host=%q model=%q keys=%d (first key hash %q); want an error (model outside the policy's hostkey coverage)",
 			openHost.Meta.Name, plan.Host.Meta.Name, plan.Model.Meta.Name, len(plan.Keys), plan.Keys[0].KeyHash)
@@ -160,7 +160,7 @@ func TestResolve_ExplicitModelGrantReachesNoAuthHost(t *testing.T) {
 	}
 	r := routing.New(c)
 
-	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Key: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Policy: pol})
 	if err != nil {
 		t.Fatalf("explicit model grant should reach the NoAuth host, got %v", err)
 	}

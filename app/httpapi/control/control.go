@@ -42,6 +42,15 @@ type Deps struct {
 	// it; the session middleware (installed by Mount) reads from it.
 	Sessions *session.Manager
 
+	// TokenSigner holds the inference-token signing key. nil (or an empty
+	// signer) disables minting and revoke-by-token.
+	TokenSigner *TokenSigner
+
+	// TokenDenylist is where a revoked token's jti is written for the data
+	// plane to read. nil disables per-token revocation (the token-version
+	// bump still works).
+	TokenDenylist TokenDenylist
+
 	// AdminToken is the cleartext break-glass bearer. Empty disables the
 	// bypass. Validated by AdminTokenMiddleware; not used directly by
 	// handlers.
@@ -177,6 +186,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerApply(api, d, protect)
 	registerExport(api, d, protect)
 	registerSchemas(r) // public: the JSON Schemas the manifests reference
+	registerTokens(api, d, protect)
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in app/ratelimit). The spec is

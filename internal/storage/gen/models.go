@@ -314,4 +314,5 @@ type User struct {
 	Disabled     bool               `db:"disabled" json:"disabled"`
 	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	TokenVersion int32              `db:"token_version" json:"token_version"`
 }

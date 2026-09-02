@@ -55,6 +55,10 @@ type Catalog struct {
 	roleBindings    RoleBindingLister
 	policyBindings  PolicyBindingLister
 
+	// tokenVersions is optional (nil = every token version reads as
+	// absent, which rejects tokens): set via UseTokenVersions.
+	tokenVersions TokenVersionLister
+
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
 	rmu   sync.Mutex
@@ -118,6 +122,12 @@ type PolicyBindingLister interface {
 	List(ctx context.Context) ([]*policybinding.PolicyBinding, error)
 }
 
+// TokenVersionLister reads users.token_version for every user. Satisfied by
+// *app/user.Store.
+type TokenVersionLister interface {
+	TokenVersions(ctx context.Context) (map[string]int, error)
+}
+
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
 func New(
@@ -157,6 +167,29 @@ func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister, sa ServiceAccountLis
 	r RoleLister, rb RoleBindingLister, pb PolicyBindingLister) {
 	c.teams, c.projects, c.serviceAccounts, c.groups = t, p, sa, g
 	c.roles, c.roleBindings, c.policyBindings = r, rb, pb
+}
+
+// UseTokenVersions attaches the per-user token-version source. Called once
+// at composition time before the first Reload; nil keeps every version
+// absent, which makes verification reject tokens.
+func (c *Catalog) UseTokenVersions(l TokenVersionLister) { c.tokenVersions = l }
+
+// ReloadTokenVersions rebuilds only the token-version map — the whole
+// snapshot reaction to a users write.
+func (c *Catalog) ReloadTokenVersions(ctx context.Context) error {
+	if c.tokenVersions == nil {
+		return nil
+	}
+	versions, err := c.tokenVersions.TokenVersions(ctx)
+	if err != nil {
+		return fmt.Errorf("catalog: token versions: %w", err)
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	s.tokenVersionByUser = versions
+	c.snap.Store(s)
+	return nil
 }
 
 // Current returns the live Snapshot. Safe to call from any goroutine; the
@@ -276,6 +309,13 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 			return fmt.Errorf("catalog reload: policy bindings: %w", err)
 		}
 	}
+	var tokenVersions map[string]int
+	if c.tokenVersions != nil {
+		tokenVersions, err = c.tokenVersions.TokenVersions(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: token versions: %w", err)
+		}
+	}
 	var ovls []*overlay.Overlay
 	if c.overlays != nil {
 		ovls, err = c.overlays.List(ctx)
@@ -316,6 +356,9 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 
 	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
 		enabledRoles, enabledRoleBindings, enabledPolicyBindings)
+	if tokenVersions != nil {
+		snap.tokenVersionByUser = tokenVersions
+	}
 	c.snap.Store(snap)
 	c.markReady()
 	return nil
