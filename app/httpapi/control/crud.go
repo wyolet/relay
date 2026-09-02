@@ -22,6 +22,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
@@ -319,6 +320,7 @@ func registerKind[T any](
 					return nil, mapGuardErr(err)
 				}
 			}
+			audit.Changed(ctx, []string{audit.AnyField})
 			if err := store.Upsert(ctx, v); err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
@@ -376,6 +378,7 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		audit.Changed(ctx, audit.DiffFields(existing, v))
 		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
 		if err := store.Upsert(ctx, v); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -422,6 +425,7 @@ func registerKind[T any](
 				return nil, huma.Error403Forbidden(err.Error())
 			}
 		}
+		audit.Changed(ctx, []string{audit.AnyField})
 		if cascade != nil {
 			if err := cascade(ctx, existing); err != nil {
 				return nil, huma.Error500InternalServerError("cascade: " + err.Error())

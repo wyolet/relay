@@ -22,6 +22,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -486,6 +487,16 @@ func main() {
 	// change (mirrors the sink Controller).
 	payloadReader := newPayloadReaderResolver(cat, stores.Secrets, payloadCHBootCfg, slog.Default())
 
+	// Admin audit log: bounded emitter → PG, retention from the "audit"
+	// settings section. Wired before hydration so the first settings reload
+	// lands on the emitter.
+	auditStore := audit.NewStore(gen.New(st.Pool()))
+	auditEmitter := audit.NewEmitter(auditStore, slog.Default())
+	defer auditEmitter.Close()
+	settingswatch.New(cat, settings.SectionAudit, func(a settings.Audit) {
+		auditEmitter.SetRetentionDays(a.RetentionDays)
+	}, slog.Default()).Start()
+
 	// Request-parsing depth lives in the "parsing" settings section and
 	// hot-swaps the openai adapter's rich-parse toggle. The vendor setter
 	// is confined here (composition root) so app/ stays vendor-neutral.
@@ -599,20 +610,24 @@ func main() {
 		if cfg.MultiUser {
 			authorizer = authz.OwnerScoped{}
 		}
+		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
-			Identity:      idStore,
-			Users:         usersStore,
-			Sessions:      sessMgr,
-			AdminToken:    cfg.AdminToken,
-			Authz:         authorizer,
-			Catalog:       cat,
-			Stores:        stores,
-			CookieSecure:  cookieSecure,
-			UsageReader:   usageReader,
-			PayloadReader: payloadReader,
-			Selector:      selector,
-			HostHealth:    hostHealth,
-			RuntimeConfig: runtimeConfig(cfg),
+			Identity:       idStore,
+			Users:          usersStore,
+			Sessions:       sessMgr,
+			AdminToken:     cfg.AdminToken,
+			Authz:          authorizer,
+			Catalog:        cat,
+			Stores:         stores,
+			CookieSecure:   cookieSecure,
+			UsageReader:    usageReader,
+			Audit:          auditEmitter,
+			AuditReader:    auditStore,
+			TrustedProxies: httpmw.TrustedProxies(),
+			PayloadReader:  payloadReader,
+			Selector:       selector,
+			HostHealth:     hostHealth,
+			RuntimeConfig:  runtimeConfig(cfg),
 		}
 		ctrlRouter.Route("/api", func(r chi.Router) {
 			control.Mount(r, ctrlDeps)

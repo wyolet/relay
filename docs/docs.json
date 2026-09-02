@@ -32,7 +32,8 @@
               "concepts/key-pooling",
               "concepts/proxy-mode",
               "concepts/observability",
-              "concepts/auth"
+              "concepts/auth",
+              "concepts/audit"
             ]
           },
           {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/settings"
 )
@@ -222,6 +223,7 @@ func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewar
 		if err != nil {
 			return nil, huma.Error400BadRequest("encode: " + err.Error())
 		}
+		audit.Changed(ctx, []string{"value"})
 		row, err := d.Stores.Settings.Upsert(ctx, section, raw)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())

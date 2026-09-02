@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
 )
@@ -94,6 +95,7 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 		if _, err := rand.Read(newKey); err != nil {
 			return nil, huma.Error500InternalServerError("rand: " + err.Error())
 		}
+		audit.Changed(ctx, []string{"masterKey", "spec.value"})
 		res, err := d.Stores.HostKey.Rotate(ctx, newKey)
 		if err != nil {
 			return nil, huma.Error500InternalServerError("rotate: " + err.Error())

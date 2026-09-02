@@ -40,6 +40,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -60,6 +61,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -77,6 +79,7 @@ type stack struct {
 	control    *httptest.Server
 	inference  *httptest.Server
 	adminToken string
+	audit      *audit.Store
 }
 
 // newStack boots the relay against the supplied DSN. The compose pg
@@ -180,15 +183,21 @@ func newStack(t *testing.T) *stack {
 
 	const adminToken = "test-admin-token"
 
+	auditStore := audit.NewStore(gen.New(st.Pool()))
+	auditEmitter := audit.NewEmitter(auditStore, slog.Default())
+	t.Cleanup(auditEmitter.Close)
+
 	ctrlRouter := chi.NewRouter()
 	// Mirror prod: control API under /api so SPA routes aren't shadowed.
 	ctrlRouter.Route("/api", func(r chi.Router) {
 		control.Mount(r, control.Deps{
-			Sessions:   sessMgr,
-			AdminToken: adminToken,
-			Authz:      authz.AlwaysAllowAuthenticated{},
-			Catalog:    cat,
-			Stores:     stores,
+			Sessions:    sessMgr,
+			AdminToken:  adminToken,
+			Authz:       audit.Authorizer{Inner: authz.AlwaysAllowAuthenticated{}, Snap: cat.Current},
+			Catalog:     cat,
+			Stores:      stores,
+			Audit:       auditEmitter,
+			AuditReader: auditStore,
 		})
 	})
 
@@ -216,6 +225,7 @@ func newStack(t *testing.T) *stack {
 		control:    ctrlSrv,
 		inference:  infSrv,
 		adminToken: adminToken,
+		audit:      auditStore,
 	}
 }
 
@@ -767,7 +777,8 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 		providers,
 		rate_limits,
 		settings,
-		projects, teams
+		projects, teams,
+		audit_events
 		RESTART IDENTITY CASCADE`
 	if _, err := st.Pool().Exec(ctx, stmt); err != nil {
 		t.Fatalf("truncateAll: %v", err)

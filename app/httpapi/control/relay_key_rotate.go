@@ -13,6 +13,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/relaykey"
 )
@@ -61,6 +62,7 @@ func registerRelayKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
+		audit.Changed(ctx, []string{"spec.keyHash", "spec.prefix"})
 		existing.Spec.KeyHash = gen.KeyHash
 		existing.Spec.Prefix = gen.Prefix
 		if err := d.Stores.RelayKey.Upsert(ctx, existing); err != nil {

@@ -720,6 +720,29 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	return i, err
 }
 
+type InsertAuditEventParams struct {
+	ID            string             `db:"id" json:"id"`
+	Ts            pgtype.Timestamptz `db:"ts" json:"ts"`
+	ActorKind     string             `db:"actor_kind" json:"actor_kind"`
+	ActorID       pgtype.Text        `db:"actor_id" json:"actor_id"`
+	ActorName     pgtype.Text        `db:"actor_name" json:"actor_name"`
+	SessionID     pgtype.Text        `db:"session_id" json:"session_id"`
+	Ip            pgtype.Text        `db:"ip" json:"ip"`
+	Action        string             `db:"action" json:"action"`
+	ResourceKind  string             `db:"resource_kind" json:"resource_kind"`
+	ResourceID    pgtype.Text        `db:"resource_id" json:"resource_id"`
+	ResourceName  pgtype.Text        `db:"resource_name" json:"resource_name"`
+	OwnerKind     pgtype.Text        `db:"owner_kind" json:"owner_kind"`
+	OwnerID       pgtype.Text        `db:"owner_id" json:"owner_id"`
+	Scope         []string           `db:"scope" json:"scope"`
+	Status        string             `db:"status" json:"status"`
+	Code          int32              `db:"code" json:"code"`
+	RequestID     pgtype.Text        `db:"request_id" json:"request_id"`
+	Method        pgtype.Text        `db:"method" json:"method"`
+	Path          pgtype.Text        `db:"path" json:"path"`
+	ChangedFields []string           `db:"changed_fields" json:"changed_fields"`
+}
+
 const insertPolicyHostKey = `-- name: InsertPolicyHostKey :exec
 INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3)
 `
@@ -960,6 +983,95 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 		&i.Spec,
 	)
 	return i, err
+}
+
+const listAuditEvents = `-- name: ListAuditEvents :many
+SELECT id, ts, actor_kind, actor_id, actor_name, session_id, ip,
+       action, resource_kind, resource_id, resource_name, owner_kind, owner_id,
+       scope, status, code, request_id, method, path, changed_fields
+FROM audit_events
+WHERE ($1::text IS NULL OR actor_id = $1::text)
+  AND ($2::text IS NULL OR actor_name = $2::text)
+  AND (cardinality($3::text[]) = 0 OR action = ANY($3::text[]))
+  AND (cardinality($4::text[]) = 0 OR resource_kind = ANY($4::text[]))
+  AND ($5::text IS NULL OR resource_id = $5::text)
+  AND (cardinality($6::text[]) = 0 OR scope && $6::text[])
+  AND ($7::text IS NULL OR status = $7::text)
+  AND ($8::timestamptz IS NULL OR ts >= $8::timestamptz)
+  AND ($9::timestamptz IS NULL OR ts <= $9::timestamptz)
+  AND ($10::timestamptz IS NULL
+       OR (ts, id) < ($10::timestamptz, $11::text))
+ORDER BY ts DESC, id DESC
+LIMIT $12
+`
+
+type ListAuditEventsParams struct {
+	ActorID       pgtype.Text        `db:"actor_id" json:"actor_id"`
+	ActorName     pgtype.Text        `db:"actor_name" json:"actor_name"`
+	Actions       []string           `db:"actions" json:"actions"`
+	ResourceKinds []string           `db:"resource_kinds" json:"resource_kinds"`
+	ResourceID    pgtype.Text        `db:"resource_id" json:"resource_id"`
+	Scopes        []string           `db:"scopes" json:"scopes"`
+	Status        pgtype.Text        `db:"status" json:"status"`
+	FromTs        pgtype.Timestamptz `db:"from_ts" json:"from_ts"`
+	ToTs          pgtype.Timestamptz `db:"to_ts" json:"to_ts"`
+	CursorTs      pgtype.Timestamptz `db:"cursor_ts" json:"cursor_ts"`
+	CursorID      string             `db:"cursor_id" json:"cursor_id"`
+	RowLimit      int32              `db:"row_limit" json:"row_limit"`
+}
+
+func (q *Queries) ListAuditEvents(ctx context.Context, arg ListAuditEventsParams) ([]AuditEvent, error) {
+	rows, err := q.db.Query(ctx, listAuditEvents,
+		arg.ActorID,
+		arg.ActorName,
+		arg.Actions,
+		arg.ResourceKinds,
+		arg.ResourceID,
+		arg.Scopes,
+		arg.Status,
+		arg.FromTs,
+		arg.ToTs,
+		arg.CursorTs,
+		arg.CursorID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditEvent
+	for rows.Next() {
+		var i AuditEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.Ts,
+			&i.ActorKind,
+			&i.ActorID,
+			&i.ActorName,
+			&i.SessionID,
+			&i.Ip,
+			&i.Action,
+			&i.ResourceKind,
+			&i.ResourceID,
+			&i.ResourceName,
+			&i.OwnerKind,
+			&i.OwnerID,
+			&i.Scope,
+			&i.Status,
+			&i.Code,
+			&i.RequestID,
+			&i.Method,
+			&i.Path,
+			&i.ChangedFields,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listBatchItems = `-- name: ListBatchItems :many
@@ -1745,6 +1857,18 @@ func (q *Queries) MaxSecretValueKeyVersion(ctx context.Context) (int32, error) {
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const pruneAuditEvents = `-- name: PruneAuditEvents :execrows
+DELETE FROM audit_events WHERE ts < $1
+`
+
+func (q *Queries) PruneAuditEvents(ctx context.Context, ts pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneAuditEvents, ts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setBatchCompleted = `-- name: SetBatchCompleted :exec

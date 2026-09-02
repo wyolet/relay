@@ -6,6 +6,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
 )
@@ -49,6 +50,7 @@ func registerAuth(api huma.API, d Deps) {
 				if err := d.Sessions.Login(ctx, u.ID, u.Username, u.Roles...); err != nil {
 					return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 				}
+				audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: u.ID, Name: u.Username}, audit.StatusAllowed, audit.Actor{Kind: audit.ActorUser, ID: u.ID, Name: u.Username})
 				out := &authResponse{}
 				out.Body.UserID = u.ID
 				out.Body.Username = u.Username
@@ -57,18 +59,22 @@ func registerAuth(api huma.API, d Deps) {
 			}
 		}
 		if d.Identity == nil {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		yu, ok := d.Identity.ByUsername(in.Body.Username)
 		if !ok {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		if !identity.Verify(yu, in.Body.Password) {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		if err := d.Sessions.Login(ctx, yu.Metadata.Name, yu.Spec.Username.Get(), yu.Spec.Roles...); err != nil {
 			return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 		}
+		audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: yu.Metadata.Name, Name: yu.Spec.Username.Get()}, audit.StatusAllowed, audit.Actor{Kind: audit.ActorUser, ID: yu.Metadata.Name, Name: yu.Spec.Username.Get()})
 		out := &authResponse{}
 		out.Body.UserID = yu.Metadata.Name
 		out.Body.Username = yu.Spec.Username.Get()
@@ -86,6 +92,7 @@ func registerAuth(api huma.API, d Deps) {
 	}, func(ctx context.Context, _ *struct{}) (*emptyOutput, error) {
 		// Logout is intentionally idempotent: no error if no session.
 		_ = d.Sessions.Logout(ctx)
+		audit.Record(ctx, "auth.logout", audit.Resource{Kind: "user"}, audit.StatusAllowed)
 		return &emptyOutput{}, nil
 	})
 

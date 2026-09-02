@@ -7,11 +7,13 @@ package control
 
 import (
 	"context"
+	"net"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
@@ -65,6 +67,17 @@ type Deps struct {
 	// from a separate store.
 	UsageReader usagelog.Reader
 
+	// Audit receives one event per audited admin request. nil disables
+	// audit capture entirely (no middleware, no rows).
+	Audit *audit.Emitter
+
+	// AuditReader serves GET /audit. nil disables the endpoint.
+	AuditReader audit.Reader
+
+	// TrustedProxies is the proxy set the audit middleware honours
+	// X-Forwarded-For behind. nil records the peer address.
+	TrustedProxies []*net.IPNet
+
 	// PayloadReader serves /payloads/* read-side endpoints (the Logs view).
 	// nil disables them — e.g. minimal builds or deployments where captured
 	// bodies are consumed from a separate store.
@@ -112,6 +125,10 @@ func Mount(r chi.Router, d Deps) huma.API {
 		r.Use(d.Sessions.Middleware)
 	}
 	r.Use(AdminTokenMiddleware(d.AdminToken))
+	// Audit last in the chain so it sees the Actor either auth path set.
+	if d.Audit != nil {
+		r.Use(audit.Middleware(d.Audit, d.TrustedProxies))
+	}
 
 	cfg := huma.DefaultConfig("Wyolet Relay — Control", httpapi.Version)
 	cfg.Info.Description = "Admin plane. Authentication, catalog CRUD, and " +
@@ -145,6 +162,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
 	registerLogs(api, d, protect)
+	registerAudit(api, d, protect)
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in app/ratelimit). The spec is
