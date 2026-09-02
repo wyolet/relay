@@ -150,6 +150,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		ModelName:             modelRef,
 		RawModelName:          in.ModelName,
 		Policy:                principal.Policy,
+		UserID:                principal.UserID,
 		PayloadLoggingEnabled: principal.PayloadLogging,
 		Snapshot:              SnapshotFrom(ctx),
 	})

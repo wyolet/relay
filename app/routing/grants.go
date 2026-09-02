@@ -54,11 +54,12 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model)
 // PolicylessAllows reports whether m is reachable by a request that resolved
 // no policy — the inventory question matching resolvePolicyless, which is the
 // only thing that serves such a request. adapter narrows the answer to
-// bindings declaring that wire shape; empty accepts any.
+// bindings declaring that wire shape; empty accepts any. userID is the calling
+// user, scoping the pool exactly as resolution does.
 //
 // Mirrors resolvePolicyless step for step: enabled model, not deprecated,
 // enabled binding, resolvable host, and a key the D73 pool actually yields.
-func PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapters.Name) bool {
+func PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapters.Name, userID string) bool {
 	if m == nil || !m.IsEnabled() || isDeprecated(m) {
 		return false
 	}
@@ -73,7 +74,7 @@ func PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapter
 		if !ok {
 			continue
 		}
-		if len(policylessKeys(snap, m, h)) > 0 {
+		if len(policylessKeys(snap, m, h, userID)) > 0 {
 			return true
 		}
 	}

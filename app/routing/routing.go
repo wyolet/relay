@@ -79,6 +79,11 @@ type Request struct {
 	// flow, which only a project-less personal key can reach.
 	Policy *policy.Policy
 
+	// UserID is the calling user, from the credential's principal. It scopes
+	// the policy-less pool to that user's own host keys; empty (no user
+	// resolved) narrows the pool to system-owned keys.
+	UserID string
+
 	// PayloadLoggingEnabled is the caller's own opt-in for body capture;
 	// the matched Policy's flag is OR'd onto it.
 	PayloadLoggingEnabled bool
@@ -145,15 +150,41 @@ func (p *Plan) UpstreamModel() string {
 	return p.Snapshot.Upstream()
 }
 
+// settingsReader is the narrow settings read the policy-less gate needs;
+// *appcatalog.Catalog satisfies it.
+type settingsReader interface {
+	Setting(section string) (any, bool)
+}
+
 // Resolver wraps a Catalog snapshot accessor and answers Resolve calls.
 type Resolver struct {
 	cat *appcatalog.Catalog
+	cfg settingsReader
+
+	// requirePolicy refuses the policy-less flow outright, whatever the
+	// inference setting says. See RequirePolicy.
+	requirePolicy bool
 }
+
+// Option configures a Resolver at composition time.
+type Option func(*Resolver)
+
+// RequirePolicy refuses policy-less traffic whatever
+// settings.Inference.AllowMissingPolicy says. RBAC authorization wires it:
+// there a credential's grants are the whole access model, so a key whose
+// policy does not resolve has no access rather than the shared pool's (D82).
+func RequirePolicy() Option { return func(r *Resolver) { r.requirePolicy = true } }
 
 // New constructs a Resolver against the live catalog. The Resolver
 // reads cat.Current() on every Resolve — picking up the latest snapshot
 // after any NOTIFY-driven reload.
-func New(cat *appcatalog.Catalog) *Resolver { return &Resolver{cat: cat} }
+func New(cat *appcatalog.Catalog, opts ...Option) *Resolver {
+	r := &Resolver{cat: cat, cfg: cat}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
 
 // Resolve maps the inbound request to a Plan. Errors are typed; handlers
 // pick the appropriate HTTP status.
@@ -178,7 +209,7 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
 		}
-		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID)
+		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID, req.UserID)
 		if err == nil && plan != nil {
 			plan.PayloadLoggingEnabled = req.PayloadLoggingEnabled
 			applyAlias(plan, alias, req)
@@ -396,10 +427,25 @@ func isDeprecated(m *model.Model) bool {
 	return false
 }
 
-// allowPolicylessTraffic reads settings.Inference.AllowMissingPolicy.
-// Missing or malformed setting → false (closed default).
+// PolicylessTrafficAllowed reports whether a caller whose credential
+// resolved no policy is served at all. Exported so the /v1/models listing
+// asks the same gate resolution applies and cannot advertise what a
+// request would be refused. Nil-safe.
+func (r *Resolver) PolicylessTrafficAllowed() bool {
+	if r == nil {
+		return false
+	}
+	return r.allowPolicylessTraffic()
+}
+
+// allowPolicylessTraffic reads settings.Inference.AllowMissingPolicy, which
+// only single-user authorization consults — RequirePolicy closes the flow
+// ahead of it. Missing or malformed setting → false (closed default).
 func (r *Resolver) allowPolicylessTraffic() bool {
-	v, ok := r.cat.Setting(settings.SectionInference)
+	if r.requirePolicy || r.cfg == nil {
+		return false
+	}
+	v, ok := r.cfg.Setting(settings.SectionInference)
 	if !ok {
 		return false
 	}
@@ -414,7 +460,7 @@ func (r *Resolver) allowPolicylessTraffic() bool {
 // the relay has any enabled hostkey for the host. No policy filter, no
 // policy-level rate limits — Plan.Policy is nil, Plan.Keys is the full
 // pool of hostkeys for the chosen host.
-func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot, pinHostID string) (*Plan, error) {
+func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot, pinHostID, userID string) (*Plan, error) {
 	var (
 		anyEnabledMod bool
 		anyEnabledBnd bool
@@ -445,7 +491,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				continue
 			}
 			anyEnabledBnd = true
-			keys := policylessKeys(snap, m, h)
+			keys := policylessKeys(snap, m, h, userID)
 			if len(keys) == 0 {
 				continue
 			}
@@ -477,25 +523,31 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 // synthetic anonymous key; everything else draws from the shared pool and
 // passes the tier gate. The single definition of the D73 pool: resolution and
 // the /v1/models listing both read it, so the two cannot drift.
-func policylessKeys(snap *appcatalog.Snapshot, m *model.Model, h *host.Host) []*hostkey.HostKey {
+func policylessKeys(snap *appcatalog.Snapshot, m *model.Model, h *host.Host, userID string) []*hostkey.HostKey {
 	if h.Spec.NoAuth {
 		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
 	}
-	return tierAllowedKeys(snap, sharedHostKeys(snap, h.Meta.ID), m.Meta.ID, h.Meta.ID)
+	return tierAllowedKeys(snap, sharedHostKeys(snap, h.Meta.ID, userID), m.Meta.ID, h.Meta.ID)
 }
 
 // sharedHostKeys returns the host's keys a request with no policy may draw
-// on: system- or user-owned ones. A project's credential is reachable only
-// through that project's policy, so a policy-less personal key can never
-// spend it — nothing would hold the spend inside the project's limits or
-// attribution. The result is a fresh slice; tierAllowedKeys filters in place.
-func sharedHostKeys(snap *appcatalog.Snapshot, hostID string) []*hostkey.HostKey {
+// on: the operator's system-owned ones, plus userID's own. Another user's
+// key is their personal credential, and a project's is reachable only
+// through that project's policy — spending either here would put the cost
+// outside the limits and the attribution that own it. An empty userID
+// (no user resolved) leaves the system-owned keys. The result is a fresh
+// slice; tierAllowedKeys filters in place.
+func sharedHostKeys(snap *appcatalog.Snapshot, hostID, userID string) []*hostkey.HostKey {
 	pool := snap.HostKeysForHost(hostID)
 	out := make([]*hostkey.HostKey, 0, len(pool))
 	for _, k := range pool {
 		switch k.Meta.Owner.Kind {
-		case meta.OwnerSystem, meta.OwnerUser:
+		case meta.OwnerSystem:
 			out = append(out, k)
+		case meta.OwnerUser:
+			if userID != "" && k.Meta.Owner.ID == userID {
+				out = append(out, k)
+			}
 		}
 	}
 	return out

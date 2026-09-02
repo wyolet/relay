@@ -66,8 +66,8 @@ func newTenancy() (*team.Team, *project.Project) {
 	return tm, proj
 }
 
-// D73: the pool a policy-less request draws on is the host's shared
-// credentials — system- or user-owned. A project's credential is reachable
+// D73: the pool a policy-less request draws on is the host's system-owned
+// credentials plus the caller's own. A project's credential is reachable
 // only through that project's policy, which is what holds the spend inside
 // its limits and attribution — TestResolvePolicyless_SkipsProjectOwnedKeys
 // pins that half. What is left is which of the remaining owner kinds count as
@@ -75,6 +75,7 @@ func newTenancy() (*team.Team, *project.Project) {
 func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 	tm, proj := newTenancy()
 	off := false
+	callerID := meta.NewID()
 
 	for _, tc := range []struct {
 		name    string
@@ -83,7 +84,8 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 		want    bool // the key serves policy-less traffic
 	}{
 		{name: "system-owned is shared", owner: meta.Owner{Kind: meta.OwnerSystem}, want: true},
-		{name: "user-owned is shared", owner: meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}, want: true},
+		{name: "the caller's own is spendable", owner: meta.Owner{Kind: meta.OwnerUser, ID: callerID}, want: true},
+		{name: "another user's is not", owner: meta.Owner{Kind: meta.OwnerUser, ID: meta.NewID()}},
 		{name: "disabled is not", owner: meta.Owner{Kind: meta.OwnerSystem}, enabled: &off},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,7 +94,7 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 			f.keyA.Spec.Enabled = tc.enabled
 			snap := tenantedSnapshot(t, f, []*hostkey.HostKey{f.keyA}, proj, tm)
 
-			plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "")
+			plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", callerID)
 			if !tc.want {
 				if !errors.Is(err, ErrNoKeys) {
 					t.Fatalf("err = %v, want ErrNoKeys — this key must not serve policy-less traffic", err)
@@ -104,7 +106,7 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 			}
 			// The listing answers the same question, or it advertises models
 			// the flow would refuse.
-			if got := PolicylessAllows(snap, f.model, ""); got != tc.want {
+			if got := PolicylessAllows(snap, f.model, "", callerID); got != tc.want {
 				t.Errorf("PolicylessAllows = %v, want %v — the listing and the flow disagree", got, tc.want)
 			}
 		})
@@ -123,7 +125,7 @@ func TestResolvePolicyless_PlanCarriesNoPolicy(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "")
+	plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
 	if err != nil {
 		t.Fatalf("resolvePolicyless: %v", err)
 	}
@@ -186,7 +188,7 @@ func TestResolvePolicyless_Diagnoses(t *testing.T) {
 			if tc.mutate == nil {
 				pin = f.hostB // a host the model has no binding on
 			}
-			_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], pin)
+			_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], pin, "")
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
@@ -303,8 +305,8 @@ func TestPolicylessAllowsMatchesResolvePolicyless(t *testing.T) {
 			for round := 0; round < 40; round++ {
 				snap, _, models := randomGrantCatalog(r)
 				for _, m := range models {
-					listed := PolicylessAllows(snap, m, "")
-					_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{m}, &m.Spec.Snapshots[0], "")
+					listed := PolicylessAllows(snap, m, "", "")
+					_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{m}, &m.Spec.Snapshots[0], "", "")
 					if served := err == nil; listed != served {
 						t.Fatalf("round %d, model %q: PolicylessAllows=%v but resolvePolicyless served=%v (err %v)",
 							round, m.Meta.Name, listed, served, err)
@@ -576,10 +578,10 @@ func TestTierGate_MatrixAcrossResolutionAndListing(t *testing.T) {
 			if got := PolicyAllows(snap, caller, f.model); got != tc.grant {
 				t.Errorf("PolicyAllows = %v, want %v", got, tc.grant)
 			}
-			if got := PolicylessAllows(snap, f.model, ""); got != tc.grant {
+			if got := PolicylessAllows(snap, f.model, "", ""); got != tc.grant {
 				t.Errorf("PolicylessAllows = %v, want %v", got, tc.grant)
 			}
-			_, err = (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "")
+			_, err = (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
 			if tc.grant && err != nil {
 				t.Errorf("resolvePolicyless: %v", err)
 			}
@@ -702,7 +704,7 @@ func TestResolve_BindingServesOnlyItsListedSnapshots(t *testing.T) {
 		}
 	}
 	// The policy-less flow applies the same snapshot filter.
-	if _, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[1], f.hostA); !errors.Is(err, ErrNoHostBinding) {
+	if _, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[1], f.hostA, ""); !errors.Is(err, ErrNoHostBinding) {
 		t.Errorf("err = %v, want ErrNoHostBinding — that host's binding does not serve this snapshot", err)
 	}
 }
@@ -747,13 +749,13 @@ func TestPolicyAllows_NilInputs(t *testing.T) {
 	if PolicyAllows(snap, f.tierA, nil) {
 		t.Error("a nil model is reachable")
 	}
-	if PolicylessAllows(snap, nil, "") {
+	if PolicylessAllows(snap, nil, "", "") {
 		t.Error("a nil model is listed policy-less")
 	}
 	off := false
 	disabledModel := *f.model
 	disabledModel.Spec.Enabled = &off
-	if PolicylessAllows(snap, &disabledModel, "") {
+	if PolicylessAllows(snap, &disabledModel, "", "") {
 		t.Error("a disabled model is listed")
 	}
 }

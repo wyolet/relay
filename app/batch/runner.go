@@ -75,10 +75,18 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID, to
 	if rk, ok := snap.KeyByHash(relayKeyHash); ok && rk != nil {
 		payloadLogging = rk.Spec.PayloadLoggingEnabled
 	}
+	// A policy-less item draws on the submitter's own host keys, so the
+	// submitting user has to reach routing; a service-account submission
+	// leaves it empty and sees the system-owned pool only.
+	userID := ""
+	if attr.PrincipalKind == string(key.PrincipalUser) {
+		userID = attr.PrincipalID
+	}
 	plan, err := rn.Resolver.Resolve(routing.Request{
 		ModelName:             modelName,
 		RawModelName:          modelName,
 		Policy:                pol,
+		UserID:                userID,
 		PayloadLoggingEnabled: payloadLogging,
 		Snapshot:              snap,
 	})

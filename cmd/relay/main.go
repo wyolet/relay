@@ -608,11 +608,17 @@ func main() {
 		slog.Error("batch payload store init failed", "err", err)
 		os.Exit(1)
 	}
+	// RBAC makes a credential's grants the whole access model, so a key whose
+	// policy does not resolve has no access rather than the shared pool's.
+	var routingOpts []routing.Option
+	if cfg.Authz == config.AuthzRBAC {
+		routingOpts = append(routingOpts, routing.RequirePolicy())
+	}
 	batchQueue := jobq.New(st.Pool(), batchPayloads, jobq.Options{})
 	batchSvc := batch.NewService(
 		batch.NewStore(st.Pool()),
 		batchQueue,
-		&batch.Runner{Resolver: routing.New(cat), Pipeline: pl, Specs: specRegistry, Catalog: cat},
+		&batch.Runner{Resolver: routing.New(cat, routingOpts...), Pipeline: pl, Specs: specRegistry, Catalog: cat},
 		batchCaller,
 	)
 	batchQueue.Register(batch.Queue, batchSvc.Handler())
@@ -634,7 +640,7 @@ func main() {
 		Pinger:         st,
 		Catalog:        cat,
 		Tokens:         tokenVerifier,
-		Resolver:       routing.New(cat),
+		Resolver:       routing.New(cat, routingOpts...),
 		Pipeline:       pl,
 		Proxy:          proxyPipeline,
 		Lifecycle:      lifecycleReg,

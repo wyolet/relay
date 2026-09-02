@@ -425,6 +425,7 @@ func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, sn
 	plan, err := resolver.Resolve(routing.Request{
 		ModelName:             model,
 		Policy:                p.Policy,
+		UserID:                p.UserID,
 		PayloadLoggingEnabled: p.PayloadLogging,
 		SkipKeyCheck:          true,
 		Snapshot:              snap,

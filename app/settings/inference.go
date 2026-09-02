@@ -15,6 +15,10 @@ type Inference struct {
 	// ratelimits still apply). When false, requests from such keys are
 	// rejected with 403.
 	//
+	// Read only under single-user authorization (RELAY_AUTHZ=single).
+	// Under rbac a credential's grants are the whole access model, so a
+	// key with no policy is rejected whatever this says.
+	//
 	// Default false. Turn on only for self-hosted setups where the
 	// operator is the caller (single-tenant) and wants a god-mode key.
 	AllowMissingPolicy bool `json:"allowMissingPolicy"`
