@@ -65,6 +65,10 @@ type InboundInput struct {
 	Policy                            *Policy
 	ProviderSlug, ModelSlug, HostSlug string
 
+	// ModelID buckets a per-model RLBinding's counters; ignored for the
+	// policy's flat rate limit.
+	ModelID string
+
 	// TeamID anchors the reservation's hash tag when the caller has a
 	// project; empty keeps the policy-slug tag.
 	TeamID string
@@ -78,7 +82,7 @@ type InboundInput struct {
 // Returns (nil, nil) when there is nothing to check: no applicable RL and no
 // token to check for revocation.
 func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgratelimit.Reservation, error) {
-	metered := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug)
+	metered := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug, in.ModelID)
 	rules := metered
 	if in.TokenJTI != "" {
 		// First in the slice: a revoked token must answer 401, not the 429 an
@@ -138,15 +142,21 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 		return nil, err
 	}
 
-	modelSlug, hostSlug := "", ""
+	modelSlug, modelID, hostSlug := "", "", ""
 	if in.Model != nil {
 		modelSlug = in.Model.Meta.Name
+		modelID = in.Model.Meta.ID
 	}
 	if in.Host != nil {
 		hostSlug = in.Host.Meta.Name
 	}
+	// A miss here means the key's tier policy is disabled or gone. Unreachable
+	// in practice: the tier gate drops such a key before it is ever selected,
+	// because PolicyAllowsCombo grants nothing for a policy that is not
+	// enabled. Left nil-tolerant rather than fatal — an unmetered request is
+	// the failure this ordering exists to prevent.
 	tier, _ := s.snap.Policy(ctx, key.Spec.PolicyID)
-	rules := s.rulesFor(ctx, tier, in.Provider, modelSlug, hostSlug)
+	rules := s.rulesFor(ctx, tier, in.Provider, modelSlug, hostSlug, modelID)
 	if len(rules) == 0 || s.limiter == nil {
 		return &Acquisition{Key: key}, nil
 	}
@@ -217,12 +227,14 @@ func (a *Acquisition) KeyHash() string {
 }
 
 // rulesFor resolves pol's applicable RL for the request triple and
-// converts it to limiter rules. Returns nil when nothing applies.
-func (s *Service) rulesFor(ctx context.Context, pol *Policy, providerSlug, modelSlug, hostSlug string) []pkgratelimit.Rule {
+// converts it to limiter rules. Returns nil when nothing applies. modelID
+// identifies the request's model so a per-model RLBinding gets its own
+// bucket; it is dropped from the key for the policy-wide flat limit.
+func (s *Service) rulesFor(ctx context.Context, pol *Policy, providerSlug, modelSlug, hostSlug, modelID string) []pkgratelimit.Rule {
 	if pol == nil || s.snap == nil {
 		return nil
 	}
-	rlID := pol.SelectRateLimitID(providerSlug, modelSlug, hostSlug)
+	rlID, perModel := pol.SelectRateLimitID(providerSlug, modelSlug, hostSlug)
 	if rlID == "" {
 		return nil
 	}
@@ -230,5 +242,8 @@ func (s *Service) rulesFor(ctx context.Context, pol *Policy, providerSlug, model
 	if !ok {
 		return nil
 	}
-	return pol.ResolveRules(rl)
+	if !perModel {
+		modelID = ""
+	}
+	return pol.ResolveRules(rl, modelID)
 }

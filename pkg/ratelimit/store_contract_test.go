@@ -104,7 +104,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			reservations[i] = res
 		}
 		for i, res := range reservations {
-			if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"tokens": 20}}); err != nil {
+			if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"input": 12, "output": 8}}); err != nil {
 				t.Fatalf("commit %d: %v", i+1, err)
 			}
 		}
@@ -114,7 +114,7 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if err != nil {
 			t.Fatalf("6th reserve (rate==amount should pass): %v", err)
 		}
-		_ = l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"tokens": 1}})
+		_ = l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"input": 1}})
 		_, err = l.Reserve(ctx, "test-policy", rules)
 		if !errors.Is(err, ErrExceeded) {
 			t.Fatalf("expected ErrExceeded after 101 tokens, got %v", err)
@@ -138,10 +138,10 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 		if err != nil {
 			t.Fatalf("reserve: %v", err)
 		}
-		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"tokens": 50}}); err != nil {
+		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"input": 30, "output": 20}}); err != nil {
 			t.Fatalf("commit 1: %v", err)
 		}
-		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"tokens": 50}}); err != nil {
+		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"input": 30, "output": 20}}); err != nil {
 			t.Fatalf("commit 2: %v", err)
 		}
 		// After idempotent double-commit the slot is freed: a new reserve succeeds.

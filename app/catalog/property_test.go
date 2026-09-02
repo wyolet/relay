@@ -60,6 +60,8 @@ func runProperty(t *testing.T, seed int64, events int) {
 		t.Fatalf("initial reload: %v", err)
 	}
 
+	orphanPolID, orphanProjID, orphanKeyID := meta.NewID(), meta.NewID(), meta.NewID()
+
 	// Operate on the same set of ids the fixture established. The reconciler
 	// is exercised via toggle-disable, toggle-enable, delete, and re-upsert.
 	all := []func(){
@@ -117,6 +119,25 @@ func runProperty(t *testing.T, seed int64, events int) {
 			cp.Spec.Enabled = togglePtr(pr0.Spec.Enabled)
 			pr0.Spec.Enabled = cp.Spec.Enabled
 			_ = c.ApplyPricingUpsert(&cp)
+		},
+		// A policy owned by a project the snapshot does not hold: it is
+		// dropped, and every key naming it has to go with it (build and
+		// reconcile must reach the same fixpoint here).
+		func() {
+			cp := *pols[0]
+			cp.Meta.ID = orphanPolID
+			cp.Meta.Name = "orphan-project-policy"
+			cp.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: orphanProjID}
+			cp.Spec.Enabled = togglePtr(cp.Spec.Enabled)
+			_ = c.ApplyPolicyUpsert(&cp)
+		},
+		func() {
+			cp := *rks[0]
+			cp.Meta.ID = orphanKeyID
+			cp.Meta.Name = "key-on-orphan-policy"
+			cp.Spec.KeyHash = "orphan-hash"
+			cp.Spec.PolicyID = orphanPolID
+			_ = c.ApplyKeyUpsert(&cp)
 		},
 		// Hard deletes (the reconciler treats absent as no-op on second call).
 		func() { _ = c.ApplyModelDelete(models[0].Meta.ID) },

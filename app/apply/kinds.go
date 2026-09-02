@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
@@ -240,7 +241,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := planKind(ctx, b, kindWiring[manifest.PolicyDTO, policy.Policy]{
 		Kind: "Policy", Docs: polDocs, Names: b.idx.Policies, Rows: b.rows.Policies,
 		To: manifest.ToPolicy, Meta: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
-		Upsert: s.Policy.Upsert, Delete: s.Policy.Delete,
+		Upsert: s.Policy.Upsert, Delete: deletePolicyWithDetach(s),
 	}); err != nil {
 		return err
 	}
@@ -301,6 +302,38 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		b.entries = append(b.entries, b.deletes[i]...)
 	}
 	return nil
+}
+
+// deletePolicyWithDetach runs the same reference cleanup, and the same
+// refusal, the control API's delete path runs. Pruning a policy without them
+// leaves keys and service accounts pointing at a row that is gone, or host
+// keys with no tier policy at all.
+func deletePolicyWithDetach(s *Stores) func(context.Context, string) error {
+	return detachThenDelete(policy.DetachStores{
+		Keys:            s.Key,
+		ServiceAccounts: s.ServiceAccount,
+		HostKeys:        s.HostKey,
+		Hosts:           s.Host,
+	}, s.Policy.Delete)
+}
+
+func detachThenDelete(refs policy.DetachStores, del func(context.Context, string) error) func(context.Context, string) error {
+	return func(ctx context.Context, id string) error {
+		// A tier policy cannot be removed while host keys mirror it: their
+		// policyId is required, so there is no valid row to leave behind.
+		names, err := policy.HostKeysUsingPolicy(ctx, refs, id)
+		if err != nil {
+			return err
+		}
+		if len(names) > 0 {
+			return fmt.Errorf("policy %s is the tier policy of host key(s) %s: reattach them before pruning it",
+				id, strings.Join(names, ", "))
+		}
+		if err := policy.Detach(ctx, refs, id); err != nil {
+			return err
+		}
+		return del(ctx, id)
+	}
 }
 
 // checkRoleDocs refuses Role documents apply must not write: a name the

@@ -186,9 +186,10 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		maxAttempts = len(req.Keys)
 	}
 
-	modelSlug, hostSlug := "", ""
+	modelSlug, modelID, hostSlug := "", "", ""
 	if req.Model != nil {
 		modelSlug = req.Model.Meta.Name
+		modelID = req.Model.Meta.ID
 	}
 	if req.Host != nil {
 		hostSlug = req.Host.Meta.Name
@@ -198,6 +199,7 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		Policy:       req.Policy,
 		ProviderSlug: req.Provider,
 		ModelSlug:    modelSlug,
+		ModelID:      modelID,
 		HostSlug:     hostSlug,
 		TeamID:       req.TeamID,
 		TokenJTI:     req.TokenJTI,

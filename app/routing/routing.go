@@ -36,6 +36,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
@@ -205,8 +206,10 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		chosen        *model.Model
 		chosenBnd     *binding.Binding
 		chosenHost    *host.Host
+		chosenKeys    []*hostkey.HostKey
 		anyEnabledMod bool
 		anyEnabledBnd bool
+		anyAllowed    bool // an allowed candidate existed but had no usable key
 	)
 	// A Policy with neither ModelIDs nor Models set is an *implicit
 	// wildcard*: it grants every model reachable through the policy's
@@ -251,6 +254,20 @@ candidates:
 			if !allowed {
 				continue
 			}
+			anyAllowed = true
+			// Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID. A
+			// candidate the policy allows but has no usable key for is not the
+			// answer: keep walking, since a later binding of the same model may
+			// reach a host the policy does hold a key for. Proxy mode
+			// (SkipKeyCheck) bypasses the gate; the caller's own upstream
+			// credentials replace the keypool.
+			if !req.SkipKeyCheck {
+				keys := candidateKeys(snap, pol, m, h)
+				if len(keys) == 0 {
+					continue
+				}
+				chosenKeys = keys
+			}
 			chosen = m
 			chosenBnd = hb
 			chosenHost = h
@@ -264,31 +281,13 @@ candidates:
 		if !anyEnabledBnd {
 			return nil, ErrNoHostBinding
 		}
+		if anyAllowed {
+			return nil, ErrNoKeys
+		}
 		return nil, ErrModelNotInPolicy
 	}
 	h := chosenHost
-
-	// 6. Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID.
-	// Proxy mode (SkipKeyCheck) bypasses this gate; the caller's own
-	// upstream credentials replace the keypool.
-	var keys []*hostkey.HostKey
-	if !req.SkipKeyCheck {
-		if h.Spec.NoAuth {
-			// Keyless upstream (e.g. self-hosted Ollama): inject the synthetic
-			// anonymous key so the keypool path is unchanged (one candidate,
-			// host-scoped breaker), but no real HostKey is required and no auth
-			// header is sent. Bypasses the tier gate — the anon key has no tier.
-			keys = []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
-		} else {
-			keys = hostKeysForHost(snap, pol, h.Meta.ID)
-			// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
-			// (model, host). An implicit-wildcard tier policy allows everything.
-			keys = tierAllowedKeys(snap, keys, chosen.Meta.ID, h.Meta.ID)
-			if len(keys) == 0 {
-				return nil, ErrNoKeys
-			}
-		}
-	}
+	keys := chosenKeys
 
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
 	pr, _ := snap.PricingForBinding(chosenBnd)
@@ -352,6 +351,20 @@ func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model
 		return []*model.Model{ref.Model}, ref.Snapshot, ref.HostID, &ref
 	}
 	return nil, nil, "", nil
+}
+
+// candidateKeys returns the keys this policy may spend against h for m, or
+// nil when the pair is unreachable. A keyless upstream (e.g. self-hosted
+// Ollama) gets the synthetic anonymous key so the keypool path is unchanged
+// (one candidate, host-scoped breaker) with no real HostKey and no auth
+// header; it bypasses the tier gate, having no tier.
+func candidateKeys(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, h *host.Host) []*hostkey.HostKey {
+	if h.Spec.NoAuth {
+		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
+	}
+	// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
+	// (model, host). An implicit-wildcard tier policy allows everything.
+	return tierAllowedKeys(snap, hostKeysForHost(snap, pol, h.Meta.ID), m.Meta.ID, h.Meta.ID)
 }
 
 // tierAllowedKeys drops keys whose host-owned tier policy doesn't grant the
@@ -432,10 +445,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				continue
 			}
 			anyEnabledBnd = true
-			keys := snap.HostKeysForHost(h.Meta.ID)
-			if h.Spec.NoAuth {
-				keys = []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
-			}
+			keys := policylessKeys(snap, m, h)
 			if len(keys) == 0 {
 				continue
 			}
@@ -460,6 +470,35 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 		return nil, ErrNoHostBinding
 	}
 	return nil, ErrNoKeys
+}
+
+// policylessKeys returns the keys a request with no policy may spend against
+// h for m, or nil when the pair is unreachable. A keyless upstream gets the
+// synthetic anonymous key; everything else draws from the shared pool and
+// passes the tier gate. The single definition of the D73 pool: resolution and
+// the /v1/models listing both read it, so the two cannot drift.
+func policylessKeys(snap *appcatalog.Snapshot, m *model.Model, h *host.Host) []*hostkey.HostKey {
+	if h.Spec.NoAuth {
+		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
+	}
+	return tierAllowedKeys(snap, sharedHostKeys(snap, h.Meta.ID), m.Meta.ID, h.Meta.ID)
+}
+
+// sharedHostKeys returns the host's keys a request with no policy may draw
+// on: system- or user-owned ones. A project's credential is reachable only
+// through that project's policy, so a policy-less personal key can never
+// spend it — nothing would hold the spend inside the project's limits or
+// attribution. The result is a fresh slice; tierAllowedKeys filters in place.
+func sharedHostKeys(snap *appcatalog.Snapshot, hostID string) []*hostkey.HostKey {
+	pool := snap.HostKeysForHost(hostID)
+	out := make([]*hostkey.HostKey, 0, len(pool))
+	for _, k := range pool {
+		switch k.Meta.Owner.Kind {
+		case meta.OwnerSystem, meta.OwnerUser:
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID string) []*hostkey.HostKey {

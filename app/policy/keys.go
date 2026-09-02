@@ -18,6 +18,24 @@ func reserveScope(teamID, policySlug string) string {
 	return policySlug
 }
 
+// ruleSubject renders the bucket family a policy's rate rules count in. The
+// limiter turns it into "limit:{<scope>}:policy:<subject>:<rule index>:<meter>",
+// so the full key is:
+//
+//	limit:{<scope>}:policy:<policy slug>:rl:<rateLimit id>[:m:<model id>]:<i>:<meter>
+//
+// The RateLimit id is in the key because one policy can carry several through
+// RLBindings, and the model id because two bindings meter different models —
+// without both, every per-model binding shared one bucket. modelID is empty
+// for the flat Spec.RateLimitID, whose single bucket spans every model.
+// One concatenation, not two: this runs per rule per request.
+func ruleSubject(policySlug, rateLimitID, modelID string) string {
+	if modelID == "" {
+		return policySlug + ":rl:" + rateLimitID
+	}
+	return policySlug + ":rl:" + rateLimitID + ":m:" + modelID
+}
+
 // revokedRuleKey returns the rule key for a token's revocation check; the
 // limiter prepends "limit:{<scope>}:" to it.
 func revokedRuleKey(jti string) string { return "jti:" + jti }

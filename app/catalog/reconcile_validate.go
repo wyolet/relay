@@ -43,8 +43,17 @@ func validateHostKeyInSnap(k *hostkey.HostKey, s *Snapshot) error {
 	if _, ok := s.hostsByID[k.Spec.HostID]; !ok {
 		return fmt.Errorf("hostkey %q: spec.hostId %q does not resolve", k.Meta.Name, k.Spec.HostID)
 	}
-	if _, ok := s.policiesByID[k.Spec.PolicyID]; !ok {
+	// Disabled included: the key survives its tier being switched off and
+	// comes back when it returns. The tier gate denies it meanwhile, because
+	// PolicyAllowsCombo grants nothing for a policy that is not enabled.
+	pol, ok := s.policyLookup(k.Spec.PolicyID)
+	if !ok {
 		return fmt.Errorf("hostkey %q: spec.policyId %q does not resolve", k.Meta.Name, k.Spec.PolicyID)
+	}
+	// Same invariant sanitizeHostKey enforces, so a policy re-pointed at
+	// another host evicts the keys that mirrored it.
+	if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != k.Spec.HostID {
+		return fmt.Errorf("hostkey %q: policy %q is not host-owned by host %q", k.Meta.Name, pol.Meta.Name, k.Spec.HostID)
 	}
 	return nil
 }
@@ -104,10 +113,8 @@ func validatePricingInSnap(p *pricing.Pricing, s *Snapshot) error {
 }
 
 func validateKeyInSnap(k *key.Key, s *Snapshot) error {
-	if k.Spec.PolicyID != "" {
-		if _, ok := s.policiesByID[k.Spec.PolicyID]; !ok {
-			return fmt.Errorf("key %q: policyId %q does not resolve", k.Meta.Name, k.Spec.PolicyID)
-		}
+	if k.Spec.PolicyID != "" && !s.policyResolvable(k.Spec.PolicyID) {
+		return fmt.Errorf("key %q: policyId %q does not resolve", k.Meta.Name, k.Spec.PolicyID)
 	}
 	if k.Spec.Principal.Kind == key.PrincipalServiceAccount {
 		if _, ok := s.serviceAccountsByID[k.Spec.Principal.ID]; !ok {
@@ -121,10 +128,8 @@ func validateServiceAccountInSnap(sa *serviceaccount.ServiceAccount, s *Snapshot
 	if _, ok := s.projectsByID[sa.Spec.ProjectID]; !ok {
 		return fmt.Errorf("serviceaccount %q: spec.projectId %q does not resolve", sa.Meta.Name, sa.Spec.ProjectID)
 	}
-	if sa.Spec.PolicyID != "" {
-		if _, ok := s.policiesByID[sa.Spec.PolicyID]; !ok {
-			return fmt.Errorf("serviceaccount %q: spec.policyId %q does not resolve", sa.Meta.Name, sa.Spec.PolicyID)
-		}
+	if sa.Spec.PolicyID != "" && !s.policyResolvable(sa.Spec.PolicyID) {
+		return fmt.Errorf("serviceaccount %q: spec.policyId %q does not resolve", sa.Meta.Name, sa.Spec.PolicyID)
 	}
 	return nil
 }
@@ -150,7 +155,7 @@ func validatePolicyBindingInSnap(b *policybinding.PolicyBinding, s *Snapshot) er
 	if _, ok := s.projectsByID[b.Spec.ProjectID]; !ok {
 		return fmt.Errorf("policybinding %q: spec.projectId %q does not resolve", b.Meta.Name, b.Spec.ProjectID)
 	}
-	if _, ok := s.policiesByID[b.Spec.PolicyID]; !ok {
+	if !s.policyResolvable(b.Spec.PolicyID) {
 		return fmt.Errorf("policybinding %q: spec.policyId %q does not resolve", b.Meta.Name, b.Spec.PolicyID)
 	}
 	return nil

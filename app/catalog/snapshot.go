@@ -53,6 +53,12 @@ type Snapshot struct {
 
 	policiesByID   map[string]*policy.Policy
 	policiesByName map[string]*policy.Policy
+	// disabledPoliciesByID holds the rows an operator switched off. They are
+	// deliberately out of every index above — nothing routes through them —
+	// but a key, service account or policy binding that names one is KEPT,
+	// and resolution hands the row back so the request answers 403
+	// policy_disabled instead of falling through to a broader grant.
+	disabledPoliciesByID map[string]*policy.Policy
 
 	modelsByID map[string]*model.Model
 	// modelsByName is multivalued: an alias may legitimately point at more
@@ -103,6 +109,10 @@ type Snapshot struct {
 	modelTemplates map[string]*model.Model
 
 	hostKeysByID map[string]*hostkey.HostKey
+	// hostKeysByHost is the per-host pool, sorted by slug, materialized at
+	// build/reconcile so the request path takes a slice header instead of
+	// scanning and sorting every key in the deployment.
+	hostKeysByHost map[string][]*hostkey.HostKey
 
 	rateLimitsByID   map[string]*ratelimit.RateLimit
 	rateLimitsByName map[string]*ratelimit.RateLimit
@@ -358,6 +368,15 @@ func (s *Snapshot) Policy(id string) (*policy.Policy, bool) {
 	return p, ok
 }
 
+// DisabledPolicy returns the Policy with this id when it is present but
+// switched off. Resolution calls it after Policy misses, so a credential
+// pointing at a disabled policy answers 403 policy_disabled rather than
+// silently resolving to something broader.
+func (s *Snapshot) DisabledPolicy(id string) (*policy.Policy, bool) {
+	p, ok := s.disabledPoliciesByID[id]
+	return p, ok
+}
+
 // PolicyByName returns the enabled Policy with this slug, or false.
 func (s *Snapshot) PolicyByName(name string) (*policy.Policy, bool) {
 	p, ok := s.policiesByName[name]
@@ -488,20 +507,27 @@ func (s *Snapshot) AllPricings() []*pricing.Pricing {
 // HostKeysForHost returns every enabled HostKey whose Spec.HostID
 // matches hostID. Order is by hostkey slug — stable across snapshots.
 // Used by routing's policy-less flow (settings.Inference.AllowMissingPolicy)
-// where the policy doesn't narrow the pool.
+// where the policy doesn't narrow the pool. The returned slice is the
+// snapshot's own: callers must not mutate or append to it.
 func (s *Snapshot) HostKeysForHost(hostID string) []*hostkey.HostKey {
-	out := make([]*hostkey.HostKey, 0)
+	return s.hostKeysByHost[hostID]
+}
+
+// rebuildHostKeysByHost recomputes the per-host pool from hostKeysByID.
+// Cheap enough to run whole on any host-key write — the map is small and
+// this runs off the request path.
+func (s *Snapshot) rebuildHostKeysByHost() {
+	byHost := make(map[string][]*hostkey.HostKey, len(s.hostKeysByHost))
 	for _, k := range s.hostKeysByID {
-		if k.Spec.HostID != hostID {
-			continue
-		}
 		if !k.IsEnabled() {
 			continue
 		}
-		out = append(out, k)
+		byHost[k.Spec.HostID] = append(byHost[k.Spec.HostID], k)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
-	return out
+	for _, list := range byHost {
+		sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	}
+	s.hostKeysByHost = byHost
 }
 
 // RateLimit returns the enabled RateLimit with this id, or false.

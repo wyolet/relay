@@ -229,7 +229,6 @@ type PolicySpec struct {
 	RLBindings []RLBindingDTO `json:"rlBindings,omitempty" yaml:"rlBindings,omitempty"`
 
 	KeySelection          string `json:"keySelection,omitempty"          yaml:"keySelection,omitempty"`
-	SkipDefaultLimits     bool   `json:"skipDefaultLimits,omitempty"     yaml:"skipDefaultLimits,omitempty"`
 	IncludeDeprecated     bool   `json:"includeDeprecated,omitempty"     yaml:"includeDeprecated,omitempty"`
 	Enabled               *bool  `json:"enabled,omitempty"               yaml:"enabled,omitempty"`
 	PayloadLoggingEnabled bool   `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`

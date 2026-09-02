@@ -6,10 +6,16 @@
 // it never reads or writes Snapshot maps directly.
 package catalog
 
+import "github.com/wyolet/relay/app/policy"
+
 // idSet answers "is this id present". A predicate rather than a map so the
 // reconcile paths, which run per NOTIFY event, can close over a snapshot map
 // directly instead of copying it.
 type idSet = func(id string) bool
+
+// policyLookupFn resolves a policy id to its row, enabled or not — the shape
+// a sanitizer needs when it inspects the policy rather than just its presence.
+type policyLookupFn = func(id string) (*policy.Policy, bool)
 
 func setFromIDs[T any](items []T, id func(T) string) idSet {
 	set := make(map[string]struct{}, len(items))

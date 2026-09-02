@@ -91,7 +91,10 @@ func framePrincipal(p *Principal, snap *appcatalog.Snapshot) *Principal {
 		}
 	}
 	if frame.Key != nil && frame.Key.Spec.PolicyID != "" {
-		if pol, ok := snap.Policy(frame.Key.Spec.PolicyID); ok {
+		// Disabled included, so a policy switched off mid-connection answers
+		// policy_disabled instead of falling through to the account's or the
+		// project's broader grant (D77).
+		if pol, ok := policyOrDisabled(snap, frame.Key.Spec.PolicyID); ok {
 			frame.Policy = pol
 		}
 	}

@@ -339,7 +339,6 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 
 	enabledProvs := filter(provs, (*provider.Provider).IsEnabled)
 	enabledHosts := filter(hosts, (*host.Host).IsEnabled)
-	enabledPols := filter(pols, (*policy.Policy).IsEnabled)
 	enabledRKs := filter(rks, (*key.Key).IsEnabled)
 	enabledModels := filter(models, (*model.Model).IsEnabled)
 	enabledKeys := filter(hostKeys, (*hostkey.HostKey).IsEnabled)
@@ -363,11 +362,11 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 		hostIDs[h.Meta.ID] = struct{}{}
 	}
 
-	if err := validateCross(providerIDs, hostIDs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings); err != nil {
+	if err := validateCross(providerIDs, hostIDs, enabledHosts, pols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings); err != nil {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(c.now, enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
+	snap := build(c.now, enabledProvs, enabledHosts, pols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
 		enabledRoles, enabledRoleBindings, enabledPolicyBindings)
 	// The own-scope hash index covers disabled keys too, so it is built from
 	// the unfiltered rows rather than the ones the snapshot routes on.

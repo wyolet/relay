@@ -18,8 +18,9 @@ func (s *Snapshot) clone() *Snapshot {
 		hostsByID:   shallowMap(s.hostsByID),
 		hostsByName: shallowMap(s.hostsByName),
 
-		policiesByID:   shallowMap(s.policiesByID),
-		policiesByName: shallowMap(s.policiesByName),
+		policiesByID:         shallowMap(s.policiesByID),
+		policiesByName:       shallowMap(s.policiesByName),
+		disabledPoliciesByID: shallowMap(s.disabledPoliciesByID),
 
 		modelsByID:      shallowMap(s.modelsByID),
 		modelsByName:    copySliceMap(s.modelsByName),
@@ -33,7 +34,10 @@ func (s *Snapshot) clone() *Snapshot {
 		overlaysByTarget: shallowMap(s.overlaysByTarget),
 		modelTemplates:   shallowMap(s.modelTemplates),
 
-		hostKeysByID:     shallowMap(s.hostKeysByID),
+		hostKeysByID: shallowMap(s.hostKeysByID),
+		// Replaced wholesale by rebuildHostKeysByHost, never appended in
+		// place, so the slice headers can be shared with the source.
+		hostKeysByHost:   shallowMap(s.hostKeysByHost),
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),
 		rateLimitsByName: shallowMap(s.rateLimitsByName),
 

@@ -5,12 +5,11 @@ import (
 
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/policy"
 )
 
-func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts, projects idSet, polByID map[string]*policy.Policy) {
+func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts, projects idSet, policyOf policyLookupFn) {
 	for _, k := range keys {
-		clean, keep := sanitizeHostKey(k, hosts, projects, polByID)
+		clean, keep := sanitizeHostKey(k, hosts, projects, policyOf)
 		if !keep {
 			continue
 		}
@@ -24,7 +23,7 @@ func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts, projects idSet, p
 // host-owned by the key's Host, or when a project-owned key's Project is
 // missing. Every one of those refs is required for the key to function.
 // The two drops an operator can act on are logged, once per key per build.
-func sanitizeHostKey(k *hostkey.HostKey, hosts, projects idSet, polByID map[string]*policy.Policy) (*hostkey.HostKey, bool) {
+func sanitizeHostKey(k *hostkey.HostKey, hosts, projects idSet, policyOf policyLookupFn) (*hostkey.HostKey, bool) {
 	if k.Status.Unresolved != nil {
 		slog.Warn("catalog: host key dropped, value unresolved",
 			"id", k.Meta.ID, "name", k.Meta.Name, "reason", k.Status.Unresolved.Reason)
@@ -38,7 +37,7 @@ func sanitizeHostKey(k *hostkey.HostKey, hosts, projects idSet, polByID map[stri
 	if !hosts(k.Spec.HostID) {
 		return nil, false
 	}
-	pol, ok := polByID[k.Spec.PolicyID]
+	pol, ok := policyOf(k.Spec.PolicyID)
 	if !ok {
 		return nil, false
 	}

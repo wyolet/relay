@@ -34,6 +34,24 @@ type policyKeyResponse struct {
 	Body *key.Key `json:"body"`
 }
 
+// writeKeyPolicy persists a policy attachment through the same checks a PUT
+// on the key runs: the ref guard (a key must not be pointed at a policy the
+// caller may not spend), the row's own Validate, and the hand-edit flag apply
+// reads to know the row is no longer its own.
+func writeKeyPolicy(ctx context.Context, d Deps, rk *key.Key) error {
+	if err := guardKeyPolicy(d)(ctx, "update", rk, rk); err != nil {
+		return mapGuardErr(err)
+	}
+	if err := rk.Validate(); err != nil {
+		return huma.Error400BadRequest(err.Error())
+	}
+	rk.Meta.Dirty = true
+	if err := d.Stores.Key.Upsert(ctx, rk); err != nil {
+		return huma.Error500InternalServerError(err.Error())
+	}
+	return nil
+}
+
 func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 	huma.Register(api, huma.Operation{
 		OperationID: "attach_relay_key_to_policy",
@@ -45,7 +63,7 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 			"is the common case).",
 		Tags:        []string{"policies"},
 		Middlewares: protect,
-		Errors:      []int{401, 403, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *policyKeyInput) (*policyKeyResponse, error) {
 		pol, err := d.Stores.Policy.Get(ctx, in.PolicyID)
 		if err != nil || pol == nil || !visibleTo(ctx, d.Authz, "policy", pol.Meta.ID, pol.Meta.Owner) {
@@ -59,8 +77,8 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, mapAuthzErr(err)
 		}
 		rk.Spec.PolicyID = in.PolicyID
-		if err := d.Stores.Key.Upsert(ctx, rk); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+		if err := writeKeyPolicy(ctx, d, rk); err != nil {
+			return nil, err
 		}
 		updated, err := d.Stores.Key.Get(ctx, in.KeyID)
 		if err != nil {
@@ -79,7 +97,7 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 			"acting on stale state).",
 		Tags:        []string{"policies"},
 		Middlewares: protect,
-		Errors:      []int{401, 403, 404, 409, 500},
+		Errors:      []int{400, 401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *policyKeyInput) (*policyKeyResponse, error) {
 		rk, err := d.Stores.Key.Get(ctx, in.KeyID)
 		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.ID, rk.Meta.Owner) {
@@ -94,8 +112,8 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 				rk.Meta.Name, rk.Spec.PolicyID, in.PolicyID))
 		}
 		rk.Spec.PolicyID = ""
-		if err := d.Stores.Key.Upsert(ctx, rk); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+		if err := writeKeyPolicy(ctx, d, rk); err != nil {
+			return nil, err
 		}
 		updated, err := d.Stores.Key.Get(ctx, in.KeyID)
 		if err != nil {

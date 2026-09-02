@@ -21,6 +21,18 @@ func resanitizePoliciesAfterParentChange(s *Snapshot) {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(p))
 		s.registerRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(clean))
 	}
+	// Disabled rows hold registered refs too, so they need the same pass:
+	// otherwise a deleted model or rate limit leaves an edge pointing at a
+	// row that is gone, and the policy carries it back when it is re-enabled.
+	for id, p := range s.disabledPoliciesByID {
+		clean, keep := sanitizePolicy(p, models, keys, rls, projects)
+		if !keep {
+			continue
+		}
+		s.disabledPoliciesByID[id] = clean
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(p))
+		s.registerRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(clean))
+	}
 }
 
 func resanitizeHostsAfterPolicyChange(s *Snapshot) {

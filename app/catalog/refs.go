@@ -96,6 +96,13 @@ func outboundPolicyRefs(p *policy.Policy) []refKey {
 	if p.Spec.RateLimitID != "" {
 		refs = append(refs, refKey{Kind: refRateLimit, ID: p.Spec.RateLimitID})
 	}
+	// Per-model bindings name rate limits too; unregistered, deleting one
+	// would not re-sanitize the policies still pointing at it.
+	for _, b := range p.Spec.RLBindings {
+		if b.RateLimitID != "" {
+			refs = append(refs, refKey{Kind: refRateLimit, ID: b.RateLimitID})
+		}
+	}
 	return refs
 }
 

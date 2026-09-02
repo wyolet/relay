@@ -44,9 +44,6 @@
             "array",
             "null"
           ]
-        },
-        "skipDefaultLimits": {
-          "type": "boolean"
         }
       },
       "type": "object"

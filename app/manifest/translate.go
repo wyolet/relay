@@ -313,10 +313,14 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 // ---------------------------------------------------------------------------
 
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
-	// Spec.Models entries are modelref DSL strings — stored verbatim on
-	// the Policy. Validation (Policy.Validate) re-runs the parser.
-	models := make([]string, 0, len(d.Spec.Models))
-	models = append(models, d.Spec.Models...)
+	// Spec.Models entries are modelref DSL strings, canonicalised exactly as
+	// the control API canonicalises them: a document and an API write of the
+	// same grant must produce the same row, or apply reports an update on
+	// every run.
+	models, err := policy.CanonicalizeModelRefs(d.Spec.Models)
+	if err != nil {
+		return nil, fmt.Errorf("policy %q: models: %w", d.Metadata.Name, err)
+	}
 
 	hostKeyIDs := make([]string, 0, len(d.Spec.HostKeys))
 	for _, name := range d.Spec.HostKeys {
@@ -346,8 +350,12 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			return nil, fmt.Errorf("policy %q: rlBindings[%d] rateLimit %q not found",
 				d.Metadata.Name, i, b.RateLimit)
 		}
+		bModels, err := policy.CanonicalizeModelRefs(append([]string{}, b.Models...))
+		if err != nil {
+			return nil, fmt.Errorf("policy %q: rlBindings[%d].models: %w", d.Metadata.Name, i, err)
+		}
 		rlBindings = append(rlBindings, policy.RLBinding{
-			Models:      append([]string{}, b.Models...),
+			Models:      bModels,
 			RateLimitID: id,
 		})
 	}
@@ -367,7 +375,6 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			RateLimitID:           rateLimitID,
 			RLBindings:            rlBindings,
 			KeySelection:          policy.KeySelection(d.Spec.KeySelection),
-			SkipDefaultLimits:     d.Spec.SkipDefaultLimits,
 			IncludeDeprecated:     d.Spec.IncludeDeprecated,
 			Enabled:               d.Spec.Enabled,
 			PayloadLoggingEnabled: d.Spec.PayloadLoggingEnabled,
@@ -378,11 +385,15 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs is the
 	// legacy literal-ID grant; emit those rows as model refs, not bare model
-	// slugs, because a bare modelref token means "provider".
+	// slugs, because a bare modelref token means "provider". Only when Models
+	// is empty, though: the two coexist on a row, and rendering both would
+	// make a re-apply of the export widen the grant.
 	models := make([]string, 0, len(p.Spec.Models)+len(p.Spec.ModelIDs))
 	models = append(models, p.Spec.Models...)
-	for _, id := range p.Spec.ModelIDs {
-		models = append(models, legacyModelRef(id, rev))
+	if len(models) == 0 {
+		for _, id := range p.Spec.ModelIDs {
+			models = append(models, legacyModelRef(id, rev))
+		}
 	}
 
 	hostKeys := make([]string, 0, len(p.Spec.HostKeyIDs))
@@ -425,7 +436,6 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 			RateLimit:             rlName,
 			RLBindings:            bindings,
 			KeySelection:          string(p.Spec.KeySelection),
-			SkipDefaultLimits:     p.Spec.SkipDefaultLimits,
 			IncludeDeprecated:     p.Spec.IncludeDeprecated,
 			Enabled:               p.Spec.Enabled,
 			PayloadLoggingEnabled: p.Spec.PayloadLoggingEnabled,
