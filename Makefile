@@ -1,7 +1,8 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
         version release release-minor release-major \
-        sqlc-generate test test-race test-fuzz test-integration smoke-mock breakers-reset \
+        sqlc-generate test test-race test-fuzz test-cover cover-check \
+        bench-gate bench-baseline test-integration smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean schemas catalog-validate catalog-embed lint-rules
 
@@ -91,6 +92,10 @@ help: ## Show this help
 	@echo '  make test              go test ./...'
 	@echo '  make test-race         unit tests under -race'
 	@echo '  make test-fuzz         each fuzz target for $(FUZZ_TIME)'
+	@echo '  make test-cover        unit tests with a coverprofile in $(COVER_DIR)'
+	@echo '  make cover-check       per-package coverage vs scripts/coverage-tiers.txt'
+	@echo '  make bench-gate        allocs/op vs $(BENCH_BASELINE) (±$(BENCH_ALLOC_TOLERANCE)%)'
+	@echo '  make bench-baseline    regenerate $(BENCH_BASELINE)'
 	@echo '  make test-integration  integration tag, race'
 	@echo '  make smoke-mock        replay recorded fixtures through relay → openai-mock.wyolet.dev'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
@@ -348,6 +353,46 @@ test-fuzz: ## fuzz the token parser and the bearer classifier ($(FUZZ_TIME) each
 	go test -run '^$$' -fuzz '^FuzzLooksLikeToken$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 	go test -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 
+# Coverage. COVER_PKGS is shared by the unit and integration profiles so the
+# two are mergeable: store packages only get credit from integration runs.
+COVER_DIR   ?= .cover
+COVER_PKGS  ?= ./app/...,./pkg/...,./internal/...,./cmd/...
+# Tiers are aspirational until the test plan lands; set to 1 to make them fail CI.
+COVER_ENFORCE ?= 0
+
+test-cover: ## unit tests with a coverprofile in $(COVER_DIR)
+	@mkdir -p $(COVER_DIR)
+	go test -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/unit.out ./...
+
+cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
+	@profiles=$$(ls $(COVER_DIR)/*.out 2>/dev/null); \
+		if [ -z "$$profiles" ]; then \
+			echo "cover-check: no profiles in $(COVER_DIR) — run 'make test-cover' first"; exit 1; \
+		fi; \
+		COVER_ENFORCE=$(COVER_ENFORCE) ./scripts/covcheck.sh $$profiles
+
+# Allocation gate. ns/op is not gated — too noisy on shared runners.
+BENCH_PKGS            := ./app/httpapi/inference ./pkg/crypto ./app/policy ./app/catalog ./app/routing
+BENCH_BASELINE        := scripts/bench-baseline.txt
+BENCH_ALLOC_TOLERANCE ?= 20
+BENCH_COUNT           ?= 1
+
+# Piped through a temp file, not a pipeline: /bin/sh has no pipefail, so a
+# failing `go test` would otherwise be masked by the parser's exit status.
+define RUN_BENCH
+out=$$(mktemp); \
+	go test -bench . -run '^$$$$' -benchmem -count=$(1) $(BENCH_PKGS) >"$$out" \
+		|| { cat "$$out"; rm -f "$$out"; exit 1; }; \
+	./scripts/benchgate.sh $(2) <"$$out"; \
+	status=$$?; rm -f "$$out"; exit $$status
+endef
+
+bench-gate: ## fail on an allocs/op regression beyond $(BENCH_ALLOC_TOLERANCE)%
+	@$(call RUN_BENCH,$(BENCH_COUNT),--check $(BENCH_BASELINE) --tolerance $(BENCH_ALLOC_TOLERANCE))
+
+bench-baseline: ## regenerate $(BENCH_BASELINE) from the current tree
+	@$(call RUN_BENCH,3,--baseline $(BENCH_BASELINE))
+
 lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
 	./scripts/check-codebase-rules.sh
 
@@ -365,7 +410,9 @@ TEST_PG_DSN  := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
 
 test-integration: ## spin up ephemeral pg, run integration-tagged tests with -race, tear down
 	docker compose -f $(COMPOSE_TEST) up -d --wait
-	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race ./... ; \
+	@mkdir -p $(COVER_DIR)
+	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race \
+		-coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/integration.out ./... ; \
 		status=$$?; \
 		RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' sh -c 'cd jobq && go test -tags=integration -race ./...' || status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \

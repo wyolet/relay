@@ -12,6 +12,7 @@
 /dist/
 *.test
 *.out
+.cover/
 
 # UI dist — fetched at build time via make ui-fetch, not source-tracked
 cmd/relay/web/dist/
