@@ -1,0 +1,27 @@
+# Per-package statement-coverage floors, checked by scripts/covcheck.sh over
+# the profiles in $(COVER_DIR). Paths are module-relative; `*` matches any
+# characters. The first matching line wins, so list narrower paths first.
+#
+# <package-path-or-glob>	<min-percent>
+
+app/authz			90
+app/httpapi/inference		90
+app/catalog			90
+app/policy			90
+pkg/crypto			90
+app/key				90
+app/apply			90
+internal/config			90
+
+app/httpapi/control		75
+app/audit			75
+app/manifest			75
+app/settings			75
+cmd/relay			75
+internal/license		75
+app/role			75
+app/rolebinding			75
+app/policybinding		75
+app/seed			75
+app/catalogvalidate		75
+pkg/ratelimit			75
