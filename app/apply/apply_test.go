@@ -36,22 +36,23 @@ func TestPrunableOwners(t *testing.T) {
 		meta.OwnerUser: true, meta.OwnerTeam: true, meta.OwnerProject: true,
 		meta.OwnerSystem: false, meta.OwnerProvider: false, meta.OwnerHost: false,
 	} {
-		if got := prunable("Team", meta.Owner{Kind: kind}); got != want {
-			t.Fatalf("prunable(Team, %s) = %v, want %v", kind, got, want)
+		if got := prunable("Policy", "p", meta.Owner{Kind: kind}); got != want {
+			t.Fatalf("prunable(Policy, %s) = %v, want %v", kind, got, want)
 		}
 	}
 	// A global role binding is system-owned because its owner mirrors its
 	// scope; it is still a declared row and prunes under the selector.
-	if !prunable("RoleBinding", meta.Owner{Kind: meta.OwnerSystem}) {
+	if !prunable("RoleBinding", "everyone-viewer", meta.Owner{Kind: meta.OwnerSystem}) {
 		t.Fatal("a global role binding must be prunable")
 	}
 	// A built-in Role is genuinely the relay's own row and stays out.
-	if prunable("Role", meta.Owner{Kind: meta.OwnerSystem}) {
-		t.Fatal("a system-owned role must never be pruned")
+	if prunable("Role", "admin", meta.Owner{Kind: meta.OwnerSystem}) {
+		t.Fatal("a built-in role must never be pruned")
 	}
 }
 
 func TestChangedFieldsIgnoresServerOwnedState(t *testing.T) {
+	const kind = "Team"
 	enabled := true
 	stored := &team.Team{
 		Meta: meta.Metadata{ID: "id-1", Name: "platform", DisplayName: "Platform", Dirty: true},
@@ -61,7 +62,7 @@ func TestChangedFieldsIgnoresServerOwnedState(t *testing.T) {
 		Meta: meta.Metadata{ID: "id-1", Name: "platform", DisplayName: "Platform"},
 		Spec: team.Spec{Enabled: &enabled},
 	}
-	if got := changedFields(viewOf(stored, &stored.Meta), viewOf(declared, &declared.Meta)); len(got) != 0 {
+	if got := changedFields(viewOf(kind, stored, &stored.Meta), viewOf(kind, declared, &declared.Meta)); len(got) != 0 {
 		t.Fatalf("identical rows reported %v", got)
 	}
 
@@ -69,7 +70,7 @@ func TestChangedFieldsIgnoresServerOwnedState(t *testing.T) {
 	declared.Meta.Labels = map[string]string{"env": "prod"}
 	disabled := false
 	declared.Spec.Enabled = &disabled
-	got := changedFields(viewOf(stored, &stored.Meta), viewOf(declared, &declared.Meta))
+	got := changedFields(viewOf(kind, stored, &stored.Meta), viewOf(kind, declared, &declared.Meta))
 	want := []string{"metadata.displayName", "metadata.labels", "spec.enabled"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("changedFields = %v, want %v", got, want)
@@ -79,6 +80,7 @@ func TestChangedFieldsIgnoresServerOwnedState(t *testing.T) {
 // A host key's runtime-only state (resolved value, derived policy back-refs)
 // must never register as drift — only the spec the manifest authors does.
 func TestChangedFieldsIgnoresDerivedHostKeyState(t *testing.T) {
+	const kind = "HostKey"
 	spec := hostkey.Spec{HostID: "h-1", PolicyID: "p-1"}
 	stored := &hostkey.HostKey{
 		Meta:     meta.Metadata{ID: "k-1", Name: "openai-main"},
@@ -87,7 +89,7 @@ func TestChangedFieldsIgnoresDerivedHostKeyState(t *testing.T) {
 		Policies: []hostkey.PolicyRef{{ID: "p-9", Name: "team"}},
 	}
 	declared := &hostkey.HostKey{Meta: meta.Metadata{ID: "k-1", Name: "openai-main"}, Spec: spec}
-	if got := changedFields(viewOf(stored, &stored.Meta), viewOf(declared, &declared.Meta)); len(got) != 0 {
+	if got := changedFields(viewOf(kind, stored, &stored.Meta), viewOf(kind, declared, &declared.Meta)); len(got) != 0 {
 		t.Fatalf("derived host-key state reported %v", got)
 	}
 }

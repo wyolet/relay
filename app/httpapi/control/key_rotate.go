@@ -94,6 +94,9 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		existing.Spec.KeyHash = gen.KeyHash
 		existing.Spec.Prefix = gen.Prefix
+		// A rotation is an operator edit: without the flag the next apply of
+		// the declaring manifest would write the pre-rotation hash back.
+		existing.Meta.Dirty = true
 		if err := d.Stores.Key.Upsert(ctx, existing); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

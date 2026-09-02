@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/meta"
 )
 
 // userRow is the projection returned by GET /users.
@@ -44,7 +45,11 @@ func registerUsers(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 403, 500},
 	}, func(ctx context.Context, _ *struct{}) (*usersListOutput, error) {
-		if err := d.Authz.Authorize(ctx, "users.list", authz.Resource{Kind: "user"}); err != nil {
+		// The global scope, not "any scope": the list is every account in
+		// the deployment, so a binding inside one team or project is not a
+		// grant to enumerate it.
+		owner := meta.Owner{Kind: meta.OwnerSystem}
+		if err := d.Authz.Authorize(ctx, "users.list", authz.Resource{Kind: "user", Owner: &owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		all, err := d.Users.List(ctx)

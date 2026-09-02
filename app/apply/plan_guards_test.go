@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 )
@@ -47,6 +50,48 @@ func teamPlan(t *testing.T, b *builder, docs ...*manifest.TeamDTO) ([]Entry, []*
 	return b.entries, written, err
 }
 
+// rateLimitPlan is teamPlan for a kind whose owner the document authors —
+// Team, Group and Role are system-owned by rule, so they cannot exercise the
+// owner guards.
+func rateLimitPlan(t *testing.T, b *builder, docs ...*manifest.RateLimitDTO) ([]Entry, []*ratelimit.RateLimit, error) {
+	t.Helper()
+	var written []*ratelimit.RateLimit
+	names := map[string]string{}
+	for _, row := range b.rows.RateLimits {
+		names[row.Meta.Name] = row.Meta.ID
+	}
+	b.idx = newIndex(b.rows)
+	err := planKind(b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
+		Kind: "RateLimit", Docs: docs, Names: names, Rows: b.rows.RateLimits,
+		To:   manifest.ToRateLimit,
+		Meta: func(x *ratelimit.RateLimit) *meta.Metadata { return &x.Meta },
+		Upsert: func(_ context.Context, x *ratelimit.RateLimit) error {
+			written = append(written, x)
+			return nil
+		},
+		Delete: func(context.Context, string) error { return nil },
+	})
+	if err != nil {
+		return b.entries, written, err
+	}
+	for _, e := range b.entries {
+		if e.write != nil {
+			if werr := e.write(context.Background()); werr != nil {
+				t.Fatalf("write: %v", werr)
+			}
+		}
+	}
+	return b.entries, written, err
+}
+
+func rateLimitDoc(name string) *manifest.RateLimitDTO {
+	d := &manifest.RateLimitDTO{APIVersion: manifest.APIVersion, Kind: "RateLimit"}
+	d.Metadata.Name = name
+	d.Metadata.DisplayName = name
+	d.Spec.Rules = []manifest.RateLimitRule{{Meter: "requests", Amount: 10, Window: "1m", Strategy: "token-bucket"}}
+	return d
+}
+
 func teamDoc(name string) *manifest.TeamDTO {
 	d := &manifest.TeamDTO{APIVersion: manifest.APIVersion, Kind: "Team"}
 	d.Metadata.Name = name
@@ -58,16 +103,25 @@ func teamDoc(name string) *manifest.TeamDTO {
 // one would otherwise move the row into another tenant's scope on every
 // apply of a repo anyone can open a PR against.
 func TestApplyKeepsTheStoredOwner(t *testing.T) {
-	stored := &team.Team{Meta: meta.Metadata{
-		ID: meta.NewID(), Name: "platform", DisplayName: "platform",
-		Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"},
-	}}
-	doc := teamDoc("platform")
+	storedRow := func() *ratelimit.RateLimit {
+		return &ratelimit.RateLimit{
+			Meta: meta.Metadata{
+				ID: meta.NewID(), Name: "burst", DisplayName: "burst",
+				Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"},
+			},
+			Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{
+				Meter: "requests", Amount: 10, Window: ratelimit.Window(time.Minute),
+				Strategy: "token-bucket",
+			}}},
+		}
+	}
+	doc := rateLimitDoc("burst")
 	doc.Metadata.Owner.Kind = meta.OwnerUser
 	doc.Metadata.Owner.ID = "u-mallory"
 
-	b := &builder{rows: &Rows{Teams: []*team.Team{stored}}}
-	entries, written, err := teamPlan(t, b, doc)
+	stored := storedRow()
+	b := &builder{rows: &Rows{RateLimits: []*ratelimit.RateLimit{stored}}, lic: license.Community}
+	entries, written, err := rateLimitPlan(t, b, doc)
 	if err != nil {
 		t.Fatalf("planKind: %v", err)
 	}
@@ -79,8 +133,8 @@ func TestApplyKeepsTheStoredOwner(t *testing.T) {
 	}
 
 	// The admin identity may re-parent deliberately.
-	b = &builder{rows: &Rows{Teams: []*team.Team{stored}}, admin: true}
-	entries, written, err = teamPlan(t, b, doc)
+	b = &builder{rows: &Rows{RateLimits: []*ratelimit.RateLimit{storedRow()}}, admin: true, lic: license.Community}
+	entries, written, err = rateLimitPlan(t, b, doc)
 	if err != nil {
 		t.Fatalf("planKind (admin): %v", err)
 	}
@@ -109,15 +163,15 @@ func TestApplyRejectsDuplicateNames(t *testing.T) {
 // A document the entity itself rejects must never reach the store: a bad row
 // in Postgres breaks the next Bootstrap.
 func TestApplyValidatesEveryPlannedRow(t *testing.T) {
-	doc := teamDoc("platform")
-	doc.Metadata.Owner.Kind = meta.OwnerProvider // Team allows user or system only
-	b := &builder{rows: &Rows{}}
-	_, written, err := teamPlan(t, b, doc)
+	doc := rateLimitDoc("burst")
+	doc.Metadata.Owner.Kind = meta.OwnerProvider // a provider owner needs an id
+	b := &builder{rows: &Rows{}, lic: license.Community}
+	_, written, err := rateLimitPlan(t, b, doc)
 	var invalid *InvalidError
 	if !errors.As(err, &invalid) {
 		t.Fatalf("err = %v, want an InvalidError", err)
 	}
-	if invalid.Name != "platform" || len(written) != 0 {
+	if invalid.Name != "burst" || len(written) != 0 {
 		t.Fatalf("invalid row named %q, written %d", invalid.Name, len(written))
 	}
 }

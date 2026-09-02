@@ -31,7 +31,8 @@ var Kinds = []string{
 // special endpoints (rotate, health, mint, …) need names of their own.
 var Verbs = []string{
 	"*", "apply", "attach", "create", "delete", "detach", "generate", "get",
-	"health", "list", "mint", "read", "reload", "rotate", "snapshot", "update",
+	"health", "list", "mint", "read", "reload", "revoke", "rotate", "snapshot",
+	"update",
 }
 
 func init() {

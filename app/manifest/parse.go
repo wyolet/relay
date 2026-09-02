@@ -28,6 +28,11 @@ type Document struct {
 	Team        *TeamDTO
 	Project     *ProjectDTO
 
+	// Foreign carries a kind owned by a sibling subsystem (User) that shares
+	// the config tree. LoadDir drops these; a caller parsing a submitted
+	// bundle sees them, so it can refuse rather than ignore them silently.
+	Foreign string
+
 	ServiceAccount *ServiceAccountDTO
 	Group          *GroupDTO
 	Role           *RoleDTO
@@ -75,6 +80,8 @@ func (d Document) Kind() string {
 		return "PolicyBinding"
 	case d.Overlay != nil:
 		return "Overlay"
+	case d.Foreign != "":
+		return d.Foreign
 	default:
 		return ""
 	}
@@ -113,6 +120,7 @@ func Parse(r io.Reader) ([]Document, error) {
 		// carries its own apiVersion — the catalog seeder must walk past it
 		// without enforcing the manifest schema version.
 		if isForeignKind(env.Kind) {
+			docs = append(docs, Document{Foreign: env.Kind})
 			docIdx++
 			continue
 		}
@@ -170,7 +178,11 @@ func LoadDir(dir string) ([]Document, error) {
 		if err != nil {
 			return fmt.Errorf("wire: %s: %w", path, err)
 		}
-		all = append(all, docs...)
+		for _, doc := range docs {
+			if doc.Foreign == "" {
+				all = append(all, doc)
+			}
+		}
 		return nil
 	})
 	if err != nil {

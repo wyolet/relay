@@ -7,9 +7,18 @@
           "type": "string"
         },
         "onExceed": {
+          "enum": [
+            "block",
+            "warn"
+          ],
           "type": "string"
         },
         "period": {
+          "enum": [
+            "month",
+            "week",
+            "day"
+          ],
           "type": "string"
         }
       },
@@ -79,6 +88,14 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
           "type": "string"
         },
         "name": {

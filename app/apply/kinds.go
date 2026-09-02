@@ -10,6 +10,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -68,6 +69,9 @@ type builder struct {
 	// admin relaxes the rules an operator may cross: today only re-parenting
 	// a row onto a different owner.
 	admin bool
+	// lic gates the features a manifest may declare. Nil is no gate — see
+	// Options.License.
+	lic license.Checker
 
 	entries []Entry
 	// deletes are collected per kind in the same order the upserts run and
@@ -97,6 +101,9 @@ func (b *builder) run(docs []manifest.Document) error {
 		ovDocs   []*manifest.OverlayDTO
 	)
 	for _, d := range docs {
+		if d.Setting != nil || d.Foreign != "" {
+			return &UnsupportedKindError{Kind: d.Kind()}
+		}
 		switch {
 		case d.Team != nil:
 			teamDocs = append(teamDocs, d.Team)
@@ -153,6 +160,10 @@ func (b *builder) run(docs []manifest.Document) error {
 	mintIDs(b.idx.RoleBindings, rbDocs, docName[manifest.RoleBindingDTO])
 	mintIDs(b.idx.PolicyBindings, pbDocs, docName[manifest.PolicyBindingDTO])
 	mintIDs(b.idx.Keys, keyDocs, docName[manifest.KeyDTO])
+
+	if err := b.checkRoleDocs(roleDocs); err != nil {
+		return err
+	}
 
 	s := b.opts.Stores
 
@@ -281,6 +292,21 @@ func (b *builder) run(docs []manifest.Document) error {
 	return nil
 }
 
+// checkRoleDocs refuses Role documents apply must not write: a name the
+// built-ins own (which would shadow a system role every binding trusts), and
+// a custom role on a deployment that is not licensed for one.
+func (b *builder) checkRoleDocs(docs []*manifest.RoleDTO) error {
+	for _, d := range docs {
+		if role.IsBuiltin(d.Metadata.Name) {
+			return &ReservedNameError{Kind: "Role", Name: d.Metadata.Name}
+		}
+		if b.lic != nil && !b.lic.Has(license.FeatureCustomRoles) {
+			return &LicenseError{Kind: "Role", Name: d.Metadata.Name, Feature: license.FeatureCustomRoles}
+		}
+	}
+	return nil
+}
+
 // kindWiring is the per-kind glue planKind needs: the documents, the name→id
 // map they mint into, the stored rows, and the translate/store calls.
 type kindWiring[D any, T any] struct {
@@ -337,7 +363,7 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 				m.Owner = k.Meta(prev).Owner
 			}
 			e.owner = m.Owner
-			fields := changedFields(viewOf(prev, k.Meta(prev)), viewOf(obj, m))
+			fields := changedFields(viewOf(k.Kind, prev, k.Meta(prev)), viewOf(k.Kind, obj, m))
 			if len(fields) == 0 {
 				e.Action = ActionUnchanged
 			} else {
@@ -362,7 +388,7 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 	if b.opts.Prune {
 		for _, row := range k.Rows {
 			m := k.Meta(row)
-			if declared[m.Name] || !prunable(k.Kind, m.Owner) || !b.selector.matches(m.Labels) {
+			if declared[m.Name] || !prunable(k.Kind, m.Name, m.Owner) || !b.selector.matches(m.Labels) {
 				continue
 			}
 			if err := b.governs(settings.OpDelete, route.Singular, m.Owner); err != nil {

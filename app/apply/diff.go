@@ -26,8 +26,9 @@ type metaView struct {
 }
 
 // viewOf projects a domain row onto the authorable subset. row is marshalled
-// once to lift its `spec` verbatim, so no kind-specific code is needed.
-func viewOf(row any, m *meta.Metadata) rowView {
+// once to lift its `spec` verbatim, so almost no kind-specific code is
+// needed — the one exception is dropped by stripSpecFields.
+func viewOf(kind string, row any, m *meta.Metadata) rowView {
 	v := rowView{Metadata: metaView{
 		DisplayName: m.DisplayName,
 		Description: m.Description,
@@ -43,8 +44,31 @@ func viewOf(row any, m *meta.Metadata) rowView {
 	if json.Unmarshal(raw, &top) != nil {
 		return v
 	}
-	v.Spec = top["spec"]
+	v.Spec = stripSpecFields(kind, top["spec"])
 	return v
+}
+
+// stripSpecFields drops spec fields that can never compare equal across the
+// two sides of a diff. A stored HostKey holds ciphertext (or nothing, for an
+// env ref) where the manifest holds the plaintext it declared, so leaving
+// `value` in would report a change on every single run.
+func stripSpecFields(kind string, spec json.RawMessage) json.RawMessage {
+	if kind != "HostKey" || len(spec) == 0 || spec[0] != '{' {
+		return spec
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(spec, &fields) != nil {
+		return spec
+	}
+	if _, ok := fields["value"]; !ok {
+		return spec
+	}
+	delete(fields, "value")
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return spec
+	}
+	return out
 }
 
 // changedFields lists the authorable JSON paths that differ between the

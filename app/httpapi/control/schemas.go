@@ -6,6 +6,7 @@ package control
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"path"
 	"sort"
@@ -35,12 +36,14 @@ func registerSchemas(r chi.Router) {
 		version := chi.URLParam(req, "version")
 		kind := strings.TrimSuffix(chi.URLParam(req, "kind"), ".schema.json")
 		// Reject traversal before touching the embedded FS: the version and
-		// kind are both path segments.
-		if version != path.Base(version) || kind != path.Base(kind) || kind == "" {
+		// kind are both path segments. path.Base leaves "." and ".." intact,
+		// so the whole path is checked with fs.ValidPath as well.
+		name := version + "/" + kind + ".schema.json"
+		if version != path.Base(version) || kind != path.Base(kind) || kind == "" || !fs.ValidPath(name) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		body, err := schemas.FS.ReadFile(version + "/" + kind + ".schema.json")
+		body, err := schemas.FS.ReadFile(name)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -51,7 +54,7 @@ func registerSchemas(r chi.Router) {
 }
 
 func schemaKinds(version string) ([]string, error) {
-	if version != path.Base(version) {
+	if version != path.Base(version) || !fs.ValidPath(version) {
 		return nil, http.ErrMissingFile
 	}
 	entries, err := schemas.FS.ReadDir(version)

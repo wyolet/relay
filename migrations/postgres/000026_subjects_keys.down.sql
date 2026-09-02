@@ -9,6 +9,13 @@ UPDATE relay_keys
    SET metadata = jsonb_set(metadata, '{owner}',
                             jsonb_build_object('kind', 'user', 'id', principal_user_id), true)
  WHERE principal_user_id IS NOT NULL;
+-- A key re-parented onto a generated service account has no user to go back
+-- to; before this migration a Key's owner was always a user, so an ownerless
+-- user row is the only shape the old code accepts.
+UPDATE relay_keys
+   SET metadata = jsonb_set(metadata, '{owner}',
+                            jsonb_build_object('kind', 'user', 'id', ''), true)
+ WHERE principal_sa_id IS NOT NULL;
 UPDATE relay_keys SET spec = spec - 'principal';
 
 DROP TRIGGER IF EXISTS group_members_notify ON group_members;

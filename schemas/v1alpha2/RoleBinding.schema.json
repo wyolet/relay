@@ -16,6 +16,7 @@
           "items": {
             "$ref": "#/$defs/SubjectDTO"
           },
+          "minItems": 1,
           "type": [
             "array",
             "null"
@@ -33,6 +34,11 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
+          "enum": [
+            "user",
+            "serviceaccount",
+            "group"
+          ],
           "type": "string"
         },
         "name": {
@@ -88,6 +94,14 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
           "type": "string"
         },
         "name": {

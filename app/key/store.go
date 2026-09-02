@@ -43,12 +43,29 @@ func (s *Store) List(ctx context.Context) ([]*Key, error) {
 	return out, nil
 }
 
+// ErrHashInUse reports a key whose hash (current or pre-rotation) already
+// belongs to another row. Both live at once on the snapshot's hash index,
+// so letting the second row in would silently hand it the first row's
+// traffic — including a rotating key's grace window.
+var ErrHashInUse = errors.New("key: hash in use by another key")
+
 // Upsert writes k. Caller is responsible for stamping Meta.ID and for
 // computing Spec.KeyHash from the plaintext.
 func (s *Store) Upsert(ctx context.Context, k *Key) error {
 	params, err := toUpsertParams(k)
 	if err != nil {
 		return fmt.Errorf("key.Upsert: %w", err)
+	}
+	taken, err := s.q.RelayKeyHashTaken(ctx, gen.RelayKeyHashTakenParams{
+		KeyHash:   k.Spec.KeyHash,
+		KeyHash_2: k.Spec.PreviousKeyHash,
+		ID:        k.Meta.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("key.Upsert: %w", err)
+	}
+	if taken {
+		return ErrHashInUse
 	}
 	return s.q.UpsertRelayKey(ctx, params)
 }

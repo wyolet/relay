@@ -217,8 +217,16 @@ func (s *Service) Set(value string) (applicense.Info, error) {
 	return s.Info(), nil
 }
 
-// Has reports whether feature is unlocked by the live license.
-func (s *Service) Has(feature string) bool { return s.cur.Load().Has(feature) }
+// Has reports whether feature is unlocked by the live license. Expiry is
+// re-evaluated on every call: a license verified at boot must stop unlocking
+// features once its grace window closes, without a restart or a reload.
+func (s *Service) Has(feature string) bool {
+	l := s.cur.Load()
+	if l != nil && s.now().UTC().After(l.ExpiresAt.Add(GraceWindow)) {
+		return false
+	}
+	return l.Has(feature)
+}
 
 // Info summarizes the live license.
 func (s *Service) Info() applicense.Info {

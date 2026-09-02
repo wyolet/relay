@@ -1,6 +1,7 @@
 package httpmw
 
 import (
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -38,9 +39,14 @@ func loadTrustedProxies() {
 				seg += "/32"
 			}
 		}
-		if _, cidr, err := net.ParseCIDR(seg); err == nil {
-			trustedProxies = append(trustedProxies, cidr)
+		_, cidr, err := net.ParseCIDR(seg)
+		if err != nil {
+			// A typo silently narrows who is trusted, which shows up much
+			// later as an unexplained client IP.
+			slog.Warn("httpmw: ignoring unparseable RELAY_TRUSTED_PROXIES entry", "entry", seg, "err", err)
+			continue
 		}
+		trustedProxies = append(trustedProxies, cidr)
 	}
 }
 

@@ -52,7 +52,7 @@ Exit codes:
 | `1` | Drift — at least one `skip-dirty` entry, and the run did not pass `--force`. |
 | `2` | The server rejected the request (4xx/5xx). |
 
-`$RELAY_URL` (default `http://localhost:5103`) names the server;
+`$RELAY_URL` (default `http://localhost:8081`) names the server;
 `$RELAY_ADMIN_TOKEN` or `--token` authenticates. Both can be overridden
 per invocation with `--url`.
 
@@ -125,7 +125,7 @@ target catalog row, not by tenant, so scoping them would mean guessing).
 Every document `export` renders is preceded by an editor directive:
 
 ```yaml
-# yaml-language-server: $schema=http://localhost:5103/api/schemas/v1alpha2/Policy.schema.json
+# yaml-language-server: $schema=http://localhost:8081/api/schemas/v1alpha2/Policy.schema.json
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Policy
 ```

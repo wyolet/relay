@@ -36,6 +36,16 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "env",
+            "stored",
+            "aws",
+            "azure",
+            "gcp",
+            "bitwarden",
+            "onepassword",
+            "oauth"
+          ],
           "type": "string"
         },
         "provider": {
@@ -90,6 +100,14 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
           "type": "string"
         },
         "name": {

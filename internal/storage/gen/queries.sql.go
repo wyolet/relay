@@ -2493,7 +2493,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 }
 
 const listUserTokenVersions = `-- name: ListUserTokenVersions :many
-SELECT id, token_version FROM users
+SELECT id, token_version FROM users WHERE NOT disabled
 `
 
 type ListUserTokenVersionsRow struct {
@@ -2501,6 +2501,8 @@ type ListUserTokenVersionsRow struct {
 	TokenVersion int32  `db:"token_version" json:"token_version"`
 }
 
+// Disabled accounts are omitted: a missing id fails the version check on
+// the data plane, so disabling a user stops their tokens.
 func (q *Queries) ListUserTokenVersions(ctx context.Context) ([]ListUserTokenVersionsRow, error) {
 	rows, err := q.db.Query(ctx, listUserTokenVersions)
 	if err != nil {
@@ -2577,6 +2579,30 @@ func (q *Queries) PruneAuditEvents(ctx context.Context, ts pgtype.Timestamptz) (
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const relayKeyHashTaken = `-- name: RelayKeyHashTaken :one
+SELECT EXISTS (
+    SELECT 1 FROM relay_keys
+     WHERE (key_hash = $1 OR previous_key_hash = $1
+         OR key_hash = $2 OR previous_key_hash = $2)
+       AND id <> $3
+)
+`
+
+type RelayKeyHashTakenParams struct {
+	KeyHash   string `db:"key_hash" json:"key_hash"`
+	KeyHash_2 string `db:"key_hash_2" json:"key_hash_2"`
+	ID        string `db:"id" json:"id"`
+}
+
+// Either hash of another row shadows this one on the hash index, so both
+// columns are checked against both of the row's hashes.
+func (q *Queries) RelayKeyHashTaken(ctx context.Context, arg RelayKeyHashTakenParams) (bool, error) {
+	row := q.db.QueryRow(ctx, relayKeyHashTaken, arg.KeyHash, arg.KeyHash_2, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const setBatchCompleted = `-- name: SetBatchCompleted :exec

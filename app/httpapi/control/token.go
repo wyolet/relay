@@ -24,6 +24,7 @@ import (
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/ids"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 // TokenSigner holds the Ed25519 signing key. The composition root swaps the
@@ -86,6 +87,13 @@ type tokenDeps struct {
 	users    tokenUserStore
 	audit    audit.Reader
 	authz    authz.Authorizer
+	limiter  MintLimiter
+}
+
+// MintLimiter meters how often one user may mint a token. Satisfied by
+// *pkg/ratelimit.Limiter; nil leaves minting unmetered.
+type MintLimiter interface {
+	Reserve(ctx context.Context, scope string, rules []pkgratelimit.Rule) (*pkgratelimit.Reservation, error)
 }
 
 // tokenUserStore is the narrow user-store surface minting and revocation
@@ -103,6 +111,7 @@ func newTokenDeps(d Deps) tokenDeps {
 		denylist: d.TokenDenylist,
 		audit:    d.AuditReader,
 		authz:    d.Authz,
+		limiter:  d.MintLimiter,
 	}
 	if d.Users != nil {
 		td.users = d.Users
@@ -241,7 +250,15 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 	}
 	owner := meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
 	if err := d.authz.Authorize(ctx, "tokens.mint", authz.Resource{Kind: "token", Owner: &owner}); err != nil {
-		return nil, mapAuthzErr(err)
+		if errors.Is(err, authz.ErrUnauthenticated) {
+			return nil, mapAuthzErr(err)
+		}
+		// Same answer as an unknown project: a 403 here would confirm which
+		// project slugs exist to anyone with a session.
+		return nil, huma.Error404NotFound("project not found")
+	}
+	if err := reserveMint(ctx, d, a.UserID); err != nil {
+		return nil, err
 	}
 
 	ttl := cfg.DefaultTTL
@@ -269,6 +286,9 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 		}
 		if u == nil {
 			return nil, huma.Error404NotFound("user not found")
+		}
+		if u.Disabled {
+			return nil, huma.Error403Forbidden("account is disabled")
 		}
 		version = u.TokenVersion
 	}
@@ -307,6 +327,27 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 	out.Body.Project = proj.Meta.Name
 	out.Body.TeamID = proj.Spec.TeamID
 	return out, nil
+}
+
+// reserveMint meters one mint against the caller's fixed window. A limiter
+// outage must not take minting down, so only an explicit budget violation
+// is fatal.
+func reserveMint(ctx context.Context, d tokenDeps, userID string) error {
+	if d.limiter == nil {
+		return nil
+	}
+	_, err := d.limiter.Reserve(ctx, mintLimitScope(userID), []pkgratelimit.Rule{{
+		Key:      mintLimitRule,
+		Name:     "token mints",
+		Meter:    "requests",
+		Strategy: pkgratelimit.StrategyFixedWindow,
+		Amount:   mintLimitBudget,
+		Window:   mintLimitWindow,
+	}})
+	if errors.Is(err, pkgratelimit.ErrExceeded) {
+		return huma.Error429TooManyRequests("too many token mints; retry shortly")
+	}
+	return nil
 }
 
 // mintGroups is the group set the token carries: what the IdP asserted at

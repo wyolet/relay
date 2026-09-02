@@ -27,7 +27,7 @@ type WireMeta struct {
 // id-form for API clients that already hold a UUID; either field is
 // accepted on read, with ID taking precedence.
 type WireOwner struct {
-	Kind meta.OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty"`
+	Kind meta.OwnerKind `json:"kind,omitempty" yaml:"kind,omitempty" enum:"system,user,team,project,provider,host"`
 	Name string         `json:"name,omitempty" yaml:"name,omitempty"`
 	ID   string         `json:"id,omitempty"   yaml:"id,omitempty"`
 }
@@ -201,7 +201,7 @@ type HostKeySpec struct {
 }
 
 type HostKeyValueFrom struct {
-	Kind     string `json:"kind"               yaml:"kind"`
+	Kind     string `json:"kind"               yaml:"kind"     enum:"env,stored,aws,azure,gcp,bitwarden,onepassword,oauth"`
 	Env      string `json:"env,omitempty"      yaml:"env,omitempty"`
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 }
@@ -274,8 +274,9 @@ type KeySpec struct {
 	// Principal names the subject by kind + *name* (wire form): a service
 	// account slug or a username.
 	Principal PrincipalDTO `json:"principal" yaml:"principal"`
-	// Policy is the policy *name* (wire form).
-	Policy                string  `json:"policy"                      yaml:"policy"`
+	// Policy is the policy *name* (wire form). Optional: a Key without one
+	// resolves through its principal.
+	Policy                string  `json:"policy,omitempty"            yaml:"policy,omitempty"`
 	KeyHash               string  `json:"keyHash"                     yaml:"keyHash"`
 	Prefix                string  `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
 	ExpiresAt             *string `json:"expiresAt,omitempty"         yaml:"expiresAt,omitempty"`
@@ -287,7 +288,7 @@ type KeySpec struct {
 
 // PrincipalDTO is the wire form of a Key principal.
 type PrincipalDTO struct {
-	Kind string `json:"kind" yaml:"kind"`
+	Kind string `json:"kind" yaml:"kind" enum:"serviceaccount,user"`
 	Name string `json:"name" yaml:"name"`
 }
 
@@ -318,8 +319,8 @@ type PricingRateDTO struct {
 // BudgetDTO is the wire form of a spend cap, shared by Team and Project.
 type BudgetDTO struct {
 	Amount   string `json:"amount"             yaml:"amount"`
-	Period   string `json:"period,omitempty"   yaml:"period,omitempty"`
-	OnExceed string `json:"onExceed,omitempty" yaml:"onExceed,omitempty"`
+	Period   string `json:"period,omitempty"   yaml:"period,omitempty"   enum:"month,week,day"`
+	OnExceed string `json:"onExceed,omitempty" yaml:"onExceed,omitempty" enum:"block,warn"`
 }
 
 // TeamDTO is the wire form of a Team. No cross-refs.
@@ -411,21 +412,21 @@ type RoleDTO struct {
 }
 
 type RoleSpec struct {
-	Rules   []RoleRuleDTO `json:"rules"             yaml:"rules"`
+	Rules   []RoleRuleDTO `json:"rules"             yaml:"rules"             minItems:"1"`
 	Enabled *bool         `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
 // RoleRuleDTO mirrors role.Rule using plain types.
 type RoleRuleDTO struct {
-	Kinds []string `json:"kinds" yaml:"kinds"`
-	Verbs []string `json:"verbs" yaml:"verbs"`
+	Kinds []string `json:"kinds" yaml:"kinds" minItems:"1" enum:"*,audit,debug,groups,host-bindings,host-keys,hosts,keys,license,logs,master-key,models,policies,policy-bindings,pricings,projects,providers,rate-limits,role-bindings,roles,service-accounts,settings,system,teams,tokens,usage,users"`
+	Verbs []string `json:"verbs" yaml:"verbs" minItems:"1" enum:"*,apply,attach,create,delete,detach,generate,get,health,list,mint,read,reload,revoke,rotate,snapshot,update"`
 }
 
 // SubjectDTO is the wire form of a binding subject: everything is named, so
 // a user carries a username, a service account its slug, and a group the
 // group name (local or IdP).
 type SubjectDTO struct {
-	Kind string `json:"kind" yaml:"kind"`
+	Kind string `json:"kind" yaml:"kind" enum:"user,serviceaccount,group"`
 	Name string `json:"name" yaml:"name"`
 }
 
@@ -443,7 +444,7 @@ type RoleBindingSpec struct {
 	// Scope is a system, team, or project reference in the same shape every
 	// owner uses; the system scope carries no name.
 	Scope    WireOwner    `json:"scope"             yaml:"scope"`
-	Subjects []SubjectDTO `json:"subjects"          yaml:"subjects"`
+	Subjects []SubjectDTO `json:"subjects"          yaml:"subjects" minItems:"1"`
 	Enabled  *bool        `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
 
@@ -460,6 +461,6 @@ type PolicyBindingSpec struct {
 	Project  string       `json:"project"            yaml:"project"`
 	Policy   string       `json:"policy"             yaml:"policy"`
 	Priority int          `json:"priority,omitempty" yaml:"priority,omitempty"`
-	Subjects []SubjectDTO `json:"subjects"           yaml:"subjects"`
+	Subjects []SubjectDTO `json:"subjects"           yaml:"subjects" minItems:"1"`
 	Enabled  *bool        `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
 }

@@ -205,6 +205,16 @@ ON CONFLICT (id) DO UPDATE SET
     spec       = EXCLUDED.spec,
     updated_at = NOW();
 
+-- name: RelayKeyHashTaken :one
+-- Either hash of another row shadows this one on the hash index, so both
+-- columns are checked against both of the row's hashes.
+SELECT EXISTS (
+    SELECT 1 FROM relay_keys
+     WHERE (key_hash = $1 OR previous_key_hash = $1
+         OR key_hash = $2 OR previous_key_hash = $2)
+       AND id <> $3
+);
+
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
 
@@ -428,7 +438,9 @@ ON CONFLICT (id) DO UPDATE SET
 DELETE FROM users WHERE id = $1;
 
 -- name: ListUserTokenVersions :many
-SELECT id, token_version FROM users;
+-- Disabled accounts are omitted: a missing id fails the version check on
+-- the data plane, so disabling a user stops their tokens.
+SELECT id, token_version FROM users WHERE NOT disabled;
 
 -- name: BumpUserTokenVersion :exec
 UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1;

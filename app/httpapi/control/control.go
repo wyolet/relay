@@ -51,6 +51,10 @@ type Deps struct {
 	// bump still works).
 	TokenDenylist TokenDenylist
 
+	// MintLimiter caps how often one user may mint an inference token.
+	// nil leaves minting unmetered.
+	MintLimiter MintLimiter
+
 	// AdminToken is the cleartext break-glass bearer. Empty disables the
 	// bypass. Validated by AdminTokenMiddleware; not used directly by
 	// handlers.

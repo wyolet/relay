@@ -698,9 +698,16 @@ func FromHostBinding(b *binding.Binding, rev ReverseResolver) HostBindingDTO {
 // ---------------------------------------------------------------------------
 
 func ToKey(d KeyDTO, idx Resolver) (*key.Key, error) {
-	policyID, ok := idx.PolicyID(d.Spec.Policy)
-	if !ok {
-		return nil, fmt.Errorf("key %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+	// A Key without a policy resolves through its principal instead
+	// (ServiceAccount.policy, then the policy bindings), so the field is
+	// optional on the wire as it is in the domain.
+	var policyID string
+	if d.Spec.Policy != "" {
+		id, ok := idx.PolicyID(d.Spec.Policy)
+		if !ok {
+			return nil, fmt.Errorf("key %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+		}
+		policyID = id
 	}
 
 	principal, err := toPrincipal(d.Metadata.Name, d.Spec.Principal, idx)
@@ -815,8 +822,8 @@ func formatOptionalTime(t *time.Time) *string {
 // Team / Project
 // ---------------------------------------------------------------------------
 
-// resolveScopeOwner rewrites a team- or project-kind owner from the wire
-// name to its id. Rows in other scopes are untouched.
+// resolveScopeOwner rewrites a team-, project-, or user-kind owner from the
+// wire name to its id. Rows in other scopes are untouched.
 func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 	if o.ID == "" {
 		return
@@ -830,6 +837,10 @@ func resolveScopeOwner(o *meta.Owner, idx Resolver) {
 		if id, ok := idx.ProjectID(o.ID); ok {
 			o.ID = id
 		}
+	case meta.OwnerUser:
+		if id, ok := idx.UserID(o.ID); ok {
+			o.ID = id
+		}
 	}
 }
 
@@ -837,7 +848,9 @@ func toBudget(b *BudgetDTO) *team.Budget {
 	if b == nil {
 		return nil
 	}
-	return &team.Budget{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+	out := &team.Budget{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+	out.Default()
+	return out
 }
 
 func fromBudget(b *team.Budget) *BudgetDTO {
@@ -849,11 +862,10 @@ func fromBudget(b *team.Budget) *BudgetDTO {
 
 func ToTeam(d TeamDTO, _ Resolver) (*team.Team, error) {
 	m := d.Metadata.toMeta()
-	// Seeded teams are system-owned by convention; API-created ones declare
-	// kind: user explicitly.
-	if m.Owner.Kind == "" {
-		m.Owner.Kind = meta.OwnerSystem
-	}
+	// A Team names a scope: a user-owned one would let its author inherit
+	// every binding made at that scope, so the owner is not the manifest's
+	// to choose.
+	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
 	return &team.Team{
 		Meta: m,
 		Spec: team.Spec{
@@ -973,11 +985,9 @@ func FromServiceAccount(sa *serviceaccount.ServiceAccount, rev ReverseResolver) 
 // ToGroup resolves member usernames → user ids.
 func ToGroup(d GroupDTO, idx Resolver) (*group.Group, error) {
 	m := d.Metadata.toMeta()
-	// Seeded groups are system-owned by convention; API-created ones declare
-	// kind: user explicitly.
-	if m.Owner.Kind == "" {
-		m.Owner.Kind = meta.OwnerSystem
-	}
+	// A Group is a grant target: a user-owned one named after an IdP group
+	// would inherit that group's bindings, so the owner is fixed here.
+	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
 	var memberIDs []string
 	for _, username := range d.Spec.Members {
 		id, ok := idx.UserID(username)
@@ -1015,11 +1025,9 @@ func FromGroup(g *group.Group, rev ReverseResolver) GroupDTO {
 
 func ToRole(d RoleDTO, _ Resolver) (*role.Role, error) {
 	m := d.Metadata.toMeta()
-	// Seeded roles are system-owned by convention; API-created ones declare
-	// kind: user explicitly.
-	if m.Owner.Kind == "" {
-		m.Owner.Kind = meta.OwnerSystem
-	}
+	// A Role is a rule set anyone may be bound to; ownership is relay's,
+	// not the manifest author's.
+	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
 	rules := make([]role.Rule, 0, len(d.Spec.Rules))
 	for _, r := range d.Spec.Rules {
 		rules = append(rules, role.Rule{Kinds: r.Kinds, Verbs: r.Verbs})
