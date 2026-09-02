@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -697,4 +698,238 @@ func TestIntegration_SeedAppliesAnOwnerChange(t *testing.T) {
 	if pols[0].Meta.Owner.ID != byName["host-b"] {
 		t.Fatalf("policy owner = %q, want host-b %q", pols[0].Meta.Owner.ID, byName["host-b"])
 	}
+}
+
+// ── scoped apply, cross-entity rules, and the published schemas ──────────
+
+// hostKeyOnAForeignPolicy declares a host key whose tier policy belongs to a
+// project rather than to the key's own host. The rule itself is unit-tested;
+// what the endpoint owes is the status and the empty write — a green apply
+// followed by "no keys" on every request for that host is the failure.
+const hostKeyOnAForeignPolicy = `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Host
+metadata:
+  name: guarded-host
+spec:
+  baseURL: https://upstream.invalid
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Team
+metadata:
+  name: guarded-team
+spec: {}
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Project
+metadata:
+  name: guarded-project
+spec:
+  team: guarded-team
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Policy
+metadata:
+  name: guarded-project-policy
+  owner: {kind: project, name: guarded-project}
+spec: {}
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: HostKey
+metadata:
+  name: guarded-key
+spec:
+  hostId: guarded-host
+  policyId: guarded-project-policy
+  valueFrom: {kind: env, env: GUARDED_KEY}
+`
+
+func TestApplyRefusesAHostKeyOnAPolicyItsHostDoesNotOwn(t *testing.T) {
+	st := newStack(t)
+
+	code, _, raw := st.applyBundle(hostKeyOnAForeignPolicy, "dryRun=true")
+	if code != http.StatusBadRequest {
+		t.Fatalf("apply = %d: %s, want 400", code, raw)
+	}
+
+	// Nothing was written, so the operator can fix the manifest and retry.
+	keys, err := st.stores.HostKey.List(context.Background())
+	if err != nil {
+		t.Fatalf("list host keys: %v", err)
+	}
+	for _, k := range keys {
+		if k.Meta.Name == "guarded-key" {
+			t.Error("the refused host key was written anyway")
+		}
+	}
+}
+
+// A scoped caller's apply reports the rows it could not act on as forbidden
+// entries rather than dropping them, so half a bundle cannot go missing
+// under a green result. Naming a row the caller supplied itself leaks
+// nothing.
+func TestApplyReportsOutOfScopeRowsAsForbidden(t *testing.T) {
+	st := newStackAuthz(t, "rbac")
+	roles := seedBuiltinRoles(t, st)
+
+	const ownTeam, otherTeam = "alpha", "beta"
+	ownID := st.mkTeam(t, ownTeam)
+	st.mkTeam(t, otherTeam)
+
+	password := "correct-horse-battery"
+	userID := st.seedLogin(t, "alpha-admin", password)
+	st.bindRole(t, "alpha-admins", roles["team-admin"].Meta.ID, userID, "team", ownID)
+	if err := st.cat.Reload(context.Background()); err != nil {
+		t.Fatalf("catalog.Reload: %v", err)
+	}
+
+	// Both rows already exist exactly as declared, so neither entry is a
+	// write: the plan reduces to what the caller may see.
+	doc := func(name string) string {
+		return "apiVersion: relay.wyolet.dev/v1alpha2\nkind: Team\nmetadata:\n  name: " + name + "\nspec: {}\n"
+	}
+	us := st.login(t, "alpha-admin", password)
+	code, raw := us.doAs(http.MethodPost, "/api/apply", doc(ownTeam)+"---\n"+doc(otherTeam), "application/yaml")
+	if code != http.StatusOK {
+		t.Fatalf("apply as a team admin = %d: %s", code, raw)
+	}
+	var plan applyResp
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatalf("decode plan: %v", err)
+	}
+	if got := plan.action("Team", otherTeam); got != "forbidden" {
+		t.Errorf("out-of-scope team reported as %q, want forbidden", got)
+	}
+	if got := plan.action("Team", ownTeam); got == "forbidden" || got == "" {
+		t.Errorf("the caller's own team reported as %q", got)
+	}
+}
+
+// Every exported document has to satisfy the schema the export's own
+// $schema directive points editors at.
+func TestExportedDocumentsMatchTheirPublishedSchema(t *testing.T) {
+	st := newStack(t)
+	seedBuiltinRoles(t, st)
+	st.seedHappyPath(newDiscardUpstream(t), "sk-mock-upstream-key")
+	if code, _, raw := st.applyBundle(bundle+globalBinding, ""); code != http.StatusOK {
+		t.Fatalf("seed the bundle: %d %s", code, raw)
+	}
+
+	code, body := st.adminDo(http.MethodGet, "/api/export", "")
+	if code != http.StatusOK {
+		t.Fatalf("export = %d: %s", code, body)
+	}
+	docs := parseBundle(t, string(body))
+	if len(docs) == 0 {
+		t.Fatal("the export is empty")
+	}
+
+	schemas := map[string]map[string]any{}
+	for _, d := range docs {
+		kind := d.Kind()
+		schema, ok := schemas[kind]
+		if !ok {
+			schema = st.fetchSchema(t, kind)
+			schemas[kind] = schema
+		}
+		encoded, err := json.Marshal(d.Payload())
+		if err != nil {
+			t.Fatalf("marshal %s: %v", kind, err)
+		}
+		var value any
+		if err := json.Unmarshal(encoded, &value); err != nil {
+			t.Fatalf("decode %s: %v", kind, err)
+		}
+		for _, problem := range schemaErrors(kind, value, schema, schema) {
+			t.Errorf("%s\n%s", problem, encoded)
+		}
+	}
+}
+
+// fetchSchema reads one kind's JSON Schema off the public endpoint the
+// export's $schema directive names.
+func (s *stack) fetchSchema(t *testing.T, kind string) map[string]any {
+	t.Helper()
+	url := s.control.URL + "/api/schemas/" + manifest.SchemaVersion + "/" + kind + ".schema.json"
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s = %d: %s", url, resp.StatusCode, raw)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode schema %s: %v", kind, err)
+	}
+	return schema
+}
+
+// schemaErrors is not a JSON Schema validator: it checks required
+// properties, `additionalProperties: false`, and that every local `$ref`
+// resolves — the failures an export can actually produce (a field renamed on
+// one side only). Everything else in the schema is ignored.
+func schemaErrors(path string, value any, schema, root map[string]any) []string {
+	if ref, ok := schema["$ref"].(string); ok {
+		target, ok := resolveSchemaRef(ref, root)
+		if !ok {
+			return []string{path + ": unresolved $ref " + ref}
+		}
+		return schemaErrors(path, value, target, root)
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		var problems []string
+		props, _ := schema["properties"].(map[string]any)
+		if required, ok := schema["required"].([]any); ok {
+			for _, name := range required {
+				key, _ := name.(string)
+				if _, present := v[key]; !present {
+					problems = append(problems, path+"."+key+": required property is missing")
+				}
+			}
+		}
+		for key, val := range v {
+			sub, described := props[key].(map[string]any)
+			if !described {
+				switch extra := schema["additionalProperties"].(type) {
+				case bool:
+					if !extra {
+						problems = append(problems, path+"."+key+": not described by the schema")
+					}
+				case map[string]any:
+					problems = append(problems, schemaErrors(path+"."+key, val, extra, root)...)
+				}
+				continue
+			}
+			problems = append(problems, schemaErrors(path+"."+key, val, sub, root)...)
+		}
+		return problems
+	case []any:
+		items, ok := schema["items"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		var problems []string
+		for i, item := range v {
+			problems = append(problems, schemaErrors(fmt.Sprintf("%s[%d]", path, i), item, items, root)...)
+		}
+		return problems
+	}
+	return nil
+}
+
+// resolveSchemaRef follows a local "#/$defs/Name" reference.
+func resolveSchemaRef(ref string, root map[string]any) (map[string]any, bool) {
+	name, ok := strings.CutPrefix(ref, "#/$defs/")
+	if !ok {
+		return nil, false
+	}
+	defs, ok := root["$defs"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	target, ok := defs[name].(map[string]any)
+	return target, ok
 }

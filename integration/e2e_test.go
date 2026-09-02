@@ -21,6 +21,8 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -196,6 +198,13 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	auditEmitter := audit.NewEmitter(auditStore, slog.Default())
 	t.Cleanup(auditEmitter.Close)
 	usersStore := user.NewStore(gen.New(st.Pool()))
+	// Token verification reads the per-user version off the snapshot. The
+	// composition root attaches the source before the first build; Bootstrap
+	// has already built one here, so refresh the map straight away.
+	cat.UseTokenVersions(usersStore)
+	if err := cat.ReloadTokenVersions(ctx); err != nil {
+		t.Fatalf("catalog.ReloadTokenVersions: %v", err)
+	}
 
 	var idStore *identity.Store
 	if len(identityDir) > 0 && identityDir[0] != "" {
@@ -208,19 +217,34 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		}
 	}
 
+	// Inference tokens: one Ed25519 key held by both planes, so the control
+	// plane mints what the data plane verifies. Key lifecycle (generation,
+	// rotation, the retired verification half) belongs to the composition
+	// root and is not modelled here.
+	signer := &control.TokenSigner{}
+	verifier := &inference.TokenVerifier{}
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatalf("generate token signing key: %v", err)
+	}
+	signer.SetSeed(seed)
+	verifier.SetKey(signer.PublicKey())
+
 	ctrlRouter := chi.NewRouter()
 	// Mirror prod: control API under /api so SPA routes aren't shadowed.
 	ctrlRouter.Route("/api", func(r chi.Router) {
 		control.Mount(r, control.Deps{
-			Identity:    idStore,
-			Users:       usersStore,
-			Sessions:    sessMgr,
-			AdminToken:  adminToken,
-			Authz:       audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
-			Catalog:     cat,
-			Stores:      stores,
-			Audit:       auditEmitter,
-			AuditReader: auditStore,
+			Identity:      idStore,
+			Users:         usersStore,
+			Sessions:      sessMgr,
+			AdminToken:    adminToken,
+			Authz:         audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
+			Catalog:       cat,
+			Stores:        stores,
+			Audit:         auditEmitter,
+			AuditReader:   auditStore,
+			TokenSigner:   signer,
+			TokenDenylist: kvStore,
 		})
 	})
 
@@ -228,6 +252,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:        st,
 		Catalog:       cat,
+		Tokens:        verifier,
 		Resolver:      routing.New(cat),
 		Pipeline:      pl,
 		Proxy:         proxyPipeline,
