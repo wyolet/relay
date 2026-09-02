@@ -7,9 +7,11 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
@@ -33,6 +35,9 @@ const (
 	// refServiceAccount keeps the "serviceaccount" value while the
 	// identifier for a Key stays refRelayKey — refKey is the struct.
 	refServiceAccount refKind = "serviceaccount"
+	refRole           refKind = "role"
+	refRoleBinding    refKind = "rolebinding"
+	refPolicyBinding  refKind = "policybinding"
 )
 
 // refKey identifies one row by (kind, id). Used as the value type in
@@ -162,6 +167,29 @@ func outboundServiceAccountRefs(sa *serviceaccount.ServiceAccount) []refKey {
 	return refs
 }
 
+// outboundRoleBindingRefs returns the granted Role and, for a scoped
+// binding, its scope target. Both are hard: without either there is
+// nothing to grant.
+func outboundRoleBindingRefs(b *rolebinding.RoleBinding) []refKey {
+	refs := []refKey{{Kind: refRole, ID: b.Spec.RoleID}}
+	switch b.Spec.Scope.Kind {
+	case meta.OwnerTeam:
+		refs = append(refs, refKey{Kind: refTeam, ID: b.Spec.Scope.ID})
+	case meta.OwnerProject:
+		refs = append(refs, refKey{Kind: refProject, ID: b.Spec.Scope.ID})
+	}
+	return refs
+}
+
+// outboundPolicyBindingRefs returns the Project the binding lives in and
+// the Policy it points at. Both hard.
+func outboundPolicyBindingRefs(b *policybinding.PolicyBinding) []refKey {
+	return []refKey{
+		{Kind: refProject, ID: b.Spec.ProjectID},
+		{Kind: refPolicy, ID: b.Spec.PolicyID},
+	}
+}
+
 // registerRefs records that `child` depends on every entry in `parents`.
 // The snapshot's refsBy* maps are mutated; safe to call only when the
 // caller owns this Snapshot (e.g. during build or COW reconcile).
@@ -212,6 +240,8 @@ func (s *Snapshot) refsetFor(kind refKind, id string) refSet {
 		m = s.refsByProject
 	case refServiceAccount:
 		m = s.refsByServiceAccount
+	case refRole:
+		m = s.refsByRole
 	default:
 		return nil
 	}
@@ -246,6 +276,8 @@ func (s *Snapshot) dropRefset(kind refKind, id string) {
 		delete(s.refsByProject, id)
 	case refServiceAccount:
 		delete(s.refsByServiceAccount, id)
+	case refRole:
+		delete(s.refsByRole, id)
 	}
 }
 
@@ -272,6 +304,8 @@ func (s *Snapshot) Dependents(kind refKind, id string) []refKey {
 		m = s.refsByProject
 	case refServiceAccount:
 		m = s.refsByServiceAccount
+	case refRole:
+		m = s.refsByRole
 	}
 	set, ok := m[id]
 	if !ok {

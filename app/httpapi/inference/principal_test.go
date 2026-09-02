@@ -19,10 +19,13 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -78,6 +81,7 @@ func (f principalFixture) stack(t *testing.T, keys ...*key.Key) *principalStack 
 	c.UseTenancy(
 		stubList[team.Team]{f.team}, stubList[project.Project]{f.project},
 		stubList[serviceaccount.ServiceAccount]{f.sa}, stubList[group.Group]{f.group},
+		stubList[role.Role]{}, stubList[rolebinding.RoleBinding]{}, stubList[policybinding.PolicyBinding]{},
 	)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)

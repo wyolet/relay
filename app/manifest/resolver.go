@@ -17,6 +17,7 @@ type Resolver interface {
 	ProjectID(name string) (string, bool)
 	ServiceAccountID(name string) (string, bool)
 	GroupID(name string) (string, bool)
+	RoleID(name string) (string, bool)
 	UserID(username string) (string, bool)
 }
 
@@ -35,6 +36,7 @@ type ReverseResolver interface {
 	ProjectName(id string) (string, bool)
 	ServiceAccountName(id string) (string, bool)
 	GroupName(id string) (string, bool)
+	RoleName(id string) (string, bool)
 	Username(id string) (string, bool)
 }
 
@@ -54,6 +56,7 @@ type MapResolver struct {
 
 	ServiceAccounts map[string]string
 	Groups          map[string]string
+	Roles           map[string]string
 	Users           map[string]string
 }
 
@@ -75,6 +78,7 @@ func (m MapResolver) ServiceAccountID(name string) (string, bool) {
 	return v, ok
 }
 func (m MapResolver) GroupID(name string) (string, bool) { v, ok := m.Groups[name]; return v, ok }
+func (m MapResolver) RoleID(name string) (string, bool)  { v, ok := m.Roles[name]; return v, ok }
 func (m MapResolver) UserID(name string) (string, bool)  { v, ok := m.Users[name]; return v, ok }
 
 // MapReverseResolver is a convenience implementation of ReverseResolver backed
@@ -93,6 +97,7 @@ type MapReverseResolver struct {
 
 	ServiceAccounts map[string]string
 	Groups          map[string]string
+	Roles           map[string]string
 	Users           map[string]string
 	// ModelProviders maps modelID -> providerID, letting FromPolicy emit the
 	// provider-qualified "provider/model" ref for legacy ModelIDs grants
@@ -142,4 +147,5 @@ func (m MapReverseResolver) ServiceAccountName(id string) (string, bool) {
 	return v, ok
 }
 func (m MapReverseResolver) GroupName(id string) (string, bool) { v, ok := m.Groups[id]; return v, ok }
+func (m MapReverseResolver) RoleName(id string) (string, bool)  { v, ok := m.Roles[id]; return v, ok }
 func (m MapReverseResolver) Username(id string) (string, bool)  { v, ok := m.Users[id]; return v, ok }

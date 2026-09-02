@@ -82,7 +82,7 @@ func (f subjectsFixture) catalog(t *testing.T) *Catalog {
 	t.Helper()
 	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{}, rkList{f.k}, rcList{}, bndList{})
 	c.UseTenancy(teamList{f.team}, projList{f.project},
-		saList{f.sa, f.orphan, f.badPol}, grpList{f.group})
+		saList{f.sa, f.orphan, f.badPol}, grpList{f.group}, roleList{}, rbList{}, pbList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

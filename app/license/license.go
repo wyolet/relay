@@ -7,7 +7,7 @@
 // root builds the real implementation and hands it in.
 //
 // Feature names are the vocabulary of the license file's `features` array.
-// Only "sso" is gated today; "custom-roles", "scim", "orgs" and
+// "sso" and "custom-roles" are gated today; "scim", "orgs" and
 // "audit-export" are reserved for the milestones that implement them.
 package license
 
@@ -19,6 +19,10 @@ import (
 // FeatureSSO gates all IdP-backed control-plane login (OIDC today, SAML
 // later). Community deployments keep password login.
 const FeatureSSO = "sso"
+
+// FeatureCustomRoles gates authoring Roles of your own. The built-in roles
+// are seeded on every deployment and are never gated.
+const FeatureCustomRoles = "custom-roles"
 
 // ErrRequired is the sentinel every gate returns. Callers match it with
 // errors.Is; the HTTP layer maps it to 403 and the settings read path

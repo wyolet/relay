@@ -13,10 +13,13 @@ import (
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -719,6 +722,200 @@ func removeGroupFromUsers(s *Snapshot, g *group.Group) {
 	}
 }
 
+// ── Role ──────────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyRoleUpsert(r *role.Role) error {
+	if !r.IsEnabled() {
+		return c.ApplyRoleDelete(r.Meta.ID)
+	}
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refRole, r.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	insertRole(s, r)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyRoleDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteRole(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertRole(s *Snapshot, r *role.Role) {
+	if old, ok := s.rolesByID[r.Meta.ID]; ok {
+		delete(s.rolesByName, old.Meta.Name)
+		delete(s.rolesByID, old.Meta.ID)
+	}
+	s.rolesByID[r.Meta.ID] = r
+	s.rolesByName[r.Meta.Name] = r
+}
+
+func deleteRole(s *Snapshot, id string) {
+	r, ok := s.rolesByID[id]
+	if !ok {
+		return
+	}
+	delete(s.rolesByID, id)
+	delete(s.rolesByName, r.Meta.Name)
+	cascadeDelete(s, refRole, id)
+}
+
+// ── RoleBinding ───────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyRoleBindingUpsert(b *rolebinding.RoleBinding) error {
+	if !b.IsEnabled() {
+		return c.ApplyRoleBindingDelete(b.Meta.ID)
+	}
+	if err := b.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	clean, keep := sanitizeRoleBinding(b, snapIDs(s.rolesByID), snapIDs(s.teamsByID), snapIDs(s.projectsByID))
+	if !keep {
+		deleteRoleBinding(s, b.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	insertRoleBinding(s, clean)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyRoleBindingDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteRoleBinding(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertRoleBinding(s *Snapshot, b *rolebinding.RoleBinding) {
+	if old, ok := s.roleBindingsByID[b.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refRoleBinding, ID: old.Meta.ID}, outboundRoleBindingRefs(old))
+		delete(s.roleBindingsByID, old.Meta.ID)
+		removeRoleBindingFromSubjects(s, old)
+	}
+	s.roleBindingsByID[b.Meta.ID] = b
+	for i := range b.Spec.Subjects {
+		key := b.Spec.Subjects[i].Key()
+		list := append(s.roleBindingsBySubject[key], b)
+		sortRoleBindings(list)
+		s.roleBindingsBySubject[key] = list
+	}
+	s.registerRefs(refKey{Kind: refRoleBinding, ID: b.Meta.ID}, outboundRoleBindingRefs(b))
+}
+
+func deleteRoleBinding(s *Snapshot, id string) {
+	b, ok := s.roleBindingsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refRoleBinding, ID: id}, outboundRoleBindingRefs(b))
+	delete(s.roleBindingsByID, id)
+	removeRoleBindingFromSubjects(s, b)
+}
+
+func removeRoleBindingFromSubjects(s *Snapshot, b *rolebinding.RoleBinding) {
+	for i := range b.Spec.Subjects {
+		key := b.Spec.Subjects[i].Key()
+		list := s.roleBindingsBySubject[key]
+		out := make([]*rolebinding.RoleBinding, 0, len(list))
+		for _, cur := range list {
+			if cur.Meta.ID != b.Meta.ID {
+				out = append(out, cur)
+			}
+		}
+		if len(out) == 0 {
+			delete(s.roleBindingsBySubject, key)
+			continue
+		}
+		s.roleBindingsBySubject[key] = out
+	}
+}
+
+// ── PolicyBinding ─────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error {
+	if !b.IsEnabled() {
+		return c.ApplyPolicyBindingDelete(b.Meta.ID)
+	}
+	if err := b.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	clean, keep := sanitizePolicyBinding(b, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
+	if !keep {
+		deletePolicyBinding(s, b.Meta.ID)
+		c.commitWithGrants(s)
+		return nil
+	}
+	insertPolicyBinding(s, clean)
+	c.commitWithGrants(s)
+	return nil
+}
+
+func (c *Catalog) ApplyPolicyBindingDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deletePolicyBinding(s, id)
+	c.commitWithGrants(s)
+	return nil
+}
+
+func insertPolicyBinding(s *Snapshot, b *policybinding.PolicyBinding) {
+	if old, ok := s.policyBindingsByID[b.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicyBinding, ID: old.Meta.ID}, outboundPolicyBindingRefs(old))
+		delete(s.policyBindingsByID, old.Meta.ID)
+		removePolicyBindingFromProject(s, old)
+	}
+	s.policyBindingsByID[b.Meta.ID] = b
+	list := append(s.policyBindingsByProject[b.Spec.ProjectID], b)
+	sortPolicyBindings(list)
+	s.policyBindingsByProject[b.Spec.ProjectID] = list
+	s.registerRefs(refKey{Kind: refPolicyBinding, ID: b.Meta.ID}, outboundPolicyBindingRefs(b))
+}
+
+func deletePolicyBinding(s *Snapshot, id string) {
+	b, ok := s.policyBindingsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refPolicyBinding, ID: id}, outboundPolicyBindingRefs(b))
+	delete(s.policyBindingsByID, id)
+	removePolicyBindingFromProject(s, b)
+}
+
+func removePolicyBindingFromProject(s *Snapshot, b *policybinding.PolicyBinding) {
+	list := s.policyBindingsByProject[b.Spec.ProjectID]
+	out := make([]*policybinding.PolicyBinding, 0, len(list))
+	for _, cur := range list {
+		if cur.Meta.ID != b.Meta.ID {
+			out = append(out, cur)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.policyBindingsByProject, b.Spec.ProjectID)
+		return
+	}
+	s.policyBindingsByProject[b.Spec.ProjectID] = out
+}
+
 // ── Binding ───────────────────────────────────────────────────────────────
 
 func deleteBinding(s *Snapshot, id string) {
@@ -969,6 +1166,18 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 			return true
 		}
 		return validateServiceAccountInSnap(sa, s) == nil
+	case refRoleBinding:
+		b, ok := s.roleBindingsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateRoleBindingInSnap(b, s) == nil
+	case refPolicyBinding:
+		b, ok := s.policyBindingsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validatePolicyBindingInSnap(b, s) == nil
 	}
 	return true
 }
@@ -1012,6 +1221,15 @@ func rowPresent(s *Snapshot, k refKey) bool {
 	case refServiceAccount:
 		_, ok := s.serviceAccountsByID[k.ID]
 		return ok
+	case refRole:
+		_, ok := s.rolesByID[k.ID]
+		return ok
+	case refRoleBinding:
+		_, ok := s.roleBindingsByID[k.ID]
+		return ok
+	case refPolicyBinding:
+		_, ok := s.policyBindingsByID[k.ID]
+		return ok
 	}
 	return false
 }
@@ -1043,6 +1261,12 @@ func deleteDirect(s *Snapshot, k refKey) {
 		deleteProject(s, k.ID)
 	case refServiceAccount:
 		deleteServiceAccount(s, k.ID)
+	case refRole:
+		deleteRole(s, k.ID)
+	case refRoleBinding:
+		deleteRoleBinding(s, k.ID)
+	case refPolicyBinding:
+		deletePolicyBinding(s, k.ID)
 	}
 }
 

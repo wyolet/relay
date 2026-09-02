@@ -44,7 +44,13 @@ DELETE /api/{plural}/by-id/{id}      delete
 
 Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
 `policies`, `pricings`, `keys`, `teams`, `projects`, `service-accounts`,
-`groups`.
+`groups`, `roles`, `role-bindings`, `policy-bindings`.
+
+Roles, role bindings, and policy bindings are stored, validated, and
+served like every other kind, and their rows are indexed in the snapshot.
+Nothing evaluates them yet — access is still decided the way it is today,
+and enforcement arrives in a later release. Authoring a role of your own
+is a licensed feature; the built-in roles ship with every deployment.
 
 <Info>
 Every write triggers a Postgres `NOTIFY`; the change propagates to every

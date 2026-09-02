@@ -556,3 +556,104 @@ DELETE FROM group_members WHERE group_id = $1;
 -- name: InsertGroupMember :exec
 INSERT INTO group_members (group_id, user_id, position) VALUES ($1, $2, $3)
 ON CONFLICT (group_id, user_id) DO UPDATE SET position = EXCLUDED.position;
+
+-- ── roles + bindings (migration 0027) ────────────────────────────────────────
+
+-- name: ListRoles :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles ORDER BY name;
+
+-- name: GetRole :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles WHERE id = $1;
+
+-- name: UpsertRole :exec
+INSERT INTO roles (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteRole :exec
+DELETE FROM roles WHERE id = $1;
+
+-- name: ListRoleBindings :many
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+FROM role_bindings ORDER BY name;
+
+-- name: GetRoleBinding :one
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+FROM role_bindings WHERE id = $1;
+
+-- name: UpsertRoleBinding :exec
+INSERT INTO role_bindings (id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    role_id      = EXCLUDED.role_id,
+    scope_kind   = EXCLUDED.scope_kind,
+    scope_id     = EXCLUDED.scope_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteRoleBinding :exec
+DELETE FROM role_bindings WHERE id = $1;
+
+-- name: ListRoleBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM role_binding_subjects ORDER BY binding_id, position;
+
+-- name: GetRoleBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM role_binding_subjects WHERE binding_id = $1 ORDER BY position;
+
+-- name: DeleteRoleBindingSubjects :exec
+DELETE FROM role_binding_subjects WHERE binding_id = $1;
+
+-- name: InsertRoleBindingSubject :exec
+INSERT INTO role_binding_subjects
+    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListPolicyBindings :many
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+FROM policy_bindings ORDER BY name;
+
+-- name: GetPolicyBinding :one
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+FROM policy_bindings WHERE id = $1;
+
+-- name: UpsertPolicyBinding :exec
+INSERT INTO policy_bindings (id, name, display_name, project_id, policy_id, priority, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    project_id   = EXCLUDED.project_id,
+    policy_id    = EXCLUDED.policy_id,
+    priority     = EXCLUDED.priority,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeletePolicyBinding :exec
+DELETE FROM policy_bindings WHERE id = $1;
+
+-- name: ListPolicyBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM policy_binding_subjects ORDER BY binding_id, position;
+
+-- name: GetPolicyBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM policy_binding_subjects WHERE binding_id = $1 ORDER BY position;
+
+-- name: DeletePolicyBindingSubjects :exec
+DELETE FROM policy_binding_subjects WHERE binding_id = $1;
+
+-- name: InsertPolicyBindingSubject :exec
+INSERT INTO policy_binding_subjects
+    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
