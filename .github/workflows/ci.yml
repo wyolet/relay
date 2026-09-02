@@ -43,3 +43,6 @@ jobs:
           go test ./...
           (cd sdk && go test ./...)
           (cd jobq && go test ./...)
+
+      - name: Race
+        run: make test-race

@@ -1,7 +1,7 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
         version release release-minor release-major \
-        sqlc-generate test test-integration smoke-mock breakers-reset \
+        sqlc-generate test test-race test-integration smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean schemas catalog-validate catalog-embed lint-rules
 
@@ -89,6 +89,7 @@ help: ## Show this help
 	@echo '🧰 Go:'
 	@echo '  make sqlc-generate     regenerate sqlc code'
 	@echo '  make test              go test ./...'
+	@echo '  make test-race         unit tests under -race'
 	@echo '  make test-integration  integration tag, race'
 	@echo '  make smoke-mock        replay recorded fixtures through relay → openai-mock.wyolet.dev'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
@@ -334,6 +335,9 @@ test: ## go test ./... (all modules)
 	go test ./...
 	cd sdk && go test ./...
 	cd jobq && go test ./...
+
+test-race: ## unit tests under -race (hot path, IAM, shared libs)
+	go test -race ./app/... ./pkg/... ./cmd/... ./internal/...
 
 lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
 	./scripts/check-codebase-rules.sh
