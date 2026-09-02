@@ -26,15 +26,17 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 )
 
 // ── payload types ─────────────────────────────────────────────────────────────
 
 type notifyEvent struct {
-	Kind string // "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
+	Kind string // "team", "project", "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
 	Op   string // "upsert" or "delete"
 	ID   string
 }
@@ -43,6 +45,7 @@ var validKinds = map[string]struct{}{
 	"provider": {}, "host": {}, "model": {}, "hostkey": {},
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
 	"hostbinding": {}, "settings": {}, "overlay": {},
+	"team": {}, "project": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -146,6 +149,12 @@ type listenerStores struct {
 	}
 	overlay interface {
 		Get(ctx context.Context, kind, resourceID string) (*overlay.Overlay, error)
+	}
+	team interface {
+		Get(ctx context.Context, id string) (*team.Team, error)
+	}
+	project interface {
+		Get(ctx context.Context, id string) (*project.Project, error)
 	}
 	settings SettingsLister
 }
@@ -251,9 +260,9 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 // transaction commits and the debouncer flushes the whole burst together,
 // cross-ref validation against the snapshot succeeds at each step.
 //
-// Order: provider → host → ratelimit → model → hostkey → policy → pricing
-// → relaykey. Deletes propagate via reverse-ref cascade inside the
-// reconciler so they don't need a separate ordering pass.
+// Order: team → project → provider → host → ratelimit → model → hostkey →
+// policy → pricing → relaykey. Deletes propagate via reverse-ref cascade
+// inside the reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
 	sort.SliceStable(events, func(i, j int) bool {
@@ -267,17 +276,19 @@ func (l *Listener) applyDrained(ctx context.Context) {
 }
 
 var kindOrder = map[string]int{
-	"provider":    0,
-	"host":        1,
-	"ratelimit":   2,
-	"model":       3,
-	"hostkey":     4,
-	"policy":      5,
-	"pricing":     6,
-	"hostbinding": 7,
-	"relaykey":    8,
-	"overlay":     9, // after model upserts so re-merges see fresh templates
-	"settings":    10,
+	"team":        0,
+	"project":     1,
+	"provider":    2,
+	"host":        3,
+	"ratelimit":   4,
+	"model":       5,
+	"hostkey":     6,
+	"policy":      7,
+	"pricing":     8,
+	"hostbinding": 9,
+	"relaykey":    10,
+	"overlay":     11, // after model upserts so re-merges see fresh templates
+	"settings":    12,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -386,6 +397,32 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return l.cat.ApplyRelayKeyDelete(e.ID)
 		}
 		return l.cat.ApplyRelayKeyUpsert(k)
+
+	case "team":
+		if e.Op == "delete" {
+			return l.cat.ApplyTeamDelete(e.ID)
+		}
+		t, err := l.stores.team.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if t == nil {
+			return l.cat.ApplyTeamDelete(e.ID)
+		}
+		return l.cat.ApplyTeamUpsert(t)
+
+	case "project":
+		if e.Op == "delete" {
+			return l.cat.ApplyProjectDelete(e.ID)
+		}
+		p, err := l.stores.project.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			return l.cat.ApplyProjectDelete(e.ID)
+		}
+		return l.cat.ApplyProjectUpsert(p)
 
 	case "hostbinding":
 		// PR1: bindings aren't consumed by routing yet, and the COW

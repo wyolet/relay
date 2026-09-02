@@ -11,7 +11,9 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
 )
 
@@ -238,4 +240,40 @@ func eqNames[T any](rows []*T, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestTeamAndProjectFilters(t *testing.T) {
+	off := false
+	teams := []*team.Team{
+		{Meta: meta.Metadata{Name: "platform", Labels: map[string]string{"env": "prod"}}},
+		{Meta: meta.Metadata{Name: "research"}, Spec: team.Spec{Enabled: &off}},
+	}
+	got, _ := applyQ(t, teamFilter, "enabled=true", teams)
+	if len(got) != 1 || got[0].Meta.Name != "platform" {
+		t.Fatalf("enabled=true => %v, want [platform]", names(got))
+	}
+	got, _ = applyQ(t, teamFilter, "label=env%3Dprod", teams)
+	if len(got) != 1 || got[0].Meta.Name != "platform" {
+		t.Fatalf("label=env=prod => %v, want [platform]", names(got))
+	}
+	if _, err := teamFilter.Parse(url.Values{"annotation": {"a=b"}}); err == nil {
+		t.Fatal("annotations are not filterable; ?annotation= should 400")
+	}
+
+	projects := []*project.Project{
+		{Meta: meta.Metadata{Name: "ml-search", Labels: map[string]string{"env": "prod"}}, Spec: project.Spec{TeamID: "t1"}},
+		{Meta: meta.Metadata{Name: "ranking"}, Spec: project.Spec{TeamID: "t1", Enabled: &off}},
+		{Meta: meta.Metadata{Name: "lab"}, Spec: project.Spec{TeamID: "t2"}},
+	}
+	gotP, _ := applyQ(t, projectFilter, "team_id=t1&enabled=true", projects)
+	if len(gotP) != 1 || gotP[0].Meta.Name != "ml-search" {
+		t.Fatalf("team_id=t1&enabled=true => %v, want [ml-search]", names(gotP))
+	}
+	gotP, _ = applyQ(t, projectFilter, "label=env%3Dprod", projects)
+	if len(gotP) != 1 || gotP[0].Meta.Name != "ml-search" {
+		t.Fatalf("label=env=prod => %v, want [ml-search]", names(gotP))
+	}
+	if _, err := projectFilter.Parse(url.Values{"bogus": {"1"}}); err == nil {
+		t.Fatal("unknown key should 400")
+	}
 }

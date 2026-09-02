@@ -6,9 +6,9 @@ import (
 	"github.com/wyolet/relay/app/policy"
 )
 
-func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts idSet, polByID map[string]*policy.Policy) {
+func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts, projects idSet, polByID map[string]*policy.Policy) {
 	for _, k := range keys {
-		clean, keep := sanitizeHostKey(k, hosts, polByID)
+		clean, keep := sanitizeHostKey(k, hosts, projects, polByID)
 		if !keep {
 			continue
 		}
@@ -18,9 +18,15 @@ func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts idSet, polByID map
 }
 
 // sanitizeHostKey drops the key when either its Host or its tier Policy
-// can't resolve, or when the Policy isn't host-owned by the key's Host.
-// Both refs are required for the key to function.
-func sanitizeHostKey(k *hostkey.HostKey, hosts idSet, polByID map[string]*policy.Policy) (*hostkey.HostKey, bool) {
+// can't resolve, when the Policy isn't host-owned by the key's Host, or
+// when a project-owned key's Project is missing. Every one of those refs
+// is required for the key to function.
+func sanitizeHostKey(k *hostkey.HostKey, hosts, projects idSet, polByID map[string]*policy.Policy) (*hostkey.HostKey, bool) {
+	if k.Meta.Owner.Kind == meta.OwnerProject {
+		if _, ok := projects[k.Meta.Owner.ID]; !ok {
+			return nil, false
+		}
+	}
 	if _, ok := hosts[k.Spec.HostID]; !ok {
 		return nil, false
 	}

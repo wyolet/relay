@@ -38,6 +38,15 @@ func TestGoverns(t *testing.T) {
 			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
 			wantErr: true,
 		},
+
+		// Tenancy rows are the tenant's, like user rows.
+		{name: "project delete allowed", op: OpDelete, kind: "project", ownerKind: "project", wantErr: false},
+		{name: "team delete allowed", op: OpDelete, kind: "team", ownerKind: "team", wantErr: false},
+		{
+			name: "project-owned policy delete allowed", op: OpDelete, kind: "policy", ownerKind: "project",
+			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

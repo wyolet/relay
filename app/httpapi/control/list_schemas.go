@@ -22,9 +22,11 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
 )
 
@@ -252,5 +254,28 @@ var relayKeyFilter = filter.Schema[relaykey.RelayKey]{
 	},
 	Q:           func(k *relaykey.RelayKey) []string { return []string{k.Meta.Name, k.Meta.DisplayName, k.Spec.Prefix} },
 	Labels:      func(k *relaykey.RelayKey) map[string]string { return labelsOf(k.Meta) },
+	DefaultSort: "name",
+}
+
+var teamFilter = filter.Schema[team.Team]{
+	Fields: []filter.Field[team.Team]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(t *team.Team) string { return t.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(t *team.Team) bool { return enabledTrue(t.Spec.Enabled) }},
+	},
+	Q:           func(t *team.Team) []string { return []string{t.Meta.Name, t.Meta.DisplayName, t.Meta.Description} },
+	Labels:      func(t *team.Team) map[string]string { return labelsOf(t.Meta) },
+	DefaultSort: "name",
+}
+
+var projectFilter = filter.Schema[project.Project]{
+	Fields: []filter.Field[project.Project]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(p *project.Project) string { return p.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(p *project.Project) bool { return enabledTrue(p.Spec.Enabled) }},
+		{Name: "team_id", Kind: filter.String, Repeat: true, Get: func(p *project.Project) string { return p.Spec.TeamID }},
+	},
+	Q: func(p *project.Project) []string {
+		return []string{p.Meta.Name, p.Meta.DisplayName, p.Meta.Description}
+	},
+	Labels:      func(p *project.Project) map[string]string { return labelsOf(p.Meta) },
 	DefaultSort: "name",
 }

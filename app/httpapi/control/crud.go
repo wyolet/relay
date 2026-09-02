@@ -30,10 +30,12 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/slug"
@@ -572,6 +574,40 @@ func guardRelayKeyPolicy(d Deps) mutationGuard[relaykey.RelayKey] {
 	}
 }
 
+// guardProject re-derives the project's owner from spec.teamId on every
+// write (spec is the source of truth, owner mirrors it) and rejects a team
+// the caller may not see.
+func guardProject(d Deps) mutationGuard[project.Project] {
+	return func(ctx context.Context, action string, _, incoming *project.Project) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		incoming.StampOwner()
+		return checkTeamRefVisible(ctx, d, incoming.Spec.TeamID)
+	}
+}
+
+// checkTeamRefVisible rejects a project whose team doesn't exist (400) or
+// isn't visible to the caller (404 — a team the caller may not see must
+// not be confirmed to exist).
+func checkTeamRefVisible(ctx context.Context, d Deps, teamID string) error {
+	if d.Stores == nil || d.Stores.Team == nil {
+		return nil
+	}
+	t, err := d.Stores.Team.Get(ctx, teamID)
+	if err != nil || t == nil {
+		return huma.Error400BadRequest(fmt.Sprintf("team %q does not exist", teamID))
+	}
+	s, ok := d.Authz.(authz.Scoper)
+	if !ok {
+		return nil
+	}
+	if !s.Visible(ctx, "team", t.Meta.Owner) {
+		return huma.Error404NotFound(fmt.Sprintf("team %q not found", teamID))
+	}
+	return nil
+}
+
 func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
 	if policyID == "" {
 		return nil
@@ -915,6 +951,40 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	prmeta := func(p *pricing.Pricing) *meta.Metadata { return &p.Meta }
 	bmeta := func(b *binding.Binding) *meta.Metadata { return &b.Meta }
 	rkmeta := func(k *relaykey.RelayKey) *meta.Metadata { return &k.Meta }
+	tmeta := func(t *team.Team) *meta.Metadata { return &t.Meta }
+	projmeta := func(p *project.Project) *meta.Metadata { return &p.Meta }
+
+	registerKind[team.Team](
+		api, "teams", "team", d.Stores.Team, d.Authz, tmeta,
+		func(t *team.Team) error { return t.Validate() },
+		meta.OwnerUser,
+		listScanResolver(d.Stores.Team, tmeta),
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&teamFilter,
+	)
+
+	registerKind[project.Project](
+		api, "projects", "project", d.Stores.Project, d.Authz, projmeta,
+		func(p *project.Project) error { return p.Validate() },
+		meta.OwnerTeam,
+		listScanResolver(d.Stores.Project, projmeta),
+		guardProject(d),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&projectFilter,
+	)
 
 	registerKind[provider.Provider](
 		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,

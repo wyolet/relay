@@ -60,6 +60,8 @@ var kinds = []kind{
 	{Name: "RateLimit", Type: reflect.TypeOf(manifest.RateLimitDTO{})},
 	{Name: "Pricing", Type: reflect.TypeOf(manifest.PricingDTO{})},
 	{Name: "RelayKey", Type: reflect.TypeOf(manifest.RelayKeyDTO{})},
+	{Name: "Team", Type: reflect.TypeOf(manifest.TeamDTO{})},
+	{Name: "Project", Type: reflect.TypeOf(manifest.ProjectDTO{})},
 }
 
 func main() {

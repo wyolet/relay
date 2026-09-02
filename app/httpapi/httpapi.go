@@ -137,6 +137,8 @@ var entityNameByPkg = map[string]string{
 	"github.com/wyolet/relay/app/policy":    "Policy",
 	"github.com/wyolet/relay/app/pricing":   "Pricing",
 	"github.com/wyolet/relay/app/relaykey":  "RelayKey",
+	"github.com/wyolet/relay/app/team":      "Team",
+	"github.com/wyolet/relay/app/project":   "Project",
 }
 
 func schemaNamer(t reflect.Type, hint string) string {

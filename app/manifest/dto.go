@@ -18,6 +18,7 @@ type WireMeta struct {
 	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
 	Owner       WireOwner         `json:"owner,omitempty"       yaml:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 }
 
 // WireOwner is the wire form of meta.Owner. The referenced row is named —
@@ -50,6 +51,7 @@ func (w WireMeta) toMeta() meta.Metadata {
 		Description: w.Description,
 		Owner:       meta.Owner{Kind: w.Owner.Kind, ID: w.Owner.ref()},
 		Labels:      w.Labels,
+		Annotations: w.Annotations,
 	}
 }
 
@@ -61,6 +63,7 @@ func metaToWire(m meta.Metadata) WireMeta {
 		Description: m.Description,
 		Owner:       WireOwner{Kind: m.Owner.Kind, Name: m.Owner.ID},
 		Labels:      m.Labels,
+		Annotations: m.Annotations,
 	}
 }
 
@@ -300,6 +303,41 @@ type PricingRateDTO struct {
 	Unit        string  `json:"unit"                  yaml:"unit"`
 	Amount      float64 `json:"amount"                yaml:"amount"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty"`
+}
+
+// BudgetDTO is the wire form of a spend cap, shared by Team and Project.
+type BudgetDTO struct {
+	Amount   string `json:"amount"             yaml:"amount"`
+	Period   string `json:"period,omitempty"   yaml:"period,omitempty"`
+	OnExceed string `json:"onExceed,omitempty" yaml:"onExceed,omitempty"`
+}
+
+// TeamDTO is the wire form of a Team. No cross-refs.
+type TeamDTO struct {
+	APIVersion string   `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string   `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta `json:"metadata"   yaml:"metadata"`
+	Spec       TeamSpec `json:"spec"       yaml:"spec"`
+}
+
+type TeamSpec struct {
+	Enabled *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Budget  *BudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
+}
+
+// ProjectDTO is the wire form of a Project. Spec.Team is a team *name*.
+type ProjectDTO struct {
+	APIVersion string      `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string      `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta    `json:"metadata"   yaml:"metadata"`
+	Spec       ProjectSpec `json:"spec"       yaml:"spec"`
+}
+
+type ProjectSpec struct {
+	// Team is the owning team *name* (wire form).
+	Team    string     `json:"team"              yaml:"team"`
+	Enabled *bool      `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Budget  *BudgetDTO `json:"budget,omitempty"  yaml:"budget,omitempty"`
 }
 
 // SettingDTO is the wire form of a settings section. Unlike the catalog kinds

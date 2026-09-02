@@ -423,3 +423,44 @@ DELETE FROM users WHERE id = $1;
 
 -- name: UpdateSecretStatus :exec
 UPDATE secrets SET status = $2 WHERE id = $1;
+
+-- ── teams + projects (migration 0025) ────────────────────────────────────────
+
+-- name: ListTeams :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams ORDER BY name;
+
+-- name: GetTeam :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams WHERE id = $1;
+
+-- name: UpsertTeam :exec
+INSERT INTO teams (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteTeam :exec
+DELETE FROM teams WHERE id = $1;
+
+-- name: ListProjects :many
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects ORDER BY name;
+
+-- name: GetProject :one
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects WHERE id = $1;
+
+-- name: UpsertProject :exec
+INSERT INTO projects (id, name, display_name, team_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    team_id      = EXCLUDED.team_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteProject :exec
+DELETE FROM projects WHERE id = $1;

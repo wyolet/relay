@@ -18,9 +18,11 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 )
 
 // Build assembles a Snapshot from entity slices using the same sanitize rules
@@ -37,7 +39,7 @@ func Build(
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil)
+	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil)
 }
 
 func build(
@@ -51,12 +53,13 @@ func build(
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 	ovls []*overlay.Overlay,
+	teams []*team.Team,
+	projects []*project.Project,
 ) *Snapshot {
-	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings))
+	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects))
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
-	rlIDs := setFromIDs(rls, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
 	polByID := make(map[string]*policy.Policy, len(pols))
 	polIDSet := make(idSet, len(pols))
 	for _, p := range pols {
@@ -65,13 +68,17 @@ func build(
 	}
 
 	s.addProviders(provs)
-	s.addRateLimits(rls)
+	// Tenancy first: every kind below can be project-owned and sanitizes
+	// against the project map.
+	s.addTeams(teams)
+	s.addProjects(projects, snapIDs(s.teamsByID))
+	s.addRateLimits(rls, snapIDs(s.projectsByID))
 	s.addHosts(hosts, polByID)
 	s.addModels(models, providerIDs)
 	// Overlays swap templates for effective rows BEFORE indexing, so
 	// aliases/refs below index the merged spec.
 	s.applyOverlays(ovls)
-	s.addHostKeys(keys, hostIDs, polByID)
+	s.addHostKeys(keys, hostIDs, snapIDs(s.projectsByID), polByID)
 	// Droppable kinds (models: missing provider; hostkeys: missing host /
 	// tier policy) are in place now, so dependents sanitize against the
 	// post-drop snapshot membership — the input enabled-id sets would keep
@@ -79,7 +86,7 @@ func build(
 	// cascade's fixpoint.
 	memberModelIDs := snapIDs(s.modelsByID)
 	memberKeyIDs := snapIDs(s.hostKeysByID)
-	s.addPolicies(pols, memberModelIDs, memberKeyIDs, rlIDs)
+	s.addPolicies(pols, memberModelIDs, memberKeyIDs, snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
 	s.addRelayKeys(rks, polIDSet)
 	s.computePolicyReverseJoins()
 	s.addPricings(pricings, hostIDs, memberModelIDs)
@@ -94,7 +101,7 @@ func build(
 	return s
 }
 
-func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings int) *Snapshot {
+func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects int) *Snapshot {
 	return &Snapshot{
 		providersByID:         make(map[string]*provider.Provider, nProvs),
 		providersByName:       make(map[string]*provider.Provider, nProvs),
@@ -129,5 +136,12 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		refsByHostKey:         map[string]refSet{},
 		refsByRateLimit:       map[string]refSet{},
 		refsByPolicy:          map[string]refSet{},
+		refsByTeam:            map[string]refSet{},
+		refsByProject:         map[string]refSet{},
+		teamsByID:             make(map[string]*team.Team, nTeams),
+		teamsByName:           make(map[string]*team.Team, nTeams),
+		projectsByID:          make(map[string]*project.Project, nProjects),
+		projectsByName:        make(map[string]*project.Project, nProjects),
+		projectsByTeam:        map[string][]*project.Project{},
 	}
 }

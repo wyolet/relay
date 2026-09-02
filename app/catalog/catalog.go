@@ -13,9 +13,11 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 )
 
 // Catalog is the long-lived composition object. Holds the entity stores
@@ -36,6 +38,12 @@ type Catalog struct {
 	// from the composition root so existing New callers (tests,
 	// catalog-embed) stay untouched.
 	overlays OverlayLister
+
+	// teams/projects are optional (nil = tenancy dormant): set via
+	// UseTenancy from the composition root so existing New callers stay
+	// untouched.
+	teams    TeamLister
+	projects ProjectLister
 
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
@@ -78,6 +86,12 @@ type BindingLister interface {
 type OverlayLister interface {
 	List(ctx context.Context) ([]*overlay.Overlay, error)
 }
+type TeamLister interface {
+	List(ctx context.Context) ([]*team.Team, error)
+}
+type ProjectLister interface {
+	List(ctx context.Context) ([]*project.Project, error)
+}
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
@@ -110,6 +124,11 @@ func New(
 // UseOverlays attaches the overlay source. Called once at composition
 // time before the first Reload; nil (the default) keeps overlays dormant.
 func (c *Catalog) UseOverlays(l OverlayLister) { c.overlays = l }
+
+// UseTenancy attaches the Team + Project sources. Called once at
+// composition time before the first Reload; nil (the default) keeps
+// tenancy dormant.
+func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister) { c.teams, c.projects = t, p }
 
 // Current returns the live Snapshot. Safe to call from any goroutine; the
 // returned pointer is immutable until the next successful Reload.
@@ -179,6 +198,20 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("catalog reload: bindings: %w", err)
 	}
+	var teams []*team.Team
+	if c.teams != nil {
+		teams, err = c.teams.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: teams: %w", err)
+		}
+	}
+	var projects []*project.Project
+	if c.projects != nil {
+		projects, err = c.projects.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: projects: %w", err)
+		}
+	}
 	var ovls []*overlay.Overlay
 	if c.overlays != nil {
 		ovls, err = c.overlays.List(ctx)
@@ -196,6 +229,8 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 	enabledPricings := filter(pricingsAll, (*pricing.Pricing).IsEnabled)
 	enabledBindings := filter(bindingsAll, (*binding.Binding).IsEnabled)
+	enabledTeams := filter(teams, (*team.Team).IsEnabled)
+	enabledProjects := filter(projects, (*project.Project).IsEnabled)
 
 	providerIDs := make(map[string]struct{}, len(enabledProvs))
 	for _, p := range enabledProvs {
@@ -210,7 +245,7 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls)
+	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects)
 	c.snap.Store(snap)
 	c.markReady()
 	return nil

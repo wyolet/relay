@@ -172,9 +172,9 @@ func (k *HostKey) Validate() error {
 		return err
 	}
 	switch k.Meta.Owner.Kind {
-	case meta.OwnerUser, meta.OwnerSystem:
+	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
 	default:
-		return fmt.Errorf("hostkey %q: owner.kind must be user or system, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+		return fmt.Errorf("hostkey %q: owner.kind must be user, system or project, got %q", k.Meta.Name, k.Meta.Owner.Kind)
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
