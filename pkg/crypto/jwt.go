@@ -98,7 +98,7 @@ func TokenKeyID(token string) string {
 	if !ok || header == jwtHeader {
 		return ""
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(header)
+	raw, err := rawURL.DecodeString(header)
 	if err != nil {
 		return ""
 	}
@@ -124,14 +124,14 @@ func ParseToken(pub ed25519.PublicKey, token string) (TokenClaims, error) {
 	if !ok || !validHeader(header) {
 		return TokenClaims{}, ErrTokenMalformed
 	}
-	rawSig, err := base64.RawURLEncoding.DecodeString(sig)
+	rawSig, err := rawURL.DecodeString(sig)
 	if err != nil {
 		return TokenClaims{}, ErrTokenMalformed
 	}
 	if !ed25519.Verify(pub, []byte(header+"."+payload), rawSig) {
 		return TokenClaims{}, ErrTokenSignature
 	}
-	rawPayload, err := base64.RawURLEncoding.DecodeString(payload)
+	rawPayload, err := rawURL.DecodeString(payload)
 	if err != nil {
 		return TokenClaims{}, ErrTokenMalformed
 	}
@@ -150,7 +150,7 @@ func validHeader(header string) bool {
 	}
 	// A byte scan rather than a JSON decode: this runs per verification and
 	// the header is a fixed shape relay itself writes.
-	raw, err := base64.RawURLEncoding.DecodeString(header)
+	raw, err := rawURL.DecodeString(header)
 	if err != nil || len(raw) > maxHeaderBytes {
 		return false
 	}
@@ -163,3 +163,8 @@ func validHeader(header string) bool {
 const maxHeaderBytes = 256
 
 func base64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+// rawURL decodes strictly: a segment whose length leaves unused trailing bits
+// (an Ed25519 signature leaves four) has many encodings of the same bytes, so
+// a non-strict decode would verify one token under several distinct strings.
+var rawURL = base64.RawURLEncoding.Strict()
