@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
+	applicense "github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/metricslog"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
@@ -49,6 +51,7 @@ import (
 	relayweb "github.com/wyolet/relay/cmd/relay/web"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
+	"github.com/wyolet/relay/internal/license"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/jobq"
@@ -152,6 +155,24 @@ func main() {
 	} else if len(seeded) > 0 {
 		slog.Info("settings: seeded from YAML", "dir", settingsDir, "sections", seeded)
 	}
+
+	// License: verified offline, never fatal. Resolved before hydrate so
+	// the first settings decode already sees the gate. The environment wins
+	// over the stored value; a bad or expired one degrades to community.
+	licenseSvc := license.New(nil)
+	var storedLicense string
+	if row, err := stores.Settings.Get(bootCtx, settings.SectionLicense); err == nil {
+		if l, ok := row.Value.(*settings.License); ok {
+			storedLicense = l.Value
+		}
+	}
+	if info, err := licenseSvc.Set(storedLicense); err != nil {
+		slog.Warn("license: unusable — running as community", "err", err)
+	} else if info.Licensed {
+		slog.Info("license: verified", "customer", info.Customer,
+			"expiresAt", info.ExpiresAt, "features", info.Features, "grace", info.Grace)
+	}
+	settings.SetLicenseGate(licenseSvc)
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
@@ -258,7 +279,11 @@ func main() {
 
 	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
 	// the boot, not the first login attempt.
-	if oidcEnv, err := settings.AuthOIDCEnv(); err != nil {
+	// An unlicensed overlay is refused, not fatal: a deployment that loses
+	// its license keeps booting and keeps serving password login.
+	if oidcEnv, err := settings.AuthOIDCEnv(); errors.Is(err, applicense.ErrRequired) {
+		slog.Warn("auth: oidc login requires a license — falling back to password login", "err", err)
+	} else if err != nil {
 		slog.Error("auth: invalid WYOLET_* OIDC env overlay", "err", err)
 		os.Exit(1)
 	} else if oidcEnv != nil {
@@ -617,6 +642,7 @@ func main() {
 			Sessions:       sessMgr,
 			AdminToken:     cfg.AdminToken,
 			Authz:          authorizer,
+			License:        licenseSvc,
 			Catalog:        cat,
 			Stores:         stores,
 			CookieSecure:   cookieSecure,

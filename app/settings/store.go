@@ -41,7 +41,7 @@ func (s *Store) Get(ctx context.Context, section string) (*Row, error) {
 		}
 		return nil, fmt.Errorf("settings.Get: %w", err)
 	}
-	v, err := sec.Decode(r.Value)
+	v, err := decodeOrDegrade(sec, r.Value)
 	if err != nil {
 		return nil, fmt.Errorf("settings.Get %s: %w", section, err)
 	}
@@ -102,7 +102,7 @@ func (s *Store) List(ctx context.Context) ([]*Row, error) {
 	for _, n := range names {
 		sec, _ := Lookup(n)
 		if r, ok := byName[n]; ok {
-			v, err := sec.Decode(r.Value)
+			v, err := decodeOrDegrade(sec, r.Value)
 			if err != nil {
 				return nil, fmt.Errorf("settings.List %s: %w", n, err)
 			}

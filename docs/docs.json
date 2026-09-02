@@ -33,7 +33,8 @@
               "concepts/proxy-mode",
               "concepts/observability",
               "concepts/auth",
-              "concepts/audit"
+              "concepts/audit",
+              "concepts/license"
             ]
           },
           {
