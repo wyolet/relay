@@ -101,14 +101,14 @@ func TestMiddlewareHealthyStore(t *testing.T) {
 	}
 }
 
-// LoginOIDC persists the IdP subject + sid alongside the normal payload and
-// the session round-trips like a password login.
-func TestLoginOIDC_StoresSubjectAndSid(t *testing.T) {
+// LoginOIDC persists the IdP subject, sid and groups alongside the normal
+// payload, and the session round-trips like a password login.
+func TestLoginOIDC_StoresSubjectSidAndGroups(t *testing.T) {
 	store := kv.NewMem()
 	m := New(store, false, "sess:")
 
 	login := m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := m.LoginOIDC(r.Context(), "u-1", "alice", "https://idp|sub-1", "sid-42", "admin"); err != nil {
+		if err := m.LoginOIDC(r.Context(), "u-1", "alice", "https://idp|sub-1", "sid-42", []string{"platform-eng"}, "admin"); err != nil {
 			t.Fatalf("LoginOIDC: %v", err)
 		}
 	}))
@@ -126,7 +126,7 @@ func TestLoginOIDC_StoresSubjectAndSid(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("committed session not found: %v", err)
 	}
-	for _, want := range []string{keyOIDCSubject, keyOIDCSid, "https://idp|sub-1", "sid-42"} {
+	for _, want := range []string{keyOIDCSubject, keyOIDCSid, keyGroups, "https://idp|sub-1", "sid-42", "platform-eng"} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("session payload missing %q", want)
 		}
@@ -136,6 +136,9 @@ func TestLoginOIDC_StoresSubjectAndSid(t *testing.T) {
 		a := actor.From(r.Context())
 		if a == nil || a.UserID != "u-1" || a.Username != "alice" {
 			t.Errorf("actor did not round-trip: %+v", a)
+		}
+		if a == nil || len(a.IdPGroups) != 1 || a.IdPGroups[0] != "platform-eng" {
+			t.Errorf("IdP groups did not round-trip: %+v", a)
 		}
 	}))
 	req := httptest.NewRequest("GET", "/", nil)

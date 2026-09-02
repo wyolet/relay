@@ -105,6 +105,15 @@ type Snapshot struct {
 	// keysByHash indexes Spec.KeyHash and, while the key is in its
 	// rotation grace window, Spec.PreviousKeyHash.
 	keysByHash map[string]*key.Key
+	// subjectsByKey holds each key's precomputed subject list (identity +
+	// groups + system groups), so the request path copies a slice header
+	// instead of rebuilding it. Recomputed when a group, service account or
+	// project write can change it.
+	subjectsByKey map[string][]string
+
+	// tokenVersionByUser mirrors users.token_version — the only user state
+	// the snapshot carries, so token verification stays a map read.
+	tokenVersionByUser map[string]int
 
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
@@ -508,6 +517,20 @@ func (s *Snapshot) KeyByHash(hash string) (k *key.Key, matchedPrevious bool) {
 		return nil, false
 	}
 	return k, k.Spec.KeyHash != hash
+}
+
+// SubjectsForKey returns the precomputed subjects the key's principal acts
+// under. The returned slice must not be mutated.
+func (s *Snapshot) SubjectsForKey(keyID string) []string {
+	return s.subjectsByKey[keyID]
+}
+
+// TokenVersion returns the user's current token version. Absent (ok=false)
+// means the user is unknown to this snapshot, which invalidates any token
+// claiming to be theirs.
+func (s *Snapshot) TokenVersion(userID string) (int, bool) {
+	v, ok := s.tokenVersionByUser[userID]
+	return v, ok
 }
 
 // ModelsInPolicy returns the Models attached to this Policy in declaration

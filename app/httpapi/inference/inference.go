@@ -37,6 +37,10 @@ type Deps struct {
 	// and the /v1/models listing.
 	Catalog *appcatalog.Catalog
 
+	// Tokens verifies relay-minted inference tokens. nil rejects every
+	// token bearer, which is the posture when tokens are disabled.
+	Tokens *TokenVerifier
+
 	// Resolver translates inbound model+policy refs into a pipeline-
 	// ready Plan against the snapshot.
 	Resolver *routing.Resolver
@@ -107,7 +111,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	mw := huma.Middlewares{
 		httpapi.HumaAuth(ReadinessMiddleware(d.Catalog)),
 		httpapi.HumaAuth(ClassifyMiddleware()),
-		httpapi.HumaAuth(PrincipalMiddleware(d.Catalog)),
+		httpapi.HumaAuth(PrincipalMiddleware(d.Catalog, d.Tokens)),
 	}
 	for _, mount := range d.RouteMounters {
 		mount(api, d, mw)
@@ -123,7 +127,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	r.With(
 		ReadinessMiddleware(d.Catalog),
 		ClassifyMiddleware(),
-		PrincipalMiddleware(d.Catalog),
+		PrincipalMiddleware(d.Catalog, d.Tokens),
 	).Get("/v1/ws", wsHandler(d))
 
 	return api

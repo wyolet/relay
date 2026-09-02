@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/crypto"
 )
 
 type stubList[T any] []*T
@@ -49,6 +51,26 @@ type principalFixture struct {
 	sa      *serviceaccount.ServiceAccount
 	group   *group.Group
 	user    string
+
+	// saPol is the service account's own policy; the others exist so a test
+	// can attach them to a key or a binding and pin the resolution order.
+	saPol, keyPol, boundPol *policy.Policy
+	bindings                []*policybinding.PolicyBinding
+	versions                stubVersions
+
+	tokens *TokenVerifier
+	signer ed25519.PrivateKey
+}
+
+// stubVersions is the catalog's token-version source in tests.
+type stubVersions map[string]int
+
+func (v stubVersions) TokenVersions(context.Context) (map[string]int, error) { return v, nil }
+
+func testPolicy(name string, projectID string) *policy.Policy {
+	return &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: projectID}},
+	}
 }
 
 func newPrincipalFixture() principalFixture {
@@ -68,21 +90,62 @@ func newPrincipalFixture() principalFixture {
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "data-science", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: group.Spec{MemberIDs: []string{user}},
 	}
-	return principalFixture{team: tm, project: proj, sa: sa, group: g, user: user}
+	saPol := testPolicy("sa-pol", proj.Meta.ID)
+	sa.Spec.PolicyID = saPol.Meta.ID
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		panic(err)
+	}
+	verifier := &TokenVerifier{}
+	verifier.SetKey(pub)
+	return principalFixture{
+		team: tm, project: proj, sa: sa, group: g, user: user,
+		saPol:    saPol,
+		keyPol:   testPolicy("key-pol", proj.Meta.ID),
+		boundPol: testPolicy("bound-pol", proj.Meta.ID),
+		versions: stubVersions{user: 1},
+		tokens:   verifier,
+		signer:   priv,
+	}
+}
+
+// mint signs a token for this fixture's user + project with the claims a
+// mint would produce, letting a test mutate them first.
+func (f principalFixture) mint(t *testing.T, mutate func(*crypto.TokenClaims)) string {
+	t.Helper()
+	claims := crypto.TokenClaims{
+		Iss: crypto.TokenIssuer,
+		Sub: "user:" + f.user,
+		Prj: f.project.Meta.ID,
+		Ver: 1,
+		Jti: meta.NewID(),
+		Iat: time.Now().Unix(),
+		Exp: time.Now().Add(time.Hour).Unix(),
+	}
+	if mutate != nil {
+		mutate(&claims)
+	}
+	token, err := crypto.SignToken(f.signer, claims)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	return token
 }
 
 func (f principalFixture) stack(t *testing.T, keys ...*key.Key) *principalStack {
 	t.Helper()
 	c := catalog.New(
-		stubList[provider.Provider]{}, stubList[host.Host]{}, stubList[policy.Policy]{},
+		stubList[provider.Provider]{}, stubList[host.Host]{},
+		stubList[policy.Policy]{f.saPol, f.keyPol, f.boundPol},
 		stubList[model.Model]{}, stubList[hostkey.HostKey]{}, stubList[ratelimit.RateLimit]{},
 		stubList[key.Key](keys), stubList[pricing.Pricing]{}, stubList[binding.Binding]{},
 	)
 	c.UseTenancy(
 		stubList[team.Team]{f.team}, stubList[project.Project]{f.project},
 		stubList[serviceaccount.ServiceAccount]{f.sa}, stubList[group.Group]{f.group},
-		stubList[role.Role]{}, stubList[rolebinding.RoleBinding]{}, stubList[policybinding.PolicyBinding]{},
+		stubList[role.Role]{}, stubList[rolebinding.RoleBinding]{}, stubList[policybinding.PolicyBinding](f.bindings),
 	)
+	c.UseTokenVersions(f.versions)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -91,7 +154,7 @@ func (f principalFixture) stack(t *testing.T, keys ...*key.Key) *principalStack 
 		st.seen = PrincipalFrom(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
-	st.handler = ClassifyMiddleware()(PrincipalMiddleware(c)(inner))
+	st.handler = ClassifyMiddleware()(PrincipalMiddleware(c, f.tokens)(inner))
 	return st
 }
 

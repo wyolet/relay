@@ -55,14 +55,42 @@ type Acquisition struct {
 // retries.
 var ErrSaturated = errors.New("policy: upstream key saturated")
 
-// ReserveInbound reserves the inbound policy's RL bucket for this
-// request. Returns (nil, nil) when the policy has no applicable RL.
-func (s *Service) ReserveInbound(ctx context.Context, pol *Policy, providerSlug, modelSlug, hostSlug string) (*pkgratelimit.Reservation, error) {
-	rules := s.rulesFor(pol, providerSlug, modelSlug, hostSlug)
+// InboundInput is one request's inbound-reservation context: what to meter
+// (the policy plus the resolved triple) and who is asking (the caller's team
+// and, for a token, its jti).
+type InboundInput struct {
+	Policy                            *Policy
+	ProviderSlug, ModelSlug, HostSlug string
+
+	// TeamID anchors the reservation's hash tag when the caller has a
+	// project; empty keeps the policy-slug tag.
+	TeamID string
+
+	// TokenJTI, when set, adds the revocation check to this Reserve — the
+	// one kv call the request already makes.
+	TokenJTI string
+}
+
+// ReserveInbound reserves the inbound policy's RL bucket for this request.
+// Returns (nil, nil) when there is nothing to check: no applicable RL and no
+// token to check for revocation.
+func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgratelimit.Reservation, error) {
+	rules := s.rulesFor(in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug)
+	if in.TokenJTI != "" {
+		rules = append(rules, pkgratelimit.Rule{
+			Key:   revokedRuleKey(in.TokenJTI),
+			Name:  "token revocation",
+			Meter: pkgratelimit.MeterRevoked,
+		})
+	}
 	if len(rules) == 0 || s.limiter == nil {
 		return nil, nil
 	}
-	return s.limiter.Reserve(ctx, pol.Meta.Name, rules)
+	policySlug := ""
+	if in.Policy != nil {
+		policySlug = in.Policy.Meta.Name
+	}
+	return s.limiter.Reserve(ctx, reserveScope(in.TeamID, policySlug), rules)
 }
 
 // CommitInbound returns the inbound reservation to the bucket with the

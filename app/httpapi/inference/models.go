@@ -71,15 +71,15 @@ func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, ad
 }
 
 func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*modelsOutput, error) {
-	rk := KeyFromContext(ctx)
-	if rk == nil {
+	principal := PrincipalFrom(ctx)
+	if principal == nil {
 		return nil, huma.Error401Unauthorized("missing relay key")
 	}
 	snap := d.Catalog.Current()
 	out := &modelsOutput{}
 	out.Body.Object = "list"
 
-	if rk.Spec.PolicyID == "" {
+	if principal.Policy == nil {
 		v, _ := d.Catalog.Setting(settings.SectionInference)
 		cfg, _ := v.(*settings.Inference)
 		if cfg == nil || !cfg.AllowMissingPolicy {
@@ -95,10 +95,7 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 		return out, nil
 	}
 
-	pol, ok := snap.Policy(rk.Spec.PolicyID)
-	if !ok {
-		return nil, huma.Error500InternalServerError("policy not found for relay key")
-	}
+	pol := principal.Policy
 	seen := map[string]struct{}{}
 	for _, m := range snap.AllModels() {
 		if !routing.PolicyAllows(snap, pol, m) {

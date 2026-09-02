@@ -7,9 +7,9 @@
 //  1. Model: caller supplies a snapshot name (from the request body's
 //     `model` field); look it up via snapshot.SnapshotByName. The owning
 //     Model + the picked Snapshot are carried into the Plan.
-//  2. Policy: comes from the authenticated Key's PolicyID. (No
-//     "default route" indirection in the new arch — Key → Policy
-//     is direct. Anonymous traffic is served by a separate package.)
+//  2. Policy: supplied by the caller, already resolved from the
+//     credential's principal at the edge. (No "default route"
+//     indirection; anonymous traffic is served by a separate package.)
 //  3. Authorization: model must be allowed by the Policy. Allowed if
 //     its id is in Spec.ModelIDs, OR Spec.Models (modelref DSL) matches,
 //     OR — when both grant fields are empty — the policy is an implicit
@@ -30,14 +30,12 @@ package routing
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
@@ -75,9 +73,14 @@ type Request struct {
 	// wildcard alias. Falls back to ModelName when empty.
 	RawModelName string
 
-	// Key is the authenticated key (already validated for auth).
-	// Its Spec.PolicyID drives policy selection.
-	Key *key.Key
+	// Policy is the caller's resolved inbound policy (the middleware walks
+	// key → service account → policy binding). Nil selects the policy-less
+	// flow, which only a project-less personal key can reach.
+	Policy *policy.Policy
+
+	// PayloadLoggingEnabled is the caller's own opt-in for body capture;
+	// the matched Policy's flag is OR'd onto it.
+	PayloadLoggingEnabled bool
 
 	// SkipKeyCheck, when true, suppresses the Policy.HostKeyIDs → host
 	// coverage gate. Used by proxy mode: the caller brings their own
@@ -149,9 +152,6 @@ func New(cat *appcatalog.Catalog) *Resolver { return &Resolver{cat: cat} }
 // Resolve maps the inbound request to a Plan. Errors are typed; handlers
 // pick the appropriate HTTP status.
 func (r *Resolver) Resolve(req Request) (*Plan, error) {
-	if req.Key == nil {
-		return nil, fmt.Errorf("routing.Resolve: relay key is required (anonymous mode is served by a separate package)")
-	}
 	snap := r.cat.Current()
 
 	// 1. Snapshot lookup — customer-facing addressing is purely by
@@ -161,26 +161,23 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
-	// Policy-less flow: when the Key has no attached Policy, the
-	// behavior is decided by settings.Inference.AllowMissingPolicy. When
-	// allowed, the request bypasses the policy-grant + policy-RL paths
-	// and just needs a (model, host) triple the relay has a hostkey for.
-	if req.Key.Spec.PolicyID == "" {
+	// Policy-less flow: when the caller resolved no Policy, the behavior is
+	// decided by settings.Inference.AllowMissingPolicy. When allowed, the
+	// request bypasses the policy-grant + policy-RL paths and just needs a
+	// (model, host) triple the relay has a hostkey for.
+	if req.Policy == nil {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
 		}
 		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID)
 		if err == nil && plan != nil {
-			plan.PayloadLoggingEnabled = req.Key.Spec.PayloadLoggingEnabled
+			plan.PayloadLoggingEnabled = req.PayloadLoggingEnabled
 			applyAlias(plan, alias, req)
 		}
 		return plan, err
 	}
 
-	pol, ok := snap.Policy(req.Key.Spec.PolicyID)
-	if !ok {
-		return nil, ErrPolicyNotFound
-	}
+	pol := req.Policy
 	if !pol.IsEnabled() {
 		return nil, ErrPolicyDisabled
 	}
@@ -289,16 +286,15 @@ candidates:
 	pr, _ := snap.PricingForBinding(chosenBnd)
 
 	plan := &Plan{
-		Model:       chosen,
-		Snapshot:    snapMatch,
-		Policy:      pol,
-		HostBinding: chosenBnd,
-		Host:        h,
-		Provider:    providerSlug,
-		Keys:        keys,
-		Pricing:     pr,
-		PayloadLoggingEnabled: (pol != nil && pol.Spec.PayloadLoggingEnabled) ||
-			req.Key.Spec.PayloadLoggingEnabled,
+		Model:                 chosen,
+		Snapshot:              snapMatch,
+		Policy:                pol,
+		HostBinding:           chosenBnd,
+		Host:                  h,
+		Provider:              providerSlug,
+		Keys:                  keys,
+		Pricing:               pr,
+		PayloadLoggingEnabled: pol.Spec.PayloadLoggingEnabled || req.PayloadLoggingEnabled,
 	}
 	applyAlias(plan, alias, req)
 	return plan, nil

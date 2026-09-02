@@ -133,7 +133,7 @@ dev-redis: ## bring up just the valkey container, host-published on $(RELAY_VALK
 dev-down: ## stop the valkey container
 	docker compose $(COMPOSE_DEV_ARGS) stop valkey
 
-breakers-reset: ## clear all keypool circuit-breaker state in valkey (lets the next request retry from healthy)
+breakers-reset: ## clear all keypool circuit-breaker state in valkey (lets the next request retry from healthy). Token revocations live separately, under limit:{team:<id>}:jti:<jti>
 	@for k in $$(docker exec relay-valkey valkey-cli --scan --pattern 'secret_health:*'); do \
 		docker exec -i relay-valkey valkey-cli del "$$k" >/dev/null; \
 	done

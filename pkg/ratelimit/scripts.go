@@ -32,6 +32,7 @@ import (
 //	"leaky-bucket"    — lazy-drain hash {level, last_ms}; refund on cancel
 //	"session-window"  — anchored hash {count, anchor_ms}; refund on cancel
 //	"" (concurrency)  — gauge counter, ignores strategy
+//	"" (revoked)      — existence check on a denylist key; no budget, no write
 //
 // Comparator invariant: every strategy uses `>` (strictly greater than amount).
 // A value equal to amount is still allowed. Applied uniformly to all meters.
@@ -61,8 +62,14 @@ for i, r in ipairs(rules) do
   local win_ms   = tonumber(r.window_ms)
   local strategy = r.strategy or "sliding-window"
 
+  -- ── revoked: existence check on a denylist key, no budget, no write ──────
+  if meter == "revoked" then
+    if redis.call('EXISTS', KEYS[r.deny_key_idx]) == 1 then
+      return cjson.encode({revoked=true, rule_key=r.rule_key, rule_name=r.rule_name, meter=meter})
+    end
+
   -- ── concurrency: gauge counter, strategy ignored ─────────────────────────
-  if meter == "concurrency" then
+  elseif meter == "concurrency" then
     local con_key = KEYS[r.con_key_idx]
     local ttl_ms  = win_ms * 5
 
@@ -372,11 +379,13 @@ type ruleArg struct {
 	TbKeyIdx   int `json:"tb_key_idx,omitempty"`
 	LbKeyIdx   int `json:"lb_key_idx,omitempty"`
 	SwKeyIdx   int `json:"sw_key_idx,omitempty"`
+	DenyKeyIdx int `json:"deny_key_idx,omitempty"`
 }
 
 // reserveResult is decoded from the Reserve script return value.
 type reserveResult struct {
 	Exceeded     bool   `json:"exceeded"`
+	Revoked      bool   `json:"revoked"`
 	Token        string `json:"token"`
 	RetryAfterMs int64  `json:"retry_after_ms"`
 	RuleKey      string `json:"rule_key"`
@@ -416,6 +425,8 @@ func buildReserveArgs(scope string, rules []Rule, now time.Time) (keys []string,
 		}
 
 		switch rule.Meter {
+		case MeterRevoked:
+			ra.DenyKeyIdx = addKey(denyKey(scope, rule))
 		case "concurrency":
 			ra.ConKeyIdx = addKey(concurrencyKey(scope, rule))
 		case "tokens":
@@ -514,6 +525,17 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 			ttl := time.Duration(winMs*2) * time.Millisecond
 
 			switch r.Meter {
+			case MeterRevoked:
+				if _, err := store.Get(ctx, keys[r.DenyKeyIdx-1]); err == nil {
+					result = reserveResult{
+						Revoked:  true,
+						RuleKey:  r.RuleKey,
+						RuleName: r.RuleName,
+						Meter:    r.Meter,
+					}
+					return nil
+				}
+
 			case "concurrency":
 				conKey := keys[r.ConKeyIdx-1]
 				conTTL := time.Duration(winMs*5) * time.Millisecond

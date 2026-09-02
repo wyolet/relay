@@ -541,6 +541,7 @@ func insertKey(s *Snapshot, k *key.Key) {
 		delete(s.keysByID, old.Meta.ID)
 	}
 	s.keysByID[k.Meta.ID] = k
+	s.subjectsByKey[k.Meta.ID] = keySubjects(s, k)
 	if k.Spec.KeyHash != "" {
 		s.keysByHash[k.Spec.KeyHash] = k
 	}
@@ -560,6 +561,7 @@ func deleteKey(s *Snapshot, id string) {
 	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundKeyRefs(k))
 	unindexKeyHashes(s, k)
 	delete(s.keysByID, id)
+	delete(s.subjectsByKey, id)
 }
 
 func unindexKeyHashes(s *Snapshot, k *key.Key) {
@@ -593,6 +595,7 @@ func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) e
 		return nil
 	}
 	insertServiceAccount(s, clean)
+	reindexKeySubjects(s, key.PrincipalServiceAccount, clean.Meta.ID)
 	c.snap.Store(s)
 	return nil
 }
@@ -666,7 +669,12 @@ func (c *Catalog) ApplyGroupUpsert(g *group.Group) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
+	old, hadOld := s.groupsByID[g.Meta.ID]
 	insertGroup(s, g)
+	if hadOld {
+		reindexMemberSubjects(s, old.Spec.MemberIDs)
+	}
+	reindexMemberSubjects(s, g.Spec.MemberIDs)
 	c.snap.Store(s)
 	return nil
 }
@@ -675,7 +683,12 @@ func (c *Catalog) ApplyGroupDelete(id string) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
+	members := []string(nil)
+	if g, ok := s.groupsByID[id]; ok {
+		members = g.Spec.MemberIDs
+	}
 	deleteGroup(s, id)
+	reindexMemberSubjects(s, members)
 	c.snap.Store(s)
 	return nil
 }
@@ -1011,6 +1024,9 @@ func (c *Catalog) ApplyProjectUpsert(p *project.Project) error {
 		return nil
 	}
 	insertProject(s, clean)
+	// A project's slug is part of its service accounts' subjects, and a
+	// rename reaches every key under it.
+	reindexAllKeySubjects(s)
 	c.snap.Store(s)
 	return nil
 }
@@ -1020,6 +1036,7 @@ func (c *Catalog) ApplyProjectDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deleteProject(s, id)
+	reindexAllKeySubjects(s)
 	c.snap.Store(s)
 	return nil
 }

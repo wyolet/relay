@@ -156,8 +156,53 @@ func TestKeygenPrintsAHashOfItsOwnPlaintext(t *testing.T) {
 	}
 }
 
-// token mint drives POST /auth/token, which lands with M3. The client is
-// written against that route; unskip when it exists.
+// TestTokenMintUsesPasswordLogin pins the flow the mint route requires: an
+// admin token names no user, so the CLI logs in and carries the session
+// cookie onto POST /api/auth/token.
 func TestTokenMintUsesPasswordLogin(t *testing.T) {
-	t.Skip("POST /auth/token lands with the token milestone")
+	const sessionCookie = "relay_session"
+	var mintAuthed bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			var body struct{ Username, Password string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Username != "alice" || body.Password != "s3cret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "sess-1", Path: "/"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"user_id": "u-1", "username": "alice"})
+		case "/api/auth/token":
+			if c, err := r.Cookie(sessionCookie); err == nil && c.Value == "sess-1" {
+				mintAuthed = true
+			}
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["project"] != "ml-search" || body["ttl"] != "30m" {
+				t.Errorf("mint body = %v, want the project and ttl the flags named", body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"token": "eyJhbGciOiJFZERTQSJ9.payload.sig", "jti": "j-1",
+				"expiresAt": "2026-09-02T10:00:00Z", "project": "ml-search",
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	out := captureStdout(t, func() {
+		if err := runToken([]string{"mint", "--project", "ml-search", "--ttl", "30m",
+			"--user", "alice", "--password", "s3cret", "--url", srv.URL}); err != nil {
+			t.Fatalf("token mint: %v", err)
+		}
+	})
+	if !mintAuthed {
+		t.Error("the mint request carried no session cookie")
+	}
+	if got := strings.TrimSpace(out); got != "eyJhbGciOiJFZERTQSJ9.payload.sig" {
+		t.Errorf("stdout = %q, want the bare token", got)
+	}
 }

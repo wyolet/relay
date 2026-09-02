@@ -37,6 +37,11 @@ type Actor struct {
 	// AdminToken already marks as all-powerful).
 	Roles []string
 
+	// IdPGroups are the group names an identity provider asserted at login,
+	// carried verbatim from the session. Empty for password logins and the
+	// admin-token bypass.
+	IdPGroups []string
+
 	// Future fields (intentionally empty in v1; populated by the multi-
 	// tenant work):
 	//   ActiveOrgID string

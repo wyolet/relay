@@ -34,6 +34,7 @@ const (
 	keyRoles       = "roles"
 	keyOIDCSubject = "oidc_subject"
 	keyOIDCSid     = "oidc_sid"
+	keyGroups      = "idp_groups"
 	defaultExpiry  = 24 * time.Hour
 )
 
@@ -156,6 +157,9 @@ func (m *Manager) loadAndSave(h http.Handler) http.Handler {
 			if raw := m.sm.GetString(ctx, keyRoles); raw != "" {
 				_ = json.Unmarshal([]byte(raw), &a.Roles)
 			}
+			if raw := m.sm.GetString(ctx, keyGroups); raw != "" {
+				_ = json.Unmarshal([]byte(raw), &a.IdPGroups)
+			}
 			ctx = actor.WithActor(ctx, a)
 		}
 		h.ServeHTTP(w, r.WithContext(ctx))
@@ -179,12 +183,17 @@ func (m *Manager) Login(ctx context.Context, userID, username string, roles ...s
 }
 
 // LoginOIDC is Login for the OIDC path: it additionally records the IdP
-// subject ("issuer|sub") and IdP session id (the id_token sid claim) on the
-// session — the lookup keys a back-channel-logout receiver needs to find
-// and destroy the relay sessions minted from a given IdP session.
-func (m *Manager) LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error {
+// subject ("issuer|sub"), the IdP session id (the id_token sid claim) — the
+// lookup keys a back-channel-logout receiver needs to find and destroy the
+// relay sessions minted from a given IdP session — and the groups the IdP
+// asserted, which the session's actor carries for the rest of its life.
+func (m *Manager) LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error {
 	if err := m.Login(ctx, userID, username, roles...); err != nil {
 		return err
+	}
+	if len(groups) > 0 {
+		b, _ := json.Marshal(groups)
+		m.sm.Put(ctx, keyGroups, string(b))
 	}
 	if oidcSubject != "" {
 		m.sm.Put(ctx, keyOIDCSubject, oidcSubject)

@@ -22,7 +22,7 @@ import (
 // policy) declares an exact bracket alias + a wildcard; m2
 // ("secret-model", NOT granted) declares its own alias — proving the
 // policy gate runs on the resolved model, not on how it was addressed.
-func aliasCatalog(t *testing.T) (*catalog.Catalog, *key.Key) {
+func aliasCatalog(t *testing.T) (*catalog.Catalog, *policy.Policy) {
 	t.Helper()
 	provID, hostID := meta.NewID(), meta.NewID()
 	hkID, m1ID, m2ID, polID := meta.NewID(), meta.NewID(), meta.NewID(), meta.NewID()
@@ -71,11 +71,11 @@ func aliasCatalog(t *testing.T) (*catalog.Catalog, *key.Key) {
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	return c, rk
+	return c, pol
 }
 
 func TestResolve_AliasExactVerbatim(t *testing.T) {
-	c, rk := aliasCatalog(t)
+	c, pol := aliasCatalog(t)
 	r := routing.New(c)
 
 	for _, send := range []string{
@@ -84,7 +84,7 @@ func TestResolve_AliasExactVerbatim(t *testing.T) {
 		"GPT-5-5.1m",
 	} {
 		t.Run(send, func(t *testing.T) {
-			plan, err := r.Resolve(routing.Request{ModelName: send, RawModelName: send, Key: rk})
+			plan, err := r.Resolve(routing.Request{ModelName: send, RawModelName: send, Policy: pol})
 			if err != nil {
 				t.Fatalf("Resolve(%q): %v", send, err)
 			}
@@ -105,11 +105,11 @@ func TestResolve_AliasExactVerbatim(t *testing.T) {
 }
 
 func TestResolve_AliasPatternVerbatim(t *testing.T) {
-	c, rk := aliasCatalog(t)
+	c, pol := aliasCatalog(t)
 	r := routing.New(c)
 
 	raw := "gpt-5-5x[experimental-2027]"
-	plan, err := r.Resolve(routing.Request{ModelName: raw, RawModelName: raw, Key: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: raw, RawModelName: raw, Policy: pol})
 	if err != nil {
 		t.Fatalf("Resolve(%q): %v", raw, err)
 	}
@@ -125,7 +125,7 @@ func TestResolve_AliasPatternVerbatim(t *testing.T) {
 	}
 
 	// RawModelName empty → falls back to ModelName.
-	plan, err = r.Resolve(routing.Request{ModelName: raw, Key: rk})
+	plan, err = r.Resolve(routing.Request{ModelName: raw, Policy: pol})
 	if err != nil {
 		t.Fatalf("Resolve no-raw: %v", err)
 	}
@@ -135,12 +135,12 @@ func TestResolve_AliasPatternVerbatim(t *testing.T) {
 }
 
 func TestResolve_AliasPinnedAndPatternPinSkip(t *testing.T) {
-	c, rk := aliasCatalog(t)
+	c, pol := aliasCatalog(t)
 	r := routing.New(c)
 
 	// Exact alias with a host pin resolves via the synthesized pinned form
 	// and still carries the clean declared alias upstream (no "@host").
-	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5-5[1m]@openai", RawModelName: "gpt-5-5[1m]@openai", Key: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5-5[1m]@openai", RawModelName: "gpt-5-5[1m]@openai", Policy: pol})
 	if err != nil {
 		t.Fatalf("pinned exact alias: %v", err)
 	}
@@ -153,29 +153,29 @@ func TestResolve_AliasPinnedAndPatternPinSkip(t *testing.T) {
 
 	// A pinned ref never matches a wildcard (the pin segment would corrupt
 	// the match) — it 404s instead of routing with a mangled wire name.
-	_, err = r.Resolve(routing.Request{ModelName: "gpt-5-5x[thing]@openai", RawModelName: "gpt-5-5x[thing]@openai", Key: rk})
+	_, err = r.Resolve(routing.Request{ModelName: "gpt-5-5x[thing]@openai", RawModelName: "gpt-5-5x[thing]@openai", Policy: pol})
 	if !errors.Is(err, routing.ErrModelNotFound) {
 		t.Fatalf("pinned pattern ref: err = %v, want ErrModelNotFound", err)
 	}
 }
 
 func TestResolve_AliasPolicyGateStillApplies(t *testing.T) {
-	c, rk := aliasCatalog(t)
+	c, pol := aliasCatalog(t)
 	r := routing.New(c)
 
 	// m2's alias resolves the model, but the policy doesn't grant m2 —
 	// addressing via alias must not widen the grant.
-	_, err := r.Resolve(routing.Request{ModelName: "secret[1m]", RawModelName: "secret[1m]", Key: rk})
+	_, err := r.Resolve(routing.Request{ModelName: "secret[1m]", RawModelName: "secret[1m]", Policy: pol})
 	if !errors.Is(err, routing.ErrModelNotInPolicy) {
 		t.Fatalf("alias to ungranted model: err = %v, want ErrModelNotInPolicy", err)
 	}
 }
 
 func TestResolve_NoAliasNoOverride(t *testing.T) {
-	c, rk := aliasCatalog(t)
+	c, pol := aliasCatalog(t)
 	r := routing.New(c)
 
-	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5.5", RawModelName: "gpt-5.5", Key: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "gpt-5.5", RawModelName: "gpt-5.5", Policy: pol})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -192,14 +192,14 @@ func TestResolve_RealNameShadowsAlias(t *testing.T) {
 	// m1 declares an alias that normalizes exactly to m1's OTHER (dated)
 	// snapshot name on a fresh catalog — Validate forbids self-shadowing,
 	// so use m2 shadowing m1's snapshot instead.
-	c, rk := aliasCatalog(t)
+	c, pol := aliasCatalog(t)
 	snap := c.Current()
 	m2 := *snap.ModelsByName("secret-model")[0]
 	m2.Spec.Aliases = append(m2.Spec.Aliases, "gpt-5.5-2026.04.23") // normalizes to m1's dated snapshot
 	if err := c.ApplyModelUpsert(&m2); err != nil {
 		t.Fatal(err)
 	}
-	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5-2026-04-23", RawModelName: "gpt-5.5-2026-04-23", Key: rk})
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5-2026-04-23", RawModelName: "gpt-5.5-2026-04-23", Policy: pol})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

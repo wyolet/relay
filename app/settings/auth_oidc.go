@@ -43,6 +43,11 @@ type AuthOIDC struct {
 	// config, never in code.
 	AuthParams map[string]string `json:"authParams,omitempty"`
 
+	// GroupsClaim names the id-token claim carrying the user's IdP groups
+	// (default "groups"); empty after an explicit "" write means the
+	// provider asserts none.
+	GroupsClaim *string `json:"groupsClaim,omitempty"`
+
 	// Registration gates first-login auto-provisioning: "open" creates a
 	// user row on first successful OIDC login; "closed" (default) rejects
 	// subjects with no existing user row.
@@ -62,6 +67,15 @@ func (c *AuthOIDC) EffectiveScopes() []string {
 		return c.Scopes
 	}
 	return []string{"openid", "profile", "email"}
+}
+
+// EffectiveGroupsClaim returns the id-token claim to read groups from, or
+// "" when the deployment has explicitly opted out.
+func (c *AuthOIDC) EffectiveGroupsClaim() string {
+	if c.GroupsClaim == nil {
+		return "groups"
+	}
+	return *c.GroupsClaim
 }
 
 // OpenRegistration reports whether first-login auto-provisioning is on.

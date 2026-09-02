@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpUserTokenVersion = `-- name: BumpUserTokenVersion :exec
+UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1
+`
+
+func (q *Queries) BumpUserTokenVersion(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, bumpUserTokenVersion, id)
+	return err
+}
+
 const createBatch = `-- name: CreateBatch :exec
 
 INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items,
@@ -962,7 +971,7 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users WHERE id = $1
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
@@ -978,12 +987,13 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenVersion,
 	)
 	return i, err
 }
 
 const getUserByOIDCSubject = `-- name: GetUserByOIDCSubject :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users WHERE oidc_subject = $1
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users WHERE oidc_subject = $1
 `
 
 func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.Text) (User, error) {
@@ -999,12 +1009,13 @@ func (q *Queries) GetUserByOIDCSubject(ctx context.Context, oidcSubject pgtype.T
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenVersion,
 	)
 	return i, err
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users WHERE username = $1
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users WHERE username = $1
 `
 
 func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
@@ -1020,6 +1031,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenVersion,
 	)
 	return i, err
 }
@@ -2480,8 +2492,37 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 	return items, nil
 }
 
+const listUserTokenVersions = `-- name: ListUserTokenVersions :many
+SELECT id, token_version FROM users
+`
+
+type ListUserTokenVersionsRow struct {
+	ID           string `db:"id" json:"id"`
+	TokenVersion int32  `db:"token_version" json:"token_version"`
+}
+
+func (q *Queries) ListUserTokenVersions(ctx context.Context) ([]ListUserTokenVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listUserTokenVersions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserTokenVersionsRow
+	for rows.Next() {
+		var i ListUserTokenVersionsRow
+		if err := rows.Scan(&i.ID, &i.TokenVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
-SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at FROM users ORDER BY created_at ASC
+SELECT id, username, email, password_hash, oidc_subject, roles, disabled, created_at, updated_at, token_version FROM users ORDER BY created_at ASC
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -2503,6 +2544,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.Disabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TokenVersion,
 		); err != nil {
 			return nil, err
 		}

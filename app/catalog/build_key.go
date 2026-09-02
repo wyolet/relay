@@ -20,6 +20,7 @@ func (s *Snapshot) addKeys(rks []*key.Key, pols, sas idSet) {
 		if clean.InGrace(now) {
 			s.keysByHash[clean.Spec.PreviousKeyHash] = clean
 		}
+		s.subjectsByKey[clean.Meta.ID] = keySubjects(s, clean)
 		s.registerRefs(refKey{Kind: refRelayKey, ID: clean.Meta.ID}, outboundKeyRefs(clean))
 	}
 }
