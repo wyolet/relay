@@ -49,7 +49,7 @@ func (s *Snapshot) computePolicyReverseJoins() {
 // Project is the one hard ref: without it the whole row is dropped.
 func sanitizePolicy(p *policy.Policy, models, keys, rls, projects idSet) (*policy.Policy, bool) {
 	if p.Meta.Owner.Kind == meta.OwnerProject {
-		if _, ok := projects[p.Meta.Owner.ID]; !ok {
+		if !projects(p.Meta.Owner.ID) {
 			return nil, false
 		}
 	}
@@ -58,14 +58,14 @@ func sanitizePolicy(p *policy.Policy, models, keys, rls, projects idSet) (*polic
 	clean.Spec.ModelIDs = filterIDs(p.Spec.ModelIDs, models)
 	clean.Spec.HostKeyIDs = filterIDs(p.Spec.HostKeyIDs, keys)
 	if p.Spec.RateLimitID != "" {
-		if _, ok := rls[p.Spec.RateLimitID]; !ok {
+		if !rls(p.Spec.RateLimitID) {
 			clean.Spec.RateLimitID = ""
 		}
 	}
 	if len(p.Spec.RLBindings) > 0 {
 		bs := make([]policy.RLBinding, 0, len(p.Spec.RLBindings))
 		for _, b := range p.Spec.RLBindings {
-			if _, ok := rls[b.RateLimitID]; !ok {
+			if !rls(b.RateLimitID) {
 				continue
 			}
 			bs = append(bs, b)

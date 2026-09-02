@@ -92,7 +92,7 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
-		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "logs")
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "logs")
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +140,7 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		// A record from someone else's traffic (or unattributed traffic) is
 		// 404, not 403 — don't confirm the request id exists. Gates the
 		// payload join below too.
-		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "logs")
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "logs")
 		if err != nil {
 			return nil, err
 		}

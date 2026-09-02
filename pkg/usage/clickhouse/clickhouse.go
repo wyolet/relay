@@ -144,6 +144,12 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_kind LowCardinality(String)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_id String`,
+	// Scoped reads (one project's events, one team's, one key's) filter on
+	// columns the ORDER BY does not lead with, so without a skip index every
+	// partition in the window is read.
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_project_id project_id TYPE bloom_filter GRANULARITY 4`,
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_team_id team_id TYPE bloom_filter GRANULARITY 4`,
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_relay_key_hash relay_key_hash TYPE bloom_filter GRANULARITY 4`,
 }
 
 // ensureSchema creates the table if absent, then verifies its columns match
@@ -807,24 +813,28 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		args = append(args, q.RequestID)
 	}
 	// Read scope is a disjunction, not another IN filter: the caller's
-	// projects OR the caller's own keys.
-	if len(q.ScopeProjectID) > 0 || len(q.ScopeRelayKeyHash) > 0 {
-		var or []string
-		if len(q.ScopeProjectID) > 0 {
-			ph := make([]string, len(q.ScopeProjectID))
-			for i, v := range q.ScopeProjectID {
+	// projects OR their own traffic.
+	if len(q.ScopeProjectID) > 0 || len(q.ScopeRelayKeyHash) > 0 || len(q.ScopePrincipalID) > 0 {
+		scopeIn := func(col string, vals []string) string {
+			if len(vals) == 0 {
+				return ""
+			}
+			ph := make([]string, len(vals))
+			for i, v := range vals {
 				ph[i] = "?"
 				args = append(args, v)
 			}
-			or = append(or, "project_id IN ("+strings.Join(ph, ",")+")")
+			return col + " IN (" + strings.Join(ph, ",") + ")"
 		}
-		if len(q.ScopeRelayKeyHash) > 0 {
-			ph := make([]string, len(q.ScopeRelayKeyHash))
-			for i, v := range q.ScopeRelayKeyHash {
-				ph[i] = "?"
-				args = append(args, v)
+		var or []string
+		for _, c := range []string{
+			scopeIn("project_id", q.ScopeProjectID),
+			scopeIn("relay_key_hash", q.ScopeRelayKeyHash),
+			scopeIn("principal_id", q.ScopePrincipalID),
+		} {
+			if c != "" {
+				or = append(or, c)
 			}
-			or = append(or, "relay_key_hash IN ("+strings.Join(ph, ",")+")")
 		}
 		clauses = append(clauses, "("+strings.Join(or, " OR ")+")")
 	}

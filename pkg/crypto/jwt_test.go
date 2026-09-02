@@ -30,7 +30,7 @@ func TestSignToken_RoundTrip(t *testing.T) {
 		Exp: time.Now().Add(time.Hour).Unix(),
 	}
 
-	token, err := SignToken(priv, want)
+	token, err := SignToken(priv, "", want)
 	if err != nil {
 		t.Fatalf("SignToken: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestSignToken_RoundTrip(t *testing.T) {
 func TestParseToken_Rejections(t *testing.T) {
 	pub, priv := testKey(t)
 	otherPub, _ := testKey(t)
-	token, err := SignToken(priv, TokenClaims{Iss: TokenIssuer, Sub: "user:u1", Jti: "j1"})
+	token, err := SignToken(priv, "", TokenClaims{Iss: TokenIssuer, Sub: "user:u1", Jti: "j1"})
 	if err != nil {
 		t.Fatalf("SignToken: %v", err)
 	}

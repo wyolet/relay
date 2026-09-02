@@ -50,6 +50,26 @@ func plural(kind string) string {
 	return kind
 }
 
+// singulars is the reverse of plurals, so a caller holding only a URL path
+// segment can name the kind handlers pass.
+var singulars = func() map[string]string {
+	out := make(map[string]string, len(plurals))
+	for k, p := range plurals {
+		out[p] = k
+	}
+	return out
+}()
+
+// Singular maps an API plural back to the Resource.Kind handlers stamp.
+// Exported for app/audit, which reconstructs a resource from the request
+// path when a handler refuses before authorizing.
+func Singular(p string) string {
+	if k, ok := singulars[p]; ok {
+		return k
+	}
+	return p
+}
+
 // Snapshot is the slice of the catalog snapshot the evaluator reads.
 // Declared here rather than imported: app/catalog reaches app/authz through
 // the boot seed (catalog → seed → apply → authz), so importing it back would

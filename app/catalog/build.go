@@ -11,6 +11,8 @@
 package catalog
 
 import (
+	"time"
+
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
@@ -44,10 +46,11 @@ func Build(
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil, nil, nil, nil, nil, nil)
+	return build(nil, provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func build(
+	now func() time.Time,
 	provs []*provider.Provider,
 	hosts []*host.Host,
 	pols []*policy.Policy,
@@ -67,15 +70,15 @@ func build(
 	policyBindings []*policybinding.PolicyBinding,
 ) *Snapshot {
 	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects), len(sas), len(groups), len(roles), len(roleBindings), len(policyBindings))
+	s.now = now
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
 	polByID := make(map[string]*policy.Policy, len(pols))
-	polIDSet := make(idSet, len(pols))
 	for _, p := range pols {
 		polByID[p.Meta.ID] = p
-		polIDSet[p.Meta.ID] = struct{}{}
 	}
+	polIDSet := snapIDs(polByID)
 
 	s.addProviders(provs)
 	// Tenancy first: every kind below can be project-owned and sanitizes
@@ -140,6 +143,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		rateLimitsByName:      make(map[string]*ratelimit.RateLimit, nRLs),
 		keysByID:              make(map[string]*key.Key, nRks),
 		keysByHash:            make(map[string]*key.Key, nRks),
+		keysByPrincipal:       make(map[string][]*key.Key, nRks),
 		subjectsByKey:         make(map[string][]string, nRks),
 		tokenVersionByUser:    map[string]int{},
 		modelsByPolicy:        map[string][]*model.Model{},

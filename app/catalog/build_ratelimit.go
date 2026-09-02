@@ -21,7 +21,7 @@ func (s *Snapshot) addRateLimits(rls []*ratelimit.RateLimit, projects idSet) {
 // missing. Every other owner kind has no parent to check.
 func sanitizeRateLimit(r *ratelimit.RateLimit, projects idSet) (*ratelimit.RateLimit, bool) {
 	if r.Meta.Owner.Kind == meta.OwnerProject {
-		if _, ok := projects[r.Meta.Owner.ID]; !ok {
+		if !projects(r.Meta.Owner.ID) {
 			return nil, false
 		}
 	}

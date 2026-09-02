@@ -317,22 +317,22 @@ func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	// Only the project store's pool dies, so the team write lands and the
-	// project write is the one that fails.
+	// Execute re-reads every row before writing any (the Plan→Execute
+	// conflict check), so a store that has gone away aborts the run before
+	// it touches Postgres rather than part-way through it.
 	second.Close()
 	applied, err := apply.Execute(ctx, plan, nil)
-	var se *apply.StoreError
-	if !errors.As(err, &se) {
-		t.Fatalf("Execute err = %v, want a StoreError", err)
+	if err == nil {
+		t.Fatal("Execute succeeded against a closed store")
 	}
-	if se.Entry.Kind != "Project" {
-		t.Fatalf("failed entry = %+v, want the Project", se.Entry)
+	if !strings.Contains(err.Error(), "list projects") {
+		t.Fatalf("Execute err = %v, want the pre-write re-read to fail", err)
 	}
-	if len(applied) != 1 || applied[0].Kind != "Team" {
-		t.Fatalf("applied = %+v, want just the Team", applied)
+	if len(applied) != 0 {
+		t.Fatalf("applied = %+v, want nothing written before the re-read failed", applied)
 	}
-	if teams, _ := st.stores.Team.List(ctx); len(teams) != 1 {
-		t.Fatalf("the row reported as applied is not in PG")
+	if teams, _ := st.stores.Team.List(ctx); len(teams) != 0 {
+		t.Fatalf("a row landed despite the aborted run")
 	}
 }
 

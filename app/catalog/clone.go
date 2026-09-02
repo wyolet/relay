@@ -36,9 +36,14 @@ func (s *Snapshot) clone() *Snapshot {
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),
 		rateLimitsByName: shallowMap(s.rateLimitsByName),
 
-		keysByID:      shallowMap(s.keysByID),
-		keysByHash:    shallowMap(s.keysByHash),
-		subjectsByKey: copySliceMap(s.subjectsByKey),
+		keysByID:   shallowMap(s.keysByID),
+		keysByHash: shallowMap(s.keysByHash),
+		// The index helpers replace a principal's slice wholesale, so the
+		// headers can be shared with the snapshot this clone came from.
+		keysByPrincipal: shallowMap(s.keysByPrincipal),
+		// Subject lists are replaced wholesale by the reindex helpers, never
+		// appended to, so the slices themselves can be shared.
+		subjectsByKey: shallowMap(s.subjectsByKey),
 
 		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
 
@@ -89,6 +94,8 @@ func (s *Snapshot) clone() *Snapshot {
 
 		policyBindingsByID:      shallowMap(s.policyBindingsByID),
 		policyBindingsByProject: copySliceMap(s.policyBindingsByProject),
+
+		now: s.now,
 	}
 	return c
 }

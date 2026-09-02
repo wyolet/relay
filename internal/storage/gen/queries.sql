@@ -215,6 +215,17 @@ SELECT EXISTS (
        AND id <> $3
 );
 
+-- name: RotateRelayKey :execrows
+-- Conditional on the hash the caller read, so two concurrent rotations of
+-- the same key cannot both win and lose one of the new plaintexts.
+UPDATE relay_keys
+   SET key_hash          = $2,
+       previous_key_hash = $3,
+       metadata          = $4,
+       spec              = $5,
+       updated_at        = NOW()
+ WHERE id = $1 AND key_hash = $6;
+
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
 
@@ -421,6 +432,10 @@ SELECT * FROM users WHERE oidc_subject = $1;
 
 -- name: ListUsers :many
 SELECT * FROM users ORDER BY created_at ASC;
+
+-- name: ListUserIDsIn :many
+-- Membership check for a whole id list in one round trip.
+SELECT id FROM users WHERE id = ANY($1::text[]);
 
 -- name: UpsertUser :exec
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)

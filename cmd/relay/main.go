@@ -220,7 +220,7 @@ func main() {
 	// auth:tokens section from there.
 	tokenSigner := &control.TokenSigner{}
 	tokenVerifier := &inference.TokenVerifier{}
-	if err := loadTokenSigningKey(bootCtx, stores, cfg.MasterKey, tokenSigner, tokenVerifier); err != nil {
+	if err := loadTokenSigningKey(bootCtx, st.Pool(), stores, cfg.MasterKey, tokenSigner, tokenVerifier); err != nil {
 		slog.Error("auth: inference-token signing key unavailable", "err", err)
 		os.Exit(1)
 	}
@@ -229,7 +229,7 @@ func main() {
 	settingswatch.New(cat, settings.SectionLicense, applyLicenseSection(licenseSvc), slog.Default()).Start()
 
 	settingswatch.New(cat, settings.AuthTokensSection, func(a settings.AuthTokens) {
-		if err := applyAuthTokensSection(listenerCtx, stores, cfg.MasterKey, a, tokenSigner, tokenVerifier); err != nil {
+		if err := applyAuthTokensSection(listenerCtx, st.Pool(), stores, cfg.MasterKey, a, tokenSigner, tokenVerifier); err != nil {
 			slog.Error("auth: inference-token signing key reload failed", "err", err)
 		}
 	}, slog.Default()).Start()
@@ -681,10 +681,13 @@ func main() {
 		}
 		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
-			Identity:       idStore,
-			TokenSigner:    tokenSigner,
-			TokenDenylist:  kvStore,
-			MintLimiter:    limiter,
+			Identity:      idStore,
+			TokenSigner:   tokenSigner,
+			TokenDenylist: kvStore,
+			MintLimiter:   limiter,
+			RotateTokenKey: func(ctx context.Context) error {
+				return rotateTokenSigningKey(ctx, st.Pool(), stores, cfg.MasterKey, tokenSigner, tokenVerifier)
+			},
 			Users:          usersStore,
 			Sessions:       sessMgr,
 			AdminToken:     cfg.AdminToken,

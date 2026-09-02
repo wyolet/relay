@@ -373,7 +373,7 @@ func equalStrings(got, want []string) bool {
 
 func signWith(t *testing.T, priv ed25519.PrivateKey, f principalFixture) string {
 	t.Helper()
-	token, err := crypto.SignToken(priv, crypto.TokenClaims{
+	token, err := crypto.SignToken(priv, "", crypto.TokenClaims{
 		Iss: crypto.TokenIssuer, Sub: "user:" + f.user, Prj: f.project.Meta.ID,
 		Ver: 1, Jti: meta.NewID(), Iat: time.Now().Unix(), Exp: time.Now().Add(time.Hour).Unix(),
 	})

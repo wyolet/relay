@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -109,6 +111,79 @@ type Rows struct {
 	Overlays        []*overlay.Overlay
 
 	Users []*user.User
+}
+
+// rowState is the provenance one planned write is conditional on: the row
+// either was absent, or carried exactly this (dirty, updatedAt) pair when
+// the plan was built.
+type rowState struct {
+	present   bool
+	dirty     bool
+	updatedAt time.Time
+}
+
+// rowStates indexes every loaded row's provenance by kind and name, so
+// Execute can tell whether the rows it is about to write still look the way
+// Plan saw them.
+func rowStates(r *Rows) map[string]map[string]rowState {
+	out := make(map[string]map[string]rowState, 17)
+	add := func(kind string, m *meta.Metadata) {
+		byName, ok := out[kind]
+		if !ok {
+			byName = map[string]rowState{}
+			out[kind] = byName
+		}
+		byName[m.Name] = rowState{present: true, dirty: m.Dirty, updatedAt: m.UpdatedAt}
+	}
+	for _, x := range r.Providers {
+		add("Provider", &x.Meta)
+	}
+	for _, x := range r.Hosts {
+		add("Host", &x.Meta)
+	}
+	for _, x := range r.RateLimits {
+		add("RateLimit", &x.Meta)
+	}
+	for _, x := range r.HostKeys {
+		add("HostKey", &x.Meta)
+	}
+	for _, x := range r.Models {
+		add("Model", &x.Meta)
+	}
+	for _, x := range r.Pricings {
+		add("Pricing", &x.Meta)
+	}
+	for _, x := range r.Bindings {
+		add("HostBinding", &x.Meta)
+	}
+	for _, x := range r.Policies {
+		add("Policy", &x.Meta)
+	}
+	for _, x := range r.Keys {
+		add("Key", &x.Meta)
+	}
+	for _, x := range r.Teams {
+		add("Team", &x.Meta)
+	}
+	for _, x := range r.Projects {
+		add("Project", &x.Meta)
+	}
+	for _, x := range r.ServiceAccounts {
+		add("ServiceAccount", &x.Meta)
+	}
+	for _, x := range r.Groups {
+		add("Group", &x.Meta)
+	}
+	for _, x := range r.Roles {
+		add("Role", &x.Meta)
+	}
+	for _, x := range r.RoleBindings {
+		add("RoleBinding", &x.Meta)
+	}
+	for _, x := range r.PolicyBindings {
+		add("PolicyBinding", &x.Meta)
+	}
+	return out
 }
 
 // Load lists every kind once.

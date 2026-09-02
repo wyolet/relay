@@ -151,6 +151,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		RawModelName:          in.ModelName,
 		Policy:                principal.Policy,
 		PayloadLoggingEnabled: principal.PayloadLogging,
+		Snapshot:              SnapshotFrom(ctx),
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())

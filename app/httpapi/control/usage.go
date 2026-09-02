@@ -18,9 +18,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/usagelog"
 )
@@ -29,41 +29,30 @@ import (
 //
 // A caller reads the whole stream only when a binding at the global scope
 // grants usage/logs read. Otherwise the stream narrows to what is
-// attributable to them: events in a project they may see, plus events their
-// own keys produced. Those two are a disjunction, carried on the query as
-// ScopeProjectID / ScopeRelayKeyHash.
-
-type keyLister interface {
-	List(ctx context.Context) ([]*key.Key, error)
-}
-
-func keysOf(d Deps) keyLister {
-	if d.Stores == nil || d.Stores.Key == nil {
-		return nil
-	}
-	return d.Stores.Key
-}
+// attributable to them: events in a project they may see, plus events they
+// are the principal of. Those two are a disjunction, carried on the query as
+// ScopeProjectID / ScopePrincipalID.
 
 // readScope is the slice of the usage/log stream a caller may read.
 // unrestricted is the whole stream; otherwise an event qualifies when its
-// project or its bearer hash is listed. Both lists empty means "no events at
+// project or its principal is listed. Both lists empty means "no events at
 // all", never "everything".
 type readScope struct {
 	unrestricted bool
 	projectIDs   []string
-	hashes       []string
+	principalIDs []string
 }
 
 // allows reports whether one already-fetched event is inside the scope.
 func (s readScope) allows(ev usagelog.Event) bool {
 	return s.unrestricted ||
 		slices.Contains(s.projectIDs, ev.ProjectID) ||
-		slices.Contains(s.hashes, ev.RelayKeyHash)
+		slices.Contains(s.principalIDs, ev.PrincipalID)
 }
 
 // scopeOf resolves the caller's read scope for kind ("usage" or "logs"). It
 // is the authorization for these endpoints: an empty scope reads nothing.
-func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catalog, keys keyLister, kind string) (readScope, error) {
+func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catalog, kind string) (readScope, error) {
 	// A nil owner resolves to the global scope, so this passes only for a
 	// binding that reaches every row — which is exactly "unrestricted".
 	if authzr.Authorize(ctx, kind+".read", authz.Resource{Kind: kind}) == nil {
@@ -81,28 +70,13 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 			}
 		}
 	}
-	if keys == nil {
-		return sc, nil
-	}
-	all, err := keys.List(ctx)
-	if err != nil {
-		return readScope{}, huma.Error500InternalServerError(err.Error())
-	}
-	for _, k := range all {
-		// The verb is the endpoint's own (usage/logs), not the key's: a
-		// caller who may see a key still needs the read grant on this
-		// stream before its events enter their scope.
-		if !s.Visible(ctx, kind, k.Meta.ID, k.Meta.Owner) {
-			continue
-		}
-		if k.Spec.KeyHash != "" {
-			sc.hashes = append(sc.hashes, k.Spec.KeyHash)
-		}
-		// A rotated key's old hash is still the caller's own traffic until
-		// the grace window closes.
-		if k.Spec.PreviousKeyHash != "" {
-			sc.hashes = append(sc.hashes, k.Spec.PreviousKeyHash)
-		}
+	// The caller's own traffic, named by the principal every event carries.
+	// Enumerating their keys instead would list every key row per read and
+	// hand the store a hash list that grows with the deployment — and a
+	// rotated key's old hash drops out of it the moment grace ends, which
+	// the principal id never does.
+	if a := actor.From(ctx); a != nil && a.UserID != "" {
+		sc.principalIDs = append(sc.principalIDs, a.UserID)
 	}
 	return sc, nil
 }
@@ -114,10 +88,10 @@ func scopeEventQuery(q *usagelog.EventQuery, sc readScope) bool {
 	if sc.unrestricted {
 		return true
 	}
-	if len(sc.projectIDs) == 0 && len(sc.hashes) == 0 {
+	if len(sc.projectIDs) == 0 && len(sc.principalIDs) == 0 {
 		return false
 	}
-	q.ScopeProjectID, q.ScopeRelayKeyHash = sc.projectIDs, sc.hashes
+	q.ScopeProjectID, q.ScopePrincipalID = sc.projectIDs, sc.principalIDs
 	return true
 }
 
@@ -361,7 +335,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
-		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "usage")
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
@@ -408,7 +382,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "usage")
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
@@ -447,7 +421,7 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "usage")
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}

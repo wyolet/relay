@@ -641,11 +641,12 @@ func guardGroupMembers(d Deps) mutationGuard[group.Group] {
 		if d.Users == nil {
 			return nil
 		}
-		for _, id := range incoming.Spec.MemberIDs {
-			u, err := d.Users.Get(ctx, id)
-			if err != nil || u == nil {
-				return huma.Error400BadRequest(fmt.Sprintf("user %q does not exist", id))
-			}
+		missing, err := d.Users.MissingIDs(ctx, incoming.Spec.MemberIDs)
+		if err != nil {
+			return huma.Error500InternalServerError(err.Error())
+		}
+		if len(missing) > 0 {
+			return huma.Error400BadRequest(fmt.Sprintf("user %q does not exist", missing[0]))
 		}
 		return nil
 	}

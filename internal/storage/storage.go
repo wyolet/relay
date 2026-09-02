@@ -100,6 +100,25 @@ func (s *Storage) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 // domain code reaches Postgres via its own typed Store packages.
 func (s *Storage) Pool() *pgxpool.Pool { return s.pool }
 
+// WithAdvisoryLock runs fn while holding the transaction-scoped Postgres
+// advisory lock named by key, so concurrent pods serialize on it. The lock
+// is released when the transaction ends, including on a panic or a lost
+// connection — nothing can leave it held.
+func WithAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64, fn func(context.Context) error) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("storage: advisory lock: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", key); err != nil {
+		return fmt.Errorf("storage: advisory lock: %w", err)
+	}
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // WrapPool wraps an existing *pgxpool.Pool into a *Storage without
 // opening a new pool or running migrations. Intended for tests that
 // supply their own pool. The returned Storage must NOT be closed —

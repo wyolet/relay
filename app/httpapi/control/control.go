@@ -55,6 +55,12 @@ type Deps struct {
 	// nil leaves minting unmetered.
 	MintLimiter MintLimiter
 
+	// RotateTokenKey generates a fresh signing key, installs it on both
+	// planes (keeping the outgoing one on the verifier) and records the new
+	// ref in the auth:tokens section. Wired by the composition root, which
+	// owns the secret store and the master key; nil disables the endpoint.
+	RotateTokenKey func(ctx context.Context) error
+
 	// AdminToken is the cleartext break-glass bearer. Empty disables the
 	// bypass. Validated by AdminTokenMiddleware; not used directly by
 	// handlers.

@@ -1,7 +1,7 @@
 package ratelimit
 
 import (
-	"fmt"
+	"strconv"
 
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -37,10 +37,12 @@ func ResolveWithScope(namespace, subject string, rl *RateLimit) []pkgratelimit.R
 		return nil
 	}
 	out := make([]pkgratelimit.Rule, 0, len(rl.Spec.Rules))
+	// Concatenation, not fmt: this runs per rule per request.
+	prefix := namespace + ":" + subject + ":"
 	for i, r := range rl.Spec.Rules {
 		out = append(out, pkgratelimit.Rule{
-			Key:      fmt.Sprintf("%s:%s:%d:%s", namespace, subject, i, r.Meter),
-			Name:     fmt.Sprintf("%s on %s", r.Meter, subject),
+			Key:      prefix + strconv.Itoa(i) + ":" + string(r.Meter),
+			Name:     string(r.Meter) + " on " + subject,
 			Meter:    string(r.Meter),
 			Strategy: pkgratelimit.Strategy(r.Strategy),
 			Amount:   r.Amount,

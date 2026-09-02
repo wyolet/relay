@@ -533,7 +533,7 @@ func percentile(sortedAsc []int64, p float64) int64 {
 // inScope applies the read-scope disjunction: within the caller's projects
 // OR from one of the caller's own keys. No scope set means no narrowing.
 func inScope(q EventQuery, ev Event) bool {
-	if len(q.ScopeProjectID) == 0 && len(q.ScopeRelayKeyHash) == 0 {
+	if len(q.ScopeProjectID) == 0 && len(q.ScopeRelayKeyHash) == 0 && len(q.ScopePrincipalID) == 0 {
 		return true
 	}
 	for _, p := range q.ScopeProjectID {
@@ -543,6 +543,11 @@ func inScope(q EventQuery, ev Event) bool {
 	}
 	for _, h := range q.ScopeRelayKeyHash {
 		if h != "" && h == ev.RelayKeyHash {
+			return true
+		}
+	}
+	for _, p := range q.ScopePrincipalID {
+		if p != "" && p == ev.PrincipalID {
 			return true
 		}
 	}

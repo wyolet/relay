@@ -6,24 +6,29 @@
 // it never reads or writes Snapshot maps directly.
 package catalog
 
-type idSet = map[string]struct{}
+// idSet answers "is this id present". A predicate rather than a map so the
+// reconcile paths, which run per NOTIFY event, can close over a snapshot map
+// directly instead of copying it.
+type idSet = func(id string) bool
 
 func setFromIDs[T any](items []T, id func(T) string) idSet {
-	out := make(idSet, len(items))
+	set := make(map[string]struct{}, len(items))
 	for _, it := range items {
-		out[id(it)] = struct{}{}
+		set[id(it)] = struct{}{}
 	}
-	return out
+	return func(id string) bool {
+		_, ok := set[id]
+		return ok
+	}
 }
 
-// snapIDs returns the id set from a snapshot map. Used by reconcile Apply
-// paths that sanitize against the current snapshot.
+// snapIDs reads membership straight off a snapshot map. Used by reconcile
+// Apply paths that sanitize against the current snapshot.
 func snapIDs[V any](m map[string]V) idSet {
-	out := make(idSet, len(m))
-	for k := range m {
-		out[k] = struct{}{}
+	return func(id string) bool {
+		_, ok := m[id]
+		return ok
 	}
-	return out
 }
 
 func filterIDs(ids []string, set idSet) []string {
@@ -32,7 +37,7 @@ func filterIDs(ids []string, set idSet) []string {
 	}
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if _, ok := set[id]; ok {
+		if set(id) {
 			out = append(out, id)
 		}
 	}

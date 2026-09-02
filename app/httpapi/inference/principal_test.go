@@ -111,7 +111,7 @@ func newPrincipalFixture() principalFixture {
 
 // mint signs a token for this fixture's user + project with the claims a
 // mint would produce, letting a test mutate them first.
-func (f principalFixture) mint(t *testing.T, mutate func(*crypto.TokenClaims)) string {
+func (f principalFixture) mint(t testing.TB, mutate func(*crypto.TokenClaims)) string {
 	t.Helper()
 	claims := crypto.TokenClaims{
 		Iss: crypto.TokenIssuer,
@@ -125,14 +125,14 @@ func (f principalFixture) mint(t *testing.T, mutate func(*crypto.TokenClaims)) s
 	if mutate != nil {
 		mutate(&claims)
 	}
-	token, err := crypto.SignToken(f.signer, claims)
+	token, err := crypto.SignToken(f.signer, "", claims)
 	if err != nil {
 		t.Fatalf("sign token: %v", err)
 	}
 	return token
 }
 
-func (f principalFixture) stack(t *testing.T, keys ...*key.Key) *principalStack {
+func (f principalFixture) stack(t testing.TB, keys ...*key.Key) *principalStack {
 	t.Helper()
 	c := catalog.New(
 		stubList[provider.Provider]{}, stubList[host.Host]{},

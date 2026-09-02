@@ -13,6 +13,7 @@ package catalog
 
 import (
 	"sort"
+	"time"
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
@@ -105,6 +106,10 @@ type Snapshot struct {
 	// keysByHash indexes Spec.KeyHash and, while the key is in its
 	// rotation grace window, Spec.PreviousKeyHash.
 	keysByHash map[string]*key.Key
+	// keysByPrincipal groups keys by "<principal kind>:<id>", so a group or
+	// service-account write reindexes that principal's keys instead of
+	// walking every key in the deployment.
+	keysByPrincipal map[string][]*key.Key
 	// subjectsByKey holds each key's precomputed subject list (identity +
 	// groups + system groups), so the request path copies a slice header
 	// instead of rebuilding it. Recomputed when a group, service account or
@@ -184,6 +189,19 @@ type Snapshot struct {
 	// policyBindingsByProject holds a project's bindings, sorted by
 	// effective priority then name — the order resolution reads them in.
 	policyBindingsByProject map[string][]*policybinding.PolicyBinding
+
+	// now is the clock the time-dependent indices (a rotated key's grace
+	// window) read. Nil means wall clock; a test installs its own so a
+	// grace transition is reachable without sleeping.
+	now func() time.Time
+}
+
+// clock returns the snapshot's time source, defaulting to the wall clock.
+func (s *Snapshot) clock() time.Time {
+	if s == nil || s.now == nil {
+		return time.Now()
+	}
+	return s.now()
 }
 
 // global is the outermost scope every chain ends in.

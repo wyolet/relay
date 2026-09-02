@@ -351,6 +351,10 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 		}
 
 		prev, found := existing[name]
+		if found {
+			pm := k.Meta(prev)
+			e.prev = rowState{present: true, dirty: pm.Dirty, updatedAt: pm.UpdatedAt}
+		}
 		switch {
 		case !found:
 			e.Action = ActionCreate
@@ -398,6 +402,7 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 			pruned = append(pruned, Entry{
 				Kind: k.Kind, Name: m.Name, ID: id, Action: ActionDelete,
 				plural: route.Plural, owner: m.Owner,
+				prev:  rowState{present: true, dirty: m.Dirty, updatedAt: m.UpdatedAt},
 				write: func(ctx context.Context) error { return k.Delete(ctx, id) },
 			})
 		}

@@ -70,6 +70,47 @@ func (s *Store) Upsert(ctx context.Context, k *Key) error {
 	return s.q.UpsertRelayKey(ctx, params)
 }
 
+// ErrRotationRaced reports a rotate whose stored hash no longer matches the
+// one the caller read: another rotation landed in between, and writing over
+// it would hand out a plaintext that authenticates nothing.
+var ErrRotationRaced = errors.New("key: rotated concurrently")
+
+// Rotate replaces the key's hashes conditionally on prevHash still being the
+// stored one. Everything else on the row (principal, policy, flags, slug) is
+// untouched, so it cannot clobber a concurrent edit either.
+func (s *Store) Rotate(ctx context.Context, k *Key, prevHash string) error {
+	params, err := toUpsertParams(k)
+	if err != nil {
+		return fmt.Errorf("key.Rotate: %w", err)
+	}
+	taken, err := s.q.RelayKeyHashTaken(ctx, gen.RelayKeyHashTakenParams{
+		KeyHash:   k.Spec.KeyHash,
+		KeyHash_2: k.Spec.PreviousKeyHash,
+		ID:        k.Meta.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("key.Rotate: %w", err)
+	}
+	if taken {
+		return ErrHashInUse
+	}
+	n, err := s.q.RotateRelayKey(ctx, gen.RotateRelayKeyParams{
+		ID:              params.ID,
+		KeyHash:         params.KeyHash,
+		PreviousKeyHash: params.PreviousKeyHash,
+		Metadata:        params.Metadata,
+		Spec:            params.Spec,
+		KeyHash_2:       prevHash,
+	})
+	if err != nil {
+		return fmt.Errorf("key.Rotate: %w", err)
+	}
+	if n == 0 {
+		return ErrRotationRaced
+	}
+	return nil
+}
+
 // Get returns the Key with the given id, or (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
 	r, err := s.q.GetRelayKey(ctx, id)

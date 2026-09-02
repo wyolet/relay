@@ -36,6 +36,9 @@ const (
 	// overwrite. Reported as drift; nothing is written.
 	ActionSkipDirty Action = "skip-dirty"
 	ActionDelete    Action = "delete"
+	// ActionConflict is a row another writer changed between Plan and
+	// Execute. Nothing is written for it; re-planning picks up the change.
+	ActionConflict Action = "conflict"
 )
 
 // Entry is one planned row change.
@@ -56,6 +59,9 @@ type Entry struct {
 	plural string
 	owner  meta.Owner
 	write  func(context.Context) error
+	// prev is what the row looked like when this entry was planned. Execute
+	// re-reads and refuses the write if it no longer matches.
+	prev rowState
 }
 
 // Counts summarises a plan.
@@ -65,6 +71,7 @@ type Counts struct {
 	Unchanged int `json:"unchanged"`
 	SkipDirty int `json:"skipDirty"`
 	Delete    int `json:"delete"`
+	Conflict  int `json:"conflict"`
 }
 
 // Result is the full ordered set of entries one apply would run — the plan.
@@ -72,6 +79,10 @@ type Counts struct {
 type Result struct {
 	Entries []Entry `json:"entries"`
 	Counts  Counts  `json:"counts"`
+
+	// reload re-reads the rows the plan was built from, for Execute's
+	// conflict check. Nil (a hand-built Result) skips the re-read.
+	reload func(context.Context) (*Rows, error)
 }
 
 // Options configures a plan.
@@ -213,7 +224,11 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 		return nil, err
 	}
 
-	p := &Result{Entries: b.entries}
+	stores := opts.Stores
+	p := &Result{
+		Entries: b.entries,
+		reload:  func(ctx context.Context) (*Rows, error) { return Load(ctx, stores) },
+	}
 	recount(p)
 	return p, nil
 }
@@ -233,6 +248,8 @@ func recount(p *Result) {
 			p.Counts.SkipDirty++
 		case ActionDelete:
 			p.Counts.Delete++
+		case ActionConflict:
+			p.Counts.Conflict++
 		}
 	}
 }
@@ -250,16 +267,37 @@ func Execute(ctx context.Context, p *Result, authzr authz.Authorizer) ([]Entry, 
 		return nil, err
 	}
 
+	// Re-read once, immediately before writing: a row someone edited through
+	// the control API since Plan ran would otherwise be silently overwritten
+	// (and un-dirtied) by a diff computed against its older content.
+	var current map[string]map[string]rowState
+	if p.reload != nil {
+		rows, err := p.reload(ctx)
+		if err != nil {
+			return nil, err
+		}
+		current = rowStates(rows)
+	}
+
 	applied := make([]Entry, 0, len(p.Entries))
-	for _, e := range p.Entries {
+	for i := range p.Entries {
+		e := &p.Entries[i]
 		if e.write == nil {
 			continue
 		}
-		if err := e.write(ctx); err != nil {
-			return applied, &StoreError{Entry: e, Applied: applied, Err: err}
+		if current != nil && e.prev != current[e.Kind][e.Name] {
+			e.Action = ActionConflict
+			e.ChangedFields = nil
+			e.write = nil
+			continue
 		}
-		applied = append(applied, e)
+		if err := e.write(ctx); err != nil {
+			recount(p)
+			return applied, &StoreError{Entry: *e, Applied: applied, Err: err}
+		}
+		applied = append(applied, *e)
 	}
+	recount(p)
 	return applied, nil
 }
 

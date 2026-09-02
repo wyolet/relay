@@ -75,7 +75,10 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 	if principal == nil {
 		return nil, huma.Error401Unauthorized("missing relay key")
 	}
-	snap := d.Catalog.Current()
+	snap := SnapshotFrom(ctx)
+	if snap == nil {
+		snap = d.Catalog.Current()
+	}
 	out := &modelsOutput{}
 	out.Body.Object = "list"
 

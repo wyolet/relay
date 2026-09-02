@@ -79,12 +79,15 @@ func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgrate
 	rules := metered
 	if in.TokenJTI != "" {
 		// First in the slice: a revoked token must answer 401, not the 429 an
-		// over-limit rule evaluated ahead of it would produce.
-		rules = append([]pkgratelimit.Rule{{
+		// over-limit rule evaluated ahead of it would produce. Pre-sized so
+		// the metered rules don't force a regrow.
+		rules = make([]pkgratelimit.Rule, 0, len(metered)+1)
+		rules = append(rules, pkgratelimit.Rule{
 			Key:   revokedRuleKey(in.TokenJTI),
 			Name:  "token revocation",
 			Meter: pkgratelimit.MeterRevoked,
-		}}, metered...)
+		})
+		rules = append(rules, metered...)
 	}
 	if len(rules) == 0 || s.limiter == nil {
 		return nil, nil

@@ -31,9 +31,11 @@ const (
 	// batchSize and batchInterval bound one insert pass.
 	batchSize     = 100
 	batchInterval = time.Second
-	// pruneInterval is how often retention is enforced.
-	pruneInterval = time.Hour
 )
+
+// pruneInterval is how often retention is enforced. A var so a test can
+// reach the prune branch of the drain loop without waiting an hour.
+var pruneInterval = time.Hour
 
 // Sink persists a batch of events.
 type Sink interface {
@@ -144,7 +146,9 @@ func (e *Emitter) drain() {
 				batch = batch[:0]
 			}
 		case <-prune.C:
-			e.Prune()
+			// Off the drain loop: a prune over a large table takes seconds,
+			// and the queue fills (and drops) for as long as it runs.
+			go e.Prune()
 		}
 	}
 }

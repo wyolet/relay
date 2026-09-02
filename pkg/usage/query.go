@@ -129,14 +129,16 @@ type EventQuery struct {
 	// Limit caps the number of events returned. <=0 → DefaultEventLimit.
 	Limit int
 
-	// ScopeProjectID / ScopeRelayKeyHash narrow the stream to the slice of
-	// events the caller is authorized to read. Unlike every other filter
-	// they are a DISJUNCTION: an event matches when its project is in
-	// ScopeProjectID OR its bearer hash is in ScopeRelayKeyHash. Both empty
-	// means no scope narrowing — a caller who may read nothing must be
-	// short-circuited by the handler, never passed through as "unfiltered".
+	// ScopeProjectID / ScopeRelayKeyHash / ScopePrincipalID narrow the
+	// stream to the slice of events the caller is authorized to read.
+	// Unlike every other filter they are a DISJUNCTION: an event matches
+	// when its project, its bearer hash or its principal is listed. All
+	// empty means no scope narrowing — a caller who may read nothing must
+	// be short-circuited by the handler, never passed through as
+	// "unfiltered".
 	ScopeProjectID    []string
 	ScopeRelayKeyHash []string
+	ScopePrincipalID  []string
 
 	// CursorTS / CursorID implement keyset pagination for Events. When
 	// CursorTS is non-zero, only events strictly older than the cursor are

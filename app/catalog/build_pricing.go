@@ -24,7 +24,7 @@ func (s *Snapshot) addPricings(pricings []*pricing.Pricing, hosts, models idSet)
 // targeted Model is missing — without a model the rate sheet has no anchor
 // to apply to.
 func sanitizePricing(p *pricing.Pricing, hosts, models idSet) (*pricing.Pricing, bool) {
-	if _, ok := hosts[p.Meta.Owner.ID]; !ok {
+	if !hosts(p.Meta.Owner.ID) {
 		return nil, false
 	}
 	clean := *p

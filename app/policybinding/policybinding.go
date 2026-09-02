@@ -20,6 +20,21 @@ const DefaultPriority = 100
 type PolicyBinding struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
 	Spec Spec          `json:"spec"     yaml:"spec"`
+
+	// SubjectKeys is Spec.Subjects rendered as match keys. Derived, so it
+	// stays off the wire and out of manifests; the snapshot builder fills
+	// it so the request path compares strings instead of building them.
+	SubjectKeys []string `json:"-" yaml:"-"`
+}
+
+// IndexSubjects recomputes SubjectKeys. Called wherever a binding enters
+// the snapshot; cheap, and never on the request path.
+func (b *PolicyBinding) IndexSubjects() {
+	keys := make([]string, len(b.Spec.Subjects))
+	for i := range b.Spec.Subjects {
+		keys[i] = b.Spec.Subjects[i].Key()
+	}
+	b.SubjectKeys = keys
 }
 
 // Spec carries the project, the policy, the tie-break priority, the

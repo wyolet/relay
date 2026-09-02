@@ -1012,19 +1012,20 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		add("request_id = $%d", q.RequestID)
 	}
 	// Read scope is a disjunction, not another membership filter: the
-	// caller's projects OR the caller's own keys.
-	if len(q.ScopeProjectID) > 0 || len(q.ScopeRelayKeyHash) > 0 {
+	// caller's projects OR their own traffic.
+	if len(q.ScopeProjectID) > 0 || len(q.ScopeRelayKeyHash) > 0 || len(q.ScopePrincipalID) > 0 {
 		var or []string
-		if len(q.ScopeProjectID) > 0 {
+		scopeAny := func(col string, vals []string) {
+			if len(vals) == 0 {
+				return
+			}
 			n++
-			or = append(or, fmt.Sprintf("project_id = ANY($%d)", n))
-			args = append(args, q.ScopeProjectID)
+			or = append(or, fmt.Sprintf("%s = ANY($%d)", col, n))
+			args = append(args, vals)
 		}
-		if len(q.ScopeRelayKeyHash) > 0 {
-			n++
-			or = append(or, fmt.Sprintf("relay_key_hash = ANY($%d)", n))
-			args = append(args, q.ScopeRelayKeyHash)
-		}
+		scopeAny("project_id", q.ScopeProjectID)
+		scopeAny("relay_key_hash", q.ScopeRelayKeyHash)
+		scopeAny("principal_id", q.ScopePrincipalID)
 		clauses = append(clauses, "("+strings.Join(or, " OR ")+")")
 	}
 	any("relay_key_hash", q.RelayKeyHash)

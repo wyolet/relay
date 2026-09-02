@@ -49,7 +49,7 @@ func TestEnablingTokensLaterGeneratesASigningKey(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	if err := applyAuthTokensSection(context.Background(), stores, nil, cfg, signer, verifier); err != nil {
+	if err := applyAuthTokensSection(context.Background(), nil, stores, nil, cfg, signer, verifier); err != nil {
 		t.Fatalf("applyAuthTokensSection: %v", err)
 	}
 	if !strings.Contains(buf.String(), "no RELAY_MASTER_KEY") {
@@ -62,7 +62,7 @@ func TestEnablingTokensLaterGeneratesASigningKey(t *testing.T) {
 	// Disabling clears both sides without touching the stored ref.
 	off := cfg
 	off.Enabled = false
-	if err := applyAuthTokensSection(context.Background(), stores, nil, off, signer, verifier); err != nil {
+	if err := applyAuthTokensSection(context.Background(), nil, stores, nil, off, signer, verifier); err != nil {
 		t.Fatalf("applyAuthTokensSection (disabled): %v", err)
 	}
 	if signer.PublicKey() != nil {

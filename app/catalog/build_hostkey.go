@@ -23,11 +23,11 @@ func (s *Snapshot) addHostKeys(keys []*hostkey.HostKey, hosts, projects idSet, p
 // is required for the key to function.
 func sanitizeHostKey(k *hostkey.HostKey, hosts, projects idSet, polByID map[string]*policy.Policy) (*hostkey.HostKey, bool) {
 	if k.Meta.Owner.Kind == meta.OwnerProject {
-		if _, ok := projects[k.Meta.Owner.ID]; !ok {
+		if !projects(k.Meta.Owner.ID) {
 			return nil, false
 		}
 	}
-	if _, ok := hosts[k.Spec.HostID]; !ok {
+	if !hosts(k.Spec.HostID) {
 		return nil, false
 	}
 	pol, ok := polByID[k.Spec.PolicyID]

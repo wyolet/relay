@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"time"
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
@@ -539,16 +538,18 @@ func insertKey(s *Snapshot, k *key.Key) {
 	if old, ok := s.keysByID[k.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refRelayKey, ID: old.Meta.ID}, outboundKeyRefs(old))
 		unindexKeyHashes(s, old)
+		deindexKeyPrincipal(s, old)
 		delete(s.keysByID, old.Meta.ID)
 	}
 	s.keysByID[k.Meta.ID] = k
+	indexKeyPrincipal(s, k)
 	s.subjectsByKey[k.Meta.ID] = keySubjects(s, k)
 	if k.Spec.KeyHash != "" {
 		indexKeyHash(s, k.Spec.KeyHash, k)
 	}
 	// The pre-rotation hash is indexed only while its grace window is open,
 	// so an expired grace drops out on the next reconcile or reload.
-	if k.InGrace(time.Now()) {
+	if k.InGrace(s.clock()) {
 		indexKeyHash(s, k.Spec.PreviousKeyHash, k)
 	}
 	s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
@@ -573,6 +574,7 @@ func deleteKey(s *Snapshot, id string) {
 	}
 	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundKeyRefs(k))
 	unindexKeyHashes(s, k)
+	deindexKeyPrincipal(s, k)
 	delete(s.keysByID, id)
 	delete(s.subjectsByKey, id)
 }
@@ -882,6 +884,9 @@ func removeRoleBindingFromSubjects(s *Snapshot, b *rolebinding.RoleBinding) {
 
 // ── PolicyBinding ─────────────────────────────────────────────────────────
 
+// A policy binding names a project, subjects and a policy — none of which
+// the allowed-combo sets are a function of — so these two publish directly
+// instead of rebuilding every policy's grants.
 func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error {
 	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
 		// Same rule as ApplyRoleBindingUpsert: no subjects, no binding.
@@ -896,11 +901,11 @@ func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error
 	clean, keep := sanitizePolicyBinding(b, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
 	if !keep {
 		deletePolicyBinding(s, b.Meta.ID)
-		c.commitWithGrants(s)
+		c.snap.Store(s)
 		return nil
 	}
 	insertPolicyBinding(s, clean)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -909,7 +914,7 @@ func (c *Catalog) ApplyPolicyBindingDelete(id string) error {
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	deletePolicyBinding(s, id)
-	c.commitWithGrants(s)
+	c.snap.Store(s)
 	return nil
 }
 
@@ -1045,10 +1050,14 @@ func (c *Catalog) ApplyProjectUpsert(p *project.Project) error {
 		c.snap.Store(s)
 		return nil
 	}
+	// A project's slug is part of its service accounts' subjects, so a
+	// rename reaches every key under it — but only a rename does. Any other
+	// project edit leaves every subject list unchanged.
+	old, existed := s.projectsByID[clean.Meta.ID]
 	insertProject(s, clean)
-	// A project's slug is part of its service accounts' subjects, and a
-	// rename reaches every key under it.
-	reindexAllKeySubjects(s)
+	if !existed || old.Meta.Name != clean.Meta.Name {
+		reindexAllKeySubjects(s)
+	}
 	c.snap.Store(s)
 	return nil
 }
