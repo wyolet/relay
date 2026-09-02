@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
@@ -50,6 +51,10 @@ type Deps struct {
 	// d.Authz.Authorize before mutations; today's impl is permissive for
 	// any authenticated caller.
 	Authz authz.Authorizer
+
+	// License is the gate for licensed features and the backing of the
+	// /license endpoints. nil is a community deployment.
+	License license.Service
 
 	// Catalog is the in-memory snapshot used for slug→id resolution on
 	// reads. Writes go through Stores.
@@ -143,7 +148,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// endpoints omit it.
 	protect := huma.Middlewares{httpapi.HumaAuth(RequireActor)}
 
-	registerVersion(api)          // public
+	registerVersion(api, d) // public (the license block is admin-only)
+	registerLicense(api, d, protect)
 	registerConfigJSON(api, d)    // public: GET /config.json for the embedded UI
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}

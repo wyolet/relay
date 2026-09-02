@@ -7,27 +7,35 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/httpapi"
+	"github.com/wyolet/relay/app/license"
+	"github.com/wyolet/relay/app/settings"
 )
 
 type versionOutput struct {
 	Body struct {
-		Version string `json:"version" doc:"Relay build version."`
+		Version string        `json:"version"           doc:"Relay build version."`
+		License *license.Info `json:"license,omitempty" doc:"Live license summary. Present for authenticated callers only — the endpoint itself is public."`
 	}
 }
 
-func registerVersion(api huma.API) {
+func registerVersion(api huma.API, d Deps) {
 	huma.Register(api, huma.Operation{
 		OperationID: "version",
 		Method:      "GET",
 		Path:        "/version",
 		Summary:     "Relay build version",
 		Tags:        []string{"system"},
-	}, func(_ context.Context, _ *struct{}) (*versionOutput, error) {
+	}, func(ctx context.Context, _ *struct{}) (*versionOutput, error) {
 		out := &versionOutput{}
 		out.Body.Version = httpapi.Version
+		if actor.From(ctx).IsAuthenticated() {
+			info := licenseInfo(d)
+			out.Body.License = &info
+		}
 		return out, nil
 	})
 }
@@ -141,6 +149,14 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		if err := d.Catalog.Reload(ctx); err != nil {
 			return nil, huma.Error500InternalServerError("reload: " + err.Error())
+		}
+		// Re-verify the license off the reloaded settings, so an operator
+		// can install or renew one without a restart. A bad value is
+		// reported; the previous license stays live.
+		if d.License != nil {
+			if _, err := d.License.Set(settings.LicenseFrom(d.Catalog).Value); err != nil {
+				return nil, huma.Error500InternalServerError("license: " + err.Error())
+			}
 		}
 		out := &reloadOutput{}
 		out.Body.Status = "ok"
