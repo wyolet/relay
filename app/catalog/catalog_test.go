@@ -259,22 +259,21 @@ func TestReload_DisabledModelDropsFromPolicyRefs(t *testing.T) {
 	}
 }
 
-// Disabling a Policy still referenced by a Key used to fail Reload.
-// Now Reload succeeds and the Key is silently dropped from the
-// snapshot (its required ref is gone).
-func TestReload_KeyToDisabledPolicyDrops(t *testing.T) {
+// A Key whose policy is merely switched off keeps its place, so resolution
+// can answer policy_disabled through the retained row — TestPrincipal_KeyOnDisabledPolicyIsForbidden
+// pins that end to end. The other half is what makes it a rule rather than a
+// leak: a Key naming a policy that is *absent* has lost a required ref and
+// must not survive.
+func TestReload_KeyOnAnAbsentPolicyDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	fls := false
-	pols[0].Spec.Enabled = &fls
-	// rks[0] points at pols[0]; disable rks[0] too so an explicit "I want
-	// this dropped" doesn't muddy the test of soft-dropping unrelated keys.
-	// Other keys (if any) pointing at the disabled policy must also
-	// disappear from the snapshot.
-	rks[0].Spec.Enabled = &fls
+	hash := rks[0].Spec.KeyHash
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
+	c := New(provs, hosts, polList{pols[1]}, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	if got, _ := c.Current().KeyByHash(hash); got != nil {
+		t.Fatal("the key survived a policy that is not in the snapshot at all")
 	}
 }
 

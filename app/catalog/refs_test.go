@@ -200,6 +200,18 @@ func (s *Snapshot) rowExists(k refKey) bool {
 	case refBinding:
 		_, ok := s.bindingsByID[k.ID]
 		return ok
+	case refTeam:
+		_, ok := s.teamsByID[k.ID]
+		return ok
+	case refProject:
+		_, ok := s.projectsByID[k.ID]
+		return ok
+	case refServiceAccount:
+		_, ok := s.serviceAccountsByID[k.ID]
+		return ok
+	case refRole:
+		_, ok := s.rolesByID[k.ID]
+		return ok
 	}
 	return false
 }
