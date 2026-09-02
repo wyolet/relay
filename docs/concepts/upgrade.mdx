@@ -1,0 +1,55 @@
+---
+title: "Upgrading across the IAM release"
+description: "Restart requirements and rollback for the teams/projects release boundary"
+---
+
+The release that adds Teams, Projects, Roles, and relay-signed inference
+tokens changes the Postgres schema and the shape of stored keys. Rolling
+upgrades are not supported across this boundary — every pod runs the old
+binary until the last one is replaced, and an old pod cannot read a key
+row that a new pod created.
+
+## What changed on disk
+
+Migrations `000025`–`000030` add:
+
+| Migration | Adds |
+| --- | --- |
+| `000025_teams_projects` | `teams`, `projects` tables — the tenancy scope every project-owned row now hangs off. |
+| `000026_subjects_keys` | `service_accounts`, `groups`; `relay_keys` becomes `keys`, re-pointed at a principal (a service account or a user) instead of being its own identity. Existing keys are backfilled onto a generated service account in a system `legacy` project. |
+| `000027_rbac_kinds` | `roles`, `role_bindings`, `policy_bindings` — stored and validated, evaluated when `RELAY_AUTHZ=rbac`. |
+| `000028_audit_events` | `audit_events` — the append-only admin audit log. |
+| `000029_token_version` | `users.token_version` — bumped to invalidate every inference token a user holds. |
+| `000030_batch_attribution` | Attribution columns on `batches` (project, team, principal, credential). |
+
+## Upgrade procedure
+
+1. Take a Postgres backup. The migrations above are structural (new
+   tables, a column, a rename); rollback is a real down-migration, not a
+   config flip.
+2. Stop every pod running the old image.
+3. Deploy the new image. It runs the migrations on boot and starts serving.
+
+There is no in-place / rolling path: a pod on the old binary doesn't know
+about `keys.principal_id` or the RBAC tables, so it can't authenticate a
+key minted or rotated under the new schema. Take the full downtime window
+rather than mixing versions.
+
+## Rolling back
+
+If the new version needs to be backed out:
+
+1. Stop every pod.
+2. Run `relay migrate down <target-version>` against the same database,
+   with `RELAY_PG_DSN` set — for example `relay migrate down 24` to
+   return to the schema before this release's migrations. This runs the
+   bundled down-migrations in reverse order down to (not including) the
+   target version.
+3. Deploy the previous image.
+
+<Warning>
+`relay migrate down` is destructive — it drops the tables and columns its
+down-migrations remove, including any teams, projects, roles, or keys
+created since the upgrade. Take the backup in step 1 before you need this,
+not after.
+</Warning>

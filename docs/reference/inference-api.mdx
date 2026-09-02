@@ -9,15 +9,20 @@ protocols, plus Relay's own provider-neutral canonical shape.
 
 ## Authentication
 
-Every inference request authenticates with a **relay key** as a bearer token:
+Every inference request authenticates with a bearer credential — either a
+**relay key** or a relay-minted **token**:
 
 ```
-Authorization: Bearer <relay-key>
+Authorization: Bearer <relay-key-or-token>
 ```
 
-Keys are minted in the admin UI or via the control plane
-(`POST /api/keys`). The plaintext is shown exactly once on creation —
-Relay stores only `sha256(plaintext)`.
+Relay tells the two apart by shape: a token looks like a JWT (starts
+`ey`, two `.` separators); a key never does. Keys are minted in the admin
+UI or via the control plane (`POST /api/keys`). The plaintext is shown
+exactly once on creation — Relay stores only `sha256(plaintext)`. Tokens
+are minted per session via `POST /api/auth/token`, scoped to one project,
+and expire on their own — see
+[Authentication concepts](/concepts/auth#inference-tokens).
 
 Rotating a key (`POST /api/keys/by-id/{id}/rotate`) accepts
 `{"graceSeconds": N}`: the previous plaintext keeps authenticating for that

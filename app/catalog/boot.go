@@ -210,9 +210,10 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		}
 		if empty {
 			if _, err := seed.Run(ctx, seed.Options{
-				Pool:      opts.Pool,
-				YAMLDir:   opts.AutoSeedDir,
-				MasterKey: opts.MasterKey,
+				Pool:             opts.Pool,
+				YAMLDir:          opts.AutoSeedDir,
+				MasterKey:        opts.MasterKey,
+				CatalogKindsOnly: true,
 			}); err != nil {
 				return nil, fmt.Errorf("catalog.Hydrate: auto-seed: %w", err)
 			}
@@ -343,6 +344,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 		"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", cause)
 	if _, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
+		CatalogKindsOnly: true,
 	}); err != nil {
 		return fmt.Errorf("fallback seed: %w", err)
 	}
@@ -357,6 +359,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
 	res, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
+		CatalogKindsOnly: true,
 	})
 	if err != nil {
 		return fmt.Errorf("seed catalog %s: %w", version, err)

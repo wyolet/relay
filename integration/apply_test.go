@@ -576,3 +576,125 @@ func goldenRows(t *testing.T, st *stack) map[string]string {
 	}
 	return out
 }
+
+// catalogAndTenancyBundle mixes a catalog kind with the tenancy kinds a
+// catalog tree must not be able to ship.
+const catalogAndTenancyBundle = `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Provider
+metadata:
+  name: acme
+  displayName: Acme
+spec: {}
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Team
+metadata:
+  name: smuggled
+  owner: {kind: system}
+spec:
+  enabled: true
+`
+
+// A catalog archive is fetched by tag from a public repository; it may
+// declare shared templates, never principals or grants.
+// TestIntegration_BootSeedRefusesTenancyKinds pins both halves of that rule:
+// the boot options drop them, and `relay seed --apply` (no such option) still
+// applies every kind.
+func TestIntegration_BootSeedRefusesTenancyKinds(t *testing.T) {
+	st := newStack(t)
+	ctx := context.Background()
+	pool := testPool(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(catalogAndTenancyBundle), 0o600); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	res, err := seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir, CatalogKindsOnly: true})
+	if err != nil {
+		t.Fatalf("boot seed: %v", err)
+	}
+	if res.Providers != 1 || res.Teams != 0 {
+		t.Fatalf("boot seed reconciled %+v, want the provider only", res)
+	}
+	if teams, _ := st.stores.Team.List(ctx); len(teams) != 0 {
+		t.Fatalf("a catalog tree minted %d team(s)", len(teams))
+	}
+
+	// The CLI path has an operator behind it and applies everything.
+	res, err = seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir})
+	if err != nil {
+		t.Fatalf("seed --apply: %v", err)
+	}
+	if res.Teams != 1 {
+		t.Fatalf("seed --apply reconciled %+v, want the team too", res)
+	}
+	if teams, _ := st.stores.Team.List(ctx); len(teams) != 1 {
+		t.Fatalf("teams after seed --apply = %d, want 1", len(teams))
+	}
+}
+
+// ownedPolicy renders a Policy owned by the named host.
+func ownedPolicy(hostName string) string {
+	return `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Host
+metadata:
+  name: host-a
+spec:
+  baseURL: https://a.invalid
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Host
+metadata:
+  name: host-b
+spec:
+  baseURL: https://b.invalid
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Policy
+metadata:
+  name: shared
+  owner: {kind: host, name: ` + hostName + `}
+spec: {}
+`
+}
+
+// A catalog tag that re-parents one of its own rows must land on re-seed:
+// the boot loader runs as the deployment itself, with no actor to be denied.
+// TestIntegration_SeedAppliesAnOwnerChange pins that.
+func TestIntegration_SeedAppliesAnOwnerChange(t *testing.T) {
+	st := newStack(t)
+	ctx := context.Background()
+	pool := testPool(t)
+	dir := t.TempDir()
+
+	write := func(hostName string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "catalog.yaml"), []byte(ownedPolicy(hostName)), 0o600); err != nil {
+			t.Fatalf("write yaml: %v", err)
+		}
+	}
+	write("host-a")
+	if _, err := seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	hosts, err := st.stores.Host.List(ctx)
+	if err != nil || len(hosts) != 2 {
+		t.Fatalf("list hosts: %v %d", err, len(hosts))
+	}
+	byName := map[string]string{}
+	for _, h := range hosts {
+		byName[h.Meta.Name] = h.Meta.ID
+	}
+
+	write("host-b")
+	if _, err := seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir}); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+	pols, err := st.stores.Policy.List(ctx)
+	if err != nil || len(pols) != 1 {
+		t.Fatalf("list policies: %v %d", err, len(pols))
+	}
+	if pols[0].Meta.Owner.ID != byName["host-b"] {
+		t.Fatalf("policy owner = %q, want host-b %q", pols[0].Meta.Owner.ID, byName["host-b"])
+	}
+}

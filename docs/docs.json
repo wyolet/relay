@@ -35,7 +35,8 @@
               "concepts/observability",
               "concepts/auth",
               "concepts/audit",
-              "concepts/license"
+              "concepts/license",
+              "concepts/upgrade"
             ]
           },
           {

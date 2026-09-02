@@ -9,6 +9,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -206,7 +207,17 @@ func Load() (*Config, error) {
 
 	// --- RELAY_AUTHZ ---
 	switch v := os.Getenv("RELAY_AUTHZ"); v {
-	case "", AuthzSingle:
+	case "":
+		// RELAY_MULTI_USER is what pre-IAM deployments set. Ignoring it
+		// would silently drop an upgraded multi-user relay to "single",
+		// where every authenticated user is an admin.
+		if multiUserOn() {
+			slog.Warn("config: RELAY_MULTI_USER is deprecated and was read as RELAY_AUTHZ=rbac; set RELAY_AUTHZ explicitly")
+			cfg.Authz = AuthzRBAC
+		} else {
+			cfg.Authz = AuthzSingle
+		}
+	case AuthzSingle:
 		cfg.Authz = AuthzSingle
 	case AuthzRBAC:
 		cfg.Authz = AuthzRBAC
@@ -315,4 +326,15 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// multiUserOn reports whether the deprecated RELAY_MULTI_USER flag is set to
+// something truthy. Anything else — including its old "off" — leaves the
+// authorizer alone.
+func multiUserOn() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_MULTI_USER"))) {
+	case "on", "1", "true", "yes":
+		return true
+	}
+	return false
 }

@@ -41,13 +41,15 @@ type readScope struct {
 	unrestricted bool
 	projectIDs   []string
 	principalIDs []string
+	keyHashes    []string
 }
 
 // allows reports whether one already-fetched event is inside the scope.
 func (s readScope) allows(ev usagelog.Event) bool {
 	return s.unrestricted ||
 		slices.Contains(s.projectIDs, ev.ProjectID) ||
-		slices.Contains(s.principalIDs, ev.PrincipalID)
+		slices.Contains(s.principalIDs, ev.PrincipalID) ||
+		slices.Contains(s.keyHashes, ev.RelayKeyHash)
 }
 
 // scopeOf resolves the caller's read scope for kind ("usage" or "logs"). It
@@ -77,6 +79,13 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 	// the principal id never does.
 	if a := actor.From(ctx); a != nil && a.UserID != "" {
 		sc.principalIDs = append(sc.principalIDs, a.UserID)
+		// Events written before the principal field existed name only the
+		// key hash. Reading the hashes off the caller's own key rows (the
+		// snapshot's principal index, no Postgres) keeps that history
+		// readable to the person who produced it.
+		if cat != nil {
+			sc.keyHashes = cat.Current().KeyHashesForUser(a.UserID)
+		}
 	}
 	return sc, nil
 }
@@ -88,10 +97,11 @@ func scopeEventQuery(q *usagelog.EventQuery, sc readScope) bool {
 	if sc.unrestricted {
 		return true
 	}
-	if len(sc.projectIDs) == 0 && len(sc.principalIDs) == 0 {
+	if len(sc.projectIDs) == 0 && len(sc.principalIDs) == 0 && len(sc.keyHashes) == 0 {
 		return false
 	}
 	q.ScopeProjectID, q.ScopePrincipalID = sc.projectIDs, sc.principalIDs
+	q.ScopeRelayKeyHash = sc.keyHashes
 	return true
 }
 

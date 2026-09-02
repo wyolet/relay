@@ -11,6 +11,7 @@ package catalog
 // each inner refSet is also copied, because the reconciler mutates them.
 func (s *Snapshot) clone() *Snapshot {
 	c := &Snapshot{
+		gen:             nextSnapshotGen(),
 		providersByID:   shallowMap(s.providersByID),
 		providersByName: shallowMap(s.providersByName),
 

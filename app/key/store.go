@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -75,10 +76,11 @@ func (s *Store) Upsert(ctx context.Context, k *Key) error {
 // it would hand out a plaintext that authenticates nothing.
 var ErrRotationRaced = errors.New("key: rotated concurrently")
 
-// Rotate replaces the key's hashes conditionally on prevHash still being the
-// stored one. Everything else on the row (principal, policy, flags, slug) is
-// untouched, so it cannot clobber a concurrent edit either.
-func (s *Store) Rotate(ctx context.Context, k *Key, prevHash string) error {
+// Rotate replaces the key's hashes conditionally on prevHash and seen still
+// being the row's stored hash and version. Everything else on the row
+// (principal, policy, flags, slug) is untouched, and seen makes a plain
+// update the caller never read lose the race rather than be overwritten.
+func (s *Store) Rotate(ctx context.Context, k *Key, prevHash string, seen time.Time) error {
 	params, err := toUpsertParams(k)
 	if err != nil {
 		return fmt.Errorf("key.Rotate: %w", err)
@@ -101,6 +103,7 @@ func (s *Store) Rotate(ctx context.Context, k *Key, prevHash string) error {
 		Metadata:        params.Metadata,
 		Spec:            params.Spec,
 		KeyHash_2:       prevHash,
+		UpdatedAt:       pgtype.Timestamptz{Time: seen, Valid: true},
 	})
 	if err != nil {
 		return fmt.Errorf("key.Rotate: %w", err)

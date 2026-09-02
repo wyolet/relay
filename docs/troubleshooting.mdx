@@ -14,10 +14,10 @@ Your relay key is missing, malformed, or wrong.
 - Use the **plaintext** returned when the key was created, not the id or
   prefix. If you lost it, mint a new one — plaintext is never retrievable.
 - A disabled relay key also returns 401; check it's enabled in the dashboard.
-- `token_revoked` means an inference token was revoked. Per-token revocations
-  live in the state backend at `limit:{team:<team-id>}:jti:<jti>` and expire
-  with the token; `POST /api/auth/token/revoke-all` invalidates every token a
-  user holds instead.
+- `token_revoked` means an inference token was revoked — either by id
+  (`DELETE /api/auth/token/{jti}`) or in bulk (`POST
+  /api/auth/token/revoke-all`, which invalidates every token the caller
+  holds). Mint a fresh one; see [Inference tokens](/concepts/auth#inference-tokens).
 
 ## `403 Forbidden` — model not granted
 
@@ -59,8 +59,8 @@ To recover:
    make breakers-reset
    ```
 
-   This clears the `secret_health:*` keys in the state backend. In
-   production, breakers heal automatically once the cooldown passes.
+   This clears the pooled host keys' circuit-breaker state. In production,
+   breakers heal automatically once the cooldown passes.
 
 <Info>
 A rotated key gets a fresh breaker automatically — the breaker is keyed by

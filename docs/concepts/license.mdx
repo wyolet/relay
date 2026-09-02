@@ -16,10 +16,10 @@ deployment verifies exactly like a connected one.
 | Feature | Without a license |
 | --- | --- |
 | `sso` — IdP login for the control plane (`auth:oidc`) | Password login and bootstrap users |
+| `custom-roles` — authoring your own `Role` (`owner: {kind: user}`) | The built-in roles only |
 
-`custom-roles`, `scim`, `orgs` and `audit-export` are reserved names that a
-license may already carry; the features themselves arrive in later
-releases.
+`scim`, `orgs` and `audit-export` are reserved names that a license may
+already carry; the features themselves arrive in later releases.
 
 A gated feature never fails quietly. Enabling one without a license is
 refused with a `license_required` error, and nothing else about the

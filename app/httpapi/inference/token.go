@@ -50,6 +50,25 @@ func (v *TokenVerifier) SetKey(pub ed25519.PublicKey) {
 	v.keys.Store(next)
 }
 
+// SetKeys installs the current key alongside the one rotation replaced, so
+// a pod that did not perform the rotation still verifies tokens minted
+// before it. A nil current key disables tokens and drops both.
+func (v *TokenVerifier) SetKeys(current, previous ed25519.PublicKey) {
+	if len(previous) == 0 {
+		v.SetKey(current)
+		return
+	}
+	defer v.cache.clear()
+	if len(current) == 0 {
+		v.keys.Store(nil)
+		return
+	}
+	v.keys.Store(&verifyKeys{
+		current: current, currentKID: crypto.KeyID(current),
+		previous: previous, previousKID: crypto.KeyID(previous),
+	})
+}
+
 // SetCacheSize bounds the verified-claims cache. 0 turns it off.
 func (v *TokenVerifier) SetCacheSize(n int) {
 	if v == nil {

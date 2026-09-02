@@ -108,7 +108,7 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 		return nil // personal row: its owner holds every verb on it
 	}
 	if (verb == "get" || verb == "list") && catalogKinds[kind] &&
-		(res.Owner == nil || isCatalogOwner(res.Owner.Kind)) {
+		(res.Owner == nil || isCatalogOwner(*res.Owner)) {
 		return nil
 	}
 	// A system-owned Role is a shared rule set, not tenant data: creating a
@@ -174,8 +174,17 @@ func IsAdmin(ctx context.Context) bool {
 	return a != nil && a.IsAuthenticated() && adminActor(a)
 }
 
-func isCatalogOwner(k meta.OwnerKind) bool {
-	return k == meta.OwnerSystem || k == meta.OwnerProvider || k == meta.OwnerHost
+func isCatalogOwner(o meta.Owner) bool {
+	switch o.Kind {
+	case meta.OwnerSystem, meta.OwnerProvider, meta.OwnerHost:
+		return true
+	case meta.OwnerUser:
+		// A user owner with no id names nobody: catalog rows shipped before
+		// owners carried one read like the catalog rows they are, not as a
+		// personal row hidden from everyone.
+		return o.ID == ""
+	}
+	return false
 }
 
 // splitAction cuts "<plural>.<verb>" into its two halves. Sub-resource

@@ -13,6 +13,7 @@ package catalog
 
 import (
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/wyolet/relay/app/binding"
@@ -40,6 +41,9 @@ import (
 // construction and never written after — read accessors are safe to call
 // from any goroutine.
 type Snapshot struct {
+	// gen names this view; see nextSnapshotGen.
+	gen uint64
+
 	providersByID   map[string]*provider.Provider
 	providersByName map[string]*provider.Provider
 
@@ -535,6 +539,35 @@ func (s *Snapshot) KeyByHash(hash string) (k *key.Key, matchedPrevious bool) {
 		return nil, false
 	}
 	return k, k.Spec.KeyHash != hash
+}
+
+// snapshotGen numbers every Snapshot ever built or cloned, so a consumer can
+// tell one apart from its successor without holding a pointer to it (and
+// keeping the whole catalog alive). Starts at 1: the zero value names the
+// pre-boot empty snapshot.
+var snapshotGen atomic.Uint64
+
+func nextSnapshotGen() uint64 { return snapshotGen.Add(1) }
+
+// Generation identifies this snapshot. Two snapshots are the same view if
+// and only if their generations match.
+func (s *Snapshot) Generation() uint64 { return s.gen }
+
+// KeyHashesForUser returns the hashes every Key of this user authenticates
+// under, the pre-rotation one included. Read from the principal index, so it
+// costs the user's own keys rather than a walk of the deployment's.
+func (s *Snapshot) KeyHashesForUser(userID string) []string {
+	keys := s.keysByPrincipal[principalKey(key.PrincipalUser, userID)]
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k.Spec.KeyHash != "" {
+			out = append(out, k.Spec.KeyHash)
+		}
+		if k.Spec.PreviousKeyHash != "" {
+			out = append(out, k.Spec.PreviousKeyHash)
+		}
+	}
+	return out
 }
 
 // SubjectsForKey returns the precomputed subjects the key's principal acts

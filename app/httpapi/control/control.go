@@ -7,7 +7,9 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -209,7 +211,24 @@ func Mount(r chi.Router, d Deps) huma.API {
 		s.Description = "Measurement period, in whole seconds."
 	})
 
+	// The control API is mounted in front of the SPA's NotFound fallback,
+	// which answers HTML. A client calling a renamed or removed endpoint
+	// must get a 404 it can parse, not the admin UI's index page.
+	r.NotFound(writeNotFoundJSON)
+
 	return api
+}
+
+func writeNotFoundJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(httpapi.OpenAIError{
+		Err: httpapi.OpenAIErrorInner{
+			Type:    "invalid_request_error",
+			Code:    "not_found",
+			Message: "no such endpoint: " + r.Method + " " + r.URL.Path,
+		},
+	})
 }
 
 // meterEnum projects the domain's closed meter set to []any for huma.Schema.Enum.

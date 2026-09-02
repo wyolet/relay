@@ -10,6 +10,7 @@ package seed
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -27,6 +28,20 @@ type Options struct {
 	// them to the catalog version and clearing their dirty flag. Default false:
 	// dirty rows are skipped so re-seeding never clobbers operator changes.
 	ClearDirty bool
+
+	// CatalogKindsOnly refuses the tenancy kinds. The boot paths set it: a
+	// catalog tree is fetched by tag from a public repository and must not be
+	// able to mint a Key, a ServiceAccount or a RoleBinding on the way in.
+	// Those kinds reach Postgres through `relay seed --apply`, `relay apply`
+	// or the control API, all of which have an actor to authorize.
+	CatalogKindsOnly bool
+}
+
+// tenancyKinds are the kinds a catalog tree may not carry: they name
+// principals, credentials or grants rather than shared catalog templates.
+var tenancyKinds = map[string]bool{
+	"Team": true, "Project": true, "Group": true, "ServiceAccount": true,
+	"Key": true, "Role": true, "RoleBinding": true, "PolicyBinding": true,
 }
 
 // Result summarises a seed run. Per-kind counts are the rows the run
@@ -68,12 +83,22 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	// Settings share the config tree but have their own loader
 	// (settings.SeedDir); apply refuses them rather than dropping them.
 	catalogDocs := docs[:0]
+	var refused []string
 	for _, d := range docs {
-		if d.Setting == nil {
-			catalogDocs = append(catalogDocs, d)
+		if d.Setting != nil {
+			continue
 		}
+		if opts.CatalogKindsOnly && tenancyKinds[d.Kind()] {
+			refused = append(refused, d.Kind()+"/"+docName(d))
+			continue
+		}
+		catalogDocs = append(catalogDocs, d)
 	}
 	docs = catalogDocs
+	if len(refused) > 0 {
+		slog.Warn("seed: refusing tenancy documents from a catalog tree",
+			"dir", opts.YAMLDir, "count", len(refused), "documents", refused)
+	}
 
 	plan, err := apply.Plan(ctx, docs, apply.Options{
 		Stores: apply.NewStores(opts.Pool, opts.MasterKey),
@@ -85,7 +110,23 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if _, err := apply.Execute(ctx, plan, nil); err != nil {
 		return nil, fmt.Errorf("seed: %w", err)
 	}
+	// A conflict is a row someone wrote between plan and write. The seed
+	// leaves it alone, which is silent unless it is said out loud.
+	for _, e := range plan.Entries {
+		if e.Action == apply.ActionConflict {
+			slog.Warn("seed: row changed during the run and was left alone",
+				"kind", e.Kind, "name", e.Name)
+		}
+	}
 	return tally(plan), nil
+}
+
+// docName is the metadata name of a document, for logs.
+func docName(d manifest.Document) string {
+	if m := d.Meta(); m != nil {
+		return m.Name
+	}
+	return ""
 }
 
 func tally(p *apply.Result) *Result {

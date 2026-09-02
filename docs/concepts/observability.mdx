@@ -24,14 +24,27 @@ Read it back through the control plane:
 | `GET /usage/summary` | Aggregated totals (tokens, counts) over a window. |
 | `GET /usage/timeseries` | Bucketed usage over time. |
 
-The usage endpoints filter by policy, model, status, and time window — for
-example, status `>= 400` for errors only, or a model id over the last day:
+All three endpoints share the same filter parameters: `since` (default
+`1h`) or an absolute `from`/`to` window; `status_min`/`status_max` or the
+`status_class` shorthand (`2xx`/`4xx`/`5xx`); `model_id`, `host_id`,
+`policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`
+(repeatable, match-any); `model`, `host`, `policy`, `provider`,
+`requested_model` (slug/string match-any); `source` (`pipeline` / `proxy`
+/ `ws` / `batch`); `finish_reason`, `error_kind`; `streamed` and `error`
+(`true`/`false`); `attempts_min`, `duration_ms_min`/`max`,
+`ttft_ms_min`/`max`; `tag` (`key:value`, repeatable); `q` (free-text
+substring); and `request_id` / `relay_key_hash` for a single event.
 
 Every event also carries who made the request: `project_id` / `team_id` /
 `principal_id` (with the `project`, `team`, `principal` slugs as of the
 request) and the credential that authenticated it (`credential_kind`,
-`credential_id`). Those are filter parameters and `group_by` dimensions too,
-so per-project or per-service-account spend is one query:
+`credential_id`). `summary` and `timeseries` take a `group_by` on top of
+the filters — `source` (default) | `model` | `host` | `policy` |
+`provider` | `project` | `team` | `principal` (event-time slugs), or
+`model_id` | `host_id` | `policy_id` | `project_id` | `team_id` |
+`principal_id` | `credential_id` | `relay_key_hash` | `host_key_id` |
+`finish_reason` | `error_kind`, or `tags.<key>` to group by one caller
+tag's value — so per-project or per-service-account spend is one query:
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
@@ -40,7 +53,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
-  "http://localhost:8081/api/usage/summary?modelId=<id>&since=24h"
+  "http://localhost:8081/api/usage/summary?model_id=<id>&since=24h"
 ```
 
 ### Where usage is stored

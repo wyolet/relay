@@ -84,6 +84,19 @@ func runApply(args []string) error {
 	}
 	printPlan(os.Stdout, resp)
 
+	// A conflict is a row that changed between plan and write and was
+	// skipped: the tree is not applied, so the run must not report success.
+	conflicts := 0
+	for _, e := range resp.Plan {
+		if e.Action == apply.ActionConflict {
+			conflicts++
+		}
+	}
+	if conflicts > 0 {
+		return &exitError{code: exitDrift, err: fmt.Errorf(
+			"apply: %d row(s) changed between plan and write and were skipped; re-run to converge",
+			conflicts)}
+	}
 	if !*force {
 		for _, e := range resp.Plan {
 			if e.Action == apply.ActionSkipDirty {

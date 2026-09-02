@@ -43,8 +43,8 @@ DELETE /api/{plural}/by-id/{id}      delete
 ```
 
 Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
-`policies`, `pricings`, `keys`, `teams`, `projects`, `service-accounts`,
-`groups`, `roles`, `role-bindings`, `policy-bindings`.
+`policies`, `pricings`, `host-bindings`, `keys`, `teams`, `projects`,
+`service-accounts`, `groups`, `roles`, `role-bindings`, `policy-bindings`.
 
 Roles, role bindings, and policy bindings are stored, validated, and
 served like every other kind. With `RELAY_AUTHZ=rbac` they are what
@@ -132,6 +132,70 @@ Response:
 The `plaintext` field is returned exactly once. Persist it on receipt — it
 cannot be retrieved later, only rotated.
 </Warning>
+
+## Teams, projects, and RBAC
+
+Beyond the CRUD surface above, these kinds have their own sub-resources:
+
+```
+POST   /api/models/by-id/{id}/overlay        set an overlay on a catalog model
+GET    /api/models/by-id/{id}/overlay        read it
+DELETE /api/models/by-id/{id}/overlay        remove it
+GET    /api/{plural}/by-id/{id}/references   reverse-reference lookup (blast radius before a delete)
+```
+
+## Tokens
+
+A **token** is a relay-signed, short-lived credential for `/v1/*`, scoped
+to one project and minted for the session holder — see
+[Authentication](/concepts/auth#inference-tokens).
+
+```
+POST   /api/auth/token               mint a token for a project (session auth only)
+DELETE /api/auth/token/{jti}         revoke one token by id (admin)
+POST   /api/auth/token/revoke        revoke the presented token (self-service)
+POST   /api/auth/token/revoke-all    bump the caller's token_version, revoking every token they hold
+POST   /api/auth/token/keys/rotate   rotate the signing key
+POST   /api/users/by-id/{id}/revoke-tokens   admin: bump another user's token_version
+```
+
+```bash
+curl -X POST http://localhost:8081/api/auth/token \
+  -H "Authorization: Bearer <session-or-bearer-with-tokens.mint>" \
+  -H "Content-Type: application/json" \
+  -d '{"project": "my-project", "ttl": "1h"}'
+```
+
+## Users and audit
+
+```
+GET  /api/users            list users (id, username, email, roles, disabled — never a password hash)
+GET  /api/audit            the admin audit log; filter by actor_id, actor_name, action,
+                            resource_kind, resource_id, scope, status, from, to
+```
+
+See [Audit Log](/concepts/audit) for the audit event shape and retention.
+
+## GitOps
+
+```
+POST /api/apply    plan and (unless dryRun) write a manifest bundle
+GET  /api/export    render the tenant-owned rows as a manifest bundle
+```
+
+See [GitOps](/concepts/gitops) for the plan/apply/prune/export model and
+the CLI wrapper.
+
+## Usage
+
+```
+GET /api/usage/events        raw usage events, filterable
+GET /api/usage/summary       aggregated totals over a window, optional group_by
+GET /api/usage/timeseries    bucketed usage over time, optional group_by
+```
+
+See [Usage & Logging](/concepts/observability) for the filter and
+`group_by` vocabulary.
 
 ## Operational endpoints
 

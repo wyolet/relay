@@ -2637,20 +2637,22 @@ UPDATE relay_keys
        metadata          = $4,
        spec              = $5,
        updated_at        = NOW()
- WHERE id = $1 AND key_hash = $6
+ WHERE id = $1 AND key_hash = $6 AND updated_at = $7
 `
 
 type RotateRelayKeyParams struct {
-	ID              string      `db:"id" json:"id"`
-	KeyHash         string      `db:"key_hash" json:"key_hash"`
-	PreviousKeyHash pgtype.Text `db:"previous_key_hash" json:"previous_key_hash"`
-	Metadata        []byte      `db:"metadata" json:"metadata"`
-	Spec            []byte      `db:"spec" json:"spec"`
-	KeyHash_2       string      `db:"key_hash_2" json:"key_hash_2"`
+	ID              string             `db:"id" json:"id"`
+	KeyHash         string             `db:"key_hash" json:"key_hash"`
+	PreviousKeyHash pgtype.Text        `db:"previous_key_hash" json:"previous_key_hash"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	KeyHash_2       string             `db:"key_hash_2" json:"key_hash_2"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
-// Conditional on the hash the caller read, so two concurrent rotations of
-// the same key cannot both win and lose one of the new plaintexts.
+// Conditional on the hash AND the row version the caller read, so neither a
+// concurrent rotation nor a concurrent update is overwritten by a rotation
+// computed against the older row.
 func (q *Queries) RotateRelayKey(ctx context.Context, arg RotateRelayKeyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, rotateRelayKey,
 		arg.ID,
@@ -2659,6 +2661,7 @@ func (q *Queries) RotateRelayKey(ctx context.Context, arg RotateRelayKeyParams) 
 		arg.Metadata,
 		arg.Spec,
 		arg.KeyHash_2,
+		arg.UpdatedAt,
 	)
 	if err != nil {
 		return 0, err

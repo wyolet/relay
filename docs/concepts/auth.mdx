@@ -27,6 +27,35 @@ can scope it, rate-limit it, and revoke it on its own.
 Each relay key points at a **policy**, which decides what it can do — see
 [the mental model](/introduction#the-mental-model).
 
+## Inference tokens
+
+`/v1/*` also accepts a relay-signed **token** in the same
+`Authorization: Bearer` header, minted for a specific project by a session
+holder with `tokens.mint` (`POST /api/auth/token`). Relay tells a key from a
+token by shape — a token looks like a JWT (`ey…`, two `.` separators); a key
+never does — so the same header works for either.
+
+A token names the user it was minted for and the project it's scoped to; it
+carries no secret beyond its own signature, so leaking one exposes only what
+that user's bindings already grant inside that project. See
+[the GitOps token example](/concepts/gitops#minting-a-token) for how to mint
+one.
+
+### Revoking a token
+
+Three ways to invalidate a token, from narrowest to widest:
+
+- `POST /api/auth/token/revoke` — the caller revokes the token it just
+  presented (self-service, no session needed).
+- `DELETE /api/auth/token/{jti}` — an admin revokes one token by its id.
+- `POST /api/auth/token/revoke-all` — the caller bumps their own
+  `token_version`, invalidating every token they hold at once. An admin can
+  do the same for another user with
+  `POST /api/users/by-id/{id}/revoke-tokens`.
+
+A revoked or expired token fails with `401` and `token_revoked` /
+`token expired`.
+
 ## Host keys (your provider credentials)
 
 A **host key** is a real upstream credential (your OpenAI key, your Anthropic
@@ -94,6 +123,13 @@ log a deprecation warning.
 The admin bearer (`RELAY_ADMIN_TOKEN`) and any user carrying the `admin` role
 bypass the check in both modes — that is the break-glass path, and it is why a
 fresh `rbac` deployment is never locked out.
+
+<Note>
+`RELAY_MULTI_USER` is deprecated. If `RELAY_AUTHZ` is unset, a truthy
+`RELAY_MULTI_USER` is still read as `RELAY_AUTHZ=rbac` (with a startup
+warning) so an existing multi-user deployment doesn't silently drop to
+`single`. Set `RELAY_AUTHZ` explicitly and drop `RELAY_MULTI_USER`.
+</Note>
 
 ### The model
 

@@ -297,6 +297,17 @@ func (l *Listener) applyDrained(ctx context.Context) {
 			slog.Error("catalog notify: bulk reload failed", "events", len(events), "err", err)
 			return
 		}
+		// Reload rebuilds catalog rows only — the settings cache is loaded
+		// separately, so its events have to be applied even here or a
+		// section change inside a bulk write never lands.
+		for _, e := range events {
+			if e.Kind != "settings" {
+				continue
+			}
+			if err := l.applyEvent(ctx, e); err != nil {
+				slog.Error("catalog notify: apply error", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			}
+		}
 		slog.Info("catalog notify: bulk change reloaded", "events", len(events))
 		return
 	}

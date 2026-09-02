@@ -47,7 +47,7 @@ func TestSchemasEndpointServesEveryKind(t *testing.T) {
 	// The kinds the loader can parse and the kinds we publish are the same
 	// set; a new DTO without a regenerated schema fails here.
 	want := []string{
-		"Group", "Host", "HostKey", "Key", "Model", "Overlay", "Policy",
+		"Group", "Host", "HostBinding", "HostKey", "Key", "Model", "Overlay", "Policy",
 		"PolicyBinding", "Pricing", "Project", "Provider", "RateLimit",
 		"Role", "RoleBinding", "ServiceAccount", "Team",
 	}

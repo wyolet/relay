@@ -55,6 +55,11 @@ type Emitter struct {
 	stop    chan struct{}
 	stopped atomic.Bool
 	dropped atomic.Uint64
+
+	// pruning keeps the ticker from starting a second prune over the same
+	// rows while the first is still running: a prune of a large table takes
+	// longer than the interval.
+	pruning atomic.Bool
 	// retentionDays is read live so a settings change lands on the next
 	// prune without a restart. 0 disables pruning.
 	retentionDays atomic.Int64
@@ -196,6 +201,10 @@ func (e *Emitter) Prune() {
 	if days <= 0 || e.sink == nil {
 		return
 	}
+	if !e.pruning.CompareAndSwap(false, true) {
+		return
+	}
+	defer e.pruning.Store(false)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	before := time.Now().UTC().AddDate(0, 0, -int(days))
