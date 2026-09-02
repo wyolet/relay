@@ -89,7 +89,16 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     provider                 LowCardinality(String),
     cost_nanos               Int64 DEFAULT -1,
     cost_breakdown           Map(LowCardinality(String), Int64) CODEC(ZSTD(1)),
-    pricing                  LowCardinality(String)
+    pricing                  LowCardinality(String),
+    project_id               String,
+    project                  LowCardinality(String),
+    team_id                  String,
+    team                     LowCardinality(String),
+    principal_kind           LowCardinality(String),
+    principal_id             String,
+    principal                LowCardinality(String),
+    credential_kind          LowCardinality(String),
+    credential_id            String
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)
@@ -105,6 +114,9 @@ var expectedColumns = []string{
 	"host_id", "host_key_id", "tokens", "extras", "tags",
 	"model", "host", "policy",
 	"provider", "cost_nanos", "cost_breakdown", "pricing",
+	"project_id", "project", "team_id", "team",
+	"principal_kind", "principal_id", "principal",
+	"credential_kind", "credential_id",
 }
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -120,6 +132,18 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_nanos Int64 DEFAULT -1`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_breakdown Map(LowCardinality(String), Int64)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pricing LowCardinality(String)`,
+	// Attribution columns append at the end so a table upgraded by these
+	// ALTERs keeps the same column order as a freshly created one — the
+	// insert batch is positional.
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS project_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS project LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS team_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS team LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal_kind LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_kind LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_id String`,
 }
 
 // ensureSchema creates the table if absent, then verifies its columns match
@@ -348,6 +372,15 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			costNanos,
 			costBreakdown,
 			ev.Pricing,
+			ev.ProjectID,
+			ev.Project,
+			ev.TeamID,
+			ev.Team,
+			ev.PrincipalKind,
+			ev.PrincipalID,
+			ev.Principal,
+			ev.CredentialKind,
+			ev.CredentialID,
 		)
 		if err != nil {
 			return fmt.Errorf("append row: %w", err)
@@ -370,7 +403,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -426,6 +459,15 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&costNanos,
 			&costBkdn,
 			&ev.Pricing,
+			&ev.ProjectID,
+			&ev.Project,
+			&ev.TeamID,
+			&ev.Team,
+			&ev.PrincipalKind,
+			&ev.PrincipalID,
+			&ev.Principal,
+			&ev.CredentialKind,
+			&ev.CredentialID,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -766,6 +808,9 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 	}
 	in("relay_key_hash", q.RelayKeyHash)
 	in("policy_id", q.PolicyID)
+	in("project_id", q.ProjectID)
+	in("team_id", q.TeamID)
+	in("principal_id", q.PrincipalID)
 	in("model_id", q.ModelID)
 	in("host_id", q.HostID)
 	in("source", q.Source)

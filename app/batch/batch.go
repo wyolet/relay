@@ -35,6 +35,21 @@ type Batch struct {
 	TotalItems   int
 	CreatedAt    time.Time
 	CompletedAt  *time.Time
+	Attribution
+}
+
+// Attribution is the principal and tenancy that authorised a submission —
+// fixed at submit, not whatever the credential resolves to when an item
+// finally runs. Ids only; slugs come from the snapshot at emit, as the policy
+// name already does. It rides each item's job metadata so execution needs no
+// extra read.
+type Attribution struct {
+	ProjectID      string
+	TeamID         string
+	PrincipalKind  string
+	PrincipalID    string
+	CredentialKind string
+	CredentialID   string
 }
 
 // Item maps one ordinal within a batch to the jobq job that runs it.

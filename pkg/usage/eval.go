@@ -301,6 +301,15 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if !inList(q.PolicyID, ev.PolicyID) {
 		return false
 	}
+	if !inList(q.ProjectID, ev.ProjectID) {
+		return false
+	}
+	if !inList(q.TeamID, ev.TeamID) {
+		return false
+	}
+	if !inList(q.PrincipalID, ev.PrincipalID) {
+		return false
+	}
 	if !inList(q.ModelID, ev.ModelID) {
 		return false
 	}
@@ -430,6 +439,14 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.RelayKeyHash
 	case "policy_id":
 		return ev.PolicyID
+	case "project_id":
+		return ev.ProjectID
+	case "team_id":
+		return ev.TeamID
+	case "principal_id":
+		return ev.PrincipalID
+	case "credential_id":
+		return ev.CredentialID
 	case "model_id":
 		return ev.ModelID
 	case "host_id":
@@ -448,6 +465,12 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.Policy
 	case "provider":
 		return ev.Provider
+	case "project":
+		return ev.Project
+	case "team":
+		return ev.Team
+	case "principal":
+		return ev.Principal
 	default: // "source"
 		return ev.Source
 	}

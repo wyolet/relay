@@ -358,15 +358,18 @@ DELETE FROM settings WHERE section = $1;
 -- ===== batches =====
 
 -- name: CreateBatch :exec
-INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items,
+                     project_id, team_id, principal_kind, principal_id, credential_kind, credential_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
 
 -- name: GetBatch :one
-SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
+SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
+       project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
 FROM batches WHERE id = $1;
 
 -- name: ListBatchesByRelayKey :many
-SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
+SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
+       project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
 FROM batches WHERE relay_key_hash = $1 ORDER BY created_at DESC;
 
 -- name: SetBatchStatus :exec

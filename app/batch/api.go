@@ -55,7 +55,8 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	for i, raw := range req.Requests {
 		items[i] = raw
 	}
-	id, err := s.Submit(r.Context(), rk.Spec.KeyHash, rk.Spec.PolicyID, req.Shape, items)
+	id, err := s.Submit(r.Context(), inference.PrincipalFrom(r.Context()),
+		rk.Spec.KeyHash, rk.Spec.PolicyID, req.Shape, items)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

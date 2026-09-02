@@ -27,6 +27,17 @@ Read it back through the control plane:
 The usage endpoints filter by policy, model, status, and time window — for
 example, status `>= 400` for errors only, or a model id over the last day:
 
+Every event also carries who made the request: `project_id` / `team_id` /
+`principal_id` (with the `project`, `team`, `principal` slugs as of the
+request) and the credential that authenticated it (`credential_kind`,
+`credential_id`). Those are filter parameters and `group_by` dimensions too,
+so per-project or per-service-account spend is one query:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/usage/summary?group_by=project&since=7d"
+```
+
 ```bash
 curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/usage/summary?modelId=<id>&since=24h"
