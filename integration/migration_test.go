@@ -175,8 +175,6 @@ func insertLegacyKey(t *testing.T, dsn, name string) {
 // two keys whose names share a long prefix must not land on one principal,
 // which would let either key spend the other's grants.
 func TestMigrationGivesLongLegacyKeyNamesDistinctServiceAccounts(t *testing.T) {
-	t.Skip("the generated account name disambiguates on the first 8 characters of the key id, which are identical for every UUIDv7 minted in the same ~65s window")
-
 	dsn := scratchDB(t, "relay_mig_names")
 	m := scratchMigrator(t, dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
