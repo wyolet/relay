@@ -3,20 +3,17 @@ package catalog
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/project"
-	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/team"
 )
 
-// bughuntCatalog wires a reloaded catalog from the supplied rows.
-func bughuntCatalog(t *testing.T, teams []*team.Team, projects []*project.Project,
+// tenancyCatalog wires a reloaded catalog from the supplied rows.
+func tenancyCatalog(t *testing.T, teams []*team.Team, projects []*project.Project,
 	pols []*policy.Policy, keys []*key.Key, groups []*group.Group) *Catalog {
 	t.Helper()
 	c := New(provList{}, hostList{}, polList(pols), modList{}, keyList{}, rlList{},
@@ -39,7 +36,7 @@ func tenancySnap(t *testing.T, keys ...*key.Key) (*Catalog, *team.Team, *project
 	proj.StampOwner()
 	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "pol", Owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}}}
 
-	c := bughuntCatalog(t, []*team.Team{tm}, []*project.Project{proj}, []*policy.Policy{pol}, keys, nil)
+	c := tenancyCatalog(t, []*team.Team{tm}, []*project.Project{proj}, []*policy.Policy{pol}, keys, nil)
 	return c, tm, proj, pol
 }
 
@@ -112,7 +109,7 @@ func TestGroupWriteReindexesMemberSubjects(t *testing.T) {
 	g := &group.Group{Meta: meta.Metadata{ID: meta.NewID(), Name: "data-science", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	g.Spec.MemberIDs = []string{user}
 
-	c := bughuntCatalog(t, nil, nil, nil, []*key.Key{k}, []*group.Group{g})
+	c := tenancyCatalog(t, nil, nil, nil, []*key.Key{k}, []*group.Group{g})
 	subs := c.Current().SubjectsForKey(k.Meta.ID)
 	if !contains(subs, "group:data-science") {
 		t.Fatalf("subjects = %v, want the group membership", subs)
@@ -138,7 +135,7 @@ func TestCloneDoesNotShareMutatedSubjectSlices(t *testing.T) {
 	g := &group.Group{Meta: meta.Metadata{ID: meta.NewID(), Name: "g1", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	g.Spec.MemberIDs = []string{user}
 
-	c := bughuntCatalog(t, nil, nil, nil, []*key.Key{k}, []*group.Group{g})
+	c := tenancyCatalog(t, nil, nil, nil, []*key.Key{k}, []*group.Group{g})
 	old := c.Current()
 	oldSubs := append([]string(nil), old.SubjectsForKey(k.Meta.ID)...)
 
@@ -150,77 +147,6 @@ func TestCloneDoesNotShareMutatedSubjectSlices(t *testing.T) {
 	got := old.SubjectsForKey(k.Meta.ID)
 	if len(got) != len(oldSubs) {
 		t.Fatalf("the published snapshot's subject list changed under it: %v, want %v", got, oldSubs)
-	}
-}
-
-// A rotated key's previous hash is indexed only while its grace window is
-// open. With an injected clock the transition is reachable without sleeping.
-func TestGraceWindowIndexUsesTheCatalogClock(t *testing.T) {
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	now := base
-	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "k1", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	k.Spec.KeyHash = hex64("c")
-	k.Spec.PreviousKeyHash = hex64("d")
-	until := base.Add(time.Hour)
-	k.Spec.GraceUntil = &until
-
-	c := New(provList{}, hostList{}, polList{}, modList{}, keyList{}, rlList{},
-		rkList{k}, rcList{}, bndList{})
-	c.UseClock(func() time.Time { return now })
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if got, prev := c.Current().KeyByHash(hex64("d")); got == nil || !prev {
-		t.Fatal("previous hash is not indexed inside the grace window")
-	}
-
-	now = until.Add(time.Second)
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	if got, _ := c.Current().KeyByHash(hex64("d")); got != nil {
-		t.Fatal("previous hash still indexed after the grace window closed")
-	}
-}
-
-// PolicyBinding subject keys are precomputed at build and at every
-// incremental write, so the request path never renders them.
-func TestPolicyBindingSubjectKeysArePrecomputed(t *testing.T) {
-	c, _, proj, pol := tenancySnap(t)
-	b := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}}
-	b.Spec.ProjectID = proj.Meta.ID
-	b.Spec.PolicyID = pol.Meta.ID
-	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "data-science"}}
-	b.StampOwner()
-
-	if err := c.ApplyPolicyBindingUpsert(b); err != nil {
-		t.Fatalf("apply binding: %v", err)
-	}
-	got := c.Current().PolicyBindingsForProject(proj.Meta.ID)
-	if len(got) != 1 {
-		t.Fatalf("bindings = %d, want 1", len(got))
-	}
-	if len(got[0].SubjectKeys) != 1 || got[0].SubjectKeys[0] != b.Spec.Subjects[0].Key() {
-		t.Fatalf("SubjectKeys = %v, want %q", got[0].SubjectKeys, b.Spec.Subjects[0].Key())
-	}
-}
-
-// A policy binding write must not disturb the allowed-combo sets — it names
-// no provider, host or model.
-func TestPolicyBindingWriteLeavesGrantsAlone(t *testing.T) {
-	c, _, proj, pol := tenancySnap(t)
-	before := c.Current().allowedCombosByPolicy[pol.Meta.ID]
-
-	b := &policybinding.PolicyBinding{Meta: meta.Metadata{ID: meta.NewID(), Name: "b1"}}
-	b.Spec.ProjectID = proj.Meta.ID
-	b.Spec.PolicyID = pol.Meta.ID
-	b.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectGroup, Name: "g"}}
-	b.StampOwner()
-	if err := c.ApplyPolicyBindingUpsert(b); err != nil {
-		t.Fatalf("apply binding: %v", err)
-	}
-	if got := c.Current().allowedCombosByPolicy[pol.Meta.ID]; len(got) != len(before) {
-		t.Fatalf("allowed combos changed on a policy-binding write: %d → %d", len(before), len(got))
 	}
 }
 

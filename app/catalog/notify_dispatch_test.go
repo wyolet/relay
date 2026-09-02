@@ -12,7 +12,7 @@ import (
 // validKinds without a case in applyEvent would otherwise make its NOTIFY a
 // silent no-op — the failure mode is invisible in production.
 func TestApplyEventHandlesEveryValidKind(t *testing.T) {
-	c := bughuntCatalog(t, nil, nil, nil, nil, nil)
+	c := tenancyCatalog(t, nil, nil, nil, nil, nil)
 	l := &Listener{cat: c, deb: newDebouncer(0)}
 
 	for kind := range validKinds {
@@ -31,7 +31,7 @@ func TestApplyEventHandlesEveryValidKind(t *testing.T) {
 // snapshot clone per row.
 func TestApplyDrainedReloadsPastTheBatchThreshold(t *testing.T) {
 	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	c := bughuntCatalog(t, []*team.Team{tm}, nil, nil, nil, nil)
+	c := tenancyCatalog(t, []*team.Team{tm}, nil, nil, nil, nil)
 	l := &Listener{cat: c, deb: newDebouncer(0)}
 
 	for i := 0; i <= reloadBatchThreshold; i++ {
@@ -48,7 +48,7 @@ func TestApplyDrainedReloadsPastTheBatchThreshold(t *testing.T) {
 
 func TestApplyDrainedStaysIncrementalBelowTheThreshold(t *testing.T) {
 	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	c := bughuntCatalog(t, []*team.Team{tm}, nil, nil, nil, nil)
+	c := tenancyCatalog(t, []*team.Team{tm}, nil, nil, nil, nil)
 	l := &Listener{cat: c, deb: newDebouncer(0)}
 
 	l.deb.push(notifyEvent{Kind: "team", Op: "delete", ID: tm.Meta.ID})

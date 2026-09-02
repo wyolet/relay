@@ -13,7 +13,7 @@ import (
 // TestApplyDrainedAppliesSettingsInABulkBurst pins that a section change
 // riding in such a burst still reaches the cache.
 func TestApplyDrainedAppliesSettingsInABulkBurst(t *testing.T) {
-	c := bughuntCatalog(t, nil, nil, nil, nil, nil)
+	c := tenancyCatalog(t, nil, nil, nil, nil, nil)
 	rows := map[string]*settings.Row{
 		settings.SectionParsing: {Section: settings.SectionParsing, Value: &settings.Parsing{RichParsing: false}},
 	}
