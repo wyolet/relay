@@ -32,6 +32,9 @@ import (
 // mint, which is the posture of a deployment with no master key.
 type TokenSigner struct {
 	key atomic.Pointer[signingKey]
+	// prev is the verification half of the key a rotation retired: minting
+	// never uses it, but a token presented for revocation may carry it.
+	prev atomic.Pointer[ed25519.PublicKey]
 }
 
 // signingKey pairs the private half with the `kid` the tokens it signs
@@ -44,6 +47,7 @@ type signingKey struct {
 // SetSeed installs the signing key from its 32-byte seed. A nil seed
 // disables minting.
 func (s *TokenSigner) SetSeed(seed []byte) {
+	s.prev.Store(nil)
 	if len(seed) != ed25519.SeedSize {
 		s.key.Store(nil)
 		return
@@ -59,6 +63,28 @@ func (s *TokenSigner) PublicKey() ed25519.PublicKey {
 		return nil
 	}
 	return k.priv.Public().(ed25519.PublicKey)
+}
+
+// SetPreviousPublicKey records the key a rotation retired. Call it after
+// SetSeed, which clears it.
+func (s *TokenSigner) SetPreviousPublicKey(pub ed25519.PublicKey) {
+	if len(pub) == 0 {
+		s.prev.Store(nil)
+		return
+	}
+	s.prev.Store(&pub)
+}
+
+// verificationKeys are the keys a live token may have been signed with.
+func (s *TokenSigner) verificationKeys() []ed25519.PublicKey {
+	var out []ed25519.PublicKey
+	if pub := s.PublicKey(); pub != nil {
+		out = append(out, pub)
+	}
+	if prev := s.prev.Load(); prev != nil {
+		out = append(out, *prev)
+	}
+	return out
 }
 
 // ErrNoSigningKey means the deployment has no token signing key — tokens
@@ -159,7 +185,7 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 			"never stored — revoke it by jti or bump the user's token version.",
 		Tags:        []string{"auth"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 403, 404, 503},
+		Errors:      []int{400, 401, 403, 404, 429, 500, 503},
 	}, func(ctx context.Context, in *mintTokenInput) (*mintTokenOutput, error) {
 		return mintToken(ctx, td, in)
 	})
@@ -191,7 +217,7 @@ func registerTokens(api huma.API, d Deps, protect huma.Middlewares) {
 			"verifies itself, and its claims carry the project the denylist entry " +
 			"is written under.",
 		Tags:   []string{"auth"},
-		Errors: []int{400, 401, 503},
+		Errors: []int{400, 401, 500, 503},
 	}, func(ctx context.Context, in *revokeTokenInput) (*emptyOutput, error) {
 		return revokeTokenByValue(ctx, td, in.Body.Token)
 	})
@@ -457,11 +483,19 @@ func revokeTokenByValue(ctx context.Context, d tokenDeps, raw string) (*emptyOut
 	if d.signer == nil {
 		return nil, huma.Error503ServiceUnavailable("tokens_disabled: no token signing key is configured")
 	}
-	pub := d.signer.PublicKey()
-	if pub == nil {
+	keys := d.signer.verificationKeys()
+	if len(keys) == 0 {
 		return nil, huma.Error503ServiceUnavailable("tokens_disabled: no token signing key is configured")
 	}
-	claims, err := crypto.ParseToken(pub, raw)
+	// A token minted before a rotation must still be revocable, so the
+	// retired key is tried too.
+	var claims crypto.TokenClaims
+	var err error
+	for _, pub := range keys {
+		if claims, err = crypto.ParseToken(pub, raw); err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, huma.Error401Unauthorized("invalid token")
 	}

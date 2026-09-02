@@ -1,6 +1,7 @@
 package apply
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestApplyRejectsKindsItCannotWrite(t *testing.T) {
 		{Foreign: "User"},
 	} {
 		b := &builder{rows: &Rows{}, lic: license.Community}
-		err := b.run([]manifest.Document{doc})
+		err := b.run(context.Background(), []manifest.Document{doc})
 		var unsupported *UnsupportedKindError
 		if !errors.As(err, &unsupported) {
 			t.Fatalf("run(%s) = %v, want an UnsupportedKindError", doc.Kind(), err)

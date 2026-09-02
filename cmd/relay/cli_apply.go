@@ -84,6 +84,19 @@ func runApply(args []string) error {
 	}
 	printPlan(os.Stdout, resp)
 
+	// A forbidden row is one the caller may not read, so it was ignored:
+	// CI must learn the tree was only partly applied.
+	forbidden := 0
+	for _, e := range resp.Plan {
+		if e.Action == apply.ActionForbidden {
+			forbidden++
+		}
+	}
+	if forbidden > 0 {
+		return &exitError{code: exitDrift, err: fmt.Errorf(
+			"apply: %d row(s) are outside your scope and were ignored", forbidden)}
+	}
+
 	// A conflict is a row that changed between plan and write and was
 	// skipped: the tree is not applied, so the run must not report success.
 	conflicts := 0
@@ -143,7 +156,8 @@ func printPlan(w *os.File, resp applyResponse) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Kind, e.Name, e.Action, strings.Join(e.ChangedFields, ","))
 	}
 	tw.Flush()
-	fmt.Fprintf(w, "\ncreate=%d update=%d unchanged=%d skip-dirty=%d delete=%d applied=%v\n",
+	fmt.Fprintf(w, "\ncreate=%d update=%d unchanged=%d skip-dirty=%d delete=%d conflict=%d forbidden=%d applied=%v\n",
 		resp.Counts.Create, resp.Counts.Update, resp.Counts.Unchanged,
-		resp.Counts.SkipDirty, resp.Counts.Delete, resp.Applied)
+		resp.Counts.SkipDirty, resp.Counts.Delete, resp.Counts.Conflict,
+		resp.Counts.Forbidden, resp.Applied)
 }

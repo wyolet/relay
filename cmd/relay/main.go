@@ -71,6 +71,10 @@ import (
 	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
+// builtinRoleSeedLock is the advisory-lock id the built-in role seed
+// serializes on. Arbitrary but fixed: every pod must pick the same number.
+const builtinRoleSeedLock int64 = 0x52454C41595F5242
+
 func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
@@ -122,9 +126,13 @@ func main() {
 
 	bootCtx := context.Background()
 
+	if !cfg.MigrateOnBoot {
+		slog.Warn("storage: boot migrations disabled (RELAY_MIGRATE_ON_BOOT=off); the schema is left as found")
+	}
 	st, err := storagemod.Open(bootCtx, cfg.PGDSN,
 		storagemod.WithMaxConns(cfg.PGMaxConns),
-		storagemod.WithMinConns(cfg.PGMinConns))
+		storagemod.WithMinConns(cfg.PGMinConns),
+		storagemod.WithMigrateOnBoot(cfg.MigrateOnBoot))
 	if err != nil {
 		slog.Error("storage.Open failed", "err", err)
 		os.Exit(1)
@@ -239,7 +247,10 @@ func main() {
 
 	// Built-in roles: seed-if-absent, so an operator's edits survive and a
 	// fresh deployment always has the seven system rows to bind against.
-	if err := role.SeedBuiltins(bootCtx, stores.Role, slog.Default()); err != nil {
+	seedLock := func(ctx context.Context, fn func(context.Context) error) error {
+		return storagemod.WithAdvisoryLock(ctx, st.Pool(), builtinRoleSeedLock, fn)
+	}
+	if err := role.SeedBuiltins(bootCtx, stores.Role, slog.Default(), seedLock); err != nil {
 		slog.Error("built-in role seed failed", "err", err)
 		os.Exit(1)
 	}
@@ -670,11 +681,6 @@ func main() {
 		if len(cfg.ControlAllowOrigins) > 0 {
 			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 		}
-		// /config.json stays at the listener ROOT — the UI fetches it at boot,
-		// before it knows the /api prefix. It advertises controlApiUrl=/api so
-		// the SPA's API client targets /api/* while the SPA's own routes
-		// (/models, /policies, …) fall through to the embedded UI below.
-		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(runtimeConfig(cfg), cat))
 		// Control API under /api so its CRUD paths (/models, /policies, …) don't
 		// shadow the SPA's identically-named client-side routes on the shared
 		// control origin (a hard-reload of /models must serve the UI, not JSON).
@@ -713,6 +719,11 @@ func main() {
 			PublicURL:      cfg.PublicURL,
 			RuntimeConfig:  runtimeConfig(cfg),
 		}
+		// /config.json stays at the listener ROOT — the UI fetches it at boot,
+		// before it knows the /api prefix. It advertises controlApiUrl=/api so
+		// the SPA's API client targets /api/* while the SPA's own routes
+		// (/models, /policies, …) fall through to the embedded UI below.
+		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(ctrlDeps))
 		ctrlRouter.Route("/api", func(r chi.Router) {
 			control.Mount(r, ctrlDeps)
 		})
@@ -852,17 +863,25 @@ func loadDotEnv(path string) {
 	}
 }
 
-// catalogSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader by
-// reading the current snapshot per lookup, so each call sees the latest
-// post-NOTIFY state.
+// catalogSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader. It
+// serves the snapshot the request was authenticated against, so the rules a
+// request is metered by come from the same catalog view its policy did; off
+// the request path (batch, boot) there is none and the current one answers.
 type catalogSnapReader struct{ cat *appcatalog.Catalog }
 
-func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
+func (r catalogSnapReader) snap(ctx context.Context) *appcatalog.Snapshot {
+	if s := inference.SnapshotFrom(ctx); s != nil {
+		return s
+	}
+	return r.cat.Current()
 }
 
-func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
+func (r catalogSnapReader) Policy(ctx context.Context, id string) (*policy.Policy, bool) {
+	return r.snap(ctx).Policy(id)
+}
+
+func (r catalogSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
+	return r.snap(ctx).RateLimit(id)
 }
 
 // keyRefresher implements appsecret.Refresher. It re-resolves a host key's

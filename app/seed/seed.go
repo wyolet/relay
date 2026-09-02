@@ -80,21 +80,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seed: load yaml: %w", err)
 	}
-	// Settings share the config tree but have their own loader
-	// (settings.SeedDir); apply refuses them rather than dropping them.
-	catalogDocs := docs[:0]
-	var refused []string
-	for _, d := range docs {
-		if d.Setting != nil {
-			continue
-		}
-		if opts.CatalogKindsOnly && tenancyKinds[d.Kind()] {
-			refused = append(refused, d.Kind()+"/"+docName(d))
-			continue
-		}
-		catalogDocs = append(catalogDocs, d)
+	docs, settingDocs, refused := splitSeedDocs(docs, opts.CatalogKindsOnly)
+	// A Setting in a seeded tree is not applied here and would otherwise
+	// vanish without a trace, so each one is named.
+	for _, name := range settingDocs {
+		slog.Warn("seed: Setting document not applied; load it with RELAY_SETTINGS_DIR",
+			"dir", opts.YAMLDir, "document", name)
 	}
-	docs = catalogDocs
 	if len(refused) > 0 {
 		slog.Warn("seed: refusing tenancy documents from a catalog tree",
 			"dir", opts.YAMLDir, "count", len(refused), "documents", refused)
@@ -119,6 +111,26 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 	return tally(plan), nil
+}
+
+// splitSeedDocs separates what apply takes from what this path leaves out:
+// Settings, which have their own loader (settings.SeedDir), and — for a
+// catalog tree — the tenancy kinds. Both are returned as "Kind/name" for the
+// caller to log.
+func splitSeedDocs(docs []manifest.Document, catalogKindsOnly bool) (keep []manifest.Document, settings, tenancy []string) {
+	keep = docs[:0]
+	for _, d := range docs {
+		switch {
+		case d.Setting != nil:
+			// A Setting carries no Payload, so its name isn't in docName.
+			settings = append(settings, d.Kind()+"/"+d.Setting.Metadata.Name)
+		case catalogKindsOnly && tenancyKinds[d.Kind()]:
+			tenancy = append(tenancy, d.Kind()+"/"+docName(d))
+		default:
+			keep = append(keep, d)
+		}
+	}
+	return keep, settings, tenancy
 }
 
 // docName is the metadata name of a document, for logs.

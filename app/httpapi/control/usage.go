@@ -273,6 +273,21 @@ func effectiveWindow(q usagelog.EventQuery) time.Duration {
 	return q.Since
 }
 
+// requestedWindow is the span the query asked for, used when the result
+// carries none of its own: readers derive from/to from the events they
+// saw, so an empty result would otherwise report a zero window.
+func requestedWindow(q usagelog.EventQuery) (time.Time, time.Time) {
+	to := q.To
+	if to.IsZero() {
+		to = time.Now()
+	}
+	from := q.From
+	if from.IsZero() {
+		from = to.Add(-q.Since)
+	}
+	return from, to
+}
+
 // --- /usage/events ---
 
 type usageEventsInput struct {
@@ -396,8 +411,11 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, err
 		}
+		from, to := requestedWindow(base)
 		if !scopeEventQuery(&base, sc) {
-			return &usageSummaryOutput{Body: usagelog.SummaryResult{Rows: []usagelog.SummaryRow{}}}, nil
+			return &usageSummaryOutput{Body: usagelog.SummaryResult{
+				Rows: []usagelog.SummaryRow{}, From: from, To: to,
+			}}, nil
 		}
 		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy}
 		res, err := d.UsageReader.Summary(ctx, q)
@@ -406,6 +424,12 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		if res.Rows == nil {
 			res.Rows = []usagelog.SummaryRow{}
+		}
+		if res.From.IsZero() {
+			res.From = from
+		}
+		if res.To.IsZero() {
+			res.To = to
 		}
 		return &usageSummaryOutput{Body: res}, nil
 	})

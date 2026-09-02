@@ -92,7 +92,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			if errors.As(err, &ge) {
 				return nil, huma.Error403Forbidden(ge.Error())
 			}
-			if errors.Is(err, license.ErrRequired) {
+			if errors.Is(err, license.ErrRequired) || errors.Is(err, authz.ErrForbidden) {
 				return nil, huma.Error403Forbidden(err.Error())
 			}
 			return nil, huma.Error400BadRequest(err.Error())

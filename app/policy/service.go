@@ -19,9 +19,12 @@ import (
 
 // SnapshotReader is the narrow catalog read surface Service needs.
 // *appcatalog.Catalog implements it via a thin adapter.
+// Reads take a context so an implementation can serve the snapshot this
+// request was authenticated against rather than the newest one — a reload
+// landing mid-request must not change the rules the request is metered by.
 type SnapshotReader interface {
-	Policy(id string) (*Policy, bool)
-	RateLimit(id string) (*ratelimit.RateLimit, bool)
+	Policy(ctx context.Context, id string) (*Policy, bool)
+	RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool)
 }
 
 type Service struct {
@@ -75,7 +78,7 @@ type InboundInput struct {
 // Returns (nil, nil) when there is nothing to check: no applicable RL and no
 // token to check for revocation.
 func (s *Service) ReserveInbound(ctx context.Context, in InboundInput) (*pkgratelimit.Reservation, error) {
-	metered := s.rulesFor(in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug)
+	metered := s.rulesFor(ctx, in.Policy, in.ProviderSlug, in.ModelSlug, in.HostSlug)
 	rules := metered
 	if in.TokenJTI != "" {
 		// First in the slice: a revoked token must answer 401, not the 429 an
@@ -142,8 +145,8 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 	if in.Host != nil {
 		hostSlug = in.Host.Meta.Name
 	}
-	tier, _ := s.snap.Policy(key.Spec.PolicyID)
-	rules := s.rulesFor(tier, in.Provider, modelSlug, hostSlug)
+	tier, _ := s.snap.Policy(ctx, key.Spec.PolicyID)
+	rules := s.rulesFor(ctx, tier, in.Provider, modelSlug, hostSlug)
 	if len(rules) == 0 || s.limiter == nil {
 		return &Acquisition{Key: key}, nil
 	}
@@ -215,7 +218,7 @@ func (a *Acquisition) KeyHash() string {
 
 // rulesFor resolves pol's applicable RL for the request triple and
 // converts it to limiter rules. Returns nil when nothing applies.
-func (s *Service) rulesFor(pol *Policy, providerSlug, modelSlug, hostSlug string) []pkgratelimit.Rule {
+func (s *Service) rulesFor(ctx context.Context, pol *Policy, providerSlug, modelSlug, hostSlug string) []pkgratelimit.Rule {
 	if pol == nil || s.snap == nil {
 		return nil
 	}
@@ -223,7 +226,7 @@ func (s *Service) rulesFor(pol *Policy, providerSlug, modelSlug, hostSlug string
 	if rlID == "" {
 		return nil
 	}
-	rl, ok := s.snap.RateLimit(rlID)
+	rl, ok := s.snap.RateLimit(ctx, rlID)
 	if !ok {
 		return nil
 	}

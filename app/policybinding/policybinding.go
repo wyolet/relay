@@ -42,7 +42,7 @@ func (b *PolicyBinding) IndexSubjects() {
 type Spec struct {
 	ProjectID string                `json:"projectId" yaml:"projectId" validate:"required,uuid"`
 	PolicyID  string                `json:"policyId"  yaml:"policyId"  validate:"required,uuid"`
-	Priority  int                   `json:"priority,omitempty" yaml:"priority,omitempty" validate:"gte=0,lte=10000"`
+	Priority  *int                  `json:"priority,omitempty" yaml:"priority,omitempty" validate:"omitempty,gte=0,lte=10000"`
 	Subjects  []rolebinding.Subject `json:"subjects"  yaml:"subjects"  validate:"required,min=1,dive"`
 	Enabled   *bool                 `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
@@ -50,13 +50,15 @@ type Spec struct {
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (b *PolicyBinding) IsEnabled() bool { return b.Spec.Enabled == nil || *b.Spec.Enabled }
 
-// EffectivePriority reads an unset (zero) priority as the default, so a
-// binding authored without one still orders against explicit values.
+// EffectivePriority reads an unset priority as the default, so a binding
+// authored without one still orders against explicit values. The field is a
+// pointer because 0 is a valid, highest-winning priority and must not read
+// as absent.
 func (b *PolicyBinding) EffectivePriority() int {
-	if b.Spec.Priority == 0 {
+	if b.Spec.Priority == nil {
 		return DefaultPriority
 	}
-	return b.Spec.Priority
+	return *b.Spec.Priority
 }
 
 // StampOwner sets Meta.Owner to the binding's Project. Called by every

@@ -31,6 +31,7 @@ const (
 	metaCredentialKind = "credential_kind"
 	metaCredentialID   = "credential_id"
 	metaPolicyID       = "policy_id"
+	metaTokenJTI       = "token_jti"
 )
 
 // ErrForbidden is returned when a caller asks about a batch they don't own.
@@ -73,6 +74,7 @@ func (s *Service) Handler() jobq.Handler {
 			job.ID,
 			job.Meta(metaKeyHash),
 			job.Meta(metaPolicyID),
+			job.Meta(metaTokenJTI),
 			Attribution{
 				ProjectID:      job.Meta(metaProjectID),
 				TeamID:         job.Meta(metaTeamID),
@@ -137,6 +139,7 @@ func (s *Service) Submit(ctx context.Context, c *Caller, inbound string, items [
 				metaKeyHash:  c.KeyHash,
 				metaInbound:  inbound,
 				metaPolicyID: c.PolicyID,
+				metaTokenJTI: c.TokenJTI(),
 				// Carried per item so execution reads the submission's
 				// attribution without a second trip to the batch row.
 				metaProjectID:      attr.ProjectID,

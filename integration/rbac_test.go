@@ -55,7 +55,7 @@ type bindingList struct {
 func seedBuiltinRoles(t *testing.T, st *stack) map[string]*role.Role {
 	t.Helper()
 	ctx := context.Background()
-	if err := role.SeedBuiltins(ctx, st.stores.Role, slog.Default()); err != nil {
+	if err := role.SeedBuiltins(ctx, st.stores.Role, slog.Default(), nil); err != nil {
 		t.Fatalf("seed built-in roles: %v", err)
 	}
 	roles, err := st.stores.Role.List(ctx)
@@ -86,7 +86,7 @@ func TestIntegration_BuiltinRoleSeed(t *testing.T) {
 	}
 
 	// A second boot changes nothing: same ids, same count.
-	if err := role.SeedBuiltins(ctx, st.stores.Role, slog.Default()); err != nil {
+	if err := role.SeedBuiltins(ctx, st.stores.Role, slog.Default(), nil); err != nil {
 		t.Fatalf("second seed: %v", err)
 	}
 	again, err := st.stores.Role.List(ctx)

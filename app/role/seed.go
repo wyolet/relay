@@ -73,15 +73,30 @@ func IsBuiltin(name string) bool {
 	return false
 }
 
+// Locker runs fn while holding a lock shared by every pod.
+// internal/storage.WithAdvisoryLock bound to a pool and a key satisfies it.
+type Locker func(ctx context.Context, fn func(context.Context) error) error
+
 // SeedBuiltins writes the built-in Roles, by name. A row whose rules already
 // match the embedded file is left untouched; one whose rules differ is
 // rewritten, so a rule added in a release reaches an upgraded deployment
 // instead of only new ones. Ids and display fields of an existing row are
 // preserved — bindings name the id.
-func SeedBuiltins(ctx context.Context, s *Store, log *slog.Logger) error {
+//
+// The read-then-write is not atomic, so pods booting together would each mint
+// an id for the same missing role: lock serializes them. A nil Locker runs the
+// seed unserialized, which is only safe for a single process.
+func SeedBuiltins(ctx context.Context, s *Store, log *slog.Logger, lock Locker) error {
 	if s == nil {
 		return nil
 	}
+	if lock == nil {
+		return seedBuiltins(ctx, s, log)
+	}
+	return lock(ctx, func(ctx context.Context) error { return seedBuiltins(ctx, s, log) })
+}
+
+func seedBuiltins(ctx context.Context, s *Store, log *slog.Logger) error {
 	existing, err := s.List(ctx)
 	if err != nil {
 		return fmt.Errorf("role seed: list: %w", err)

@@ -1188,11 +1188,13 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 		return nil, err
 	}
 	priority := d.Spec.Priority
-	if priority == 0 {
-		// The store and the control API both stamp this default, so a
+	if priority == nil {
+		// The store and the control API both write this default, so a
 		// document that omits priority must translate to the same row or
-		// apply reports an update on every run.
-		priority = policybinding.DefaultPriority
+		// apply reports an update on every run. An explicit 0 is a real
+		// priority and is carried through.
+		def := policybinding.DefaultPriority
+		priority = &def
 	}
 	b := &policybinding.PolicyBinding{
 		Meta: d.Metadata.toMeta(),
@@ -1219,6 +1221,7 @@ func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) Poli
 	}
 	wm := metaToWire(b.Meta)
 	wm.Owner.Name = projectName
+	effectivePriority := b.EffectivePriority()
 	return PolicyBindingDTO{
 		APIVersion: APIVersion,
 		Kind:       "PolicyBinding",
@@ -1226,7 +1229,7 @@ func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) Poli
 		Spec: PolicyBindingSpec{
 			Project:  projectName,
 			Policy:   policyName,
-			Priority: b.EffectivePriority(),
+			Priority: &effectivePriority,
 			Subjects: fromSubjects(b.Spec.Subjects, rev),
 			Enabled:  b.Spec.Enabled,
 		},

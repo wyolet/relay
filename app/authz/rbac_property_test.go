@@ -628,8 +628,6 @@ func TestProperty_TeamDeleteMatchesAFreshBuild(t *testing.T) {
 // D67: an upgraded deployment has no bindings at all, and every list there
 // must answer 200 with the caller's own rows rather than 403.
 func TestProperty_ZeroBindingListIsAllowedAndFilteredByVisible(t *testing.T) {
-	t.Skip("D67 not implemented: list on a scoped kind with no owner needs a granting binding, so a binding-less actor gets 403 instead of an empty 200")
-
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()
 		id := ids.New()
@@ -645,8 +643,6 @@ func TestProperty_ZeroBindingListIsAllowedAndFilteredByVisible(t *testing.T) {
 // D69: a binding at a project must let its holder resolve the parent team
 // row, which today's strict chain refuses.
 func TestProperty_ProjectBindingReadsTheParentTeam(t *testing.T) {
-	t.Skip("D69 not implemented: a project-scoped binding does not grant teams.get on the parent team")
-
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()
 		actors := w.actors()

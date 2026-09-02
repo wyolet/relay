@@ -11,6 +11,7 @@ them straight is the key to understanding the whole security model.
 | Your app | Inference plane (`/v1/*`) | **Relay key** — `Authorization: Bearer <relay-key>` |
 | A browser / the dashboard | Control plane | **Session cookie** (`relay_session`) |
 | An operator or CI | Control plane | **Admin bearer** — `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
+| The `relay` CLI | Control plane | The admin bearer for `relay apply` / `relay export`; a password login for `relay token mint`, which needs a user session |
 
 ## Relay keys (your apps)
 
@@ -47,14 +48,20 @@ Three ways to invalidate a token, from narrowest to widest:
 
 - `POST /api/auth/token/revoke` — the caller revokes the token it just
   presented (self-service, no session needed).
-- `DELETE /api/auth/token/{jti}` — an admin revokes one token by its id.
+- `DELETE /api/auth/token/{jti}` — revoke one token by its id. Its mint is
+  read from the audit log, and the caller needs `tokens.revoke` at the
+  token's project (the user who minted it always may). Only the fallback for
+  a mint that is no longer in the log — passing `team_id` and `exp` — requires
+  an admin.
 - `POST /api/auth/token/revoke-all` — the caller bumps their own
-  `token_version`, invalidating every token they hold at once. An admin can
-  do the same for another user with
-  `POST /api/users/by-id/{id}/revoke-tokens`.
+  `token_version`, invalidating every token they hold at once. A caller with
+  `users.update` at the global scope can do the same for another user with
+  `POST /api/users/by-id/{id}/revoke-tokens`, and disabling an account with
+  `PUT /api/users/by-id/{id}` bumps it too.
 
-A revoked or expired token fails with `401` and `token_revoked` /
-`token expired`.
+Rejections all answer `401`. Both revocation paths — a denylisted `jti` and a
+token behind the user's `token_version` — carry the code `token_revoked`; an
+expired token carries `unauthenticated` with the message `token expired`.
 
 ## Host keys (your provider credentials)
 
@@ -101,6 +108,15 @@ The admin surface (dashboard + CRUD + ops endpoints) accepts either:
   sessions (opaque token, rotated on login, destroyed on logout); or
 - the **admin bearer**, `RELAY_ADMIN_TOKEN` — a break-glass credential for
   operators and CI that coexists with sessions.
+
+The CLI uses both: `relay apply` and `relay export` send the admin bearer
+(`$RELAY_ADMIN_TOKEN` or `--token`), while `relay token mint` logs in with a
+password and carries the session it gets back, because a token names the user
+it was minted for and the admin bearer names no user.
+
+An account is disabled with `PUT /api/users/by-id/{id}` (`{"disabled": true}`).
+It then fails password login and every inference token it holds stops
+verifying; an open session is not destroyed.
 
 Run the control plane on its own port (`RELAY_CONTROL_PORT`) and keep it off
 the public internet; expose only the inference plane.

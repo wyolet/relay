@@ -351,7 +351,7 @@ func TestListModels_Token(t *testing.T) {
 func boundTo(f principalFixture, name string, priority int, policyID string, subjects ...string) *policybinding.PolicyBinding {
 	b := &policybinding.PolicyBinding{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: f.project.Meta.ID}},
-		Spec: policybinding.Spec{ProjectID: f.project.Meta.ID, PolicyID: policyID, Priority: priority},
+		Spec: policybinding.Spec{ProjectID: f.project.Meta.ID, PolicyID: policyID, Priority: &priority},
 	}
 	for _, s := range subjects {
 		b.Spec.Subjects = append(b.Spec.Subjects, subjectFrom(s))

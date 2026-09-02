@@ -156,8 +156,8 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	if pb.Spec.ProjectID != projectUUID || pb.Spec.PolicyID != policyUUID {
 		t.Errorf("policy binding refs = %+v", pb.Spec)
 	}
-	if rendered := manifest.FromPolicyBinding(pb, rbacRev); rendered.Spec.Priority != 100 {
-		t.Errorf("rendered priority = %d, want the default 100", rendered.Spec.Priority)
+	if rendered := manifest.FromPolicyBinding(pb, rbacRev); rendered.Spec.Priority == nil || *rendered.Spec.Priority != 100 {
+		t.Errorf("rendered priority = %v, want the default 100", rendered.Spec.Priority)
 	}
 }
 
@@ -174,8 +174,43 @@ func TestToPolicyBinding_OmittedPriorityStampsTheDefaultOnSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToPolicyBinding: %v", err)
 	}
-	if pb.Spec.Priority != policybinding.DefaultPriority {
-		t.Errorf("Spec.Priority = %d, want the default %d stamped directly", pb.Spec.Priority, policybinding.DefaultPriority)
+	if pb.Spec.Priority == nil || *pb.Spec.Priority != policybinding.DefaultPriority {
+		t.Errorf("Spec.Priority = %v, want the default %d stamped directly", pb.Spec.Priority, policybinding.DefaultPriority)
+	}
+}
+
+// TestPolicyBindingExplicitZeroPriorityRoundTrips: 0 is the highest-winning
+// priority, so it must survive parse → domain → render instead of reading as
+// an omitted field and picking up the default.
+func TestPolicyBindingExplicitZeroPriorityRoundTrips(t *testing.T) {
+	const yaml = `
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: PolicyBinding
+metadata:
+  name: zero-priority
+spec:
+  project: ml-search
+  policy: ml-search-default
+  priority: 0
+  subjects:
+    - {kind: user, name: alice}
+`
+	docs, err := manifest.Parse(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	pb, err := manifest.ToPolicyBinding(*docs[0].PolicyBinding, rbacResolver)
+	if err != nil {
+		t.Fatalf("ToPolicyBinding: %v", err)
+	}
+	if pb.Spec.Priority == nil || *pb.Spec.Priority != 0 {
+		t.Fatalf("Spec.Priority = %v, want an explicit 0", pb.Spec.Priority)
+	}
+	if got := pb.EffectivePriority(); got != 0 {
+		t.Errorf("EffectivePriority = %d, want 0", got)
+	}
+	if rendered := manifest.FromPolicyBinding(pb, rbacRev); rendered.Spec.Priority == nil || *rendered.Spec.Priority != 0 {
+		t.Errorf("rendered priority = %v, want 0", rendered.Spec.Priority)
 	}
 }
 

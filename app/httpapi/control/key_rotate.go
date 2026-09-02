@@ -101,7 +101,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		existing.Meta.Dirty = true
 		if err := d.Stores.Key.Rotate(ctx, existing, readHash, existing.Meta.UpdatedAt); err != nil {
 			if errors.Is(err, key.ErrRotationRaced) {
-				return nil, huma.Error409Conflict("key was rotated concurrently; re-read it and retry")
+				return nil, huma.Error409Conflict("key changed concurrently; re-read and retry")
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
@@ -80,7 +81,7 @@ type builder struct {
 	deletes [][]Entry
 }
 
-func (b *builder) run(docs []manifest.Document) error {
+func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	var (
 		teamDocs []*manifest.TeamDTO
 		projDocs []*manifest.ProjectDTO
@@ -168,98 +169,103 @@ func (b *builder) run(docs []manifest.Document) error {
 	s := b.opts.Stores
 
 	// Tenancy first: every kind below may be owned by a project.
-	if err := planKind(b, kindWiring[manifest.TeamDTO, team.Team]{
+	if err := planKind(ctx, b, kindWiring[manifest.TeamDTO, team.Team]{
 		Kind: "Team", Docs: teamDocs, Names: b.idx.Teams, Rows: b.rows.Teams,
 		To: manifest.ToTeam, Meta: func(t *team.Team) *meta.Metadata { return &t.Meta },
 		Upsert: s.Team.Upsert, Delete: s.Team.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.ProjectDTO, project.Project]{
+	if err := planKind(ctx, b, kindWiring[manifest.ProjectDTO, project.Project]{
 		Kind: "Project", Docs: projDocs, Names: b.idx.Projects, Rows: b.rows.Projects,
 		To: manifest.ToProject, Meta: func(p *project.Project) *meta.Metadata { return &p.Meta },
 		Upsert: s.Project.Upsert, Delete: s.Project.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.ProviderDTO, provider.Provider]{
+	if err := planKind(ctx, b, kindWiring[manifest.ProviderDTO, provider.Provider]{
 		Kind: "Provider", Docs: provDocs, Names: b.idx.Providers, Rows: b.rows.Providers,
 		To: manifest.ToProvider, Meta: func(p *provider.Provider) *meta.Metadata { return &p.Meta },
 		Upsert: s.Provider.Upsert, Delete: s.Provider.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.HostDTO, host.Host]{
+	if err := planKind(ctx, b, kindWiring[manifest.HostDTO, host.Host]{
 		Kind: "Host", Docs: hostDocs, Names: b.idx.Hosts, Rows: b.rows.Hosts,
 		To: manifest.ToHost, Meta: func(h *host.Host) *meta.Metadata { return &h.Meta },
 		Upsert: s.Host.Upsert, Delete: s.Host.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
+	if err := planKind(ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
 		Kind: "RateLimit", Docs: rlDocs, Names: b.idx.RateLimits, Rows: b.rows.RateLimits,
 		To: manifest.ToRateLimit, Meta: func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta },
 		Upsert: s.RateLimit.Upsert, Delete: s.RateLimit.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.HostKeyDTO, hostkey.HostKey]{
+	pols, err := b.policyByID(polDocs)
+	if err != nil {
+		return err
+	}
+	if err := planKind(ctx, b, kindWiring[manifest.HostKeyDTO, hostkey.HostKey]{
 		Kind: "HostKey", Docs: hkDocs, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
+		Check: checkHostKeyPolicy(pols),
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.ModelDTO, model.Model]{
+	if err := planKind(ctx, b, kindWiring[manifest.ModelDTO, model.Model]{
 		Kind: "Model", Docs: mDocs, Names: b.idx.Models, Rows: b.rows.Models,
 		To: manifest.ToModel, Meta: func(m *model.Model) *meta.Metadata { return &m.Meta },
 		Upsert: s.Model.Upsert, Delete: s.Model.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.PricingDTO, pricing.Pricing]{
+	if err := planKind(ctx, b, kindWiring[manifest.PricingDTO, pricing.Pricing]{
 		Kind: "Pricing", Docs: prDocs, Names: b.idx.Pricings, Rows: b.rows.Pricings,
 		To: manifest.ToPricing, Meta: func(p *pricing.Pricing) *meta.Metadata { return &p.Meta },
 		Upsert: s.Pricing.Upsert, Delete: s.Pricing.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.HostBindingDTO, binding.Binding]{
+	if err := planKind(ctx, b, kindWiring[manifest.HostBindingDTO, binding.Binding]{
 		Kind: "HostBinding", Docs: bndDocs, Names: b.idx.Bindings, Rows: b.rows.Bindings,
 		To: manifest.ToHostBinding, Meta: func(x *binding.Binding) *meta.Metadata { return &x.Meta },
 		Upsert: s.HostBinding.Upsert, Delete: s.HostBinding.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.PolicyDTO, policy.Policy]{
+	if err := planKind(ctx, b, kindWiring[manifest.PolicyDTO, policy.Policy]{
 		Kind: "Policy", Docs: polDocs, Names: b.idx.Policies, Rows: b.rows.Policies,
 		To: manifest.ToPolicy, Meta: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
 		Upsert: s.Policy.Upsert, Delete: s.Policy.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.GroupDTO, group.Group]{
+	if err := planKind(ctx, b, kindWiring[manifest.GroupDTO, group.Group]{
 		Kind: "Group", Docs: grpDocs, Names: b.idx.Groups, Rows: b.rows.Groups,
 		To: manifest.ToGroup, Meta: func(g *group.Group) *meta.Metadata { return &g.Meta },
 		Upsert: s.Group.Upsert, Delete: s.Group.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.RoleDTO, role.Role]{
+	if err := planKind(ctx, b, kindWiring[manifest.RoleDTO, role.Role]{
 		Kind: "Role", Docs: roleDocs, Names: b.idx.Roles, Rows: b.rows.Roles,
 		To: manifest.ToRole, Meta: func(r *role.Role) *meta.Metadata { return &r.Meta },
 		Upsert: s.Role.Upsert, Delete: s.Role.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
+	if err := planKind(ctx, b, kindWiring[manifest.ServiceAccountDTO, serviceaccount.ServiceAccount]{
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
 		Upsert: s.ServiceAccount.Upsert, Delete: s.ServiceAccount.Delete,
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.KeyDTO, key.Key]{
+	if err := planKind(ctx, b, kindWiring[manifest.KeyDTO, key.Key]{
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
 		Upsert: s.Key.Upsert, Delete: s.Key.Delete,
@@ -268,14 +274,19 @@ func (b *builder) run(docs []manifest.Document) error {
 	}
 	// Bindings last: they name roles, tenancy rows, policies, and the
 	// principals every kind above just wrote.
-	if err := planKind(b, kindWiring[manifest.RoleBindingDTO, rolebinding.RoleBinding]{
+	roles, err := b.roleByID(roleDocs)
+	if err != nil {
+		return err
+	}
+	if err := planKind(ctx, b, kindWiring[manifest.RoleBindingDTO, rolebinding.RoleBinding]{
 		Kind: "RoleBinding", Docs: rbDocs, Names: b.idx.RoleBindings, Rows: b.rows.RoleBindings,
 		To: manifest.ToRoleBinding, Meta: func(x *rolebinding.RoleBinding) *meta.Metadata { return &x.Meta },
 		Upsert: s.RoleBinding.Upsert, Delete: s.RoleBinding.Delete,
+		Check: b.checkRoleBindingGrant(roles),
 	}); err != nil {
 		return err
 	}
-	if err := planKind(b, kindWiring[manifest.PolicyBindingDTO, policybinding.PolicyBinding]{
+	if err := planKind(ctx, b, kindWiring[manifest.PolicyBindingDTO, policybinding.PolicyBinding]{
 		Kind: "PolicyBinding", Docs: pbDocs, Names: b.idx.PolicyBindings, Rows: b.rows.PolicyBindings,
 		To: manifest.ToPolicyBinding, Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
 		Upsert: s.PolicyBinding.Upsert, Delete: s.PolicyBinding.Delete,
@@ -307,6 +318,73 @@ func (b *builder) checkRoleDocs(docs []*manifest.RoleDTO) error {
 	return nil
 }
 
+// policyByID indexes every Policy this run can resolve: the stored rows plus
+// the ones the same bundle declares, so a key may name a tier policy created
+// by the same apply.
+func (b *builder) policyByID(docs []*manifest.PolicyDTO) (map[string]*policy.Policy, error) {
+	out := make(map[string]*policy.Policy, len(b.rows.Policies)+len(docs))
+	for _, p := range b.rows.Policies {
+		out[p.Meta.ID] = p
+	}
+	for _, d := range docs {
+		p, err := manifest.ToPolicy(*d, b.idx)
+		if err != nil {
+			return nil, fmt.Errorf("apply: Policy %q: %w", d.Metadata.Name, err)
+		}
+		p.Meta.ID = b.idx.Policies[d.Metadata.Name]
+		out[p.Meta.ID] = p
+	}
+	return out, nil
+}
+
+// roleByID indexes every Role this run can resolve, stored plus declared.
+func (b *builder) roleByID(docs []*manifest.RoleDTO) (map[string]*role.Role, error) {
+	out := make(map[string]*role.Role, len(b.rows.Roles)+len(docs))
+	for _, r := range b.rows.Roles {
+		out[r.Meta.ID] = r
+	}
+	for _, d := range docs {
+		r, err := manifest.ToRole(*d, b.idx)
+		if err != nil {
+			return nil, fmt.Errorf("apply: Role %q: %w", d.Metadata.Name, err)
+		}
+		r.Meta.ID = b.idx.Roles[d.Metadata.Name]
+		out[r.Meta.ID] = r
+	}
+	return out, nil
+}
+
+// checkHostKeyPolicy is the API's host-key rule in the loader: a key whose
+// tier policy is not host-owned by the key's own host is dropped from the
+// snapshot, so accepting it here would report a clean apply for a key that
+// answers no_keys. A policy this run cannot resolve is left alone.
+func checkHostKeyPolicy(pols map[string]*policy.Policy) func(context.Context, *hostkey.HostKey) error {
+	return func(_ context.Context, k *hostkey.HostKey) error {
+		pol, ok := pols[k.Spec.PolicyID]
+		if !ok {
+			return nil
+		}
+		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != k.Spec.HostID {
+			return fmt.Errorf("policy %q is not host-owned by host %q (owner=%s/%s)",
+				pol.Meta.Name, k.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
+		}
+		return nil
+	}
+}
+
+// checkRoleBindingGrant applies the API's escalation rule to a declared
+// binding: the caller must already hold every permission the bound role
+// grants at the binding's scope.
+func (b *builder) checkRoleBindingGrant(roles map[string]*role.Role) func(context.Context, *rolebinding.RoleBinding) error {
+	return func(ctx context.Context, rb *rolebinding.RoleBinding) error {
+		r, ok := roles[rb.Spec.RoleID]
+		if !ok {
+			return nil
+		}
+		return authz.CheckGrant(ctx, b.opts.Authz, r, rb.Spec.Scope)
+	}
+}
+
 // kindWiring is the per-kind glue planKind needs: the documents, the name→id
 // map they mint into, the stored rows, and the translate/store calls.
 type kindWiring[D any, T any] struct {
@@ -318,9 +396,13 @@ type kindWiring[D any, T any] struct {
 	Meta   func(*T) *meta.Metadata
 	Upsert func(context.Context, *T) error
 	Delete func(context.Context, string) error
+	// Check is a cross-entity rule the row's own Validate cannot see (it
+	// reads one row, not the plan). Runs on create and update only, and
+	// reports the same error the API's guard for that rule reports.
+	Check func(context.Context, *T) error
 }
 
-func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
+func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T]) error {
 	route := KindRoutes[k.Kind]
 	existing := make(map[string]*T, len(k.Rows))
 	for _, row := range k.Rows {
@@ -378,6 +460,11 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 		if e.Action == ActionCreate || e.Action == ActionUpdate {
 			if err := validateRow(obj); err != nil {
 				return &InvalidError{Kind: k.Kind, Name: name, Err: err}
+			}
+			if k.Check != nil {
+				if err := k.Check(ctx, obj); err != nil {
+					return &InvalidError{Kind: k.Kind, Name: name, Err: err}
+				}
 			}
 			if err := b.governs(settings.OpEdit, route.Singular, e.owner); err != nil {
 				return &GovernanceError{Kind: k.Kind, Name: name, Err: err}

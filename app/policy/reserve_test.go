@@ -62,8 +62,8 @@ type reserveSnap struct {
 	rl  *appratelimit.RateLimit
 }
 
-func (s reserveSnap) Policy(string) (*Policy, bool) { return s.pol, s.pol != nil }
-func (s reserveSnap) RateLimit(id string) (*appratelimit.RateLimit, bool) {
+func (s reserveSnap) Policy(context.Context, string) (*Policy, bool) { return s.pol, s.pol != nil }
+func (s reserveSnap) RateLimit(_ context.Context, id string) (*appratelimit.RateLimit, bool) {
 	if s.rl == nil || s.rl.Meta.ID != id {
 		return nil, false
 	}

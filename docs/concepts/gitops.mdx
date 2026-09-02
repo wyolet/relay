@@ -17,7 +17,7 @@ relay apply -f manifests/
 
 A file or a directory of `.yaml` documents is parsed, diffed against the
 stored rows, and — unless `--dry-run` — written. Every entry in the plan
-gets one of six actions:
+gets one of seven actions:
 
 | Action | Meaning |
 | --- | --- |
@@ -27,6 +27,7 @@ gets one of six actions:
 | `skip-dirty` | The row was hand-edited through the control API (`meta.Dirty`) and the run is not forcing. Reported as drift; left alone. |
 | `delete` | Pruning removed a row absent from the bundle. Only appears with `--prune`. |
 | `conflict` | Another writer changed the row between the plan and the write. Nothing is written for it; re-running picks up the change. |
+| `forbidden` | The caller may not see the row the document names. Nothing is written for it, and the run reports it by the name the bundle used. |
 
 `--force` overwrites a dirty row with the manifest's version and clears the
 dirty flag — apply owns the row again from that point on.
@@ -50,7 +51,7 @@ Exit codes:
 | Code | Meaning |
 | --- | --- |
 | `0` | Clean — every entry was `create`, `update`, `unchanged`, or `delete`. |
-| `1` | Drift — at least one `skip-dirty` entry and the run did not pass `--force`, or at least one `conflict` entry. |
+| `1` | Drift — at least one `skip-dirty` entry and the run did not pass `--force`, at least one `conflict` entry, or at least one `forbidden` entry. |
 | `2` | The server rejected the request (4xx/5xx). |
 
 `$RELAY_URL` (default `http://localhost:8081`) names the server;
@@ -81,10 +82,17 @@ its removal.
 
 ## Authorization and partial failure
 
-Every row in the plan is authorized before anything is written. One denied
-row fails the whole apply with `403` (or `401` if the caller isn't
+Every row in the plan is authorized before anything is written. A denied
+write fails the whole apply with `403` (or `401` if the caller isn't
 authenticated) and nothing is written — authorization is all-or-nothing,
 checked up front.
+
+A row the caller may not *see* is different: it is not a write they were
+refused, it is a document about a row outside their scope. Those entries come
+back as `forbidden`, named as the bundle named them, and the rest of the
+bundle still applies. `relay apply` exits `1` on them, so a pipeline applying
+a bundle wider than its own scope learns which documents were ignored instead
+of reading a clean run.
 
 Writes then run sequentially, one kind at a time, each kind in its own
 store transaction. There is no cross-kind transaction: if a write fails
@@ -161,7 +169,7 @@ and cannot mint one. Session auth only:
 
 ```bash
 curl -X POST http://localhost:8081/api/auth/token \
-  -H "Authorization: Bearer <session-or-bearer-with-tokens.mint>" \
+  -H "Cookie: relay_session=<session from POST /api/auth/login>" \
   -H "Content-Type: application/json" \
   -d '{"project": "my-project", "ttl": "1h"}'
 ```

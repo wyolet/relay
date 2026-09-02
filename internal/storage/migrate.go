@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -28,6 +29,21 @@ func runMigrations(dsn string) error {
 	return nil
 }
 
+// downAll is the target that means "unwind every migration".
+const downAll = 0
+
+// migrateDownTarget validates a `migrate down` target against the schema's
+// current version. hasVersion is false on a database no migration has run
+// against yet.
+func migrateDownTarget(current uint, hasVersion bool, target uint) (downAllRun bool, err error) {
+	if hasVersion && target > current {
+		return false, fmt.Errorf(
+			"storage: migrate down to %d: the schema is at %d — a higher target would migrate UP; "+
+				"pass a version at or below the current one", target, current)
+	}
+	return target == downAll, nil
+}
+
 // MigrateTo moves the schema to an exact version, running the down
 // migrations when it is below the current one. Exported for the rollback
 // path: an old binary cannot read rows a newer schema wrote, so downgrading
@@ -42,6 +58,22 @@ func MigrateTo(dsn string, version uint) error {
 		return fmt.Errorf("storage: init migrations: %w", err)
 	}
 	defer m.Close()
+	current, _, err := m.Version()
+	if err != nil && !errors.Is(err, migrate.ErrNilVersion) {
+		return fmt.Errorf("storage: read schema version: %w", err)
+	}
+	downAllRun, err := migrateDownTarget(current, err == nil, version)
+	if err != nil {
+		return err
+	}
+	// Migrate(0) is not a valid target for golang-migrate; unwinding
+	// everything is its own call.
+	if downAllRun {
+		if err := m.Down(); err != nil && err != migrate.ErrNoChange {
+			return fmt.Errorf("storage: migrate down to 0: %w", err)
+		}
+		return nil
+	}
 	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
 		return fmt.Errorf("storage: migrate to %d: %w", version, err)
 	}

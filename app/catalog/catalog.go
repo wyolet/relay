@@ -369,6 +369,11 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 
 	snap := build(c.now, enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
 		enabledRoles, enabledRoleBindings, enabledPolicyBindings)
+	// The own-scope hash index covers disabled keys too, so it is built from
+	// the unfiltered rows rather than the ones the snapshot routes on.
+	for _, k := range rks {
+		snap.indexUserKeyHashes(k)
+	}
 	if tokenVersions != nil {
 		snap.tokenVersionByUser = tokenVersions
 	}

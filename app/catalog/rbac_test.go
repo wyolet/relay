@@ -81,7 +81,7 @@ func newRBACFixture() rbacFixture {
 		b := &policybinding.PolicyBinding{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: name},
 			Spec: policybinding.Spec{
-				ProjectID: projectID, PolicyID: policyID, Priority: priority,
+				ProjectID: projectID, PolicyID: policyID, Priority: &priority,
 				Subjects: []rolebinding.Subject{group("system:authenticated")},
 			},
 		}

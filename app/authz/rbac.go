@@ -6,6 +6,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
@@ -16,6 +17,17 @@ import (
 var catalogKinds = map[string]bool{
 	"providers": true, "hosts": true, "models": true,
 	"host-bindings": true, "pricings": true, "rate-limits": true,
+}
+
+// scopedKinds are the kinds whose lists are filtered row by row through
+// Visible. Asking for such a list is safe for any authenticated caller: what
+// comes back is what they may see, which for a caller with no binding at all
+// is nothing. `users` is deliberately absent — a scoped caller must not
+// enumerate the deployment's users.
+var scopedKinds = map[string]bool{
+	"keys": true, "policies": true, "host-keys": true, "service-accounts": true,
+	"policy-bindings": true, "role-bindings": true, "projects": true,
+	"teams": true, "groups": true,
 }
 
 // plurals maps the singular Resource.Kind handlers pass to the API plural a
@@ -82,6 +94,9 @@ type Snapshot interface {
 	ScopeChainFor(kind, id string, o *meta.Owner) []meta.Owner
 	// RoleBindingsForSubject returns the bindings naming a subject string.
 	RoleBindingsForSubject(subject string) []*rolebinding.RoleBinding
+	// ProjectsInTeam returns the team's projects, so a binding at a project
+	// can answer for the team row above it.
+	ProjectsInTeam(teamID string) []*project.Project
 	// Role returns an enabled Role by id.
 	Role(id string) (*role.Role, bool)
 }
@@ -118,12 +133,24 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 		res.Owner != nil && res.Owner.Kind == meta.OwnerSystem {
 		return nil
 	}
+	// A list call names no row and its result is filtered through Visible, so
+	// the call itself needs no binding: a deployment whose bindings have not
+	// been written yet answers an empty list rather than 403 everywhere.
+	if verb == "list" && res.Owner == nil && scopedKinds[kind] {
+		return nil
+	}
 	if r.Snap == nil {
 		return ErrForbidden
 	}
 	snap := r.Snap()
 	if snap == nil {
 		return ErrForbidden
+	}
+	// Working in a project includes resolving the team it belongs to, so a
+	// binding at a project reads that project's team row.
+	if (verb == "get" || verb == "list") && kind == "teams" && res.ID != "" &&
+		boundInTeamProject(snap, a.Subjects, res.ID) {
+		return nil
 	}
 	chain := snap.ScopeChainFor(res.Kind, res.ID, res.Owner)
 	// A list call names no row; the rows it returns are filtered by Visible
@@ -146,6 +173,28 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 // so list filtering and per-row reads can never disagree.
 func (r RBAC) Visible(ctx context.Context, kind, id string, owner meta.Owner) bool {
 	return r.Authorize(ctx, plural(kind)+".get", Resource{Kind: kind, ID: id, Owner: &owner}) == nil
+}
+
+// boundInTeamProject reports whether any of subjects holds a binding at a
+// project belonging to teamID.
+func boundInTeamProject(snap Snapshot, subjects []string, teamID string) bool {
+	projects := snap.ProjectsInTeam(teamID)
+	if len(projects) == 0 {
+		return false
+	}
+	for _, subj := range subjects {
+		for _, b := range snap.RoleBindingsForSubject(subj) {
+			if b.Spec.Scope.Kind != meta.OwnerProject {
+				continue
+			}
+			for _, p := range projects {
+				if p.Meta.ID == b.Spec.Scope.ID {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func inChain(chain []meta.Owner, scope meta.Owner) bool {

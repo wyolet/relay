@@ -61,6 +61,11 @@ type Config struct {
 	// caller's RoleBindings against each row's scope chain.
 	Authz string
 
+	// MigrateOnBoot runs the pending up-migrations at startup
+	// (RELAY_MIGRATE_ON_BOOT, default true). Set it false while rolling the
+	// schema back, so a restarting pod doesn't re-apply what was just undone.
+	MigrateOnBoot bool
+
 	// Behavior knobs
 	CHRetentionDays int
 	AutoSeedIfEmpty bool
@@ -218,11 +223,26 @@ func Load() (*Config, error) {
 			cfg.Authz = AuthzSingle
 		}
 	case AuthzSingle:
+		// An explicit "single" wins, but the pair is contradictory: the
+		// deployment asked for multi-user and gets every caller an admin.
+		if multiUserOn() {
+			slog.Warn("config: RELAY_AUTHZ=single with RELAY_MULTI_USER=on — every authenticated caller is an admin; set RELAY_AUTHZ=rbac for role-based access")
+		}
 		cfg.Authz = AuthzSingle
 	case AuthzRBAC:
 		cfg.Authz = AuthzRBAC
 	default:
 		return nil, fmt.Errorf(`RELAY_AUTHZ must be %q or %q, got %q`, AuthzSingle, AuthzRBAC, v)
+	}
+
+	// --- RELAY_MIGRATE_ON_BOOT ---
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_MIGRATE_ON_BOOT"))); v {
+	case "", "on", "1", "true":
+		cfg.MigrateOnBoot = true
+	case "off", "0", "false":
+		cfg.MigrateOnBoot = false
+	default:
+		return nil, fmt.Errorf(`RELAY_MIGRATE_ON_BOOT must be "on" or "off", got %q`, v)
 	}
 
 	// --- Behavior knobs ---

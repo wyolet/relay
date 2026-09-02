@@ -13,6 +13,8 @@ package batch
 import (
 	"context"
 	"time"
+
+	"github.com/wyolet/relay/app/httpapi/inference"
 )
 
 // Status is the coarse, cached lifecycle of a batch. The authoritative per-item
@@ -65,6 +67,16 @@ type Caller struct {
 	KeyHash string
 	// PolicyID is the already-resolved policy, not the key's raw field.
 	PolicyID string
+}
+
+// TokenJTI returns the jti of the token the submission arrived with, or ""
+// for a key. It rides each item so a token revoked after submit stops its
+// queued work at the pipeline's reservation, as it would a live request.
+func (c *Caller) TokenJTI() string {
+	if c == nil || c.CredentialKind != inference.CredentialToken {
+		return ""
+	}
+	return c.CredentialID
 }
 
 // CallerFunc resolves the caller from a request context.

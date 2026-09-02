@@ -146,6 +146,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		keysByHash:            make(map[string]*key.Key, nRks),
 		keysByPrincipal:       make(map[string][]*key.Key, nRks),
 		subjectsByKey:         make(map[string][]string, nRks),
+		hashesByUser:          map[string][]string{},
 		tokenVersionByUser:    map[string]int{},
 		modelsByPolicy:        map[string][]*model.Model{},
 		hostKeysByPolicy:      map[string][]*hostkey.HostKey{},

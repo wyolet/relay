@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
@@ -41,6 +42,8 @@ func (s bindingSnapshot) RoleBindingsForSubject(subject string) []*rolebinding.R
 		Spec: rolebinding.Spec{RoleID: s.role.Meta.ID, Scope: s.scope},
 	}}
 }
+
+func (s bindingSnapshot) ProjectsInTeam(string) []*project.Project { return nil }
 
 func (s bindingSnapshot) Role(id string) (*role.Role, bool) {
 	if id != s.role.Meta.ID {

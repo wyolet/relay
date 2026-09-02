@@ -50,15 +50,24 @@ func wsHandler(d Deps) http.HandlerFunc {
 			if d.Catalog != nil {
 				snap = d.Catalog.Current()
 			}
-			fr = fr.WithContext(context.WithValue(fr.Context(), ctxSnapshotT{}, snap))
+			fr = fr.WithContext(WithSnapshot(fr.Context(), snap))
 			// The credential was checked once, at the upgrade. Re-run the
 			// revocation checks per frame so a revoked key or token stops
-			// working without waiting for the client to reconnect.
+			// working without waiting for the client to reconnect, and
+			// re-resolve the policy against this frame's snapshot — a
+			// rebound policy binding must reach a live connection too.
+			// Frames run concurrently, so the re-resolution writes to a
+			// copy and never to the connection's shared principal.
 			if p := PrincipalFrom(fr.Context()); p != nil && snap != nil {
 				if err := p.Recheck(snap, time.Now()); err != nil {
 					writeAuthErr(fw, err.Error())
 					return
 				}
+				frame := framePrincipal(p, snap)
+				if !resolvePolicy(fw, snap, frame) {
+					return
+				}
+				fr = fr.WithContext(context.WithValue(fr.Context(), ctxPrincipalT{}, frame))
 			}
 			handleShape(spec, d, fw, fr)
 		}
@@ -67,4 +76,24 @@ func wsHandler(d Deps) http.HandlerFunc {
 			Logger: slog.Default(),
 		})
 	}
+}
+
+// framePrincipal copies the connection's principal and re-reads what the
+// credential resolves to in snap: the key row (and with it the policy it
+// names) may have been rebound since the upgrade. The copy is what keeps
+// concurrent frames from writing the connection's shared principal.
+func framePrincipal(p *Principal, snap *appcatalog.Snapshot) *Principal {
+	frame := *p
+	frame.Policy = nil
+	if frame.CredentialKind == CredentialKey {
+		if k, _ := snap.KeyByHash(frame.KeyHash); k != nil {
+			frame.Key = k
+		}
+	}
+	if frame.Key != nil && frame.Key.Spec.PolicyID != "" {
+		if pol, ok := snap.Policy(frame.Key.Spec.PolicyID); ok {
+			frame.Policy = pol
+		}
+	}
+	return &frame
 }

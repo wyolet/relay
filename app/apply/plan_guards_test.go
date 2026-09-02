@@ -27,7 +27,7 @@ func teamPlan(t *testing.T, b *builder, docs ...*manifest.TeamDTO) ([]Entry, []*
 		names[row.Meta.Name] = row.Meta.ID
 	}
 	b.idx = newIndex(b.rows)
-	err := planKind(b, kindWiring[manifest.TeamDTO, team.Team]{
+	err := planKind(context.Background(), b, kindWiring[manifest.TeamDTO, team.Team]{
 		Kind: "Team", Docs: docs, Names: names, Rows: b.rows.Teams,
 		To:   manifest.ToTeam,
 		Meta: func(x *team.Team) *meta.Metadata { return &x.Meta },
@@ -61,7 +61,7 @@ func rateLimitPlan(t *testing.T, b *builder, docs ...*manifest.RateLimitDTO) ([]
 		names[row.Meta.Name] = row.Meta.ID
 	}
 	b.idx = newIndex(b.rows)
-	err := planKind(b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
+	err := planKind(context.Background(), b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
 		Kind: "RateLimit", Docs: docs, Names: names, Rows: b.rows.RateLimits,
 		To:   manifest.ToRateLimit,
 		Meta: func(x *ratelimit.RateLimit) *meta.Metadata { return &x.Meta },
@@ -215,7 +215,7 @@ func TestApplyHonoursGovernance(t *testing.T) {
 		d.Metadata.Owner.ID = providerID
 		d.Spec.Snapshots = []model.Snapshot{{Name: "gpt-4o"}}
 		d.Spec.Pointer = "gpt-4o"
-		return planKind(b, kindWiring[manifest.ModelDTO, model.Model]{
+		return planKind(context.Background(), b, kindWiring[manifest.ModelDTO, model.Model]{
 			Kind: "Model", Docs: []*manifest.ModelDTO{d},
 			Names: map[string]string{"gpt-4o": stored.Meta.ID}, Rows: b.rows.Models,
 			To:     manifest.ToModel,
@@ -244,10 +244,10 @@ func (s scopedAuthz) Authorize(_ context.Context, _ string, res authz.Resource) 
 	return authz.ErrForbidden
 }
 
-// A dry run is a read: rows the caller may not see are dropped from the plan
-// rather than echoed back, so the diff cannot be used to enumerate other
-// tenants' state.
-func TestAuthorizeDropsUnreadableNonWrites(t *testing.T) {
+// A row the caller may not read comes back as forbidden — named from their
+// own bundle, with nothing about the stored row attached — so a scoped apply
+// reports what it ignored instead of looking complete.
+func TestAuthorizeReportsUnreadableNonWritesAsForbidden(t *testing.T) {
 	mine := meta.Owner{Kind: meta.OwnerTeam, ID: "t-mine"}
 	theirs := meta.Owner{Kind: meta.OwnerTeam, ID: "t-theirs"}
 	p := &Result{Entries: []Entry{
@@ -258,11 +258,16 @@ func TestAuthorizeDropsUnreadableNonWrites(t *testing.T) {
 	if err := Authorize(context.Background(), p, scopedAuthz{teamID: "t-mine"}); err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
-	if len(p.Entries) != 1 || p.Entries[0].Name != "ours" {
-		t.Fatalf("plan = %+v, want only the caller's own row", p.Entries)
+	if len(p.Entries) != 3 {
+		t.Fatalf("plan = %+v, want every submitted row reported", p.Entries)
 	}
-	if p.Counts.Unchanged != 1 || p.Counts.SkipDirty != 0 {
-		t.Fatalf("counts = %+v, want them to follow the filtered plan", p.Counts)
+	for _, e := range p.Entries[1:] {
+		if e.Action != ActionForbidden || e.ID != "" {
+			t.Fatalf("entry %+v, want a forbidden row carrying no stored state", e)
+		}
+	}
+	if p.Counts.Unchanged != 1 || p.Counts.SkipDirty != 0 || p.Counts.Forbidden != 2 {
+		t.Fatalf("counts = %+v, want 1 unchanged and 2 forbidden", p.Counts)
 	}
 }
 
