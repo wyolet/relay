@@ -13,17 +13,24 @@ import (
 
 const createBatch = `-- name: CreateBatch :exec
 
-INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items,
+                     project_id, team_id, principal_kind, principal_id, credential_kind, credential_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 type CreateBatchParams struct {
-	ID           string `db:"id" json:"id"`
-	RelayKeyHash string `db:"relay_key_hash" json:"relay_key_hash"`
-	PolicyID     string `db:"policy_id" json:"policy_id"`
-	InboundShape string `db:"inbound_shape" json:"inbound_shape"`
-	Status       string `db:"status" json:"status"`
-	TotalItems   int32  `db:"total_items" json:"total_items"`
+	ID             string `db:"id" json:"id"`
+	RelayKeyHash   string `db:"relay_key_hash" json:"relay_key_hash"`
+	PolicyID       string `db:"policy_id" json:"policy_id"`
+	InboundShape   string `db:"inbound_shape" json:"inbound_shape"`
+	Status         string `db:"status" json:"status"`
+	TotalItems     int32  `db:"total_items" json:"total_items"`
+	ProjectID      string `db:"project_id" json:"project_id"`
+	TeamID         string `db:"team_id" json:"team_id"`
+	PrincipalKind  string `db:"principal_kind" json:"principal_kind"`
+	PrincipalID    string `db:"principal_id" json:"principal_id"`
+	CredentialKind string `db:"credential_kind" json:"credential_kind"`
+	CredentialID   string `db:"credential_id" json:"credential_id"`
 }
 
 // ===== batches =====
@@ -35,6 +42,12 @@ func (q *Queries) CreateBatch(ctx context.Context, arg CreateBatchParams) error 
 		arg.InboundShape,
 		arg.Status,
 		arg.TotalItems,
+		arg.ProjectID,
+		arg.TeamID,
+		arg.PrincipalKind,
+		arg.PrincipalID,
+		arg.CredentialKind,
+		arg.CredentialID,
 	)
 	return err
 }
@@ -249,7 +262,8 @@ func (q *Queries) DeleteUser(ctx context.Context, id string) error {
 }
 
 const getBatch = `-- name: GetBatch :one
-SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
+SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
+       project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
 FROM batches WHERE id = $1
 `
 
@@ -265,6 +279,12 @@ func (q *Queries) GetBatch(ctx context.Context, id string) (Batch, error) {
 		&i.TotalItems,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.ProjectID,
+		&i.TeamID,
+		&i.PrincipalKind,
+		&i.PrincipalID,
+		&i.CredentialKind,
+		&i.CredentialID,
 	)
 	return i, err
 }
@@ -1211,7 +1231,8 @@ func (q *Queries) ListBatchItems(ctx context.Context, batchID string) ([]BatchIt
 }
 
 const listBatchesByRelayKey = `-- name: ListBatchesByRelayKey :many
-SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
+SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
+       project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
 FROM batches WHERE relay_key_hash = $1 ORDER BY created_at DESC
 `
 
@@ -1233,6 +1254,12 @@ func (q *Queries) ListBatchesByRelayKey(ctx context.Context, relayKeyHash string
 			&i.TotalItems,
 			&i.CreatedAt,
 			&i.CompletedAt,
+			&i.ProjectID,
+			&i.TeamID,
+			&i.PrincipalKind,
+			&i.PrincipalID,
+			&i.CredentialKind,
+			&i.CredentialID,
 		); err != nil {
 			return nil, err
 		}

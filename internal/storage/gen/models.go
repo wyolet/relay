@@ -32,14 +32,20 @@ type AuditEvent struct {
 }
 
 type Batch struct {
-	ID           string             `db:"id" json:"id"`
-	RelayKeyHash string             `db:"relay_key_hash" json:"relay_key_hash"`
-	PolicyID     string             `db:"policy_id" json:"policy_id"`
-	InboundShape string             `db:"inbound_shape" json:"inbound_shape"`
-	Status       string             `db:"status" json:"status"`
-	TotalItems   int32              `db:"total_items" json:"total_items"`
-	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	CompletedAt  pgtype.Timestamptz `db:"completed_at" json:"completed_at"`
+	ID             string             `db:"id" json:"id"`
+	RelayKeyHash   string             `db:"relay_key_hash" json:"relay_key_hash"`
+	PolicyID       string             `db:"policy_id" json:"policy_id"`
+	InboundShape   string             `db:"inbound_shape" json:"inbound_shape"`
+	Status         string             `db:"status" json:"status"`
+	TotalItems     int32              `db:"total_items" json:"total_items"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	CompletedAt    pgtype.Timestamptz `db:"completed_at" json:"completed_at"`
+	ProjectID      string             `db:"project_id" json:"project_id"`
+	TeamID         string             `db:"team_id" json:"team_id"`
+	PrincipalKind  string             `db:"principal_kind" json:"principal_kind"`
+	PrincipalID    string             `db:"principal_id" json:"principal_id"`
+	CredentialKind string             `db:"credential_kind" json:"credential_kind"`
+	CredentialID   string             `db:"credential_id" json:"credential_id"`
 }
 
 type BatchItem struct {

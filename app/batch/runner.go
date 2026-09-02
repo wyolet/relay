@@ -12,6 +12,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -36,11 +37,13 @@ type Runner struct {
 var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 
 // Run executes one item. requestID ties the usage event to the item (the jobq
-// job id); relayKeyHash + inbound select routing. It returns the upstream
-// status and the buffered response body. Usage emits automatically with
-// source="batch" when the pipeline body closes.
-func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbound adapters.Name, body []byte) (int, []byte, error) {
-	rk, _ := rn.Catalog.Current().KeyByHash(relayKeyHash)
+// job id); relayKeyHash + inbound select routing, and attr is the submission's
+// attribution as recorded at submit. It returns the upstream status and the
+// buffered response body. Usage emits automatically with source="batch" when
+// the pipeline body closes.
+func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
+	snap := rn.Catalog.Current()
+	rk, _ := snap.KeyByHash(relayKeyHash)
 	if rk == nil {
 		return 0, nil, errors.New("batch: relay key not found (revoked or deleted)")
 	}
@@ -72,6 +75,25 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 	lc := lifecycle.NewContext(requestID, "batch", time.Now())
 	lc.RelayKeyHash = relayKeyHash
 	lc.RequestedModel = modelName
+	lc.ProjectID = attr.ProjectID
+	lc.TeamID = attr.TeamID
+	lc.PrincipalKind = attr.PrincipalKind
+	lc.PrincipalID = attr.PrincipalID
+	lc.CredentialKind = attr.CredentialKind
+	lc.CredentialID = attr.CredentialID
+	// Slugs resolve from the snapshot here, as the policy name already does:
+	// the ids were fixed at submit, the names describe them as of execution.
+	if proj, ok := snap.Project(attr.ProjectID); ok {
+		lc.ProjectName = proj.Meta.Name
+	}
+	if t, ok := snap.Team(attr.TeamID); ok {
+		lc.TeamName = t.Meta.Name
+	}
+	if attr.PrincipalKind == string(key.PrincipalServiceAccount) {
+		if sa, ok := snap.ServiceAccount(attr.PrincipalID); ok {
+			lc.PrincipalName = sa.Meta.Name
+		}
+	}
 	if plan.Policy != nil {
 		lc.PolicyID = plan.Policy.Meta.ID
 		lc.PolicyName = plan.Policy.Meta.Name

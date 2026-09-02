@@ -80,7 +80,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Context rather than minting its own. Routing fills the identity ids
 	// later via applyPlanIdentity.
 	cls := ClassificationFrom(ctx)
-	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.Key, cls.ClientIP)
+	lc := mintLifecycle(ctx, d.Catalog, sourceForMode(cls.Mode), cls.Key, cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	// Retain the inbound body for the payloadlog observer (a reference, not

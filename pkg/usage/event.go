@@ -57,6 +57,23 @@ type Event struct {
 	HostID         string `json:"host_id,omitempty"`
 	HostKeyID      string `json:"host_key_id,omitempty"`
 
+	// Tenancy + principal attribution as resolved at request entry.
+	// Project/Team/Principal are the event-time slugs beside their ids —
+	// same denormalization rationale as Model/Host/Policy below. Principal
+	// is empty for a user principal (users live in Postgres, not the
+	// snapshot the entry reads). CredentialKind/CredentialID name the
+	// credential presented, not the subject; RelayKeyHash stays the hash of
+	// the inbound bearer and is empty for token credentials.
+	ProjectID      string `json:"project_id,omitempty"`
+	Project        string `json:"project,omitempty"`
+	TeamID         string `json:"team_id,omitempty"`
+	Team           string `json:"team,omitempty"`
+	PrincipalKind  string `json:"principal_kind,omitempty"`
+	PrincipalID    string `json:"principal_id,omitempty"`
+	Principal      string `json:"principal,omitempty"`
+	CredentialKind string `json:"credential_kind,omitempty"`
+	CredentialID   string `json:"credential_id,omitempty"`
+
 	// Token usage as reported by the upstream. Empty on error or when
 	// the adapter could not extract.
 	Tokens sdkusage.Tokens `json:"tokens,omitempty"`

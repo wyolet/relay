@@ -102,6 +102,9 @@ type UsageFilterInput struct {
 	RequestID    string   `query:"request_id" doc:"Exact match on a single request id (deep-link one event)."`
 	RelayKeyHash []string `query:"relay_key_hash" doc:"Match any of the given sha256 hashes of the inbound bearer."`
 	PolicyID     []string `query:"policy_id" doc:"Match any of the given Policy.metadata.id values."`
+	ProjectID    []string `query:"project_id" doc:"Match any of the given Project.metadata.id values."`
+	TeamID       []string `query:"team_id" doc:"Match any of the given Team.metadata.id values."`
+	PrincipalID  []string `query:"principal_id" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
 	ModelID      []string `query:"model_id" doc:"Match any of the given Model.metadata.id values."`
 	HostID       []string `query:"host_id" doc:"Match any of the given Host.metadata.id values."`
 	Source       []string `query:"source" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
@@ -181,6 +184,9 @@ func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		RequestID:      f.RequestID,
 		RelayKeyHash:   f.RelayKeyHash,
 		PolicyID:       f.PolicyID,
+		ProjectID:      f.ProjectID,
+		TeamID:         f.TeamID,
+		PrincipalID:    f.PrincipalID,
 		ModelID:        f.ModelID,
 		HostID:         f.HostID,
 		Source:         f.Source,
@@ -277,7 +283,7 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model\" | \"host\" | \"policy\" | \"provider\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
 }
 
 type usageSummaryOutput struct {
@@ -289,7 +295,7 @@ type usageSummaryOutput struct {
 type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
-	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series."`
 }
 
 type usageTimeSeriesOutput struct {

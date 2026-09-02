@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/key"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
@@ -87,7 +89,7 @@ func TestIntegration_SubmitRunResults(t *testing.T) {
 	const hash = "ownerhash1"
 
 	items := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
-	id, err := svc.Submit(ctx, hash, "policy1", "openai", items)
+	id, err := svc.Submit(ctx, nil, hash, "policy1", "openai", items)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -119,7 +121,7 @@ func TestIntegration_OwnerIsolation(t *testing.T) {
 	svc, _, _ := testService(t, func(_ context.Context, j *jobq.Job) ([]byte, error) { return j.Input(), nil })
 	ctx := context.Background()
 
-	id, err := svc.Submit(ctx, "owner", "p", "openai", [][]byte{[]byte("x")})
+	id, err := svc.Submit(ctx, nil, "owner", "p", "openai", [][]byte{[]byte("x")})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -148,7 +150,7 @@ func TestIntegration_Cancel(t *testing.T) {
 	ctx := context.Background()
 	const hash = "cancelowner"
 
-	id, err := svc.Submit(ctx, hash, "p", "openai", [][]byte{[]byte("1"), []byte("2")})
+	id, err := svc.Submit(ctx, nil, hash, "p", "openai", [][]byte{[]byte("1"), []byte("2")})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -169,4 +171,56 @@ func TestIntegration_Cancel(t *testing.T) {
 		t.Fatalf("batch status = %s, want cancelled", b.Status)
 	}
 	waitCounts(t, svc, id, hash, jobq.StateCancelled, 2, 3*time.Second)
+}
+
+// A submission records the principal's tenancy so an item that runs minutes
+// later is attributed to who submitted it, not to whatever the credential
+// resolves to at execution time.
+func TestIntegration_SubmitRecordsAttribution(t *testing.T) {
+	var seen Attribution
+	// Mirrors Service.Handler: the item reads its attribution off its own job
+	// metadata, which is what the runner puts on the lifecycle.
+	capture := func(_ context.Context, job *jobq.Job) ([]byte, error) {
+		seen = Attribution{
+			ProjectID:      job.Meta(metaProjectID),
+			TeamID:         job.Meta(metaTeamID),
+			PrincipalKind:  job.Meta(metaPrincipalKind),
+			PrincipalID:    job.Meta(metaPrincipalID),
+			CredentialKind: job.Meta(metaCredentialKind),
+			CredentialID:   job.Meta(metaCredentialID),
+		}
+		return job.Input(), nil
+	}
+	svc, _, _ := testService(t, capture)
+	ctx := context.Background()
+	const hash = "attribhash"
+
+	p := &inference.Principal{
+		ProjectID: "p1", TeamID: "t1",
+		ServiceAccountID: "sa1",
+		CredentialKind:   "key", CredentialID: "k1",
+	}
+	id, err := svc.Submit(ctx, p, hash, "policy1", "openai", [][]byte{[]byte("a")})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	b, err := svc.store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if b.ProjectID != "p1" || b.TeamID != "t1" {
+		t.Fatalf("tenancy: %q / %q", b.ProjectID, b.TeamID)
+	}
+	if b.PrincipalKind != string(key.PrincipalServiceAccount) || b.PrincipalID != "sa1" {
+		t.Fatalf("principal: %q / %q", b.PrincipalKind, b.PrincipalID)
+	}
+	if b.CredentialKind != "key" || b.CredentialID != "k1" {
+		t.Fatalf("credential: %q / %q", b.CredentialKind, b.CredentialID)
+	}
+
+	waitCounts(t, svc, id, hash, jobq.StateCompleted, 1, 3*time.Second)
+	if seen != b.Attribution {
+		t.Fatalf("execution read %+v from job metadata, want %+v", seen, b.Attribution)
+	}
 }

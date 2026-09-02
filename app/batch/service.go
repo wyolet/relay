@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/jobq"
 )
 
@@ -23,6 +25,13 @@ const (
 	metaItemIdx = "item_idx"
 	metaKeyHash = "relay_key_hash"
 	metaInbound = "inbound_shape"
+
+	metaProjectID      = "project_id"
+	metaTeamID         = "team_id"
+	metaPrincipalKind  = "principal_kind"
+	metaPrincipalID    = "principal_id"
+	metaCredentialKind = "credential_kind"
+	metaCredentialID   = "credential_id"
 )
 
 // ErrForbidden is returned when a caller asks about a batch they don't own.
@@ -53,6 +62,14 @@ func (s *Service) Handler() jobq.Handler {
 			ctx,
 			job.ID,
 			job.Meta(metaKeyHash),
+			Attribution{
+				ProjectID:      job.Meta(metaProjectID),
+				TeamID:         job.Meta(metaTeamID),
+				PrincipalKind:  job.Meta(metaPrincipalKind),
+				PrincipalID:    job.Meta(metaPrincipalID),
+				CredentialKind: job.Meta(metaCredentialKind),
+				CredentialID:   job.Meta(metaCredentialID),
+			},
 			adapters.Name(job.Meta(metaInbound)),
 			job.Input(),
 		)
@@ -68,7 +85,11 @@ func (s *Service) Handler() jobq.Handler {
 
 // Submit creates a batch and enqueues one job per item. items are raw request
 // bodies in the given inbound shape. Returns the new batch id.
-func (s *Service) Submit(ctx context.Context, relayKeyHash, policyID, inbound string, items [][]byte) (string, error) {
+//
+// p is the submitting principal, recorded on the batch so every item's usage
+// event carries the attribution the submission had rather than whatever the
+// credential resolves to when the item finally runs. Nil leaves it empty.
+func (s *Service) Submit(ctx context.Context, p *inference.Principal, relayKeyHash, policyID, inbound string, items [][]byte) (string, error) {
 	if len(items) == 0 {
 		return "", errors.New("batch: no items")
 	}
@@ -78,14 +99,26 @@ func (s *Service) Submit(ctx context.Context, relayKeyHash, policyID, inbound st
 	}
 	batchID := id.String()
 
-	if err := s.store.Create(ctx, &Batch{
+	b := &Batch{
 		ID:           batchID,
 		RelayKeyHash: relayKeyHash,
 		PolicyID:     policyID,
 		InboundShape: inbound,
 		Status:       StatusQueued,
 		TotalItems:   len(items),
-	}); err != nil {
+	}
+	if p != nil {
+		b.ProjectID, b.TeamID = p.ProjectID, p.TeamID
+		b.CredentialKind, b.CredentialID = p.CredentialKind, p.CredentialID
+		switch {
+		case p.ServiceAccountID != "":
+			b.PrincipalKind, b.PrincipalID = string(key.PrincipalServiceAccount), p.ServiceAccountID
+		case p.UserID != "":
+			b.PrincipalKind, b.PrincipalID = string(key.PrincipalUser), p.UserID
+		}
+	}
+	attr := b.Attribution
+	if err := s.store.Create(ctx, b); err != nil {
 		return "", err
 	}
 
@@ -98,6 +131,14 @@ func (s *Service) Submit(ctx context.Context, relayKeyHash, policyID, inbound st
 				metaItemIdx: strconv.Itoa(idx),
 				metaKeyHash: relayKeyHash,
 				metaInbound: inbound,
+				// Carried per item so execution reads the submission's
+				// attribution without a second trip to the batch row.
+				metaProjectID:      attr.ProjectID,
+				metaTeamID:         attr.TeamID,
+				metaPrincipalKind:  attr.PrincipalKind,
+				metaPrincipalID:    attr.PrincipalID,
+				metaCredentialKind: attr.CredentialKind,
+				metaCredentialID:   attr.CredentialID,
 			},
 		})
 		if err != nil {
