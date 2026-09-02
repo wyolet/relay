@@ -86,13 +86,14 @@ SELECT gen_random_uuid()::text, 'legacy', 'Legacy', t.id,
                 WHERE principal_sa_id IS NULL AND principal_user_id IS NULL)
 ON CONFLICT (name) DO NOTHING;
 
--- The account name carries 8 chars of the key id: two keys whose names
--- differ only past the truncation point would otherwise collide on the
--- UNIQUE name and share one account. 54 + 1 + 8 keeps it inside the 63-char
--- slug limit.
+-- The account name carries the last 8 chars of the key id: two keys whose
+-- names differ only past the truncation point would otherwise collide on the
+-- UNIQUE name and share one account. The leading chars of a UUIDv7 are a
+-- millisecond timestamp — identical across a backfill — so the suffix has to
+-- come off the random tail. 54 + 1 + 8 keeps it inside the 63-char slug limit.
 INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec)
 SELECT gen_random_uuid()::text,
-       left('legacy-' || k.name, 54) || '-' || left(k.id, 8), k.display_name, p.id,
+       left('legacy-' || k.name, 54) || '-' || right(k.id, 8), k.display_name, p.id,
        jsonb_build_object('owner', jsonb_build_object('kind', 'project', 'id', p.id)),
        jsonb_build_object('projectId', p.id)
   FROM relay_keys k
@@ -110,7 +111,7 @@ UPDATE relay_keys k
   FROM service_accounts sa
  WHERE k.principal_sa_id IS NULL
    AND k.principal_user_id IS NULL
-   AND sa.name = left('legacy-' || k.name, 54) || '-' || left(k.id, 8);
+   AND sa.name = left('legacy-' || k.name, 54) || '-' || right(k.id, 8);
 
 DO $$
 BEGIN
