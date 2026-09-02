@@ -2,9 +2,24 @@ package audit
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// failingSink always errors, and counts how many times Write was called so
+// a test can assert the retry happened.
+type failingSink struct {
+	memSink
+	writes atomic.Int32
+}
+
+func (f *failingSink) Write(ctx context.Context, evs []Event) error {
+	f.writes.Add(1)
+	return errors.New("sink unavailable")
+}
 
 // blockingSink parks the drain goroutine so the queue can be filled past
 // its bound deterministically.
@@ -81,6 +96,49 @@ func TestEmitterCloseDrains(t *testing.T) {
 	if got := len(sink.all()); got != 10 {
 		t.Fatalf("written = %d after a post-Close Emit, want 10", got)
 	}
+}
+
+// A sink that keeps failing must not lose the row silently: the write is
+// retried once, and only then counted as dropped.
+func TestEmitterRetriesThenDropsOnPersistentSinkFailure(t *testing.T) {
+	sink := &failingSink{}
+	e := NewEmitter(sink, quietLogger())
+	const n = 10
+	for i := 0; i < n; i++ {
+		e.Emit(Event{Action: "policies.update"})
+	}
+	e.Close()
+
+	if got := e.DroppedCount(); got != n {
+		t.Fatalf("dropped = %d, want %d", got, n)
+	}
+	if got := sink.writes.Load(); got != 2 {
+		t.Fatalf("sink.Write calls = %d, want 2 (the write + one retry)", got)
+	}
+}
+
+// Close no longer closes the queue channel, so a concurrent Emit is a no-op
+// rather than a send-on-closed-channel panic — run under -race.
+func TestEmitterCloseDoesNotRaceEmit(t *testing.T) {
+	sink := &memSink{}
+	e := NewEmitter(sink, quietLogger())
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				e.Emit(Event{Action: "policies.update"})
+			}
+		}()
+	}
+	e.Close()
+	wg.Wait()
+
+	// Already-queued events before Close still get written; nothing panics.
+	e.Emit(Event{Action: "policies.update"})
+	e.Close()
 }
 
 func TestPruneUsesLiveRetention(t *testing.T) {

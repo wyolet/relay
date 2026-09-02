@@ -224,6 +224,10 @@ func main() {
 		slog.Error("auth: inference-token signing key unavailable", "err", err)
 		os.Exit(1)
 	}
+	// PUT /license writes the section; the watcher is what carries the change
+	// to the other pods (and back to this one after a NOTIFY).
+	settingswatch.New(cat, settings.SectionLicense, applyLicenseSection(licenseSvc), slog.Default()).Start()
+
 	settingswatch.New(cat, settings.AuthTokensSection, func(a settings.AuthTokens) {
 		ref := a.SigningKey
 		if !a.Enabled {
@@ -599,6 +603,7 @@ func main() {
 		batch.NewStore(st.Pool()),
 		batchQueue,
 		&batch.Runner{Resolver: routing.New(cat), Pipeline: pl, Specs: specRegistry, Catalog: cat},
+		batchCaller,
 	)
 	batchQueue.Register(batch.Queue, batchSvc.Handler())
 	if err := batchQueue.Start(listenerCtx); err != nil {

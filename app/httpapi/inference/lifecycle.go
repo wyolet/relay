@@ -2,8 +2,6 @@ package inference
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"time"
 
@@ -28,17 +26,19 @@ import (
 // auth middleware resolved plus at most three snapshot map reads for the
 // project/team/service-account slugs. Post-flight observers must never
 // re-resolve them — the row they name may be gone by then.
-func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, keyToken, clientIP string) *lifecycle.Context {
+func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientIP string) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), source, time.Now())
-	if keyToken != "" {
-		sum := sha256.Sum256([]byte(keyToken))
-		lc.RelayKeyHash = hex.EncodeToString(sum[:])
-	}
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP
 	}
-	if p := PrincipalFrom(ctx); p != nil && cat != nil {
-		applyPrincipalIdentity(lc, cat.Current(), p)
+	if p := PrincipalFrom(ctx); p != nil {
+		// The hash the auth middleware matched on — empty for a token, which
+		// presents no key. Re-hashing the bearer here would stamp a hash on
+		// token traffic that matches no key row.
+		lc.RelayKeyHash = p.KeyHash
+		if cat != nil {
+			applyPrincipalIdentity(lc, cat.Current(), p)
+		}
 	}
 	return lc
 }

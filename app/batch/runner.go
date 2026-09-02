@@ -38,16 +38,13 @@ type Runner struct {
 var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 
 // Run executes one item. requestID ties the usage event to the item (the jobq
-// job id); relayKeyHash + inbound select routing, and attr is the submission's
-// attribution as recorded at submit. It returns the upstream status and the
-// buffered response body. Usage emits automatically with source="batch" when
-// the pipeline body closes.
-func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
+// job id); policyID is the policy the submission already resolved to (the
+// resolution order lives in the auth layer, not here), and attr is the
+// submission's attribution as recorded at submit. It returns the upstream
+// status and the buffered response body. Usage emits automatically with
+// source="batch" when the pipeline body closes.
+func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
 	snap := rn.Catalog.Current()
-	rk, _ := snap.KeyByHash(relayKeyHash)
-	if rk == nil {
-		return 0, nil, errors.New("batch: relay key not found (revoked or deleted)")
-	}
 
 	modelName, _, err := inference.ExtractModelStream(body)
 	if err != nil {
@@ -55,14 +52,20 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, attr 
 	}
 
 	var pol *policy.Policy
-	if rk.Spec.PolicyID != "" {
-		pol, _ = snap.Policy(rk.Spec.PolicyID)
+	if policyID != "" {
+		pol, _ = snap.Policy(policyID)
+	}
+	// Payload logging is a per-key opt-in; a token-submitted batch has no key
+	// row to read it from and stays off.
+	payloadLogging := false
+	if rk, ok := snap.KeyByHash(relayKeyHash); ok && rk != nil {
+		payloadLogging = rk.Spec.PayloadLoggingEnabled
 	}
 	plan, err := rn.Resolver.Resolve(routing.Request{
 		ModelName:             modelName,
 		RawModelName:          modelName,
 		Policy:                pol,
-		PayloadLoggingEnabled: rk.Spec.PayloadLoggingEnabled,
+		PayloadLoggingEnabled: payloadLogging,
 	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)

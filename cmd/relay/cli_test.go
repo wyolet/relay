@@ -194,8 +194,9 @@ func TestTokenMintUsesPasswordLogin(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	out := captureStdout(t, func() {
+		t.Setenv("RELAY_PASSWORD", "s3cret")
 		if err := runToken([]string{"mint", "--project", "ml-search", "--ttl", "30m",
-			"--user", "alice", "--password", "s3cret", "--url", srv.URL}); err != nil {
+			"--user", "alice", "--url", srv.URL}); err != nil {
 			t.Fatalf("token mint: %v", err)
 		}
 	})
@@ -204,5 +205,37 @@ func TestTokenMintUsesPasswordLogin(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out); got != "eyJhbGciOiJFZERTQSJ9.payload.sig" {
 		t.Errorf("stdout = %q, want the bare token", got)
+	}
+}
+
+// TestTokenMintWithNoPasswordAndNoTerminalFails pins readPassword's
+// non-interactive guard: without $RELAY_PASSWORD and with no terminal to
+// prompt on, it must error rather than fall through to a login attempt with
+// an empty password.
+func TestTokenMintWithNoPasswordAndNoTerminalFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("no request should reach the server: %s", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Setenv("RELAY_PASSWORD", "")
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	w.Close() // a closed pipe read-end is never a terminal
+	origStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = origStdin })
+
+	err = runToken([]string{"mint", "--project", "ml-search", "--user", "alice", "--url", srv.URL})
+	if err == nil {
+		t.Fatal("runToken = nil, want an error for no password and no terminal")
+	}
+	if !strings.Contains(err.Error(), "RELAY_PASSWORD") {
+		t.Errorf("err = %v, want it to name RELAY_PASSWORD as the fix", err)
 	}
 }

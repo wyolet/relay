@@ -43,7 +43,7 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "host-key", existing.Meta.ID, existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
 		}
-		if err := d.Authz.Authorize(ctx, "host-keys.update", authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
+		if err := d.Authz.Authorize(ctx, "host-keys.rotate", authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		if existing.Spec.ValueFrom.Kind != hostkey.ValueKindStored && existing.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {

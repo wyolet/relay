@@ -33,7 +33,7 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		if err := checkHostKeyRefsVisible(ctx, d, incoming.Spec.HostKeyIDs); err != nil {
+		if err := checkHostKeyRefsVisible(ctx, d, incoming.Spec.HostKeyIDs, incoming.Meta.Owner); err != nil {
 			return err
 		}
 		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {

@@ -56,6 +56,18 @@ type Reservation struct {
 	lbRules []Rule
 	// swRules holds session-window rules that need count refund on cancel.
 	swRules []Rule
+	// noCommit marks a reservation that metered nothing — a check-only
+	// Reserve. Committing it would be a second script call for no state.
+	noCommit bool
+}
+
+// SetNoCommit marks res as metering nothing, so Commit is a no-op. Set by
+// callers that reserve only to run a check (token revocation) alongside no
+// rate-limit rule.
+func (r *Reservation) SetNoCommit() {
+	if r != nil {
+		r.noCommit = true
+	}
 }
 
 // Reserve checks all rules and increments counters atomically via one RunScript call.
@@ -145,6 +157,9 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
 //   - meter "concurrency":   decremented (not incremented)
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
+	if res != nil && res.noCommit {
+		return nil
+	}
 	call, err := l.buildCommitCall(res, obs, l.clock())
 	if err != nil {
 		return err
@@ -172,10 +187,10 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 // per-reservation script and args are produced by the same builder.
 func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observations) error {
 	present := make([]*Reservation, 0, 2)
-	if a != nil {
+	if a != nil && !a.noCommit {
 		present = append(present, a)
 	}
-	if b != nil {
+	if b != nil && !b.noCommit {
 		present = append(present, b)
 	}
 	switch len(present) {

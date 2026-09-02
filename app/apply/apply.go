@@ -21,6 +21,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/settings"
 )
 
 // Action is what a plan entry would do to one row.
@@ -86,6 +87,11 @@ type Options struct {
 	// or host-owned rows.
 	Prune    bool
 	Selector string
+
+	// Gov supplies the governance:<kind> sections every planned mutation is
+	// checked against. Nil skips the check — the boot seed runs before the
+	// settings cache exists.
+	Gov settings.Reader
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -102,6 +108,40 @@ func (e *AuthzError) Error() string {
 	return fmt.Sprintf("apply: %s %q: %v", e.Entry.Kind, e.Entry.Name, e.Err)
 }
 func (e *AuthzError) Unwrap() error { return e.Err }
+
+// InvalidError reports a document whose translated row failed its kind's
+// Validate. Nothing was planned or written.
+type InvalidError struct {
+	Kind, Name string
+	Err        error
+}
+
+func (e *InvalidError) Error() string {
+	return fmt.Sprintf("apply: %s %q: %v", e.Kind, e.Name, e.Err)
+}
+func (e *InvalidError) Unwrap() error { return e.Err }
+
+// GovernanceError reports a row whose mutation the governance settings
+// refuse. Nothing was planned or written.
+type GovernanceError struct {
+	Kind, Name string
+	Err        error
+}
+
+func (e *GovernanceError) Error() string {
+	return fmt.Sprintf("apply: %s %q: %v", e.Kind, e.Name, e.Err)
+}
+func (e *GovernanceError) Unwrap() error { return e.Err }
+
+// DuplicateError reports two submitted documents naming the same row. Last
+// one wins would silently discard the first.
+type DuplicateError struct {
+	Kind, Name string
+}
+
+func (e *DuplicateError) Error() string {
+	return fmt.Sprintf("apply: %s %q is declared twice in the submitted documents", e.Kind, e.Name)
+}
 
 // StoreError reports a write that failed part-way through. Applied lists the
 // entries that landed before it.
@@ -135,12 +175,19 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 		return nil, err
 	}
 
-	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel}
+	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel, admin: authz.IsAdmin(ctx)}
 	if err := b.run(docs); err != nil {
 		return nil, err
 	}
 
 	p := &Result{Entries: b.entries}
+	recount(p)
+	return p, nil
+}
+
+// recount refreshes the summary after the entry list changes.
+func recount(p *Result) {
+	p.Counts = Counts{}
 	for _, e := range p.Entries {
 		switch e.Action {
 		case ActionCreate:
@@ -155,7 +202,6 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 			p.Counts.Delete++
 		}
 	}
-	return p, nil
 }
 
 // Execute authorizes every mutating entry up front and only then writes.
@@ -184,24 +230,36 @@ func Execute(ctx context.Context, p *Result, authzr authz.Authorizer) ([]Entry, 
 	return applied, nil
 }
 
-// Authorize checks every mutating entry against authzr and returns an
-// *AuthzError for the first denial. A nil authorizer skips the pass — the
-// boot seed has no actor. Callers that only plan (dry run) run it too, so a
-// caller who may write nothing never sees the diff.
+// Authorize checks every entry against authzr and returns an *AuthzError for
+// the first denied write. A nil authorizer skips the pass — the boot seed has
+// no actor. Callers that only plan (dry run) run it too, so a caller who may
+// write nothing never sees the diff.
+//
+// Non-writing entries (unchanged, skip-dirty) are authorized under get and
+// silently dropped when denied: reporting a row the caller may not read would
+// make the plan an oracle for other tenants' state.
 func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 	if p == nil || authzr == nil {
 		return nil
 	}
+	kept := make([]Entry, 0, len(p.Entries))
 	for _, e := range p.Entries {
-		if e.write == nil {
-			continue
-		}
 		owner := e.owner
 		res := authz.Resource{Kind: singularOf(e.plural), ID: e.ID, Name: e.Name, Owner: &owner}
+		if e.write == nil {
+			if authzr.Authorize(ctx, e.plural+".get", res) != nil {
+				continue
+			}
+			kept = append(kept, e)
+			continue
+		}
 		if err := authzr.Authorize(ctx, e.plural+"."+string(verbOf(e.Action)), res); err != nil {
 			return &AuthzError{Entry: e, Err: err}
 		}
+		kept = append(kept, e)
 	}
+	p.Entries = kept
+	recount(p)
 	return nil
 }
 

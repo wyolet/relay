@@ -87,7 +87,7 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := checkPolicyRefVisible(ctx, d, in.Body.Spec.PolicyID); err != nil {
+		if err := checkPolicyRefVisible(ctx, d, in.Body.Spec.PolicyID, k.Meta.Owner); err != nil {
 			return nil, err
 		}
 

@@ -234,6 +234,55 @@ func TestReconcile_ProjectDeleteEvictsBindings(t *testing.T) {
 	}
 }
 
+// TestApplyRoleBindingUpsert_EmptySubjectsRemovesIt covers the shape a
+// binding actually arrives in once PG cascades its last subject away: still
+// enabled, but Spec.Subjects is empty. Validate rejects that, so the upsert
+// must be treated as a delete rather than leaving the stale grant behind.
+func TestApplyRoleBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
+	f := newRBACFixture()
+	c := f.catalog(t)
+
+	stripped := *f.teamWide
+	stripped.Spec.Subjects = nil
+	if err := c.ApplyRoleBindingUpsert(&stripped); err != nil {
+		t.Fatalf("ApplyRoleBindingUpsert: %v", err)
+	}
+	s := c.Current()
+	if _, ok := s.RoleBinding(f.teamWide.Meta.ID); ok {
+		t.Error("binding with no subjects should be removed from the snapshot, not kept stale")
+	}
+	if got := s.RoleBindingsForSubject("group:platform-eng"); len(got) != 0 {
+		for _, b := range got {
+			if b.Meta.ID == f.teamWide.Meta.ID {
+				t.Errorf("subject index still holds the emptied binding: %v", bindingNames(got))
+			}
+		}
+	}
+}
+
+// TestApplyPolicyBindingUpsert_EmptySubjectsRemovesIt is the PolicyBinding
+// half of the same rule.
+func TestApplyPolicyBindingUpsert_EmptySubjectsRemovesIt(t *testing.T) {
+	f := newRBACFixture()
+	c := f.catalog(t)
+
+	stripped := *f.highA
+	stripped.Spec.Subjects = nil
+	if err := c.ApplyPolicyBindingUpsert(&stripped); err != nil {
+		t.Fatalf("ApplyPolicyBindingUpsert: %v", err)
+	}
+	s := c.Current()
+	if _, ok := s.PolicyBinding(f.highA.Meta.ID); ok {
+		t.Error("policy binding with no subjects should be removed from the snapshot, not kept stale")
+	}
+	got := policyBindingNames(s.PolicyBindingsForProject(f.live.Meta.ID))
+	for _, name := range got {
+		if name == f.highA.Meta.Name {
+			t.Errorf("project index still holds the emptied binding: %v", got)
+		}
+	}
+}
+
 func TestReconcile_PolicyDeleteEvictsPolicyBindings(t *testing.T) {
 	f := newRBACFixture()
 	c := f.catalog(t)

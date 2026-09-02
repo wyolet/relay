@@ -10,7 +10,10 @@
 // validates and enqueues, execution happens off to the side.
 package batch
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Status is the coarse, cached lifecycle of a batch. The authoritative per-item
 // state lives in jobq; this is a cheap roll-up plus the terminal cancellation
@@ -50,6 +53,34 @@ type Attribution struct {
 	PrincipalID    string
 	CredentialKind string
 	CredentialID   string
+}
+
+// Caller is the identity a batch request arrives with, resolved by the
+// transport. app/batch never reads an HTTP context itself: the inference
+// layer owns bearer classification and the Key → ServiceAccount →
+// PolicyBinding resolution order, and hands the result down.
+type Caller struct {
+	Attribution
+	// KeyHash is the presented key's hash; empty for a token.
+	KeyHash string
+	// PolicyID is the already-resolved policy, not the key's raw field.
+	PolicyID string
+}
+
+// CallerFunc resolves the caller from a request context.
+type CallerFunc func(ctx context.Context) *Caller
+
+// Owner is the opaque string a batch is authorized by on read and cancel:
+// the bearer's key hash when it has one, else the principal, so a
+// token-authenticated caller reaches its own batches and no one else's.
+func (c *Caller) Owner() string {
+	if c == nil {
+		return ""
+	}
+	if c.KeyHash != "" {
+		return c.KeyHash
+	}
+	return c.PrincipalKind + ":" + c.PrincipalID
 }
 
 // Item maps one ordinal within a batch to the jobq job that runs it.

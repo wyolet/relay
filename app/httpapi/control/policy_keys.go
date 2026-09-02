@@ -55,7 +55,7 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.ID, rk.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("key %q not found", in.KeyID))
 		}
-		if err := d.Authz.Authorize(ctx, "keys.update", authz.Resource{Kind: "key", ID: in.KeyID, Owner: &rk.Meta.Owner}); err != nil {
+		if err := d.Authz.Authorize(ctx, "policies.attach", authz.Resource{Kind: "key", ID: in.KeyID, Owner: &rk.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		rk.Spec.PolicyID = in.PolicyID
@@ -85,7 +85,7 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.ID, rk.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("key %q not found", in.KeyID))
 		}
-		if err := d.Authz.Authorize(ctx, "keys.update", authz.Resource{Kind: "key", ID: in.KeyID, Owner: &rk.Meta.Owner}); err != nil {
+		if err := d.Authz.Authorize(ctx, "policies.detach", authz.Resource{Kind: "key", ID: in.KeyID, Owner: &rk.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		if rk.Spec.PolicyID != in.PolicyID {

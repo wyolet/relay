@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,13 +17,17 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/session"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/internal/identity"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/kv"
 )
 
@@ -282,6 +287,57 @@ func TestAuditReadIsAdminOnlyUnderRBAC(t *testing.T) {
 		if err := testRBAC().Authorize(ctx, "audit.read", authz.Resource{Kind: "audit"}); err != nil {
 			t.Fatalf("%s: audit.read denied (%v), want allowed", who, err)
 		}
+	}
+}
+
+// execOnlyDBTX satisfies gen.DBTX with just enough to back UpsertSetting
+// (an Exec) — every other method is unused on this path.
+type execOnlyDBTX struct{}
+
+func (execOnlyDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (execOnlyDBTX) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errors.New("execOnlyDBTX: Query not implemented")
+}
+func (execOnlyDBTX) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
+func (execOnlyDBTX) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
+	return 0, errors.New("execOnlyDBTX: CopyFrom not implemented")
+}
+
+// A bare "value" path is a secret-bearing leaf and gets filtered to an empty
+// change set; the settings PUT handler must record the section path instead
+// so the update leaves a change trail.
+func TestAuditSettingsUpdateRecordsSectionPath(t *testing.T) {
+	deps := mountDeps(t)
+	sink := &auditSink{}
+	deps.Audit = audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	deps.Stores.Settings = settings.NewStore(gen.New(execOnlyDBTX{}))
+
+	r := chi.NewRouter()
+	Mount(r, deps)
+
+	body := `{"enabled":true,"allowUnauthenticated":false}`
+	req := httptest.NewRequest(http.MethodPut, "/settings/proxy-mode", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+deps.AdminToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	deps.Audit.Close()
+
+	evs := sink.all()
+	if len(evs) != 1 {
+		t.Fatalf("events = %d, want 1", len(evs))
+	}
+	ev := evs[0]
+	if ev.Action != "settings.update" {
+		t.Fatalf("action = %q, want settings.update", ev.Action)
+	}
+	if ev.Change == nil || !contains(ev.Change.Fields, "sections.proxy-mode") {
+		t.Fatalf("change = %+v, want sections.proxy-mode", ev.Change)
 	}
 }
 

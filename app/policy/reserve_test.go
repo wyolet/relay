@@ -203,6 +203,51 @@ func TestReserveInbound_ScopeTag(t *testing.T) {
 	}
 }
 
+// TestReserveInbound_RevocationRuleIsFirst pins the rule order: the token
+// revocation check must reach the limiter ahead of any rate-limit rule, so
+// a revoked token answers 401 rather than the 429 an over-limit rule
+// evaluated first would produce.
+func TestReserveInbound_RevocationRuleIsFirst(t *testing.T) {
+	svc, store, pol := reserveFixture(t, appratelimit.Rule{
+		Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute),
+	})
+
+	if _, err := svc.ReserveInbound(context.Background(), InboundInput{
+		Policy: pol, TeamID: "team-1", TokenJTI: "jti-1",
+	}); err != nil {
+		t.Fatalf("ReserveInbound: %v", err)
+	}
+	keys := store.lastKeys()
+	if len(keys) != 2 {
+		t.Fatalf("script keys = %v, want the denylist key plus the rate-limit rule key", keys)
+	}
+	want := RevokedKey("team-1", "jti-1")
+	if keys[0] != want {
+		t.Fatalf("first key = %q, want the revocation key %q first", keys[0], want)
+	}
+}
+
+// TestReserveInbound_ThenCommit_IsOneScriptTotal is the other half of the
+// no-commit invariant: not just Reserve, but Reserve+Commit together must
+// cost exactly one kv round trip when revocation is the only rule — the
+// commit-side script must be skipped, not merely a no-op RunScript call.
+func TestReserveInbound_ThenCommit_IsOneScriptTotal(t *testing.T) {
+	svc, store, pol := reserveFixture(t)
+
+	res, err := svc.ReserveInbound(context.Background(), InboundInput{
+		Policy: pol, TeamID: "team-1", TokenJTI: "jti-1",
+	})
+	if err != nil {
+		t.Fatalf("ReserveInbound: %v", err)
+	}
+	if err := svc.CommitInbound(context.Background(), res, pkgratelimit.Observations{}); err != nil {
+		t.Fatalf("CommitInbound: %v", err)
+	}
+	if got := len(store.names); got != 1 {
+		t.Fatalf("total script calls = %d (%v), want exactly 1 (Reserve only, Commit skipped)", got, store.names)
+	}
+}
+
 func TestRevokedKeyFormat(t *testing.T) {
 	if got := RevokedKey("019200aa", "019200bb"); got != "limit:{team:019200aa}:jti:019200bb" {
 		t.Errorf("RevokedKey = %q", got)

@@ -6,13 +6,11 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-
-	"github.com/wyolet/relay/app/httpapi/inference"
 )
 
 // Routes returns the /v1/batches HTTP surface. Mount it on the inference router
-// behind the readiness → classify → key-auth chain so every handler sees
-// an authenticated relay key via inference.KeyFromContext.
+// behind the readiness → classify → auth chain so the Service's CallerFunc
+// resolves an authenticated caller (key or token) from the request context.
 //
 //	POST   /v1/batches            submit (JSON: {shape, requests:[...]})
 //	GET    /v1/batches/{id}       status + per-item states
@@ -33,8 +31,8 @@ type submitRequest struct {
 }
 
 func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	rk := inference.KeyFromContext(r.Context())
-	if rk == nil {
+	c := s.caller(r.Context())
+	if c == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
@@ -55,8 +53,7 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	for i, raw := range req.Requests {
 		items[i] = raw
 	}
-	id, err := s.Submit(r.Context(), inference.PrincipalFrom(r.Context()),
-		rk.Spec.KeyHash, rk.Spec.PolicyID, req.Shape, items)
+	id, err := s.Submit(r.Context(), c, req.Shape, items)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -67,12 +64,12 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
-	rk := inference.KeyFromContext(r.Context())
-	if rk == nil {
+	c := s.caller(r.Context())
+	if c == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	view, err := s.Status(r.Context(), chi.URLParam(r, "id"), rk.Spec.KeyHash)
+	view, err := s.Status(r.Context(), chi.URLParam(r, "id"), c.Owner())
 	if err != nil {
 		writeLookupErr(w, err)
 		return
@@ -81,12 +78,12 @@ func (s *Service) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleResults(w http.ResponseWriter, r *http.Request) {
-	rk := inference.KeyFromContext(r.Context())
-	if rk == nil {
+	c := s.caller(r.Context())
+	if c == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	results, err := s.Results(r.Context(), chi.URLParam(r, "id"), rk.Spec.KeyHash)
+	results, err := s.Results(r.Context(), chi.URLParam(r, "id"), c.Owner())
 	if err != nil {
 		writeLookupErr(w, err)
 		return
@@ -95,12 +92,12 @@ func (s *Service) handleResults(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) handleCancel(w http.ResponseWriter, r *http.Request) {
-	rk := inference.KeyFromContext(r.Context())
-	if rk == nil {
+	c := s.caller(r.Context())
+	if c == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	if err := s.Cancel(r.Context(), chi.URLParam(r, "id"), rk.Spec.KeyHash); err != nil {
+	if err := s.Cancel(r.Context(), chi.URLParam(r, "id"), c.Owner()); err != nil {
 		writeLookupErr(w, err)
 		return
 	}

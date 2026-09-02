@@ -89,8 +89,19 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 		return readScope{}, huma.Error500InternalServerError(err.Error())
 	}
 	for _, k := range all {
-		if k.Spec.KeyHash != "" && s.Visible(ctx, "key", k.Meta.ID, k.Meta.Owner) {
+		// The verb is the endpoint's own (usage/logs), not the key's: a
+		// caller who may see a key still needs the read grant on this
+		// stream before its events enter their scope.
+		if !s.Visible(ctx, kind, k.Meta.ID, k.Meta.Owner) {
+			continue
+		}
+		if k.Spec.KeyHash != "" {
 			sc.hashes = append(sc.hashes, k.Spec.KeyHash)
+		}
+		// A rotated key's old hash is still the caller's own traffic until
+		// the grace window closes.
+		if k.Spec.PreviousKeyHash != "" {
+			sc.hashes = append(sc.hashes, k.Spec.PreviousKeyHash)
 		}
 	}
 	return sc, nil

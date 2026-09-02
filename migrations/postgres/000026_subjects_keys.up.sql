@@ -58,31 +58,35 @@ UPDATE relay_keys k
    AND k.metadata->'owner'->>'id' = u.id;
 
 -- Backfill 2: every remaining key gets a generated ServiceAccount in a
--- system Project `legacy`. The tenancy rows use fixed ids so re-running
--- the backfill converges instead of forking a second `legacy` project.
+-- system Project `legacy`. The tenancy rows are keyed by name, not by a
+-- fixed id: `name` is what carries the UNIQUE constraint, so an operator
+-- who already has a team named `system` keeps it and the backfill hangs
+-- its rows off that id instead of failing on the duplicate name.
 INSERT INTO teams (id, name, display_name, metadata, spec)
-SELECT '01920000-0000-7000-8000-000000000001', 'system', 'System',
+SELECT gen_random_uuid()::text, 'system', 'System',
        '{"owner":{"kind":"system"}}'::jsonb, '{}'::jsonb
  WHERE EXISTS (SELECT 1 FROM relay_keys
                 WHERE principal_sa_id IS NULL AND principal_user_id IS NULL)
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO projects (id, name, display_name, team_id, metadata, spec)
-SELECT '01920000-0000-7000-8000-000000000002', 'legacy', 'Legacy',
-       '01920000-0000-7000-8000-000000000001',
-       '{"owner":{"kind":"team","id":"01920000-0000-7000-8000-000000000001"}}'::jsonb,
-       '{"teamId":"01920000-0000-7000-8000-000000000001"}'::jsonb
- WHERE EXISTS (SELECT 1 FROM relay_keys
+SELECT gen_random_uuid()::text, 'legacy', 'Legacy', t.id,
+       jsonb_build_object('owner', jsonb_build_object('kind', 'team', 'id', t.id)),
+       jsonb_build_object('teamId', t.id)
+  FROM teams t
+ WHERE t.name = 'system'
+   AND EXISTS (SELECT 1 FROM relay_keys
                 WHERE principal_sa_id IS NULL AND principal_user_id IS NULL)
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec)
-SELECT gen_random_uuid()::text, 'legacy-' || k.name, k.display_name,
-       '01920000-0000-7000-8000-000000000002',
-       '{"owner":{"kind":"project","id":"01920000-0000-7000-8000-000000000002"}}'::jsonb,
-       '{"projectId":"01920000-0000-7000-8000-000000000002"}'::jsonb
+SELECT gen_random_uuid()::text, 'legacy-' || k.name, k.display_name, p.id,
+       jsonb_build_object('owner', jsonb_build_object('kind', 'project', 'id', p.id)),
+       jsonb_build_object('projectId', p.id)
   FROM relay_keys k
- WHERE k.principal_sa_id IS NULL AND k.principal_user_id IS NULL
+ CROSS JOIN projects p
+ WHERE p.name = 'legacy'
+   AND k.principal_sa_id IS NULL AND k.principal_user_id IS NULL
 ON CONFLICT (name) DO NOTHING;
 
 UPDATE relay_keys k
@@ -90,8 +94,7 @@ UPDATE relay_keys k
        spec = jsonb_set(k.spec, '{principal}',
                         jsonb_build_object('kind', 'serviceaccount', 'id', sa.id), true),
        metadata = jsonb_set(k.metadata, '{owner}',
-                            jsonb_build_object('kind', 'project',
-                                               'id', '01920000-0000-7000-8000-000000000002'), true)
+                            jsonb_build_object('kind', 'project', 'id', sa.project_id), true)
   FROM service_accounts sa
  WHERE k.principal_sa_id IS NULL
    AND k.principal_user_id IS NULL

@@ -53,7 +53,7 @@ func registerHostKeyHealth(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
 		}
-		if err := d.Authz.Authorize(ctx, "host-keys.get",
+		if err := d.Authz.Authorize(ctx, "host-keys.health",
 			authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
 			if errors.Is(err, authz.ErrUnauthenticated) {
 				return nil, mapAuthzErr(err)

@@ -354,7 +354,7 @@ func TestScopeIsADisjunction(t *testing.T) {
 		ScopeProjectID:    []string{"p-1"},
 		ScopeRelayKeyHash: []string{"h-mine"},
 	}))
-	if len(got) != 2 || got[0] != "in-project" && got[1] != "in-project" {
+	if len(got) != 2 || !contains(got, "in-project") || !contains(got, "own-key") {
 		t.Fatalf("scoped = %v, want the project event and the own-key event", got)
 	}
 
@@ -378,4 +378,13 @@ func ids(evs []Event) []string {
 		out = append(out, e.RequestID)
 	}
 	return out
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

@@ -294,13 +294,14 @@ func registerKind[T any](
 				}
 				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-			// API never creates system-owned rows. system is reserved for
-			// seed paths (Store.Upsert directly, bypassing this handler).
-			// When defaultOwnerKind is set, an empty owner gets stamped;
-			// an explicit "system" gets rejected. Kinds without a default
-			// (Model, HostKey) require the caller to specify owner.kind
-			// because their valid owner is per-row.
-			if m.Owner.Kind == meta.OwnerSystem {
+			// system is reserved for seed paths (Store.Upsert directly,
+			// bypassing this handler) except on kinds whose default owner IS
+			// system — Team, Group and Role name a scope or a grant, so a
+			// personal row of those kinds would let any caller mint one and
+			// inherit whatever already binds to its name. Kinds without a
+			// default (Model, HostKey) require the caller to specify
+			// owner.kind because their valid owner is per-row.
+			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
@@ -585,7 +586,7 @@ func guardKeyPolicy(d Deps) mutationGuard[key.Key] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID)
+		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner)
 	}
 }
 
@@ -601,7 +602,7 @@ func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
 			return err
 		}
-		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID)
+		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner)
 	}
 }
 
@@ -681,7 +682,11 @@ func checkTeamRefVisible(ctx context.Context, d Deps, teamID string) error {
 	return nil
 }
 
-func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
+// checkPolicyRefVisible rejects a policy the caller may not see, and a
+// project-owned policy referenced from a personal (user-owned) row: a
+// project's upstream credentials are reached through a ServiceAccount in
+// that project, so the traffic carries its attribution and limits (D51).
+func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
 	if policyID == "" {
 		return nil
 	}
@@ -696,6 +701,9 @@ func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
 	if !s.Visible(ctx, "policy", p.Meta.ID, p.Meta.Owner) {
 		return huma.Error400BadRequest(fmt.Sprintf("policy %q not found", policyID))
 	}
+	if refOwner.Kind == meta.OwnerUser && p.Meta.Owner.Kind == meta.OwnerProject {
+		return huma.Error400BadRequest("personal rows cannot reference project resources")
+	}
 	return nil
 }
 
@@ -703,7 +711,7 @@ func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
 // policy referencing a foreign host-key would spend someone else's upstream
 // credential. Missing rows pass through (host-key existence is deliberately
 // not checked at policy write time; the inference path handles it).
-func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string) error {
+func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string, refOwner meta.Owner) error {
 	if len(keyIDs) == 0 {
 		return nil
 	}
@@ -718,6 +726,11 @@ func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string) error
 		}
 		if !s.Visible(ctx, "host-key", k.Meta.ID, k.Meta.Owner) {
 			return huma.Error400BadRequest(fmt.Sprintf("host-key %q not found", id))
+		}
+		// Same rule as checkPolicyRefVisible: a personal policy must not
+		// spend a project's upstream credential (D51).
+		if refOwner.Kind == meta.OwnerUser && k.Meta.Owner.Kind == meta.OwnerProject {
+			return huma.Error400BadRequest("personal rows cannot reference project resources")
 		}
 	}
 	return nil
@@ -1016,7 +1029,13 @@ func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
 // gates authoring a custom role on the license. Delete stays open so an
 // expired license never traps a row an operator wants gone.
 func guardRole(d Deps) mutationGuard[role.Role] {
-	return func(_ context.Context, action string, _, incoming *role.Role) error {
+	return func(_ context.Context, action string, existing, incoming *role.Role) error {
+		// Built-ins are the relay's own rows: every binding in a fresh
+		// deployment points at one, so neither edit nor delete goes through
+		// generic CRUD.
+		if existing != nil && role.IsBuiltin(existing.Meta.Name) {
+			return huma.Error403Forbidden(fmt.Sprintf("role %q is built in: %s goes through the seed, not generic CRUD", existing.Meta.Name, action))
+		}
 		if action == "delete" || incoming == nil {
 			return nil
 		}
@@ -1072,7 +1091,7 @@ func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
 			return err
 		}
-		if err := checkPolicyRefExists(ctx, d, incoming.Spec.PolicyID); err != nil {
+		if err := checkPolicyRefExists(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner); err != nil {
 			return err
 		}
 		return checkSubjectsExist(ctx, d, incoming.Spec.Subjects)
@@ -1101,7 +1120,7 @@ func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) error {
 
 // checkPolicyRefExists rejects a binding whose policy does not exist, then
 // applies the same visibility rule the other policy refs use.
-func checkPolicyRefExists(ctx context.Context, d Deps, policyID string) error {
+func checkPolicyRefExists(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
 	if d.Stores == nil || d.Stores.Policy == nil {
 		return nil
 	}
@@ -1109,7 +1128,7 @@ func checkPolicyRefExists(ctx context.Context, d Deps, policyID string) error {
 	if err != nil || p == nil {
 		return huma.Error400BadRequest(fmt.Sprintf("policy %q does not exist", policyID))
 	}
-	return checkPolicyRefVisible(ctx, d, policyID)
+	return checkPolicyRefVisible(ctx, d, policyID, refOwner)
 }
 
 // checkSubjectsExist rejects an id-bearing subject that names no row. Group
@@ -1162,7 +1181,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[team.Team](
 		api, "teams", "team", d.Stores.Team, d.Authz, tmeta,
 		func(t *team.Team) error { return t.Validate() },
-		meta.OwnerUser,
+		meta.OwnerSystem,
 		listScanResolver(d.Stores.Team, tmeta),
 		nil,
 		nil,
@@ -1210,7 +1229,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[group.Group](
 		api, "groups", "group", d.Stores.Group, d.Authz, gmeta,
 		func(g *group.Group) error { return g.Validate() },
-		meta.OwnerUser,
+		meta.OwnerSystem,
 		listScanResolver(d.Stores.Group, gmeta),
 		guardGroupMembers(d),
 		nil,
@@ -1226,7 +1245,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	registerKind[role.Role](
 		api, "roles", "role", d.Stores.Role, d.Authz, rolemeta,
 		func(r *role.Role) error { return r.Validate() },
-		meta.OwnerUser,
+		meta.OwnerSystem,
 		listScanResolver(d.Stores.Role, rolemeta),
 		guardRole(d),
 		nil,

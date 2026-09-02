@@ -12,9 +12,26 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/binding"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/ids"
 )
 
 type fakeKeyLister []*key.Key
@@ -226,4 +243,124 @@ func TestUsageReadScoping(t *testing.T) {
 			t.Fatalf("admin status = %d, want 200: %s", w.Code, w.Body)
 		}
 	})
+}
+
+func TestScopeOfIncludesPreviousKeyHash(t *testing.T) {
+	k := &key.Key{}
+	k.Meta = meta.Metadata{ID: meta.NewID(), Name: "k-rotated", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}
+	k.Spec.KeyHash = "hash-new"
+	k.Spec.PreviousKeyHash = "hash-old"
+	keys := fakeKeyLister{k}
+
+	ctx := actor.WithActor(context.Background(), scopeActors["alice"])
+	sc, err := scopeOf(ctx, testRBAC(), nil, keys, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"hash-new": true, "hash-old": true}
+	if len(sc.hashes) != len(want) {
+		t.Fatalf("hashes = %v, want both the current and the previous hash", sc.hashes)
+	}
+	for _, h := range sc.hashes {
+		if !want[h] {
+			t.Fatalf("unexpected hash %q in scope %v", h, sc.hashes)
+		}
+	}
+}
+
+// viewerFixture builds a two-project catalog with a viewer role bound at
+// project p1 only, for exercising scopeOf's project-scan and per-kind
+// branches, which an empty catalog (testRBAC) can never reach.
+func viewerFixture(t *testing.T) (cat *appcatalog.Catalog, viewer *actor.Actor, p1ID string) {
+	t.Helper()
+	builtins, err := role.Builtins()
+	if err != nil {
+		t.Fatalf("built-in roles: %v", err)
+	}
+	yes := true
+	var viewerRoleID string
+	for _, r := range builtins {
+		r.Meta.ID = ids.New()
+		r.Spec.Enabled = &yes
+		if r.Meta.Name == "viewer" {
+			viewerRoleID = r.Meta.ID
+		}
+	}
+	if viewerRoleID == "" {
+		t.Fatal("no built-in viewer role")
+	}
+
+	teamID, p1, p2, viewerUserID := ids.New(), ids.New(), ids.New(), ids.New()
+	tm := &team.Team{Meta: meta.Metadata{ID: teamID, Name: "t1", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	tm.Spec.Enabled = &yes
+	proj1 := &project.Project{Meta: meta.Metadata{ID: p1, Name: "p1", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	proj1.Spec.TeamID = teamID
+	proj1.Spec.Enabled = &yes
+	proj2 := &project.Project{Meta: meta.Metadata{ID: p2, Name: "p2", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	proj2.Spec.TeamID = teamID
+	proj2.Spec.Enabled = &yes
+
+	rb := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: "viewer-p1", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p1}}}
+	rb.Spec.RoleID = viewerRoleID
+	rb.Spec.Scope = meta.Owner{Kind: meta.OwnerProject, ID: p1}
+	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: viewerUserID}}
+	rb.Spec.Enabled = &yes
+
+	cat = appcatalog.New(
+		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
+		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
+		tokenList[key.Key]{}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
+	)
+	cat.UseTenancy(
+		tokenList[team.Team]{tm}, tokenList[project.Project]{proj1, proj2},
+		tokenList[serviceaccount.ServiceAccount]{}, tokenList[group.Group]{},
+		tokenList[role.Role](builtins), tokenList[rolebinding.RoleBinding]{rb},
+		tokenList[policybinding.PolicyBinding]{},
+	)
+	if err := cat.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	viewer = &actor.Actor{UserID: viewerUserID, Subjects: appcatalog.UserSubjects(viewerUserID, nil, nil)}
+	return cat, viewer, p1
+}
+
+func TestScopeOfProjectBranchResolvesOnlyTheBoundProject(t *testing.T) {
+	cat, viewer, p1 := viewerFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	ctx := actor.WithActor(context.Background(), viewer)
+
+	sc, err := scopeOf(ctx, rbac, cat, nil, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.unrestricted {
+		t.Fatal("a viewer bound at one project should not resolve unrestricted")
+	}
+	if len(sc.projectIDs) != 1 || sc.projectIDs[0] != p1 {
+		t.Fatalf("projectIDs = %v, want exactly [%s]", sc.projectIDs, p1)
+	}
+}
+
+// The viewer role grants usage.{get,read} but not logs — scopeOf must
+// resolve the two kinds independently rather than sharing one scope.
+func TestScopeOfLogsIsNotGrantedByAUsageOnlyRole(t *testing.T) {
+	cat, viewer, p1 := viewerFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	ctx := actor.WithActor(context.Background(), viewer)
+
+	usageSc, err := scopeOf(ctx, rbac, cat, nil, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usageSc.projectIDs) != 1 || usageSc.projectIDs[0] != p1 {
+		t.Fatalf("usage scope = %+v, want the bound project %s", usageSc, p1)
+	}
+
+	logsSc, err := scopeOf(ctx, rbac, cat, nil, "logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logsSc.unrestricted || len(logsSc.projectIDs) != 0 || len(logsSc.hashes) != 0 {
+		t.Fatalf("logs scope = %+v, want empty (viewer role has no logs grant)", logsSc)
+	}
 }

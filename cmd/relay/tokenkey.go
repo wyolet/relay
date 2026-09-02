@@ -57,7 +57,16 @@ func loadTokenSigningKey(ctx context.Context, stores *appcatalog.Stores, masterK
 		cfg = &next
 		slog.Info("auth: generated an inference-token signing key", "secret", ref.ID)
 	}
-	return applyTokenSigningKey(ctx, stores.Secrets, cfg.SigningKey, signer, verifier)
+	if err := applyTokenSigningKey(ctx, stores.Secrets, cfg.SigningKey, signer, verifier); err != nil {
+		// Tokens are one feature; a key that no longer decrypts (rotated
+		// master key, deleted secret) must not stop the gateway from serving
+		// inference. Mint answers 503 until the ref is fixed.
+		slog.Warn("auth: inference tokens disabled — signing key unusable",
+			"err", err, "secret", cfg.SigningKey.ID)
+		signer.SetSeed(nil)
+		verifier.SetKey(nil)
+	}
+	return nil
 }
 
 // applyTokenSigningKey resolves the ref and installs the key on both sides.

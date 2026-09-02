@@ -23,6 +23,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 )
 
@@ -64,6 +65,9 @@ type builder struct {
 	rows     *Rows
 	idx      *index
 	selector labelSelector
+	// admin relaxes the rules an operator may cross: today only re-parenting
+	// a row onto a different owner.
+	admin bool
 
 	entries []Entry
 	// deletes are collected per kind in the same order the upserts run and
@@ -301,6 +305,9 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 	for _, d := range k.Docs {
 		wm := docMeta(d)
 		name := wm.Name
+		if declared[name] {
+			return &DuplicateError{Kind: k.Kind, Name: name}
+		}
 		declared[name] = true
 
 		obj, err := k.To(*d, b.idx)
@@ -324,7 +331,12 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 		case k.Meta(prev).Dirty && !b.opts.Force:
 			e.Action = ActionSkipDirty
 		default:
-			e.owner = k.Meta(prev).Owner
+			// The stored owner wins: a document must not move a row into
+			// another tenant's scope. An operator may still re-parent.
+			if !b.admin {
+				m.Owner = k.Meta(prev).Owner
+			}
+			e.owner = m.Owner
 			fields := changedFields(viewOf(prev, k.Meta(prev)), viewOf(obj, m))
 			if len(fields) == 0 {
 				e.Action = ActionUnchanged
@@ -334,6 +346,12 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 			}
 		}
 		if e.Action == ActionCreate || e.Action == ActionUpdate {
+			if err := validateRow(obj); err != nil {
+				return &InvalidError{Kind: k.Kind, Name: name, Err: err}
+			}
+			if err := b.governs(settings.OpEdit, route.Singular, e.owner); err != nil {
+				return &GovernanceError{Kind: k.Kind, Name: name, Err: err}
+			}
 			row := obj
 			e.write = func(ctx context.Context) error { return k.Upsert(ctx, row) }
 		}
@@ -347,6 +365,9 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 			if declared[m.Name] || !prunable(k.Kind, m.Owner) || !b.selector.matches(m.Labels) {
 				continue
 			}
+			if err := b.governs(settings.OpDelete, route.Singular, m.Owner); err != nil {
+				return &GovernanceError{Kind: k.Kind, Name: m.Name, Err: err}
+			}
 			id := m.ID
 			pruned = append(pruned, Entry{
 				Kind: k.Kind, Name: m.Name, ID: id, Action: ActionDelete,
@@ -358,6 +379,27 @@ func planKind[D any, T any](b *builder, k kindWiring[D, T]) error {
 	}
 	b.deletes = append(b.deletes, pruned)
 	return nil
+}
+
+// validateRow runs the kind's own Validate when it has one. Every catalog
+// kind does; the assertion keeps planKind free of a per-kind wiring field.
+func validateRow(row any) error {
+	v, ok := row.(interface{ Validate() error })
+	if !ok {
+		return nil
+	}
+	return v.Validate()
+}
+
+// governs applies the governance:<kind> settings to a planned mutation. The
+// system tier of settings.Governs is a rule about generic CRUD; apply is the
+// declarative loader that owns system rows (providers, hosts, built-in
+// roles), so system-owned rows are exempt here.
+func (b *builder) governs(op settings.Op, kind string, owner meta.Owner) error {
+	if b.opts.Gov == nil || owner.Kind == meta.OwnerSystem {
+		return nil
+	}
+	return settings.Governs(b.opts.Gov, op, kind, string(owner.Kind))
 }
 
 // planOverlays diffs the model overlays. Overlays carry no metadata of their

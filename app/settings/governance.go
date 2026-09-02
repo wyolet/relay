@@ -58,6 +58,10 @@ const (
 	ownerProject = "project"
 )
 
+// tenancyKinds are the kinds whose rows are system-owned by construction
+// rather than by belonging to the catalog.
+var tenancyKinds = map[string]bool{"team": true, "group": true, "role": true}
+
 // Reader is the narrow read surface Governs needs — satisfied by
 // *catalog.Catalog. Settings cache reads are lock-free and total (a
 // registered section always returns at least its Defaults).
@@ -92,6 +96,14 @@ func (e *MutationError) Error() string { return e.Reason }
 func Governs(r Reader, op Op, kind, ownerKind string) error {
 	switch ownerKind {
 	case ownerSystem:
+		// A Team, Group or Role is system-owned when nobody owns it
+		// personally — a scope or a grant belongs to the deployment, not to
+		// whoever created it. That is not the "the relay's own row" the
+		// system tier protects, so these follow the tenant tier and stay
+		// editable through CRUD.
+		if tenancyKinds[kind] {
+			return nil
+		}
 		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
 			Reason: fmt.Sprintf("%s is system-owned: deletion is never permitted and edits go through limited APIs, not generic CRUD", kind)}
 	case ownerUser, ownerTeam, ownerProject:

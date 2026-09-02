@@ -180,12 +180,15 @@ func (c *Catalog) ReloadTokenVersions(ctx context.Context) error {
 	if c.tokenVersions == nil {
 		return nil
 	}
+	// The read is inside the lock: a full Reload landing between a read
+	// outside it and the swap below would be overwritten by versions older
+	// than the ones it just published.
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
 	versions, err := c.tokenVersions.TokenVersions(ctx)
 	if err != nil {
 		return fmt.Errorf("catalog: token versions: %w", err)
 	}
-	c.rmu.Lock()
-	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
 	s.tokenVersionByUser = versions
 	c.snap.Store(s)

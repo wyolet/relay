@@ -60,7 +60,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "key", existing.Meta.ID, existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("key %q not found", in.ID))
 		}
-		if err := d.Authz.Authorize(ctx, "keys.update", authz.Resource{Kind: "key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
+		if err := d.Authz.Authorize(ctx, "keys.rotate", authz.Resource{Kind: "key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		// Rotating a revoked key would hand out a token that still can't
