@@ -61,6 +61,7 @@ func (s *Snapshot) clone() *Snapshot {
 		refsByProject:   copyRefMap(s.refsByProject),
 
 		refsByServiceAccount: copyRefMap(s.refsByServiceAccount),
+		refsByRole:           copyRefMap(s.refsByRole),
 
 		teamsByID:   shallowMap(s.teamsByID),
 		teamsByName: shallowMap(s.teamsByName),
@@ -76,6 +77,15 @@ func (s *Snapshot) clone() *Snapshot {
 		groupsByID:   shallowMap(s.groupsByID),
 		groupsByName: shallowMap(s.groupsByName),
 		groupsByUser: copySliceMap(s.groupsByUser),
+
+		rolesByID:   shallowMap(s.rolesByID),
+		rolesByName: shallowMap(s.rolesByName),
+
+		roleBindingsByID:      shallowMap(s.roleBindingsByID),
+		roleBindingsBySubject: copySliceMap(s.roleBindingsBySubject),
+
+		policyBindingsByID:      shallowMap(s.policyBindingsByID),
+		policyBindingsByProject: copySliceMap(s.policyBindingsByProject),
 	}
 	return c
 }

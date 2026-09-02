@@ -41,6 +41,7 @@ import (
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/routing"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/session"
@@ -197,6 +198,13 @@ func main() {
 	usersStore := user.NewStore(gen.New(st.Pool()))
 	if err := user.SeedFromIdentity(bootCtx, usersStore, idStore, slog.Default()); err != nil {
 		slog.Error("user seed from identity YAML failed", "err", err)
+		os.Exit(1)
+	}
+
+	// Built-in roles: seed-if-absent, so an operator's edits survive and a
+	// fresh deployment always has the seven system rows to bind against.
+	if err := role.SeedBuiltins(bootCtx, stores.Role, slog.Default()); err != nil {
+		slog.Error("built-in role seed failed", "err", err)
 		os.Exit(1)
 	}
 

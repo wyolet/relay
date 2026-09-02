@@ -8,7 +8,8 @@
 //  4. Translate each DTO → domain object via manifest.ToXxx using the merged
 //     resolver, stamping Meta.ID from the same map.
 //  5. Upsert in dependency order: Team, Project, Group, Provider, Host,
-//     RateLimit, HostKey, Model, Policy, ServiceAccount, Key.
+//     RateLimit, HostKey, Model, Policy, Role, ServiceAccount, Key, and the
+//     role/policy bindings last.
 //
 // Diffing, dry-run, and identity (User) handling are deliberately omitted —
 // this is the minimal "make the rows be there" path. Idempotent: re-running
@@ -31,10 +32,13 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
@@ -68,6 +72,9 @@ type Result struct {
 	Policies        int
 	ServiceAccounts int
 	Groups          int
+	Roles           int
+	RoleBindings    int
+	PolicyBindings  int
 	Keys            int
 	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
 }
@@ -103,6 +110,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 		serviceaccount: serviceaccount.NewStore(q),
 		group:          group.NewStore(opts.Pool),
+		role:           role.NewStore(q),
+		rolebinding:    rolebinding.NewStore(opts.Pool),
+		policybinding:  policybinding.NewStore(opts.Pool),
 		user:           user.NewStore(q),
 	}
 
@@ -125,6 +135,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		polDocs  []*manifest.PolicyDTO
 		saDocs   []*manifest.ServiceAccountDTO
 		grpDocs  []*manifest.GroupDTO
+		roleDocs []*manifest.RoleDTO
+		rbDocs   []*manifest.RoleBindingDTO
+		pbDocs   []*manifest.PolicyBindingDTO
 		rkDocs   []*manifest.KeyDTO
 	)
 	for _, d := range docs {
@@ -153,6 +166,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			saDocs = append(saDocs, d.ServiceAccount)
 		case d.Group != nil:
 			grpDocs = append(grpDocs, d.Group)
+		case d.Role != nil:
+			roleDocs = append(roleDocs, d.Role)
+		case d.RoleBinding != nil:
+			rbDocs = append(rbDocs, d.RoleBinding)
+		case d.PolicyBinding != nil:
+			pbDocs = append(pbDocs, d.PolicyBinding)
 		case d.Key != nil:
 			rkDocs = append(rkDocs, d.Key)
 		}
@@ -172,6 +191,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	mintIDs(resolver.Policies, polDocs, func(d *manifest.PolicyDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.ServiceAccounts, saDocs, func(d *manifest.ServiceAccountDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Groups, grpDocs, func(d *manifest.GroupDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.Roles, roleDocs, func(d *manifest.RoleDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.RoleBindings, rbDocs, func(d *manifest.RoleBindingDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.PolicyBindings, pbDocs, func(d *manifest.PolicyBindingDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Keys, rkDocs, func(d *manifest.KeyDTO) string { return d.Metadata.Name })
 
 	res := &Result{}
@@ -342,6 +364,21 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		res.Groups++
 	}
+	for _, d := range roleDocs {
+		r, err := manifest.ToRole(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: role %q: %w", d.Metadata.Name, err)
+		}
+		r.Meta.ID = resolver.Roles[d.Metadata.Name]
+		if resolver.skip(r.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.role.Upsert(ctx, r); err != nil {
+			return nil, fmt.Errorf("seed: upsert role %q: %w", d.Metadata.Name, err)
+		}
+		res.Roles++
+	}
 	for _, d := range saDocs {
 		sa, err := manifest.ToServiceAccount(*d, resolver)
 		if err != nil {
@@ -372,6 +409,38 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		res.Keys++
 	}
+	// Bindings last: they name roles, tenancy rows, policies, and the
+	// principals every loop above just wrote.
+	for _, d := range rbDocs {
+		b, err := manifest.ToRoleBinding(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: rolebinding %q: %w", d.Metadata.Name, err)
+		}
+		b.Meta.ID = resolver.RoleBindings[d.Metadata.Name]
+		if resolver.skip(b.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.rolebinding.Upsert(ctx, b); err != nil {
+			return nil, fmt.Errorf("seed: upsert rolebinding %q: %w", d.Metadata.Name, err)
+		}
+		res.RoleBindings++
+	}
+	for _, d := range pbDocs {
+		b, err := manifest.ToPolicyBinding(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: policybinding %q: %w", d.Metadata.Name, err)
+		}
+		b.Meta.ID = resolver.PolicyBindings[d.Metadata.Name]
+		if resolver.skip(b.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.policybinding.Upsert(ctx, b); err != nil {
+			return nil, fmt.Errorf("seed: upsert policybinding %q: %w", d.Metadata.Name, err)
+		}
+		res.PolicyBindings++
+	}
 
 	return res, nil
 }
@@ -393,6 +462,9 @@ type storeSet struct {
 
 	serviceaccount *serviceaccount.Store
 	group          *group.Store
+	role           *role.Store
+	rolebinding    *rolebinding.Store
+	policybinding  *policybinding.Store
 	user           *user.Store
 }
 
@@ -413,6 +485,9 @@ type indexBuilder struct {
 
 	ServiceAccounts map[string]string
 	Groups          map[string]string
+	Roles           map[string]string
+	RoleBindings    map[string]string
+	PolicyBindings  map[string]string
 	Users           map[string]string
 
 	// Dirty is keyed by row id: true when the existing PG row was operator-
@@ -442,6 +517,7 @@ func (i *indexBuilder) ServiceAccountID(n string) (string, bool) {
 	return v, ok
 }
 func (i *indexBuilder) GroupID(n string) (string, bool) { v, ok := i.Groups[n]; return v, ok }
+func (i *indexBuilder) RoleID(n string) (string, bool)  { v, ok := i.Roles[n]; return v, ok }
 func (i *indexBuilder) UserID(n string) (string, bool)  { v, ok := i.Users[n]; return v, ok }
 
 func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
@@ -460,6 +536,9 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 
 		ServiceAccounts: map[string]string{},
 		Groups:          map[string]string{},
+		Roles:           map[string]string{},
+		RoleBindings:    map[string]string{},
+		PolicyBindings:  map[string]string{},
 		Users:           map[string]string{},
 
 		Dirty: map[string]bool{},
@@ -567,6 +646,30 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	for _, g := range groups {
 		idx.Groups[g.Meta.Name] = g.Meta.ID
 		idx.Dirty[g.Meta.ID] = g.Meta.Dirty
+	}
+	roles, err := s.role.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list roles: %w", err)
+	}
+	for _, r := range roles {
+		idx.Roles[r.Meta.Name] = r.Meta.ID
+		idx.Dirty[r.Meta.ID] = r.Meta.Dirty
+	}
+	rbs, err := s.rolebinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list rolebindings: %w", err)
+	}
+	for _, b := range rbs {
+		idx.RoleBindings[b.Meta.Name] = b.Meta.ID
+		idx.Dirty[b.Meta.ID] = b.Meta.Dirty
+	}
+	pbs, err := s.policybinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list policybindings: %w", err)
+	}
+	for _, b := range pbs {
+		idx.PolicyBindings[b.Meta.Name] = b.Meta.ID
+		idx.Dirty[b.Meta.ID] = b.Meta.Dirty
 	}
 	// Users are not a catalog kind, but group members and user-principal
 	// keys name them, so the resolver needs their slugs.

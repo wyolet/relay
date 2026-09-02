@@ -9,9 +9,11 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
@@ -123,6 +125,33 @@ func validateServiceAccountInSnap(sa *serviceaccount.ServiceAccount, s *Snapshot
 		if _, ok := s.policiesByID[sa.Spec.PolicyID]; !ok {
 			return fmt.Errorf("serviceaccount %q: spec.policyId %q does not resolve", sa.Meta.Name, sa.Spec.PolicyID)
 		}
+	}
+	return nil
+}
+
+func validateRoleBindingInSnap(b *rolebinding.RoleBinding, s *Snapshot) error {
+	if _, ok := s.rolesByID[b.Spec.RoleID]; !ok {
+		return fmt.Errorf("rolebinding %q: spec.roleId %q does not resolve", b.Meta.Name, b.Spec.RoleID)
+	}
+	switch b.Spec.Scope.Kind {
+	case meta.OwnerTeam:
+		if _, ok := s.teamsByID[b.Spec.Scope.ID]; !ok {
+			return fmt.Errorf("rolebinding %q: scope team %q does not resolve", b.Meta.Name, b.Spec.Scope.ID)
+		}
+	case meta.OwnerProject:
+		if _, ok := s.projectsByID[b.Spec.Scope.ID]; !ok {
+			return fmt.Errorf("rolebinding %q: scope project %q does not resolve", b.Meta.Name, b.Spec.Scope.ID)
+		}
+	}
+	return nil
+}
+
+func validatePolicyBindingInSnap(b *policybinding.PolicyBinding, s *Snapshot) error {
+	if _, ok := s.projectsByID[b.Spec.ProjectID]; !ok {
+		return fmt.Errorf("policybinding %q: spec.projectId %q does not resolve", b.Meta.Name, b.Spec.ProjectID)
+	}
+	if _, ok := s.policiesByID[b.Spec.PolicyID]; !ok {
+		return fmt.Errorf("policybinding %q: spec.policyId %q does not resolve", b.Meta.Name, b.Spec.PolicyID)
 	}
 	return nil
 }

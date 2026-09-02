@@ -18,10 +18,13 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -95,6 +98,9 @@ type Stores struct {
 
 	ServiceAccount *serviceaccount.Store
 	Group          *group.Store
+	Role           *role.Store
+	RoleBinding    *rolebinding.Store
+	PolicyBinding  *policybinding.Store
 
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
@@ -134,6 +140,9 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 
 		ServiceAccount: serviceaccount.NewStore(q),
 		Group:          group.NewStore(opts.Pool),
+		Role:           role.NewStore(q),
+		RoleBinding:    rolebinding.NewStore(opts.Pool),
+		PolicyBinding:  policybinding.NewStore(opts.Pool),
 
 		Secrets: secReg,
 	}
@@ -143,7 +152,8 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		stores.Binding,
 	)
 	cat.UseOverlays(stores.Overlay)
-	cat.UseTenancy(stores.Team, stores.Project, stores.ServiceAccount, stores.Group)
+	cat.UseTenancy(stores.Team, stores.Project, stores.ServiceAccount, stores.Group,
+		stores.Role, stores.RoleBinding, stores.PolicyBinding)
 	cat.settings.store = stores.Settings
 
 	// OAuth credential resolver: stores its token blob via the same AES-GCM
@@ -228,6 +238,9 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 
 		serviceAccount: stores.ServiceAccount,
 		group:          stores.Group,
+		role:           stores.Role,
+		roleBinding:    stores.RoleBinding,
+		policyBinding:  stores.PolicyBinding,
 	})
 	return listener, nil
 }

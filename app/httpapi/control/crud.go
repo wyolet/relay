@@ -29,13 +29,17 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
@@ -1003,6 +1007,133 @@ func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
 	}
 }
 
+// guardRole reserves the built-in role names for the seeded system rows and
+// gates authoring a custom role on the license. Delete stays open so an
+// expired license never traps a row an operator wants gone.
+func guardRole(d Deps) mutationGuard[role.Role] {
+	return func(_ context.Context, action string, _, incoming *role.Role) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		if role.IsBuiltin(incoming.Meta.Name) {
+			return huma.Error400BadRequest(fmt.Sprintf("role name %q is reserved for the built-in role", incoming.Meta.Name))
+		}
+		if d.License == nil || !d.License.Has(license.FeatureCustomRoles) {
+			return huma.Error403Forbidden(license.ErrRequired.Error())
+		}
+		return nil
+	}
+}
+
+// guardRoleBinding re-derives the binding's owner from spec.scope (spec is
+// the source of truth, owner mirrors it) and rejects a role, a scope target,
+// or an id-bearing subject the caller may not see. Group subjects are
+// unchecked: an IdP group has no row.
+func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
+	return func(ctx context.Context, action string, _, incoming *rolebinding.RoleBinding) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		incoming.StampOwner()
+		if err := checkRoleRefVisible(ctx, d, incoming.Spec.RoleID); err != nil {
+			return err
+		}
+		switch incoming.Spec.Scope.Kind {
+		case meta.OwnerTeam:
+			if err := checkTeamRefVisible(ctx, d, incoming.Spec.Scope.ID); err != nil {
+				return err
+			}
+		case meta.OwnerProject:
+			if err := checkProjectRefVisible(ctx, d, incoming.Spec.Scope.ID); err != nil {
+				return err
+			}
+		}
+		return checkSubjectsExist(ctx, d, incoming.Spec.Subjects)
+	}
+}
+
+// guardPolicyBinding re-derives the binding's owner from spec.projectId,
+// rejects a project, policy, or subject the caller may not see, and applies
+// the default priority so the stored row orders against explicit values.
+func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
+	return func(ctx context.Context, action string, _, incoming *policybinding.PolicyBinding) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		incoming.StampOwner()
+		if incoming.Spec.Priority == 0 {
+			incoming.Spec.Priority = policybinding.DefaultPriority
+		}
+		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
+			return err
+		}
+		if err := checkPolicyRefExists(ctx, d, incoming.Spec.PolicyID); err != nil {
+			return err
+		}
+		return checkSubjectsExist(ctx, d, incoming.Spec.Subjects)
+	}
+}
+
+// checkRoleRefVisible rejects a binding whose role does not exist (400) or
+// is not visible to the caller (404).
+func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) error {
+	if d.Stores == nil || d.Stores.Role == nil {
+		return nil
+	}
+	r, err := d.Stores.Role.Get(ctx, roleID)
+	if err != nil || r == nil {
+		return huma.Error400BadRequest(fmt.Sprintf("role %q does not exist", roleID))
+	}
+	s, ok := d.Authz.(authz.Scoper)
+	if !ok {
+		return nil
+	}
+	if !s.Visible(ctx, "role", r.Meta.Owner) {
+		return huma.Error404NotFound(fmt.Sprintf("role %q not found", roleID))
+	}
+	return nil
+}
+
+// checkPolicyRefExists rejects a binding whose policy does not exist, then
+// applies the same visibility rule the other policy refs use.
+func checkPolicyRefExists(ctx context.Context, d Deps, policyID string) error {
+	if d.Stores == nil || d.Stores.Policy == nil {
+		return nil
+	}
+	p, err := d.Stores.Policy.Get(ctx, policyID)
+	if err != nil || p == nil {
+		return huma.Error400BadRequest(fmt.Sprintf("policy %q does not exist", policyID))
+	}
+	return checkPolicyRefVisible(ctx, d, policyID)
+}
+
+// checkSubjectsExist rejects an id-bearing subject that names no row. Group
+// subjects carry a name an IdP may supply, so they are never checked.
+func checkSubjectsExist(ctx context.Context, d Deps, subjects []rolebinding.Subject) error {
+	for i := range subjects {
+		sub := &subjects[i]
+		switch sub.Kind {
+		case rolebinding.SubjectUser:
+			if d.Users == nil {
+				continue
+			}
+			u, err := d.Users.Get(ctx, sub.ID)
+			if err != nil || u == nil {
+				return huma.Error400BadRequest(fmt.Sprintf("user %q does not exist", sub.ID))
+			}
+		case rolebinding.SubjectServiceAccount:
+			if d.Stores == nil || d.Stores.ServiceAccount == nil {
+				continue
+			}
+			sa, err := d.Stores.ServiceAccount.Get(ctx, sub.ID)
+			if err != nil || sa == nil {
+				return huma.Error400BadRequest(fmt.Sprintf("service account %q does not exist", sub.ID))
+			}
+		}
+	}
+	return nil
+}
+
 // registerCRUD wires the eight kinds onto api. metaOf closures + slug
 // resolvers are supplied per kind.
 func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
@@ -1019,6 +1150,9 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	projmeta := func(p *project.Project) *meta.Metadata { return &p.Meta }
 	sameta := func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta }
 	gmeta := func(g *group.Group) *meta.Metadata { return &g.Meta }
+	rolemeta := func(r *role.Role) *meta.Metadata { return &r.Meta }
+	rbmeta := func(b *rolebinding.RoleBinding) *meta.Metadata { return &b.Meta }
+	pbmeta := func(b *policybinding.PolicyBinding) *meta.Metadata { return &b.Meta }
 
 	registerKind[team.Team](
 		api, "teams", "team", d.Stores.Team, d.Authz, tmeta,
@@ -1082,6 +1216,56 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&groupFilter,
+	)
+
+	registerKind[role.Role](
+		api, "roles", "role", d.Stores.Role, d.Authz, rolemeta,
+		func(r *role.Role) error { return r.Validate() },
+		meta.OwnerUser,
+		listScanResolver(d.Stores.Role, rolemeta),
+		guardRole(d),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&roleFilter,
+	)
+
+	registerKind[rolebinding.RoleBinding](
+		api, "role-bindings", "role-binding", d.Stores.RoleBinding, d.Authz, rbmeta,
+		// Owner mirrors the scope exactly, so it is re-derived before the
+		// row is checked rather than in the guard that runs after.
+		func(b *rolebinding.RoleBinding) error { b.StampOwner(); return b.Validate() },
+		"",
+		listScanResolver(d.Stores.RoleBinding, rbmeta),
+		guardRoleBinding(d),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&roleBindingFilter,
+	)
+
+	registerKind[policybinding.PolicyBinding](
+		api, "policy-bindings", "policy-binding", d.Stores.PolicyBinding, d.Authz, pbmeta,
+		func(b *policybinding.PolicyBinding) error { return b.Validate() },
+		meta.OwnerProject,
+		listScanResolver(d.Stores.PolicyBinding, pbmeta),
+		guardPolicyBinding(d),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&policyBindingFilter,
 	)
 
 	registerKind[provider.Provider](

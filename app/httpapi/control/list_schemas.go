@@ -23,10 +23,13 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
@@ -311,5 +314,61 @@ var groupFilter = filter.Schema[group.Group]{
 		return []string{g.Meta.Name, g.Meta.DisplayName, g.Meta.Description}
 	},
 	Labels:      func(g *group.Group) map[string]string { return labelsOf(g.Meta) },
+	DefaultSort: "name",
+}
+
+// subjectKeys renders a binding's subjects as the "<kind>:<id-or-name>"
+// strings ?subject= matches on.
+func subjectKeys(subjects []rolebinding.Subject) []string {
+	out := make([]string, 0, len(subjects))
+	for i := range subjects {
+		out = append(out, subjects[i].Key())
+	}
+	return out
+}
+
+var roleFilter = filter.Schema[role.Role]{
+	Fields: []filter.Field[role.Role]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(r *role.Role) string { return r.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(r *role.Role) bool { return enabledTrue(r.Spec.Enabled) }},
+	},
+	Q: func(r *role.Role) []string {
+		return []string{r.Meta.Name, r.Meta.DisplayName, r.Meta.Description}
+	},
+	Labels:      func(r *role.Role) map[string]string { return labelsOf(r.Meta) },
+	DefaultSort: "name",
+}
+
+var roleBindingFilter = filter.Schema[rolebinding.RoleBinding]{
+	Fields: []filter.Field[rolebinding.RoleBinding]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *rolebinding.RoleBinding) string { return b.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *rolebinding.RoleBinding) bool { return enabledTrue(b.Spec.Enabled) }},
+		{Name: "role_id", Kind: filter.String, Repeat: true, Get: func(b *rolebinding.RoleBinding) string { return b.Spec.RoleID }},
+		{Name: "scope_kind", Kind: filter.String, Enum: []string{"system", "team", "project"},
+			Get: func(b *rolebinding.RoleBinding) string { return string(b.Spec.Scope.Kind) }},
+		{Name: "scope_id", Kind: filter.String, Repeat: true, Get: func(b *rolebinding.RoleBinding) string { return b.Spec.Scope.ID }},
+		{Name: "subject", Kind: filter.String, Repeat: true,
+			GetMulti: func(b *rolebinding.RoleBinding) []string { return subjectKeys(b.Spec.Subjects) }},
+	},
+	Q: func(b *rolebinding.RoleBinding) []string {
+		return []string{b.Meta.Name, b.Meta.DisplayName, b.Meta.Description}
+	},
+	Labels:      func(b *rolebinding.RoleBinding) map[string]string { return labelsOf(b.Meta) },
+	DefaultSort: "name",
+}
+
+var policyBindingFilter = filter.Schema[policybinding.PolicyBinding]{
+	Fields: []filter.Field[policybinding.PolicyBinding]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *policybinding.PolicyBinding) string { return b.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *policybinding.PolicyBinding) bool { return enabledTrue(b.Spec.Enabled) }},
+		{Name: "project_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Spec.ProjectID }},
+		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Spec.PolicyID }},
+		{Name: "subject", Kind: filter.String, Repeat: true,
+			GetMulti: func(b *policybinding.PolicyBinding) []string { return subjectKeys(b.Spec.Subjects) }},
+	},
+	Q: func(b *policybinding.PolicyBinding) []string {
+		return []string{b.Meta.Name, b.Meta.DisplayName, b.Meta.Description}
+	},
+	Labels:      func(b *policybinding.PolicyBinding) map[string]string { return labelsOf(b.Meta) },
 	DefaultSort: "name",
 }

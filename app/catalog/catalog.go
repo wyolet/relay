@@ -14,10 +14,13 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -48,6 +51,9 @@ type Catalog struct {
 	projects        ProjectLister
 	serviceAccounts ServiceAccountLister
 	groups          GroupLister
+	roles           RoleLister
+	roleBindings    RoleBindingLister
+	policyBindings  PolicyBindingLister
 
 	snap  atomic.Pointer[Snapshot]
 	ready atomic.Bool
@@ -102,6 +108,15 @@ type ServiceAccountLister interface {
 type GroupLister interface {
 	List(ctx context.Context) ([]*group.Group, error)
 }
+type RoleLister interface {
+	List(ctx context.Context) ([]*role.Role, error)
+}
+type RoleBindingLister interface {
+	List(ctx context.Context) ([]*rolebinding.RoleBinding, error)
+}
+type PolicyBindingLister interface {
+	List(ctx context.Context) ([]*policybinding.PolicyBinding, error)
+}
 
 // New constructs a Catalog backed by the supplied stores. Initial Snapshot
 // is empty; call Reload before serving traffic.
@@ -135,11 +150,13 @@ func New(
 // time before the first Reload; nil (the default) keeps overlays dormant.
 func (c *Catalog) UseOverlays(l OverlayLister) { c.overlays = l }
 
-// UseTenancy attaches the Team, Project, ServiceAccount and Group
-// sources. Called once at composition time before the first Reload; nil
-// (the default) keeps tenancy dormant.
-func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister, sa ServiceAccountLister, g GroupLister) {
+// UseTenancy attaches the Team, Project, ServiceAccount, Group, Role,
+// RoleBinding and PolicyBinding sources. Called once at composition time
+// before the first Reload; nil (the default) keeps tenancy dormant.
+func (c *Catalog) UseTenancy(t TeamLister, p ProjectLister, sa ServiceAccountLister, g GroupLister,
+	r RoleLister, rb RoleBindingLister, pb PolicyBindingLister) {
 	c.teams, c.projects, c.serviceAccounts, c.groups = t, p, sa, g
+	c.roles, c.roleBindings, c.policyBindings = r, rb, pb
 }
 
 // Current returns the live Snapshot. Safe to call from any goroutine; the
@@ -238,6 +255,27 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 			return fmt.Errorf("catalog reload: groups: %w", err)
 		}
 	}
+	var roles []*role.Role
+	if c.roles != nil {
+		roles, err = c.roles.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: roles: %w", err)
+		}
+	}
+	var roleBindings []*rolebinding.RoleBinding
+	if c.roleBindings != nil {
+		roleBindings, err = c.roleBindings.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: role bindings: %w", err)
+		}
+	}
+	var policyBindings []*policybinding.PolicyBinding
+	if c.policyBindings != nil {
+		policyBindings, err = c.policyBindings.List(ctx)
+		if err != nil {
+			return fmt.Errorf("catalog reload: policy bindings: %w", err)
+		}
+	}
 	var ovls []*overlay.Overlay
 	if c.overlays != nil {
 		ovls, err = c.overlays.List(ctx)
@@ -259,6 +297,9 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	enabledProjects := filter(projects, (*project.Project).IsEnabled)
 	enabledSAs := filter(sas, (*serviceaccount.ServiceAccount).IsEnabled)
 	enabledGroups := filter(groups, (*group.Group).IsEnabled)
+	enabledRoles := filter(roles, (*role.Role).IsEnabled)
+	enabledRoleBindings := filter(roleBindings, (*rolebinding.RoleBinding).IsEnabled)
+	enabledPolicyBindings := filter(policyBindings, (*policybinding.PolicyBinding).IsEnabled)
 
 	providerIDs := make(map[string]struct{}, len(enabledProvs))
 	for _, p := range enabledProvs {
@@ -273,7 +314,8 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 		return fmt.Errorf("catalog reload: %w", err)
 	}
 
-	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups)
+	snap := build(enabledProvs, enabledHosts, enabledPols, enabledRKs, enabledModels, enabledKeys, enabledRLs, enabledPricings, enabledBindings, ovls, enabledTeams, enabledProjects, enabledSAs, enabledGroups,
+		enabledRoles, enabledRoleBindings, enabledPolicyBindings)
 	c.snap.Store(snap)
 	c.markReady()
 	return nil

@@ -30,6 +30,9 @@ type Document struct {
 
 	ServiceAccount *ServiceAccountDTO
 	Group          *GroupDTO
+	Role           *RoleDTO
+	RoleBinding    *RoleBindingDTO
+	PolicyBinding  *PolicyBindingDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -63,6 +66,12 @@ func (d Document) Kind() string {
 		return "ServiceAccount"
 	case d.Group != nil:
 		return "Group"
+	case d.Role != nil:
+		return "Role"
+	case d.RoleBinding != nil:
+		return "RoleBinding"
+	case d.PolicyBinding != nil:
+		return "PolicyBinding"
 	default:
 		return ""
 	}
@@ -97,9 +106,9 @@ func Parse(r io.Reader) ([]Document, error) {
 			continue
 		}
 		// Skip kinds owned by sibling subsystems that share the config tree.
-		// Identity (User, Role) lives in config/users/ alongside catalog
-		// YAML and carries its own apiVersion — the catalog seeder must walk
-		// past it without enforcing the manifest schema version.
+		// Identity (User) lives in config/users/ alongside catalog YAML and
+		// carries its own apiVersion — the catalog seeder must walk past it
+		// without enforcing the manifest schema version.
 		if isForeignKind(env.Kind) {
 			docIdx++
 			continue
@@ -260,6 +269,27 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 		}
 		return Document{Group: &GroupDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
+	case "Role":
+		var spec RoleSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{Role: &RoleDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "RoleBinding":
+		var spec RoleBindingSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{RoleBinding: &RoleBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "PolicyBinding":
+		var spec PolicyBindingSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{PolicyBinding: &PolicyBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
 	case "Setting":
 		// Spec stays a raw node — its shape is per-section and is validated
 		// when the settings store decodes it against the named section.
@@ -275,7 +305,7 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 // silent skips can mask typos in catalog YAML.
 func isForeignKind(kind string) bool {
 	switch kind {
-	case "User", "Role":
+	case "User":
 		return true
 	}
 	return false

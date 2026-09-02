@@ -76,7 +76,8 @@ func newTenancyFixture() tenancyFixture {
 func (f tenancyFixture) catalog(t *testing.T) *Catalog {
 	t.Helper()
 	c := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
-	c.UseTenancy(teamList{f.team, f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{})
+	c.UseTenancy(teamList{f.team, f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{},
+		roleList{}, rbList{}, pbList{})
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
@@ -195,7 +196,8 @@ func TestApplyTeamDelete_MatchesBuild(t *testing.T) {
 	reconciled := c.Current()
 
 	fresh := New(provList{}, hostList{}, polList{f.pol}, modList{}, keyList{}, rlList{f.rl}, rkList{}, rcList{}, bndList{})
-	fresh.UseTenancy(teamList{f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{})
+	fresh.UseTenancy(teamList{f.other}, projList{f.zeta, f.alpha, f.orphan}, saList{}, grpList{},
+		roleList{}, rbList{}, pbList{})
 	if err := fresh.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}

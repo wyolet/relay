@@ -27,10 +27,13 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -49,6 +52,7 @@ var validKinds = map[string]struct{}{
 	"hostbinding": {}, "settings": {}, "overlay": {},
 	"team": {}, "project": {},
 	"serviceaccount": {}, "group": {},
+	"role": {}, "rolebinding": {}, "policybinding": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -161,6 +165,15 @@ type listenerStores struct {
 	}
 	group interface {
 		Get(ctx context.Context, id string) (*group.Group, error)
+	}
+	role interface {
+		Get(ctx context.Context, id string) (*role.Role, error)
+	}
+	roleBinding interface {
+		Get(ctx context.Context, id string) (*rolebinding.RoleBinding, error)
+	}
+	policyBinding interface {
+		Get(ctx context.Context, id string) (*policybinding.PolicyBinding, error)
 	}
 	project interface {
 		Get(ctx context.Context, id string) (*project.Project, error)
@@ -296,11 +309,16 @@ var kindOrder = map[string]int{
 	// service accounts sanitize against policies, keys against accounts.
 	"serviceaccount": 8,
 	"group":          9,
-	"pricing":        10,
-	"hostbinding":    11,
-	"relaykey":       12,
-	"overlay":        13, // after model upserts so re-merges see fresh templates
-	"settings":       14,
+	// roles before the bindings that grant them; bindings after the
+	// policies and tenancy rows they are scoped to.
+	"role":          10,
+	"rolebinding":   11,
+	"policybinding": 12,
+	"pricing":       13,
+	"hostbinding":   14,
+	"relaykey":      15,
+	"overlay":       16, // after model upserts so re-merges see fresh templates
+	"settings":      17,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -461,6 +479,45 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 			return l.cat.ApplyGroupDelete(e.ID)
 		}
 		return l.cat.ApplyGroupUpsert(g)
+
+	case "role":
+		if e.Op == "delete" {
+			return l.cat.ApplyRoleDelete(e.ID)
+		}
+		r, err := l.stores.role.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if r == nil {
+			return l.cat.ApplyRoleDelete(e.ID)
+		}
+		return l.cat.ApplyRoleUpsert(r)
+
+	case "rolebinding":
+		if e.Op == "delete" {
+			return l.cat.ApplyRoleBindingDelete(e.ID)
+		}
+		b, err := l.stores.roleBinding.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			return l.cat.ApplyRoleBindingDelete(e.ID)
+		}
+		return l.cat.ApplyRoleBindingUpsert(b)
+
+	case "policybinding":
+		if e.Op == "delete" {
+			return l.cat.ApplyPolicyBindingDelete(e.ID)
+		}
+		b, err := l.stores.policyBinding.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			return l.cat.ApplyPolicyBindingDelete(e.ID)
+		}
+		return l.cat.ApplyPolicyBindingUpsert(b)
 
 	case "hostbinding":
 		// PR1: bindings aren't consumed by routing yet, and the COW

@@ -1,0 +1,102 @@
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: admin
+  displayName: Administrator
+  description: Every verb on every kind.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: ["*"]
+      verbs: ["*"]
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: auditor
+  displayName: Auditor
+  description: Read the audit log, usage, and request logs everywhere.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: [audit, usage, logs]
+      verbs: [read]
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: catalog-editor
+  displayName: Catalog Editor
+  description: Mutate the shared catalog layer, still behind the governance settings.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: [providers, hosts, models, host-bindings, pricings, rate-limits]
+      verbs: [get, list, create, update, delete]
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: team-admin
+  displayName: Team Administrator
+  description: Own the team's projects, bindings, and scoped resources.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: [projects, role-bindings, policy-bindings, policies, keys,
+              service-accounts, host-keys, rate-limits]
+      verbs: ["*"]
+    - kinds: [teams]
+      verbs: [get, list, update]
+    - kinds: [usage, logs]
+      verbs: [read]
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: project-admin
+  displayName: Project Administrator
+  description: Own everything inside one project.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: [policies, keys, service-accounts, host-keys, rate-limits,
+              role-bindings, policy-bindings]
+      verbs: ["*"]
+    - kinds: [projects]
+      verbs: [get, list, update, delete]
+    - kinds: [usage, logs]
+      verbs: [read]
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: developer
+  displayName: Developer
+  description: Read the project's configuration, own its keys and service accounts.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits]
+      verbs: [get, list]
+    - kinds: [keys, service-accounts]
+      verbs: [get, list, create, update, delete, rotate]
+    - kinds: [tokens]
+      verbs: [mint]
+    - kinds: [usage, logs]
+      verbs: [read]
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: viewer
+  displayName: Viewer
+  description: Read-only on the scoped resources, plus usage.
+  owner: {kind: system}
+spec:
+  rules:
+    - kinds: [policies, keys, service-accounts, policy-bindings, host-keys,
+              rate-limits, role-bindings]
+      verbs: [get, list]
+    - kinds: [usage]
+      verbs: [read]

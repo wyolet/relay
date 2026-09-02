@@ -400,3 +400,66 @@ type GroupSpec struct {
 	Members []string `json:"members,omitempty" yaml:"members,omitempty"`
 	Enabled *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }
+
+// RoleDTO is the wire form of a Role. Rules name API plurals and verbs
+// verbatim — there is nothing to resolve.
+type RoleDTO struct {
+	APIVersion string   `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string   `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta `json:"metadata"   yaml:"metadata"`
+	Spec       RoleSpec `json:"spec"       yaml:"spec"`
+}
+
+type RoleSpec struct {
+	Rules   []RoleRuleDTO `json:"rules"             yaml:"rules"`
+	Enabled *bool         `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// RoleRuleDTO mirrors role.Rule using plain types.
+type RoleRuleDTO struct {
+	Kinds []string `json:"kinds" yaml:"kinds"`
+	Verbs []string `json:"verbs" yaml:"verbs"`
+}
+
+// SubjectDTO is the wire form of a binding subject: everything is named, so
+// a user carries a username, a service account its slug, and a group the
+// group name (local or IdP).
+type SubjectDTO struct {
+	Kind string `json:"kind" yaml:"kind"`
+	Name string `json:"name" yaml:"name"`
+}
+
+// RoleBindingDTO is the wire form of a RoleBinding. Spec.Role is a role
+// *name*, Spec.Scope names a team or project, and subjects are named.
+type RoleBindingDTO struct {
+	APIVersion string          `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string          `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta        `json:"metadata"   yaml:"metadata"`
+	Spec       RoleBindingSpec `json:"spec"       yaml:"spec"`
+}
+
+type RoleBindingSpec struct {
+	Role string `json:"role" yaml:"role"`
+	// Scope is a system, team, or project reference in the same shape every
+	// owner uses; the system scope carries no name.
+	Scope    WireOwner    `json:"scope"             yaml:"scope"`
+	Subjects []SubjectDTO `json:"subjects"          yaml:"subjects"`
+	Enabled  *bool        `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// PolicyBindingDTO is the wire form of a PolicyBinding. Spec.Project and
+// Spec.Policy are *names*.
+type PolicyBindingDTO struct {
+	APIVersion string            `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string            `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta          `json:"metadata"   yaml:"metadata"`
+	Spec       PolicyBindingSpec `json:"spec"       yaml:"spec"`
+}
+
+type PolicyBindingSpec struct {
+	Project  string       `json:"project"            yaml:"project"`
+	Policy   string       `json:"policy"             yaml:"policy"`
+	Priority int          `json:"priority,omitempty" yaml:"priority,omitempty"`
+	Subjects []SubjectDTO `json:"subjects"           yaml:"subjects"`
+	Enabled  *bool        `json:"enabled,omitempty"  yaml:"enabled,omitempty"`
+}

@@ -19,10 +19,13 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -41,7 +44,7 @@ func Build(
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil, nil, nil)
+	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func build(
@@ -59,8 +62,11 @@ func build(
 	projects []*project.Project,
 	sas []*serviceaccount.ServiceAccount,
 	groups []*group.Group,
+	roles []*role.Role,
+	roleBindings []*rolebinding.RoleBinding,
+	policyBindings []*policybinding.PolicyBinding,
 ) *Snapshot {
-	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects), len(sas), len(groups))
+	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects), len(sas), len(groups), len(roles), len(roleBindings), len(policyBindings))
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
@@ -92,6 +98,7 @@ func build(
 	memberKeyIDs := snapIDs(s.hostKeysByID)
 	s.addPolicies(pols, memberModelIDs, memberKeyIDs, snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
 	s.addGroups(groups)
+	s.addRoles(roles)
 	// Service accounts sanitize against the policies just indexed; keys
 	// then sanitize against the accounts.
 	s.addServiceAccounts(sas, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
@@ -105,11 +112,15 @@ func build(
 		s.indexModelSnapshots(m)
 	}
 	s.rebuildPolicyAllowSets()
+	// Bindings last: they sanitize against the roles, tenancy rows and
+	// policies already indexed above.
+	s.addRoleBindings(roleBindings, snapIDs(s.rolesByID), snapIDs(s.teamsByID), snapIDs(s.projectsByID))
+	s.addPolicyBindings(policyBindings, snapIDs(s.projectsByID), snapIDs(s.policiesByID))
 
 	return s
 }
 
-func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects, nSAs, nGroups int) *Snapshot {
+func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects, nSAs, nGroups, nRoles, nRoleBindings, nPolicyBindings int) *Snapshot {
 	return &Snapshot{
 		providersByID:         make(map[string]*provider.Provider, nProvs),
 		providersByName:       make(map[string]*provider.Provider, nProvs),
@@ -152,6 +163,7 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		projectsByName:        make(map[string]*project.Project, nProjects),
 		projectsByTeam:        map[string][]*project.Project{},
 		refsByServiceAccount:  map[string]refSet{},
+		refsByRole:            map[string]refSet{},
 
 		serviceAccountsByID:      make(map[string]*serviceaccount.ServiceAccount, nSAs),
 		serviceAccountsByName:    make(map[string]*serviceaccount.ServiceAccount, nSAs),
@@ -160,5 +172,14 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		groupsByID:   make(map[string]*group.Group, nGroups),
 		groupsByName: make(map[string]*group.Group, nGroups),
 		groupsByUser: map[string][]string{},
+
+		rolesByID:   make(map[string]*role.Role, nRoles),
+		rolesByName: make(map[string]*role.Role, nRoles),
+
+		roleBindingsByID:      make(map[string]*rolebinding.RoleBinding, nRoleBindings),
+		roleBindingsBySubject: map[string][]*rolebinding.RoleBinding{},
+
+		policyBindingsByID:      make(map[string]*policybinding.PolicyBinding, nPolicyBindings),
+		policyBindingsByProject: map[string][]*policybinding.PolicyBinding{},
 	}
 }

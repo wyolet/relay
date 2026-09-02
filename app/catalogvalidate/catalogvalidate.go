@@ -123,6 +123,8 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 	issues = append(issues, checkPricingRefs(g)...)
 	issues = append(issues, checkBindingRefs(g)...)
 	issues = append(issues, checkServiceAccountRefs(g)...)
+	issues = append(issues, checkRoleBindingRefs(g)...)
+	issues = append(issues, checkPolicyBindingRefs(g)...)
 	issues = append(issues, checkKeyRefs(g)...)
 	// RateLimit has no other cross-refs, so its owning Project is checked
 	// here rather than in a check of its own.
@@ -153,6 +155,9 @@ type graph struct {
 
 	ServiceAccounts map[string]*manifest.ServiceAccountDTO
 	Groups          map[string]*manifest.GroupDTO
+	Roles           map[string]*manifest.RoleDTO
+	RoleBindings    map[string]*manifest.RoleBindingDTO
+	PolicyBindings  map[string]*manifest.PolicyBindingDTO
 
 	// duplicates tracks names that appeared more than once within a kind.
 	// Each entry holds the kind + name; checkDuplicateNames emits issues.
@@ -175,6 +180,9 @@ func buildGraph(docs []manifest.Document) *graph {
 
 		ServiceAccounts: map[string]*manifest.ServiceAccountDTO{},
 		Groups:          map[string]*manifest.GroupDTO{},
+		Roles:           map[string]*manifest.RoleDTO{},
+		RoleBindings:    map[string]*manifest.RoleBindingDTO{},
+		PolicyBindings:  map[string]*manifest.PolicyBindingDTO{},
 	}
 	for i := range docs {
 		d := &docs[i]
@@ -249,6 +257,24 @@ func buildGraph(docs []manifest.Document) *graph {
 			indexOne(g, "Group", d.Group.Metadata.Name, func() bool {
 				_, dup := g.Groups[d.Group.Metadata.Name]
 				g.Groups[d.Group.Metadata.Name] = d.Group
+				return dup
+			})
+		case d.Role != nil:
+			indexOne(g, "Role", d.Role.Metadata.Name, func() bool {
+				_, dup := g.Roles[d.Role.Metadata.Name]
+				g.Roles[d.Role.Metadata.Name] = d.Role
+				return dup
+			})
+		case d.RoleBinding != nil:
+			indexOne(g, "RoleBinding", d.RoleBinding.Metadata.Name, func() bool {
+				_, dup := g.RoleBindings[d.RoleBinding.Metadata.Name]
+				g.RoleBindings[d.RoleBinding.Metadata.Name] = d.RoleBinding
+				return dup
+			})
+		case d.PolicyBinding != nil:
+			indexOne(g, "PolicyBinding", d.PolicyBinding.Metadata.Name, func() bool {
+				_, dup := g.PolicyBindings[d.PolicyBinding.Metadata.Name]
+				g.PolicyBindings[d.PolicyBinding.Metadata.Name] = d.PolicyBinding
 				return dup
 			})
 		case d.HostBinding != nil:
