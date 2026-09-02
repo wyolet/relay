@@ -26,7 +26,7 @@ func PerModelScope(base, modelID string) string {
 // ResolveWithScope is the policy-less variant used by proxy mode, where
 // the rate-limit subject is not a Policy but a per-key hash or per-IP
 // identifier. namespace identifies the bucket family ("proxy",
-// "proxy-anon"); subject is the request's bucket key (relay-key hash,
+// "proxy-anon"); subject is the request's bucket key (key hash,
 // client IP, etc.). Key construction:
 //
 //	"{namespace}:{subject}:{rule-index}:{meter}"

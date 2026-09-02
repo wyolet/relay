@@ -31,7 +31,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.Inference](api, d, protect, settings.Section{
 		Name:        settings.SectionInference,
-		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets RelayKeys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
+		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets Keys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
 	})
 	registerSettingsSection[settings.PayloadLogging](api, d, protect, settings.Section{
 		Name:        settings.SectionPayloadLogging,

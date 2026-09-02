@@ -1,4 +1,4 @@
-package relaykey
+package key
 
 import (
 	"crypto/rand"
@@ -33,14 +33,14 @@ type Generated struct {
 	Prefix    string
 }
 
-// Generate produces a fresh relay-key plaintext and the derived
+// Generate produces a fresh key plaintext and the derived
 // KeyHash + display Prefix. The plaintext is `sk-wr-<base64url(48
 // random bytes)>`. Callers store KeyHash + Prefix and return
 // Plaintext to the user once.
 func Generate() (Generated, error) {
 	buf := make([]byte, tokenEntropyBytes)
 	if _, err := rand.Read(buf); err != nil {
-		return Generated{}, fmt.Errorf("relaykey.Generate: read entropy: %w", err)
+		return Generated{}, fmt.Errorf("key.Generate: read entropy: %w", err)
 	}
 	body := base64.RawURLEncoding.EncodeToString(buf)
 	plaintext := TokenPrefix + body

@@ -21,7 +21,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -53,7 +53,7 @@ func buildRealCrossShapeRegistry() *adapter.Registry {
 // crossShapeCatalog builds the standard dispatch fixture with the model bound to
 // the openai_responses adapter on a non-"openai" host (so IsNativePath is false
 // → the cross-shape canonical chain runs, not byte-pass), pointed at upstreamURL.
-func crossShapeCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *relaykey.RelayKey) {
+func crossShapeCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *key.Key) {
 	t.Helper()
 	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAIResponses)
 	h := *cat.Current().Hosts()[0]

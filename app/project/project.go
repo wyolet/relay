@@ -1,5 +1,5 @@
 // Package project is the domain layer for the Project entity — the unit
-// inside a Team that owns Policies, RelayKeys, and user-created HostKeys.
+// inside a Team that owns Policies, Keys, and user-created HostKeys.
 // A Project's owner is always its Team (owner.kind=team, owner.id=teamId);
 // rows owned by a Project carry owner.kind=project.
 //

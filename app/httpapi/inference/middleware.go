@@ -7,67 +7,138 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/policy"
 )
 
-// ctxRelayKeyT is the context-value key used to stash the authenticated
-// RelayKey for handlers to read via RelayKeyFromContext.
-type ctxRelayKeyT struct{}
+// ctxKeyT is the context-value key used to stash the authenticated
+// Key for handlers to read via KeyFromContext.
+type ctxKeyT struct{}
 
-// RelayKeyFromContext returns the authenticated relay key from ctx, or
-// nil if no relay-key middleware fired.
-func RelayKeyFromContext(ctx context.Context) *relaykey.RelayKey {
-	if v, ok := ctx.Value(ctxRelayKeyT{}).(*relaykey.RelayKey); ok {
+// ctxPrincipalT is the context-value key for the resolved Principal.
+type ctxPrincipalT struct{}
+
+// Principal is who the request is acting as, resolved once at the edge so
+// nothing downstream re-derives it. Credential-specific fields
+// (CredentialKind, CredentialID) name the credential presented, not the
+// subject.
+type Principal struct {
+	Subjects                     []string
+	UserID, ServiceAccountID     string // exactly one set
+	ProjectID, TeamID            string // empty for personal keys
+	CredentialKind, CredentialID string // "key", key id
+	KeyHash                      string
+	Key                          *key.Key
+	Policy                       *policy.Policy // nil → policy-less
+	PassthroughAllowed           bool
+	PayloadLogging               bool
+}
+
+// KeyFromContext returns the authenticated relay key from ctx, or
+// nil if no key middleware fired.
+func KeyFromContext(ctx context.Context) *key.Key {
+	if v, ok := ctx.Value(ctxKeyT{}).(*key.Key); ok {
 		return v
 	}
 	return nil
 }
 
-// RelayKeyAuthMiddleware authenticates the inbound relay key according
-// to the request's Mode classification (set by ClassifyMiddleware
-// upstream):
+// PrincipalFrom returns the resolved principal from ctx, or nil when the
+// request carried no credential (anonymous proxy mode).
+func PrincipalFrom(ctx context.Context) *Principal {
+	if v, ok := ctx.Value(ctxPrincipalT{}).(*Principal); ok {
+		return v
+	}
+	return nil
+}
+
+// PrincipalMiddleware authenticates the inbound key according to the
+// request's Mode classification (set by ClassifyMiddleware upstream) and
+// resolves who it acts as:
 //
-//   - ModeNormal       — relay key is required; lookup must succeed.
-//   - ModeProxyAuthed  — relay key is required; lookup must succeed.
-//   - ModeProxyAnonymous — no relay key; this middleware is a no-op and
-//     no *RelayKey is stashed on ctx.
+//   - ModeNormal       — key is required; lookup must succeed.
+//   - ModeProxyAuthed  — key is required; lookup must succeed.
+//   - ModeProxyAnonymous — no key; this middleware is a no-op and
+//     neither a *Key nor a *Principal is stashed on ctx.
 //
 // Snapshot is read on every request so admins toggling Enabled /
 // RevokedAt take effect within the NOTIFY debounce window.
-func RelayKeyAuthMiddleware(cat *appcatalog.Catalog) func(http.Handler) http.Handler {
+func PrincipalMiddleware(cat *appcatalog.Catalog) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cls := ClassificationFrom(r.Context())
 			if cls.Mode == ModeProxyAnonymous {
 				// Gate (Settings.ProxyMode.AllowUnauthenticated) is checked
 				// downstream in the handler; this middleware just doesn't
-				// require a relay key.
+				// require a key.
 				next.ServeHTTP(w, r)
 				return
 			}
-			if cls.RelayKey == "" {
+			if cls.Key == "" {
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			rk, ok := cat.Current().RelayKeyByHash(hashToken(cls.RelayKey))
-			if !ok {
+			snap := cat.Current()
+			hash := hashToken(cls.Key)
+			k, matchedPrevious := snap.KeyByHash(hash)
+			if k == nil {
 				writeAuthErr(w, "invalid api key")
 				return
 			}
-			if rk.Spec.Enabled != nil && !*rk.Spec.Enabled {
+			now := time.Now()
+			switch {
+			case !k.IsEnabled():
 				writeAuthErr(w, "api key disabled")
 				return
-			}
-			if rk.Spec.RevokedAt != nil {
+			case k.Spec.RevokedAt != nil:
 				writeAuthErr(w, "api key revoked")
 				return
+			case k.Spec.ExpiresAt != nil && !now.Before(*k.Spec.ExpiresAt):
+				writeAuthErr(w, "api key expired")
+				return
+			case matchedPrevious && !k.InGrace(now):
+				writeAuthErr(w, "api key rotated")
+				return
 			}
-			ctx := context.WithValue(r.Context(), ctxRelayKeyT{}, rk)
+			ctx := context.WithValue(r.Context(), ctxKeyT{}, k)
+			ctx = context.WithValue(ctx, ctxPrincipalT{}, buildPrincipal(snap, k, hash))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// buildPrincipal resolves the key's identity and tenancy from the
+// snapshot. Subjects stays nil: nothing evaluates it yet.
+func buildPrincipal(snap *appcatalog.Snapshot, k *key.Key, hash string) *Principal {
+	p := &Principal{
+		CredentialKind:     "key",
+		CredentialID:       k.Meta.ID,
+		KeyHash:            hash,
+		Key:                k,
+		PassthroughAllowed: k.Spec.PassthroughAllowed,
+		PayloadLogging:     k.Spec.PayloadLoggingEnabled,
+	}
+	if k.Spec.PolicyID != "" {
+		if pol, ok := snap.Policy(k.Spec.PolicyID); ok {
+			p.Policy = pol
+		}
+	}
+	switch k.Spec.Principal.Kind {
+	case key.PrincipalServiceAccount:
+		p.ServiceAccountID = k.Spec.Principal.ID
+		if sa, ok := snap.ServiceAccount(k.Spec.Principal.ID); ok {
+			p.ProjectID = sa.Spec.ProjectID
+			if proj, ok := snap.Project(sa.Spec.ProjectID); ok {
+				p.TeamID = proj.Spec.TeamID
+			}
+		}
+	case key.PrincipalUser:
+		p.UserID = k.Spec.Principal.ID
+	}
+	return p
 }
 
 func bearer(h string) string {

@@ -262,23 +262,33 @@ type RateLimitRule struct {
 	Strategy string      `json:"strategy" yaml:"strategy"`
 }
 
-// RelayKeyDTO is the wire form of a RelayKey. Policy is a name.
-type RelayKeyDTO struct {
-	APIVersion string       `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string       `json:"kind"       yaml:"kind"`
-	Metadata   WireMeta     `json:"metadata"   yaml:"metadata"`
-	Spec       RelayKeySpec `json:"spec"       yaml:"spec"`
+// KeyDTO is the wire form of a Key. Policy is a name.
+type KeyDTO struct {
+	APIVersion string   `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string   `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta `json:"metadata"   yaml:"metadata"`
+	Spec       KeySpec  `json:"spec"       yaml:"spec"`
 }
 
-type RelayKeySpec struct {
+type KeySpec struct {
+	// Principal names the subject by kind + *name* (wire form): a service
+	// account slug or a username.
+	Principal PrincipalDTO `json:"principal" yaml:"principal"`
 	// Policy is the policy *name* (wire form).
 	Policy                string  `json:"policy"                      yaml:"policy"`
 	KeyHash               string  `json:"keyHash"                     yaml:"keyHash"`
 	Prefix                string  `json:"prefix,omitempty"            yaml:"prefix,omitempty"`
+	ExpiresAt             *string `json:"expiresAt,omitempty"         yaml:"expiresAt,omitempty"`
 	RevokedAt             *string `json:"revokedAt,omitempty"         yaml:"revokedAt,omitempty"`
 	Enabled               *bool   `json:"enabled,omitempty"           yaml:"enabled,omitempty"`
 	PassthroughAllowed    bool    `json:"passthroughAllowed,omitempty" yaml:"passthroughAllowed,omitempty"`
 	PayloadLoggingEnabled bool    `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
+}
+
+// PrincipalDTO is the wire form of a Key principal.
+type PrincipalDTO struct {
+	Kind string `json:"kind" yaml:"kind"`
+	Name string `json:"name" yaml:"name"`
 }
 
 // PricingDTO is the wire form of a Pricing. Owner.ID is a host *name* here.
@@ -361,4 +371,32 @@ func (d *SettingDTO) SpecJSON() (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.Marshal(v)
+}
+
+// ServiceAccountDTO is the wire form of a ServiceAccount. Spec.Project is
+// a project *name*, Spec.Policy a policy *name*.
+type ServiceAccountDTO struct {
+	APIVersion string             `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string             `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta           `json:"metadata"   yaml:"metadata"`
+	Spec       ServiceAccountSpec `json:"spec"       yaml:"spec"`
+}
+
+type ServiceAccountSpec struct {
+	Project string `json:"project"           yaml:"project"`
+	Policy  string `json:"policy,omitempty"  yaml:"policy,omitempty"`
+	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// GroupDTO is the wire form of a Group. Spec.Members holds *usernames*.
+type GroupDTO struct {
+	APIVersion string    `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string    `json:"kind"       yaml:"kind"`
+	Metadata   WireMeta  `json:"metadata"   yaml:"metadata"`
+	Spec       GroupSpec `json:"spec"       yaml:"spec"`
+}
+
+type GroupSpec struct {
+	Members []string `json:"members,omitempty" yaml:"members,omitempty"`
+	Enabled *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 }

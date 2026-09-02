@@ -82,8 +82,8 @@ curl -X PUT http://localhost:8081/api/settings/payload-logging \
   -H "Content-Type: application/json" \
   -d '{"enabled": true, "backend": "file", "maxBytes": 1048576}'
 
-# 2. Opt a single relay key into capture.
-curl -X PUT http://localhost:8081/api/relay-keys/by-id/<id> \
+# 2. Opt a single key into capture.
+curl -X PUT http://localhost:8081/api/keys/by-id/<id> \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"spec": {"payloadLoggingEnabled": true}}'

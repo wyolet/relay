@@ -71,7 +71,7 @@ func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, ad
 }
 
 func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*modelsOutput, error) {
-	rk := RelayKeyFromContext(ctx)
+	rk := KeyFromContext(ctx)
 	if rk == nil {
 		return nil, huma.Error401Unauthorized("missing relay key")
 	}

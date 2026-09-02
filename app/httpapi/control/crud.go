@@ -25,8 +25,10 @@ import (
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -34,7 +36,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
@@ -261,7 +263,7 @@ func registerKind[T any](
 	})
 
 	// Create — skipped for kinds whose creation requires custom logic
-	// (e.g. relay-keys, which generate plaintext server-side and return
+	// (e.g. keys, which generate plaintext server-side and return
 	// it once in the response body).
 	if !skipCreate {
 		huma.Register(api, huma.Operation{
@@ -563,18 +565,76 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 	}
 }
 
-// guardRelayKeyPolicy rejects a relay-key mutation whose Spec.PolicyID
-// points at a policy the caller may not see — a relay-key inherits its
+// guardKeyPolicy rejects a key mutation whose Spec.PolicyID
+// points at a policy the caller may not see — a key inherits its
 // policy's host-keys, so binding to a foreign policy would route traffic
 // through someone else's credentials. Reported as "not found" to avoid
 // confirming the row exists. Existence of the policy is otherwise still
 // not checked here (the inference path handles missing policies).
-func guardRelayKeyPolicy(d Deps) mutationGuard[relaykey.RelayKey] {
-	return func(ctx context.Context, action string, _, incoming *relaykey.RelayKey) error {
+func guardKeyPolicy(d Deps) mutationGuard[key.Key] {
+	return func(ctx context.Context, action string, _, incoming *key.Key) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
 		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID)
+	}
+}
+
+// guardServiceAccount re-derives the account's owner from spec.projectId
+// on every write (spec is the source of truth, owner mirrors it) and
+// rejects a project or policy the caller may not see.
+func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
+	return func(ctx context.Context, action string, _, incoming *serviceaccount.ServiceAccount) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		incoming.StampOwner()
+		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
+			return err
+		}
+		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID)
+	}
+}
+
+// checkProjectRefVisible rejects a row whose project doesn't exist (400) or
+// isn't visible to the caller (404 — a project the caller may not see must
+// not be confirmed to exist).
+func checkProjectRefVisible(ctx context.Context, d Deps, projectID string) error {
+	if d.Stores == nil || d.Stores.Project == nil {
+		return nil
+	}
+	p, err := d.Stores.Project.Get(ctx, projectID)
+	if err != nil || p == nil {
+		return huma.Error400BadRequest(fmt.Sprintf("project %q does not exist", projectID))
+	}
+	s, ok := d.Authz.(authz.Scoper)
+	if !ok {
+		return nil
+	}
+	if !s.Visible(ctx, "project", p.Meta.Owner) {
+		return huma.Error404NotFound(fmt.Sprintf("project %q not found", projectID))
+	}
+	return nil
+}
+
+// guardGroupMembers rejects a member id that is not a user. Membership is
+// what a role binding resolves through, so a typo'd id would silently
+// grant nothing.
+func guardGroupMembers(d Deps) mutationGuard[group.Group] {
+	return func(ctx context.Context, action string, _, incoming *group.Group) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		if d.Users == nil {
+			return nil
+		}
+		for _, id := range incoming.Spec.MemberIDs {
+			u, err := d.Users.Get(ctx, id)
+			if err != nil || u == nil {
+				return huma.Error400BadRequest(fmt.Sprintf("user %q does not exist", id))
+			}
+		}
+		return nil
 	}
 }
 
@@ -802,18 +862,18 @@ func cascadePolicyDetach(d Deps) cascadeFn[policy.Policy] {
 		}
 		id := p.Meta.ID
 
-		if d.Stores.RelayKey != nil {
-			rks, err := d.Stores.RelayKey.List(ctx)
+		if d.Stores.Key != nil {
+			rks, err := d.Stores.Key.List(ctx)
 			if err != nil {
-				return fmt.Errorf("list relay-keys: %w", err)
+				return fmt.Errorf("list keys: %w", err)
 			}
 			for _, k := range rks {
 				if k.Spec.PolicyID != id {
 					continue
 				}
 				k.Spec.PolicyID = ""
-				if err := d.Stores.RelayKey.Upsert(ctx, k); err != nil {
-					return fmt.Errorf("detach from relay-key %q: %w", k.Meta.Name, err)
+				if err := d.Stores.Key.Upsert(ctx, k); err != nil {
+					return fmt.Errorf("detach from key %q: %w", k.Meta.Name, err)
 				}
 			}
 		}
@@ -954,9 +1014,11 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
 	prmeta := func(p *pricing.Pricing) *meta.Metadata { return &p.Meta }
 	bmeta := func(b *binding.Binding) *meta.Metadata { return &b.Meta }
-	rkmeta := func(k *relaykey.RelayKey) *meta.Metadata { return &k.Meta }
+	rkmeta := func(k *key.Key) *meta.Metadata { return &k.Meta }
 	tmeta := func(t *team.Team) *meta.Metadata { return &t.Meta }
 	projmeta := func(p *project.Project) *meta.Metadata { return &p.Meta }
+	sameta := func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta }
+	gmeta := func(g *group.Group) *meta.Metadata { return &g.Meta }
 
 	registerKind[team.Team](
 		api, "teams", "team", d.Stores.Team, d.Authz, tmeta,
@@ -988,6 +1050,38 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		false,
 		protect,
 		&projectFilter,
+	)
+
+	registerKind[serviceaccount.ServiceAccount](
+		api, "service-accounts", "service-account", d.Stores.ServiceAccount, d.Authz, sameta,
+		func(sa *serviceaccount.ServiceAccount) error { return sa.Validate() },
+		meta.OwnerProject,
+		listScanResolver(d.Stores.ServiceAccount, sameta),
+		guardServiceAccount(d),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&serviceAccountFilter,
+	)
+
+	registerKind[group.Group](
+		api, "groups", "group", d.Stores.Group, d.Authz, gmeta,
+		func(g *group.Group) error { return g.Validate() },
+		meta.OwnerUser,
+		listScanResolver(d.Stores.Group, gmeta),
+		guardGroupMembers(d),
+		nil,
+		nil,
+		nil,
+		nil,
+		d.Catalog,
+		false,
+		protect,
+		&groupFilter,
 	)
 
 	registerKind[provider.Provider](
@@ -1118,28 +1212,31 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		&bindingFilter,
 	)
 
-	// relay-keys uses a custom POST handler (registerRelayKeyCreate) that
+	// keys uses a custom POST handler (registerKeyCreate) that
 	// generates the bearer plaintext server-side and returns it once. The
 	// generic CRUD POST is therefore skipped here.
-	registerKind[relaykey.RelayKey](
-		api, "relay-keys", "relay-key", d.Stores.RelayKey, d.Authz, rkmeta,
-		func(k *relaykey.RelayKey) error { return k.Validate() },
-		meta.OwnerUser,
-		listScanResolver(d.Stores.RelayKey, rkmeta),
-		guardRelayKeyPolicy(d),
+	registerKind[key.Key](
+		api, "keys", "key", d.Stores.Key, d.Authz, rkmeta,
+		func(k *key.Key) error { return k.Validate() },
+		meta.OwnerProject,
+		listScanResolver(d.Stores.Key, rkmeta),
+		guardKeyPolicy(d),
 		nil,
 		nil,
 		nil,
 		// Credential material is server-managed: PUT can neither wipe nor
-		// overwrite it. Rotation goes through POST /relay-keys/by-id/{id}/rotate.
-		func(existing, incoming *relaykey.RelayKey) {
+		// overwrite it. Rotation goes through POST /keys/by-id/{id}/rotate.
+		func(existing, incoming *key.Key) {
 			incoming.Spec.KeyHash = existing.Spec.KeyHash
 			incoming.Spec.Prefix = existing.Spec.Prefix
+			incoming.Spec.PreviousKeyHash = existing.Spec.PreviousKeyHash
+			incoming.Spec.GraceUntil = existing.Spec.GraceUntil
+			incoming.Spec.Principal = existing.Spec.Principal
 		},
 		d.Catalog,
 		true, // skipCreate
 		protect,
-		&relayKeyFilter,
+		&keyFilter,
 	)
-	registerRelayKeyCreate(api, d, protect)
+	registerKeyCreate(api, d, protect)
 }

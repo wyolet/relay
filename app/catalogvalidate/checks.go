@@ -457,12 +457,63 @@ func checkBindingRefs(g *graph) []Issue {
 	return out
 }
 
-// checkRelayKeyRefs validates RelayKey outbound refs:
-//   - spec.policy → Policy name must exist
-func checkRelayKeyRefs(g *graph) []Issue {
+// checkServiceAccountRefs validates ServiceAccount outbound refs:
+//   - spec.project → Project name must exist
+//   - spec.policy → Policy name must exist when set
+func checkServiceAccountRefs(g *graph) []Issue {
 	var out []Issue
-	for _, rk := range g.RelayKeys {
-		src := Ref{Kind: "RelayKey", Name: rk.Metadata.Name}
+	for _, sa := range g.ServiceAccounts {
+		src := Ref{Kind: "ServiceAccount", Name: sa.Metadata.Name}
+		if sa.Spec.Project == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
+				Message:  "project is required",
+			})
+		} else if _, ok := g.Projects[sa.Spec.Project]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
+				Target:   Ref{Kind: "Project", Name: sa.Spec.Project},
+				Message:  fmt.Sprintf("project %q not found", sa.Spec.Project),
+			})
+		}
+		if sa.Spec.Policy != "" {
+			if _, ok := g.Policies[sa.Spec.Policy]; !ok {
+				out = append(out, Issue{
+					Severity: SeverityError,
+					Kind:     KindRefMissing,
+					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"},
+					Target:   Ref{Kind: "Policy", Name: sa.Spec.Policy},
+					Message:  fmt.Sprintf("policy %q not found", sa.Spec.Policy),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// checkKeyRefs validates Key outbound refs:
+//   - spec.principal → a ServiceAccount must exist (user principals are
+//     unchecked: users are not catalog documents)
+//   - spec.policy → Policy name must exist
+func checkKeyRefs(g *graph) []Issue {
+	var out []Issue
+	for _, rk := range g.Keys {
+		src := Ref{Kind: "Key", Name: rk.Metadata.Name}
+		if rk.Spec.Principal.Kind == "serviceaccount" {
+			if _, ok := g.ServiceAccounts[rk.Spec.Principal.Name]; !ok {
+				out = append(out, Issue{
+					Severity: SeverityError,
+					Kind:     KindRefMissing,
+					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.principal"},
+					Target:   Ref{Kind: "ServiceAccount", Name: rk.Spec.Principal.Name},
+					Message:  fmt.Sprintf("service account %q not found", rk.Spec.Principal.Name),
+				})
+			}
+		}
 		if rk.Spec.Policy == "" {
 			continue
 		}

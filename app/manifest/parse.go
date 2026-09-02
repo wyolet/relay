@@ -21,12 +21,15 @@ type Document struct {
 	HostKey     *HostKeyDTO
 	Policy      *PolicyDTO
 	RateLimit   *RateLimitDTO
-	RelayKey    *RelayKeyDTO
+	Key         *KeyDTO
 	Pricing     *PricingDTO
 	HostBinding *HostBindingDTO
 	Setting     *SettingDTO
 	Team        *TeamDTO
 	Project     *ProjectDTO
+
+	ServiceAccount *ServiceAccountDTO
+	Group          *GroupDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -44,8 +47,8 @@ func (d Document) Kind() string {
 		return "Policy"
 	case d.RateLimit != nil:
 		return "RateLimit"
-	case d.RelayKey != nil:
-		return "RelayKey"
+	case d.Key != nil:
+		return "Key"
 	case d.Pricing != nil:
 		return "Pricing"
 	case d.HostBinding != nil:
@@ -56,6 +59,10 @@ func (d Document) Kind() string {
 		return "Team"
 	case d.Project != nil:
 		return "Project"
+	case d.ServiceAccount != nil:
+		return "ServiceAccount"
+	case d.Group != nil:
+		return "Group"
 	default:
 		return ""
 	}
@@ -90,7 +97,7 @@ func Parse(r io.Reader) ([]Document, error) {
 			continue
 		}
 		// Skip kinds owned by sibling subsystems that share the config tree.
-		// Identity (User, Group, Role) lives in config/users/ alongside catalog
+		// Identity (User, Role) lives in config/users/ alongside catalog
 		// YAML and carries its own apiVersion — the catalog seeder must walk
 		// past it without enforcing the manifest schema version.
 		if isForeignKind(env.Kind) {
@@ -204,12 +211,12 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 		}
 		return Document{RateLimit: &RateLimitDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
-	case "RelayKey":
-		var spec RelayKeySpec
+	case "Key":
+		var spec KeySpec
 		if err := env.Spec.Decode(&spec); err != nil {
 			return Document{}, err
 		}
-		return Document{RelayKey: &RelayKeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+		return Document{Key: &KeyDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
 	case "Pricing":
 		var spec PricingSpec
@@ -239,6 +246,20 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 		}
 		return Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
+	case "ServiceAccount":
+		var spec ServiceAccountSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{ServiceAccount: &ServiceAccountDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "Group":
+		var spec GroupSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{Group: &GroupDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
 	case "Setting":
 		// Spec stays a raw node — its shape is per-section and is validated
 		// when the settings store decodes it against the named section.
@@ -254,7 +275,7 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 // silent skips can mask typos in catalog YAML.
 func isForeignKind(kind string) bool {
 	switch kind {
-	case "User", "Group", "Role":
+	case "User", "Role":
 		return true
 	}
 	return false

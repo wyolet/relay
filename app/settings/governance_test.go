@@ -21,7 +21,7 @@ func TestGoverns(t *testing.T) {
 		{name: "system delete always denied", op: OpDelete, kind: "rate-limit", ownerKind: "system", wantErr: true},
 		{name: "system edit denied via generic CRUD", op: OpEdit, kind: "host", ownerKind: "system", wantErr: true},
 		{name: "user delete allowed", op: OpDelete, kind: "policy", ownerKind: "user", wantErr: false},
-		{name: "user edit allowed", op: OpEdit, kind: "relay-key", ownerKind: "user", wantErr: false},
+		{name: "user edit allowed", op: OpEdit, kind: "key", ownerKind: "user", wantErr: false},
 
 		// Catalog-managed (host/provider-owned), no section present → safe default.
 		{name: "catalog edit default allowed", op: OpEdit, kind: "model", ownerKind: "provider", wantErr: false},

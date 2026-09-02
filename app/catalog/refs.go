@@ -3,13 +3,14 @@ package catalog
 import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 )
 
 // refKind labels a referenced row's kind. Keep this in sync with the
@@ -29,6 +30,9 @@ const (
 	refBinding   refKind = "binding"
 	refTeam      refKind = "team"
 	refProject   refKind = "project"
+	// refServiceAccount keeps the "serviceaccount" value while the
+	// identifier for a Key stays refRelayKey — refKey is the struct.
+	refServiceAccount refKind = "serviceaccount"
 )
 
 // refKey identifies one row by (kind, id). Used as the value type in
@@ -131,11 +135,31 @@ func outboundProjectRefs(p *project.Project) []refKey {
 	return []refKey{{Kind: refTeam, ID: p.Spec.TeamID}}
 }
 
-func outboundRelayKeyRefs(k *relaykey.RelayKey) []refKey {
+// outboundKeyRefs returns the Policy override (when set) and the
+// ServiceAccount principal. A project-owned key reaches its project
+// through the account, so there is no separate project edge.
+func outboundKeyRefs(k *key.Key) []refKey {
+	refs := make([]refKey, 0, 2)
 	if k.Spec.PolicyID != "" {
-		return []refKey{{Kind: refPolicy, ID: k.Spec.PolicyID}}
+		refs = append(refs, refKey{Kind: refPolicy, ID: k.Spec.PolicyID})
 	}
-	return nil
+	if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Spec.Principal.ID != "" {
+		refs = append(refs, refKey{Kind: refServiceAccount, ID: k.Spec.Principal.ID})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return refs
+}
+
+// outboundServiceAccountRefs returns the owning Project and the optional
+// policy override. Both are hard: a dangling either way drops the row.
+func outboundServiceAccountRefs(sa *serviceaccount.ServiceAccount) []refKey {
+	refs := []refKey{{Kind: refProject, ID: sa.Spec.ProjectID}}
+	if sa.Spec.PolicyID != "" {
+		refs = append(refs, refKey{Kind: refPolicy, ID: sa.Spec.PolicyID})
+	}
+	return refs
 }
 
 // registerRefs records that `child` depends on every entry in `parents`.
@@ -186,6 +210,8 @@ func (s *Snapshot) refsetFor(kind refKind, id string) refSet {
 		m = s.refsByTeam
 	case refProject:
 		m = s.refsByProject
+	case refServiceAccount:
+		m = s.refsByServiceAccount
 	default:
 		return nil
 	}
@@ -218,6 +244,8 @@ func (s *Snapshot) dropRefset(kind refKind, id string) {
 		delete(s.refsByTeam, id)
 	case refProject:
 		delete(s.refsByProject, id)
+	case refServiceAccount:
+		delete(s.refsByServiceAccount, id)
 	}
 }
 
@@ -242,6 +270,8 @@ func (s *Snapshot) Dependents(kind refKind, id string) []refKey {
 		m = s.refsByTeam
 	case refProject:
 		m = s.refsByProject
+	case refServiceAccount:
+		m = s.refsByServiceAccount
 	}
 	set, ok := m[id]
 	if !ok {

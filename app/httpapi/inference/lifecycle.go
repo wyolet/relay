@@ -16,15 +16,15 @@ import (
 
 // mintLifecycle creates the per-request lifecycle Context at the inference
 // entry, before routing. It carries the identity known at entry — request
-// id, runner source, relay-key hash, client IP — and a stamped timing
+// id, runner source, key hash, client IP — and a stamped timing
 // anchor. Routing fills the (policy, model, host) ids later via
 // applyPlanIdentity; the runner stamps the remaining timing marks. The
 // caller stashes the returned Context on ctx with lifecycle.ContextWith so
 // every downstream phase (routing failures included) shares this one.
-func mintLifecycle(ctx context.Context, source, relayKeyToken, clientIP string) *lifecycle.Context {
+func mintLifecycle(ctx context.Context, source, keyToken, clientIP string) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), source, time.Now())
-	if relayKeyToken != "" {
-		sum := sha256.Sum256([]byte(relayKeyToken))
+	if keyToken != "" {
+		sum := sha256.Sum256([]byte(keyToken))
 		lc.RelayKeyHash = hex.EncodeToString(sum[:])
 	}
 	if clientIP != "" {

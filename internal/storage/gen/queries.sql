@@ -189,15 +189,18 @@ DELETE FROM models WHERE id = $1;
 DELETE FROM rate_limits WHERE id = $1;
 
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name;
 
 -- name: UpsertRelayKey :exec
-INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
-    key_hash   = EXCLUDED.key_hash,
+    key_hash          = EXCLUDED.key_hash,
+    previous_key_hash = EXCLUDED.previous_key_hash,
+    principal_sa_id   = EXCLUDED.principal_sa_id,
+    principal_user_id = EXCLUDED.principal_user_id,
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
     updated_at = NOW();
@@ -324,7 +327,7 @@ UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1;
 
 -- name: GetPolicyModels :many
 SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
@@ -497,3 +500,56 @@ LIMIT @row_limit;
 
 -- name: PruneAuditEvents :execrows
 DELETE FROM audit_events WHERE ts < $1;
+-- ── service accounts + groups (migration 0026) ───────────────────────────────
+
+-- name: ListServiceAccounts :many
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts ORDER BY name;
+
+-- name: GetServiceAccount :one
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts WHERE id = $1;
+
+-- name: UpsertServiceAccount :exec
+INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    project_id   = EXCLUDED.project_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteServiceAccount :exec
+DELETE FROM service_accounts WHERE id = $1;
+
+-- name: ListGroups :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups ORDER BY name;
+
+-- name: GetGroup :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups WHERE id = $1;
+
+-- name: UpsertGroup :exec
+INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteGroup :exec
+DELETE FROM groups WHERE id = $1;
+
+-- name: ListGroupMembers :many
+SELECT group_id, user_id, position FROM group_members ORDER BY group_id, position;
+
+-- name: GetGroupMembers :many
+SELECT group_id, user_id, position FROM group_members WHERE group_id = $1 ORDER BY position;
+
+-- name: DeleteGroupMembers :exec
+DELETE FROM group_members WHERE group_id = $1;
+
+-- name: InsertGroupMember :exec
+INSERT INTO group_members (group_id, user_id, position) VALUES ($1, $2, $3)
+ON CONFLICT (group_id, user_id) DO UPDATE SET position = EXCLUDED.position;

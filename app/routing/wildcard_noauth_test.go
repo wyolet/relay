@@ -9,11 +9,11 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -75,9 +75,9 @@ func TestResolve_WildcardPolicyDoesNotReachUngrantedNoAuthHost(t *testing.T) {
 		Meta: meta.Metadata{ID: polID, Name: "wildcard-pol", Owner: meta.Owner{Kind: meta.OwnerHost, ID: keyedHostID}},
 		Spec: policy.Spec{HostKeyIDs: []string{hkID}},
 	}
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
 	c := catalog.New(
@@ -96,7 +96,7 @@ func TestResolve_WildcardPolicyDoesNotReachUngrantedNoAuthHost(t *testing.T) {
 	}
 	r := routing.New(c)
 
-	plan, err := r.Resolve(routing.Request{ModelName: "open-model", RelayKey: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Key: rk})
 	if err == nil {
 		t.Fatalf("authz widening: wildcard policy with zero grants for host %q routed to it anyway: plan host=%q model=%q keys=%d (first key hash %q); want an error (model outside the policy's hostkey coverage)",
 			openHost.Meta.Name, plan.Host.Meta.Name, plan.Model.Meta.Name, len(plan.Keys), plan.Keys[0].KeyHash)
@@ -139,9 +139,9 @@ func TestResolve_ExplicitModelGrantReachesNoAuthHost(t *testing.T) {
 		Meta: meta.Metadata{ID: polID, Name: "explicit-pol", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: policy.Spec{Models: []string{"acme/open-model"}},
 	}
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
 	c := catalog.New(
@@ -160,7 +160,7 @@ func TestResolve_ExplicitModelGrantReachesNoAuthHost(t *testing.T) {
 	}
 	r := routing.New(c)
 
-	plan, err := r.Resolve(routing.Request{ModelName: "open-model", RelayKey: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "open-model", Key: rk})
 	if err != nil {
 		t.Fatalf("explicit model grant should reach the NoAuth host, got %v", err)
 	}

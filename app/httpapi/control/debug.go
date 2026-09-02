@@ -21,12 +21,12 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 )
 
 type debugSnapshotInput struct {
@@ -39,7 +39,7 @@ type debugSnapshotCounts struct {
 	Models     int `json:"models"`
 	Policies   int `json:"policies"`
 	HostKeys   int `json:"hostKeys"`
-	RelayKeys  int `json:"relayKeys"`
+	Keys       int `json:"keys"`
 	RateLimits int `json:"rateLimits"`
 	Pricings   int `json:"pricings"`
 }
@@ -60,7 +60,7 @@ type debugSnapshotBody struct {
 	Models      []*model.Model         `json:"models,omitempty"`
 	Policies    []*policy.Policy       `json:"policies,omitempty"`
 	HostKeys    []*hostkey.HostKey     `json:"hostKeys,omitempty"`
-	RelayKeys   []*relaykey.RelayKey   `json:"relayKeys,omitempty"`
+	Keys        []*key.Key             `json:"keys,omitempty"`
 	RateLimits  []*ratelimit.RateLimit `json:"rateLimits,omitempty"`
 	Pricings    []*pricing.Pricing     `json:"pricings,omitempty"`
 }
@@ -96,7 +96,7 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 			Models:     len(snap.AllModels()),
 			Policies:   len(policies),
 			HostKeys:   len(snap.AllHostKeys()),
-			RelayKeys:  len(snap.AllRelayKeys()),
+			Keys:       len(snap.AllKeys()),
 			RateLimits: len(snap.AllRateLimits()),
 			Pricings:   len(snap.AllPricings()),
 		}
@@ -117,7 +117,7 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 			out.Body.Models = snap.AllModels()
 			out.Body.Policies = policies
 			out.Body.HostKeys = snap.AllHostKeys()
-			out.Body.RelayKeys = snap.AllRelayKeys()
+			out.Body.Keys = snap.AllKeys()
 			out.Body.RateLimits = snap.AllRateLimits()
 			out.Body.Pricings = snap.AllPricings()
 		}

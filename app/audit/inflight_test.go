@@ -54,8 +54,8 @@ func TestMarkDecision(t *testing.T) {
 		},
 		{
 			name:       "last mutating decision wins",
-			decisions:  []decision{allow("relay-keys.read"), deny("relay-keys.update")},
-			wantMarked: true, wantAction: "relay-keys.update", wantStatus: StatusDenied,
+			decisions:  []decision{allow("keys.read"), deny("keys.update")},
+			wantMarked: true, wantAction: "keys.update", wantStatus: StatusDenied,
 		},
 		{
 			name:       "mutating decision wins over a later read",
@@ -120,8 +120,8 @@ func TestRefusedRoute(t *testing.T) {
 		},
 		{
 			name: "DELETE by-id forbidden", method: http.MethodDelete,
-			path: "/api/relay-keys/by-id/k-9", code: http.StatusForbidden,
-			wantMarked: true, wantAction: "relay-keys.delete", wantKind: "relay-keys", wantID: "k-9",
+			path: "/api/keys/by-id/k-9", code: http.StatusForbidden,
+			wantMarked: true, wantAction: "keys.delete", wantKind: "keys", wantID: "k-9",
 		},
 		{
 			name: "POST rotate hidden by visibility", method: http.MethodPost,
@@ -130,7 +130,7 @@ func TestRefusedRoute(t *testing.T) {
 		},
 		{
 			name: "PUT sub-resource attach", method: http.MethodPut,
-			path: "/api/policies/by-id/p-1/relay-keys/k-2/attach", code: http.StatusForbidden,
+			path: "/api/policies/by-id/p-1/keys/k-2/attach", code: http.StatusForbidden,
 			wantMarked: true, wantAction: "policies.attach", wantKind: "policies", wantID: "p-1",
 		},
 		{
@@ -140,7 +140,7 @@ func TestRefusedRoute(t *testing.T) {
 		},
 		{
 			name: "POST sub-resource with no trailing verb is a create", method: http.MethodPost,
-			path: "/api/policies/by-id/p-1/relay-keys", code: http.StatusNotFound,
+			path: "/api/policies/by-id/p-1/keys", code: http.StatusNotFound,
 			wantMarked: true, wantAction: "policies.create", wantKind: "policies", wantID: "p-1",
 		},
 		{

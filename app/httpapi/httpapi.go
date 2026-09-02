@@ -110,7 +110,7 @@ func installSchemaNamer() {}
 // clean PascalCase schema ids in the generated OpenAPI:
 //
 //   - The entity types Provider / Host / Model / HostKey / RateLimit /
-//     Policy / Pricing / RelayKey keep their bare names.
+//     Policy / Pricing / Key / ServiceAccount / Group keep their bare names.
 //   - Sub-types defined inside an entity package get the entity name
 //     prepended so the 8 colliding `Spec` types become `ProviderSpec`,
 //     `HostSpec`, `ModelSpec`, etc. without renaming the Go types.
@@ -136,9 +136,12 @@ var entityNameByPkg = map[string]string{
 	"github.com/wyolet/relay/app/ratelimit": "RateLimit",
 	"github.com/wyolet/relay/app/policy":    "Policy",
 	"github.com/wyolet/relay/app/pricing":   "Pricing",
-	"github.com/wyolet/relay/app/relaykey":  "RelayKey",
+	"github.com/wyolet/relay/app/key":       "Key",
 	"github.com/wyolet/relay/app/team":      "Team",
 	"github.com/wyolet/relay/app/project":   "Project",
+
+	"github.com/wyolet/relay/app/serviceaccount": "ServiceAccount",
+	"github.com/wyolet/relay/app/group":          "Group",
 }
 
 func schemaNamer(t reflect.Type, hint string) string {

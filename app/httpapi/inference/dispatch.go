@@ -80,7 +80,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Context rather than minting its own. Routing fills the identity ids
 	// later via applyPlanIdentity.
 	cls := ClassificationFrom(ctx)
-	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
+	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.Key, cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	// Retain the inbound body for the payloadlog observer (a reference, not
@@ -124,7 +124,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
 		// Proxy bypasses routing.Resolve; the only opt-in surface is the
 		// authenticating relay key (anonymous proxy has none).
-		if rk := RelayKeyFromContext(ctx); rk != nil {
+		if rk := KeyFromContext(ctx); rk != nil {
 			lc.PayloadLog = rk.Spec.PayloadLoggingEnabled
 		}
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
@@ -132,7 +132,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		return
 	}
 
-	rk := RelayKeyFromContext(ctx)
+	rk := KeyFromContext(ctx)
 	if rk == nil {
 		d.fireUsageFailure(ctx, "unauthenticated", "missing relay key")
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated", "missing relay key")
@@ -149,7 +149,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	plan, err := d.Resolver.Resolve(routing.Request{
 		ModelName:    modelRef,
 		RawModelName: in.ModelName,
-		RelayKey:     rk,
+		Key:          rk,
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())

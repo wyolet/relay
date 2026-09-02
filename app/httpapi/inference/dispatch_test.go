@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -27,7 +28,6 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -45,7 +45,7 @@ type polListD []*policy.Policy
 type modListD []*model.Model
 type keyListD []*hostkey.HostKey
 type rlListD []*ratelimit.RateLimit
-type rkListD []*relaykey.RelayKey
+type rkListD []*key.Key
 type rcListD []*pricing.Pricing
 type bndListD []*binding.Binding
 
@@ -56,14 +56,14 @@ func (l polListD) List(context.Context) ([]*policy.Policy, error)      { return 
 func (l modListD) List(context.Context) ([]*model.Model, error)        { return l, nil }
 func (l keyListD) List(context.Context) ([]*hostkey.HostKey, error)    { return l, nil }
 func (l rlListD) List(context.Context) ([]*ratelimit.RateLimit, error) { return l, nil }
-func (l rkListD) List(context.Context) ([]*relaykey.RelayKey, error)   { return l, nil }
+func (l rkListD) List(context.Context) ([]*key.Key, error)             { return l, nil }
 func (l rcListD) List(context.Context) ([]*pricing.Pricing, error)     { return l, nil }
 
 // buildDispatchCatalog creates a catalog with a model bound to the given
 // hostName (Meta.Name) with the provided adapter. Returns the catalog and
 // the relay key that authorises access. An optional Capabilities value is
 // applied to the model.
-func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name, caps ...model.Capabilities) (*catalog.Catalog, *relaykey.RelayKey) {
+func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name, caps ...model.Capabilities) (*catalog.Catalog, *key.Key) {
 	t.Helper()
 
 	provID := meta.NewID()
@@ -102,9 +102,9 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
 		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
 	}
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: rkID, Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "testhash"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "testhash"},
 	}
 
 	cat := catalog.New(
@@ -222,9 +222,9 @@ func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 
 // withNormalContext injects a ModeNormal classification and relay key into
 // r's context, simulating what the classifier + auth middleware would do.
-func withNormalContext(r *http.Request, rk *relaykey.RelayKey) *http.Request {
+func withNormalContext(r *http.Request, rk *key.Key) *http.Request {
 	ctx := WithClassification(r.Context(), Classification{Mode: ModeNormal})
-	ctx = context.WithValue(ctx, ctxRelayKeyT{}, rk)
+	ctx = context.WithValue(ctx, ctxKeyT{}, rk)
 	return r.WithContext(ctx)
 }
 

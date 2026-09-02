@@ -16,7 +16,7 @@
 // read. (Migration + sqlc queries land as a follow-up; current store.go
 // keeps Spec in JSONB until then, see TODO in store.go.)
 //
-// Reverse direction: RelayKey carries a single Spec.PolicyID (m:1).
+// Reverse direction: Key carries a single Spec.PolicyID (m:1).
 // Provider names its default via Spec.DefaultPolicyID. Models and
 // ProviderKeys carry no policy reference — they are discovered via the
 // junctions / via Policy.Spec.
@@ -112,7 +112,7 @@ type Spec struct {
 
 	// PayloadLoggingEnabled opts every request authorized by this policy
 	// into full request/response body capture by the payloadlog observer.
-	// Off by default. A RelayKey may also opt in independently; either
+	// Off by default. A Key may also opt in independently; either
 	// being set enables capture for the request.
 	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }

@@ -9,13 +9,13 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -27,7 +27,7 @@ type polListR []*policy.Policy
 type modListR []*model.Model
 type keyListR []*hostkey.HostKey
 type rlListR []*ratelimit.RateLimit
-type rkListR []*relaykey.RelayKey
+type rkListR []*key.Key
 type rcListR []*pricing.Pricing
 type bndListR []*binding.Binding
 
@@ -38,7 +38,7 @@ func (l polListR) List(context.Context) ([]*policy.Policy, error)      { return 
 func (l modListR) List(context.Context) ([]*model.Model, error)        { return l, nil }
 func (l keyListR) List(context.Context) ([]*hostkey.HostKey, error)    { return l, nil }
 func (l rlListR) List(context.Context) ([]*ratelimit.RateLimit, error) { return l, nil }
-func (l rkListR) List(context.Context) ([]*relaykey.RelayKey, error)   { return l, nil }
+func (l rkListR) List(context.Context) ([]*key.Key, error)             { return l, nil }
 func (l rcListR) List(context.Context) ([]*pricing.Pricing, error)     { return l, nil }
 
 func mkSnap(real string) model.Snapshot {
@@ -50,7 +50,7 @@ func mkSnap(real string) model.Snapshot {
 	return model.Snapshot{Name: s, OriginalName: orig}
 }
 
-func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
+func realModelsCatalog(t *testing.T) (*catalog.Catalog, *key.Key) {
 	t.Helper()
 	provID := meta.NewID()
 	hostID := meta.NewID()
@@ -90,9 +90,9 @@ func realModelsCatalog(t *testing.T) (*catalog.Catalog, *relaykey.RelayKey) {
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
 		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
 	}
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
 	c := catalog.New(
@@ -145,7 +145,7 @@ func TestResolve_RealModelStrings(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.customerSends, func(t *testing.T) {
-			plan, err := r.Resolve(routing.Request{ModelName: tc.customerSends, RelayKey: rk})
+			plan, err := r.Resolve(routing.Request{ModelName: tc.customerSends, Key: rk})
 			if err != nil {
 				t.Fatalf("Resolve(%q): %v", tc.customerSends, err)
 			}
@@ -159,7 +159,7 @@ func TestResolve_RealModelStrings(t *testing.T) {
 	}
 
 	t.Run("unknown name 404s", func(t *testing.T) {
-		_, err := r.Resolve(routing.Request{ModelName: "gpt-bogus", RelayKey: rk})
+		_, err := r.Resolve(routing.Request{ModelName: "gpt-bogus", Key: rk})
 		if err == nil {
 			t.Fatal("expected ErrModelNotFound for unknown name")
 		}
@@ -266,9 +266,9 @@ func TestResolve_ViaStandaloneBinding(t *testing.T) {
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
 		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
 	}
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "h"},
 	}
 
 	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m},
@@ -276,7 +276,7 @@ func TestResolve_ViaStandaloneBinding(t *testing.T) {
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5", RelayKey: rk})
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "gpt-5.5", Key: rk})
 	if err != nil {
 		t.Fatalf("Resolve via standalone binding: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	tierB := &policy.Policy{Meta: meta.Metadata{ID: tierBID, Name: "tierB", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: policy.Spec{Models: []string{"anthropic"}}}
 	keyA := &hostkey.HostKey{Meta: meta.Metadata{ID: hkA, Name: "ka", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostA}}, Spec: hostkey.Spec{HostID: hostA, PolicyID: custPolID, Value: "sk-a", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
 	keyB := &hostkey.HostKey{Meta: meta.Metadata{ID: hkB, Name: "kb", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostB}}, Spec: hostkey.Spec{HostID: hostB, PolicyID: tierBID, Value: "sk-b", ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindStored}}}
-	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: custPolID, KeyHash: "h"}}
+	rk := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: key.Spec{PolicyID: custPolID, KeyHash: "h"}}
 
 	c := catalog.New(provListR{prov}, hostListR{hA, hB}, polListR{custPol, tierB}, modListR{m}, keyListR{keyA, keyB}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{bA, bB})
 	if err := c.Reload(t.Context()); err != nil {
@@ -332,7 +332,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 	r := routing.New(c)
 
 	// @openai: keyA's tier (the customer policy) grants openai → succeeds.
-	plan, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@openai", RelayKey: rk})
+	plan, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@openai", Key: rk})
 	if err != nil {
 		t.Fatalf("@openai should resolve: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestResolve_TierPolicyGate(t *testing.T) {
 
 	// @azure: customer policy allows the host, but azure's key tier (tierB)
 	// doesn't grant the openai model → key filtered → no usable key.
-	if _, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@azure", RelayKey: rk}); err == nil {
+	if _, err := r.Resolve(routing.Request{ModelName: "openai/gpt-5-5@azure", Key: rk}); err == nil {
 		t.Fatal("@azure should fail: azure key tier doesn't grant this model")
 	}
 }
@@ -368,13 +368,13 @@ func TestResolve_NoAuthHostInjectsAnonKey(t *testing.T) {
 	// Explicit model grant, NO host keys for the host. (Implicit wildcards
 	// no longer cover NoAuth hosts — see wildcard_noauth_test.go.)
 	pol := &policy.Policy{Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}}, Spec: policy.Spec{ModelIDs: []string{modID}}}
-	rk := &relaykey.RelayKey{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: relaykey.Spec{PolicyID: polID, KeyHash: "h"}}
+	rk := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: key.Spec{PolicyID: polID, KeyHash: "h"}}
 
 	c := catalog.New(provListR{prov}, hostListR{h}, polListR{pol}, modListR{m}, keyListR{}, rlListR{}, rkListR{rk}, rcListR{}, bndListR{b})
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "qwen3", RelayKey: rk})
+	plan, err := routing.New(c).Resolve(routing.Request{ModelName: "qwen3", Key: rk})
 	if err != nil {
 		t.Fatalf("no-auth host should resolve without a real key, got %v", err)
 	}

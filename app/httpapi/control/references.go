@@ -19,11 +19,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 )
 
 type referenceItem struct {
-	Kind string `json:"kind" doc:"Resource kind (host, policy, host-key, relay-key, model, pricing)."`
+	Kind string `json:"kind" doc:"Resource kind (host, policy, host-key, key, service-account, model, pricing)."`
 	ID   string `json:"id"   doc:"Resource id."`
 	Name string `json:"name" doc:"Resource slug."`
 	Via  string `json:"via"  doc:"Field path on the referencing row that points at the target."`
@@ -103,6 +104,9 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	register("projects", "project", func(ctx context.Context, id string) ([]referenceItem, error) {
 		return scanProjectRefs(ctx, d, id)
+	})
+	register("service-accounts", "service-account", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanServiceAccountRefs(ctx, d, id)
 	})
 }
 
@@ -192,13 +196,13 @@ func scanModelRefs(ctx context.Context, d Deps, id string) ([]referenceItem, err
 
 func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	rks, err := d.Stores.RelayKey.List(ctx)
+	rks, err := d.Stores.Key.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list relay-keys: %w", err)
+		return nil, fmt.Errorf("list keys: %w", err)
 	}
 	for _, k := range rks {
 		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "relay-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
 		}
 	}
 	keys, err := d.Stores.HostKey.List(ctx)
@@ -293,13 +297,13 @@ func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id", owner: p.Meta.Owner})
 		}
 	}
-	rks, err := d.Stores.RelayKey.List(ctx)
+	rks, err := d.Stores.Key.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list relay-keys: %w", err)
+		return nil, fmt.Errorf("list keys: %w", err)
 	}
 	for _, k := range rks {
 		if ownedByProject(k.Meta.Owner, id) {
-			out = append(out, referenceItem{Kind: "relay-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
 		}
 	}
 	keys, err := d.Stores.HostKey.List(ctx)
@@ -318,6 +322,29 @@ func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, e
 	for _, r := range rls {
 		if ownedByProject(r.Meta.Owner, id) {
 			out = append(out, referenceItem{Kind: "rate-limit", ID: r.Meta.ID, Name: r.Meta.Name, Via: "metadata.owner.id", owner: r.Meta.Owner})
+		}
+	}
+	sas, err := d.Stores.ServiceAccount.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list service-accounts: %w", err)
+	}
+	for _, sa := range sas {
+		if sa.Spec.ProjectID == id {
+			out = append(out, referenceItem{Kind: "service-account", ID: sa.Meta.ID, Name: sa.Meta.Name, Via: "spec.projectId", owner: sa.Meta.Owner})
+		}
+	}
+	return out, nil
+}
+
+func scanServiceAccountRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	keys, err := d.Stores.Key.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list keys: %w", err)
+	}
+	for _, k := range keys {
+		if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Spec.Principal.ID == id {
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.principal.id", owner: k.Meta.Owner})
 		}
 	}
 	return out, nil

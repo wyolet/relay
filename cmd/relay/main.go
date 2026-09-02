@@ -438,7 +438,7 @@ func main() {
 	// Payload logging: the second lifecycle observer. Always wired; its
 	// runtime config lives in the "payload-logging" settings section, so it
 	// toggles and reconfigures (backend / bucket / credentials) without a
-	// restart. Per-request capture is still gated by the Policy/RelayKey
+	// restart. Per-request capture is still gated by the Policy/Key
 	// opt-in resolved at the inference entry. S3 credentials resolve through
 	// the shared secret registry.
 	payloadCHBootCfg := payloadCHBoot{
@@ -562,12 +562,12 @@ func main() {
 	})
 
 	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →
-	// relay-key auth), mounted directly on chi like /v1/ws since it isn't a
+	// key auth), mounted directly on chi like /v1/ws since it isn't a
 	// huma operation.
 	inferRouter.With(
 		inference.ReadinessMiddleware(cat),
 		inference.ClassifyMiddleware(),
-		inference.RelayKeyAuthMiddleware(cat),
+		inference.PrincipalMiddleware(cat),
 	).Mount("/v1/batches", batchSvc.Routes())
 
 	inferAddr := ":8080"

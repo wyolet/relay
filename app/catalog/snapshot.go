@@ -15,8 +15,10 @@ import (
 	"sort"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
@@ -25,7 +27,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -96,8 +98,10 @@ type Snapshot struct {
 	rateLimitsByID   map[string]*ratelimit.RateLimit
 	rateLimitsByName map[string]*ratelimit.RateLimit
 
-	relayKeysByID   map[string]*relaykey.RelayKey
-	relayKeysByHash map[string]*relaykey.RelayKey
+	keysByID map[string]*key.Key
+	// keysByHash indexes Spec.KeyHash and, while the key is in its
+	// rotation grace window, Spec.PreviousKeyHash.
+	keysByHash map[string]*key.Key
 
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
@@ -126,14 +130,15 @@ type Snapshot struct {
 	// reference this row. Used by the COW reconciler to enumerate dependents
 	// when a parent is evicted. Allocated even for empty snapshots so
 	// registerRefs has somewhere to write.
-	refsByProvider  map[string]refSet
-	refsByHost      map[string]refSet
-	refsByModel     map[string]refSet
-	refsByHostKey   map[string]refSet
-	refsByRateLimit map[string]refSet
-	refsByPolicy    map[string]refSet
-	refsByTeam      map[string]refSet
-	refsByProject   map[string]refSet
+	refsByProvider       map[string]refSet
+	refsByHost           map[string]refSet
+	refsByModel          map[string]refSet
+	refsByHostKey        map[string]refSet
+	refsByRateLimit      map[string]refSet
+	refsByPolicy         map[string]refSet
+	refsByTeam           map[string]refSet
+	refsByProject        map[string]refSet
+	refsByServiceAccount map[string]refSet
 
 	teamsByID   map[string]*team.Team
 	teamsByName map[string]*team.Team
@@ -142,6 +147,17 @@ type Snapshot struct {
 	projectsByName map[string]*project.Project
 	// projectsByTeam groups a team's projects (sorted by name).
 	projectsByTeam map[string][]*project.Project
+
+	serviceAccountsByID   map[string]*serviceaccount.ServiceAccount
+	serviceAccountsByName map[string]*serviceaccount.ServiceAccount
+	// serviceAccountsByProject groups a project's accounts (sorted by name).
+	serviceAccountsByProject map[string][]*serviceaccount.ServiceAccount
+
+	groupsByID   map[string]*group.Group
+	groupsByName map[string]*group.Group
+	// groupsByUser maps a user id to the names of the groups holding them,
+	// sorted — the form the subject list needs.
+	groupsByUser map[string][]string
 }
 
 // global is the outermost scope every chain ends in.
@@ -352,7 +368,7 @@ func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
 	return k, ok
 }
 
-// AllProviders / AllPolicies / AllHostKeys / AllRelayKeys / AllRateLimits
+// AllProviders / AllPolicies / AllHostKeys / AllKeys / AllRateLimits
 // / AllPricings return the full enabled set in stable slug order. Used
 // by the debug-snapshot endpoint; never on the hot path.
 
@@ -386,10 +402,10 @@ func (s *Snapshot) AllHostKeys() []*hostkey.HostKey {
 	return out
 }
 
-// AllRelayKeys returns every RelayKey in the snapshot, sorted by slug.
-func (s *Snapshot) AllRelayKeys() []*relaykey.RelayKey {
-	out := make([]*relaykey.RelayKey, 0, len(s.relayKeysByID))
-	for _, k := range s.relayKeysByID {
+// AllKeys returns every Key in the snapshot, sorted by slug.
+func (s *Snapshot) AllKeys() []*key.Key {
+	out := make([]*key.Key, 0, len(s.keysByID))
+	for _, k := range s.keysByID {
 		out = append(out, k)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
@@ -460,17 +476,21 @@ func (s *Snapshot) Hosts() []*host.Host {
 	return out
 }
 
-// RelayKey returns the enabled RelayKey with this id, or false.
-func (s *Snapshot) RelayKey(id string) (*relaykey.RelayKey, bool) {
-	k, ok := s.relayKeysByID[id]
+// Key returns the enabled Key with this id, or false.
+func (s *Snapshot) Key(id string) (*key.Key, bool) {
+	k, ok := s.keysByID[id]
 	return k, ok
 }
 
-// RelayKeyByHash is the hot-path inbound-auth lookup. Returns the RelayKey
-// whose Spec.KeyHash matches. Caller checks IsActive.
-func (s *Snapshot) RelayKeyByHash(hash string) (*relaykey.RelayKey, bool) {
-	k, ok := s.relayKeysByHash[hash]
-	return k, ok
+// KeyByHash is the hot-path inbound-auth lookup. matchedPrevious is true
+// when the hash matched the pre-rotation credential, which the caller must
+// then check against the grace window. Caller checks IsActive.
+func (s *Snapshot) KeyByHash(hash string) (k *key.Key, matchedPrevious bool) {
+	k, ok := s.keysByHash[hash]
+	if !ok {
+		return nil, false
+	}
+	return k, k.Spec.KeyHash != hash
 }
 
 // ModelsInPolicy returns the Models attached to this Policy in declaration
@@ -618,4 +638,60 @@ func (s *Snapshot) ScopeChain(o *meta.Owner) []meta.Owner {
 		}
 	}
 	return []meta.Owner{global}
+}
+
+// ServiceAccount returns the enabled ServiceAccount with this id, or false.
+func (s *Snapshot) ServiceAccount(id string) (*serviceaccount.ServiceAccount, bool) {
+	sa, ok := s.serviceAccountsByID[id]
+	return sa, ok
+}
+
+// ServiceAccountByName returns the enabled ServiceAccount with this slug, or false.
+func (s *Snapshot) ServiceAccountByName(name string) (*serviceaccount.ServiceAccount, bool) {
+	sa, ok := s.serviceAccountsByName[name]
+	return sa, ok
+}
+
+// ServiceAccountsForProject returns the project's accounts, sorted by name.
+// The returned slice must not be mutated.
+func (s *Snapshot) ServiceAccountsForProject(projectID string) []*serviceaccount.ServiceAccount {
+	return s.serviceAccountsByProject[projectID]
+}
+
+// AllServiceAccounts returns every ServiceAccount in the snapshot, sorted by slug.
+func (s *Snapshot) AllServiceAccounts() []*serviceaccount.ServiceAccount {
+	out := make([]*serviceaccount.ServiceAccount, 0, len(s.serviceAccountsByID))
+	for _, sa := range s.serviceAccountsByID {
+		out = append(out, sa)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// Group returns the enabled Group with this id, or false.
+func (s *Snapshot) Group(id string) (*group.Group, bool) {
+	g, ok := s.groupsByID[id]
+	return g, ok
+}
+
+// GroupByName returns the enabled Group with this slug, or false.
+func (s *Snapshot) GroupByName(name string) (*group.Group, bool) {
+	g, ok := s.groupsByName[name]
+	return g, ok
+}
+
+// GroupsForUser returns the names of the groups holding this user, sorted.
+// The returned slice must not be mutated.
+func (s *Snapshot) GroupsForUser(userID string) []string {
+	return s.groupsByUser[userID]
+}
+
+// AllGroups returns every Group in the snapshot, sorted by slug.
+func (s *Snapshot) AllGroups() []*group.Group {
+	out := make([]*group.Group, 0, len(s.groupsByID))
+	for _, g := range s.groupsByID {
+		out = append(out, g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
 }

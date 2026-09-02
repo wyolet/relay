@@ -7,8 +7,8 @@
 //     to the resolver map.
 //  4. Translate each DTO → domain object via manifest.ToXxx using the merged
 //     resolver, stamping Meta.ID from the same map.
-//  5. Upsert in dependency order: Team, Project, Provider, Host, RateLimit,
-//     HostKey, Model, Policy, RelayKey.
+//  5. Upsert in dependency order: Team, Project, Group, Provider, Host,
+//     RateLimit, HostKey, Model, Policy, ServiceAccount, Key.
 //
 // Diffing, dry-run, and identity (User) handling are deliberately omitted —
 // this is the minimal "make the rows be there" path. Idempotent: re-running
@@ -23,8 +23,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -33,9 +35,10 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
@@ -53,18 +56,20 @@ type Options struct {
 
 // Result summarises a seed run.
 type Result struct {
-	Teams        int
-	Projects     int
-	Providers    int
-	Hosts        int
-	RateLimits   int
-	HostKeys     int
-	Models       int
-	Pricings     int
-	HostBindings int
-	Policies     int
-	RelayKeys    int
-	Skipped      int // dirty rows preserved (operator-edited; not re-seeded)
+	Teams           int
+	Projects        int
+	Providers       int
+	Hosts           int
+	RateLimits      int
+	HostKeys        int
+	Models          int
+	Pricings        int
+	HostBindings    int
+	Policies        int
+	ServiceAccounts int
+	Groups          int
+	Keys            int
+	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
 }
 
 // Run executes the seed pipeline end-to-end.
@@ -92,9 +97,13 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		policy:      policy.NewStore(opts.Pool),
 		pricing:     pricing.NewStore(opts.Pool),
 		hostbinding: binding.NewStore(opts.Pool),
-		relaykey:    relaykey.NewStore(q),
+		key:         key.NewStore(q),
 		team:        team.NewStore(q),
 		project:     project.NewStore(q),
+
+		serviceaccount: serviceaccount.NewStore(q),
+		group:          group.NewStore(opts.Pool),
+		user:           user.NewStore(q),
 	}
 
 	resolver, err := buildResolver(ctx, stores)
@@ -114,7 +123,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		prDocs   []*manifest.PricingDTO
 		bndDocs  []*manifest.HostBindingDTO
 		polDocs  []*manifest.PolicyDTO
-		rkDocs   []*manifest.RelayKeyDTO
+		saDocs   []*manifest.ServiceAccountDTO
+		grpDocs  []*manifest.GroupDTO
+		rkDocs   []*manifest.KeyDTO
 	)
 	for _, d := range docs {
 		switch {
@@ -138,8 +149,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			bndDocs = append(bndDocs, d.HostBinding)
 		case d.Policy != nil:
 			polDocs = append(polDocs, d.Policy)
-		case d.RelayKey != nil:
-			rkDocs = append(rkDocs, d.RelayKey)
+		case d.ServiceAccount != nil:
+			saDocs = append(saDocs, d.ServiceAccount)
+		case d.Group != nil:
+			grpDocs = append(grpDocs, d.Group)
+		case d.Key != nil:
+			rkDocs = append(rkDocs, d.Key)
 		}
 	}
 
@@ -155,7 +170,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	mintIDs(resolver.Pricings, prDocs, func(d *manifest.PricingDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Bindings, bndDocs, func(d *manifest.HostBindingDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Policies, polDocs, func(d *manifest.PolicyDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.RelayKeys, rkDocs, func(d *manifest.RelayKeyDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.ServiceAccounts, saDocs, func(d *manifest.ServiceAccountDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.Groups, grpDocs, func(d *manifest.GroupDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.Keys, rkDocs, func(d *manifest.KeyDTO) string { return d.Metadata.Name })
 
 	res := &Result{}
 
@@ -310,20 +327,50 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		}
 		res.Policies++
 	}
-	for _, d := range rkDocs {
-		k, err := manifest.ToRelayKey(*d, resolver)
+	for _, d := range grpDocs {
+		g, err := manifest.ToGroup(*d, resolver)
 		if err != nil {
-			return nil, fmt.Errorf("seed: relaykey %q: %w", d.Metadata.Name, err)
+			return nil, fmt.Errorf("seed: group %q: %w", d.Metadata.Name, err)
 		}
-		k.Meta.ID = resolver.RelayKeys[d.Metadata.Name]
+		g.Meta.ID = resolver.Groups[d.Metadata.Name]
+		if resolver.skip(g.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.group.Upsert(ctx, g); err != nil {
+			return nil, fmt.Errorf("seed: upsert group %q: %w", d.Metadata.Name, err)
+		}
+		res.Groups++
+	}
+	for _, d := range saDocs {
+		sa, err := manifest.ToServiceAccount(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: serviceaccount %q: %w", d.Metadata.Name, err)
+		}
+		sa.Meta.ID = resolver.ServiceAccounts[d.Metadata.Name]
+		if resolver.skip(sa.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.serviceaccount.Upsert(ctx, sa); err != nil {
+			return nil, fmt.Errorf("seed: upsert serviceaccount %q: %w", d.Metadata.Name, err)
+		}
+		res.ServiceAccounts++
+	}
+	for _, d := range rkDocs {
+		k, err := manifest.ToKey(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: key %q: %w", d.Metadata.Name, err)
+		}
+		k.Meta.ID = resolver.Keys[d.Metadata.Name]
 		if resolver.skip(k.Meta.ID, opts.ClearDirty) {
 			res.Skipped++
 			continue
 		}
-		if err := stores.relaykey.Upsert(ctx, k); err != nil {
-			return nil, fmt.Errorf("seed: upsert relaykey %q: %w", d.Metadata.Name, err)
+		if err := stores.key.Upsert(ctx, k); err != nil {
+			return nil, fmt.Errorf("seed: upsert key %q: %w", d.Metadata.Name, err)
 		}
-		res.RelayKeys++
+		res.Keys++
 	}
 
 	return res, nil
@@ -340,9 +387,13 @@ type storeSet struct {
 	policy      *policy.Store
 	pricing     *pricing.Store
 	hostbinding *binding.Store
-	relaykey    *relaykey.Store
+	key         *key.Store
 	team        *team.Store
 	project     *project.Store
+
+	serviceaccount *serviceaccount.Store
+	group          *group.Store
+	user           *user.Store
 }
 
 // indexBuilder is a mutable resolver populated from PG + freshly minted ids.
@@ -356,9 +407,13 @@ type indexBuilder struct {
 	Pricings   map[string]string
 	Bindings   map[string]string
 	Policies   map[string]string
-	RelayKeys  map[string]string
+	Keys       map[string]string
 	Teams      map[string]string
 	Projects   map[string]string
+
+	ServiceAccounts map[string]string
+	Groups          map[string]string
+	Users           map[string]string
 
 	// Dirty is keyed by row id: true when the existing PG row was operator-
 	// edited. Populated from the List sweep in buildResolver so the upsert
@@ -382,6 +437,12 @@ func (i *indexBuilder) PricingID(n string) (string, bool)   { v, ok := i.Pricing
 func (i *indexBuilder) BindingID(n string) (string, bool)   { v, ok := i.Bindings[n]; return v, ok }
 func (i *indexBuilder) TeamID(n string) (string, bool)      { v, ok := i.Teams[n]; return v, ok }
 func (i *indexBuilder) ProjectID(n string) (string, bool)   { v, ok := i.Projects[n]; return v, ok }
+func (i *indexBuilder) ServiceAccountID(n string) (string, bool) {
+	v, ok := i.ServiceAccounts[n]
+	return v, ok
+}
+func (i *indexBuilder) GroupID(n string) (string, bool) { v, ok := i.Groups[n]; return v, ok }
+func (i *indexBuilder) UserID(n string) (string, bool)  { v, ok := i.Users[n]; return v, ok }
 
 func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	idx := &indexBuilder{
@@ -393,10 +454,15 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 		Pricings:   map[string]string{},
 		Bindings:   map[string]string{},
 		Policies:   map[string]string{},
-		RelayKeys:  map[string]string{},
+		Keys:       map[string]string{},
 		Teams:      map[string]string{},
 		Projects:   map[string]string{},
-		Dirty:      map[string]bool{},
+
+		ServiceAccounts: map[string]string{},
+		Groups:          map[string]string{},
+		Users:           map[string]string{},
+
+		Dirty: map[string]bool{},
 	}
 	teams, err := s.team.List(ctx)
 	if err != nil {
@@ -478,13 +544,38 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 		idx.Policies[p.Meta.Name] = p.Meta.ID
 		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
 	}
-	rks, err := s.relaykey.List(ctx)
+	rks, err := s.key.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("seed: list relaykeys: %w", err)
+		return nil, fmt.Errorf("seed: list keys: %w", err)
 	}
 	for _, k := range rks {
-		idx.RelayKeys[k.Meta.Name] = k.Meta.ID
+		idx.Keys[k.Meta.Name] = k.Meta.ID
 		idx.Dirty[k.Meta.ID] = k.Meta.Dirty
+	}
+	sas, err := s.serviceaccount.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list serviceaccounts: %w", err)
+	}
+	for _, sa := range sas {
+		idx.ServiceAccounts[sa.Meta.Name] = sa.Meta.ID
+		idx.Dirty[sa.Meta.ID] = sa.Meta.Dirty
+	}
+	groups, err := s.group.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list groups: %w", err)
+	}
+	for _, g := range groups {
+		idx.Groups[g.Meta.Name] = g.Meta.ID
+		idx.Dirty[g.Meta.ID] = g.Meta.Dirty
+	}
+	// Users are not a catalog kind, but group members and user-principal
+	// keys name them, so the resolver needs their slugs.
+	users, err := s.user.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list users: %w", err)
+	}
+	for _, u := range users {
+		idx.Users[u.Username] = u.ID
 	}
 	return idx, nil
 }

@@ -36,8 +36,8 @@ func (s *Snapshot) clone() *Snapshot {
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),
 		rateLimitsByName: shallowMap(s.rateLimitsByName),
 
-		relayKeysByID:   shallowMap(s.relayKeysByID),
-		relayKeysByHash: shallowMap(s.relayKeysByHash),
+		keysByID:   shallowMap(s.keysByID),
+		keysByHash: shallowMap(s.keysByHash),
 
 		modelsByPolicy:        copySliceMap(s.modelsByPolicy),
 		hostKeysByPolicy:      copySliceMap(s.hostKeysByPolicy),
@@ -60,12 +60,22 @@ func (s *Snapshot) clone() *Snapshot {
 		refsByTeam:      copyRefMap(s.refsByTeam),
 		refsByProject:   copyRefMap(s.refsByProject),
 
+		refsByServiceAccount: copyRefMap(s.refsByServiceAccount),
+
 		teamsByID:   shallowMap(s.teamsByID),
 		teamsByName: shallowMap(s.teamsByName),
 
 		projectsByID:   shallowMap(s.projectsByID),
 		projectsByName: shallowMap(s.projectsByName),
 		projectsByTeam: copySliceMap(s.projectsByTeam),
+
+		serviceAccountsByID:      shallowMap(s.serviceAccountsByID),
+		serviceAccountsByName:    shallowMap(s.serviceAccountsByName),
+		serviceAccountsByProject: copySliceMap(s.serviceAccountsByProject),
+
+		groupsByID:   shallowMap(s.groupsByID),
+		groupsByName: shallowMap(s.groupsByName),
+		groupsByUser: copySliceMap(s.groupsByUser),
 	}
 	return c
 }

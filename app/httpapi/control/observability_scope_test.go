@@ -12,18 +12,18 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/usagelog"
 )
 
-type fakeKeyLister []*relaykey.RelayKey
+type fakeKeyLister []*key.Key
 
-func (f fakeKeyLister) List(context.Context) ([]*relaykey.RelayKey, error) { return f, nil }
+func (f fakeKeyLister) List(context.Context) ([]*key.Key, error) { return f, nil }
 
 func testKeys() fakeKeyLister {
-	mk := func(hash string, owner meta.Owner) *relaykey.RelayKey {
-		k := &relaykey.RelayKey{}
+	mk := func(hash string, owner meta.Owner) *key.Key {
+		k := &key.Key{}
 		k.Meta = meta.Metadata{ID: meta.NewID(), Name: "k-" + hash, Owner: owner}
 		k.Spec.KeyHash = hash
 		return k
@@ -36,7 +36,7 @@ func testKeys() fakeKeyLister {
 	}
 }
 
-func TestRelayKeyScope(t *testing.T) {
+func TestKeyScope(t *testing.T) {
 	keys := testKeys()
 
 	tests := []struct {
@@ -55,7 +55,7 @@ func TestRelayKeyScope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := actor.WithActor(context.Background(), tt.who)
-			hashes, unrestricted, err := relayKeyScope(ctx, tt.authzr, keys)
+			hashes, unrestricted, err := keyScope(ctx, tt.authzr, keys)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +75,7 @@ func TestRelayKeyScope(t *testing.T) {
 
 	t.Run("nil lister fails closed", func(t *testing.T) {
 		ctx := actor.WithActor(context.Background(), scopeActors["alice"])
-		hashes, unrestricted, err := relayKeyScope(ctx, authz.OwnerScoped{}, nil)
+		hashes, unrestricted, err := keyScope(ctx, authz.OwnerScoped{}, nil)
 		if err != nil || unrestricted || len(hashes) != 0 {
 			t.Fatalf("got (%v, %v, %v), want scoped-to-nothing", hashes, unrestricted, err)
 		}
