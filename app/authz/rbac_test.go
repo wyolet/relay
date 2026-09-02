@@ -448,3 +448,66 @@ func TestRBACRotateIsNotUpdate(t *testing.T) {
 		t.Errorf("keys.update with a rotate-only role = %v, want forbidden", err)
 	}
 }
+
+// A misconfigured evaluator must fail closed: no snapshot means no
+// bindings to read, which is a denial and never a bypass.
+func TestRBACWithoutASnapshotDenies(t *testing.T) {
+	bob := actorOf(bobID, subjectsOf(bobID))
+	res := authz.Resource{Kind: "key", Owner: projectOwner(p1ID)}
+
+	for _, tt := range []struct {
+		name string
+		rbac authz.RBAC
+	}{
+		{"no snapshot accessor", authz.RBAC{}},
+		{"accessor returns nil", authz.RBAC{Snap: func() authz.Snapshot { return nil }}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.rbac.Authorize(ctxOf(bob), "keys.get", res); !errors.Is(err, authz.ErrForbidden) {
+				t.Fatalf("Authorize = %v, want forbidden", err)
+			}
+			// An unauthenticated caller is still refused first, and the
+			// admin token still bypasses without reading a snapshot.
+			if err := tt.rbac.Authorize(ctxOf(nil), "keys.get", res); !errors.Is(err, authz.ErrUnauthenticated) {
+				t.Errorf("unauthenticated = %v, want unauthenticated", err)
+			}
+			if err := tt.rbac.Authorize(ctxOf(&actor.Actor{AdminToken: true}), "keys.get", res); err != nil {
+				t.Errorf("admin token = %v, want allowed", err)
+			}
+		})
+	}
+}
+
+// IsAdmin is the operator escape hatch a few call sites read directly; it
+// must answer for the break-glass token and the bootstrap admin role only.
+func TestIsAdmin(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		who  *actor.Actor
+		want bool
+	}{
+		{"no actor", nil, false},
+		{"plain user", actorOf(bobID, subjectsOf(bobID)), false},
+		{"admin token", &actor.Actor{AdminToken: true}, true},
+		{"bootstrap admin role", actorOf(ids.New(), nil, user.RoleAdmin), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := authz.IsAdmin(ctxOf(tt.who)); got != tt.want {
+				t.Fatalf("IsAdmin = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Single-user mode: authenticated is the whole check, and unauthenticated
+// is still refused.
+func TestAlwaysAllowAuthenticated(t *testing.T) {
+	a := authz.AlwaysAllowAuthenticated{}
+	if err := a.Authorize(ctxOf(nil), "keys.delete", authz.Resource{Kind: "key"}); !errors.Is(err, authz.ErrUnauthenticated) {
+		t.Fatalf("unauthenticated = %v, want unauthenticated", err)
+	}
+	if err := a.Authorize(ctxOf(actorOf(bobID, nil)), "keys.delete",
+		authz.Resource{Kind: "key", Owner: userOwner(aliceID)}); err != nil {
+		t.Fatalf("authenticated = %v, want allowed", err)
+	}
+}
