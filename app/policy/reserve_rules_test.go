@@ -13,8 +13,8 @@ import (
 // slice is pre-sized so the metered rules never force a regrow.
 func TestReserveInbound_RevokedRuleStaysFirst(t *testing.T) {
 	svc, store, pol := reserveFixture(t,
-		appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute)},
-		appratelimit.Rule{Meter: appratelimit.MeterTokens, Amount: 100, Window: appratelimit.Window(time.Minute)},
+		appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow},
+		appratelimit.Rule{Meter: appratelimit.MeterTokens, Amount: 100, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow},
 	)
 	if _, err := svc.ReserveInbound(context.Background(), InboundInput{
 		Policy: pol, TeamID: "team-1", TokenJTI: "jti-1",
@@ -37,6 +37,7 @@ func TestReserveInbound_OneScriptRegardlessOfRuleCount(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		rules = append(rules, appratelimit.Rule{
 			Meter: appratelimit.MeterRequests, Amount: 1 << 20, Window: appratelimit.Window(time.Hour),
+			Strategy: appratelimit.StrategyFixedWindow,
 		})
 	}
 	svc, store, pol := reserveFixture(t, rules...)

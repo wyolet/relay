@@ -74,6 +74,14 @@ func reserveFixture(t testing.TB, rules ...appratelimit.Rule) (*Service, *counti
 	t.Helper()
 	pol := fix("prod-policy")
 	pol.Meta.ID = "pol-1"
+	// Strategy is required by RateLimit.Validate, so a stored rule always
+	// carries one; a fixture without it would meter through a shape no
+	// production row can have.
+	for i, r := range rules {
+		if r.Strategy == "" {
+			t.Fatalf("fixture rule %d has no strategy", i)
+		}
+	}
 	var rl *appratelimit.RateLimit
 	if len(rules) > 0 {
 		rl = &appratelimit.RateLimit{}
@@ -133,6 +141,7 @@ func TestReserveInbound_KeyWithNoRules(t *testing.T) {
 func TestReserveInbound_OneScriptWithRules(t *testing.T) {
 	svc, store, pol := reserveFixture(t, appratelimit.Rule{
 		Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute),
+		Strategy: appratelimit.StrategyFixedWindow,
 	})
 
 	if _, err := svc.ReserveInbound(context.Background(), InboundInput{
@@ -179,7 +188,7 @@ func TestReserveInbound_RevokedJTI(t *testing.T) {
 // TestReserveInbound_ScopeTag pins D26: a project-scoped caller anchors on
 // its team, everyone else keeps the policy slug.
 func TestReserveInbound_ScopeTag(t *testing.T) {
-	rule := appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute)}
+	rule := appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow}
 
 	for _, tc := range []struct {
 		name   string
@@ -210,6 +219,7 @@ func TestReserveInbound_ScopeTag(t *testing.T) {
 func TestReserveInbound_RevocationRuleIsFirst(t *testing.T) {
 	svc, store, pol := reserveFixture(t, appratelimit.Rule{
 		Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute),
+		Strategy: appratelimit.StrategyFixedWindow,
 	})
 
 	if _, err := svc.ReserveInbound(context.Background(), InboundInput{

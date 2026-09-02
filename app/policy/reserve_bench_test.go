@@ -10,9 +10,9 @@ import (
 
 func benchRules() []appratelimit.Rule {
 	return []appratelimit.Rule{
-		{Meter: appratelimit.MeterRequests, Amount: 1 << 40, Window: appratelimit.Window(time.Hour)},
-		{Meter: appratelimit.MeterTokens, Amount: 1 << 40, Window: appratelimit.Window(time.Hour)},
-		{Meter: appratelimit.MeterTokensInput, Amount: 1 << 40, Window: appratelimit.Window(time.Hour)},
+		{Meter: appratelimit.MeterRequests, Amount: 1 << 40, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyTokenBucket},
+		{Meter: appratelimit.MeterTokens, Amount: 1 << 40, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyTokenBucket},
+		{Meter: appratelimit.MeterTokensInput, Amount: 1 << 40, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyTokenBucket},
 	}
 }
 
