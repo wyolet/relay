@@ -98,6 +98,11 @@ type Deps struct {
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
 
+	// PublicURL is the deployment's externally reachable control-plane
+	// origin. Exported manifests reference the schema endpoint under it;
+	// empty renders the reference relative.
+	PublicURL string
+
 	// RuntimeConfig is the public config served at GET /config.json for the
 	// embedded admin UI. Zero value is fine (UI falls back to origin defaults).
 	RuntimeConfig RuntimeConfig
@@ -169,6 +174,9 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerUsage(api, d, protect)
 	registerLogs(api, d, protect)
 	registerAudit(api, d, protect)
+	registerApply(api, d, protect)
+	registerExport(api, d, protect)
+	registerSchemas(r) // public: the JSON Schemas the manifests reference
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in app/ratelimit). The spec is

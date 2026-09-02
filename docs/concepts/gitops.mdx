@@ -1,0 +1,149 @@
+---
+title: "GitOps"
+description: "Declare teams, projects, and policy as manifests and apply them from CI"
+---
+
+Everything under the control API can also be declared as YAML and applied
+from a git repository. `POST /api/apply` runs the same loader
+(`app/apply`) that boots the server from `RELAY_CATALOG_DIR` — a seed and
+an apply of the same manifest tree converge on the same rows.
+
+## Apply
+
+```bash
+relay apply -f manifests/ --dry-run
+relay apply -f manifests/
+```
+
+A file or a directory of `.yaml` documents is parsed, diffed against the
+stored rows, and — unless `--dry-run` — written. Every entry in the plan
+gets one of five actions:
+
+| Action | Meaning |
+| --- | --- |
+| `create` | No row with this name exists yet. |
+| `update` | The row exists and at least one field differs. `changedFields` lists the JSON paths. |
+| `unchanged` | The row matches the manifest exactly. Nothing is written. |
+| `skip-dirty` | The row was hand-edited through the control API (`meta.Dirty`) and the run is not forcing. Reported as drift; left alone. |
+| `delete` | Pruning removed a row absent from the bundle. Only appears with `--prune`. |
+
+`--force` overwrites a dirty row with the manifest's version and clears the
+dirty flag — apply owns the row again from that point on.
+
+## Running it from CI
+
+Run the dry run first so a pipeline can gate on drift before writing
+anything:
+
+```bash
+relay apply -f manifests/ --dry-run || exit_code=$?
+if [ "$exit_code" = "1" ]; then
+  echo "drift detected — see plan above"
+  exit 1
+fi
+relay apply -f manifests/
+```
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Clean — every entry was `create`, `update`, `unchanged`, or `delete`. |
+| `1` | Drift — at least one `skip-dirty` entry, and the run did not pass `--force`. |
+| `2` | The server rejected the request (4xx/5xx). |
+
+`$RELAY_URL` (default `http://localhost:5103`) names the server;
+`$RELAY_ADMIN_TOKEN` or `--token` authenticates. Both can be overridden
+per invocation with `--url`.
+
+## Prune
+
+```bash
+relay apply -f manifests/ --prune --selector env=prod,team=platform
+```
+
+`--prune` deletes rows that are absent from the bundle, but only rows that
+carry **every** label in `--selector` — an unfiltered prune would delete
+every user row the manifest happens to omit, so the selector is required.
+
+Pruning only ever considers user-, team-, or project-owned rows. System-,
+provider-, and host-owned rows — the catalog's own data — are never
+candidates, no matter what labels they carry: a manifest that omits a
+catalog-managed provider or host is not asking for its removal.
+
+## Authorization and partial failure
+
+Every row in the plan is authorized before anything is written. One denied
+row fails the whole apply with `403` (or `401` if the caller isn't
+authenticated) and nothing is written — authorization is all-or-nothing,
+checked up front.
+
+Writes then run sequentially, one kind at a time, each kind in its own
+store transaction. There is no cross-kind transaction: if a write fails
+part-way through, the apply returns `500` with the list of entries that
+already landed. Re-applying the same bundle converges — the rows that
+landed diff as `unchanged`, and the run picks up from where it stopped.
+
+## Export
+
+```bash
+relay export -o manifests/relay.yaml
+relay export --scope project:<id> --kinds policies,keys
+```
+
+`GET /api/export` renders the tenant-owned rows as a manifest bundle in
+the same shape `apply` accepts — round-trip the deployment's state without
+hand-authoring YAML. Kinds emit in dependency order, each sorted by name for
+a stable diff:
+
+```
+teams, projects, groups, roles, rate-limits, policies,
+host-keys, service-accounts, keys, role-bindings,
+policy-bindings, overlays
+```
+
+Only user-, team-, and project-owned rows are exported. Catalog template
+rows (system-, provider-, and host-owned — providers, hosts, models,
+pricing) are never exported; they come from the catalog, not from a git
+repo. Overlays layered on top of those catalog rows *are* exported, since
+the overlay itself is user-owned.
+
+Secrets never leave: a `HostKey`'s `value` is always omitted from the
+export, regardless of `valueFrom.kind`. A `Key` exports only `keyHash`,
+`prefix`, and `expiresAt` — never `previousKeyHash` or `graceUntil` (a
+`Key` document also carries `revokedAt`, `enabled`, and the passthrough/
+payload-logging flags, none of which are secret).
+
+`--scope team:<id>` or `--scope project:<id>` restricts the export to one
+subtree (overlays are skipped in a scoped export — they're keyed by their
+target catalog row, not by tenant, so scoping them would mean guessing).
+`--kinds` takes a comma-separated list of API plurals. `--format` is
+`yaml` (default) or `json`.
+
+## The `$schema` directive
+
+Every document `export` renders is preceded by an editor directive:
+
+```yaml
+# yaml-language-server: $schema=http://localhost:5103/api/schemas/v1alpha2/Policy.schema.json
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Policy
+```
+
+The base is `RELAY_PUBLIC_URL` when the deployment sets one, otherwise the
+path is relative (same-origin). `GET /api/schemas/{version}` lists the
+kinds available at a schema version; `GET /api/schemas/{version}/{kind}`
+serves one. Both are public — an editor resolving the directive has no
+session, and a schema describes shape, never data.
+
+## Other commands
+
+```bash
+relay keygen [--prefix]
+relay token mint --project <slug> [--ttl 1h] --user U --password P
+```
+
+`keygen` mints a key locally, so the plaintext never has to pass through
+the server and only the hash goes in a manifest. `token mint` exchanges a
+username and password for a short-lived, project-scoped token for the
+inference API; the admin token identifies no user and cannot mint one.

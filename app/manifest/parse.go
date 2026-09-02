@@ -33,6 +33,7 @@ type Document struct {
 	Role           *RoleDTO
 	RoleBinding    *RoleBindingDTO
 	PolicyBinding  *PolicyBindingDTO
+	Overlay        *OverlayDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -72,6 +73,8 @@ func (d Document) Kind() string {
 		return "RoleBinding"
 	case d.PolicyBinding != nil:
 		return "PolicyBinding"
+	case d.Overlay != nil:
+		return "Overlay"
 	default:
 		return ""
 	}
@@ -289,6 +292,13 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 			return Document{}, err
 		}
 		return Document{PolicyBinding: &PolicyBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "Overlay":
+		var spec OverlaySpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{Overlay: &OverlayDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
 	case "Setting":
 		// Spec stays a raw node — its shape is per-section and is validated

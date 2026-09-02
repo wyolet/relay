@@ -92,6 +92,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "apply":
+			runCLI("apply", runApply, os.Args[2:])
+			return
+		case "export":
+			runCLI("export", runExport, os.Args[2:])
+			return
+		case "keygen":
+			runCLI("keygen", runKeygen, os.Args[2:])
+			return
+		case "token":
+			runCLI("token", runToken, os.Args[2:])
+			return
 		}
 	}
 
@@ -661,6 +673,7 @@ func main() {
 			PayloadReader:  payloadReader,
 			Selector:       selector,
 			HostHealth:     hostHealth,
+			PublicURL:      cfg.PublicURL,
 			RuntimeConfig:  runtimeConfig(cfg),
 		}
 		ctrlRouter.Route("/api", func(r chi.Router) {

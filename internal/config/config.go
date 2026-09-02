@@ -40,6 +40,11 @@ type Config struct {
 	CHDSN             string
 	OTLPEndpoint      string
 
+	// PublicURL is the deployment's externally reachable control-plane
+	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema
+	// endpoint under it; empty renders the reference relative.
+	PublicURL string
+
 	// Auth
 	AdminToken string
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
@@ -192,6 +197,7 @@ func Load() (*Config, error) {
 
 	// --- Auth ---
 	cfg.AdminToken = os.Getenv("RELAY_ADMIN_TOKEN")
+	cfg.PublicURL = strings.TrimSuffix(os.Getenv("RELAY_PUBLIC_URL"), "/")
 
 	// --- RELAY_MULTI_USER ---
 	switch v := os.Getenv("RELAY_MULTI_USER"); v {
