@@ -85,6 +85,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			Selector: in.Selector,
 			Gov:      d.Catalog,
 			License:  applyLicense(d),
+			Authz:    d.Authz,
 		})
 		if err != nil {
 			var ge *apply.GovernanceError

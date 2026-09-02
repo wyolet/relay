@@ -181,8 +181,10 @@ func TestRBACList(t *testing.T) {
 		who       string
 		wantNames []string
 	}{
-		{"alice", []string{"catalog-row", "alice-row"}},
-		{"bob", []string{"catalog-row", "bob-row"}},
+		// operator-row's owner names no user, so it reads like the catalog
+		// row it is rather than hiding from everyone.
+		{"alice", []string{"catalog-row", "alice-row", "operator-row"}},
+		{"bob", []string{"catalog-row", "bob-row", "operator-row"}},
 		{"root", []string{"catalog-row", "alice-row", "bob-row", "operator-row"}},
 		{"token", []string{"catalog-row", "alice-row", "bob-row", "operator-row"}},
 	}
@@ -230,7 +232,7 @@ func TestRBACGet(t *testing.T) {
 		{"catalog row", "alice", catalogID, 200},
 		{"foreign row hidden as 404", "alice", bobID, 404},
 		{"foreign row by slug hidden as 404", "alice", "bob-row", 404},
-		{"operator row hidden as 404", "alice", operatorID, 404},
+		{"operator row reads like a catalog row", "alice", operatorID, 200},
 		{"admin sees foreign row", "root", bobID, 200},
 		{"admin token sees operator row", "token", operatorID, 200},
 	}
@@ -284,7 +286,7 @@ func TestRBACUpdateDelete(t *testing.T) {
 	}{
 		{"update own", "alice", http.MethodPut, aliceID, 200},
 		{"update foreign is 404", "alice", http.MethodPut, bobID, 404},
-		{"update operator row is 404", "alice", http.MethodPut, operatorID, 404},
+		{"update operator row is 403", "alice", http.MethodPut, operatorID, 403},
 		{"update catalog row is 403", "alice", http.MethodPut, catalogID, 403},
 		{"admin updates foreign", "root", http.MethodPut, bobID, 200},
 		{"admin token updates operator row", "token", http.MethodPut, operatorID, 200},

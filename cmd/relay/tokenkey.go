@@ -62,7 +62,7 @@ func loadTokenSigningKey(ctx context.Context, pool *pgxpool.Pool, stores *appcat
 		}
 	}
 	verifier.SetCacheSize(cfg.EffectiveVerifyCacheSize())
-	if err := applyTokenSigningKey(ctx, stores.Secrets, cfg.SigningKey, signer, verifier); err != nil {
+	if err := applyTokenSigningKey(ctx, stores.Secrets, cfg, signer, verifier); err != nil {
 		// Tokens are one feature; a key that no longer decrypts (rotated
 		// master key, deleted secret) must not stop the gateway from serving
 		// inference. Mint answers 503 until the ref is fixed.
@@ -97,6 +97,7 @@ func generateSigningKey(ctx context.Context, pool *pgxpool.Pool, stores *appcata
 			out = cfg
 			return nil
 		}
+		previous := cfg.SigningKey
 		seed := make([]byte, ed25519.SeedSize)
 		if _, err := rand.Read(seed); err != nil {
 			return fmt.Errorf("generate signing key: %w", err)
@@ -107,6 +108,9 @@ func generateSigningKey(ctx context.Context, pool *pgxpool.Pool, stores *appcata
 		}
 		next := *cfg
 		next.SigningKey = ref
+		// Kept so every pod (not only this one) verifies tokens minted
+		// under the outgoing key.
+		next.PreviousSigningKey = previous
 		raw, err := json.Marshal(next)
 		if err != nil {
 			return fmt.Errorf("encode %s: %w", settings.AuthTokensSection, err)
@@ -140,7 +144,7 @@ func rotateTokenSigningKey(ctx context.Context, pool *pgxpool.Pool, stores *appc
 	if err != nil {
 		return err
 	}
-	return applyTokenSigningKey(ctx, stores.Secrets, cfg.SigningKey, signer, verifier)
+	return applyTokenSigningKey(ctx, stores.Secrets, cfg, signer, verifier)
 }
 
 // applyAuthTokensSection carries a live auth:tokens change onto the signer
@@ -153,27 +157,44 @@ func applyAuthTokensSection(ctx context.Context, pool *pgxpool.Pool, stores *app
 	if a.Enabled && a.SigningKey.ID == "" {
 		return loadTokenSigningKey(ctx, pool, stores, masterKey, signer, verifier)
 	}
-	ref := a.SigningKey
 	if !a.Enabled {
-		ref = pkgsecret.Ref{}
+		a.SigningKey, a.PreviousSigningKey = pkgsecret.Ref{}, pkgsecret.Ref{}
 	}
-	return applyTokenSigningKey(ctx, stores.Secrets, ref, signer, verifier)
+	return applyTokenSigningKey(ctx, stores.Secrets, &a, signer, verifier)
 }
 
-// applyTokenSigningKey resolves the ref and installs the key on both sides.
-// An empty ref clears them, which disables tokens without a restart.
-func applyTokenSigningKey(ctx context.Context, secrets *pkgsecret.Registry, ref pkgsecret.Ref,
+// applyTokenSigningKey resolves the section's refs and installs the keys on
+// both sides: the current one mints and verifies, the previous one only
+// verifies. An empty current ref clears them, which disables tokens without
+// a restart. A previous ref that no longer resolves is logged and skipped —
+// minting under the live key must not depend on the retired one.
+func applyTokenSigningKey(ctx context.Context, secrets *pkgsecret.Registry, cfg *settings.AuthTokens,
 	signer *control.TokenSigner, verifier *inference.TokenVerifier) error {
-	if ref.ID == "" {
+	if cfg == nil || cfg.SigningKey.ID == "" {
 		signer.SetSeed(nil)
 		verifier.SetKey(nil)
 		return nil
 	}
-	seed, err := secrets.Resolve(ctx, ref)
+	seed, err := secrets.Resolve(ctx, cfg.SigningKey)
 	if err != nil {
 		return fmt.Errorf("resolve signing key: %w", err)
 	}
 	signer.SetSeed(seed)
-	verifier.SetKey(signer.PublicKey())
+	verifier.SetKeys(signer.PublicKey(), previousPublicKey(ctx, secrets, cfg.PreviousSigningKey))
 	return nil
+}
+
+// previousPublicKey resolves the retired signing key's public half, or nil.
+func previousPublicKey(ctx context.Context, secrets *pkgsecret.Registry, ref pkgsecret.Ref) ed25519.PublicKey {
+	if ref.ID == "" {
+		return nil
+	}
+	seed, err := secrets.Resolve(ctx, ref)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		slog.Warn("auth: previous token signing key unusable; tokens minted under it will not verify",
+			"secret", ref.ID, "err", err)
+		return nil
+	}
+	pub, _ := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+	return pub
 }

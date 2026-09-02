@@ -125,6 +125,7 @@ func build(
 
 func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects, nSAs, nGroups, nRoles, nRoleBindings, nPolicyBindings int) *Snapshot {
 	return &Snapshot{
+		gen:                   nextSnapshotGen(),
 		providersByID:         make(map[string]*provider.Provider, nProvs),
 		providersByName:       make(map[string]*provider.Provider, nProvs),
 		hostsByID:             make(map[string]*host.Host, nHosts),

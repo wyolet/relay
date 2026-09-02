@@ -216,15 +216,16 @@ SELECT EXISTS (
 );
 
 -- name: RotateRelayKey :execrows
--- Conditional on the hash the caller read, so two concurrent rotations of
--- the same key cannot both win and lose one of the new plaintexts.
+-- Conditional on the hash AND the row version the caller read, so neither a
+-- concurrent rotation nor a concurrent update is overwritten by a rotation
+-- computed against the older row.
 UPDATE relay_keys
    SET key_hash          = $2,
        previous_key_hash = $3,
        metadata          = $4,
        spec              = $5,
        updated_at        = NOW()
- WHERE id = $1 AND key_hash = $6;
+ WHERE id = $1 AND key_hash = $6 AND updated_at = $7;
 
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;

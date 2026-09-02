@@ -36,7 +36,7 @@ func TestPrunableOwners(t *testing.T) {
 		meta.OwnerUser: true, meta.OwnerTeam: true, meta.OwnerProject: true,
 		meta.OwnerSystem: false, meta.OwnerProvider: false, meta.OwnerHost: false,
 	} {
-		if got := prunable("Policy", "p", meta.Owner{Kind: kind}); got != want {
+		if got := prunable("Policy", "p", meta.Owner{Kind: kind, ID: "owner-1"}); got != want {
 			t.Fatalf("prunable(Policy, %s) = %v, want %v", kind, got, want)
 		}
 	}

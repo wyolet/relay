@@ -659,7 +659,7 @@ func checkPolicyBindingRefs(g *graph) []Issue {
 // checkOrphans surfaces curation hints (warnings, not errors):
 //   - Provider with zero Models
 //   - Model with zero enabled host bindings
-//   - HostKey not referenced by any user-owned Policy (unreachable)
+//   - HostKey not referenced by any routable Policy (unreachable)
 //   - RateLimit not referenced by any Policy
 //
 // Errors-by-orphaning would be too strict — operators may legitimately
@@ -712,10 +712,15 @@ func checkOrphans(g *graph) []Issue {
 		})
 	}
 
-	// HostKey → at least one user-owned Policy listing it.
+	// HostKey → at least one Policy a caller can actually route through.
+	// A team- or project-owned Policy reaches its host keys the same way a
+	// user-owned one does, so counting only user/system owners reports a
+	// referenced key as unreachable.
 	keyReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
-		if pol.Metadata.Owner.Kind != "user" && pol.Metadata.Owner.Kind != "system" {
+		switch pol.Metadata.Owner.Kind {
+		case "user", "system", "team", "project":
+		default:
 			continue
 		}
 		for _, hk := range pol.Spec.HostKeys {
@@ -728,7 +733,7 @@ func checkOrphans(g *graph) []Issue {
 				Severity: SeverityWarning,
 				Kind:     KindOrphan,
 				Source:   Ref{Kind: "HostKey", Name: name},
-				Message:  "hostkey not referenced by any user/system-owned policy; underlying models won't appear in /v1/models",
+				Message:  "hostkey not referenced by any routable policy; underlying models won't appear in /v1/models",
 			})
 		}
 	}

@@ -750,3 +750,80 @@ func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T
 		t.Fatalf("migrate back up to head: %v", err)
 	}
 }
+
+// Rolling back below the tenancy tables leaves rows whose owner names a team
+// or project that no longer exists.
+// TestIntegration_Migration25DownRewritesTenantOwners drives up → down → up
+// and pins that the down migration puts those owners back into the shape an
+// older binary understands.
+func TestIntegration_Migration25DownRewritesTenantOwners(t *testing.T) {
+	newStack(t) // truncates, schema at head
+	ctx := context.Background()
+	p := testPool(t)
+
+	teamID, projectID := ids.New(), ids.New()
+	if _, err := p.Exec(ctx,
+		`INSERT INTO teams (id, name, display_name, metadata, spec)
+		 VALUES ($1, 'platform', '', '{"owner":{"kind":"system"}}'::jsonb, '{}'::jsonb)`,
+		teamID); err != nil {
+		t.Fatalf("seed team: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO projects (id, name, display_name, team_id, metadata, spec)
+		 VALUES ($1, 'search', '', $2, $3::jsonb, $4::jsonb)`,
+		projectID, teamID,
+		`{"owner":{"kind":"team","id":"`+teamID+`"}}`,
+		`{"teamId":"`+teamID+`"}`); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	owner := func(kind, id string) string {
+		return `{"owner":{"kind":"` + kind + `","id":"` + id + `"}}`
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO policies (id, name, display_name, metadata, spec, models)
+		 VALUES ($1, 'proj-policy', '', $2::jsonb, '{}'::jsonb, '{}')`,
+		ids.New(), owner("project", projectID)); err != nil {
+		t.Fatalf("seed policy: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO secrets (id, name, display_name, value_kind, value_from_env, metadata, spec)
+		 VALUES ($1, 'proj-host-key', '', 'env', 'PROJ_KEY', $2::jsonb, '{}'::jsonb)`,
+		ids.New(), owner("project", projectID)); err != nil {
+		t.Fatalf("seed host key: %v", err)
+	}
+	if _, err := p.Exec(ctx,
+		`INSERT INTO rate_limits (id, name, display_name, metadata, spec)
+		 VALUES ($1, 'team-limit', '', $2::jsonb, '{}'::jsonb)`,
+		ids.New(), owner("team", teamID)); err != nil {
+		t.Fatalf("seed rate limit: %v", err)
+	}
+
+	m := migrator(t)
+	if err := m.Migrate(24); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate down to 24: %v", err)
+	}
+
+	for _, table := range []string{"policies", "secrets", "rate_limits"} {
+		var kind string
+		var stale int
+		if err := p.QueryRow(ctx,
+			`SELECT count(*) FROM `+table+` WHERE metadata->'owner'->>'kind' IN ('team','project')`).Scan(&stale); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if stale != 0 {
+			t.Errorf("%s: %d row(s) still owned by a team or project after the down migration", table, stale)
+		}
+		if err := p.QueryRow(ctx,
+			`SELECT metadata->'owner'->>'kind' FROM `+table+` LIMIT 1`).Scan(&kind); err != nil {
+			t.Fatalf("read %s owner: %v", table, err)
+		}
+		if kind != "user" {
+			t.Errorf("%s owner kind = %q, want user", table, kind)
+		}
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate back up to head: %v", err)
+	}
+}

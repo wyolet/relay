@@ -84,7 +84,10 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "migrate":
-			slog.Debug("relay: 'migrate' subcommand currently runs implicitly on boot")
+			if err := runMigrate(os.Args[2:]); err != nil {
+				slog.Error("migrate failed", "err", err)
+				os.Exit(1)
+			}
 			return
 		case "seed":
 			if err := runSeed(os.Args[2:]); err != nil {
@@ -679,6 +682,10 @@ func main() {
 		if cfg.Authz == config.AuthzRBAC {
 			authorizer = authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
 		}
+		// Which authorizer is live decides whether an authenticated user is
+		// an admin; an upgrade that silently picks the wrong one is exactly
+		// what an operator needs to see in the first lines of a boot log.
+		slog.Info("relay control: authorization mode", "authz", cfg.Authz)
 		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
 			Identity:      idStore,
@@ -715,9 +722,12 @@ func main() {
 		// control API mounts under.
 		control.MountOIDCCallbackRoot(ctrlRouter, ctrlDeps)
 		ctrlRouter.Handle("/metrics", metrics.Handler())
-		// Embedded admin UI: same-origin SPA served as the fallback after all
-		// API operations. Only mounted when a real dist was baked in (image
-		// build) and not explicitly disabled.
+		// Embedded admin UI: same-origin SPA served as the fallback for
+		// everything the routes above do not claim. Paths under /api never
+		// reach it — the control API answers its own 404s in JSON, so a UI
+		// calling a renamed endpoint gets an error it can parse. Only
+		// mounted when a real dist was baked in (image build) and not
+		// explicitly disabled.
 		if !cfg.UIDisable && relayweb.Present() {
 			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
 			slog.Debug("relay control: serving embedded UI")

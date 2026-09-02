@@ -17,7 +17,7 @@ relay apply -f manifests/
 
 A file or a directory of `.yaml` documents is parsed, diffed against the
 stored rows, and — unless `--dry-run` — written. Every entry in the plan
-gets one of five actions:
+gets one of six actions:
 
 | Action | Meaning |
 | --- | --- |
@@ -26,6 +26,7 @@ gets one of five actions:
 | `unchanged` | The row matches the manifest exactly. Nothing is written. |
 | `skip-dirty` | The row was hand-edited through the control API (`meta.Dirty`) and the run is not forcing. Reported as drift; left alone. |
 | `delete` | Pruning removed a row absent from the bundle. Only appears with `--prune`. |
+| `conflict` | Another writer changed the row between the plan and the write. Nothing is written for it; re-running picks up the change. |
 
 `--force` overwrites a dirty row with the manifest's version and clears the
 dirty flag — apply owns the row again from that point on.
@@ -49,12 +50,16 @@ Exit codes:
 | Code | Meaning |
 | --- | --- |
 | `0` | Clean — every entry was `create`, `update`, `unchanged`, or `delete`. |
-| `1` | Drift — at least one `skip-dirty` entry, and the run did not pass `--force`. |
+| `1` | Drift — at least one `skip-dirty` entry and the run did not pass `--force`, or at least one `conflict` entry. |
 | `2` | The server rejected the request (4xx/5xx). |
 
 `$RELAY_URL` (default `http://localhost:8081`) names the server;
 `$RELAY_ADMIN_TOKEN` or `--token` authenticates. Both can be overridden
 per invocation with `--url`.
+
+A `conflict` entry means the row is not applied, so the run exits `1` even
+under `--force`: `--force` overrides an operator's edit, not a write that
+landed mid-apply. Re-run to converge on the row as it now stands.
 
 ## Prune
 
@@ -66,10 +71,13 @@ relay apply -f manifests/ --prune --selector env=prod,team=platform
 carry **every** label in `--selector` — an unfiltered prune would delete
 every user row the manifest happens to omit, so the selector is required.
 
-Pruning only ever considers user-, team-, or project-owned rows. System-,
-provider-, and host-owned rows — the catalog's own data — are never
-candidates, no matter what labels they carry: a manifest that omits a
-catalog-managed provider or host is not asking for its removal.
+Pruning draws the same membership line as export (below): teams, groups,
+roles, and role-bindings are always prunable (minus built-in roles);
+every other kind is prunable only when it's user-, team-, or
+project-owned. System-, provider-, and host-owned rows — the catalog's
+own data — are never candidates, no matter what labels they carry: a
+manifest that omits a catalog-managed provider or host is not asking for
+its removal.
 
 ## Authorization and partial failure
 
@@ -102,11 +110,20 @@ host-keys, service-accounts, keys, role-bindings,
 policy-bindings, overlays
 ```
 
-Only user-, team-, and project-owned rows are exported. Catalog template
-rows (system-, provider-, and host-owned — providers, hosts, models,
-pricing) are never exported; they come from the catalog, not from a git
-repo. Overlays layered on top of those catalog rows *are* exported, since
-the overlay itself is user-owned.
+Teams, groups, roles, and role-bindings are exported by **kind**,
+regardless of who owns the row — a scope or a grant isn't its author's
+property, so provenance can't decide membership for these four (built-in
+roles are excluded by name). Every other kind is exported by **owner**:
+only rows owned by a user, a team, or a project. Catalog template rows
+(system-, provider-, and host-owned — providers, hosts, models, pricing)
+are never exported; they come from the catalog, not from a git repo.
+Overlays layered on top of those catalog rows *are* exported, since the
+overlay itself is user-owned.
+
+A role-binding at global scope (`{kind: system}`) has no team or project
+to scope it into, so it only survives an **unscoped** export — `--scope
+team:<id>` or `--scope project:<id>` drops it along with every other
+row outside that subtree.
 
 Secrets never leave: a `HostKey`'s `value` is always omitted from the
 export, regardless of `valueFrom.kind`. A `Key` exports only `keyHash`,
@@ -136,14 +153,46 @@ kinds available at a schema version; `GET /api/schemas/{version}/{kind}`
 serves one. Both are public — an editor resolving the directive has no
 session, and a schema describes shape, never data.
 
+## Minting a token
+
+A **token** is a short-lived, project-scoped credential for the inference
+API, minted for the session holder — the admin token identifies no user
+and cannot mint one. Session auth only:
+
+```bash
+curl -X POST http://localhost:8081/api/auth/token \
+  -H "Authorization: Bearer <session-or-bearer-with-tokens.mint>" \
+  -H "Content-Type: application/json" \
+  -d '{"project": "my-project", "ttl": "1h"}'
+```
+
+```json
+{
+  "token": "eyJhbGciOi...",
+  "jti": "...",
+  "expiresAt": "2027-01-01T01:00:00Z",
+  "project": "my-project",
+  "teamId": "..."
+}
+```
+
+Or via the CLI, which logs in and mints in one step:
+
+```bash
+export RELAY_PASSWORD=...   # never pass a password on argv
+relay token mint --project my-project --ttl 1h --user alice
+```
+
+`relay token` reads the password from `$RELAY_PASSWORD`, or prompts on an
+interactive terminal — there is no `--password` flag, since argv is
+world-readable through the process table and lands in shell history. It
+prints the token to stdout on success.
+
 ## Other commands
 
 ```bash
 relay keygen [--prefix]
-relay token mint --project <slug> [--ttl 1h] --user U --password P
 ```
 
 `keygen` mints a key locally, so the plaintext never has to pass through
-the server and only the hash goes in a manifest. `token mint` exchanges a
-username and password for a short-lived, project-scoped token for the
-inference API; the admin token identifies no user and cannot mint one.
+the server and only the hash goes in a manifest.

@@ -25,6 +25,11 @@ type AuthTokens struct {
 	// and writes the ref back here.
 	SigningKey secret.Ref `json:"signingKey,omitempty"`
 
+	// PreviousSigningKey is the ref rotation replaced. Tokens minted under
+	// it still verify, so a rotation is not a fleet-wide logout — every pod
+	// loads both refs at boot, not just the one it happened to rotate.
+	PreviousSigningKey secret.Ref `json:"previousSigningKey,omitempty"`
+
 	// VerifyCacheSize bounds how many verified tokens the data plane keeps
 	// so a repeat request skips the Ed25519 verify. 0 uses the default;
 	// negative disables the cache.
@@ -62,6 +67,14 @@ func (a *AuthTokens) Validate() error {
 		}
 		if err := a.SigningKey.Validate(); err != nil {
 			return fmt.Errorf("auth:tokens: signingKey: %w", err)
+		}
+	}
+	if a.PreviousSigningKey.Kind != "" {
+		if a.PreviousSigningKey.Kind != secret.KindStored {
+			return fmt.Errorf("auth:tokens: previousSigningKey must be a stored secret ref")
+		}
+		if err := a.PreviousSigningKey.Validate(); err != nil {
+			return fmt.Errorf("auth:tokens: previousSigningKey: %w", err)
 		}
 	}
 	return nil

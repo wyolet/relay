@@ -110,6 +110,13 @@ type Options struct {
 	// seed subcommand) load an operator's own tree from disk, which is not
 	// the surface the licence sells. The control plane always supplies one.
 	License license.Checker
+
+	// Authz is the authorizer Execute will use. Plan reads it only to know
+	// whether there is one at all: without an authorizer the caller is a
+	// loader running as the deployment itself (boot seed, CLI), which may
+	// re-parent a row the same way an admin can. The control plane always
+	// supplies one, so a scoped caller still cannot chown across scopes.
+	Authz authz.Authorizer
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -219,7 +226,8 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 		return nil, err
 	}
 
-	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel, admin: authz.IsAdmin(ctx), lic: opts.License}
+	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel,
+		admin: opts.Authz == nil || authz.IsAdmin(ctx), lic: opts.License}
 	if err := b.run(docs); err != nil {
 		return nil, err
 	}

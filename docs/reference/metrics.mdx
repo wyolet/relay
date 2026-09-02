@@ -67,6 +67,8 @@ records, and provider keys dying off.
 | `relay_provider_keys_down_total` | counter | `reason` | Times a pooled provider key was put into cooldown by a failure. `reason` is the failure class, e.g. `auth`, `rate_limit`, `server_error`, `network`, `local_rl`. |
 | `relay_flush_lag_seconds` | gauge | `kind` | Age of the oldest un-flushed WAL segment (`usage` / `payload`). 0 = drained. Rising = the sink (ClickHouse) is not accepting data — your usage/billing view is going stale even while nothing is being *lost*. |
 | `relay_upstream_connections_total` | counter | `kind` | Upstream connections per attempt: `new` (dialed) vs `reused` (keep-alive pool). A `new` rate approaching the request rate means connection churn — the failure mode connection pooling exists to prevent. |
+| `relay_dropped_params_total` | counter | `param`, `model` | A request field the target model/adapter doesn't support, stripped instead of failing the request. Watch it to catch a client sending parameters a model silently ignores. |
+| `relay_audit_dropped_total` | counter | _(none)_ | Admin audit events dropped because the emitter queue was full. A drop here is a gap in the audit trail — alert on it if completeness matters for your deployment. |
 
 <Note>
 `relay_provider_keys_down_total` is a counter of cooldown **transitions**, not a

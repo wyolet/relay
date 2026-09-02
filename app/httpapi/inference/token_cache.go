@@ -21,19 +21,22 @@ const cacheShards = 16
 // cacheEntry is one verified bearer. claims and exp are fixed at insert;
 // subjects is recomputed whenever the snapshot they were derived from is
 // replaced, so a membership change is not held until the token expires.
+// The snapshot is remembered by generation, never by pointer: an entry lives
+// until its token expires and would otherwise keep every catalog it ever saw
+// reachable.
 type cacheEntry struct {
 	claims crypto.TokenClaims
 	exp    time.Time
 
 	mu       sync.Mutex
-	snap     *appcatalog.Snapshot
+	snapGen  uint64
 	subjects []string
 }
 
 func (e *cacheEntry) subjectsFor(snap *appcatalog.Snapshot) ([]string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.snap != snap || e.subjects == nil {
+	if e.snapGen != snap.Generation() || e.subjects == nil {
 		return nil, false
 	}
 	return e.subjects, true
@@ -41,7 +44,7 @@ func (e *cacheEntry) subjectsFor(snap *appcatalog.Snapshot) ([]string, bool) {
 
 func (e *cacheEntry) setSubjects(snap *appcatalog.Snapshot, subs []string) {
 	e.mu.Lock()
-	e.snap, e.subjects = snap, subs
+	e.snapGen, e.subjects = snap.Generation(), subs
 	e.mu.Unlock()
 }
 
