@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/settings"
@@ -92,6 +93,12 @@ type Options struct {
 	// checked against. Nil skips the check — the boot seed runs before the
 	// settings cache exists.
 	Gov settings.Reader
+
+	// License gates the features a manifest may declare. Nil skips the
+	// gate: the loaders below the control API (the boot seed, the CLI's
+	// seed subcommand) load an operator's own tree from disk, which is not
+	// the surface the licence sells. The control plane always supplies one.
+	License license.Checker
 }
 
 // ErrSelectorRequired is returned when Prune is set without a selector —
@@ -132,6 +139,32 @@ func (e *GovernanceError) Error() string {
 	return fmt.Sprintf("apply: %s %q: %v", e.Kind, e.Name, e.Err)
 }
 func (e *GovernanceError) Unwrap() error { return e.Err }
+
+// UnsupportedKindError reports a document apply cannot write. Settings and
+// identity rows have their own endpoints; ignoring them would make a bundle
+// look applied when half of it was dropped.
+type UnsupportedKindError struct{ Kind string }
+
+func (e *UnsupportedKindError) Error() string {
+	return fmt.Sprintf("apply: kind %q is not applied through this path", e.Kind)
+}
+
+// LicenseError reports a document declaring a feature this deployment is not
+// licensed for. Unwraps to license.ErrRequired, which the HTTP layer maps to
+// 403 with the license_required body.
+type LicenseError struct{ Kind, Name, Feature string }
+
+func (e *LicenseError) Error() string {
+	return fmt.Sprintf("apply: %s %q needs the %q feature: %v", e.Kind, e.Name, e.Feature, license.ErrRequired)
+}
+func (e *LicenseError) Unwrap() error { return license.ErrRequired }
+
+// ReservedNameError reports a document claiming a name relay owns.
+type ReservedNameError struct{ Kind, Name string }
+
+func (e *ReservedNameError) Error() string {
+	return fmt.Sprintf("apply: %s %q is a built-in name", e.Kind, e.Name)
+}
 
 // DuplicateError reports two submitted documents naming the same row. Last
 // one wins would silently discard the first.
@@ -175,7 +208,7 @@ func Plan(ctx context.Context, docs []manifest.Document, opts Options) (*Result,
 		return nil, err
 	}
 
-	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel, admin: authz.IsAdmin(ctx)}
+	b := &builder{opts: opts, rows: rows, idx: newIndex(rows), selector: sel, admin: authz.IsAdmin(ctx), lic: opts.License}
 	if err := b.run(docs); err != nil {
 		return nil, err
 	}

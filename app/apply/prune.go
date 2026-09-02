@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/role"
 )
 
 // labelSelector is an equality-only label match: every pair must be present
@@ -48,15 +49,23 @@ func (s labelSelector) matches(labels map[string]string) bool {
 	return true
 }
 
+// tenantKinds are authored by tenants whatever their owner says: a Team,
+// Group or Role names a scope or a grant and is system-owned by rule, and a
+// RoleBinding's owner mirrors its scope (a global binding is system-owned).
+// Membership is therefore decided by kind, not by provenance.
+var tenantKinds = map[string]bool{
+	"Team": true, "Group": true, "Role": true, "RoleBinding": true,
+}
+
 // prunable reports whether a row's provenance allows apply to delete it.
 // System, provider, and host rows belong to the catalog and the relay
 // itself; a manifest that omits them is not asking for their removal.
-//
-// RoleBinding is the exception: its owner mirrors its scope, so a global
-// binding is system-owned while still being a tenant-authored row. It is
-// eligible under the selector like any other declared row.
-func prunable(kind string, o meta.Owner) bool {
-	if kind == "RoleBinding" {
+// Built-in Roles are relay's own rows and stay out regardless of kind.
+func prunable(kind, name string, o meta.Owner) bool {
+	if kind == "Role" && role.IsBuiltin(name) {
+		return false
+	}
+	if tenantKinds[kind] {
 		return true
 	}
 	switch o.Kind {

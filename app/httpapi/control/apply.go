@@ -16,6 +16,7 @@ import (
 
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
 )
 
@@ -74,11 +75,15 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			Prune:    in.Prune,
 			Selector: in.Selector,
 			Gov:      d.Catalog,
+			License:  applyLicense(d),
 		})
 		if err != nil {
 			var ge *apply.GovernanceError
 			if errors.As(err, &ge) {
 				return nil, huma.Error403Forbidden(ge.Error())
+			}
+			if errors.Is(err, license.ErrRequired) {
+				return nil, huma.Error403Forbidden(err.Error())
 			}
 			return nil, huma.Error400BadRequest(err.Error())
 		}
@@ -89,11 +94,13 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := apply.Authorize(ctx, plan, d.Authz); err != nil {
 			var ae *apply.AuthzError
 			if errors.As(err, &ae) {
-				status := http.StatusForbidden
+				status, msg := http.StatusForbidden, "forbidden"
 				if errors.Is(err, authz.ErrUnauthenticated) {
-					status = http.StatusUnauthorized
+					status, msg = http.StatusUnauthorized, "unauthorized"
 				}
-				return nil, &applyFailure{status: status, Message: ae.Error()}
+				// Naming the refused row would report state the caller may
+				// not see; the plan is already withheld for that reason.
+				return nil, &applyFailure{status: status, Message: msg}
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
@@ -146,6 +153,16 @@ func parseBundle(contentType string, raw []byte) ([]manifest.Document, error) {
 		raw = buf.Bytes()
 	}
 	return manifest.Parse(bytes.NewReader(raw))
+}
+
+// applyLicense is the gate a bundle posted to the API is checked against.
+// A deployment with no licence service is a community deployment, not an
+// ungated one — apply.Options treats nil as "no gate".
+func applyLicense(d Deps) license.Checker {
+	if d.License == nil {
+		return license.Community
+	}
+	return d.License
 }
 
 // applyStores narrows the control plane's store bundle to what the loader

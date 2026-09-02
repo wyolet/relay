@@ -229,11 +229,7 @@ func main() {
 	settingswatch.New(cat, settings.SectionLicense, applyLicenseSection(licenseSvc), slog.Default()).Start()
 
 	settingswatch.New(cat, settings.AuthTokensSection, func(a settings.AuthTokens) {
-		ref := a.SigningKey
-		if !a.Enabled {
-			ref = pkgsecret.Ref{}
-		}
-		if err := applyTokenSigningKey(listenerCtx, stores.Secrets, ref, tokenSigner, tokenVerifier); err != nil {
+		if err := applyAuthTokensSection(listenerCtx, stores, cfg.MasterKey, a, tokenSigner, tokenVerifier); err != nil {
 			slog.Error("auth: inference-token signing key reload failed", "err", err)
 		}
 	}, slog.Default()).Start()
@@ -688,6 +684,7 @@ func main() {
 			Identity:       idStore,
 			TokenSigner:    tokenSigner,
 			TokenDenylist:  kvStore,
+			MintLimiter:    limiter,
 			Users:          usersStore,
 			Sessions:       sessMgr,
 			AdminToken:     cfg.AdminToken,

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 
 	"gopkg.in/yaml.v3"
 
@@ -72,9 +73,11 @@ func IsBuiltin(name string) bool {
 	return false
 }
 
-// SeedBuiltins writes the built-in Roles that are not in the table yet,
-// seed-if-absent by name — same pattern as the user seed. Existing rows are
-// left alone so an operator's edits survive a restart.
+// SeedBuiltins writes the built-in Roles, by name. A row whose rules already
+// match the embedded file is left untouched; one whose rules differ is
+// rewritten, so a rule added in a release reaches an upgraded deployment
+// instead of only new ones. Ids and display fields of an existing row are
+// preserved — bindings name the id.
 func SeedBuiltins(ctx context.Context, s *Store, log *slog.Logger) error {
 	if s == nil {
 		return nil
@@ -83,30 +86,51 @@ func SeedBuiltins(ctx context.Context, s *Store, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("role seed: list: %w", err)
 	}
-	have := make(map[string]struct{}, len(existing))
+	have := make(map[string]*Role, len(existing))
 	for _, r := range existing {
-		have[r.Meta.Name] = struct{}{}
+		have[r.Meta.Name] = r
 	}
 	builtins, err := Builtins()
 	if err != nil {
 		return err
 	}
-	seeded := 0
+	seeded, updated := 0, 0
 	for _, r := range builtins {
-		if _, ok := have[r.Meta.Name]; ok {
+		prev, found := have[r.Meta.Name]
+		switch {
+		case !found:
+			r.Meta.ID = ids.New()
+			seeded++
+		case sameRules(prev.Spec.Rules, r.Spec.Rules):
 			continue
+		default:
+			r.Meta.ID = prev.Meta.ID
+			r.Spec.Enabled = prev.Spec.Enabled
+			updated++
 		}
-		r.Meta.ID = ids.New()
 		if err := r.Validate(); err != nil {
 			return fmt.Errorf("role seed: %q: %w", r.Meta.Name, err)
 		}
 		if err := s.Upsert(ctx, r); err != nil {
 			return fmt.Errorf("role seed: upsert %q: %w", r.Meta.Name, err)
 		}
-		seeded++
 	}
-	if seeded > 0 && log != nil {
-		log.Info("built-in roles seeded", "count", seeded)
+	if (seeded > 0 || updated > 0) && log != nil {
+		log.Info("built-in roles seeded", "created", seeded, "updated", updated)
 	}
 	return nil
+}
+
+// sameRules compares two rule sets verbatim: order is part of what the
+// embedded file declares, so a reordering is a change like any other.
+func sameRules(a, b []Rule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !slices.Equal(a[i].Kinds, b[i].Kinds) || !slices.Equal(a[i].Verbs, b[i].Verbs) {
+			return false
+		}
+	}
+	return true
 }

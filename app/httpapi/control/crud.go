@@ -301,7 +301,10 @@ func registerKind[T any](
 			// inherit whatever already binds to its name. Kinds without a
 			// default (Model, HostKey) require the caller to specify
 			// owner.kind because their valid owner is per-row.
-			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem {
+			// role-bindings are exempt too: their owner mirrors spec.scope,
+			// and a global binding's scope IS system (D42).
+			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem &&
+				singular != "role-binding" {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {

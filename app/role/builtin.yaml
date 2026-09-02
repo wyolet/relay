@@ -48,6 +48,8 @@ spec:
       verbs: ["*"]
     - kinds: [teams]
       verbs: [get, list, update]
+    - kinds: [tokens]
+      verbs: [mint, revoke]
     - kinds: [system]
       verbs: [apply]
     - kinds: [usage, logs]
@@ -67,6 +69,8 @@ spec:
       verbs: ["*"]
     - kinds: [projects]
       verbs: [get, list, update, delete]
+    - kinds: [tokens]
+      verbs: [mint, revoke]
     - kinds: [usage, logs]
       verbs: [get, read]
 ---

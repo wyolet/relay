@@ -264,6 +264,14 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
           "type": "string"
         },
         "name": {

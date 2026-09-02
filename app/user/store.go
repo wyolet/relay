@@ -98,9 +98,10 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteUser(ctx, id)
 }
 
-// TokenVersions returns every user's current token version, keyed by id.
-// The map is the snapshot's whole view of users — small enough to rebuild
-// on every NOTIFY.
+// TokenVersions returns every enabled user's current token version, keyed
+// by id. The map is the snapshot's whole view of users — small enough to
+// rebuild on every NOTIFY. A disabled account is absent, which is what
+// makes its live tokens stop verifying.
 func (s *Store) TokenVersions(ctx context.Context) (map[string]int, error) {
 	rows, err := s.q.ListUserTokenVersions(ctx)
 	if err != nil {

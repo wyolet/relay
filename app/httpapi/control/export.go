@@ -163,18 +163,27 @@ func newExporter(ctx context.Context, d Deps, in *exportInput) (*exporter, error
 	return e, nil
 }
 
+// tenantOwnedKinds are authored by tenants whatever their owner says; see
+// app/apply's prunable, which draws the same line for the delete side.
+var tenantOwnedKinds = map[string]bool{
+	"team": true, "group": true, "role": true, "role-binding": true,
+}
+
 // wanted reports whether a row belongs in the bundle: an exportable
 // provenance, inside the requested scope, and visible to the caller.
 func (e *exporter) wanted(ctx context.Context, plural, singular string, m *meta.Metadata) bool {
 	if e.kinds != nil && !e.kinds[plural] {
 		return false
 	}
-	// A role binding's owner mirrors its scope, so a global binding is
-	// system-owned. It is still authored by a tenant, not shipped by the
-	// catalog, so provenance does not decide its membership here — the
-	// scope filter below still does, and a global binding (no team, no
-	// project) only survives an unscoped export.
-	if singular != "role-binding" {
+	// Team, group, role and role-binding rows are system-owned by rule (a
+	// scope or a grant is not its author's property), so provenance cannot
+	// decide their membership — the kind does. The scope filter below still
+	// applies, and a global row only survives an unscoped export.
+	switch {
+	case singular == "role" && role.IsBuiltin(m.Name):
+		return false // relay's own rows, seeded on every deployment
+	case tenantOwnedKinds[singular]:
+	default:
 		switch m.Owner.Kind {
 		case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject:
 		default:

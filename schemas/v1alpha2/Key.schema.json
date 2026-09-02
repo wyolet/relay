@@ -33,7 +33,6 @@
       },
       "required": [
         "principal",
-        "policy",
         "keyHash"
       ],
       "type": "object"
@@ -42,6 +41,10 @@
       "additionalProperties": false,
       "properties": {
         "kind": {
+          "enum": [
+            "serviceaccount",
+            "user"
+          ],
           "type": "string"
         },
         "name": {
@@ -97,6 +100,14 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
           "type": "string"
         },
         "name": {

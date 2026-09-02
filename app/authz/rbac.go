@@ -91,6 +91,13 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 		(res.Owner == nil || isCatalogOwner(res.Owner.Kind)) {
 		return nil
 	}
+	// A system-owned Role is a shared rule set, not tenant data: creating a
+	// binding means reading the role it names, and a scoped admin holds no
+	// binding at the global scope the row lives in.
+	if (verb == "get" || verb == "list") && kind == "roles" &&
+		res.Owner != nil && res.Owner.Kind == meta.OwnerSystem {
+		return nil
+	}
 	if r.Snap == nil {
 		return ErrForbidden
 	}

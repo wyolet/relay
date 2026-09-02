@@ -65,6 +65,15 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seed: load yaml: %w", err)
 	}
+	// Settings share the config tree but have their own loader
+	// (settings.SeedDir); apply refuses them rather than dropping them.
+	catalogDocs := docs[:0]
+	for _, d := range docs {
+		if d.Setting == nil {
+			catalogDocs = append(catalogDocs, d)
+		}
+	}
+	docs = catalogDocs
 
 	plan, err := apply.Plan(ctx, docs, apply.Options{
 		Stores: apply.NewStores(opts.Pool, opts.MasterKey),

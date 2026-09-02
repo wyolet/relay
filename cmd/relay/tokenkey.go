@@ -69,6 +69,22 @@ func loadTokenSigningKey(ctx context.Context, stores *appcatalog.Stores, masterK
 	return nil
 }
 
+// applyAuthTokensSection carries a live auth:tokens change onto the signer
+// and the verifier. Tokens switched on after boot have no key yet, so the
+// generate-and-record path runs here too — otherwise minting stays 503
+// until the next restart.
+func applyAuthTokensSection(ctx context.Context, stores *appcatalog.Stores, masterKey []byte,
+	a settings.AuthTokens, signer *control.TokenSigner, verifier *inference.TokenVerifier) error {
+	if a.Enabled && a.SigningKey.ID == "" {
+		return loadTokenSigningKey(ctx, stores, masterKey, signer, verifier)
+	}
+	ref := a.SigningKey
+	if !a.Enabled {
+		ref = pkgsecret.Ref{}
+	}
+	return applyTokenSigningKey(ctx, stores.Secrets, ref, signer, verifier)
+}
+
 // applyTokenSigningKey resolves the ref and installs the key on both sides.
 // An empty ref clears them, which disables tokens without a restart.
 func applyTokenSigningKey(ctx context.Context, secrets *pkgsecret.Registry, ref pkgsecret.Ref,

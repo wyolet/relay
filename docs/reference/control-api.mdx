@@ -32,7 +32,7 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
 
 ## CRUD surface
 
-Eight catalog kinds share one uniform shape:
+Every kind shares one uniform shape:
 
 ```
 GET    /api/{plural}                 list
@@ -47,10 +47,11 @@ Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
 `groups`, `roles`, `role-bindings`, `policy-bindings`.
 
 Roles, role bindings, and policy bindings are stored, validated, and
-served like every other kind, and their rows are indexed in the snapshot.
-Nothing evaluates them yet — access is still decided the way it is today,
-and enforcement arrives in a later release. Authoring a role of your own
-is a licensed feature; the built-in roles ship with every deployment.
+served like every other kind. With `RELAY_AUTHZ=rbac` they are what
+decides access: every read is filtered and every write authorized against
+the bindings naming the caller, at the scope of the row being touched.
+Authoring a role of your own is a licensed feature; the built-in roles
+ship with every deployment and are reserved by name.
 
 <Info>
 Every write triggers a Postgres `NOTIFY`; the change propagates to every

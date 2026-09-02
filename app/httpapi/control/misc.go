@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"log/slog"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -127,6 +128,11 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 	type reloadOutput struct {
 		Body struct {
 			Status string `json:"status"`
+			// License reports a stored license that no longer verifies. The
+			// reload itself still succeeded; the previous license stays live.
+			License *struct {
+				Error string `json:"error"`
+			} `json:"license,omitempty"`
 		}
 	}
 	huma.Register(api, huma.Operation{
@@ -150,16 +156,20 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 		if err := d.Catalog.Reload(ctx); err != nil {
 			return nil, huma.Error500InternalServerError("reload: " + err.Error())
 		}
-		// Re-verify the license off the reloaded settings, so an operator
-		// can install or renew one without a restart. A bad value is
-		// reported; the previous license stays live.
-		if d.License != nil {
-			if _, err := d.License.Set(settings.LicenseFrom(d.Catalog).Value); err != nil {
-				return nil, huma.Error500InternalServerError("license: " + err.Error())
-			}
-		}
 		out := &reloadOutput{}
 		out.Body.Status = "ok"
+		// Re-verify the license off the reloaded settings, so an operator
+		// can install or renew one without a restart. A bad stored value is
+		// reported in the body rather than failing the reload: the catalog
+		// rebuild the caller asked for did happen.
+		if d.License != nil {
+			if _, err := d.License.Set(settings.LicenseFrom(d.Catalog).Value); err != nil {
+				slog.Warn("control: stored license does not verify", "err", err)
+				out.Body.License = &struct {
+					Error string `json:"error"`
+				}{Error: err.Error()}
+			}
+		}
 		return out, nil
 	})
 }

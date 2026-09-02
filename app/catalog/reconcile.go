@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -543,14 +544,26 @@ func insertKey(s *Snapshot, k *key.Key) {
 	s.keysByID[k.Meta.ID] = k
 	s.subjectsByKey[k.Meta.ID] = keySubjects(s, k)
 	if k.Spec.KeyHash != "" {
-		s.keysByHash[k.Spec.KeyHash] = k
+		indexKeyHash(s, k.Spec.KeyHash, k)
 	}
 	// The pre-rotation hash is indexed only while its grace window is open,
 	// so an expired grace drops out on the next reconcile or reload.
 	if k.InGrace(time.Now()) {
-		s.keysByHash[k.Spec.PreviousKeyHash] = k
+		indexKeyHash(s, k.Spec.PreviousKeyHash, k)
 	}
 	s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
+}
+
+// indexKeyHash claims a hash slot for k. A slot already held by a different
+// key is left alone: overwriting it would move that key's live traffic
+// (including a rotation grace window) onto this one.
+func indexKeyHash(s *Snapshot, hash string, k *key.Key) {
+	if held, ok := s.keysByHash[hash]; ok && held.Meta.ID != k.Meta.ID {
+		slog.Warn("catalog: key hash already indexed by another key; keeping the first",
+			"held_key", held.Meta.ID, "rejected_key", k.Meta.ID)
+		return
+	}
+	s.keysByHash[hash] = k
 }
 
 func deleteKey(s *Snapshot, id string) {
@@ -564,12 +577,16 @@ func deleteKey(s *Snapshot, id string) {
 	delete(s.subjectsByKey, id)
 }
 
+// unindexKeyHashes drops only the slots this key actually holds — a hash it
+// lost to another key (see indexKeyHash) still belongs to that one.
 func unindexKeyHashes(s *Snapshot, k *key.Key) {
-	if k.Spec.KeyHash != "" {
-		delete(s.keysByHash, k.Spec.KeyHash)
-	}
-	if k.Spec.PreviousKeyHash != "" {
-		delete(s.keysByHash, k.Spec.PreviousKeyHash)
+	for _, h := range []string{k.Spec.KeyHash, k.Spec.PreviousKeyHash} {
+		if h == "" {
+			continue
+		}
+		if held, ok := s.keysByHash[h]; ok && held.Meta.ID == k.Meta.ID {
+			delete(s.keysByHash, h)
+		}
 	}
 }
 

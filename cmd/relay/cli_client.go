@@ -15,7 +15,7 @@ import (
 )
 
 // DefaultControlURL matches the control listener's default port.
-const DefaultControlURL = "http://localhost:5103"
+const DefaultControlURL = "http://localhost:8081"
 
 type controlClient struct {
 	baseURL string

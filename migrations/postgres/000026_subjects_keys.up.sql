@@ -55,7 +55,8 @@ UPDATE relay_keys k
  WHERE k.principal_sa_id IS NULL
    AND k.principal_user_id IS NULL
    AND k.metadata->'owner'->>'kind' = 'user'
-   AND k.metadata->'owner'->>'id' = u.id;
+   AND (k.metadata->'owner'->>'id' = u.id
+     OR k.metadata->'owner'->>'id' = u.username);
 
 -- Backfill 2: every remaining key gets a generated ServiceAccount in a
 -- system Project `legacy`. The tenancy rows are keyed by name, not by a
@@ -80,7 +81,7 @@ SELECT gen_random_uuid()::text, 'legacy', 'Legacy', t.id,
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec)
-SELECT gen_random_uuid()::text, 'legacy-' || k.name, k.display_name, p.id,
+SELECT gen_random_uuid()::text, left('legacy-' || k.name, 63), k.display_name, p.id,
        jsonb_build_object('owner', jsonb_build_object('kind', 'project', 'id', p.id)),
        jsonb_build_object('projectId', p.id)
   FROM relay_keys k
@@ -98,11 +99,17 @@ UPDATE relay_keys k
   FROM service_accounts sa
  WHERE k.principal_sa_id IS NULL
    AND k.principal_user_id IS NULL
-   AND sa.name = 'legacy-' || k.name;
+   AND sa.name = left('legacy-' || k.name, 63);
 
-ALTER TABLE relay_keys
-    ADD CONSTRAINT relay_keys_one_principal
-    CHECK ((principal_sa_id IS NULL) <> (principal_user_id IS NULL));
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'relay_keys_one_principal') THEN
+        ALTER TABLE relay_keys
+            ADD CONSTRAINT relay_keys_one_principal
+            CHECK ((principal_sa_id IS NULL) <> (principal_user_id IS NULL));
+    END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS relay_keys_previous_hash_idx
     ON relay_keys (previous_key_hash) WHERE previous_key_hash IS NOT NULL;
