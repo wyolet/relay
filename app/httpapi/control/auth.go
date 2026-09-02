@@ -2,11 +2,13 @@ package control
 
 import (
 	"context"
+	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
 )
@@ -25,7 +27,39 @@ type authResponse struct {
 		UserID   string   `json:"user_id"`
 		Username string   `json:"username"`
 		Roles    []string `json:"roles,omitempty"`
+		Subjects []string `json:"subjects,omitempty" doc:"RBAC subject strings this caller acts under."`
+		Scopes   []string `json:"scopes,omitempty"   doc:"Scopes the caller holds a role binding at, as \"team:<id>\" / \"project:<id>\"."`
 	}
+}
+
+// bindingScopes lists the non-global scopes the actor holds any RoleBinding
+// at, deduplicated and sorted. Used by the UI to decide which tenancy views
+// to offer; it is not an authorization decision.
+func bindingScopes(d Deps, a *actor.Actor) []string {
+	if d.Catalog == nil || len(a.Subjects) == 0 {
+		return nil
+	}
+	snap := d.Catalog.Current()
+	if snap == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, subj := range a.Subjects {
+		for _, b := range snap.RoleBindingsForSubject(subj) {
+			if b.Spec.Scope.Kind == meta.OwnerSystem || b.Spec.Scope.ID == "" {
+				continue
+			}
+			s := string(b.Spec.Scope.Kind) + ":" + b.Spec.Scope.ID
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 type emptyOutput struct{}
@@ -71,14 +105,29 @@ func registerAuth(api huma.API, d Deps) {
 			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
-		if err := d.Sessions.Login(ctx, yu.Metadata.Name, yu.Spec.Username.Get(), yu.Spec.Roles...); err != nil {
+		// The YAML users are seeded into the table at boot, so the row is
+		// what the session must carry: everything downstream (owner ids,
+		// key principals, subjects) keys on the UUID, and the YAML slug is
+		// not one. Only a deployment with no user store falls back to it.
+		username, roles := yu.Spec.Username.Get(), yu.Spec.Roles
+		userID := yu.Metadata.Name
+		if d.Users != nil {
+			row, err := d.Users.ByUsername(ctx, username)
+			if err != nil {
+				return nil, huma.Error500InternalServerError("user lookup failed: " + err.Error())
+			}
+			if row != nil {
+				userID, roles = row.ID, row.Roles
+			}
+		}
+		if err := d.Sessions.Login(ctx, userID, username, roles...); err != nil {
 			return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 		}
-		audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: yu.Metadata.Name, Name: yu.Spec.Username.Get()}, audit.StatusAllowed, audit.Actor{Kind: audit.ActorUser, ID: yu.Metadata.Name, Name: yu.Spec.Username.Get()})
+		audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: userID, Name: username}, audit.StatusAllowed, audit.Actor{Kind: audit.ActorUser, ID: userID, Name: username})
 		out := &authResponse{}
-		out.Body.UserID = yu.Metadata.Name
-		out.Body.Username = yu.Spec.Username.Get()
-		out.Body.Roles = yu.Spec.Roles
+		out.Body.UserID = userID
+		out.Body.Username = username
+		out.Body.Roles = roles
 		return out, nil
 	})
 
@@ -112,6 +161,8 @@ func registerAuth(api huma.API, d Deps) {
 		out.Body.UserID = a.UserID
 		out.Body.Username = a.Username
 		out.Body.Roles = a.Roles
+		out.Body.Subjects = a.Subjects
+		out.Body.Scopes = bindingScopes(d, a)
 		return out, nil
 	})
 }

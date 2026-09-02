@@ -340,3 +340,42 @@ func TestCostAggregates_SummaryAndTimeSeries(t *testing.T) {
 		t.Fatalf("provider filter: %+v", got)
 	}
 }
+
+// The read scope is the one disjunctive filter: an event qualifies through
+// its project OR its bearer hash, and it still ANDs with the caller's own
+// filters.
+func TestScopeIsADisjunction(t *testing.T) {
+	events := []Event{
+		{RequestID: "in-project", ProjectID: "p-1"},
+		{RequestID: "own-key", RelayKeyHash: "h-mine"},
+		{RequestID: "foreign", ProjectID: "p-2", RelayKeyHash: "h-theirs"},
+	}
+	got := ids(FilterEvents(events, EventQuery{
+		ScopeProjectID:    []string{"p-1"},
+		ScopeRelayKeyHash: []string{"h-mine"},
+	}))
+	if len(got) != 2 || got[0] != "in-project" && got[1] != "in-project" {
+		t.Fatalf("scoped = %v, want the project event and the own-key event", got)
+	}
+
+	if n := len(FilterEvents(events, EventQuery{})); n != 3 {
+		t.Fatalf("unscoped = %d events, want 3", n)
+	}
+
+	// A caller filter narrows further; it never widens the scope.
+	got = ids(FilterEvents(events, EventQuery{
+		ScopeProjectID: []string{"p-1"},
+		ProjectID:      []string{"p-2"},
+	}))
+	if len(got) != 0 {
+		t.Fatalf("scope + foreign filter = %v, want nothing", got)
+	}
+}
+
+func ids(evs []Event) []string {
+	out := make([]string, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, e.RequestID)
+	}
+	return out
+}

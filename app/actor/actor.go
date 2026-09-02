@@ -37,6 +37,12 @@ type Actor struct {
 	// AdminToken already marks as all-powerful).
 	Roles []string
 
+	// Subjects are the RBAC subject strings this caller acts under
+	// ("user:<id>", "group:<name>", …). Built once per request by the
+	// session middleware; handlers never assemble them. Empty for the
+	// admin-token bypass, which authz short-circuits.
+	Subjects []string
+
 	// IdPGroups are the group names an identity provider asserted at login,
 	// carried verbatim from the session. Empty for password logins and the
 	// admin-token bypass.

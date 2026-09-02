@@ -48,11 +48,11 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 		Errors:      []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *policyKeyInput) (*policyKeyResponse, error) {
 		pol, err := d.Stores.Policy.Get(ctx, in.PolicyID)
-		if err != nil || pol == nil || !visibleTo(ctx, d.Authz, "policy", pol.Meta.Owner) {
+		if err != nil || pol == nil || !visibleTo(ctx, d.Authz, "policy", pol.Meta.ID, pol.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("policy %q not found", in.PolicyID))
 		}
 		rk, err := d.Stores.Key.Get(ctx, in.KeyID)
-		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.Owner) {
+		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.ID, rk.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("key %q not found", in.KeyID))
 		}
 		if err := d.Authz.Authorize(ctx, "keys.update", authz.Resource{Kind: "key", ID: in.KeyID, Owner: &rk.Meta.Owner}); err != nil {
@@ -82,7 +82,7 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 		Errors:      []int{401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *policyKeyInput) (*policyKeyResponse, error) {
 		rk, err := d.Stores.Key.Get(ctx, in.KeyID)
-		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.Owner) {
+		if err != nil || rk == nil || !visibleTo(ctx, d.Authz, "key", rk.Meta.ID, rk.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("key %q not found", in.KeyID))
 		}
 		if err := d.Authz.Authorize(ctx, "keys.update", authz.Resource{Kind: "key", ID: in.KeyID, Owner: &rk.Meta.Owner}); err != nil {

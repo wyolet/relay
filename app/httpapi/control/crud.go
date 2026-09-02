@@ -194,7 +194,7 @@ func registerKind[T any](
 		if s, ok := authzr.(authz.Scoper); ok {
 			visible := items[:0:0]
 			for _, it := range items {
-				if s.Visible(ctx, singular, metaOf(it).Owner) {
+				if s.Visible(ctx, singular, metaOf(it).ID, metaOf(it).Owner) {
 					visible = append(visible, it)
 				}
 			}
@@ -240,9 +240,6 @@ func registerKind[T any](
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
 	}, func(ctx context.Context, in *refInput) (*itemResponse[T], error) {
-		if err := authzr.Authorize(ctx, plural+".read", authz.Resource{Kind: singular, Name: in.Ref}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		id := in.Ref
 		if !ids.Valid(id) {
 			resolved, err := resolveSlug(id)
@@ -255,9 +252,14 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
-		// 404, not 403 — a row the caller may not see must not confirm its
+		// Authorized on the fetched row: the decision needs its owner. 404,
+		// not 403 — a row the caller may not see must not confirm its
 		// existence.
-		if !visibleTo(ctx, authzr, singular, metaOf(v).Owner) {
+		if err := authzr.Authorize(ctx, plural+".get",
+			authz.Resource{Kind: singular, ID: id, Name: in.Ref, Owner: &metaOf(v).Owner}); err != nil {
+			if errors.Is(err, authz.ErrUnauthenticated) {
+				return nil, mapAuthzErr(err)
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
 		if enrich != nil {
@@ -307,9 +309,17 @@ func registerKind[T any](
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
+			// The guard runs first: on kinds whose owner mirrors a spec field
+			// (Project, ServiceAccount, PolicyBinding) it is what re-derives
+			// the owner, and the owner is what the decision below turns on.
+			if guard != nil {
+				if err := guard(ctx, "create", nil, v); err != nil {
+					return nil, mapGuardErr(err)
+				}
+			}
 			// Authorize AFTER owner stamping so an owner-aware Authorizer can
 			// decide on the row's final provenance (user-owned rows are open to
-			// any authenticated caller; anything else is an admin operation).
+			// any authenticated caller; anything else needs a binding).
 			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
 				return nil, mapAuthzErr(err)
 			}
@@ -319,11 +329,6 @@ func registerKind[T any](
 			if validate != nil {
 				if err := validate(v); err != nil {
 					return nil, huma.Error400BadRequest(err.Error())
-				}
-			}
-			if guard != nil {
-				if err := guard(ctx, "create", nil, v); err != nil {
-					return nil, mapGuardErr(err)
 				}
 			}
 			audit.Changed(ctx, []string{audit.AnyField})
@@ -355,7 +360,7 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).Owner) {
+		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
 		// Authorize with the fetched row's owner so an owner-aware Authorizer
@@ -417,7 +422,7 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).Owner) {
+		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
 		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
@@ -467,15 +472,15 @@ func stampOwnerID(ctx context.Context, o *meta.Owner) error {
 	return nil
 }
 
-// visibleTo reports whether the actor in ctx may see a row with the given
-// owner. True whenever the configured Authorizer doesn't scope reads (the
+// visibleTo reports whether the actor in ctx may see the identified row.
+// True whenever the configured Authorizer doesn't scope reads (the
 // single-user default).
-func visibleTo(ctx context.Context, a authz.Authorizer, kind string, owner meta.Owner) bool {
+func visibleTo(ctx context.Context, a authz.Authorizer, kind, id string, owner meta.Owner) bool {
 	s, ok := a.(authz.Scoper)
 	if !ok {
 		return true
 	}
-	return s.Visible(ctx, kind, owner)
+	return s.Visible(ctx, kind, id, owner)
 }
 
 // slugTakenFn returns the existence predicate slug.Unique needs to mint a
@@ -615,7 +620,7 @@ func checkProjectRefVisible(ctx context.Context, d Deps, projectID string) error
 	if !ok {
 		return nil
 	}
-	if !s.Visible(ctx, "project", p.Meta.Owner) {
+	if !s.Visible(ctx, "project", p.Meta.ID, p.Meta.Owner) {
 		return huma.Error404NotFound(fmt.Sprintf("project %q not found", projectID))
 	}
 	return nil
@@ -670,7 +675,7 @@ func checkTeamRefVisible(ctx context.Context, d Deps, teamID string) error {
 	if !ok {
 		return nil
 	}
-	if !s.Visible(ctx, "team", t.Meta.Owner) {
+	if !s.Visible(ctx, "team", t.Meta.ID, t.Meta.Owner) {
 		return huma.Error404NotFound(fmt.Sprintf("team %q not found", teamID))
 	}
 	return nil
@@ -688,7 +693,7 @@ func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
 	if err != nil || p == nil {
 		return nil
 	}
-	if !s.Visible(ctx, "policy", p.Meta.Owner) {
+	if !s.Visible(ctx, "policy", p.Meta.ID, p.Meta.Owner) {
 		return huma.Error400BadRequest(fmt.Sprintf("policy %q not found", policyID))
 	}
 	return nil
@@ -711,7 +716,7 @@ func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string) error
 		if err != nil || k == nil {
 			continue
 		}
-		if !s.Visible(ctx, "host-key", k.Meta.Owner) {
+		if !s.Visible(ctx, "host-key", k.Meta.ID, k.Meta.Owner) {
 			return huma.Error400BadRequest(fmt.Sprintf("host-key %q not found", id))
 		}
 	}
@@ -1088,7 +1093,7 @@ func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) error {
 	if !ok {
 		return nil
 	}
-	if !s.Visible(ctx, "role", r.Meta.Owner) {
+	if !s.Visible(ctx, "role", r.Meta.ID, r.Meta.Owner) {
 		return huma.Error404NotFound(fmt.Sprintf("role %q not found", roleID))
 	}
 	return nil

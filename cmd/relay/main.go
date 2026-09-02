@@ -317,6 +317,7 @@ func main() {
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.New(kvStore, cookieSecure, "sess:")
+	sessMgr.UseGroups(func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 
 	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
 	// the boot, not the first login attempt.
@@ -674,8 +675,8 @@ func main() {
 		// shadow the SPA's identically-named client-side routes on the shared
 		// control origin (a hard-reload of /models must serve the UI, not JSON).
 		var authorizer authz.Authorizer = authz.AlwaysAllowAuthenticated{}
-		if cfg.MultiUser {
-			authorizer = authz.OwnerScoped{}
+		if cfg.Authz == config.AuthzRBAC {
+			authorizer = authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
 		}
 		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{

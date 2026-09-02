@@ -36,7 +36,7 @@ func testKeys() fakeKeyLister {
 	}
 }
 
-func TestKeyScope(t *testing.T) {
+func TestScopeOf(t *testing.T) {
 	keys := testKeys()
 
 	tests := []struct {
@@ -47,27 +47,27 @@ func TestKeyScope(t *testing.T) {
 		unrestricted bool
 	}{
 		{"single-user authorizer is unrestricted", authz.AlwaysAllowAuthenticated{}, scopeActors["alice"], nil, true},
-		{"admin role is unrestricted", authz.OwnerScoped{}, scopeActors["root"], nil, true},
-		{"admin token is unrestricted", authz.OwnerScoped{}, scopeActors["token"], nil, true},
-		{"user is scoped to own hashes", authz.OwnerScoped{}, scopeActors["alice"], []string{"hash-alice-1", "hash-alice-2"}, false},
-		{"user with no keys is scoped to nothing", authz.OwnerScoped{}, &actor.Actor{UserID: "u-carol"}, nil, false},
+		{"admin role is unrestricted", testRBAC(), scopeActors["root"], nil, true},
+		{"admin token is unrestricted", testRBAC(), scopeActors["token"], nil, true},
+		{"user is scoped to own hashes", testRBAC(), scopeActors["alice"], []string{"hash-alice-1", "hash-alice-2"}, false},
+		{"user with no keys is scoped to nothing", testRBAC(), &actor.Actor{UserID: "u-carol"}, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := actor.WithActor(context.Background(), tt.who)
-			hashes, unrestricted, err := keyScope(ctx, tt.authzr, keys)
+			sc, err := scopeOf(ctx, tt.authzr, nil, keys, "usage")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if unrestricted != tt.unrestricted {
-				t.Fatalf("unrestricted = %v, want %v", unrestricted, tt.unrestricted)
+			if sc.unrestricted != tt.unrestricted {
+				t.Fatalf("unrestricted = %v, want %v", sc.unrestricted, tt.unrestricted)
 			}
-			if len(hashes) != len(tt.wantHashes) {
-				t.Fatalf("hashes = %v, want %v", hashes, tt.wantHashes)
+			if len(sc.hashes) != len(tt.wantHashes) {
+				t.Fatalf("hashes = %v, want %v", sc.hashes, tt.wantHashes)
 			}
-			for i := range hashes {
-				if hashes[i] != tt.wantHashes[i] {
-					t.Fatalf("hashes = %v, want %v", hashes, tt.wantHashes)
+			for i := range sc.hashes {
+				if sc.hashes[i] != tt.wantHashes[i] {
+					t.Fatalf("hashes = %v, want %v", sc.hashes, tt.wantHashes)
 				}
 			}
 		})
@@ -75,43 +75,49 @@ func TestKeyScope(t *testing.T) {
 
 	t.Run("nil lister fails closed", func(t *testing.T) {
 		ctx := actor.WithActor(context.Background(), scopeActors["alice"])
-		hashes, unrestricted, err := keyScope(ctx, authz.OwnerScoped{}, nil)
-		if err != nil || unrestricted || len(hashes) != 0 {
-			t.Fatalf("got (%v, %v, %v), want scoped-to-nothing", hashes, unrestricted, err)
+		sc, err := scopeOf(ctx, testRBAC(), nil, nil, "usage")
+		if err != nil || sc.unrestricted || len(sc.hashes) != 0 || len(sc.projectIDs) != 0 {
+			t.Fatalf("got (%+v, %v), want scoped-to-nothing", sc, err)
 		}
 	})
 }
 
 func TestScopeEventQuery(t *testing.T) {
-	owned := []string{"h-1", "h-2"}
-
-	t.Run("no caller filter gets the owned set", func(t *testing.T) {
+	t.Run("unrestricted leaves the query alone", func(t *testing.T) {
 		q := usagelog.EventQuery{}
-		if !scopeEventQuery(&q, owned) {
+		if !scopeEventQuery(&q, readScope{unrestricted: true}) {
 			t.Fatal("want true")
 		}
-		if len(q.RelayKeyHash) != 2 {
-			t.Fatalf("RelayKeyHash = %v", q.RelayKeyHash)
+		if len(q.ScopeProjectID) != 0 || len(q.ScopeRelayKeyHash) != 0 {
+			t.Fatalf("query narrowed: %+v", q)
 		}
 	})
-	t.Run("caller filter intersects", func(t *testing.T) {
-		q := usagelog.EventQuery{RelayKeyHash: []string{"h-2", "h-foreign"}}
-		if !scopeEventQuery(&q, owned) {
+	t.Run("scope rides the query as a disjunction", func(t *testing.T) {
+		q := usagelog.EventQuery{}
+		sc := readScope{projectIDs: []string{"p-1"}, hashes: []string{"h-1", "h-2"}}
+		if !scopeEventQuery(&q, sc) {
 			t.Fatal("want true")
 		}
-		if len(q.RelayKeyHash) != 1 || q.RelayKeyHash[0] != "h-2" {
-			t.Fatalf("RelayKeyHash = %v, want [h-2]", q.RelayKeyHash)
+		if len(q.ScopeProjectID) != 1 || len(q.ScopeRelayKeyHash) != 2 {
+			t.Fatalf("query = %+v, want the scope carried verbatim", q)
 		}
 	})
-	t.Run("foreign-only filter matches nothing", func(t *testing.T) {
+	t.Run("a caller filter is not widened by the scope", func(t *testing.T) {
 		q := usagelog.EventQuery{RelayKeyHash: []string{"h-foreign"}}
-		if scopeEventQuery(&q, owned) {
-			t.Fatal("want false")
+		if !scopeEventQuery(&q, readScope{hashes: []string{"h-1"}}) {
+			t.Fatal("want true")
+		}
+		// The caller's own filter stays; the scope is ANDed on top of it.
+		if len(q.RelayKeyHash) != 1 || q.RelayKeyHash[0] != "h-foreign" {
+			t.Fatalf("RelayKeyHash = %v, want the caller filter untouched", q.RelayKeyHash)
+		}
+		if len(q.ScopeRelayKeyHash) != 1 {
+			t.Fatalf("ScopeRelayKeyHash = %v", q.ScopeRelayKeyHash)
 		}
 	})
-	t.Run("no owned hashes matches nothing", func(t *testing.T) {
+	t.Run("an empty scope matches nothing", func(t *testing.T) {
 		q := usagelog.EventQuery{}
-		if scopeEventQuery(&q, nil) {
+		if scopeEventQuery(&q, readScope{}) {
 			t.Fatal("want false")
 		}
 	})
@@ -167,7 +173,7 @@ func newUsageHarness(t *testing.T, authzr authz.Authorizer, reader *fakeUsageRea
 func TestUsageReadScoping(t *testing.T) {
 	t.Run("scoped user with no keys gets an empty page without touching the store", func(t *testing.T) {
 		reader := &fakeUsageReader{events: []usagelog.Event{{RequestID: "r-1"}}}
-		h := newUsageHarness(t, authz.OwnerScoped{}, reader)
+		h := newUsageHarness(t, testRBAC(), reader)
 		w := scopeReq(t, h, "alice", http.MethodGet, "/usage/events", "")
 		if w.Code != 200 {
 			t.Fatalf("status = %d: %s", w.Code, w.Body)
@@ -188,7 +194,7 @@ func TestUsageReadScoping(t *testing.T) {
 
 	t.Run("admin reads unscoped", func(t *testing.T) {
 		reader := &fakeUsageReader{}
-		h := newUsageHarness(t, authz.OwnerScoped{}, reader)
+		h := newUsageHarness(t, testRBAC(), reader)
 		w := scopeReq(t, h, "root", http.MethodGet, "/usage/events", "")
 		if w.Code != 200 {
 			t.Fatalf("status = %d: %s", w.Code, w.Body)
@@ -212,7 +218,7 @@ func TestUsageReadScoping(t *testing.T) {
 
 	t.Run("scoped user cannot fetch a foreign log record", func(t *testing.T) {
 		reader := &fakeUsageReader{events: []usagelog.Event{{RequestID: "r-1", RelayKeyHash: "hash-bob"}}}
-		h := newUsageHarness(t, authz.OwnerScoped{}, reader)
+		h := newUsageHarness(t, testRBAC(), reader)
 		if w := scopeReq(t, h, "alice", http.MethodGet, "/logs/r-1", ""); w.Code != 404 {
 			t.Fatalf("status = %d, want 404: %s", w.Code, w.Body)
 		}

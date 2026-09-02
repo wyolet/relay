@@ -61,9 +61,6 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 500},
 	}, func(ctx context.Context, in *applyInput) (*applyOutput, error) {
-		if err := d.Authz.Authorize(ctx, "system.apply", authz.Resource{Kind: "system"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		if d.Stores == nil {
 			return nil, huma.Error500InternalServerError("stores not wired")
 		}
@@ -81,6 +78,21 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 
+		// The endpoint has no gate of its own: the plan is authorized row by
+		// row, and a dry run runs the same pass so a caller who may write
+		// nothing never gets the diff back.
+		if err := apply.Authorize(ctx, plan, d.Authz); err != nil {
+			var ae *apply.AuthzError
+			if errors.As(err, &ae) {
+				status := http.StatusForbidden
+				if errors.Is(err, authz.ErrUnauthenticated) {
+					status = http.StatusUnauthorized
+				}
+				return nil, &applyFailure{status: status, Message: ae.Error()}
+			}
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+
 		out := &applyOutput{}
 		out.Body.Plan = plan.Entries
 		out.Body.Counts = plan.Counts
@@ -90,14 +102,6 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 
 		applied, err := apply.Execute(ctx, plan, d.Authz)
 		if err != nil {
-			var ae *apply.AuthzError
-			if errors.As(err, &ae) {
-				status := http.StatusForbidden
-				if errors.Is(err, authz.ErrUnauthenticated) {
-					status = http.StatusUnauthorized
-				}
-				return nil, &applyFailure{status: status, Message: ae.Error(), Plan: plan.Entries}
-			}
 			var se *apply.StoreError
 			if errors.As(err, &se) {
 				return nil, &applyFailure{

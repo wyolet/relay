@@ -15,6 +15,12 @@ import (
 	"github.com/wyolet/relay/pkg/crypto"
 )
 
+// Authorizer modes for RELAY_AUTHZ.
+const (
+	AuthzSingle = "single"
+	AuthzRBAC   = "rbac"
+)
+
 // Config holds every RELAY_* setting parsed and validated at startup.
 type Config struct {
 	// Cluster
@@ -49,11 +55,10 @@ type Config struct {
 	AdminToken string
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
 
-	// MultiUser selects the owner-scoped authorizer on the control API:
-	// each user sees and mutates only the rows they own; catalog rows stay
-	// readable by all and admin-mutable. Off (the default) keeps the
-	// single-user always-allow behavior.
-	MultiUser bool
+	// Authz selects the control-plane authorizer. "single" (the default)
+	// grants every authenticated caller every action; "rbac" evaluates the
+	// caller's RoleBindings against each row's scope chain.
+	Authz string
 
 	// Behavior knobs
 	CHRetentionDays int
@@ -199,14 +204,14 @@ func Load() (*Config, error) {
 	cfg.AdminToken = os.Getenv("RELAY_ADMIN_TOKEN")
 	cfg.PublicURL = strings.TrimSuffix(os.Getenv("RELAY_PUBLIC_URL"), "/")
 
-	// --- RELAY_MULTI_USER ---
-	switch v := os.Getenv("RELAY_MULTI_USER"); v {
-	case "", "off":
-		cfg.MultiUser = false
-	case "on":
-		cfg.MultiUser = true
+	// --- RELAY_AUTHZ ---
+	switch v := os.Getenv("RELAY_AUTHZ"); v {
+	case "", AuthzSingle:
+		cfg.Authz = AuthzSingle
+	case AuthzRBAC:
+		cfg.Authz = AuthzRBAC
 	default:
-		return nil, fmt.Errorf(`RELAY_MULTI_USER must be "on" or "off", got %q`, v)
+		return nil, fmt.Errorf(`RELAY_AUTHZ must be %q or %q, got %q`, AuthzSingle, AuthzRBAC, v)
 	}
 
 	// --- Behavior knobs ---

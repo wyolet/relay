@@ -57,7 +57,7 @@ func registerKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		Errors:      []int{400, 401, 403, 404, 500},
 	}, func(ctx context.Context, in *rotateKeyInput) (*rotateKeyResponse, error) {
 		existing, err := d.Stores.Key.Get(ctx, in.ID)
-		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "key", existing.Meta.Owner) {
+		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "key", existing.Meta.ID, existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("key %q not found", in.ID))
 		}
 		if err := d.Authz.Authorize(ctx, "keys.update", authz.Resource{Kind: "key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {

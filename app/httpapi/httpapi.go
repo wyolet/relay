@@ -145,6 +145,10 @@ var entityNameByPkg = map[string]string{
 	"github.com/wyolet/relay/app/role":           "Role",
 	"github.com/wyolet/relay/app/rolebinding":    "RoleBinding",
 	"github.com/wyolet/relay/app/policybinding":  "PolicyBinding",
+
+	// Not a catalog entity, but its Event/Actor/Resource/Request names
+	// collide with usage.Event and authz.Resource in the shared registry.
+	"github.com/wyolet/relay/app/audit": "Audit",
 }
 
 func schemaNamer(t reflect.Type, hint string) string {

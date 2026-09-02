@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -45,14 +46,18 @@ func registerHostKeyHealth(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
 	}, func(ctx context.Context, in *hostKeyHealthInput) (*hostKeyHealthResponse, error) {
-		if err := d.Authz.Authorize(ctx, "host-keys.read", authz.Resource{Kind: "host-key", ID: in.ID}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		if d.Selector == nil {
 			return nil, huma.Error500InternalServerError("circuit-breaker state is unavailable")
 		}
 		existing, err := d.Stores.HostKey.Get(ctx, in.ID)
-		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "host-key", existing.Meta.Owner) {
+		if err != nil || existing == nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
+		}
+		if err := d.Authz.Authorize(ctx, "host-keys.get",
+			authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
+			if errors.Is(err, authz.ErrUnauthenticated) {
+				return nil, mapAuthzErr(err)
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
 		}
 

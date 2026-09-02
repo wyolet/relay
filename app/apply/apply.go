@@ -167,17 +167,8 @@ func Execute(ctx context.Context, p *Result, authzr authz.Authorizer) ([]Entry, 
 	if p == nil {
 		return nil, nil
 	}
-	if authzr != nil {
-		for _, e := range p.Entries {
-			if e.write == nil {
-				continue
-			}
-			owner := e.owner
-			res := authz.Resource{Kind: singularOf(e.plural), ID: e.ID, Name: e.Name, Owner: &owner}
-			if err := authzr.Authorize(ctx, e.plural+"."+string(verbOf(e.Action)), res); err != nil {
-				return nil, &AuthzError{Entry: e, Err: err}
-			}
-		}
+	if err := Authorize(ctx, p, authzr); err != nil {
+		return nil, err
 	}
 
 	applied := make([]Entry, 0, len(p.Entries))
@@ -191,6 +182,27 @@ func Execute(ctx context.Context, p *Result, authzr authz.Authorizer) ([]Entry, 
 		applied = append(applied, e)
 	}
 	return applied, nil
+}
+
+// Authorize checks every mutating entry against authzr and returns an
+// *AuthzError for the first denial. A nil authorizer skips the pass — the
+// boot seed has no actor. Callers that only plan (dry run) run it too, so a
+// caller who may write nothing never sees the diff.
+func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
+	if p == nil || authzr == nil {
+		return nil
+	}
+	for _, e := range p.Entries {
+		if e.write == nil {
+			continue
+		}
+		owner := e.owner
+		res := authz.Resource{Kind: singularOf(e.plural), ID: e.ID, Name: e.Name, Owner: &owner}
+		if err := authzr.Authorize(ctx, e.plural+"."+string(verbOf(e.Action)), res); err != nil {
+			return &AuthzError{Entry: e, Err: err}
+		}
+	}
+	return nil
 }
 
 // verbOf maps a plan action to the RBAC verb the row is authorized under.

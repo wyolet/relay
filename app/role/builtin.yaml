@@ -20,7 +20,7 @@ metadata:
 spec:
   rules:
     - kinds: [audit, usage, logs]
-      verbs: [read]
+      verbs: [get, read]
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Role
@@ -48,8 +48,10 @@ spec:
       verbs: ["*"]
     - kinds: [teams]
       verbs: [get, list, update]
+    - kinds: [system]
+      verbs: [apply]
     - kinds: [usage, logs]
-      verbs: [read]
+      verbs: [get, read]
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Role
@@ -66,7 +68,7 @@ spec:
     - kinds: [projects]
       verbs: [get, list, update, delete]
     - kinds: [usage, logs]
-      verbs: [read]
+      verbs: [get, read]
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Role
@@ -79,12 +81,14 @@ spec:
   rules:
     - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits]
       verbs: [get, list]
+    - kinds: [projects, teams]
+      verbs: [get, list]
     - kinds: [keys, service-accounts]
       verbs: [get, list, create, update, delete, rotate]
     - kinds: [tokens]
       verbs: [mint]
     - kinds: [usage, logs]
-      verbs: [read]
+      verbs: [get, read]
 ---
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Role
@@ -96,7 +100,7 @@ metadata:
 spec:
   rules:
     - kinds: [policies, keys, service-accounts, policy-bindings, host-keys,
-              rate-limits, role-bindings]
+              rate-limits, role-bindings, projects, teams]
       verbs: [get, list]
     - kinds: [usage]
-      verbs: [read]
+      verbs: [get, read]

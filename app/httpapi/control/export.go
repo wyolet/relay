@@ -16,7 +16,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/apply"
-	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -65,9 +64,8 @@ func registerExport(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 403, 500},
 	}, func(ctx context.Context, in *exportInput) (*exportOutput, error) {
-		if err := d.Authz.Authorize(ctx, "system.apply", authz.Resource{Kind: "system"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
+		// No endpoint gate: every row is filtered by Visible, so a scoped
+		// caller exports their own subtree and nothing else.
 		if d.Stores == nil {
 			return nil, huma.Error500InternalServerError("stores not wired")
 		}
@@ -199,7 +197,7 @@ func (e *exporter) wanted(ctx context.Context, plural, singular string, m *meta.
 			return false
 		}
 	}
-	return visibleTo(ctx, e.d.Authz, singular, m.Owner)
+	return visibleTo(ctx, e.d.Authz, singular, m.ID, m.Owner)
 }
 
 func (e *exporter) documents(ctx context.Context) ([]manifest.Document, error) {

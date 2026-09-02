@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,17 +19,19 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/usagelog"
 )
 
 // --- read scoping ---
 //
-// Usage and log events carry the sha256 hash of the inbound bearer
-// (relay_key_hash), so "the caller's traffic" is exactly "events whose hash
-// belongs to a key the caller owns". Under a scoping Authorizer,
-// every usage/logs read is narrowed to that set; admins (and the
-// single-user default authorizer) read the whole stream.
+// A caller reads the whole stream only when a binding at the global scope
+// grants usage/logs read. Otherwise the stream narrows to what is
+// attributable to them: events in a project they may see, plus events their
+// own keys produced. Those two are a disjunction, carried on the query as
+// ScopeProjectID / ScopeRelayKeyHash.
 
 type keyLister interface {
 	List(ctx context.Context) ([]*key.Key, error)
@@ -41,56 +44,70 @@ func keysOf(d Deps) keyLister {
 	return d.Stores.Key
 }
 
-// keyScope decides what slice of the usage/log stream the caller may
-// read. unrestricted=true means the whole stream. Otherwise hashes lists
-// the bearer hashes of the caller's keys — possibly empty, which
-// means "no events at all", never "everything".
-func keyScope(ctx context.Context, authzr authz.Authorizer, keys keyLister) (hashes []string, unrestricted bool, err error) {
-	// Probe with a non-read verb: OwnerScoped grants it to admins only;
-	// the single-user authorizer grants any authenticated caller.
-	if authzr.Authorize(ctx, "usage.read_all", authz.Resource{Kind: "usage"}) == nil {
-		return nil, true, nil
+// readScope is the slice of the usage/log stream a caller may read.
+// unrestricted is the whole stream; otherwise an event qualifies when its
+// project or its bearer hash is listed. Both lists empty means "no events at
+// all", never "everything".
+type readScope struct {
+	unrestricted bool
+	projectIDs   []string
+	hashes       []string
+}
+
+// allows reports whether one already-fetched event is inside the scope.
+func (s readScope) allows(ev usagelog.Event) bool {
+	return s.unrestricted ||
+		slices.Contains(s.projectIDs, ev.ProjectID) ||
+		slices.Contains(s.hashes, ev.RelayKeyHash)
+}
+
+// scopeOf resolves the caller's read scope for kind ("usage" or "logs"). It
+// is the authorization for these endpoints: an empty scope reads nothing.
+func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catalog, keys keyLister, kind string) (readScope, error) {
+	// A nil owner resolves to the global scope, so this passes only for a
+	// binding that reaches every row — which is exactly "unrestricted".
+	if authzr.Authorize(ctx, kind+".read", authz.Resource{Kind: kind}) == nil {
+		return readScope{unrestricted: true}, nil
 	}
 	s, ok := authzr.(authz.Scoper)
-	if !ok || keys == nil {
-		return nil, false, nil // cannot resolve ownership → scope to nothing
+	if !ok {
+		return readScope{}, nil // cannot resolve scope → scope to nothing
+	}
+	var sc readScope
+	if cat != nil {
+		for _, p := range cat.Current().AllProjects() {
+			if s.Visible(ctx, kind, "", meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}) {
+				sc.projectIDs = append(sc.projectIDs, p.Meta.ID)
+			}
+		}
+	}
+	if keys == nil {
+		return sc, nil
 	}
 	all, err := keys.List(ctx)
 	if err != nil {
-		return nil, false, huma.Error500InternalServerError(err.Error())
+		return readScope{}, huma.Error500InternalServerError(err.Error())
 	}
 	for _, k := range all {
-		if k.Spec.KeyHash != "" && s.Visible(ctx, "key", k.Meta.Owner) {
-			hashes = append(hashes, k.Spec.KeyHash)
+		if k.Spec.KeyHash != "" && s.Visible(ctx, "key", k.Meta.ID, k.Meta.Owner) {
+			sc.hashes = append(sc.hashes, k.Spec.KeyHash)
 		}
 	}
-	return hashes, false, nil
+	return sc, nil
 }
 
-// scopeEventQuery narrows q to the given hashes, intersecting any caller-
-// supplied relay_key_hash filter. Returns false when the scoped caller can
-// match no events — the handler must short-circuit to an empty result,
-// because an empty hash filter downstream means "unfiltered".
-func scopeEventQuery(q *usagelog.EventQuery, hashes []string) bool {
-	if len(hashes) == 0 {
-		return false
-	}
-	if len(q.RelayKeyHash) == 0 {
-		q.RelayKeyHash = hashes
+// scopeEventQuery narrows q to sc. Returns false when the caller can match no
+// events — the handler must short-circuit to an empty result, because an
+// empty scope downstream means "unfiltered".
+func scopeEventQuery(q *usagelog.EventQuery, sc readScope) bool {
+	if sc.unrestricted {
 		return true
 	}
-	owned := make(map[string]struct{}, len(hashes))
-	for _, h := range hashes {
-		owned[h] = struct{}{}
+	if len(sc.projectIDs) == 0 && len(sc.hashes) == 0 {
+		return false
 	}
-	kept := q.RelayKeyHash[:0:0]
-	for _, h := range q.RelayKeyHash {
-		if _, ok := owned[h]; ok {
-			kept = append(kept, h)
-		}
-	}
-	q.RelayKeyHash = kept
-	return len(kept) > 0
+	q.ScopeProjectID, q.ScopeRelayKeyHash = sc.projectIDs, sc.hashes
+	return true
 }
 
 // --- shared input filters ---
@@ -321,9 +338,6 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageEventsInput) (*usageEventsOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		q, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
@@ -336,11 +350,11 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
-		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "usage")
 		if err != nil {
 			return nil, err
 		}
-		if !unrestricted && !scopeEventQuery(&q, hashes) {
+		if !scopeEventQuery(&q, sc) {
 			out := &usageEventsOutput{}
 			out.Body.Events = []usagelog.Event{}
 			return out, nil
@@ -379,18 +393,15 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageSummaryInput) (*usageSummaryOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		base, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "usage")
 		if err != nil {
 			return nil, err
 		}
-		if !unrestricted && !scopeEventQuery(&base, hashes) {
+		if !scopeEventQuery(&base, sc) {
 			return &usageSummaryOutput{Body: usagelog.SummaryResult{Rows: []usagelog.SummaryRow{}}}, nil
 		}
 		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy}
@@ -421,18 +432,15 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageTimeSeriesInput) (*usageTimeSeriesOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		base, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		hashes, unrestricted, err := keyScope(ctx, d.Authz, keysOf(d))
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, keysOf(d), "usage")
 		if err != nil {
 			return nil, err
 		}
-		scopedOut := !unrestricted && !scopeEventQuery(&base, hashes)
+		scopedOut := !scopeEventQuery(&base, sc)
 		interval, err := parseInterval(in.Interval)
 		if err != nil {
 			return nil, err

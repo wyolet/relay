@@ -99,7 +99,7 @@ func (s *Service) loadPolicy(ctx context.Context, ref string) (*policy.Policy, *
 	}
 	for _, p := range idx.policies {
 		if p.Meta.ID == ref || p.Meta.Name == ref {
-			if !s.visible("policy", p.Meta.Owner) {
+			if !s.visible("policy", p.Meta.ID, p.Meta.Owner) {
 				return nil, nil, ErrNotFound
 			}
 			return p, idx, nil
