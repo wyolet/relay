@@ -17,13 +17,16 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
@@ -129,7 +132,20 @@ type Snapshot struct {
 	refsByHostKey   map[string]refSet
 	refsByRateLimit map[string]refSet
 	refsByPolicy    map[string]refSet
+	refsByTeam      map[string]refSet
+	refsByProject   map[string]refSet
+
+	teamsByID   map[string]*team.Team
+	teamsByName map[string]*team.Team
+
+	projectsByID   map[string]*project.Project
+	projectsByName map[string]*project.Project
+	// projectsByTeam groups a team's projects (sorted by name).
+	projectsByTeam map[string][]*project.Project
 }
+
+// global is the outermost scope every chain ends in.
+var global = meta.Owner{Kind: meta.OwnerSystem}
 
 // snapshotRef links a Snapshot back to its owning Model. Stored in the
 // snapshot-name index so request-time lookup can return both in one shot.
@@ -531,4 +547,75 @@ func (s *Snapshot) AllBindings() []*binding.Binding {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
 	return out
+}
+
+// Team returns the enabled Team with this id, or false.
+func (s *Snapshot) Team(id string) (*team.Team, bool) {
+	t, ok := s.teamsByID[id]
+	return t, ok
+}
+
+// TeamByName returns the enabled Team with this slug, or false.
+func (s *Snapshot) TeamByName(name string) (*team.Team, bool) {
+	t, ok := s.teamsByName[name]
+	return t, ok
+}
+
+// Project returns the enabled Project with this id, or false.
+func (s *Snapshot) Project(id string) (*project.Project, bool) {
+	p, ok := s.projectsByID[id]
+	return p, ok
+}
+
+// ProjectByName returns the enabled Project with this slug, or false.
+func (s *Snapshot) ProjectByName(name string) (*project.Project, bool) {
+	p, ok := s.projectsByName[name]
+	return p, ok
+}
+
+// ProjectsInTeam returns the team's projects, sorted by project name. The
+// returned slice must not be mutated.
+func (s *Snapshot) ProjectsInTeam(teamID string) []*project.Project {
+	return s.projectsByTeam[teamID]
+}
+
+// AllTeams returns every Team in the snapshot, sorted by slug.
+func (s *Snapshot) AllTeams() []*team.Team {
+	out := make([]*team.Team, 0, len(s.teamsByID))
+	for _, t := range s.teamsByID {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllProjects returns every Project in the snapshot, sorted by slug.
+func (s *Snapshot) AllProjects() []*project.Project {
+	out := make([]*project.Project, 0, len(s.projectsByID))
+	for _, p := range s.projectsByID {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// ScopeChain returns the scopes a row with this owner lives in, most
+// specific first. A nil owner is a global resource (settings, list calls).
+// An owner whose project or team is absent collapses to the global scope,
+// which is what lets an admin still reach the row.
+func (s *Snapshot) ScopeChain(o *meta.Owner) []meta.Owner {
+	if o == nil {
+		return []meta.Owner{global}
+	}
+	switch o.Kind {
+	case meta.OwnerProject:
+		if p, ok := s.projectsByID[o.ID]; ok {
+			return []meta.Owner{*o, {Kind: meta.OwnerTeam, ID: p.Spec.TeamID}, global}
+		}
+	case meta.OwnerTeam:
+		if _, ok := s.teamsByID[o.ID]; ok {
+			return []meta.Owner{*o, global}
+		}
+	}
+	return []meta.Owner{global}
 }

@@ -208,8 +208,9 @@ func (p *Policy) Validate() error {
 		if len(p.Spec.HostKeyIDs) > 0 {
 			return fmt.Errorf("policy %q: host-owned policies must not list hostKeyIds", p.Meta.Name)
 		}
+	case meta.OwnerProject:
 	default:
-		return fmt.Errorf("policy %q: owner.kind required (user|system|host)", p.Meta.Name)
+		return fmt.Errorf("policy %q: owner.kind required (user|system|host|project)", p.Meta.Name)
 	}
 	// RateLimit shape: flat singular OR per-model bindings, never both.
 	if p.Spec.RateLimitID != "" && len(p.Spec.RLBindings) > 0 {

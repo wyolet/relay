@@ -7,8 +7,8 @@
 //     to the resolver map.
 //  4. Translate each DTO → domain object via manifest.ToXxx using the merged
 //     resolver, stamping Meta.ID from the same map.
-//  5. Upsert in dependency order: Provider, Host, RateLimit, HostKey, Model,
-//     Policy, RelayKey.
+//  5. Upsert in dependency order: Team, Project, Provider, Host, RateLimit,
+//     HostKey, Model, Policy, RelayKey.
 //
 // Diffing, dry-run, and identity (User) handling are deliberately omitted —
 // this is the minimal "make the rows be there" path. Idempotent: re-running
@@ -30,10 +30,12 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 	appsecret "github.com/wyolet/relay/app/secret"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
@@ -51,6 +53,8 @@ type Options struct {
 
 // Result summarises a seed run.
 type Result struct {
+	Teams        int
+	Projects     int
 	Providers    int
 	Hosts        int
 	RateLimits   int
@@ -89,6 +93,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		pricing:     pricing.NewStore(opts.Pool),
 		hostbinding: binding.NewStore(opts.Pool),
 		relaykey:    relaykey.NewStore(q),
+		team:        team.NewStore(q),
+		project:     project.NewStore(q),
 	}
 
 	resolver, err := buildResolver(ctx, stores)
@@ -98,6 +104,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	// Bucket docs by kind so we can upsert in dependency order.
 	var (
+		teamDocs []*manifest.TeamDTO
+		projDocs []*manifest.ProjectDTO
 		provDocs []*manifest.ProviderDTO
 		hostDocs []*manifest.HostDTO
 		rlDocs   []*manifest.RateLimitDTO
@@ -110,6 +118,10 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	)
 	for _, d := range docs {
 		switch {
+		case d.Team != nil:
+			teamDocs = append(teamDocs, d.Team)
+		case d.Project != nil:
+			projDocs = append(projDocs, d.Project)
 		case d.Provider != nil:
 			provDocs = append(provDocs, d.Provider)
 		case d.Host != nil:
@@ -133,6 +145,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	// Mint ids for any names not yet in PG. Doing this before translate so the
 	// resolver is complete when cross-refs are resolved.
+	mintIDs(resolver.Teams, teamDocs, func(d *manifest.TeamDTO) string { return d.Metadata.Name })
+	mintIDs(resolver.Projects, projDocs, func(d *manifest.ProjectDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Providers, provDocs, func(d *manifest.ProviderDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.Hosts, hostDocs, func(d *manifest.HostDTO) string { return d.Metadata.Name })
 	mintIDs(resolver.RateLimits, rlDocs, func(d *manifest.RateLimitDTO) string { return d.Metadata.Name })
@@ -145,6 +159,37 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	res := &Result{}
 
+	// Tenancy first: every kind below may be owned by a project.
+	for _, d := range teamDocs {
+		t, err := manifest.ToTeam(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: team %q: %w", d.Metadata.Name, err)
+		}
+		t.Meta.ID = resolver.Teams[d.Metadata.Name]
+		if resolver.skip(t.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.team.Upsert(ctx, t); err != nil {
+			return nil, fmt.Errorf("seed: upsert team %q: %w", d.Metadata.Name, err)
+		}
+		res.Teams++
+	}
+	for _, d := range projDocs {
+		p, err := manifest.ToProject(*d, resolver)
+		if err != nil {
+			return nil, fmt.Errorf("seed: project %q: %w", d.Metadata.Name, err)
+		}
+		p.Meta.ID = resolver.Projects[d.Metadata.Name]
+		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
+			res.Skipped++
+			continue
+		}
+		if err := stores.project.Upsert(ctx, p); err != nil {
+			return nil, fmt.Errorf("seed: upsert project %q: %w", d.Metadata.Name, err)
+		}
+		res.Projects++
+	}
 	for _, d := range provDocs {
 		p, err := manifest.ToProvider(*d, resolver)
 		if err != nil {
@@ -296,6 +341,8 @@ type storeSet struct {
 	pricing     *pricing.Store
 	hostbinding *binding.Store
 	relaykey    *relaykey.Store
+	team        *team.Store
+	project     *project.Store
 }
 
 // indexBuilder is a mutable resolver populated from PG + freshly minted ids.
@@ -310,6 +357,8 @@ type indexBuilder struct {
 	Bindings   map[string]string
 	Policies   map[string]string
 	RelayKeys  map[string]string
+	Teams      map[string]string
+	Projects   map[string]string
 
 	// Dirty is keyed by row id: true when the existing PG row was operator-
 	// edited. Populated from the List sweep in buildResolver so the upsert
@@ -331,6 +380,8 @@ func (i *indexBuilder) HostKeyID(n string) (string, bool)   { v, ok := i.HostKey
 func (i *indexBuilder) RateLimitID(n string) (string, bool) { v, ok := i.RateLimits[n]; return v, ok }
 func (i *indexBuilder) PricingID(n string) (string, bool)   { v, ok := i.Pricings[n]; return v, ok }
 func (i *indexBuilder) BindingID(n string) (string, bool)   { v, ok := i.Bindings[n]; return v, ok }
+func (i *indexBuilder) TeamID(n string) (string, bool)      { v, ok := i.Teams[n]; return v, ok }
+func (i *indexBuilder) ProjectID(n string) (string, bool)   { v, ok := i.Projects[n]; return v, ok }
 
 func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 	idx := &indexBuilder{
@@ -343,7 +394,25 @@ func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
 		Bindings:   map[string]string{},
 		Policies:   map[string]string{},
 		RelayKeys:  map[string]string{},
+		Teams:      map[string]string{},
+		Projects:   map[string]string{},
 		Dirty:      map[string]bool{},
+	}
+	teams, err := s.team.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list teams: %w", err)
+	}
+	for _, t := range teams {
+		idx.Teams[t.Meta.Name] = t.Meta.ID
+		idx.Dirty[t.Meta.ID] = t.Meta.Dirty
+	}
+	projects, err := s.project.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("seed: list projects: %w", err)
+	}
+	for _, p := range projects {
+		idx.Projects[p.Meta.Name] = p.Meta.ID
+		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
 	}
 	provs, err := s.provider.List(ctx)
 	if err != nil {

@@ -13,9 +13,11 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 )
 
 // ---------------------------------------------------------------------------
@@ -236,6 +238,7 @@ func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 	if m.Owner.Kind == "" {
 		m.Owner.Kind = meta.OwnerSystem
 	}
+	resolveScopeOwner(&m.Owner, idx)
 	hostID := d.Spec.HostID
 	if hostID != "" {
 		if id, ok := idx.HostID(hostID); ok {
@@ -350,6 +353,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			m.Owner.ID = hid
 		}
 	}
+	resolveScopeOwner(&m.Owner, idx)
 	return &policy.Policy{
 		Meta: m,
 		Spec: policy.Spec{
@@ -477,6 +481,7 @@ func ToRateLimit(d RateLimitDTO, idx Resolver) (*ratelimit.RateLimit, error) {
 			m.Owner.ID = hid
 		}
 	}
+	resolveScopeOwner(&m.Owner, idx)
 	return &ratelimit.RateLimit{
 		Meta: m,
 		Spec: ratelimit.Spec{
@@ -740,6 +745,108 @@ func FromRelayKey(k *relaykey.RelayKey, rev ReverseResolver) RelayKeyDTO {
 			Enabled:               k.Spec.Enabled,
 			PassthroughAllowed:    k.Spec.PassthroughAllowed,
 			PayloadLoggingEnabled: k.Spec.PayloadLoggingEnabled,
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Team / Project
+// ---------------------------------------------------------------------------
+
+// resolveScopeOwner rewrites a team- or project-kind owner from the wire
+// name to its id. Rows in other scopes are untouched.
+func resolveScopeOwner(o *meta.Owner, idx Resolver) {
+	if o.ID == "" {
+		return
+	}
+	switch o.Kind {
+	case meta.OwnerTeam:
+		if id, ok := idx.TeamID(o.ID); ok {
+			o.ID = id
+		}
+	case meta.OwnerProject:
+		if id, ok := idx.ProjectID(o.ID); ok {
+			o.ID = id
+		}
+	}
+}
+
+func toBudget(b *BudgetDTO) *team.Budget {
+	if b == nil {
+		return nil
+	}
+	return &team.Budget{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+}
+
+func fromBudget(b *team.Budget) *BudgetDTO {
+	if b == nil {
+		return nil
+	}
+	return &BudgetDTO{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+}
+
+func ToTeam(d TeamDTO, _ Resolver) (*team.Team, error) {
+	m := d.Metadata.toMeta()
+	// Seeded teams are system-owned by convention; API-created ones declare
+	// kind: user explicitly.
+	if m.Owner.Kind == "" {
+		m.Owner.Kind = meta.OwnerSystem
+	}
+	return &team.Team{
+		Meta: m,
+		Spec: team.Spec{
+			Enabled: d.Spec.Enabled,
+			Budget:  toBudget(d.Spec.Budget),
+		},
+	}, nil
+}
+
+func FromTeam(t *team.Team, _ ReverseResolver) TeamDTO {
+	return TeamDTO{
+		APIVersion: APIVersion,
+		Kind:       "Team",
+		Metadata:   metaToWire(t.Meta),
+		Spec: TeamSpec{
+			Enabled: t.Spec.Enabled,
+			Budget:  fromBudget(t.Spec.Budget),
+		},
+	}
+}
+
+// ToProject resolves the owning team name → id. Owner mirrors spec.team,
+// so it is re-derived rather than read from the wire form.
+func ToProject(d ProjectDTO, idx Resolver) (*project.Project, error) {
+	teamID, ok := idx.TeamID(d.Spec.Team)
+	if !ok {
+		return nil, fmt.Errorf("project %q: team %q not found", d.Metadata.Name, d.Spec.Team)
+	}
+	p := &project.Project{
+		Meta: d.Metadata.toMeta(),
+		Spec: project.Spec{
+			TeamID:  teamID,
+			Enabled: d.Spec.Enabled,
+			Budget:  toBudget(d.Spec.Budget),
+		},
+	}
+	p.StampOwner()
+	return p, nil
+}
+
+func FromProject(p *project.Project, rev ReverseResolver) ProjectDTO {
+	teamName, _ := rev.TeamName(p.Spec.TeamID)
+	if teamName == "" {
+		teamName = p.Spec.TeamID
+	}
+	wm := metaToWire(p.Meta)
+	wm.Owner.Name = teamName
+	return ProjectDTO{
+		APIVersion: APIVersion,
+		Kind:       "Project",
+		Metadata:   wm,
+		Spec: ProjectSpec{
+			Team:    teamName,
+			Enabled: p.Spec.Enabled,
+			Budget:  fromBudget(p.Spec.Budget),
 		},
 	}
 }

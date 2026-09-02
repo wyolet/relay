@@ -114,6 +114,7 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 
 	var issues []Issue
 	issues = append(issues, checkDuplicateNames(g)...)
+	issues = append(issues, checkProjectRefs(g)...)
 	issues = append(issues, checkProviderRefs(g)...)
 	issues = append(issues, checkHostRefs(g)...)
 	issues = append(issues, checkModelRefs(g)...)
@@ -122,6 +123,11 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 	issues = append(issues, checkPricingRefs(g)...)
 	issues = append(issues, checkBindingRefs(g)...)
 	issues = append(issues, checkRelayKeyRefs(g)...)
+	// RateLimit has no other cross-refs, so its owning Project is checked
+	// here rather than in a check of its own.
+	for _, rl := range g.RateLimits {
+		issues = append(issues, checkOwnerProject(g, "RateLimit", rl.Metadata.Name, rl.Metadata.Owner)...)
+	}
 	issues = append(issues, checkOrphans(g)...)
 
 	sortIssues(issues)
@@ -141,6 +147,8 @@ type graph struct {
 	RelayKeys    map[string]*manifest.RelayKeyDTO
 	Pricings     map[string]*manifest.PricingDTO
 	HostBindings map[string]*manifest.HostBindingDTO
+	Teams        map[string]*manifest.TeamDTO
+	Projects     map[string]*manifest.ProjectDTO
 
 	// duplicates tracks names that appeared more than once within a kind.
 	// Each entry holds the kind + name; checkDuplicateNames emits issues.
@@ -158,6 +166,8 @@ func buildGraph(docs []manifest.Document) *graph {
 		RelayKeys:    map[string]*manifest.RelayKeyDTO{},
 		Pricings:     map[string]*manifest.PricingDTO{},
 		HostBindings: map[string]*manifest.HostBindingDTO{},
+		Teams:        map[string]*manifest.TeamDTO{},
+		Projects:     map[string]*manifest.ProjectDTO{},
 	}
 	for i := range docs {
 		d := &docs[i]
@@ -208,6 +218,18 @@ func buildGraph(docs []manifest.Document) *graph {
 			indexOne(g, "Pricing", d.Pricing.Metadata.Name, func() bool {
 				_, dup := g.Pricings[d.Pricing.Metadata.Name]
 				g.Pricings[d.Pricing.Metadata.Name] = d.Pricing
+				return dup
+			})
+		case d.Team != nil:
+			indexOne(g, "Team", d.Team.Metadata.Name, func() bool {
+				_, dup := g.Teams[d.Team.Metadata.Name]
+				g.Teams[d.Team.Metadata.Name] = d.Team
+				return dup
+			})
+		case d.Project != nil:
+			indexOne(g, "Project", d.Project.Metadata.Name, func() bool {
+				_, dup := g.Projects[d.Project.Metadata.Name]
+				g.Projects[d.Project.Metadata.Name] = d.Project
 				return dup
 			})
 		case d.HostBinding != nil:

@@ -7,6 +7,8 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
 
@@ -25,6 +27,8 @@ const (
 	refPricing   refKind = "pricing"
 	refRelayKey  refKind = "relaykey"
 	refBinding   refKind = "binding"
+	refTeam      refKind = "team"
+	refProject   refKind = "project"
 )
 
 // refKey identifies one row by (kind, id). Used as the value type in
@@ -53,7 +57,10 @@ func outboundModelRefs(m *model.Model) []refKey {
 }
 
 func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {
-	refs := make([]refKey, 0, 2)
+	refs := make([]refKey, 0, 3)
+	if k.Meta.Owner.Kind == meta.OwnerProject && k.Meta.Owner.ID != "" {
+		refs = append(refs, refKey{Kind: refProject, ID: k.Meta.Owner.ID})
+	}
 	if k.Spec.HostID != "" {
 		refs = append(refs, refKey{Kind: refHost, ID: k.Spec.HostID})
 	}
@@ -67,7 +74,10 @@ func outboundHostKeyRefs(k *hostkey.HostKey) []refKey {
 }
 
 func outboundPolicyRefs(p *policy.Policy) []refKey {
-	refs := make([]refKey, 0, len(p.Spec.ModelIDs)+len(p.Spec.HostKeyIDs)+1)
+	refs := make([]refKey, 0, len(p.Spec.ModelIDs)+len(p.Spec.HostKeyIDs)+2)
+	if p.Meta.Owner.Kind == meta.OwnerProject && p.Meta.Owner.ID != "" {
+		refs = append(refs, refKey{Kind: refProject, ID: p.Meta.Owner.ID})
+	}
 	for _, id := range p.Spec.ModelIDs {
 		refs = append(refs, refKey{Kind: refModel, ID: id})
 	}
@@ -104,6 +114,21 @@ func outboundBindingRefs(b *binding.Binding) []refKey {
 		refs = append(refs, refKey{Kind: refHost, ID: b.Spec.HostID})
 	}
 	return refs
+}
+
+// outboundRateLimitRefs returns the owning Project of a project-owned rate
+// limit. Rate limits owned by any other kind have no parents.
+func outboundRateLimitRefs(r *ratelimit.RateLimit) []refKey {
+	if r.Meta.Owner.Kind == meta.OwnerProject && r.Meta.Owner.ID != "" {
+		return []refKey{{Kind: refProject, ID: r.Meta.Owner.ID}}
+	}
+	return nil
+}
+
+// outboundProjectRefs returns the Team a project belongs to. A project
+// without its team is dropped, so the edge is hard.
+func outboundProjectRefs(p *project.Project) []refKey {
+	return []refKey{{Kind: refTeam, ID: p.Spec.TeamID}}
 }
 
 func outboundRelayKeyRefs(k *relaykey.RelayKey) []refKey {
@@ -157,6 +182,10 @@ func (s *Snapshot) refsetFor(kind refKind, id string) refSet {
 		m = s.refsByRateLimit
 	case refPolicy:
 		m = s.refsByPolicy
+	case refTeam:
+		m = s.refsByTeam
+	case refProject:
+		m = s.refsByProject
 	default:
 		return nil
 	}
@@ -185,6 +214,10 @@ func (s *Snapshot) dropRefset(kind refKind, id string) {
 		delete(s.refsByRateLimit, id)
 	case refPolicy:
 		delete(s.refsByPolicy, id)
+	case refTeam:
+		delete(s.refsByTeam, id)
+	case refProject:
+		delete(s.refsByProject, id)
 	}
 }
 
@@ -205,6 +238,10 @@ func (s *Snapshot) Dependents(kind refKind, id string) []refKey {
 		m = s.refsByRateLimit
 	case refPolicy:
 		m = s.refsByPolicy
+	case refTeam:
+		m = s.refsByTeam
+	case refProject:
+		m = s.refsByProject
 	}
 	set, ok := m[id]
 	if !ok {

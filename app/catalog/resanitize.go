@@ -10,8 +10,12 @@ func resanitizePoliciesAfterParentChange(s *Snapshot) {
 	models := snapIDs(s.modelsByID)
 	keys := snapIDs(s.hostKeysByID)
 	rls := snapIDs(s.rateLimitsByID)
+	projects := snapIDs(s.projectsByID)
 	for id, p := range s.policiesByID {
-		clean := sanitizePolicy(p, models, keys, rls)
+		clean, keep := sanitizePolicy(p, models, keys, rls, projects)
+		if !keep {
+			continue
+		}
 		s.policiesByID[id] = clean
 		s.policiesByName[clean.Meta.Name] = clean
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(p))

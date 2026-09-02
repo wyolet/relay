@@ -5,9 +5,12 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 )
 
@@ -31,6 +34,9 @@ func validateModelInSnap(m *model.Model, s *Snapshot) error {
 }
 
 func validateHostKeyInSnap(k *hostkey.HostKey, s *Snapshot) error {
+	if err := validateOwnerProjectInSnap("hostkey", k.Meta, s); err != nil {
+		return err
+	}
 	if _, ok := s.hostsByID[k.Spec.HostID]; !ok {
 		return fmt.Errorf("hostkey %q: spec.hostId %q does not resolve", k.Meta.Name, k.Spec.HostID)
 	}
@@ -40,7 +46,32 @@ func validateHostKeyInSnap(k *hostkey.HostKey, s *Snapshot) error {
 	return nil
 }
 
-func validatePolicyInSnap(_ *policy.Policy, _ *Snapshot) error { return nil }
+func validatePolicyInSnap(p *policy.Policy, s *Snapshot) error {
+	return validateOwnerProjectInSnap("policy", p.Meta, s)
+}
+
+func validateRateLimitInSnap(r *ratelimit.RateLimit, s *Snapshot) error {
+	return validateOwnerProjectInSnap("ratelimit", r.Meta, s)
+}
+
+func validateProjectInSnap(p *project.Project, s *Snapshot) error {
+	if _, ok := s.teamsByID[p.Spec.TeamID]; !ok {
+		return fmt.Errorf("project %q: spec.teamId %q does not resolve", p.Meta.Name, p.Spec.TeamID)
+	}
+	return nil
+}
+
+// validateOwnerProjectInSnap is the shared owner check for the kinds that
+// may live inside a Project: the owning Project must still be present.
+func validateOwnerProjectInSnap(kind string, m meta.Metadata, s *Snapshot) error {
+	if m.Owner.Kind != meta.OwnerProject {
+		return nil
+	}
+	if _, ok := s.projectsByID[m.Owner.ID]; !ok {
+		return fmt.Errorf("%s %q: owner project %q does not resolve", kind, m.Name, m.Owner.ID)
+	}
+	return nil
+}
 
 func validatePricingInSnap(p *pricing.Pricing, s *Snapshot) error {
 	if _, ok := s.hostsByID[p.Meta.Owner.ID]; !ok {

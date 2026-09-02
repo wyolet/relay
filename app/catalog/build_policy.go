@@ -1,10 +1,16 @@
 package catalog
 
-import "github.com/wyolet/relay/app/policy"
+import (
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policy"
+)
 
-func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls idSet) {
+func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls, projects idSet) {
 	for _, p := range pols {
-		clean := sanitizePolicy(p, models, keys, rls)
+		clean, keep := sanitizePolicy(p, models, keys, rls, projects)
+		if !keep {
+			continue
+		}
 		s.policiesByID[clean.Meta.ID] = clean
 		s.policiesByName[clean.Meta.Name] = clean
 		// Refs mirror the stored (sanitized) row so incremental delete/replace
@@ -39,8 +45,14 @@ func (s *Snapshot) computePolicyReverseJoins() {
 
 // sanitizePolicy drops Spec refs (ModelIDs, HostKeyIDs, RateLimitID,
 // RLBindings) whose targets aren't in the enabled-id sets. The original
-// Spec stays in PG; only the snapshot copy is filtered.
-func sanitizePolicy(p *policy.Policy, models, keys, rls idSet) *policy.Policy {
+// Spec stays in PG; only the snapshot copy is filtered. The owning
+// Project is the one hard ref: without it the whole row is dropped.
+func sanitizePolicy(p *policy.Policy, models, keys, rls, projects idSet) (*policy.Policy, bool) {
+	if p.Meta.Owner.Kind == meta.OwnerProject {
+		if _, ok := projects[p.Meta.Owner.ID]; !ok {
+			return nil, false
+		}
+	}
 	clean := *p
 	clean.Spec = p.Spec
 	clean.Spec.ModelIDs = filterIDs(p.Spec.ModelIDs, models)
@@ -64,5 +76,5 @@ func sanitizePolicy(p *policy.Policy, models, keys, rls idSet) *policy.Policy {
 			clean.Spec.RLBindings = bs
 		}
 	}
-	return &clean
+	return &clean, true
 }

@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
@@ -10,9 +11,11 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/team"
 )
 
 // commitWithGrants recomputes the per-policy allowed-combo sets (a function of
@@ -230,7 +233,7 @@ func (c *Catalog) ApplyHostKeyUpsert(k *hostkey.HostKey) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), s.policiesByID)
+	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), snapIDs(s.projectsByID), s.policiesByID)
 	if !keep {
 		deleteHostKey(s, k.Meta.ID)
 		c.snap.Store(s)
@@ -292,12 +295,22 @@ func (c *Catalog) ApplyRateLimitUpsert(r *ratelimit.RateLimit) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	// Strip stale name index when slug changed for the same id.
-	if prev, ok := s.rateLimitsByID[r.Meta.ID]; ok && prev.Meta.Name != r.Meta.Name {
-		delete(s.rateLimitsByName, prev.Meta.Name)
+	clean, keep := sanitizeRateLimit(r, snapIDs(s.projectsByID))
+	if !keep {
+		deleteRateLimit(s, r.Meta.ID)
+		c.snap.Store(s)
+		return nil
 	}
-	s.rateLimitsByID[r.Meta.ID] = r
-	s.rateLimitsByName[r.Meta.Name] = r
+	// Strip stale name index when slug changed for the same id.
+	if prev, ok := s.rateLimitsByID[clean.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refRateLimit, ID: prev.Meta.ID}, outboundRateLimitRefs(prev))
+		if prev.Meta.Name != clean.Meta.Name {
+			delete(s.rateLimitsByName, prev.Meta.Name)
+		}
+	}
+	s.rateLimitsByID[clean.Meta.ID] = clean
+	s.rateLimitsByName[clean.Meta.Name] = clean
+	s.registerRefs(refKey{Kind: refRateLimit, ID: clean.Meta.ID}, outboundRateLimitRefs(clean))
 	c.snap.Store(s)
 	return nil
 }
@@ -316,6 +329,7 @@ func deleteRateLimit(s *Snapshot, id string) {
 	if !ok {
 		return
 	}
+	s.unregisterRefs(refKey{Kind: refRateLimit, ID: id}, outboundRateLimitRefs(r))
 	delete(s.rateLimitsByID, id)
 	delete(s.rateLimitsByName, r.Meta.Name)
 	// Remove from policy reverse join.
@@ -343,7 +357,12 @@ func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID))
+	clean, keep := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
+	if !keep {
+		deletePolicy(s, p.Meta.ID)
+		c.commitWithGrants(s)
+		return nil
+	}
 	insertPolicy(s, clean)
 	c.commitWithGrants(s)
 	return nil
@@ -561,6 +580,137 @@ func deleteBinding(s *Snapshot, id string) {
 	}
 }
 
+// ── Team ──────────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyTeamUpsert(t *team.Team) error {
+	if !t.IsEnabled() {
+		return c.ApplyTeamDelete(t.Meta.ID)
+	}
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refTeam, t.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	insertTeam(s, t)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyTeamDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteTeam(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertTeam(s *Snapshot, t *team.Team) {
+	if old, ok := s.teamsByID[t.Meta.ID]; ok {
+		delete(s.teamsByName, old.Meta.Name)
+		delete(s.teamsByID, old.Meta.ID)
+	}
+	s.teamsByID[t.Meta.ID] = t
+	s.teamsByName[t.Meta.Name] = t
+}
+
+func deleteTeam(s *Snapshot, id string) {
+	t, ok := s.teamsByID[id]
+	if !ok {
+		return
+	}
+	delete(s.teamsByID, id)
+	delete(s.teamsByName, t.Meta.Name)
+	cascadeDelete(s, refTeam, id)
+}
+
+// ── Project ───────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyProjectUpsert(p *project.Project) error {
+	if !p.IsEnabled() {
+		return c.ApplyProjectDelete(p.Meta.ID)
+	}
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refProject, p.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	clean, keep := sanitizeProject(p, snapIDs(s.teamsByID))
+	if !keep {
+		deleteProject(s, p.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	insertProject(s, clean)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyProjectDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteProject(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertProject(s *Snapshot, p *project.Project) {
+	if old, ok := s.projectsByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refProject, ID: old.Meta.ID}, outboundProjectRefs(old))
+		delete(s.projectsByName, old.Meta.Name)
+		delete(s.projectsByID, old.Meta.ID)
+		removeProjectFromTeam(s, old)
+	}
+	s.projectsByID[p.Meta.ID] = p
+	s.projectsByName[p.Meta.Name] = p
+	insertProjectIntoTeam(s, p)
+	s.registerRefs(refKey{Kind: refProject, ID: p.Meta.ID}, outboundProjectRefs(p))
+}
+
+func deleteProject(s *Snapshot, id string) {
+	p, ok := s.projectsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refProject, ID: id}, outboundProjectRefs(p))
+	delete(s.projectsByID, id)
+	delete(s.projectsByName, p.Meta.Name)
+	removeProjectFromTeam(s, p)
+	cascadeDelete(s, refProject, id)
+}
+
+// insertProjectIntoTeam keeps projectsByTeam sorted by project name, the
+// order build() produces.
+func insertProjectIntoTeam(s *Snapshot, p *project.Project) {
+	list := append(s.projectsByTeam[p.Spec.TeamID], p)
+	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	s.projectsByTeam[p.Spec.TeamID] = list
+}
+
+func removeProjectFromTeam(s *Snapshot, p *project.Project) {
+	list := s.projectsByTeam[p.Spec.TeamID]
+	out := make([]*project.Project, 0, len(list))
+	for _, cur := range list {
+		if cur.Meta.ID != p.Meta.ID {
+			out = append(out, cur)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.projectsByTeam, p.Spec.TeamID)
+		return
+	}
+	s.projectsByTeam[p.Spec.TeamID] = out
+}
+
 // ── Cascade helpers ───────────────────────────────────────────────────────
 
 // cascadeDelete uses an explicit worklist to avoid deep recursion. For each
@@ -637,6 +787,18 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 		_, modelOK := s.modelsByID[b.Spec.ModelID]
 		_, hostOK := s.hostsByID[b.Spec.HostID]
 		return modelOK && hostOK
+	case refRateLimit:
+		r, ok := s.rateLimitsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateRateLimitInSnap(r, s) == nil
+	case refProject:
+		p, ok := s.projectsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateProjectInSnap(p, s) == nil
 	}
 	return true
 }
@@ -671,6 +833,12 @@ func rowPresent(s *Snapshot, k refKey) bool {
 	case refBinding:
 		_, ok := s.bindingsByID[k.ID]
 		return ok
+	case refTeam:
+		_, ok := s.teamsByID[k.ID]
+		return ok
+	case refProject:
+		_, ok := s.projectsByID[k.ID]
+		return ok
 	}
 	return false
 }
@@ -696,6 +864,10 @@ func deleteDirect(s *Snapshot, k refKey) {
 		deleteHost(s, k.ID)
 	case refBinding:
 		deleteBinding(s, k.ID)
+	case refTeam:
+		deleteTeam(s, k.ID)
+	case refProject:
+		deleteProject(s, k.ID)
 	}
 }
 

@@ -25,6 +25,8 @@ type Document struct {
 	Pricing     *PricingDTO
 	HostBinding *HostBindingDTO
 	Setting     *SettingDTO
+	Team        *TeamDTO
+	Project     *ProjectDTO
 }
 
 // Kind returns the kind string of the contained document.
@@ -50,6 +52,10 @@ func (d Document) Kind() string {
 		return "HostBinding"
 	case d.Setting != nil:
 		return "Setting"
+	case d.Team != nil:
+		return "Team"
+	case d.Project != nil:
+		return "Project"
 	default:
 		return ""
 	}
@@ -218,6 +224,20 @@ func dispatchKind(env *rawEnvelope) (Document, error) {
 			return Document{}, err
 		}
 		return Document{HostBinding: &HostBindingDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "Team":
+		var spec TeamSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{Team: &TeamDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
+
+	case "Project":
+		var spec ProjectSpec
+		if err := env.Spec.Decode(&spec); err != nil {
+			return Document{}, err
+		}
+		return Document{Project: &ProjectDTO{APIVersion: env.APIVersion, Kind: env.Kind, Metadata: env.Metadata, Spec: spec}}, nil
 
 	case "Setting":
 		// Spec stays a raw node — its shape is per-section and is validated

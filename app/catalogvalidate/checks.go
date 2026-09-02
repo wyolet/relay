@@ -1,6 +1,10 @@
 package catalogvalidate
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/wyolet/relay/app/manifest"
+)
 
 // checkDuplicateNames emits an error for every name that appeared more
 // than once within a kind. The graph index already silently overwrote
@@ -93,6 +97,7 @@ func checkHostKeyRefs(g *graph) []Issue {
 	var out []Issue
 	for _, hk := range g.HostKeys {
 		src := Ref{Kind: "HostKey", Name: hk.Metadata.Name}
+		out = append(out, checkOwnerProject(g, src.Kind, src.Name, hk.Metadata.Owner)...)
 
 		if hk.Spec.HostID == "" {
 			out = append(out, Issue{
@@ -160,6 +165,59 @@ func checkHostKeyRefs(g *graph) []Issue {
 	return out
 }
 
+// checkProjectRefs validates Project outbound refs:
+//   - spec.team → Team name must exist
+func checkProjectRefs(g *graph) []Issue {
+	var out []Issue
+	for _, p := range g.Projects {
+		src := Ref{Kind: "Project", Name: p.Metadata.Name}
+		if p.Spec.Team == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.team"},
+				Message:  "team is required",
+			})
+			continue
+		}
+		if _, ok := g.Teams[p.Spec.Team]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.team"},
+				Target:   Ref{Kind: "Team", Name: p.Spec.Team},
+				Message:  fmt.Sprintf("team %q not found", p.Spec.Team),
+			})
+		}
+	}
+	return out
+}
+
+// checkOwnerProject validates the owner ref of a row that lives inside a
+// Project. Rows in any other scope produce no issue.
+func checkOwnerProject(g *graph, kind, name string, owner manifest.WireOwner) []Issue {
+	if owner.Kind != "project" {
+		return nil
+	}
+	pname := owner.Name
+	if pname == "" {
+		pname = owner.ID
+	}
+	if pname == "" {
+		return nil
+	}
+	if _, ok := g.Projects[pname]; ok {
+		return nil
+	}
+	return []Issue{{
+		Severity: SeverityError,
+		Kind:     KindRefMissing,
+		Source:   Ref{Kind: kind, Name: name, Field: "metadata.owner"},
+		Target:   Ref{Kind: "Project", Name: pname},
+		Message:  fmt.Sprintf("owner project %q not found", pname),
+	}}
+}
+
 // checkPolicyRefs validates Policy outbound refs:
 //   - spec.hostKeys[] → HostKey names must exist
 //   - spec.rateLimit → RateLimit name must exist when set
@@ -171,6 +229,7 @@ func checkPolicyRefs(g *graph) []Issue {
 	var out []Issue
 	for _, pol := range g.Policies {
 		src := Ref{Kind: "Policy", Name: pol.Metadata.Name}
+		out = append(out, checkOwnerProject(g, src.Kind, src.Name, pol.Metadata.Owner)...)
 
 		if pol.Metadata.Owner.Kind == "host" {
 			hname := pol.Metadata.Owner.Name

@@ -1,33 +1,38 @@
 {
   "$defs": {
-    "RelayKeySpec": {
+    "BudgetDTO": {
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "keyHash": {
+        "amount": {
           "type": "string"
         },
-        "passthroughAllowed": {
-          "type": "boolean"
-        },
-        "payloadLoggingEnabled": {
-          "type": "boolean"
-        },
-        "policy": {
+        "onExceed": {
           "type": "string"
         },
-        "prefix": {
-          "type": "string"
-        },
-        "revokedAt": {
+        "period": {
           "type": "string"
         }
       },
       "required": [
-        "policy",
-        "keyHash"
+        "amount"
+      ],
+      "type": "object"
+    },
+    "ProjectSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "budget": {
+          "$ref": "#/$defs/BudgetDTO"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "team"
       ],
       "type": "object"
     },
@@ -83,7 +88,7 @@
       "type": "object"
     }
   },
-  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/RelayKey.schema.json",
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Project.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -97,7 +102,7 @@
       "$ref": "#/$defs/WireMeta"
     },
     "spec": {
-      "$ref": "#/$defs/RelayKeySpec"
+      "$ref": "#/$defs/ProjectSpec"
     }
   },
   "required": [
@@ -106,6 +111,6 @@
     "metadata",
     "spec"
   ],
-  "title": "RelayKey",
+  "title": "Project",
   "type": "object"
 }

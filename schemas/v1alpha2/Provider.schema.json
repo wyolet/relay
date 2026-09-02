@@ -33,6 +33,12 @@
     "WireMeta": {
       "additionalProperties": false,
       "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "description": {
           "type": "string"
         },

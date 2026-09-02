@@ -17,12 +17,14 @@ import (
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
@@ -86,6 +88,8 @@ type Stores struct {
 	RelayKey  *relaykey.Store
 	Overlay   *overlay.Store
 	Settings  *settings.Store
+	Team      *team.Store
+	Project   *project.Store
 
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
@@ -120,6 +124,8 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		RelayKey:  relaykey.NewStore(q),
 		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),
+		Team:      team.NewStore(q),
+		Project:   project.NewStore(q),
 		Secrets:   secReg,
 	}
 	cat := New(
@@ -128,6 +134,7 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		stores.Binding,
 	)
 	cat.UseOverlays(stores.Overlay)
+	cat.UseTenancy(stores.Team, stores.Project)
 	cat.settings.store = stores.Settings
 
 	// OAuth credential resolver: stores its token blob via the same AES-GCM
@@ -207,6 +214,8 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		relaykey:  stores.RelayKey,
 		overlay:   stores.Overlay,
 		settings:  stores.Settings,
+		team:      stores.Team,
+		project:   stores.Project,
 	})
 	return listener, nil
 }

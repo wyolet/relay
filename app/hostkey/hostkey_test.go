@@ -56,7 +56,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "host owner rejected",
 			k:    func() *HostKey { k := fix("k", ValueKindEnv); k.Meta.Owner.Kind = meta.OwnerHost; return k }(),
-			want: "owner.kind must be user or system",
+			want: "owner.kind must be user, system or project",
 		},
 		{
 			name: "missing host id",

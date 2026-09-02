@@ -140,6 +140,15 @@ func (q *Queries) DeletePricingModels(ctx context.Context, pricingID string) err
 	return err
 }
 
+const deleteProject = `-- name: DeleteProject :exec
+DELETE FROM projects WHERE id = $1
+`
+
+func (q *Queries) DeleteProject(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteProject, id)
+	return err
+}
+
 const deleteProvider = `-- name: DeleteProvider :exec
 DELETE FROM providers WHERE id = $1
 `
@@ -191,6 +200,15 @@ DELETE FROM settings WHERE section = $1
 
 func (q *Queries) DeleteSetting(ctx context.Context, section string) error {
 	_, err := q.db.Exec(ctx, deleteSetting, section)
+	return err
+}
+
+const deleteTeam = `-- name: DeleteTeam :exec
+DELETE FROM teams WHERE id = $1
+`
+
+func (q *Queries) DeleteTeam(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteTeam, id)
 	return err
 }
 
@@ -440,6 +458,26 @@ func (q *Queries) GetPricingModels(ctx context.Context, pricingID string) ([]Pri
 	return items, nil
 }
 
+const getProject = `-- name: GetProject :one
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects WHERE id = $1
+`
+
+func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
+	row := q.db.QueryRow(ctx, getProject, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.TeamID,
+		&i.Metadata,
+		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getProvider = `-- name: GetProvider :one
 SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers WHERE id = $1
 `
@@ -597,6 +635,25 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 	row := q.db.QueryRow(ctx, getSetting, section)
 	var i Setting
 	err := row.Scan(&i.Section, &i.Value, &i.UpdatedAt)
+	return i, err
+}
+
+const getTeam = `-- name: GetTeam :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams WHERE id = $1
+`
+
+func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
+	row := q.db.QueryRow(ctx, getTeam, id)
+	var i Team
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Metadata,
+		&i.Spec,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -1300,6 +1357,39 @@ func (q *Queries) ListPricings(ctx context.Context) ([]Pricing, error) {
 	return items, nil
 }
 
+const listProjects = `-- name: ListProjects :many
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects ORDER BY name
+`
+
+func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.TeamID,
+			&i.Metadata,
+			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProviders = `-- name: ListProviders :many
 SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers ORDER BY name
 `
@@ -1567,6 +1657,40 @@ func (q *Queries) ListStoredSecretsForRotation(ctx context.Context) ([]ListStore
 			&i.ValueCiphertext,
 			&i.ValueNonce,
 			&i.ValueKeyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeams = `-- name: ListTeams :many
+
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams ORDER BY name
+`
+
+// ── teams + projects (migration 0025) ────────────────────────────────────────
+func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
+	rows, err := q.db.Query(ctx, listTeams)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Team
+	for rows.Next() {
+		var i Team
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Metadata,
+			&i.Spec,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2007,6 +2131,39 @@ func (q *Queries) UpsertPricing(ctx context.Context, arg UpsertPricingParams) er
 	return err
 }
 
+const upsertProject = `-- name: UpsertProject :exec
+INSERT INTO projects (id, name, display_name, team_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    team_id      = EXCLUDED.team_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+`
+
+type UpsertProjectParams struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	TeamID      string `db:"team_id" json:"team_id"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
+	_, err := q.db.Exec(ctx, upsertProject,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.TeamID,
+		arg.Metadata,
+		arg.Spec,
+	)
+	return err
+}
+
 const upsertProvider = `-- name: UpsertProvider :exec
 INSERT INTO providers (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
@@ -2173,6 +2330,36 @@ type UpsertSettingParams struct {
 
 func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) error {
 	_, err := q.db.Exec(ctx, upsertSetting, arg.Section, arg.Value)
+	return err
+}
+
+const upsertTeam = `-- name: UpsertTeam :exec
+INSERT INTO teams (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW()
+`
+
+type UpsertTeamParams struct {
+	ID          string `db:"id" json:"id"`
+	Name        string `db:"name" json:"name"`
+	DisplayName string `db:"display_name" json:"display_name"`
+	Metadata    []byte `db:"metadata" json:"metadata"`
+	Spec        []byte `db:"spec" json:"spec"`
+}
+
+func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
+	_, err := q.db.Exec(ctx, upsertTeam,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Metadata,
+		arg.Spec,
+	)
 	return err
 }
 

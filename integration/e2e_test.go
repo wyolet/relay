@@ -766,7 +766,8 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 		hosts,
 		providers,
 		rate_limits,
-		settings
+		settings,
+		projects, teams
 		RESTART IDENTITY CASCADE`
 	if _, err := st.Pool().Exec(ctx, stmt); err != nil {
 		t.Fatalf("truncateAll: %v", err)

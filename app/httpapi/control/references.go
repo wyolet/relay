@@ -98,6 +98,12 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 	register("rate-limits", "rate-limit", func(ctx context.Context, id string) ([]referenceItem, error) {
 		return scanRateLimitRefs(ctx, d, id)
 	})
+	register("teams", "team", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanTeamRefs(ctx, d, id)
+	})
+	register("projects", "project", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanProjectRefs(ctx, d, id)
+	})
 }
 
 func sortReferences(items []referenceItem) {
@@ -260,4 +266,63 @@ func scanRateLimitRefs(ctx context.Context, d Deps, id string) ([]referenceItem,
 		}
 	}
 	return out, nil
+}
+
+func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	projects, err := d.Stores.Project.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	for _, p := range projects {
+		if p.Spec.TeamID == id {
+			out = append(out, referenceItem{Kind: "project", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.teamId", owner: p.Meta.Owner})
+		}
+	}
+	return out, nil
+}
+
+func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	pols, err := d.Stores.Policy.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	for _, p := range pols {
+		if ownedByProject(p.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id", owner: p.Meta.Owner})
+		}
+	}
+	rks, err := d.Stores.RelayKey.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list relay-keys: %w", err)
+	}
+	for _, k := range rks {
+		if ownedByProject(k.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "relay-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+		}
+	}
+	keys, err := d.Stores.HostKey.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list host-keys: %w", err)
+	}
+	for _, k := range keys {
+		if ownedByProject(k.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+		}
+	}
+	rls, err := d.Stores.RateLimit.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list rate-limits: %w", err)
+	}
+	for _, r := range rls {
+		if ownedByProject(r.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "rate-limit", ID: r.Meta.ID, Name: r.Meta.Name, Via: "metadata.owner.id", owner: r.Meta.Owner})
+		}
+	}
+	return out, nil
+}
+
+func ownedByProject(o meta.Owner, projectID string) bool {
+	return o.Kind == meta.OwnerProject && o.ID == projectID
 }

@@ -57,6 +57,15 @@ func (s *Snapshot) clone() *Snapshot {
 		refsByHostKey:   copyRefMap(s.refsByHostKey),
 		refsByRateLimit: copyRefMap(s.refsByRateLimit),
 		refsByPolicy:    copyRefMap(s.refsByPolicy),
+		refsByTeam:      copyRefMap(s.refsByTeam),
+		refsByProject:   copyRefMap(s.refsByProject),
+
+		teamsByID:   shallowMap(s.teamsByID),
+		teamsByName: shallowMap(s.teamsByName),
+
+		projectsByID:   shallowMap(s.projectsByID),
+		projectsByName: shallowMap(s.projectsByName),
+		projectsByTeam: copySliceMap(s.projectsByTeam),
 	}
 	return c
 }
