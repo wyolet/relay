@@ -26,7 +26,7 @@ require (
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/wyolet/relay/jobq v0.1.1
-	github.com/wyolet/relay/sdk v0.7.5
+	github.com/wyolet/relay/sdk v0.7.6
 	golang.org/x/crypto v0.49.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.20.0
