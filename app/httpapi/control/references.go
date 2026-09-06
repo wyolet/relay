@@ -4,8 +4,9 @@
 // admin UI for blast-radius confirmation dialogs ("deleting this rate
 // limit will affect N policies") and for inline "in use by" lists.
 //
-// Walks the relevant stores per kind; admin-only, no SLO. Indices come
-// later if scan time matters. Reading PG (not the catalog snapshot) so
+// Walks the relevant stores per kind; no SLO. Referencing rows the caller
+// may not see are dropped, so the endpoint needs no gate of its own.
+// Indices come later if scan time matters. Reading PG (not the catalog snapshot) so
 // disabled / soft-dropped refs are still visible — they exist in PG even
 // when the data plane has filtered them out.
 package control
@@ -19,11 +20,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/rolebinding"
 )
 
 type referenceItem struct {
-	Kind string `json:"kind" doc:"Resource kind (host, policy, host-key, relay-key, model, pricing)."`
+	Kind string `json:"kind" doc:"Resource kind (host, policy, host-key, key, service-account, model, pricing)."`
 	ID   string `json:"id"   doc:"Resource id."`
 	Name string `json:"name" doc:"Resource slug."`
 	Via  string `json:"via"  doc:"Field path on the referencing row that points at the target."`
@@ -55,9 +58,6 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			Middlewares: protect,
 			Errors:      []int{401, 500},
 		}, func(ctx context.Context, in *referencesInput) (*referencesOutput, error) {
-			if err := d.Authz.Authorize(ctx, plural+".read", authz.Resource{Kind: singular, ID: in.ID}); err != nil {
-				return nil, mapAuthzErr(err)
-			}
 			items, err := scan(ctx, in.ID)
 			if err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
@@ -67,7 +67,7 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			if s, ok := d.Authz.(authz.Scoper); ok {
 				visible := items[:0:0]
 				for _, it := range items {
-					if s.Visible(ctx, it.Kind, it.owner) {
+					if s.Visible(ctx, it.Kind, it.ID, it.owner) {
 						visible = append(visible, it)
 					}
 				}
@@ -97,6 +97,18 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	register("rate-limits", "rate-limit", func(ctx context.Context, id string) ([]referenceItem, error) {
 		return scanRateLimitRefs(ctx, d, id)
+	})
+	register("teams", "team", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanTeamRefs(ctx, d, id)
+	})
+	register("projects", "project", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanProjectRefs(ctx, d, id)
+	})
+	register("service-accounts", "service-account", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanServiceAccountRefs(ctx, d, id)
+	})
+	register("roles", "role", func(ctx context.Context, id string) ([]referenceItem, error) {
+		return scanRoleRefs(ctx, d, id)
 	})
 }
 
@@ -186,13 +198,13 @@ func scanModelRefs(ctx context.Context, d Deps, id string) ([]referenceItem, err
 
 func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
 	out := []referenceItem{}
-	rks, err := d.Stores.RelayKey.List(ctx)
+	rks, err := d.Stores.Key.List(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list relay-keys: %w", err)
+		return nil, fmt.Errorf("list keys: %w", err)
 	}
 	for _, k := range rks {
 		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "relay-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
 		}
 	}
 	keys, err := d.Stores.HostKey.List(ctx)
@@ -202,6 +214,15 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 	for _, k := range keys {
 		if k.Spec.PolicyID == id {
 			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
+		}
+	}
+	pbs, err := d.Stores.PolicyBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policy-bindings: %w", err)
+	}
+	for _, b := range pbs {
+		if b.Spec.PolicyID == id {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.policyId", owner: b.Meta.Owner})
 		}
 	}
 	hosts, err := d.Stores.Host.List(ctx)
@@ -260,4 +281,163 @@ func scanRateLimitRefs(ctx context.Context, d Deps, id string) ([]referenceItem,
 		}
 	}
 	return out, nil
+}
+
+func scanTeamRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	projects, err := d.Stores.Project.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list projects: %w", err)
+	}
+	for _, p := range projects {
+		if p.Spec.TeamID == id {
+			out = append(out, referenceItem{Kind: "project", ID: p.Meta.ID, Name: p.Meta.Name, Via: "spec.teamId", owner: p.Meta.Owner})
+		}
+	}
+	scoped, err := scanRoleBindingsScopedTo(ctx, d, meta.OwnerTeam, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, scoped...), nil
+}
+
+func scanProjectRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	pols, err := d.Stores.Policy.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policies: %w", err)
+	}
+	for _, p := range pols {
+		if ownedByProject(p.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "policy", ID: p.Meta.ID, Name: p.Meta.Name, Via: "metadata.owner.id", owner: p.Meta.Owner})
+		}
+	}
+	rks, err := d.Stores.Key.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list keys: %w", err)
+	}
+	for _, k := range rks {
+		if ownedByProject(k.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+		}
+	}
+	keys, err := d.Stores.HostKey.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list host-keys: %w", err)
+	}
+	for _, k := range keys {
+		if ownedByProject(k.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "host-key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "metadata.owner.id", owner: k.Meta.Owner})
+		}
+	}
+	rls, err := d.Stores.RateLimit.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list rate-limits: %w", err)
+	}
+	for _, r := range rls {
+		if ownedByProject(r.Meta.Owner, id) {
+			out = append(out, referenceItem{Kind: "rate-limit", ID: r.Meta.ID, Name: r.Meta.Name, Via: "metadata.owner.id", owner: r.Meta.Owner})
+		}
+	}
+	sas, err := d.Stores.ServiceAccount.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list service-accounts: %w", err)
+	}
+	for _, sa := range sas {
+		if sa.Spec.ProjectID == id {
+			out = append(out, referenceItem{Kind: "service-account", ID: sa.Meta.ID, Name: sa.Meta.Name, Via: "spec.projectId", owner: sa.Meta.Owner})
+		}
+	}
+	pbs, err := d.Stores.PolicyBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policy-bindings: %w", err)
+	}
+	for _, b := range pbs {
+		if b.Spec.ProjectID == id {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.projectId", owner: b.Meta.Owner})
+		}
+	}
+	scoped, err := scanRoleBindingsScopedTo(ctx, d, meta.OwnerProject, id)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, scoped...), nil
+}
+
+func scanServiceAccountRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	keys, err := d.Stores.Key.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list keys: %w", err)
+	}
+	for _, k := range keys {
+		if k.Spec.Principal.Kind == key.PrincipalServiceAccount && k.Spec.Principal.ID == id {
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.principal.id", owner: k.Meta.Owner})
+		}
+	}
+	rbs, err := d.Stores.RoleBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list role-bindings: %w", err)
+	}
+	for _, b := range rbs {
+		if namesSubject(b.Spec.Subjects, id) {
+			out = append(out, referenceItem{Kind: "role-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.subjects", owner: b.Meta.Owner})
+		}
+	}
+	pbs, err := d.Stores.PolicyBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list policy-bindings: %w", err)
+	}
+	for _, b := range pbs {
+		if namesSubject(b.Spec.Subjects, id) {
+			out = append(out, referenceItem{Kind: "policy-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.subjects", owner: b.Meta.Owner})
+		}
+	}
+	return out, nil
+}
+
+// scanRoleBindingsScopedTo returns the role bindings whose scope names
+// (kind, id) — the tenancy row's blast radius when it is deleted.
+func scanRoleBindingsScopedTo(ctx context.Context, d Deps, kind meta.OwnerKind, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	rbs, err := d.Stores.RoleBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list role-bindings: %w", err)
+	}
+	for _, b := range rbs {
+		if b.Spec.Scope.Kind == kind && b.Spec.Scope.ID == id {
+			out = append(out, referenceItem{Kind: "role-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.scope", owner: b.Meta.Owner})
+		}
+	}
+	return out, nil
+}
+
+func scanRoleRefs(ctx context.Context, d Deps, id string) ([]referenceItem, error) {
+	out := []referenceItem{}
+	rbs, err := d.Stores.RoleBinding.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list role-bindings: %w", err)
+	}
+	for _, b := range rbs {
+		if b.Spec.RoleID == id {
+			out = append(out, referenceItem{Kind: "role-binding", ID: b.Meta.ID, Name: b.Meta.Name, Via: "spec.roleId", owner: b.Meta.Owner})
+		}
+	}
+	return out, nil
+}
+
+// namesSubject reports whether a binding's subjects hold the service
+// account id.
+func namesSubject(subjects []rolebinding.Subject, id string) bool {
+	for i := range subjects {
+		s := &subjects[i]
+		if s.Kind == rolebinding.SubjectServiceAccount && s.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func ownedByProject(o meta.Owner, projectID string) bool {
+	return o.Kind == meta.OwnerProject && o.ID == projectID
 }

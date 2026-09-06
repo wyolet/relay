@@ -21,6 +21,8 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -40,13 +42,14 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -55,17 +58,20 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
+	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // stack is the in-process relay under test: a control listener, an
@@ -74,15 +80,24 @@ type stack struct {
 	t          *testing.T
 	cat        *appcatalog.Catalog
 	stores     *appcatalog.Stores
+	users      *user.Store
 	control    *httptest.Server
 	inference  *httptest.Server
 	adminToken string
+	audit      *audit.Store
+	lifecycle  *lifecycle.Registry
 }
 
 // newStack boots the relay against the supplied DSN. The compose pg
 // must already be up. Returns a stack with two httptest servers for
 // the two planes; t.Cleanup tears everything down.
-func newStack(t *testing.T) *stack {
+func newStack(t *testing.T) *stack { return newStackAuthz(t, "") }
+
+// newStackAuthz boots the stack under the named authorizer mode; the empty
+// mode is the single-user default every other test runs under. An optional
+// identity dir wires the YAML user store and seeds it into the users table,
+// the way the binary does at boot.
+func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	t.Helper()
 
 	dsn := os.Getenv("RELAY_TEST_PG_DSN")
@@ -127,6 +142,7 @@ func newStack(t *testing.T) *stack {
 	t.Cleanup(func() { _ = kvStore.Close() })
 
 	sessMgr := session.New(kvStore, false, "sess:")
+	sessMgr.UseGroups(func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	policySvc := policy.NewService(catSnapReader{cat: cat}, selector, limiter)
@@ -168,6 +184,13 @@ func newStack(t *testing.T) *stack {
 			BytePass:      true,
 			ExtractTokens: pkgopenai.ExtractTokens,
 		}).Build(),
+		// The canonical shape, as the composition root registers it: /v1/ws
+		// serves it and refuses the upgrade when it is missing.
+		(&adapter.Spec{
+			Name:         adapters.Canonical,
+			InboundPaths: []adapter.InboundPath{{Path: "/v1/generate", OperationID: "generate", Summary: "Generate (relay canonical shape)"}},
+			Translator:   relayv1.IdentityTranslator{},
+		}).Build(),
 		(&adapter.Spec{
 			Name:          adapters.Anthropic,
 			InboundPaths:  []adapter.InboundPath{{Path: "/v1/messages", OperationID: "messages", Summary: "Create a message (Anthropic-compatible)"}},
@@ -180,15 +203,57 @@ func newStack(t *testing.T) *stack {
 
 	const adminToken = "test-admin-token"
 
+	auditStore := audit.NewStore(gen.New(st.Pool()))
+	auditEmitter := audit.NewEmitter(auditStore, slog.Default())
+	t.Cleanup(auditEmitter.Close)
+	usersStore := user.NewStore(gen.New(st.Pool()))
+	// Token verification reads the per-user version off the snapshot. The
+	// composition root attaches the source before the first build; Bootstrap
+	// has already built one here, so refresh the map straight away.
+	cat.UseTokenVersions(usersStore)
+	if err := cat.ReloadTokenVersions(ctx); err != nil {
+		t.Fatalf("catalog.ReloadTokenVersions: %v", err)
+	}
+
+	var idStore *identity.Store
+	if len(identityDir) > 0 && identityDir[0] != "" {
+		var err error
+		if idStore, err = identity.LoadYAML(identityDir[0]); err != nil {
+			t.Fatalf("identity.LoadYAML: %v", err)
+		}
+		if err := user.SeedFromIdentity(ctx, usersStore, idStore, slog.Default()); err != nil {
+			t.Fatalf("seed users from identity: %v", err)
+		}
+	}
+
+	// Inference tokens: one Ed25519 key held by both planes, so the control
+	// plane mints what the data plane verifies. Key lifecycle (generation,
+	// rotation, the retired verification half) belongs to the composition
+	// root and is not modelled here.
+	signer := &control.TokenSigner{}
+	verifier := &inference.TokenVerifier{}
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatalf("generate token signing key: %v", err)
+	}
+	signer.SetSeed(seed)
+	verifier.SetKey(signer.PublicKey())
+
 	ctrlRouter := chi.NewRouter()
 	// Mirror prod: control API under /api so SPA routes aren't shadowed.
 	ctrlRouter.Route("/api", func(r chi.Router) {
 		control.Mount(r, control.Deps{
-			Sessions:   sessMgr,
-			AdminToken: adminToken,
-			Authz:      authz.AlwaysAllowAuthenticated{},
-			Catalog:    cat,
-			Stores:     stores,
+			Identity:      idStore,
+			Users:         usersStore,
+			Sessions:      sessMgr,
+			AdminToken:    adminToken,
+			Authz:         audit.Authorizer{Inner: pickAuthorizer(mode, cat), Snap: cat.Current},
+			Catalog:       cat,
+			Stores:        stores,
+			Audit:         auditEmitter,
+			AuditReader:   auditStore,
+			TokenSigner:   signer,
+			TokenDenylist: kvStore,
 		})
 	})
 
@@ -196,6 +261,7 @@ func newStack(t *testing.T) *stack {
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:        st,
 		Catalog:       cat,
+		Tokens:        verifier,
 		Resolver:      routing.New(cat),
 		Pipeline:      pl,
 		Proxy:         proxyPipeline,
@@ -213,18 +279,21 @@ func newStack(t *testing.T) *stack {
 		t:          t,
 		cat:        cat,
 		stores:     stores,
+		users:      usersStore,
 		control:    ctrlSrv,
 		inference:  infSrv,
 		adminToken: adminToken,
+		audit:      auditStore,
+		lifecycle:  lifecycleReg,
 	}
 }
 
 // seedHappyPath wires the minimum catalog needed for a successful
 // /v1/chat/completions: one Provider, one Host (pointing at upstreamURL),
 // one HostKey, one Model with an openai-adapter binding, one Policy
-// granting model + hostkey, one RelayKey.
+// granting model + hostkey, one Key.
 //
-// Returns the cleartext relay-key bearer the inference call should use.
+// Returns the cleartext key bearer the inference call should use.
 func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	s.t.Helper()
 	ctx := context.Background()
@@ -290,24 +359,26 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 
-	const relayKeyPlain = "rk_test_secret_value_e2e"
-	relayKeyHash := sha256Hex(relayKeyPlain)
-	rk := &relaykey.RelayKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "test-relaykey", Owner: meta.Owner{Kind: meta.OwnerUser, ID: ids.New()}},
-		Spec: relaykey.Spec{
-			PolicyID: pol.Meta.ID,
-			KeyHash:  relayKeyHash,
-			Prefix:   "rk_test",
+	const keyPlain = "rk_test_secret_value_e2e"
+	relayKeyHash := sha256Hex(keyPlain)
+	userID := s.seedUser("e2e-owner")
+	rk := &key.Key{
+		Meta: meta.Metadata{ID: ids.New(), Name: "test-key", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
+		Spec: key.Spec{
+			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
+			PolicyID:  pol.Meta.ID,
+			KeyHash:   relayKeyHash,
+			Prefix:    "rk_test",
 		},
 	}
-	mustUpsert(s.t, s.stores.RelayKey.Upsert(ctx, rk), "relaykey")
+	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
 
 	// Force a snapshot rebuild rather than racing the 1s NOTIFY debouncer.
 	if err := s.cat.Reload(ctx); err != nil {
 		s.t.Fatalf("catalog.Reload: %v", err)
 	}
 
-	return relayKeyPlain
+	return keyPlain
 }
 
 // TestE2E_ChatCompletions exercises the OpenAI-shape inference path
@@ -334,7 +405,7 @@ func TestE2E_ChatCompletions(t *testing.T) {
 	defer upstream.Close()
 
 	st := newStack(t)
-	relayKey := st.seedHappyPath(upstream.URL, mockHostKey)
+	key := st.seedHappyPath(upstream.URL, mockHostKey)
 
 	// Issue the call.
 	body := []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)
@@ -343,7 +414,7 @@ func TestE2E_ChatCompletions(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+relayKey)
+	req.Header.Set("Authorization", "Bearer "+key)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -409,7 +480,7 @@ func TestE2E_AliasModel(t *testing.T) {
 	defer upstream.Close()
 
 	st := newStack(t)
-	relayKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
+	key := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
 
 	cases := []struct {
 		name     string
@@ -428,7 +499,7 @@ func TestE2E_AliasModel(t *testing.T) {
 				t.Fatalf("NewRequest: %v", err)
 			}
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+relayKey)
+			req.Header.Set("Authorization", "Bearer "+key)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -465,7 +536,7 @@ func TestE2E_OverlaySurvivesReseed(t *testing.T) {
 	defer upstream.Close()
 
 	st := newStack(t)
-	relayKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
+	key := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
 	models := st.cat.Current().ModelsByName("test-model")
 	if len(models) != 1 {
 		t.Fatalf("seeded model missing")
@@ -476,7 +547,7 @@ func TestE2E_OverlaySurvivesReseed(t *testing.T) {
 		body := []byte(`{"model":"` + modelName + `","messages":[{"role":"user","content":"hi"}]}`)
 		req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+relayKey)
+		req.Header.Set("Authorization", "Bearer "+key)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("infer: %v", err)
@@ -564,9 +635,9 @@ func TestE2E_OverlaySurvivesReseed(t *testing.T) {
 	}
 }
 
-// TestE2E_RelayKeyAuth_RejectsBadBearer confirms the inference plane
+// TestE2E_KeyAuth_RejectsBadBearer confirms the inference plane
 // rejects unauthenticated traffic before any routing or upstream call.
-func TestE2E_RelayKeyAuth_RejectsBadBearer(t *testing.T) {
+func TestE2E_KeyAuth_RejectsBadBearer(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Errorf("upstream should NOT be hit on a 401 path")
 		http.Error(w, "test bug", http.StatusInternalServerError)
@@ -665,12 +736,18 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 	}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, pol), "policy")
 
-	const relayKeyPlain = "rk_test_mismatch"
-	rk := &relaykey.RelayKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "rk1", Owner: meta.Owner{Kind: meta.OwnerUser, ID: ids.New()}},
-		Spec: relaykey.Spec{PolicyID: pol.Meta.ID, KeyHash: sha256Hex(relayKeyPlain), Prefix: "rk_test"},
+	const keyPlain = "rk_test_mismatch"
+	userID := st.seedUser("mismatch-owner")
+	rk := &key.Key{
+		Meta: meta.Metadata{ID: ids.New(), Name: "rk1", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
+		Spec: key.Spec{
+			Principal: key.Principal{Kind: key.PrincipalUser, ID: userID},
+			PolicyID:  pol.Meta.ID,
+			KeyHash:   sha256Hex(keyPlain),
+			Prefix:    "rk_test",
+		},
 	}
-	mustUpsert(t, st.stores.RelayKey.Upsert(ctx, rk), "relaykey")
+	mustUpsert(t, st.stores.Key.Upsert(ctx, rk), "relaykey")
 	if err := st.cat.Reload(ctx); err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -678,7 +755,7 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions",
 		bytes.NewReader([]byte(`{"model":"anthrop-model","messages":[{"role":"user","content":"hi"}]}`)))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+relayKeyPlain)
+	req.Header.Set("Authorization", "Bearer "+keyPlain)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -766,11 +843,30 @@ func truncateAll(t *testing.T, st *storagemod.Storage) {
 		hosts,
 		providers,
 		rate_limits,
-		settings
+		settings,
+		group_members, groups,
+		role_binding_subjects, role_bindings,
+		policy_binding_subjects, policy_bindings,
+		roles,
+		service_accounts,
+		users,
+		projects, teams,
+		audit_events
 		RESTART IDENTITY CASCADE`
 	if _, err := st.Pool().Exec(ctx, stmt); err != nil {
 		t.Fatalf("truncateAll: %v", err)
 	}
+}
+
+// seedUser inserts a user row so a key fixture has a principal to belong
+// to (principal_user_id is a real FK).
+func (s *stack) seedUser(username string) string {
+	s.t.Helper()
+	u := &user.User{ID: ids.New(), Username: username}
+	if err := s.users.Upsert(context.Background(), u); err != nil {
+		s.t.Fatalf("seed user %q: %v", username, err)
+	}
+	return u.ID
 }
 
 // TestE2E_OpenAPI_AllRefsResolve fetches the generated spec from each
@@ -951,9 +1047,9 @@ func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
 }
 
 // seedProxyHost installs a single Host pointing at upstreamURL and a
-// RelayKey unattached to any Policy (proxy mode doesn't need one).
-// Returns the cleartext relay-key bearer.
-func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, relayKey string) {
+// Key unattached to any Policy (proxy mode doesn't need one).
+// Returns the cleartext key bearer.
+func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, keyPlaintext string) {
 	s.t.Helper()
 	ctx := context.Background()
 
@@ -964,7 +1060,7 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, relayKey string) {
 	}
 	mustUpsert(s.t, s.stores.Host.Upsert(ctx, hst), "host")
 
-	// Need a Policy because RelayKey.Spec.PolicyID is required, even
+	// Need a Policy because Key.Spec.PolicyID is required, even
 	// though proxy mode doesn't consult it.
 	pol := &policy.Policy{
 		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-policy",
@@ -973,22 +1069,25 @@ func (s *stack) seedProxyHost(upstreamURL string) (hostSlug, relayKey string) {
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 
-	const relayKeyPlain = "rk_test_proxy_secret"
-	rk := &relaykey.RelayKey{
-		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-relaykey",
-			Owner: meta.Owner{Kind: meta.OwnerUser, ID: ids.New()}},
-		Spec: relaykey.Spec{
-			PolicyID: pol.Meta.ID,
-			KeyHash:  sha256Hex(relayKeyPlain),
-			Prefix:   "rk_test",
+	const keyPlain = "rk_test_proxy_secret"
+	userID := s.seedUser("proxy-owner")
+	rk := &key.Key{
+		Meta: meta.Metadata{ID: ids.New(), Name: "proxy-key",
+			Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}},
+		Spec: key.Spec{
+			Principal:          key.Principal{Kind: key.PrincipalUser, ID: userID},
+			PolicyID:           pol.Meta.ID,
+			KeyHash:            sha256Hex(keyPlain),
+			Prefix:             "rk_test",
+			PassthroughAllowed: true,
 		},
 	}
-	mustUpsert(s.t, s.stores.RelayKey.Upsert(ctx, rk), "relaykey")
+	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
 
 	if err := s.cat.Reload(ctx); err != nil {
 		s.t.Fatalf("Reload: %v", err)
 	}
-	return hst.Meta.Name, relayKeyPlain
+	return hst.Meta.Name, keyPlain
 }
 
 // enableProxyMode flips the proxy-mode settings section and waits for
@@ -1035,7 +1134,7 @@ func TestE2E_ProxyMode_Authed(t *testing.T) {
 	defer upstream.Close()
 
 	st := newStack(t)
-	hostSlug, relayKey := st.seedProxyHost(upstream.URL)
+	hostSlug, key := st.seedProxyHost(upstream.URL)
 	st.enableProxyMode(false)
 
 	const callerUpstreamKey = "sk-ant-oauth-customer-supplied"
@@ -1043,7 +1142,7 @@ func TestE2E_ProxyMode_Authed(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/messages", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
-	req.Header.Set("X-WR-API-Key", relayKey)
+	req.Header.Set("X-WR-API-Key", key)
 	req.Header.Set("X-WR-Upstream-Host", hostSlug)
 	req.Header.Set("Authorization", "Bearer "+callerUpstreamKey)
 
@@ -1080,7 +1179,7 @@ func TestE2E_ProxyMode_Authed(t *testing.T) {
 // 401 until AllowUnauthenticated is set on the settings section.
 //
 // Skipped: classify/auth middleware now returns 400 (not 401) when the
-// X-WR-Proxy-Mode header is set without a corresponding RelayKey AND
+// X-WR-Proxy-Mode header is set without a corresponding Key AND
 // anonymous flag is disabled. The status-code expectation needs to be
 // re-derived against current ClassifyMiddleware behavior — out of scope
 // for the rot-fix PR.
@@ -1140,14 +1239,14 @@ func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
 	defer upstream.Close()
 
 	st := newStack(t)
-	_, relayKey := st.seedProxyHost(upstream.URL)
+	_, key := st.seedProxyHost(upstream.URL)
 	st.enableProxyMode(false)
 
 	req, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/messages",
 		bytes.NewReader([]byte(`{"model":"x","messages":[]}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-WR-Proxy-Mode", "Proxy")
-	req.Header.Set("X-WR-API-Key", relayKey)
+	req.Header.Set("X-WR-API-Key", key)
 	req.Header.Set("X-WR-Upstream-Host", "does-not-exist")
 	req.Header.Set("Authorization", "Bearer sk-x")
 
@@ -1164,18 +1263,26 @@ func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
 // catSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader.
 type catSnapReader struct{ cat *appcatalog.Catalog }
 
-func (r catSnapReader) Policy(id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
+func (r catSnapReader) Policy(ctx context.Context, id string) (*policy.Policy, bool) {
+	return r.snap(ctx).Policy(id)
 }
 
-func (r catSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
+func (r catSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
+	return r.snap(ctx).RateLimit(id)
 }
 
-// TestE2E_RelayKeyRotate exercises POST /relay-keys/by-id/{id}/rotate:
+// snap mirrors the binary: the request's pinned snapshot when there is one.
+func (r catSnapReader) snap(ctx context.Context) *appcatalog.Snapshot {
+	if s := inference.SnapshotFrom(ctx); s != nil {
+		return s
+	}
+	return r.cat.Current()
+}
+
+// TestE2E_KeyRotate exercises POST /keys/by-id/{id}/rotate:
 // the new plaintext authenticates, the old one stops, and the key's
 // policy binding survives the rotation.
-func TestE2E_RelayKeyRotate(t *testing.T) {
+func TestE2E_KeyRotate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-rot","object":"chat.completion","model":"test-model","choices":[],"usage":{}}`)
@@ -1186,9 +1293,9 @@ func TestE2E_RelayKeyRotate(t *testing.T) {
 	oldKey := st.seedHappyPath(upstream.URL, "sk-mock-upstream-key")
 	ctx := context.Background()
 
-	keys, err := st.stores.RelayKey.List(ctx)
+	keys, err := st.stores.Key.List(ctx)
 	if err != nil || len(keys) != 1 {
-		t.Fatalf("list relay-keys: err=%v len=%d", err, len(keys))
+		t.Fatalf("list keys: err=%v len=%d", err, len(keys))
 	}
 	keyID := keys[0].Meta.ID
 	oldHash := keys[0].Spec.KeyHash
@@ -1212,7 +1319,7 @@ func TestE2E_RelayKeyRotate(t *testing.T) {
 		t.Fatalf("pre-rotate inference with old key: want 200, got %d", got)
 	}
 
-	req, _ := http.NewRequest(http.MethodPost, st.control.URL+"/api/relay-keys/by-id/"+keyID+"/rotate", nil)
+	req, _ := http.NewRequest(http.MethodPost, st.control.URL+"/api/keys/by-id/"+keyID+"/rotate", nil)
 	req.Header.Set("Authorization", "Bearer "+st.adminToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -1224,8 +1331,8 @@ func TestE2E_RelayKeyRotate(t *testing.T) {
 		t.Fatalf("rotate status: want 200, got %d; body=%s", resp.StatusCode, body)
 	}
 	var rot struct {
-		Plaintext string             `json:"plaintext"`
-		RelayKey  *relaykey.RelayKey `json:"relayKey"`
+		Plaintext string   `json:"plaintext"`
+		Key       *key.Key `json:"key"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rot); err != nil {
 		t.Fatalf("decode rotate response: %v", err)
@@ -1233,14 +1340,14 @@ func TestE2E_RelayKeyRotate(t *testing.T) {
 	if rot.Plaintext == "" || rot.Plaintext == oldKey {
 		t.Fatalf("rotate must return a fresh plaintext, got %q", rot.Plaintext)
 	}
-	if rot.RelayKey.Spec.KeyHash == oldHash {
+	if rot.Key.Spec.KeyHash == oldHash {
 		t.Fatalf("KeyHash unchanged after rotate")
 	}
-	if rot.RelayKey.Spec.KeyHash != sha256Hex(rot.Plaintext) {
+	if rot.Key.Spec.KeyHash != sha256Hex(rot.Plaintext) {
 		t.Fatalf("KeyHash does not match sha256(plaintext)")
 	}
-	if rot.RelayKey.Spec.PolicyID != policyID {
-		t.Fatalf("rotation must not change PolicyID: want %q, got %q", policyID, rot.RelayKey.Spec.PolicyID)
+	if rot.Key.Spec.PolicyID != policyID {
+		t.Fatalf("rotation must not change PolicyID: want %q, got %q", policyID, rot.Key.Spec.PolicyID)
 	}
 
 	// Force a snapshot rebuild rather than racing the NOTIFY debouncer.

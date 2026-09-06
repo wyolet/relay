@@ -1,6 +1,10 @@
 package catalogvalidate
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/wyolet/relay/app/manifest"
+)
 
 // checkDuplicateNames emits an error for every name that appeared more
 // than once within a kind. The graph index already silently overwrote
@@ -93,6 +97,7 @@ func checkHostKeyRefs(g *graph) []Issue {
 	var out []Issue
 	for _, hk := range g.HostKeys {
 		src := Ref{Kind: "HostKey", Name: hk.Metadata.Name}
+		out = append(out, checkOwnerProject(g, src.Kind, src.Name, hk.Metadata.Owner)...)
 
 		if hk.Spec.HostID == "" {
 			out = append(out, Issue{
@@ -160,6 +165,59 @@ func checkHostKeyRefs(g *graph) []Issue {
 	return out
 }
 
+// checkProjectRefs validates Project outbound refs:
+//   - spec.team → Team name must exist
+func checkProjectRefs(g *graph) []Issue {
+	var out []Issue
+	for _, p := range g.Projects {
+		src := Ref{Kind: "Project", Name: p.Metadata.Name}
+		if p.Spec.Team == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.team"},
+				Message:  "team is required",
+			})
+			continue
+		}
+		if _, ok := g.Teams[p.Spec.Team]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.team"},
+				Target:   Ref{Kind: "Team", Name: p.Spec.Team},
+				Message:  fmt.Sprintf("team %q not found", p.Spec.Team),
+			})
+		}
+	}
+	return out
+}
+
+// checkOwnerProject validates the owner ref of a row that lives inside a
+// Project. Rows in any other scope produce no issue.
+func checkOwnerProject(g *graph, kind, name string, owner manifest.WireOwner) []Issue {
+	if owner.Kind != "project" {
+		return nil
+	}
+	pname := owner.Name
+	if pname == "" {
+		pname = owner.ID
+	}
+	if pname == "" {
+		return nil
+	}
+	if _, ok := g.Projects[pname]; ok {
+		return nil
+	}
+	return []Issue{{
+		Severity: SeverityError,
+		Kind:     KindRefMissing,
+		Source:   Ref{Kind: kind, Name: name, Field: "metadata.owner"},
+		Target:   Ref{Kind: "Project", Name: pname},
+		Message:  fmt.Sprintf("owner project %q not found", pname),
+	}}
+}
+
 // checkPolicyRefs validates Policy outbound refs:
 //   - spec.hostKeys[] → HostKey names must exist
 //   - spec.rateLimit → RateLimit name must exist when set
@@ -171,6 +229,7 @@ func checkPolicyRefs(g *graph) []Issue {
 	var out []Issue
 	for _, pol := range g.Policies {
 		src := Ref{Kind: "Policy", Name: pol.Metadata.Name}
+		out = append(out, checkOwnerProject(g, src.Kind, src.Name, pol.Metadata.Owner)...)
 
 		if pol.Metadata.Owner.Kind == "host" {
 			hname := pol.Metadata.Owner.Name
@@ -398,12 +457,97 @@ func checkBindingRefs(g *graph) []Issue {
 	return out
 }
 
-// checkRelayKeyRefs validates RelayKey outbound refs:
-//   - spec.policy → Policy name must exist
-func checkRelayKeyRefs(g *graph) []Issue {
+// checkServiceAccountRefs validates ServiceAccount outbound refs:
+//   - spec.project → Project name must exist
+//   - spec.policy → Policy name must exist when set
+func checkServiceAccountRefs(g *graph) []Issue {
 	var out []Issue
-	for _, rk := range g.RelayKeys {
-		src := Ref{Kind: "RelayKey", Name: rk.Metadata.Name}
+	for _, sa := range g.ServiceAccounts {
+		src := Ref{Kind: "ServiceAccount", Name: sa.Metadata.Name}
+		if sa.Spec.Project == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
+				Message:  "project is required",
+			})
+		} else if _, ok := g.Projects[sa.Spec.Project]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
+				Target:   Ref{Kind: "Project", Name: sa.Spec.Project},
+				Message:  fmt.Sprintf("project %q not found", sa.Spec.Project),
+			})
+		}
+		if sa.Spec.Policy != "" {
+			if p, ok := g.Policies[sa.Spec.Policy]; !ok {
+				out = append(out, Issue{
+					Severity: SeverityError,
+					Kind:     KindRefMissing,
+					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"},
+					Target:   Ref{Kind: "Policy", Name: sa.Spec.Policy},
+					Message:  fmt.Sprintf("policy %q not found", sa.Spec.Policy),
+				})
+			} else {
+				out = append(out, checkPolicyBindable(src, p, sa.Spec.Project)...)
+			}
+		}
+	}
+	return out
+}
+
+// checkPolicyBindable mirrors the control-plane rule: only a policy of the
+// binder's own project, or a system-owned shared one, may be bound. A
+// host-owned policy is an upstream tier definition carrying no inbound
+// grants, so binding one resolves a principal to a policy with no keys.
+func checkPolicyBindable(src Ref, p *manifest.PolicyDTO, project string) []Issue {
+	field := Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"}
+	target := Ref{Kind: "Policy", Name: p.Metadata.Name}
+	owner := p.Metadata.Owner
+	switch owner.Kind {
+	case "host":
+		return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field, Target: target,
+			Message: fmt.Sprintf("policy %q is a host tier policy and cannot be bound", p.Metadata.Name)}}
+	case "project":
+		name := owner.Name
+		if name == "" {
+			name = owner.ID
+		}
+		if name != project {
+			return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field, Target: target,
+				Message: fmt.Sprintf("policy %q belongs to project %q, not %q", p.Metadata.Name, name, project)}}
+		}
+	case "user":
+		// An ownerless user row is the operator's shared row and stays
+		// bindable; one naming a person is that person's alone.
+		if owner.Name != "" || owner.ID != "" {
+			return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field, Target: target,
+				Message: fmt.Sprintf("policy %q is personal and cannot be bound from a project", p.Metadata.Name)}}
+		}
+	}
+	return nil
+}
+
+// checkKeyRefs validates Key outbound refs:
+//   - spec.principal → a ServiceAccount must exist (user principals are
+//     unchecked: users are not catalog documents)
+//   - spec.policy → Policy name must exist
+func checkKeyRefs(g *graph) []Issue {
+	var out []Issue
+	for _, rk := range g.Keys {
+		src := Ref{Kind: "Key", Name: rk.Metadata.Name}
+		if rk.Spec.Principal.Kind == "serviceaccount" {
+			if _, ok := g.ServiceAccounts[rk.Spec.Principal.Name]; !ok {
+				out = append(out, Issue{
+					Severity: SeverityError,
+					Kind:     KindRefMissing,
+					Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.principal"},
+					Target:   Ref{Kind: "ServiceAccount", Name: rk.Spec.Principal.Name},
+					Message:  fmt.Sprintf("service account %q not found", rk.Spec.Principal.Name),
+				})
+			}
+		}
 		if rk.Spec.Policy == "" {
 			continue
 		}
@@ -420,10 +564,138 @@ func checkRelayKeyRefs(g *graph) []Issue {
 	return out
 }
 
+// checkRoleBindingRefs validates RoleBinding outbound refs:
+//   - spec.role → Role name must exist
+//   - spec.scope → the named Team or Project must exist
+//   - service-account subjects must exist (users and groups are not catalog
+//     documents, so they are unchecked)
+func checkRoleBindingRefs(g *graph) []Issue {
+	var out []Issue
+	for _, b := range g.RoleBindings {
+		src := Ref{Kind: "RoleBinding", Name: b.Metadata.Name}
+		if b.Spec.Role == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.role"},
+				Message:  "role is required",
+			})
+		} else if _, ok := g.Roles[b.Spec.Role]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.role"},
+				Target:   Ref{Kind: "Role", Name: b.Spec.Role},
+				Message:  fmt.Sprintf("role %q not found", b.Spec.Role),
+			})
+		}
+		out = append(out, checkScopeTarget(g, src, b.Spec.Scope)...)
+		out = append(out, checkSubjects(g, src, b.Spec.Subjects)...)
+	}
+	return out
+}
+
+// checkScopeTarget validates the team/project a binding is scoped to. The
+// system scope names nothing.
+func checkScopeTarget(g *graph, src Ref, scope manifest.WireOwner) []Issue {
+	field := Ref{Kind: src.Kind, Name: src.Name, Field: "spec.scope"}
+	name := scope.Name
+	if name == "" {
+		name = scope.ID
+	}
+	switch scope.Kind {
+	case "team":
+		if _, ok := g.Teams[name]; !ok {
+			return []Issue{{Severity: SeverityError, Kind: KindRefMissing, Source: field,
+				Target:  Ref{Kind: "Team", Name: name},
+				Message: fmt.Sprintf("team %q not found", name)}}
+		}
+	case "project":
+		if _, ok := g.Projects[name]; !ok {
+			return []Issue{{Severity: SeverityError, Kind: KindRefMissing, Source: field,
+				Target:  Ref{Kind: "Project", Name: name},
+				Message: fmt.Sprintf("project %q not found", name)}}
+		}
+	case "system", "":
+	default:
+		return []Issue{{Severity: SeverityError, Kind: KindInvariant, Source: field,
+			Message: fmt.Sprintf("scope.kind must be system, team, or project, got %q", scope.Kind)}}
+	}
+	return nil
+}
+
+// checkSubjects validates the service-account subjects of a binding. User
+// and group subjects name rows that live outside the catalog.
+func checkSubjects(g *graph, src Ref, subjects []manifest.SubjectDTO) []Issue {
+	var out []Issue
+	for _, sub := range subjects {
+		if sub.Kind != "serviceaccount" {
+			continue
+		}
+		if _, ok := g.ServiceAccounts[sub.Name]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.subjects"},
+				Target:   Ref{Kind: "ServiceAccount", Name: sub.Name},
+				Message:  fmt.Sprintf("service account %q not found", sub.Name),
+			})
+		}
+	}
+	return out
+}
+
+// checkPolicyBindingRefs validates PolicyBinding outbound refs:
+//   - spec.project → Project name must exist
+//   - spec.policy → Policy name must exist
+//   - service-account subjects must exist
+func checkPolicyBindingRefs(g *graph) []Issue {
+	var out []Issue
+	for _, b := range g.PolicyBindings {
+		src := Ref{Kind: "PolicyBinding", Name: b.Metadata.Name}
+		if b.Spec.Project == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
+				Message:  "project is required",
+			})
+		} else if _, ok := g.Projects[b.Spec.Project]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.project"},
+				Target:   Ref{Kind: "Project", Name: b.Spec.Project},
+				Message:  fmt.Sprintf("project %q not found", b.Spec.Project),
+			})
+		}
+		if b.Spec.Policy == "" {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindIncomplete,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"},
+				Message:  "policy is required",
+			})
+		} else if p, ok := g.Policies[b.Spec.Policy]; !ok {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindRefMissing,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.policy"},
+				Target:   Ref{Kind: "Policy", Name: b.Spec.Policy},
+				Message:  fmt.Sprintf("policy %q not found", b.Spec.Policy),
+			})
+		} else {
+			out = append(out, checkPolicyBindable(src, p, b.Spec.Project)...)
+		}
+		out = append(out, checkSubjects(g, src, b.Spec.Subjects)...)
+	}
+	return out
+}
+
 // checkOrphans surfaces curation hints (warnings, not errors):
 //   - Provider with zero Models
 //   - Model with zero enabled host bindings
-//   - HostKey not referenced by any user-owned Policy (unreachable)
+//   - HostKey not referenced by any routable Policy (unreachable)
 //   - RateLimit not referenced by any Policy
 //
 // Errors-by-orphaning would be too strict — operators may legitimately
@@ -476,10 +748,15 @@ func checkOrphans(g *graph) []Issue {
 		})
 	}
 
-	// HostKey → at least one user-owned Policy listing it.
+	// HostKey → at least one Policy a caller can actually route through.
+	// A team- or project-owned Policy reaches its host keys the same way a
+	// user-owned one does, so counting only user/system owners reports a
+	// referenced key as unreachable.
 	keyReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
-		if pol.Metadata.Owner.Kind != "user" && pol.Metadata.Owner.Kind != "system" {
+		switch pol.Metadata.Owner.Kind {
+		case "user", "system", "team", "project":
+		default:
 			continue
 		}
 		for _, hk := range pol.Spec.HostKeys {
@@ -492,7 +769,7 @@ func checkOrphans(g *graph) []Issue {
 				Severity: SeverityWarning,
 				Kind:     KindOrphan,
 				Source:   Ref{Kind: "HostKey", Name: name},
-				Message:  "hostkey not referenced by any user/system-owned policy; underlying models won't appear in /v1/models",
+				Message:  "hostkey not referenced by any routable policy; underlying models won't appear in /v1/models",
 			})
 		}
 	}

@@ -56,6 +56,18 @@ type Reservation struct {
 	lbRules []Rule
 	// swRules holds session-window rules that need count refund on cancel.
 	swRules []Rule
+	// noCommit marks a reservation that metered nothing — a check-only
+	// Reserve. Committing it would be a second script call for no state.
+	noCommit bool
+}
+
+// SetNoCommit marks res as metering nothing, so Commit is a no-op. Set by
+// callers that reserve only to run a check (token revocation) alongside no
+// rate-limit rule.
+func (r *Reservation) SetNoCommit() {
+	if r != nil {
+		r.noCommit = true
+	}
 }
 
 // Reserve checks all rules and increments counters atomically via one RunScript call.
@@ -86,6 +98,11 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 		return nil, fmt.Errorf("limit: decode reserve result: %w", err)
 	}
 
+	if res.Revoked {
+		l.log.Debug("limit reserve revoked", "request_id", reqid.From(ctx), "rule", res.RuleName)
+		return nil, ErrRevoked
+	}
+
 	if res.Exceeded {
 		exceeded := &ExceededError{
 			RetryAfter: time.Duration(res.RetryAfterMs) * time.Millisecond,
@@ -112,6 +129,8 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 			strategy = StrategyTokenBucket
 		}
 		switch {
+		case rule.Meter == MeterRevoked:
+			// Nothing to commit or refund: the rule wrote no state.
 		case rule.Meter == "concurrency":
 			reservation.conKeys = append(reservation.conKeys, concurrencyKey(scope, rule))
 		case rule.Meter == "tokens" || strings.HasPrefix(rule.Meter, "tokens."):
@@ -133,11 +152,14 @@ func (l *Limiter) Reserve(ctx context.Context, scope string, rules []Rule) (*Res
 // post-hoc; concurrency is always decremented. Calling Commit twice is a no-op.
 //
 // obs.Tokens is a map[string]int64. Per-meter increments are derived as:
-//   - meter "tokens":        sum of all values in obs.Tokens (backward compat)
+//   - meter "tokens":        obs.Tokens["input"] + obs.Tokens["output"]
 //   - meter "tokens.<key>":  obs.Tokens["<key>"]
 //   - meter "requests":      always 1 (counted at Reserve; not post-hoc)
 //   - meter "concurrency":   decremented (not incremented)
 func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations) error {
+	if res != nil && res.noCommit {
+		return nil
+	}
 	call, err := l.buildCommitCall(res, obs, l.clock())
 	if err != nil {
 		return err
@@ -165,10 +187,10 @@ func (l *Limiter) Commit(ctx context.Context, res *Reservation, obs Observations
 // per-reservation script and args are produced by the same builder.
 func (l *Limiter) CommitBoth(ctx context.Context, a, b *Reservation, obs Observations) error {
 	present := make([]*Reservation, 0, 2)
-	if a != nil {
+	if a != nil && !a.noCommit {
 		present = append(present, a)
 	}
-	if b != nil {
+	if b != nil && !b.noCommit {
 		present = append(present, b)
 	}
 	switch len(present) {
@@ -218,12 +240,12 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		for i, rule := range res.tokRules {
 			m := rule.Meter
 			if m == "tokens" {
-				// sum all values
-				var sum int64
-				for _, v := range obs.Tokens {
-					sum += v
-				}
-				tokAmounts[i] = sum
+				// Input and output are the uncached counts, and their sum is
+				// what a provider reports as the total; the cache, reasoning
+				// and server-tool counters are metered by their own
+				// tokens.<key> meters. Summing the whole map billed one
+				// request several times over.
+				tokAmounts[i] = obs.Tokens["input"] + obs.Tokens["output"]
 			} else if strings.HasPrefix(m, "tokens.") {
 				key := m[len("tokens."):]
 				tokAmounts[i] = obs.Tokens[key]

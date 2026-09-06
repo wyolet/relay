@@ -43,3 +43,34 @@ jobs:
           go test ./...
           (cd sdk && go test ./...)
           (cd jobq && go test ./...)
+
+      - name: Race
+        run: make test-race
+
+      - name: Fuzz
+        run: make test-fuzz FUZZ_TIME=20s
+
+      - name: Allocation gate
+        run: make bench-gate
+
+  # Split off `check`: the coverage run rebuilds every package instrumented,
+  # which roughly doubles the test time and would otherwise serialise behind
+  # race + fuzz.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      # Unit profiles only — this job has no Postgres service, so the store
+      # packages that `make test-integration` covers are absent from the merge.
+      # COVER_ENFORCE stays 0 (the Makefile default): the tiers report but do
+      # not fail until the packages reach them.
+      - name: Coverage tiers
+        run: |
+          make test-cover
+          make cover-check

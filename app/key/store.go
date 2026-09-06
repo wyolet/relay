@@ -1,0 +1,205 @@
+// store.go is the data-access layer for Key. Same shape as the other
+// entity stores; sha256(plaintext) is the caller's responsibility — the
+// plaintext never enters this package.
+//
+// The principal and the rotation hashes live in real columns (FK cascade,
+// unique index) as well as the spec JSONB; the columns win on read.
+package key
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/internal/storage/gen"
+)
+
+// Store is the Key data-access type.
+type Store struct {
+	q *gen.Queries
+}
+
+// NewStore constructs a Store from an existing sqlc Queries handle.
+func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
+
+// List returns every Key row.
+func (s *Store) List(ctx context.Context) ([]*Key, error) {
+	rows, err := s.q.ListRelayKeys(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("key.List: %w", err)
+	}
+	out := make([]*Key, 0, len(rows))
+	for _, r := range rows {
+		k, err := fromRow(r)
+		if err != nil {
+			return nil, fmt.Errorf("key %s: %w", r.Name, err)
+		}
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+// ErrHashInUse reports a key whose hash (current or pre-rotation) already
+// belongs to another row. Both live at once on the snapshot's hash index,
+// so letting the second row in would silently hand it the first row's
+// traffic — including a rotating key's grace window.
+var ErrHashInUse = errors.New("key: hash in use by another key")
+
+// Upsert writes k. Caller is responsible for stamping Meta.ID and for
+// computing Spec.KeyHash from the plaintext.
+func (s *Store) Upsert(ctx context.Context, k *Key) error {
+	params, err := toUpsertParams(k)
+	if err != nil {
+		return fmt.Errorf("key.Upsert: %w", err)
+	}
+	taken, err := s.q.RelayKeyHashTaken(ctx, gen.RelayKeyHashTakenParams{
+		KeyHash:   k.Spec.KeyHash,
+		KeyHash_2: k.Spec.PreviousKeyHash,
+		ID:        k.Meta.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("key.Upsert: %w", err)
+	}
+	if taken {
+		return ErrHashInUse
+	}
+	return s.q.UpsertRelayKey(ctx, params)
+}
+
+// ErrRotationRaced reports a rotate whose stored hash no longer matches the
+// one the caller read: another rotation landed in between, and writing over
+// it would hand out a plaintext that authenticates nothing.
+var ErrRotationRaced = errors.New("key: rotated concurrently")
+
+// Rotate replaces the key's hashes conditionally on prevHash and seen still
+// being the row's stored hash and version. Everything else on the row
+// (principal, policy, flags, slug) is untouched, and seen makes a plain
+// update the caller never read lose the race rather than be overwritten.
+func (s *Store) Rotate(ctx context.Context, k *Key, prevHash string, seen time.Time) error {
+	params, err := toUpsertParams(k)
+	if err != nil {
+		return fmt.Errorf("key.Rotate: %w", err)
+	}
+	taken, err := s.q.RelayKeyHashTaken(ctx, gen.RelayKeyHashTakenParams{
+		KeyHash:   k.Spec.KeyHash,
+		KeyHash_2: k.Spec.PreviousKeyHash,
+		ID:        k.Meta.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("key.Rotate: %w", err)
+	}
+	if taken {
+		return ErrHashInUse
+	}
+	n, err := s.q.RotateRelayKey(ctx, gen.RotateRelayKeyParams{
+		ID:              params.ID,
+		KeyHash:         params.KeyHash,
+		PreviousKeyHash: params.PreviousKeyHash,
+		Metadata:        params.Metadata,
+		Spec:            params.Spec,
+		KeyHash_2:       prevHash,
+		UpdatedAt:       pgtype.Timestamptz{Time: seen, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("key.Rotate: %w", err)
+	}
+	if n == 0 {
+		return ErrRotationRaced
+	}
+	return nil
+}
+
+// Get returns the Key with the given id, or (nil, nil) if not found.
+func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
+	r, err := s.q.GetRelayKey(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("key.Get: %w", err)
+	}
+	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID)
+	return &Key{Meta: md, Spec: spec}, nil
+}
+
+// Delete removes a Key by id.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	return s.q.DeleteRelayKey(ctx, id)
+}
+
+func fromRow(r gen.ListRelayKeysRow) (*Key, error) {
+	md, err := meta.UnmarshalJSONB(r.ID, r.Name, r.DisplayName, r.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	md.CreatedAt = r.CreatedAt.Time
+	md.UpdatedAt = r.UpdatedAt.Time
+	var spec Spec
+	if err := json.Unmarshal(r.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	applyColumns(&spec, r.PreviousKeyHash, r.PrincipalSaID, r.PrincipalUserID)
+	return &Key{Meta: md, Spec: spec}, nil
+}
+
+// applyColumns overwrites the spec's principal + previous hash from the
+// relational columns, which the migration backfilled and every write keeps
+// in step.
+func applyColumns(spec *Spec, prevHash, saID, userID pgtype.Text) {
+	spec.PreviousKeyHash = prevHash.String
+	switch {
+	case saID.Valid:
+		spec.Principal = Principal{Kind: PrincipalServiceAccount, ID: saID.String}
+	case userID.Valid:
+		spec.Principal = Principal{Kind: PrincipalUser, ID: userID.String}
+	}
+}
+
+func toUpsertParams(k *Key) (gen.UpsertRelayKeyParams, error) {
+	metaJSON, err := meta.MarshalJSONB(k.Meta)
+	if err != nil {
+		return gen.UpsertRelayKeyParams{}, fmt.Errorf("metadata: %w", err)
+	}
+	// Relational fields live in columns; keep them out of the spec JSONB so
+	// there is one source of truth per field (applyColumns reads them back).
+	stored := k.Spec
+	stored.Principal = Principal{}
+	stored.PreviousKeyHash = ""
+	specJSON, err := json.Marshal(stored)
+	if err != nil {
+		return gen.UpsertRelayKeyParams{}, fmt.Errorf("spec: %w", err)
+	}
+	params := gen.UpsertRelayKeyParams{
+		ID:          k.Meta.ID,
+		Name:        k.Meta.Name,
+		DisplayName: k.Meta.DisplayName,
+		KeyHash:     k.Spec.KeyHash,
+		Metadata:    metaJSON,
+		Spec:        specJSON,
+	}
+	if k.Spec.PreviousKeyHash != "" {
+		params.PreviousKeyHash = pgtype.Text{String: k.Spec.PreviousKeyHash, Valid: true}
+	}
+	switch k.Spec.Principal.Kind {
+	case PrincipalServiceAccount:
+		params.PrincipalSaID = pgtype.Text{String: k.Spec.Principal.ID, Valid: true}
+	case PrincipalUser:
+		params.PrincipalUserID = pgtype.Text{String: k.Spec.Principal.ID, Valid: true}
+	}
+	return params, nil
+}

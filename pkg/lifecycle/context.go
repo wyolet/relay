@@ -76,6 +76,21 @@ type Context struct {
 	// request time — same denormalization rationale as the slugs above.
 	ProviderName string
 
+	// Tenancy + principal attribution, copied at the inference entry from
+	// the resolved Principal and the project/team/service-account rows the
+	// snapshot already holds. Names are event-time slugs (same
+	// denormalization rationale as PolicyName/ModelName/HostName above);
+	// nothing here is re-resolved post-flight.
+	ProjectID      string
+	ProjectName    string
+	TeamID         string
+	TeamName       string
+	PrincipalKind  string // "user" | "serviceaccount"
+	PrincipalID    string
+	PrincipalName  string
+	CredentialKind string // "key" | "token"
+	CredentialID   string
+
 	// PricingID / PricingName identify the rate sheet billing this request,
 	// stamped at plan-fill from what routing already resolved. The post-
 	// flight usage observer prices the token counts against PricingID; the

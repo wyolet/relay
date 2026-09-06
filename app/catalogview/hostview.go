@@ -63,7 +63,7 @@ func (s *Service) HostKeyList(ctx context.Context, ref string) (HostRef, []HostK
 		if k.Spec.HostID != h.Meta.ID {
 			continue
 		}
-		if !s.visible("host-key", k.Meta.Owner) {
+		if !s.visible("host-key", k.Meta.ID, k.Meta.Owner) {
 			continue
 		}
 		rows = append(rows, HostKeyView{

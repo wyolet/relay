@@ -14,13 +14,14 @@
 //
 // Refs that resolve to nothing enabled are rejected with 400. This is the
 // cross-entity check the per-row policy.Validate() (grammar only, no catalog
-// access) can't perform. Host-key / relay-key existence is deliberately NOT
+// access) can't perform. Host-key / key existence is deliberately NOT
 // checked here — the inference path handles those at request time.
 package control
 
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -29,12 +30,23 @@ import (
 )
 
 func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
-	return func(ctx context.Context, action string, _, incoming *policy.Policy) error {
-		if action == "delete" || incoming == nil {
+	return func(ctx context.Context, action string, existing, incoming *policy.Policy) error {
+		if action == "delete" {
+			return guardPolicyDeleteTier(ctx, d, existing)
+		}
+		if incoming == nil {
 			return nil
 		}
-		if err := checkHostKeyRefsVisible(ctx, d, incoming.Spec.HostKeyIDs); err != nil {
+		if err := checkHostKeyRefsVisible(ctx, d, incoming.Spec.HostKeyIDs, incoming.Meta.Owner); err != nil {
 			return err
+		}
+		if err := checkRateLimitRefVisible(ctx, d, incoming.Spec.RateLimitID, incoming.Meta.Owner); err != nil {
+			return err
+		}
+		for _, b := range incoming.Spec.RLBindings {
+			if err := checkRateLimitRefVisible(ctx, d, b.RateLimitID, incoming.Meta.Owner); err != nil {
+				return err
+			}
 		}
 		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {
 			return nil
@@ -63,52 +75,47 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 	}
 }
 
-// normalizePolicyRefs slugifies each ref to canonical form, drops post-slug
-// duplicates, and rejects any ref that doesn't resolve to an enabled binding.
-func normalizePolicyRefs(idx *resolveIndex, refs []string, polName, field string) ([]string, error) {
-	if len(refs) == 0 {
-		return refs, nil
+// guardPolicyDeleteTier refuses to delete a policy that host keys use as
+// their tier policy: the delete cascade would clear their spec.policyId and
+// leave every one of them invalid, failing its next write and vanishing from
+// the snapshot. Refusing names the rows the operator has to reattach first.
+func guardPolicyDeleteTier(ctx context.Context, d Deps, existing *policy.Policy) error {
+	if existing == nil || d.Stores == nil || d.Stores.HostKey == nil {
+		return nil
 	}
-	out := make([]string, 0, len(refs))
-	seen := make(map[string]struct{}, len(refs))
-	for _, raw := range refs {
-		ref, err := modelref.Parse(raw)
+	names, err := policy.HostKeysUsingPolicy(ctx, detachStores(d), existing.Meta.ID)
+	if err != nil {
+		return huma.Error500InternalServerError(err.Error())
+	}
+	if len(names) > 0 {
+		return huma.Error409Conflict(fmt.Sprintf(
+			"policy %q is the tier policy of host key(s) %s: reattach them before deleting it",
+			existing.Meta.Name, strings.Join(names, ", ")))
+	}
+	return nil
+}
+
+// normalizePolicyRefs canonicalises each ref exactly as apply does (one
+// shared function, or a document and an API write of the same grant would
+// store different strings) and rejects any that doesn't resolve to an
+// enabled binding — the catalog check apply cannot make.
+func normalizePolicyRefs(idx *resolveIndex, refs []string, polName, field string) ([]string, error) {
+	canonical, err := policy.CanonicalizeModelRefs(refs)
+	if err != nil {
+		return nil, huma.Error400BadRequest(fmt.Sprintf("policy %q: %s: %v", polName, field, err))
+	}
+	for _, c := range canonical {
+		ref, err := modelref.Parse(c)
 		if err != nil {
 			return nil, huma.Error400BadRequest(fmt.Sprintf("policy %q: %s: %v", polName, field, err))
 		}
-		canonical := canonicalRef(ref)
-		if _, dup := seen[canonical]; dup {
-			continue
-		}
-		seen[canonical] = struct{}{}
 		if !refResolvesEnabled(idx, ref) {
 			return nil, huma.Error400BadRequest(fmt.Sprintf(
 				"policy %q: %s ref %q matches no enabled model or host in the catalog",
-				polName, field, canonical))
+				polName, field, c))
 		}
-		out = append(out, canonical)
 	}
-	return out, nil
-}
-
-// canonicalRef renders a parsed Ref back to its shortest slug form. The Ref's
-// segments are already slug-normalized by modelref.Parse.
-func canonicalRef(r modelref.Ref) string {
-	prov, mdl, hst := "", "", ""
-	if !r.ProviderWildcard {
-		prov = r.Provider
-	}
-	if !r.ModelWildcard {
-		mdl = r.Model
-	}
-	if !r.HostWildcard {
-		hst = r.Host
-	}
-	s, err := modelref.Format(prov, mdl, hst)
-	if err != nil {
-		return r.Raw
-	}
-	return s
+	return canonical, nil
 }
 
 // refResolvesEnabled reports whether ref matches at least one binding whose

@@ -63,11 +63,13 @@ Common flags:
 
 Filter flags (shared):
   --relay_key_hash, --policy_id, --model_id, --host_id
+  --project_id, --team_id, --principal_id
   --source (pipeline|proxy|ws|batch)
   --status_min, --status_max
 
 summary-only:
   --by FIELD         source (default) | model_id | host_id | policy_id | relay_key_hash | host_key_id
+                     | project | team | principal | project_id | team_id | principal_id | credential_id
 
 events-only:
   --limit N          cap on rows returned (default 100, max 10000)`)
@@ -124,16 +126,19 @@ func runSummary(args []string) {
 // --- shared flag plumbing ---
 
 type commonFlags struct {
-	url, token *string
-	since      *string
-	jsonOut    *bool
-	keyHash    *string
-	policyID   *string
-	modelID    *string
-	hostID     *string
-	source     *string
-	statusMin  *int
-	statusMax  *int
+	url, token  *string
+	since       *string
+	jsonOut     *bool
+	keyHash     *string
+	policyID    *string
+	modelID     *string
+	hostID      *string
+	projectID   *string
+	teamID      *string
+	principalID *string
+	source      *string
+	statusMin   *int
+	statusMax   *int
 }
 
 func registerCommon(fs *flag.FlagSet) commonFlags {
@@ -142,17 +147,20 @@ func registerCommon(fs *flag.FlagSet) commonFlags {
 		defUrl = "http://127.0.0.1:8090"
 	}
 	c := commonFlags{
-		url:       fs.String("url", defUrl, ""),
-		token:     fs.String("token", os.Getenv("RELAY_ADMIN_TOKEN"), ""),
-		since:     fs.String("since", "1h", ""),
-		jsonOut:   fs.Bool("json", false, ""),
-		keyHash:   fs.String("relay_key_hash", "", ""),
-		policyID:  fs.String("policy_id", "", ""),
-		modelID:   fs.String("model_id", "", ""),
-		hostID:    fs.String("host_id", "", ""),
-		source:    fs.String("source", "", ""),
-		statusMin: fs.Int("status_min", 0, ""),
-		statusMax: fs.Int("status_max", 0, ""),
+		url:         fs.String("url", defUrl, ""),
+		token:       fs.String("token", os.Getenv("RELAY_ADMIN_TOKEN"), ""),
+		since:       fs.String("since", "1h", ""),
+		jsonOut:     fs.Bool("json", false, ""),
+		keyHash:     fs.String("relay_key_hash", "", ""),
+		policyID:    fs.String("policy_id", "", ""),
+		modelID:     fs.String("model_id", "", ""),
+		hostID:      fs.String("host_id", "", ""),
+		projectID:   fs.String("project_id", "", ""),
+		teamID:      fs.String("team_id", "", ""),
+		principalID: fs.String("principal_id", "", ""),
+		source:      fs.String("source", "", ""),
+		statusMin:   fs.Int("status_min", 0, ""),
+		statusMax:   fs.Int("status_max", 0, ""),
 	}
 	return c
 }
@@ -169,6 +177,9 @@ func (c commonFlags) query() url.Values {
 	addIfNonEmpty("policy_id", *c.policyID)
 	addIfNonEmpty("model_id", *c.modelID)
 	addIfNonEmpty("host_id", *c.hostID)
+	addIfNonEmpty("project_id", *c.projectID)
+	addIfNonEmpty("team_id", *c.teamID)
+	addIfNonEmpty("principal_id", *c.principalID)
 	addIfNonEmpty("source", *c.source)
 	if *c.statusMin > 0 {
 		v.Set("status_min", fmt.Sprintf("%d", *c.statusMin))

@@ -189,18 +189,43 @@ DELETE FROM models WHERE id = $1;
 DELETE FROM rate_limits WHERE id = $1;
 
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name;
 
 -- name: UpsertRelayKey :exec
-INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     display_name = EXCLUDED.display_name,
-    key_hash   = EXCLUDED.key_hash,
+    key_hash          = EXCLUDED.key_hash,
+    previous_key_hash = EXCLUDED.previous_key_hash,
+    principal_sa_id   = EXCLUDED.principal_sa_id,
+    principal_user_id = EXCLUDED.principal_user_id,
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
     updated_at = NOW();
+
+-- name: RelayKeyHashTaken :one
+-- Either hash of another row shadows this one on the hash index, so both
+-- columns are checked against both of the row's hashes.
+SELECT EXISTS (
+    SELECT 1 FROM relay_keys
+     WHERE (key_hash = $1 OR previous_key_hash = $1
+         OR key_hash = $2 OR previous_key_hash = $2)
+       AND id <> $3
+);
+
+-- name: RotateRelayKey :execrows
+-- Conditional on the hash AND the row version the caller read, so neither a
+-- concurrent rotation nor a concurrent update is overwritten by a rotation
+-- computed against the older row.
+UPDATE relay_keys
+   SET key_hash          = $2,
+       previous_key_hash = $3,
+       metadata          = $4,
+       spec              = $5,
+       updated_at        = NOW()
+ WHERE id = $1 AND key_hash = $6 AND updated_at = $7;
 
 -- name: DeleteRelayKey :exec
 DELETE FROM relay_keys WHERE id = $1;
@@ -324,7 +349,7 @@ UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1;
 
 -- name: GetPolicyModels :many
 SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
@@ -355,15 +380,18 @@ DELETE FROM settings WHERE section = $1;
 -- ===== batches =====
 
 -- name: CreateBatch :exec
-INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO batches (id, relay_key_hash, policy_id, inbound_shape, status, total_items,
+                     project_id, team_id, principal_kind, principal_id, credential_kind, credential_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
 
 -- name: GetBatch :one
-SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
+SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
+       project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
 FROM batches WHERE id = $1;
 
 -- name: ListBatchesByRelayKey :many
-SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at
+SELECT id, relay_key_hash, policy_id, inbound_shape, status, total_items, created_at, completed_at,
+       project_id, team_id, principal_kind, principal_id, credential_kind, credential_id
 FROM batches WHERE relay_key_hash = $1 ORDER BY created_at DESC;
 
 -- name: SetBatchStatus :exec
@@ -406,6 +434,10 @@ SELECT * FROM users WHERE oidc_subject = $1;
 -- name: ListUsers :many
 SELECT * FROM users ORDER BY created_at ASC;
 
+-- name: ListUserIDsIn :many
+-- Membership check for a whole id list in one round trip.
+SELECT id FROM users WHERE id = ANY($1::text[]);
+
 -- name: UpsertUser :exec
 INSERT INTO users (id, username, email, password_hash, oidc_subject, roles, disabled)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -421,5 +453,241 @@ ON CONFLICT (id) DO UPDATE SET
 -- name: DeleteUser :exec
 DELETE FROM users WHERE id = $1;
 
+-- name: ListUserTokenVersions :many
+-- Disabled accounts are omitted: a missing id fails the version check on
+-- the data plane, so disabling a user stops their tokens.
+SELECT id, token_version FROM users WHERE NOT disabled;
+
+-- name: BumpUserTokenVersion :exec
+UPDATE users SET token_version = token_version + 1, updated_at = now() WHERE id = $1;
+
 -- name: UpdateSecretStatus :exec
 UPDATE secrets SET status = $2 WHERE id = $1;
+
+-- ── teams + projects (migration 0025) ────────────────────────────────────────
+
+-- name: ListTeams :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams ORDER BY name;
+
+-- name: GetTeam :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams WHERE id = $1;
+
+-- name: UpsertTeam :exec
+INSERT INTO teams (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteTeam :exec
+DELETE FROM teams WHERE id = $1;
+
+-- name: ListProjects :many
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects ORDER BY name;
+
+-- name: GetProject :one
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects WHERE id = $1;
+
+-- name: UpsertProject :exec
+INSERT INTO projects (id, name, display_name, team_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    team_id      = EXCLUDED.team_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteProject :exec
+DELETE FROM projects WHERE id = $1;
+
+-- ── audit events (migration 0028) ────────────────────────────────────────────
+
+-- name: InsertAuditEvent :copyfrom
+INSERT INTO audit_events (
+    id, ts, actor_kind, actor_id, actor_name, session_id, ip,
+    action, resource_kind, resource_id, resource_name, owner_kind, owner_id,
+    scope, status, code, request_id, method, path, changed_fields
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+);
+
+-- name: ListAuditEvents :many
+SELECT id, ts, actor_kind, actor_id, actor_name, session_id, ip,
+       action, resource_kind, resource_id, resource_name, owner_kind, owner_id,
+       scope, status, code, request_id, method, path, changed_fields
+FROM audit_events
+WHERE (sqlc.narg('actor_id')::text IS NULL OR actor_id = sqlc.narg('actor_id')::text)
+  AND (sqlc.narg('actor_name')::text IS NULL OR actor_name = sqlc.narg('actor_name')::text)
+  AND (cardinality(@actions::text[]) = 0 OR action = ANY(@actions::text[]))
+  AND (cardinality(@resource_kinds::text[]) = 0 OR resource_kind = ANY(@resource_kinds::text[]))
+  AND (sqlc.narg('resource_id')::text IS NULL OR resource_id = sqlc.narg('resource_id')::text)
+  AND (cardinality(@scopes::text[]) = 0 OR scope && @scopes::text[])
+  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
+  AND (sqlc.narg('from_ts')::timestamptz IS NULL OR ts >= sqlc.narg('from_ts')::timestamptz)
+  AND (sqlc.narg('to_ts')::timestamptz IS NULL OR ts <= sqlc.narg('to_ts')::timestamptz)
+  AND (sqlc.narg('cursor_ts')::timestamptz IS NULL
+       OR (ts, id) < (sqlc.narg('cursor_ts')::timestamptz, @cursor_id::text))
+ORDER BY ts DESC, id DESC
+LIMIT @row_limit;
+
+-- name: PruneAuditEvents :execrows
+DELETE FROM audit_events WHERE ts < $1;
+-- ── service accounts + groups (migration 0026) ───────────────────────────────
+
+-- name: ListServiceAccounts :many
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts ORDER BY name;
+
+-- name: GetServiceAccount :one
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts WHERE id = $1;
+
+-- name: UpsertServiceAccount :exec
+INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    project_id   = EXCLUDED.project_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteServiceAccount :exec
+DELETE FROM service_accounts WHERE id = $1;
+
+-- name: ListGroups :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups ORDER BY name;
+
+-- name: GetGroup :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups WHERE id = $1;
+
+-- name: UpsertGroup :exec
+INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteGroup :exec
+DELETE FROM groups WHERE id = $1;
+
+-- name: ListGroupMembers :many
+SELECT group_id, user_id, position FROM group_members ORDER BY group_id, position;
+
+-- name: GetGroupMembers :many
+SELECT group_id, user_id, position FROM group_members WHERE group_id = $1 ORDER BY position;
+
+-- name: DeleteGroupMembers :exec
+DELETE FROM group_members WHERE group_id = $1;
+
+-- name: InsertGroupMember :exec
+INSERT INTO group_members (group_id, user_id, position) VALUES ($1, $2, $3)
+ON CONFLICT (group_id, user_id) DO UPDATE SET position = EXCLUDED.position;
+
+-- ── roles + bindings (migration 0027) ────────────────────────────────────────
+
+-- name: ListRoles :many
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles ORDER BY name;
+
+-- name: GetRole :one
+SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles WHERE id = $1;
+
+-- name: UpsertRole :exec
+INSERT INTO roles (id, name, display_name, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteRole :exec
+DELETE FROM roles WHERE id = $1;
+
+-- name: ListRoleBindings :many
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+FROM role_bindings ORDER BY name;
+
+-- name: GetRoleBinding :one
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+FROM role_bindings WHERE id = $1;
+
+-- name: UpsertRoleBinding :exec
+INSERT INTO role_bindings (id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    role_id      = EXCLUDED.role_id,
+    scope_kind   = EXCLUDED.scope_kind,
+    scope_id     = EXCLUDED.scope_id,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeleteRoleBinding :exec
+DELETE FROM role_bindings WHERE id = $1;
+
+-- name: ListRoleBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM role_binding_subjects ORDER BY binding_id, position;
+
+-- name: GetRoleBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM role_binding_subjects WHERE binding_id = $1 ORDER BY position;
+
+-- name: DeleteRoleBindingSubjects :exec
+DELETE FROM role_binding_subjects WHERE binding_id = $1;
+
+-- name: InsertRoleBindingSubject :exec
+INSERT INTO role_binding_subjects
+    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListPolicyBindings :many
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+FROM policy_bindings ORDER BY name;
+
+-- name: GetPolicyBinding :one
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+FROM policy_bindings WHERE id = $1;
+
+-- name: UpsertPolicyBinding :exec
+INSERT INTO policy_bindings (id, name, display_name, project_id, policy_id, priority, metadata, spec, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name         = EXCLUDED.name,
+    display_name = EXCLUDED.display_name,
+    project_id   = EXCLUDED.project_id,
+    policy_id    = EXCLUDED.policy_id,
+    priority     = EXCLUDED.priority,
+    metadata     = EXCLUDED.metadata,
+    spec         = EXCLUDED.spec,
+    updated_at   = NOW();
+
+-- name: DeletePolicyBinding :exec
+DELETE FROM policy_bindings WHERE id = $1;
+
+-- name: ListPolicyBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM policy_binding_subjects ORDER BY binding_id, position;
+
+-- name: GetPolicyBindingSubjects :many
+SELECT binding_id, kind, subject_id, subject_name, position
+FROM policy_binding_subjects WHERE binding_id = $1 ORDER BY position;
+
+-- name: DeletePolicyBindingSubjects :exec
+DELETE FROM policy_binding_subjects WHERE binding_id = $1;
+
+-- name: InsertPolicyBindingSubject :exec
+INSERT INTO policy_binding_subjects
+    (binding_id, kind, subject_id, subject_name, subject_user_id, subject_sa_id, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7);

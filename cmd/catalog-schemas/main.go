@@ -59,7 +59,16 @@ var kinds = []kind{
 	{Name: "Policy", Type: reflect.TypeOf(manifest.PolicyDTO{})},
 	{Name: "RateLimit", Type: reflect.TypeOf(manifest.RateLimitDTO{})},
 	{Name: "Pricing", Type: reflect.TypeOf(manifest.PricingDTO{})},
-	{Name: "RelayKey", Type: reflect.TypeOf(manifest.RelayKeyDTO{})},
+	{Name: "HostBinding", Type: reflect.TypeOf(manifest.HostBindingDTO{})},
+	{Name: "Key", Type: reflect.TypeOf(manifest.KeyDTO{})},
+	{Name: "Team", Type: reflect.TypeOf(manifest.TeamDTO{})},
+	{Name: "Project", Type: reflect.TypeOf(manifest.ProjectDTO{})},
+	{Name: "ServiceAccount", Type: reflect.TypeOf(manifest.ServiceAccountDTO{})},
+	{Name: "Group", Type: reflect.TypeOf(manifest.GroupDTO{})},
+	{Name: "Role", Type: reflect.TypeOf(manifest.RoleDTO{})},
+	{Name: "RoleBinding", Type: reflect.TypeOf(manifest.RoleBindingDTO{})},
+	{Name: "PolicyBinding", Type: reflect.TypeOf(manifest.PolicyBindingDTO{})},
+	{Name: "Overlay", Type: reflect.TypeOf(manifest.OverlayDTO{})},
 }
 
 func main() {

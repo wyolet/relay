@@ -10,7 +10,6 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/routing"
-	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
@@ -39,9 +38,9 @@ type modelsOutput struct {
 // routing.PolicyAllows. Covers literal ModelIDs grants, modelref
 // Spec.Models grants, and the implicit-wildcard case (both fields empty).
 //
-// Policy-less key (Spec.PolicyID empty + settings.Inference.
-// AllowMissingPolicy on): returns every enabled model that has at least
-// one enabled host binding to a host the relay has hostkeys for.
+// Policy-less key (Spec.PolicyID empty): refused unless the resolver's own
+// gate opens the flow, then asks routing.PolicylessAllows — so the listing
+// and the flow that would serve the request read one definition of the pool.
 func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
 	registerModelsAt(api, d, mw, "/v1/models", "")
 	registerModelsAt(api, d, mw, "/openai/v1/models", adapters.OpenAI)
@@ -71,23 +70,24 @@ func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, ad
 }
 
 func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*modelsOutput, error) {
-	rk := RelayKeyFromContext(ctx)
-	if rk == nil {
+	principal := PrincipalFrom(ctx)
+	if principal == nil {
 		return nil, huma.Error401Unauthorized("missing relay key")
 	}
-	snap := d.Catalog.Current()
+	snap := SnapshotFrom(ctx)
+	if snap == nil {
+		snap = d.Catalog.Current()
+	}
 	out := &modelsOutput{}
 	out.Body.Object = "list"
 
-	if rk.Spec.PolicyID == "" {
-		v, _ := d.Catalog.Setting(settings.SectionInference)
-		cfg, _ := v.(*settings.Inference)
-		if cfg == nil || !cfg.AllowMissingPolicy {
+	if principal.Policy == nil {
+		if !d.Resolver.PolicylessTrafficAllowed() {
 			return nil, huma.Error403Forbidden("policy-less traffic is disabled on this relay")
 		}
 		seen := map[string]struct{}{}
 		for _, m := range snap.AllModels() {
-			if !modelHasReachableBinding(snap, m, adapterFilter) {
+			if !routing.PolicylessAllows(snap, m, adapterFilter, principal.UserID) {
 				continue
 			}
 			appendModelRows(&out.Body.Data, snap, m, seen)
@@ -95,10 +95,7 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 		return out, nil
 	}
 
-	pol, ok := snap.Policy(rk.Spec.PolicyID)
-	if !ok {
-		return nil, huma.Error500InternalServerError("policy not found for relay key")
-	}
+	pol := principal.Policy
 	seen := map[string]struct{}{}
 	for _, m := range snap.AllModels() {
 		if !routing.PolicyAllows(snap, pol, m) {
@@ -148,25 +145,6 @@ func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
 		return fallback
 	}
 	return t.UTC().Unix()
-}
-
-// modelHasReachableBinding returns true iff the model has at least one
-// enabled host binding to a host with credentials, optionally restricted
-// to a specific adapter kind.
-func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Name) bool {
-	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if !hb.IsEnabled() {
-			continue
-		}
-		if adapterFilter != "" && hb.Spec.Adapter != adapterFilter {
-			continue
-		}
-		if len(snap.HostKeysForHost(hb.Spec.HostID)) == 0 {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 // modelHasAdapter returns true iff the model has at least one enabled

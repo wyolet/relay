@@ -7,9 +7,9 @@
 //  1. Model: caller supplies a snapshot name (from the request body's
 //     `model` field); look it up via snapshot.SnapshotByName. The owning
 //     Model + the picked Snapshot are carried into the Plan.
-//  2. Policy: comes from the authenticated RelayKey's PolicyID. (No
-//     "default route" indirection in the new arch — RelayKey → Policy
-//     is direct. Anonymous traffic is served by a separate package.)
+//  2. Policy: supplied by the caller, already resolved from the
+//     credential's principal at the edge. (No "default route"
+//     indirection; anonymous traffic is served by a separate package.)
 //  3. Authorization: model must be allowed by the Policy. Allowed if
 //     its id is in Spec.ModelIDs, OR Spec.Models (modelref DSL) matches,
 //     OR — when both grant fields are empty — the policy is an implicit
@@ -30,17 +30,16 @@ package routing
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -58,7 +57,7 @@ var (
 	ErrHostNotFound     = errors.New("routing: host not found")
 	ErrNoKeys           = errors.New("routing: no host keys available for this host")
 
-	// ErrPolicyless is returned when a RelayKey has no PolicyID and the
+	// ErrPolicyless is returned when a Key has no PolicyID and the
 	// inference settings forbid policy-less traffic.
 	ErrPolicyless = errors.New("routing: relay key has no policy and policy-less traffic is disabled")
 )
@@ -75,9 +74,19 @@ type Request struct {
 	// wildcard alias. Falls back to ModelName when empty.
 	RawModelName string
 
-	// RelayKey is the authenticated key (already validated for auth).
-	// Its Spec.PolicyID drives policy selection.
-	RelayKey *relaykey.RelayKey
+	// Policy is the caller's resolved inbound policy (the middleware walks
+	// key → service account → policy binding). Nil selects the policy-less
+	// flow, which only a project-less personal key can reach.
+	Policy *policy.Policy
+
+	// UserID is the calling user, from the credential's principal. It scopes
+	// the policy-less pool to that user's own host keys; empty (no user
+	// resolved) narrows the pool to system-owned keys.
+	UserID string
+
+	// PayloadLoggingEnabled is the caller's own opt-in for body capture;
+	// the matched Policy's flag is OR'd onto it.
+	PayloadLoggingEnabled bool
 
 	// SkipKeyCheck, when true, suppresses the Policy.HostKeyIDs → host
 	// coverage gate. Used by proxy mode: the caller brings their own
@@ -85,6 +94,11 @@ type Request struct {
 	// the (model, binding, host) tuple matters. Plan.Keys is nil in
 	// this mode.
 	SkipKeyCheck bool
+
+	// Snapshot pins the catalog view this resolution reads. Nil takes the
+	// live one; handlers pass the snapshot the auth middleware already
+	// resolved against, so one request never straddles two of them.
+	Snapshot *appcatalog.Snapshot
 }
 
 // Plan is the fully-resolved input the pipeline consumes. The handler
@@ -108,7 +122,7 @@ type Plan struct {
 	Pricing *pricing.Pricing
 
 	// PayloadLoggingEnabled is the resolved opt-in for full request/response
-	// body capture: true when the matched Policy or the inbound RelayKey
+	// body capture: true when the matched Policy or the inbound Key
 	// sets PayloadLoggingEnabled. Read by the inference entry to flag the
 	// lifecycle Context so the payloadlog observer captures bodies.
 	PayloadLoggingEnabled bool
@@ -136,23 +150,49 @@ func (p *Plan) UpstreamModel() string {
 	return p.Snapshot.Upstream()
 }
 
+// settingsReader is the narrow settings read the policy-less gate needs;
+// *appcatalog.Catalog satisfies it.
+type settingsReader interface {
+	Setting(section string) (any, bool)
+}
+
 // Resolver wraps a Catalog snapshot accessor and answers Resolve calls.
 type Resolver struct {
 	cat *appcatalog.Catalog
+	cfg settingsReader
+
+	// requirePolicy refuses the policy-less flow outright, whatever the
+	// inference setting says. See RequirePolicy.
+	requirePolicy bool
 }
+
+// Option configures a Resolver at composition time.
+type Option func(*Resolver)
+
+// RequirePolicy refuses policy-less traffic whatever
+// settings.Inference.AllowMissingPolicy says. RBAC authorization wires it:
+// there a credential's grants are the whole access model, so a key whose
+// policy does not resolve has no access rather than the shared pool's (D82).
+func RequirePolicy() Option { return func(r *Resolver) { r.requirePolicy = true } }
 
 // New constructs a Resolver against the live catalog. The Resolver
 // reads cat.Current() on every Resolve — picking up the latest snapshot
 // after any NOTIFY-driven reload.
-func New(cat *appcatalog.Catalog) *Resolver { return &Resolver{cat: cat} }
+func New(cat *appcatalog.Catalog, opts ...Option) *Resolver {
+	r := &Resolver{cat: cat, cfg: cat}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
 
 // Resolve maps the inbound request to a Plan. Errors are typed; handlers
 // pick the appropriate HTTP status.
 func (r *Resolver) Resolve(req Request) (*Plan, error) {
-	if req.RelayKey == nil {
-		return nil, fmt.Errorf("routing.Resolve: relay key is required (anonymous mode is served by a separate package)")
+	snap := req.Snapshot
+	if snap == nil {
+		snap = r.cat.Current()
 	}
-	snap := r.cat.Current()
 
 	// 1. Snapshot lookup — customer-facing addressing is purely by
 	//    snapshot name (with declared aliases as last-priority matchers).
@@ -161,26 +201,23 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
-	// Policy-less flow: when the RelayKey has no attached Policy, the
-	// behavior is decided by settings.Inference.AllowMissingPolicy. When
-	// allowed, the request bypasses the policy-grant + policy-RL paths
-	// and just needs a (model, host) triple the relay has a hostkey for.
-	if req.RelayKey.Spec.PolicyID == "" {
+	// Policy-less flow: when the caller resolved no Policy, the behavior is
+	// decided by settings.Inference.AllowMissingPolicy. When allowed, the
+	// request bypasses the policy-grant + policy-RL paths and just needs a
+	// (model, host) triple the relay has a hostkey for.
+	if req.Policy == nil {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
 		}
-		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID)
+		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID, req.UserID)
 		if err == nil && plan != nil {
-			plan.PayloadLoggingEnabled = req.RelayKey.Spec.PayloadLoggingEnabled
+			plan.PayloadLoggingEnabled = req.PayloadLoggingEnabled
 			applyAlias(plan, alias, req)
 		}
 		return plan, err
 	}
 
-	pol, ok := snap.Policy(req.RelayKey.Spec.PolicyID)
-	if !ok {
-		return nil, ErrPolicyNotFound
-	}
+	pol := req.Policy
 	if !pol.IsEnabled() {
 		return nil, ErrPolicyDisabled
 	}
@@ -200,8 +237,10 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		chosen        *model.Model
 		chosenBnd     *binding.Binding
 		chosenHost    *host.Host
+		chosenKeys    []*hostkey.HostKey
 		anyEnabledMod bool
 		anyEnabledBnd bool
+		anyAllowed    bool // an allowed candidate existed but had no usable key
 	)
 	// A Policy with neither ModelIDs nor Models set is an *implicit
 	// wildcard*: it grants every model reachable through the policy's
@@ -246,6 +285,20 @@ candidates:
 			if !allowed {
 				continue
 			}
+			anyAllowed = true
+			// Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID. A
+			// candidate the policy allows but has no usable key for is not the
+			// answer: keep walking, since a later binding of the same model may
+			// reach a host the policy does hold a key for. Proxy mode
+			// (SkipKeyCheck) bypasses the gate; the caller's own upstream
+			// credentials replace the keypool.
+			if !req.SkipKeyCheck {
+				keys := candidateKeys(snap, pol, m, h)
+				if len(keys) == 0 {
+					continue
+				}
+				chosenKeys = keys
+			}
 			chosen = m
 			chosenBnd = hb
 			chosenHost = h
@@ -259,46 +312,27 @@ candidates:
 		if !anyEnabledBnd {
 			return nil, ErrNoHostBinding
 		}
+		if anyAllowed {
+			return nil, ErrNoKeys
+		}
 		return nil, ErrModelNotInPolicy
 	}
 	h := chosenHost
-
-	// 6. Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID.
-	// Proxy mode (SkipKeyCheck) bypasses this gate; the caller's own
-	// upstream credentials replace the keypool.
-	var keys []*hostkey.HostKey
-	if !req.SkipKeyCheck {
-		if h.Spec.NoAuth {
-			// Keyless upstream (e.g. self-hosted Ollama): inject the synthetic
-			// anonymous key so the keypool path is unchanged (one candidate,
-			// host-scoped breaker), but no real HostKey is required and no auth
-			// header is sent. Bypasses the tier gate — the anon key has no tier.
-			keys = []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
-		} else {
-			keys = hostKeysForHost(snap, pol, h.Meta.ID)
-			// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
-			// (model, host). An implicit-wildcard tier policy allows everything.
-			keys = tierAllowedKeys(snap, keys, chosen.Meta.ID, h.Meta.ID)
-			if len(keys) == 0 {
-				return nil, ErrNoKeys
-			}
-		}
-	}
+	keys := chosenKeys
 
 	providerSlug, _ := snap.ProviderSlug(chosen.Meta.Owner.ID)
 	pr, _ := snap.PricingForBinding(chosenBnd)
 
 	plan := &Plan{
-		Model:       chosen,
-		Snapshot:    snapMatch,
-		Policy:      pol,
-		HostBinding: chosenBnd,
-		Host:        h,
-		Provider:    providerSlug,
-		Keys:        keys,
-		Pricing:     pr,
-		PayloadLoggingEnabled: (pol != nil && pol.Spec.PayloadLoggingEnabled) ||
-			req.RelayKey.Spec.PayloadLoggingEnabled,
+		Model:                 chosen,
+		Snapshot:              snapMatch,
+		Policy:                pol,
+		HostBinding:           chosenBnd,
+		Host:                  h,
+		Provider:              providerSlug,
+		Keys:                  keys,
+		Pricing:               pr,
+		PayloadLoggingEnabled: pol.Spec.PayloadLoggingEnabled || req.PayloadLoggingEnabled,
 	}
 	applyAlias(plan, alias, req)
 	return plan, nil
@@ -350,6 +384,20 @@ func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model
 	return nil, nil, "", nil
 }
 
+// candidateKeys returns the keys this policy may spend against h for m, or
+// nil when the pair is unreachable. A keyless upstream (e.g. self-hosted
+// Ollama) gets the synthetic anonymous key so the keypool path is unchanged
+// (one candidate, host-scoped breaker) with no real HostKey and no auth
+// header; it bypasses the tier gate, having no tier.
+func candidateKeys(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, h *host.Host) []*hostkey.HostKey {
+	if h.Spec.NoAuth {
+		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
+	}
+	// Tier gate: drop keys whose own (host-owned) policy doesn't grant this
+	// (model, host). An implicit-wildcard tier policy allows everything.
+	return tierAllowedKeys(snap, hostKeysForHost(snap, pol, h.Meta.ID), m.Meta.ID, h.Meta.ID)
+}
+
 // tierAllowedKeys drops keys whose host-owned tier policy doesn't grant the
 // (model, host) combination. A key's tier policy (hostkey.Spec.PolicyID)
 // defines what that key may serve; an implicit-wildcard tier policy permits
@@ -379,10 +427,25 @@ func isDeprecated(m *model.Model) bool {
 	return false
 }
 
-// allowPolicylessTraffic reads settings.Inference.AllowMissingPolicy.
-// Missing or malformed setting → false (closed default).
+// PolicylessTrafficAllowed reports whether a caller whose credential
+// resolved no policy is served at all. Exported so the /v1/models listing
+// asks the same gate resolution applies and cannot advertise what a
+// request would be refused. Nil-safe.
+func (r *Resolver) PolicylessTrafficAllowed() bool {
+	if r == nil {
+		return false
+	}
+	return r.allowPolicylessTraffic()
+}
+
+// allowPolicylessTraffic reads settings.Inference.AllowMissingPolicy, which
+// only single-user authorization consults — RequirePolicy closes the flow
+// ahead of it. Missing or malformed setting → false (closed default).
 func (r *Resolver) allowPolicylessTraffic() bool {
-	v, ok := r.cat.Setting(settings.SectionInference)
+	if r.requirePolicy || r.cfg == nil {
+		return false
+	}
+	v, ok := r.cfg.Setting(settings.SectionInference)
 	if !ok {
 		return false
 	}
@@ -397,7 +460,7 @@ func (r *Resolver) allowPolicylessTraffic() bool {
 // the relay has any enabled hostkey for the host. No policy filter, no
 // policy-level rate limits — Plan.Policy is nil, Plan.Keys is the full
 // pool of hostkeys for the chosen host.
-func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot, pinHostID string) (*Plan, error) {
+func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.Model, snapMatch *model.Snapshot, pinHostID, userID string) (*Plan, error) {
 	var (
 		anyEnabledMod bool
 		anyEnabledBnd bool
@@ -428,10 +491,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				continue
 			}
 			anyEnabledBnd = true
-			keys := snap.HostKeysForHost(h.Meta.ID)
-			if h.Spec.NoAuth {
-				keys = []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
-			}
+			keys := policylessKeys(snap, m, h, userID)
 			if len(keys) == 0 {
 				continue
 			}
@@ -456,6 +516,41 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 		return nil, ErrNoHostBinding
 	}
 	return nil, ErrNoKeys
+}
+
+// policylessKeys returns the keys a request with no policy may spend against
+// h for m, or nil when the pair is unreachable. A keyless upstream gets the
+// synthetic anonymous key; everything else draws from the shared pool and
+// passes the tier gate. The single definition of the D73 pool: resolution and
+// the /v1/models listing both read it, so the two cannot drift.
+func policylessKeys(snap *appcatalog.Snapshot, m *model.Model, h *host.Host, userID string) []*hostkey.HostKey {
+	if h.Spec.NoAuth {
+		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
+	}
+	return tierAllowedKeys(snap, sharedHostKeys(snap, h.Meta.ID, userID), m.Meta.ID, h.Meta.ID)
+}
+
+// sharedHostKeys returns the host's keys a request with no policy may draw
+// on: the operator's system-owned ones, plus userID's own. Another user's
+// key is their personal credential, and a project's is reachable only
+// through that project's policy — spending either here would put the cost
+// outside the limits and the attribution that own it. An empty userID
+// (no user resolved) leaves the system-owned keys. The result is a fresh
+// slice; tierAllowedKeys filters in place.
+func sharedHostKeys(snap *appcatalog.Snapshot, hostID, userID string) []*hostkey.HostKey {
+	pool := snap.HostKeysForHost(hostID)
+	out := make([]*hostkey.HostKey, 0, len(pool))
+	for _, k := range pool {
+		switch k.Meta.Owner.Kind {
+		case meta.OwnerSystem:
+			out = append(out, k)
+		case meta.OwnerUser:
+			if userID != "" && k.Meta.Owner.ID == userID {
+				out = append(out, k)
+			}
+		}
+	}
+	return out
 }
 
 func hostKeysForHost(snap *appcatalog.Snapshot, pol *policy.Policy, hostID string) []*hostkey.HostKey {

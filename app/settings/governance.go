@@ -52,9 +52,15 @@ func governanceSection(kind string) string { return "governance:" + kind }
 // Owner-kind values Governs reasons about. Mirrors app/meta.OwnerKind; kept
 // as local strings so the settings package stays free of the domain types.
 const (
-	ownerSystem = "system"
-	ownerUser   = "user"
+	ownerSystem  = "system"
+	ownerUser    = "user"
+	ownerTeam    = "team"
+	ownerProject = "project"
 )
+
+// tenancyKinds are the kinds whose rows are system-owned by construction
+// rather than by belonging to the catalog.
+var tenancyKinds = map[string]bool{"team": true, "group": true, "role": true}
 
 // Reader is the narrow read surface Governs needs — satisfied by
 // *catalog.Catalog. Settings cache reads are lock-free and total (a
@@ -82,17 +88,25 @@ func (e *MutationError) Error() string { return e.Reason }
 //   - system  → never deleted; edited only via limited APIs (the settings
 //     API and specialized endpoints), never generic CRUD. Editing or
 //     deleting a system row can break the whole router.
-//   - user    → always allowed (the row is the caller's). RBAC will later add
-//     an owner.id == caller match here.
+//   - user / team / project → always allowed (the row belongs to a tenant,
+//     not to the catalog). RBAC will later add an owner match here.
 //   - else (provider/host-owned, i.e. catalog-managed) → consult the kind's
 //     governance:<kind> section; absent or unregistered ⇒ the safe default
 //     (edit allowed, delete denied).
 func Governs(r Reader, op Op, kind, ownerKind string) error {
 	switch ownerKind {
 	case ownerSystem:
+		// A Team, Group or Role is system-owned when nobody owns it
+		// personally — a scope or a grant belongs to the deployment, not to
+		// whoever created it. That is not the "the relay's own row" the
+		// system tier protects, so these follow the tenant tier and stay
+		// editable through CRUD.
+		if tenancyKinds[kind] {
+			return nil
+		}
 		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
 			Reason: fmt.Sprintf("%s is system-owned: deletion is never permitted and edits go through limited APIs, not generic CRUD", kind)}
-	case ownerUser:
+	case ownerUser, ownerTeam, ownerProject:
 		return nil
 	}
 

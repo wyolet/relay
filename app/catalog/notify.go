@@ -12,6 +12,7 @@ package catalog
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -20,21 +21,28 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 )
 
 // ── payload types ─────────────────────────────────────────────────────────────
 
 type notifyEvent struct {
-	Kind string // "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
+	Kind string // "team", "project", "serviceaccount", "group", "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
 	Op   string // "upsert" or "delete"
 	ID   string
 }
@@ -43,6 +51,10 @@ var validKinds = map[string]struct{}{
 	"provider": {}, "host": {}, "model": {}, "hostkey": {},
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
 	"hostbinding": {}, "settings": {}, "overlay": {},
+	"team": {}, "project": {},
+	"serviceaccount": {}, "group": {},
+	"role": {}, "rolebinding": {}, "policybinding": {},
+	"user": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -141,11 +153,32 @@ type listenerStores struct {
 	pricing interface {
 		Get(ctx context.Context, id string) (*pricing.Pricing, error)
 	}
-	relaykey interface {
-		Get(ctx context.Context, id string) (*relaykey.RelayKey, error)
+	key interface {
+		Get(ctx context.Context, id string) (*key.Key, error)
 	}
 	overlay interface {
 		Get(ctx context.Context, kind, resourceID string) (*overlay.Overlay, error)
+	}
+	team interface {
+		Get(ctx context.Context, id string) (*team.Team, error)
+	}
+	serviceAccount interface {
+		Get(ctx context.Context, id string) (*serviceaccount.ServiceAccount, error)
+	}
+	group interface {
+		Get(ctx context.Context, id string) (*group.Group, error)
+	}
+	role interface {
+		Get(ctx context.Context, id string) (*role.Role, error)
+	}
+	roleBinding interface {
+		Get(ctx context.Context, id string) (*rolebinding.RoleBinding, error)
+	}
+	policyBinding interface {
+		Get(ctx context.Context, id string) (*policybinding.PolicyBinding, error)
+	}
+	project interface {
+		Get(ctx context.Context, id string) (*project.Project, error)
 	}
 	settings SettingsLister
 }
@@ -251,11 +284,33 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 // transaction commits and the debouncer flushes the whole burst together,
 // cross-ref validation against the snapshot succeeds at each step.
 //
-// Order: provider → host → ratelimit → model → hostkey → policy → pricing
-// → relaykey. Deletes propagate via reverse-ref cascade inside the
-// reconciler so they don't need a separate ordering pass.
+// Order: team → project → provider → host → ratelimit → model → hostkey →
+// policy → pricing → key. Deletes propagate via reverse-ref cascade
+// inside the reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
+	// Every incremental apply clones the whole snapshot, so a bulk write
+	// (an apply of a large bundle) would clone once per row. Past this size
+	// one full rebuild is cheaper and reaches the same state.
+	if len(events) > reloadBatchThreshold {
+		if err := l.cat.Reload(ctx); err != nil {
+			slog.Error("catalog notify: bulk reload failed", "events", len(events), "err", err)
+			return
+		}
+		// Reload rebuilds catalog rows only — the settings cache is loaded
+		// separately, so its events have to be applied even here or a
+		// section change inside a bulk write never lands.
+		for _, e := range events {
+			if e.Kind != "settings" {
+				continue
+			}
+			if err := l.applyEvent(ctx, e); err != nil {
+				slog.Error("catalog notify: apply error", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			}
+		}
+		slog.Info("catalog notify: bulk change reloaded", "events", len(events))
+		return
+	}
 	sort.SliceStable(events, func(i, j int) bool {
 		return kindOrder[events[i].Kind] < kindOrder[events[j].Kind]
 	})
@@ -266,18 +321,33 @@ func (l *Listener) applyDrained(ctx context.Context) {
 	}
 }
 
+// reloadBatchThreshold is the drained-event count past which a full rebuild
+// replaces the per-event incremental applies.
+const reloadBatchThreshold = 64
+
 var kindOrder = map[string]int{
-	"provider":    0,
-	"host":        1,
-	"ratelimit":   2,
-	"model":       3,
-	"hostkey":     4,
-	"policy":      5,
-	"pricing":     6,
-	"hostbinding": 7,
-	"relaykey":    8,
-	"overlay":     9, // after model upserts so re-merges see fresh templates
-	"settings":    10,
+	"team":      0,
+	"project":   1,
+	"provider":  2,
+	"host":      3,
+	"ratelimit": 4,
+	"model":     5,
+	"hostkey":   6,
+	"policy":    7,
+	// service accounts sanitize against policies, keys against accounts.
+	"serviceaccount": 8,
+	"group":          9,
+	// roles before the bindings that grant them; bindings after the
+	// policies and tenancy rows they are scoped to.
+	"role":          10,
+	"rolebinding":   11,
+	"policybinding": 12,
+	"pricing":       13,
+	"hostbinding":   14,
+	"relaykey":      15,
+	"overlay":       16, // after model upserts so re-merges see fresh templates
+	"settings":      17,
+	"user":          18,
 }
 
 // applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
@@ -376,16 +446,107 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 
 	case "relaykey":
 		if e.Op == "delete" {
-			return l.cat.ApplyRelayKeyDelete(e.ID)
+			return l.cat.ApplyKeyDelete(e.ID)
 		}
-		k, err := l.stores.relaykey.Get(ctx, e.ID)
+		k, err := l.stores.key.Get(ctx, e.ID)
 		if err != nil {
 			return err
 		}
 		if k == nil {
-			return l.cat.ApplyRelayKeyDelete(e.ID)
+			return l.cat.ApplyKeyDelete(e.ID)
 		}
-		return l.cat.ApplyRelayKeyUpsert(k)
+		return l.cat.ApplyKeyUpsert(k)
+
+	case "team":
+		if e.Op == "delete" {
+			return l.cat.ApplyTeamDelete(e.ID)
+		}
+		t, err := l.stores.team.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if t == nil {
+			return l.cat.ApplyTeamDelete(e.ID)
+		}
+		return l.cat.ApplyTeamUpsert(t)
+
+	case "project":
+		if e.Op == "delete" {
+			return l.cat.ApplyProjectDelete(e.ID)
+		}
+		p, err := l.stores.project.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if p == nil {
+			return l.cat.ApplyProjectDelete(e.ID)
+		}
+		return l.cat.ApplyProjectUpsert(p)
+
+	case "serviceaccount":
+		if e.Op == "delete" {
+			return l.cat.ApplyServiceAccountDelete(e.ID)
+		}
+		sa, err := l.stores.serviceAccount.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if sa == nil {
+			return l.cat.ApplyServiceAccountDelete(e.ID)
+		}
+		return l.cat.ApplyServiceAccountUpsert(sa)
+
+	case "group":
+		if e.Op == "delete" {
+			return l.cat.ApplyGroupDelete(e.ID)
+		}
+		g, err := l.stores.group.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if g == nil {
+			return l.cat.ApplyGroupDelete(e.ID)
+		}
+		return l.cat.ApplyGroupUpsert(g)
+
+	case "role":
+		if e.Op == "delete" {
+			return l.cat.ApplyRoleDelete(e.ID)
+		}
+		r, err := l.stores.role.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if r == nil {
+			return l.cat.ApplyRoleDelete(e.ID)
+		}
+		return l.cat.ApplyRoleUpsert(r)
+
+	case "rolebinding":
+		if e.Op == "delete" {
+			return l.cat.ApplyRoleBindingDelete(e.ID)
+		}
+		b, err := l.stores.roleBinding.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			return l.cat.ApplyRoleBindingDelete(e.ID)
+		}
+		return l.cat.ApplyRoleBindingUpsert(b)
+
+	case "policybinding":
+		if e.Op == "delete" {
+			return l.cat.ApplyPolicyBindingDelete(e.ID)
+		}
+		b, err := l.stores.policyBinding.Get(ctx, e.ID)
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			return l.cat.ApplyPolicyBindingDelete(e.ID)
+		}
+		return l.cat.ApplyPolicyBindingUpsert(b)
 
 	case "hostbinding":
 		// PR1: bindings aren't consumed by routing yet, and the COW
@@ -414,6 +575,11 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 		}
 		return l.cat.ApplyOverlayUpsert(o)
 
+	case "user":
+		// Users are not catalog rows; only their token version reaches the
+		// snapshot, and the map is cheap enough to rebuild whole.
+		return l.cat.ReloadTokenVersions(ctx)
+
 	case "settings":
 		if e.Op == "delete" {
 			l.cat.settings.applyDelete(e.ID)
@@ -421,5 +587,8 @@ func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
 		}
 		return l.cat.settings.applyUpsert(ctx, e.ID)
 	}
-	return nil
+	// parseEvent already refused anything not in validKinds, so reaching
+	// here means a kind was added there without a case below — which would
+	// otherwise be a silently ignored NOTIFY.
+	return fmt.Errorf("catalog notify: no handler for kind %q", e.Kind)
 }

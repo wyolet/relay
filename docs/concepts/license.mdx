@@ -1,0 +1,68 @@
+---
+title: "License"
+description: "What a license unlocks, how to install one, and what happens when it expires"
+---
+
+Relay is Apache-2.0 and every routing, catalog, key-pooling, batch and
+observability feature works without a license. A small set of enterprise
+features is gated behind a signed license file.
+
+Verification is entirely offline. The release public key is compiled into
+the binary; relay never contacts a license server, and an airgapped
+deployment verifies exactly like a connected one.
+
+## What is gated
+
+| Feature | Without a license |
+| --- | --- |
+| `sso` — IdP login for the control plane (`auth:oidc`) | Password login and bootstrap users |
+| `custom-roles` — authoring your own `Role` (`owner: {kind: user}`) | The built-in roles only |
+
+`scim`, `orgs` and `audit-export` are reserved names that a license may
+already carry; the features themselves arrive in later releases.
+
+A gated feature never fails quietly. Enabling one without a license is
+refused with a `license_required` error, and nothing else about the
+deployment changes.
+
+## Installing a license
+
+Three sources, in precedence order:
+
+| Source | How |
+| --- | --- |
+| `RELAY_LICENSE_FILE` | Path to the license file — the usual choice for a k8s Secret mounted as a file |
+| `RELAY_LICENSE` | The license value inline |
+| Admin API | `PUT /api/license` with `{"value": "<license>"}` |
+
+The environment wins over the stored value, so a deployment that sets
+either variable cannot be overridden from the UI. `PUT /api/license`
+verifies the value before storing it: a key that does not verify is
+rejected with a 400 and the previous license stays live.
+
+The license is verified at boot and re-verified on `POST /api/reload`, so
+installing or renewing one does not need a restart.
+
+Read the live license with `GET /api/license` (admins only);
+`GET /api/version` carries the same block for authenticated callers.
+
+```json
+{
+  "licensed": true,
+  "customer": "acme",
+  "expiresAt": "2027-01-01T00:00:00Z",
+  "features": ["sso"],
+  "grace": false
+}
+```
+
+## Expiry
+
+An expired license keeps working for 30 days. Through that window
+`grace` reads `true` and every boot logs a warning; gated features stay on
+so a renewal gap cannot interrupt a running gateway.
+
+After the grace window the deployment becomes community: gated features
+turn off and report `license_required`. It keeps booting and keeps
+serving — a lapsed license never takes a gateway down. A deployment that
+had SSO enabled falls back to password login, with the reason logged once.

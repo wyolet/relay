@@ -17,6 +17,12 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CONTROL_PORT` | `8081` | Control plane + admin UI listener port. Set `off` to disable. |
 | `RELAY_MASTER_KEY` | _(auto-generated on standalone)_ | 32-byte base64 key for stored-mode host keys. Generate with `openssl rand -base64 32`. Must be **stable** in production. |
 | `RELAY_ADMIN_TOKEN` | _(auto-generated on standalone)_ | Break-glass control-plane bearer. Empty disables it on the lean image. |
+| `RELAY_PUBLIC_URL` | _(empty)_ | Externally reachable control-plane origin. Exported manifests point their `$schema` directive at this host; empty renders it relative. |
+| `RELAY_AUTHZ` | `single` | Control-plane authorization mode. `single` grants every authenticated caller every action; `rbac` evaluates [roles and bindings](/concepts/auth). |
+| `RELAY_MULTI_USER` | _(empty)_ | Deprecated. A truthy value (`on`/`1`/`true`/`yes`) is read as `RELAY_AUTHZ=rbac` when `RELAY_AUTHZ` is unset, with a startup warning. Set `RELAY_AUTHZ` explicitly instead. |
+| `RELAY_TRUSTED_PROXIES` | _(empty)_ | Comma-separated IPs/CIDRs of reverse proxies allowed to set `X-Forwarded-For`. Empty means no proxy is trusted — the client IP is always `RemoteAddr`. |
+| `RELAY_LICENSE_FILE` | _(empty)_ | Path to a [license](/concepts/license) file, unlocking gated features. Highest precedence. |
+| `RELAY_LICENSE` | _(empty)_ | The [license](/concepts/license) value inline. Used when `RELAY_LICENSE_FILE` is unset; both win over the stored `license` setting installed via `PUT /api/license`. |
 | `RELAY_INFERENCE_API_URL` | _(standalone: `http://localhost:8080`)_ | Data-plane origin the admin UI calls (served via `/config.json`). Set to your public API URL in production. |
 | `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Use `redis` for multi-pod deployments. |
 | `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
@@ -26,6 +32,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CATALOG_VERSION` | _(empty)_ | Pin the seeded catalog to a published [relay-catalog](https://github.com/wyolet/relay-catalog) release tag (e.g. `v0.1.0`). On boot, if the stored catalog version differs, the release archive is fetched and re-seeded — no image rebuild needed. Re-seeds never overwrite your changes: operator-edited resources are skipped and overlays re-apply. |
 | `RELAY_CATALOG_URL` | _(GitHub archive)_ | Override the archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point at a mirror for airgapped deployments. |
 | `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). |
+| `RELAY_MIGRATE_ON_BOOT` | `on` | Run pending schema migrations at startup. Set `off` while [rolling the schema back](/concepts/upgrade#rolling-back) so a restarting pod doesn't re-apply them. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget in seconds. |
 | `RELAY_LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warn` \| `error`. |
 
@@ -53,6 +60,18 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RELAY_OTLP_ENDPOINT` | _(empty)_ | OpenTelemetry collector endpoint for traces. |
+
+### SSO / OIDC login
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `WYOLET_AUTH_MODE` | _(empty)_ | Set `oidc` to enable OpenID Connect login for the admin UI, independent of the DB-backed `auth:oidc` settings section (which stays the fallback when unset). |
+| `WYOLET_OIDC_ISSUER` | _(empty)_ | Identity provider issuer URL. |
+| `WYOLET_OIDC_CLIENT_ID` | _(empty)_ | OIDC client id. |
+| `WYOLET_OIDC_CLIENT_SECRET` | _(empty)_ | OIDC client secret. |
+| `WYOLET_OIDC_REDIRECT_URL` | _(empty)_ | Callback URL registered with the provider — conventionally `https://<ui-origin>/auth/callback`. |
+| `WYOLET_OIDC_REGISTRATION` | `open` | `open` auto-provisions a user on first login; `closed` rejects unknown subjects. |
+| `WYOLET_OIDC_POST_LOGIN_URL` | `/` | Where the browser lands after a successful SSO login. Set it to the UI origin when the UI is served elsewhere. |
 
 ### Admin UI & CORS
 

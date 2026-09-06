@@ -71,7 +71,7 @@ func TestApply_ModelDisableEnableRestoresPolicyGrant(t *testing.T) {
 // audit 2026-07-04 P1 #7: disable→enable round-trips permanently lose
 // dependents — re-enabling a policy must restore the relay keys that still
 // point at it in PG.
-func TestApply_PolicyDisableEnableRestoresRelayKeys(t *testing.T) {
+func TestApply_PolicyDisableEnableRestoresKeys(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
@@ -80,14 +80,14 @@ func TestApply_PolicyDisableEnableRestoresRelayKeys(t *testing.T) {
 
 	pol := pols[0]
 	hash := strings.Repeat("a", 64)
-	if _, ok := c.Current().RelayKeyByHash(hash); !ok {
+	if k, _ := c.Current().KeyByHash(hash); k == nil {
 		t.Fatal("precondition: relay key not resolvable before the round-trip")
 	}
 
 	if err := c.ApplyPolicyDelete(pol.Meta.ID); err != nil {
 		t.Fatalf("ApplyPolicyDelete: %v", err)
 	}
-	if _, ok := c.Current().RelayKeyByHash(hash); ok {
+	if k, _ := c.Current().KeyByHash(hash); k != nil {
 		t.Fatal("precondition: relay key survived its policy's delete")
 	}
 
@@ -100,7 +100,7 @@ func TestApply_PolicyDisableEnableRestoresRelayKeys(t *testing.T) {
 	if _, ok := s.Policy(pol.Meta.ID); !ok {
 		t.Fatal("policy missing after re-enable")
 	}
-	if _, ok := s.RelayKeyByHash(hash); !ok {
-		t.Errorf("relay key on policy %q not restored after policy re-enable — RelayKeyByHash misses", pol.Meta.Name)
+	if k, _ := s.KeyByHash(hash); k == nil {
+		t.Errorf("relay key on policy %q not restored after policy re-enable — KeyByHash misses", pol.Meta.Name)
 	}
 }

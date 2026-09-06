@@ -16,15 +16,22 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
 )
 
@@ -238,19 +245,130 @@ var rateLimitFilter = filter.Schema[ratelimit.RateLimit]{
 	DefaultSort: "name",
 }
 
-var relayKeyFilter = filter.Schema[relaykey.RelayKey]{
-	Fields: []filter.Field[relaykey.RelayKey]{
-		{Name: "name", Kind: filter.String, Sortable: true, Get: func(k *relaykey.RelayKey) string { return k.Meta.Name }},
-		{Name: "enabled", Kind: filter.Bool, GetBool: func(k *relaykey.RelayKey) bool { return enabledTrue(k.Spec.Enabled) }},
-		{Name: "revoked", Kind: filter.Bool, GetBool: func(k *relaykey.RelayKey) bool { return k.Spec.RevokedAt != nil }},
-		{Name: "passthrough", Kind: filter.Bool, GetBool: func(k *relaykey.RelayKey) bool { return k.Spec.PassthroughAllowed }},
-		{Name: "payload_logging", Kind: filter.Bool, GetBool: func(k *relaykey.RelayKey) bool { return k.Spec.PayloadLoggingEnabled }},
-		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(k *relaykey.RelayKey) string { return k.Spec.PolicyID }},
-		{Name: "prefix", Kind: filter.String, Get: func(k *relaykey.RelayKey) string { return k.Spec.Prefix }},
-		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(k *relaykey.RelayKey) time.Time { return k.Meta.CreatedAt }},
-		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(k *relaykey.RelayKey) time.Time { return k.Meta.UpdatedAt }},
+var keyFilter = filter.Schema[key.Key]{
+	Fields: []filter.Field[key.Key]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(k *key.Key) string { return k.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return enabledTrue(k.Spec.Enabled) }},
+		{Name: "revoked", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.RevokedAt != nil }},
+		{Name: "passthrough", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.PassthroughAllowed }},
+		{Name: "payload_logging", Kind: filter.Bool, GetBool: func(k *key.Key) bool { return k.Spec.PayloadLoggingEnabled }},
+		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Spec.PolicyID }},
+		{Name: "principal_kind", Kind: filter.String, Repeat: true, Enum: []string{"serviceaccount", "user"},
+			Get: func(k *key.Key) string { return string(k.Spec.Principal.Kind) }},
+		{Name: "principal_id", Kind: filter.String, Repeat: true, Get: func(k *key.Key) string { return k.Spec.Principal.ID }},
+		{Name: "expired", Kind: filter.Bool, GetBool: func(k *key.Key) bool {
+			return k.Spec.ExpiresAt != nil && k.Spec.ExpiresAt.Before(time.Now())
+		}},
+		{Name: "prefix", Kind: filter.String, Get: func(k *key.Key) string { return k.Spec.Prefix }},
+		{Name: "created", Kind: filter.Time, Sortable: true, GetTime: func(k *key.Key) time.Time { return k.Meta.CreatedAt }},
+		{Name: "updated", Kind: filter.Time, Sortable: true, GetTime: func(k *key.Key) time.Time { return k.Meta.UpdatedAt }},
 	},
-	Q:           func(k *relaykey.RelayKey) []string { return []string{k.Meta.Name, k.Meta.DisplayName, k.Spec.Prefix} },
-	Labels:      func(k *relaykey.RelayKey) map[string]string { return labelsOf(k.Meta) },
+	Q:           func(k *key.Key) []string { return []string{k.Meta.Name, k.Meta.DisplayName, k.Spec.Prefix} },
+	Labels:      func(k *key.Key) map[string]string { return labelsOf(k.Meta) },
+	DefaultSort: "name",
+}
+
+var teamFilter = filter.Schema[team.Team]{
+	Fields: []filter.Field[team.Team]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(t *team.Team) string { return t.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(t *team.Team) bool { return enabledTrue(t.Spec.Enabled) }},
+	},
+	Q:           func(t *team.Team) []string { return []string{t.Meta.Name, t.Meta.DisplayName, t.Meta.Description} },
+	Labels:      func(t *team.Team) map[string]string { return labelsOf(t.Meta) },
+	DefaultSort: "name",
+}
+
+var projectFilter = filter.Schema[project.Project]{
+	Fields: []filter.Field[project.Project]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(p *project.Project) string { return p.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(p *project.Project) bool { return enabledTrue(p.Spec.Enabled) }},
+		{Name: "team_id", Kind: filter.String, Repeat: true, Get: func(p *project.Project) string { return p.Spec.TeamID }},
+	},
+	Q: func(p *project.Project) []string {
+		return []string{p.Meta.Name, p.Meta.DisplayName, p.Meta.Description}
+	},
+	Labels:      func(p *project.Project) map[string]string { return labelsOf(p.Meta) },
+	DefaultSort: "name",
+}
+
+var serviceAccountFilter = filter.Schema[serviceaccount.ServiceAccount]{
+	Fields: []filter.Field[serviceaccount.ServiceAccount]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(sa *serviceaccount.ServiceAccount) bool { return enabledTrue(sa.Spec.Enabled) }},
+		{Name: "project_id", Kind: filter.String, Repeat: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Spec.ProjectID }},
+		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(sa *serviceaccount.ServiceAccount) string { return sa.Spec.PolicyID }},
+	},
+	Q: func(sa *serviceaccount.ServiceAccount) []string {
+		return []string{sa.Meta.Name, sa.Meta.DisplayName, sa.Meta.Description}
+	},
+	Labels:      func(sa *serviceaccount.ServiceAccount) map[string]string { return labelsOf(sa.Meta) },
+	DefaultSort: "name",
+}
+
+var groupFilter = filter.Schema[group.Group]{
+	Fields: []filter.Field[group.Group]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(g *group.Group) string { return g.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(g *group.Group) bool { return enabledTrue(g.Spec.Enabled) }},
+	},
+	Q: func(g *group.Group) []string {
+		return []string{g.Meta.Name, g.Meta.DisplayName, g.Meta.Description}
+	},
+	Labels:      func(g *group.Group) map[string]string { return labelsOf(g.Meta) },
+	DefaultSort: "name",
+}
+
+// subjectKeys renders a binding's subjects as the "<kind>:<id-or-name>"
+// strings ?subject= matches on.
+func subjectKeys(subjects []rolebinding.Subject) []string {
+	out := make([]string, 0, len(subjects))
+	for i := range subjects {
+		out = append(out, subjects[i].Key())
+	}
+	return out
+}
+
+var roleFilter = filter.Schema[role.Role]{
+	Fields: []filter.Field[role.Role]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(r *role.Role) string { return r.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(r *role.Role) bool { return enabledTrue(r.Spec.Enabled) }},
+	},
+	Q: func(r *role.Role) []string {
+		return []string{r.Meta.Name, r.Meta.DisplayName, r.Meta.Description}
+	},
+	Labels:      func(r *role.Role) map[string]string { return labelsOf(r.Meta) },
+	DefaultSort: "name",
+}
+
+var roleBindingFilter = filter.Schema[rolebinding.RoleBinding]{
+	Fields: []filter.Field[rolebinding.RoleBinding]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *rolebinding.RoleBinding) string { return b.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *rolebinding.RoleBinding) bool { return enabledTrue(b.Spec.Enabled) }},
+		{Name: "role_id", Kind: filter.String, Repeat: true, Get: func(b *rolebinding.RoleBinding) string { return b.Spec.RoleID }},
+		{Name: "scope_kind", Kind: filter.String, Enum: []string{"system", "team", "project"},
+			Get: func(b *rolebinding.RoleBinding) string { return string(b.Spec.Scope.Kind) }},
+		{Name: "scope_id", Kind: filter.String, Repeat: true, Get: func(b *rolebinding.RoleBinding) string { return b.Spec.Scope.ID }},
+		{Name: "subject", Kind: filter.String, Repeat: true,
+			GetMulti: func(b *rolebinding.RoleBinding) []string { return subjectKeys(b.Spec.Subjects) }},
+	},
+	Q: func(b *rolebinding.RoleBinding) []string {
+		return []string{b.Meta.Name, b.Meta.DisplayName, b.Meta.Description}
+	},
+	Labels:      func(b *rolebinding.RoleBinding) map[string]string { return labelsOf(b.Meta) },
+	DefaultSort: "name",
+}
+
+var policyBindingFilter = filter.Schema[policybinding.PolicyBinding]{
+	Fields: []filter.Field[policybinding.PolicyBinding]{
+		{Name: "name", Kind: filter.String, Sortable: true, Get: func(b *policybinding.PolicyBinding) string { return b.Meta.Name }},
+		{Name: "enabled", Kind: filter.Bool, GetBool: func(b *policybinding.PolicyBinding) bool { return enabledTrue(b.Spec.Enabled) }},
+		{Name: "project_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Spec.ProjectID }},
+		{Name: "policy_id", Kind: filter.String, Repeat: true, Get: func(b *policybinding.PolicyBinding) string { return b.Spec.PolicyID }},
+		{Name: "subject", Kind: filter.String, Repeat: true,
+			GetMulti: func(b *policybinding.PolicyBinding) []string { return subjectKeys(b.Spec.Subjects) }},
+	},
+	Q: func(b *policybinding.PolicyBinding) []string {
+		return []string{b.Meta.Name, b.Meta.DisplayName, b.Meta.Description}
+	},
+	Labels:      func(b *policybinding.PolicyBinding) map[string]string { return labelsOf(b.Meta) },
 	DefaultSort: "name",
 }

@@ -8,21 +8,66 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuditEvent struct {
+	ID            string             `db:"id" json:"id"`
+	Ts            pgtype.Timestamptz `db:"ts" json:"ts"`
+	ActorKind     string             `db:"actor_kind" json:"actor_kind"`
+	ActorID       pgtype.Text        `db:"actor_id" json:"actor_id"`
+	ActorName     pgtype.Text        `db:"actor_name" json:"actor_name"`
+	SessionID     pgtype.Text        `db:"session_id" json:"session_id"`
+	Ip            pgtype.Text        `db:"ip" json:"ip"`
+	Action        string             `db:"action" json:"action"`
+	ResourceKind  string             `db:"resource_kind" json:"resource_kind"`
+	ResourceID    pgtype.Text        `db:"resource_id" json:"resource_id"`
+	ResourceName  pgtype.Text        `db:"resource_name" json:"resource_name"`
+	OwnerKind     pgtype.Text        `db:"owner_kind" json:"owner_kind"`
+	OwnerID       pgtype.Text        `db:"owner_id" json:"owner_id"`
+	Scope         []string           `db:"scope" json:"scope"`
+	Status        string             `db:"status" json:"status"`
+	Code          int32              `db:"code" json:"code"`
+	RequestID     pgtype.Text        `db:"request_id" json:"request_id"`
+	Method        pgtype.Text        `db:"method" json:"method"`
+	Path          pgtype.Text        `db:"path" json:"path"`
+	ChangedFields []string           `db:"changed_fields" json:"changed_fields"`
+}
+
 type Batch struct {
-	ID           string             `db:"id" json:"id"`
-	RelayKeyHash string             `db:"relay_key_hash" json:"relay_key_hash"`
-	PolicyID     string             `db:"policy_id" json:"policy_id"`
-	InboundShape string             `db:"inbound_shape" json:"inbound_shape"`
-	Status       string             `db:"status" json:"status"`
-	TotalItems   int32              `db:"total_items" json:"total_items"`
-	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	CompletedAt  pgtype.Timestamptz `db:"completed_at" json:"completed_at"`
+	ID             string             `db:"id" json:"id"`
+	RelayKeyHash   string             `db:"relay_key_hash" json:"relay_key_hash"`
+	PolicyID       string             `db:"policy_id" json:"policy_id"`
+	InboundShape   string             `db:"inbound_shape" json:"inbound_shape"`
+	Status         string             `db:"status" json:"status"`
+	TotalItems     int32              `db:"total_items" json:"total_items"`
+	CreatedAt      pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	CompletedAt    pgtype.Timestamptz `db:"completed_at" json:"completed_at"`
+	ProjectID      string             `db:"project_id" json:"project_id"`
+	TeamID         string             `db:"team_id" json:"team_id"`
+	PrincipalKind  string             `db:"principal_kind" json:"principal_kind"`
+	PrincipalID    string             `db:"principal_id" json:"principal_id"`
+	CredentialKind string             `db:"credential_kind" json:"credential_kind"`
+	CredentialID   string             `db:"credential_id" json:"credential_id"`
 }
 
 type BatchItem struct {
 	BatchID string `db:"batch_id" json:"batch_id"`
 	Idx     int32  `db:"idx" json:"idx"`
 	JobID   string `db:"job_id" json:"job_id"`
+}
+
+type Group struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type GroupMember struct {
+	GroupID  string `db:"group_id" json:"group_id"`
+	UserID   string `db:"user_id" json:"user_id"`
+	Position int32  `db:"position" json:"position"`
 }
 
 type Host struct {
@@ -77,6 +122,29 @@ type Policy struct {
 	Models      []byte             `db:"models" json:"models"`
 }
 
+type PolicyBinding struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	ProjectID   string             `db:"project_id" json:"project_id"`
+	PolicyID    string             `db:"policy_id" json:"policy_id"`
+	Priority    int32              `db:"priority" json:"priority"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type PolicyBindingSubject struct {
+	BindingID     string      `db:"binding_id" json:"binding_id"`
+	Kind          string      `db:"kind" json:"kind"`
+	SubjectID     pgtype.Text `db:"subject_id" json:"subject_id"`
+	SubjectName   pgtype.Text `db:"subject_name" json:"subject_name"`
+	SubjectUserID pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
+	SubjectSaID   pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
+	Position      int32       `db:"position" json:"position"`
+}
+
 type PolicyHostKey struct {
 	PolicyID  string `db:"policy_id" json:"policy_id"`
 	HostKeyID string `db:"host_key_id" json:"host_key_id"`
@@ -106,6 +174,17 @@ type PricingModel struct {
 	Position  int32  `db:"position" json:"position"`
 }
 
+type Project struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	TeamID      string             `db:"team_id" json:"team_id"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Provider struct {
 	Name        string             `db:"name" json:"name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`
@@ -127,14 +206,50 @@ type RateLimit struct {
 }
 
 type RelayKey struct {
+	Name            string             `db:"name" json:"name"`
+	KeyHash         string             `db:"key_hash" json:"key_hash"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	PrincipalSaID   pgtype.Text        `db:"principal_sa_id" json:"principal_sa_id"`
+	PrincipalUserID pgtype.Text        `db:"principal_user_id" json:"principal_user_id"`
+	PreviousKeyHash pgtype.Text        `db:"previous_key_hash" json:"previous_key_hash"`
+}
+
+type Role struct {
+	ID          string             `db:"id" json:"id"`
 	Name        string             `db:"name" json:"name"`
-	KeyHash     string             `db:"key_hash" json:"key_hash"`
+	DisplayName string             `db:"display_name" json:"display_name"`
 	Metadata    []byte             `db:"metadata" json:"metadata"`
 	Spec        []byte             `db:"spec" json:"spec"`
 	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type RoleBinding struct {
 	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
 	DisplayName string             `db:"display_name" json:"display_name"`
+	RoleID      string             `db:"role_id" json:"role_id"`
+	ScopeKind   string             `db:"scope_kind" json:"scope_kind"`
+	ScopeID     pgtype.Text        `db:"scope_id" json:"scope_id"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type RoleBindingSubject struct {
+	BindingID     string      `db:"binding_id" json:"binding_id"`
+	Kind          string      `db:"kind" json:"kind"`
+	SubjectID     pgtype.Text `db:"subject_id" json:"subject_id"`
+	SubjectName   pgtype.Text `db:"subject_name" json:"subject_name"`
+	SubjectUserID pgtype.Text `db:"subject_user_id" json:"subject_user_id"`
+	SubjectSaID   pgtype.Text `db:"subject_sa_id" json:"subject_sa_id"`
+	Position      int32       `db:"position" json:"position"`
 }
 
 type Secret struct {
@@ -162,10 +277,31 @@ type SecretValue struct {
 	UpdatedAt  pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
+type ServiceAccount struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	ProjectID   string             `db:"project_id" json:"project_id"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
 type Setting struct {
 	Section   string             `db:"section" json:"section"`
 	Value     []byte             `db:"value" json:"value"`
 	UpdatedAt pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+}
+
+type Team struct {
+	ID          string             `db:"id" json:"id"`
+	Name        string             `db:"name" json:"name"`
+	DisplayName string             `db:"display_name" json:"display_name"`
+	Metadata    []byte             `db:"metadata" json:"metadata"`
+	Spec        []byte             `db:"spec" json:"spec"`
+	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
 }
 
 type User struct {
@@ -178,4 +314,5 @@ type User struct {
 	Disabled     bool               `db:"disabled" json:"disabled"`
 	CreatedAt    pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	TokenVersion int32              `db:"token_version" json:"token_version"`
 }

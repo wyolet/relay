@@ -57,7 +57,8 @@ type Rule struct {
 	// Name is for human-readable error messages only (e.g. "requests on rl-basic").
 	Name string
 
-	// Meter is "requests" | "tokens" | "tokens.<suffix>" | "concurrency".
+	// Meter is "requests" | "tokens" | "tokens.<suffix>" | "concurrency" |
+	// MeterRevoked.
 	Meter string
 
 	// Strategy controls the rate-limit algorithm.
@@ -70,6 +71,14 @@ type Rule struct {
 	// used only to set key TTLs.
 	Window time.Duration
 }
+
+// MeterRevoked is a pseudo-meter: it carries no budget, only the key whose
+// existence revokes the caller's credential. Callers ride it on the Reserve
+// they already run so revocation costs no extra round trip.
+const MeterRevoked = "revoked"
+
+// ErrRevoked is returned by Reserve when a MeterRevoked rule's key exists.
+var ErrRevoked = errors.New("limit: credential revoked")
 
 // Observations are passed to Commit to supply post-hoc measurements.
 // Tokens is a map of token-type → count (e.g. {"input": 300, "output": 200}).

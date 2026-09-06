@@ -89,7 +89,16 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     provider                 LowCardinality(String),
     cost_nanos               Int64 DEFAULT -1,
     cost_breakdown           Map(LowCardinality(String), Int64) CODEC(ZSTD(1)),
-    pricing                  LowCardinality(String)
+    pricing                  LowCardinality(String),
+    project_id               String,
+    project                  LowCardinality(String),
+    team_id                  String,
+    team                     LowCardinality(String),
+    principal_kind           LowCardinality(String),
+    principal_id             String,
+    principal                LowCardinality(String),
+    credential_kind          LowCardinality(String),
+    credential_id            String
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)
@@ -105,6 +114,9 @@ var expectedColumns = []string{
 	"host_id", "host_key_id", "tokens", "extras", "tags",
 	"model", "host", "policy",
 	"provider", "cost_nanos", "cost_breakdown", "pricing",
+	"project_id", "project", "team_id", "team",
+	"principal_kind", "principal_id", "principal",
+	"credential_kind", "credential_id",
 }
 
 // alterTableSQL upgrades a pre-existing table in place — additive columns
@@ -120,6 +132,24 @@ var alterTableSQL = []string{
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_nanos Int64 DEFAULT -1`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS cost_breakdown Map(LowCardinality(String), Int64)`,
 	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS pricing LowCardinality(String)`,
+	// Attribution columns append at the end so a table upgraded by these
+	// ALTERs keeps the same column order as a freshly created one — the
+	// insert batch is positional.
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS project_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS project LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS team_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS team LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal_kind LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal_id String`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS principal LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_kind LowCardinality(String)`,
+	`ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS credential_id String`,
+	// Scoped reads (one project's events, one team's, one key's) filter on
+	// columns the ORDER BY does not lead with, so without a skip index every
+	// partition in the window is read.
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_project_id project_id TYPE bloom_filter GRANULARITY 4`,
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_team_id team_id TYPE bloom_filter GRANULARITY 4`,
+	`ALTER TABLE usage_events ADD INDEX IF NOT EXISTS idx_relay_key_hash relay_key_hash TYPE bloom_filter GRANULARITY 4`,
 }
 
 // ensureSchema creates the table if absent, then verifies its columns match
@@ -348,6 +378,15 @@ func (s *Sink) insertBatch(events []usage.Event) error {
 			costNanos,
 			costBreakdown,
 			ev.Pricing,
+			ev.ProjectID,
+			ev.Project,
+			ev.TeamID,
+			ev.Team,
+			ev.PrincipalKind,
+			ev.PrincipalID,
+			ev.Principal,
+			ev.CredentialKind,
+			ev.CredentialID,
 		)
 		if err != nil {
 			return fmt.Errorf("append row: %w", err)
@@ -370,7 +409,7 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 	where, args := buildWhere(q, false)
 
 	sql := fmt.Sprintf(
-		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
+		"SELECT request_id, source, ts, status, duration_ms, streamed, finish_reason, attempts, error_kind, error_message, upstream_start, upstream_response_start, upstream_response_end, relay_key_hash, policy_id, model_id, requested_model, host_id, host_key_id, tokens, extras, tags, model, host, policy, provider, cost_nanos, cost_breakdown, pricing, project_id, project, team_id, team, principal_kind, principal_id, principal, credential_kind, credential_id FROM %s%s ORDER BY ts DESC, request_id DESC LIMIT %d",
 		chTable, where, limit,
 	)
 
@@ -426,6 +465,15 @@ func (s *Sink) Events(ctx context.Context, q usage.EventQuery) ([]usage.Event, e
 			&costNanos,
 			&costBkdn,
 			&ev.Pricing,
+			&ev.ProjectID,
+			&ev.Project,
+			&ev.TeamID,
+			&ev.Team,
+			&ev.PrincipalKind,
+			&ev.PrincipalID,
+			&ev.Principal,
+			&ev.CredentialKind,
+			&ev.CredentialID,
 		); err != nil {
 			return nil, fmt.Errorf("usage/clickhouse: scan event: %w", err)
 		}
@@ -764,8 +812,37 @@ func buildWhere(q usage.EventQuery, aggregate bool) (string, []any) {
 		clauses = append(clauses, "request_id = ?")
 		args = append(args, q.RequestID)
 	}
+	// Read scope is a disjunction, not another IN filter: the caller's
+	// projects OR their own traffic.
+	if len(q.ScopeProjectID) > 0 || len(q.ScopeRelayKeyHash) > 0 || len(q.ScopePrincipalID) > 0 {
+		scopeIn := func(col string, vals []string) string {
+			if len(vals) == 0 {
+				return ""
+			}
+			ph := make([]string, len(vals))
+			for i, v := range vals {
+				ph[i] = "?"
+				args = append(args, v)
+			}
+			return col + " IN (" + strings.Join(ph, ",") + ")"
+		}
+		var or []string
+		for _, c := range []string{
+			scopeIn("project_id", q.ScopeProjectID),
+			scopeIn("relay_key_hash", q.ScopeRelayKeyHash),
+			scopeIn("principal_id", q.ScopePrincipalID),
+		} {
+			if c != "" {
+				or = append(or, c)
+			}
+		}
+		clauses = append(clauses, "("+strings.Join(or, " OR ")+")")
+	}
 	in("relay_key_hash", q.RelayKeyHash)
 	in("policy_id", q.PolicyID)
+	in("project_id", q.ProjectID)
+	in("team_id", q.TeamID)
+	in("principal_id", q.PrincipalID)
 	in("model_id", q.ModelID)
 	in("host_id", q.HostID)
 	in("source", q.Source)

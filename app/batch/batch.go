@@ -10,7 +10,12 @@
 // validates and enqueues, execution happens off to the side.
 package batch
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"github.com/wyolet/relay/app/httpapi/inference"
+)
 
 // Status is the coarse, cached lifecycle of a batch. The authoritative per-item
 // state lives in jobq; this is a cheap roll-up plus the terminal cancellation
@@ -35,6 +40,59 @@ type Batch struct {
 	TotalItems   int
 	CreatedAt    time.Time
 	CompletedAt  *time.Time
+	Attribution
+}
+
+// Attribution is the principal and tenancy that authorised a submission —
+// fixed at submit, not whatever the credential resolves to when an item
+// finally runs. Ids only; slugs come from the snapshot at emit, as the policy
+// name already does. It rides each item's job metadata so execution needs no
+// extra read.
+type Attribution struct {
+	ProjectID      string
+	TeamID         string
+	PrincipalKind  string
+	PrincipalID    string
+	CredentialKind string
+	CredentialID   string
+}
+
+// Caller is the identity a batch request arrives with, resolved by the
+// transport. app/batch never reads an HTTP context itself: the inference
+// layer owns bearer classification and the Key → ServiceAccount →
+// PolicyBinding resolution order, and hands the result down.
+type Caller struct {
+	Attribution
+	// KeyHash is the presented key's hash; empty for a token.
+	KeyHash string
+	// PolicyID is the already-resolved policy, not the key's raw field.
+	PolicyID string
+}
+
+// TokenJTI returns the jti of the token the submission arrived with, or ""
+// for a key. It rides each item so a token revoked after submit stops its
+// queued work at the pipeline's reservation, as it would a live request.
+func (c *Caller) TokenJTI() string {
+	if c == nil || c.CredentialKind != inference.CredentialToken {
+		return ""
+	}
+	return c.CredentialID
+}
+
+// CallerFunc resolves the caller from a request context.
+type CallerFunc func(ctx context.Context) *Caller
+
+// Owner is the opaque string a batch is authorized by on read and cancel:
+// the bearer's key hash when it has one, else the principal, so a
+// token-authenticated caller reaches its own batches and no one else's.
+func (c *Caller) Owner() string {
+	if c == nil {
+		return ""
+	}
+	if c.KeyHash != "" {
+		return c.KeyHash
+	}
+	return c.PrincipalKind + ":" + c.PrincipalID
 }
 
 // Item maps one ordinal within a batch to the jobq job that runs it.

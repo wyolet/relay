@@ -7,13 +7,13 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 )
 
 // catalogFromFixture returns a *Catalog loaded with the standard fixture.
@@ -411,8 +411,8 @@ func TestApply_RefInvariantsHold(t *testing.T) {
 	for _, p := range s.pricingsByID {
 		check(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
 	}
-	for _, k := range s.relayKeysByID {
-		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
+	for _, k := range s.keysByID {
+		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
 	}
 
 	// Invariant 2: every dependent in refsBy* exists.
@@ -447,8 +447,8 @@ func emptySnap() *Snapshot {
 		modelsByName:       map[string][]*model.Model{},
 		hostKeysByID:       map[string]*hostkey.HostKey{},
 		rateLimitsByID:     map[string]*ratelimit.RateLimit{},
-		relayKeysByID:      map[string]*relaykey.RelayKey{},
-		relayKeysByHash:    map[string]*relaykey.RelayKey{},
+		keysByID:           map[string]*key.Key{},
+		keysByHash:         map[string]*key.Key{},
 		modelsByPolicy:     map[string][]*model.Model{},
 		hostKeysByPolicy:   map[string][]*hostkey.HostKey{},
 		rateLimitByPolicy:  map[string]*ratelimit.RateLimit{},

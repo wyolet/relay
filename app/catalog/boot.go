@@ -11,18 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
@@ -83,14 +90,27 @@ type Stores struct {
 	Policy    *policy.Store
 	Pricing   *pricing.Store
 	Binding   *binding.Store
-	RelayKey  *relaykey.Store
+	Key       *key.Store
 	Overlay   *overlay.Store
 	Settings  *settings.Store
+	Team      *team.Store
+	Project   *project.Store
+
+	ServiceAccount *serviceaccount.Store
+	Group          *group.Store
+	Role           *role.Store
+	RoleBinding    *rolebinding.Store
+	PolicyBinding  *policybinding.Store
 
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
 	// controller resolving S3 credentials) resolve through the same seam.
 	Secrets *pkgsecret.Registry
+
+	// Stored is the AES-GCM stored-secret backend registered in Secrets,
+	// exposed so the composition root can write a secret (the generated
+	// token signing key) through the same master-key path.
+	Stored *pkgsecret.StoredResolver
 
 	// OAuthResolver is the KindOAuth resolver registered in Secrets,
 	// exposed so the composition root can drive the proactive
@@ -117,17 +137,29 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),
 		Binding:   binding.NewStore(opts.Pool),
-		RelayKey:  relaykey.NewStore(q),
+		Key:       key.NewStore(q),
 		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),
-		Secrets:   secReg,
+		Team:      team.NewStore(q),
+		Project:   project.NewStore(q),
+
+		ServiceAccount: serviceaccount.NewStore(q),
+		Group:          group.NewStore(opts.Pool),
+		Role:           role.NewStore(q),
+		RoleBinding:    rolebinding.NewStore(opts.Pool),
+		PolicyBinding:  policybinding.NewStore(opts.Pool),
+
+		Secrets: secReg,
+		Stored:  secStored,
 	}
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
-		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
+		stores.HostKey, stores.RateLimit, stores.Key, stores.Pricing,
 		stores.Binding,
 	)
 	cat.UseOverlays(stores.Overlay)
+	cat.UseTenancy(stores.Team, stores.Project, stores.ServiceAccount, stores.Group,
+		stores.Role, stores.RoleBinding, stores.PolicyBinding)
 	cat.settings.store = stores.Settings
 
 	// OAuth credential resolver: stores its token blob via the same AES-GCM
@@ -178,9 +210,10 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		}
 		if empty {
 			if _, err := seed.Run(ctx, seed.Options{
-				Pool:      opts.Pool,
-				YAMLDir:   opts.AutoSeedDir,
-				MasterKey: opts.MasterKey,
+				Pool:             opts.Pool,
+				YAMLDir:          opts.AutoSeedDir,
+				MasterKey:        opts.MasterKey,
+				CatalogKindsOnly: true,
 			}); err != nil {
 				return nil, fmt.Errorf("catalog.Hydrate: auto-seed: %w", err)
 			}
@@ -204,9 +237,17 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		ratelimit: stores.RateLimit,
 		policy:    stores.Policy,
 		pricing:   stores.Pricing,
-		relaykey:  stores.RelayKey,
+		key:       stores.Key,
 		overlay:   stores.Overlay,
 		settings:  stores.Settings,
+		team:      stores.Team,
+		project:   stores.Project,
+
+		serviceAccount: stores.ServiceAccount,
+		group:          stores.Group,
+		role:           stores.Role,
+		roleBinding:    stores.RoleBinding,
+		policyBinding:  stores.PolicyBinding,
 	})
 	return listener, nil
 }
@@ -303,6 +344,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 		"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", cause)
 	if _, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
+		CatalogKindsOnly: true,
 	}); err != nil {
 		return fmt.Errorf("fallback seed: %w", err)
 	}
@@ -317,6 +359,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
 	res, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
+		CatalogKindsOnly: true,
 	})
 	if err != nil {
 		return fmt.Errorf("seed catalog %s: %w", version, err)
@@ -401,7 +444,7 @@ func isCatalogEmpty(ctx context.Context, s *Stores) (bool, error) {
 	if len(prs) > 0 {
 		return false, nil
 	}
-	rks, err := s.RelayKey.List(ctx)
+	rks, err := s.Key.List(ctx)
 	if err != nil {
 		return false, err
 	}

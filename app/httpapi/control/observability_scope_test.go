@@ -12,106 +12,100 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/binding"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/group"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/ids"
 )
 
-type fakeKeyLister []*relaykey.RelayKey
-
-func (f fakeKeyLister) List(context.Context) ([]*relaykey.RelayKey, error) { return f, nil }
-
-func testKeys() fakeKeyLister {
-	mk := func(hash string, owner meta.Owner) *relaykey.RelayKey {
-		k := &relaykey.RelayKey{}
-		k.Meta = meta.Metadata{ID: meta.NewID(), Name: "k-" + hash, Owner: owner}
-		k.Spec.KeyHash = hash
-		return k
-	}
-	return fakeKeyLister{
-		mk("hash-alice-1", meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}),
-		mk("hash-alice-2", meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}),
-		mk("hash-bob", meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}),
-		mk("hash-operator", meta.Owner{Kind: meta.OwnerUser}),
-	}
-}
-
-func TestRelayKeyScope(t *testing.T) {
-	keys := testKeys()
-
+func TestScopeOf(t *testing.T) {
 	tests := []struct {
-		name         string
-		authzr       authz.Authorizer
-		who          *actor.Actor
-		wantHashes   []string
-		unrestricted bool
+		name           string
+		authzr         authz.Authorizer
+		who            *actor.Actor
+		wantPrincipals []string
+		unrestricted   bool
 	}{
 		{"single-user authorizer is unrestricted", authz.AlwaysAllowAuthenticated{}, scopeActors["alice"], nil, true},
-		{"admin role is unrestricted", authz.OwnerScoped{}, scopeActors["root"], nil, true},
-		{"admin token is unrestricted", authz.OwnerScoped{}, scopeActors["token"], nil, true},
-		{"user is scoped to own hashes", authz.OwnerScoped{}, scopeActors["alice"], []string{"hash-alice-1", "hash-alice-2"}, false},
-		{"user with no keys is scoped to nothing", authz.OwnerScoped{}, &actor.Actor{UserID: "u-carol"}, nil, false},
+		{"admin role is unrestricted", testRBAC(), scopeActors["root"], nil, true},
+		{"admin token is unrestricted", testRBAC(), scopeActors["token"], nil, true},
+		{"user is scoped to their own principal", testRBAC(), scopeActors["alice"], []string{"u-alice"}, false},
+		{"user with no session identity is scoped to nothing", testRBAC(), &actor.Actor{}, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := actor.WithActor(context.Background(), tt.who)
-			hashes, unrestricted, err := relayKeyScope(ctx, tt.authzr, keys)
+			sc, err := scopeOf(ctx, tt.authzr, nil, "usage")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if unrestricted != tt.unrestricted {
-				t.Fatalf("unrestricted = %v, want %v", unrestricted, tt.unrestricted)
+			if sc.unrestricted != tt.unrestricted {
+				t.Fatalf("unrestricted = %v, want %v", sc.unrestricted, tt.unrestricted)
 			}
-			if len(hashes) != len(tt.wantHashes) {
-				t.Fatalf("hashes = %v, want %v", hashes, tt.wantHashes)
+			if len(sc.principalIDs) != len(tt.wantPrincipals) {
+				t.Fatalf("principalIDs = %v, want %v", sc.principalIDs, tt.wantPrincipals)
 			}
-			for i := range hashes {
-				if hashes[i] != tt.wantHashes[i] {
-					t.Fatalf("hashes = %v, want %v", hashes, tt.wantHashes)
+			for i := range sc.principalIDs {
+				if sc.principalIDs[i] != tt.wantPrincipals[i] {
+					t.Fatalf("principalIDs = %v, want %v", sc.principalIDs, tt.wantPrincipals)
 				}
 			}
 		})
 	}
-
-	t.Run("nil lister fails closed", func(t *testing.T) {
-		ctx := actor.WithActor(context.Background(), scopeActors["alice"])
-		hashes, unrestricted, err := relayKeyScope(ctx, authz.OwnerScoped{}, nil)
-		if err != nil || unrestricted || len(hashes) != 0 {
-			t.Fatalf("got (%v, %v, %v), want scoped-to-nothing", hashes, unrestricted, err)
-		}
-	})
 }
 
 func TestScopeEventQuery(t *testing.T) {
-	owned := []string{"h-1", "h-2"}
-
-	t.Run("no caller filter gets the owned set", func(t *testing.T) {
+	t.Run("unrestricted leaves the query alone", func(t *testing.T) {
 		q := usagelog.EventQuery{}
-		if !scopeEventQuery(&q, owned) {
+		if !scopeEventQuery(&q, readScope{unrestricted: true}) {
 			t.Fatal("want true")
 		}
-		if len(q.RelayKeyHash) != 2 {
-			t.Fatalf("RelayKeyHash = %v", q.RelayKeyHash)
+		if len(q.ScopeProjectID) != 0 || len(q.ScopePrincipalID) != 0 {
+			t.Fatalf("query narrowed: %+v", q)
 		}
 	})
-	t.Run("caller filter intersects", func(t *testing.T) {
-		q := usagelog.EventQuery{RelayKeyHash: []string{"h-2", "h-foreign"}}
-		if !scopeEventQuery(&q, owned) {
+	t.Run("scope rides the query as a disjunction", func(t *testing.T) {
+		q := usagelog.EventQuery{}
+		sc := readScope{projectIDs: []string{"p-1"}, principalIDs: []string{"u-1", "u-2"}}
+		if !scopeEventQuery(&q, sc) {
 			t.Fatal("want true")
 		}
-		if len(q.RelayKeyHash) != 1 || q.RelayKeyHash[0] != "h-2" {
-			t.Fatalf("RelayKeyHash = %v, want [h-2]", q.RelayKeyHash)
+		if len(q.ScopeProjectID) != 1 || len(q.ScopePrincipalID) != 2 {
+			t.Fatalf("query = %+v, want the scope carried verbatim", q)
 		}
 	})
-	t.Run("foreign-only filter matches nothing", func(t *testing.T) {
+	t.Run("a caller filter is not widened by the scope", func(t *testing.T) {
 		q := usagelog.EventQuery{RelayKeyHash: []string{"h-foreign"}}
-		if scopeEventQuery(&q, owned) {
-			t.Fatal("want false")
+		if !scopeEventQuery(&q, readScope{principalIDs: []string{"u-1"}}) {
+			t.Fatal("want true")
+		}
+		// The caller's own filter stays; the scope is ANDed on top of it.
+		if len(q.RelayKeyHash) != 1 || q.RelayKeyHash[0] != "h-foreign" {
+			t.Fatalf("RelayKeyHash = %v, want the caller filter untouched", q.RelayKeyHash)
+		}
+		if len(q.ScopePrincipalID) != 1 {
+			t.Fatalf("ScopePrincipalID = %v", q.ScopePrincipalID)
 		}
 	})
-	t.Run("no owned hashes matches nothing", func(t *testing.T) {
+	t.Run("an empty scope matches nothing", func(t *testing.T) {
 		q := usagelog.EventQuery{}
-		if scopeEventQuery(&q, nil) {
+		if scopeEventQuery(&q, readScope{}) {
 			t.Fatal("want false")
 		}
 	})
@@ -165,10 +159,25 @@ func newUsageHarness(t *testing.T, authzr authz.Authorizer, reader *fakeUsageRea
 }
 
 func TestUsageReadScoping(t *testing.T) {
-	t.Run("scoped user with no keys gets an empty page without touching the store", func(t *testing.T) {
+	t.Run("scoped user reads only their own principal's events", func(t *testing.T) {
 		reader := &fakeUsageReader{events: []usagelog.Event{{RequestID: "r-1"}}}
-		h := newUsageHarness(t, authz.OwnerScoped{}, reader)
+		h := newUsageHarness(t, testRBAC(), reader)
 		w := scopeReq(t, h, "alice", http.MethodGet, "/usage/events", "")
+		if w.Code != 200 {
+			t.Fatalf("status = %d: %s", w.Code, w.Body)
+		}
+		if reader.calls != 1 {
+			t.Fatalf("reader called %d times, want 1", reader.calls)
+		}
+		if len(reader.last.ScopePrincipalID) != 1 || reader.last.ScopePrincipalID[0] != "u-alice" {
+			t.Fatalf("ScopePrincipalID = %v, want [u-alice]", reader.last.ScopePrincipalID)
+		}
+	})
+
+	t.Run("a caller with no principal at all is scoped out before the store", func(t *testing.T) {
+		reader := &fakeUsageReader{events: []usagelog.Event{{RequestID: "r-1"}}}
+		h := newUsageHarness(t, testRBAC(), reader)
+		w := scopeReq(t, h, "nobody", http.MethodGet, "/usage/events", "")
 		if w.Code != 200 {
 			t.Fatalf("status = %d: %s", w.Code, w.Body)
 		}
@@ -188,7 +197,7 @@ func TestUsageReadScoping(t *testing.T) {
 
 	t.Run("admin reads unscoped", func(t *testing.T) {
 		reader := &fakeUsageReader{}
-		h := newUsageHarness(t, authz.OwnerScoped{}, reader)
+		h := newUsageHarness(t, testRBAC(), reader)
 		w := scopeReq(t, h, "root", http.MethodGet, "/usage/events", "")
 		if w.Code != 200 {
 			t.Fatalf("status = %d: %s", w.Code, w.Body)
@@ -212,7 +221,7 @@ func TestUsageReadScoping(t *testing.T) {
 
 	t.Run("scoped user cannot fetch a foreign log record", func(t *testing.T) {
 		reader := &fakeUsageReader{events: []usagelog.Event{{RequestID: "r-1", RelayKeyHash: "hash-bob"}}}
-		h := newUsageHarness(t, authz.OwnerScoped{}, reader)
+		h := newUsageHarness(t, testRBAC(), reader)
 		if w := scopeReq(t, h, "alice", http.MethodGet, "/logs/r-1", ""); w.Code != 404 {
 			t.Fatalf("status = %d, want 404: %s", w.Code, w.Body)
 		}
@@ -220,4 +229,120 @@ func TestUsageReadScoping(t *testing.T) {
 			t.Fatalf("admin status = %d, want 200: %s", w.Code, w.Body)
 		}
 	})
+}
+
+// Own traffic is matched by principal, so a key's rotation — which changes
+// its hash and eventually retires the old one — never drops the caller's own
+// events out of their scope.
+func TestScopeOfCoversOwnTrafficAcrossKeyRotation(t *testing.T) {
+	ctx := actor.WithActor(context.Background(), scopeActors["alice"])
+	sc, err := scopeOf(ctx, testRBAC(), nil, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := usagelog.Event{RequestID: "r-1", RelayKeyHash: "hash-brand-new", PrincipalID: "u-alice"}
+	if !sc.allows(rotated) {
+		t.Fatalf("scope %+v rejects the caller's own event after a rotation", sc)
+	}
+	foreign := usagelog.Event{RequestID: "r-2", RelayKeyHash: "hash-bob", PrincipalID: "u-bob"}
+	if sc.allows(foreign) {
+		t.Fatalf("scope %+v admits another principal's event", sc)
+	}
+}
+
+// viewerFixture builds a two-project catalog with a viewer role bound at
+// project p1 only, for exercising scopeOf's project-scan and per-kind
+// branches, which an empty catalog (testRBAC) can never reach.
+func viewerFixture(t *testing.T) (cat *appcatalog.Catalog, viewer *actor.Actor, p1ID string) {
+	t.Helper()
+	builtins, err := role.Builtins()
+	if err != nil {
+		t.Fatalf("built-in roles: %v", err)
+	}
+	yes := true
+	var viewerRoleID string
+	for _, r := range builtins {
+		r.Meta.ID = ids.New()
+		r.Spec.Enabled = &yes
+		if r.Meta.Name == "viewer" {
+			viewerRoleID = r.Meta.ID
+		}
+	}
+	if viewerRoleID == "" {
+		t.Fatal("no built-in viewer role")
+	}
+
+	teamID, p1, p2, viewerUserID := ids.New(), ids.New(), ids.New(), ids.New()
+	tm := &team.Team{Meta: meta.Metadata{ID: teamID, Name: "t1", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	tm.Spec.Enabled = &yes
+	proj1 := &project.Project{Meta: meta.Metadata{ID: p1, Name: "p1", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	proj1.Spec.TeamID = teamID
+	proj1.Spec.Enabled = &yes
+	proj2 := &project.Project{Meta: meta.Metadata{ID: p2, Name: "p2", Owner: meta.Owner{Kind: meta.OwnerTeam, ID: teamID}}}
+	proj2.Spec.TeamID = teamID
+	proj2.Spec.Enabled = &yes
+
+	rb := &rolebinding.RoleBinding{Meta: meta.Metadata{ID: ids.New(), Name: "viewer-p1", Owner: meta.Owner{Kind: meta.OwnerProject, ID: p1}}}
+	rb.Spec.RoleID = viewerRoleID
+	rb.Spec.Scope = meta.Owner{Kind: meta.OwnerProject, ID: p1}
+	rb.Spec.Subjects = []rolebinding.Subject{{Kind: rolebinding.SubjectUser, ID: viewerUserID}}
+	rb.Spec.Enabled = &yes
+
+	cat = appcatalog.New(
+		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
+		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
+		tokenList[key.Key]{}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
+	)
+	cat.UseTenancy(
+		tokenList[team.Team]{tm}, tokenList[project.Project]{proj1, proj2},
+		tokenList[serviceaccount.ServiceAccount]{}, tokenList[group.Group]{},
+		tokenList[role.Role](builtins), tokenList[rolebinding.RoleBinding]{rb},
+		tokenList[policybinding.PolicyBinding]{},
+	)
+	if err := cat.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	viewer = &actor.Actor{UserID: viewerUserID, Subjects: appcatalog.UserSubjects(viewerUserID, nil, nil)}
+	return cat, viewer, p1
+}
+
+func TestScopeOfProjectBranchResolvesOnlyTheBoundProject(t *testing.T) {
+	cat, viewer, p1 := viewerFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	ctx := actor.WithActor(context.Background(), viewer)
+
+	sc, err := scopeOf(ctx, rbac, cat, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.unrestricted {
+		t.Fatal("a viewer bound at one project should not resolve unrestricted")
+	}
+	if len(sc.projectIDs) != 1 || sc.projectIDs[0] != p1 {
+		t.Fatalf("projectIDs = %v, want exactly [%s]", sc.projectIDs, p1)
+	}
+}
+
+// The viewer role grants usage.{get,read} but not logs — scopeOf must
+// resolve the two kinds independently rather than sharing one scope.
+func TestScopeOfLogsIsNotGrantedByAUsageOnlyRole(t *testing.T) {
+	cat, viewer, p1 := viewerFixture(t)
+	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
+	ctx := actor.WithActor(context.Background(), viewer)
+
+	usageSc, err := scopeOf(ctx, rbac, cat, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usageSc.projectIDs) != 1 || usageSc.projectIDs[0] != p1 {
+		t.Fatalf("usage scope = %+v, want the bound project %s", usageSc, p1)
+	}
+
+	logsSc, err := scopeOf(ctx, rbac, cat, "logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logsSc.unrestricted || len(logsSc.projectIDs) != 0 {
+		t.Fatalf("logs scope = %+v, want empty (viewer role has no logs grant)", logsSc)
+	}
 }

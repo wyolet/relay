@@ -6,13 +6,13 @@ import (
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 )
 
 // TestProperty_InvariantsHoldUnderRandomEvents fuzzes the reconciler. It
@@ -59,6 +59,8 @@ func runProperty(t *testing.T, seed int64, events int) {
 	if err := c.Reload(t.Context()); err != nil {
 		t.Fatalf("initial reload: %v", err)
 	}
+
+	orphanPolID, orphanProjID, orphanKeyID := meta.NewID(), meta.NewID(), meta.NewID()
 
 	// Operate on the same set of ids the fixture established. The reconciler
 	// is exercised via toggle-disable, toggle-enable, delete, and re-upsert.
@@ -110,13 +112,32 @@ func runProperty(t *testing.T, seed int64, events int) {
 			cp := *rks[0]
 			cp.Spec.Enabled = togglePtr(rks[0].Spec.Enabled)
 			rks[0].Spec.Enabled = cp.Spec.Enabled
-			_ = c.ApplyRelayKeyUpsert(&cp)
+			_ = c.ApplyKeyUpsert(&cp)
 		},
 		func() {
 			cp := *pr0
 			cp.Spec.Enabled = togglePtr(pr0.Spec.Enabled)
 			pr0.Spec.Enabled = cp.Spec.Enabled
 			_ = c.ApplyPricingUpsert(&cp)
+		},
+		// A policy owned by a project the snapshot does not hold: it is
+		// dropped, and every key naming it has to go with it (build and
+		// reconcile must reach the same fixpoint here).
+		func() {
+			cp := *pols[0]
+			cp.Meta.ID = orphanPolID
+			cp.Meta.Name = "orphan-project-policy"
+			cp.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: orphanProjID}
+			cp.Spec.Enabled = togglePtr(cp.Spec.Enabled)
+			_ = c.ApplyPolicyUpsert(&cp)
+		},
+		func() {
+			cp := *rks[0]
+			cp.Meta.ID = orphanKeyID
+			cp.Meta.Name = "key-on-orphan-policy"
+			cp.Spec.KeyHash = "orphan-hash"
+			cp.Spec.PolicyID = orphanPolID
+			_ = c.ApplyKeyUpsert(&cp)
 		},
 		// Hard deletes (the reconciler treats absent as no-op on second call).
 		func() { _ = c.ApplyModelDelete(models[0].Meta.ID) },
@@ -189,8 +210,8 @@ func assertSnapshotInvariants(t *testing.T, s *Snapshot, step int) {
 	for _, p := range s.pricingsByID {
 		check(refKey{Kind: refPricing, ID: p.Meta.ID}, outboundPricingRefs(p))
 	}
-	for _, k := range s.relayKeysByID {
-		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
+	for _, k := range s.keysByID {
+		check(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
 	}
 
 	// 2. Every dependent in every refsBy* set points at a present row.
@@ -275,5 +296,5 @@ var (
 	_ = policy.Spec{}
 	_ = provider.Spec{}
 	_ = ratelimit.Spec{}
-	_ = relaykey.Spec{}
+	_ = key.Spec{}
 )

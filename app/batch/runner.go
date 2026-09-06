@@ -12,7 +12,9 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/pipeline"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -35,22 +37,59 @@ type Runner struct {
 // silently mis-dispatched (canonical rule 11).
 var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 
+// ErrPolicyUnavailable is returned when the policy the submission resolved to
+// is no longer in the snapshot. The item fails rather than running policy-less.
+var ErrPolicyUnavailable = errors.New("batch: policy_unavailable")
+
 // Run executes one item. requestID ties the usage event to the item (the jobq
-// job id); relayKeyHash + inbound select routing. It returns the upstream
-// status and the buffered response body. Usage emits automatically with
-// source="batch" when the pipeline body closes.
-func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbound adapters.Name, body []byte) (int, []byte, error) {
-	rk, ok := rn.Catalog.Current().RelayKeyByHash(relayKeyHash)
-	if !ok {
-		return 0, nil, errors.New("batch: relay key not found (revoked or deleted)")
-	}
+// job id); policyID is the policy the submission already resolved to (the
+// resolution order lives in the auth layer, not here), tokenJTI is the
+// submitting token's jti (empty for a key) so the reservation refuses a
+// revoked one, and attr is the submission's attribution as recorded at
+// submit. It returns the upstream status and the buffered response body.
+// Usage emits automatically with source="batch" when the pipeline body
+// closes.
+func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID, tokenJTI string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
+	snap := rn.Catalog.Current()
 
 	modelName, _, err := inference.ExtractModelStream(body)
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: parse model: %w", err)
 	}
 
-	plan, err := rn.Resolver.Resolve(routing.Request{ModelName: modelName, RawModelName: modelName, RelayKey: rk})
+	var pol *policy.Policy
+	if policyID != "" {
+		var ok bool
+		if pol, ok = snap.Policy(policyID); !ok {
+			// The submission resolved to this policy; running the item without
+			// one would silently execute it under the policy-less rules
+			// instead, unmetered and against a pool the caller never had.
+			if pol, ok = snap.DisabledPolicy(policyID); !ok {
+				return 0, nil, fmt.Errorf("%w: policy %q", ErrPolicyUnavailable, policyID)
+			}
+		}
+	}
+	// Payload logging is a per-key opt-in; a token-submitted batch has no key
+	// row to read it from and stays off.
+	payloadLogging := false
+	if rk, ok := snap.KeyByHash(relayKeyHash); ok && rk != nil {
+		payloadLogging = rk.Spec.PayloadLoggingEnabled
+	}
+	// A policy-less item draws on the submitter's own host keys, so the
+	// submitting user has to reach routing; a service-account submission
+	// leaves it empty and sees the system-owned pool only.
+	userID := ""
+	if attr.PrincipalKind == string(key.PrincipalUser) {
+		userID = attr.PrincipalID
+	}
+	plan, err := rn.Resolver.Resolve(routing.Request{
+		ModelName:             modelName,
+		RawModelName:          modelName,
+		Policy:                pol,
+		UserID:                userID,
+		PayloadLoggingEnabled: payloadLogging,
+		Snapshot:              snap,
+	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)
 	}
@@ -72,6 +111,25 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 	lc := lifecycle.NewContext(requestID, "batch", time.Now())
 	lc.RelayKeyHash = relayKeyHash
 	lc.RequestedModel = modelName
+	lc.ProjectID = attr.ProjectID
+	lc.TeamID = attr.TeamID
+	lc.PrincipalKind = attr.PrincipalKind
+	lc.PrincipalID = attr.PrincipalID
+	lc.CredentialKind = attr.CredentialKind
+	lc.CredentialID = attr.CredentialID
+	// Slugs resolve from the snapshot here, as the policy name already does:
+	// the ids were fixed at submit, the names describe them as of execution.
+	if proj, ok := snap.Project(attr.ProjectID); ok {
+		lc.ProjectName = proj.Meta.Name
+	}
+	if t, ok := snap.Team(attr.TeamID); ok {
+		lc.TeamName = t.Meta.Name
+	}
+	if attr.PrincipalKind == string(key.PrincipalServiceAccount) {
+		if sa, ok := snap.ServiceAccount(attr.PrincipalID); ok {
+			lc.PrincipalName = sa.Meta.Name
+		}
+	}
 	if plan.Policy != nil {
 		lc.PolicyID = plan.Policy.Meta.ID
 		lc.PolicyName = plan.Policy.Meta.Name
@@ -114,6 +172,8 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash string, inbou
 		ModelName:     plan.Model.Meta.Name,
 		UpstreamModel: plan.UpstreamModel(),
 		Stream:        false,
+		TeamID:        attr.TeamID,
+		TokenJTI:      tokenJTI,
 		Lifecycle:     lc,
 	}
 

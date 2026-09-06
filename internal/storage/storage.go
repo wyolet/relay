@@ -27,6 +27,14 @@ type PoolOption func(*poolSettings)
 type poolSettings struct {
 	maxConns int32
 	minConns int32
+	migrate  bool
+}
+
+// WithMigrateOnBoot(false) stops Open from running the up-migrations. An
+// operator rolling back runs `relay migrate down` and needs the pods that
+// restart meanwhile to leave the schema where they put it.
+func WithMigrateOnBoot(on bool) PoolOption {
+	return func(s *poolSettings) { s.migrate = on }
 }
 
 // WithMaxConns overrides the pool's maximum connections (ignored if n <= 0).
@@ -53,7 +61,7 @@ func WithMinConns(n int) PoolOption {
 // then the caller's overrides, and clamps the warm floor to the ceiling so a
 // misconfigured MinConns > MaxConns can't wedge pool creation.
 func resolvePoolSettings(opts ...PoolOption) poolSettings {
-	s := poolSettings{maxConns: 10, minConns: 2}
+	s := poolSettings{maxConns: 10, minConns: 2, migrate: true}
 	for _, o := range opts {
 		o(&s)
 	}
@@ -66,10 +74,14 @@ func resolvePoolSettings(opts ...PoolOption) poolSettings {
 // Open opens a connection pool, runs pending migrations, and returns a
 // ready-to-use *Storage. The returned Storage must be closed with Close
 // when no longer needed. Pool sizing defaults to MaxConns 10 / MinConns 2;
-// pass WithMaxConns / WithMinConns to override.
+// pass WithMaxConns / WithMinConns to override, WithMigrateOnBoot(false) to
+// skip the migrations.
 func Open(ctx context.Context, dsn string, opts ...PoolOption) (*Storage, error) {
-	if err := runMigrations(dsn); err != nil {
-		return nil, fmt.Errorf("storage.Open: %w", err)
+	s := resolvePoolSettings(opts...)
+	if s.migrate {
+		if err := runMigrations(dsn); err != nil {
+			return nil, fmt.Errorf("storage.Open: %w", err)
+		}
 	}
 
 	cfg, err := pgxpool.ParseConfig(dsn)
@@ -77,7 +89,6 @@ func Open(ctx context.Context, dsn string, opts ...PoolOption) (*Storage, error)
 		return nil, fmt.Errorf("storage.Open: parse DSN: %w", err)
 	}
 
-	s := resolvePoolSettings(opts...)
 	cfg.MaxConns = s.maxConns
 	cfg.MinConns = s.minConns
 	cfg.MaxConnLifetime = 30 * time.Minute
@@ -99,6 +110,25 @@ func (s *Storage) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 // Pool returns the underlying pgxpool. Composition-root use only —
 // domain code reaches Postgres via its own typed Store packages.
 func (s *Storage) Pool() *pgxpool.Pool { return s.pool }
+
+// WithAdvisoryLock runs fn while holding the transaction-scoped Postgres
+// advisory lock named by key, so concurrent pods serialize on it. The lock
+// is released when the transaction ends, including on a panic or a lost
+// connection — nothing can leave it held.
+func WithAdvisoryLock(ctx context.Context, pool *pgxpool.Pool, key int64, fn func(context.Context) error) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("storage: advisory lock: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", key); err != nil {
+		return fmt.Errorf("storage: advisory lock: %w", err)
+	}
+	if err := fn(ctx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 
 // WrapPool wraps an existing *pgxpool.Pool into a *Storage without
 // opening a new pool or running migrations. Intended for tests that

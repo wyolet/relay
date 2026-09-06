@@ -7,15 +7,22 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 )
 
 // ---------------------------------------------------------------------------
@@ -236,6 +243,7 @@ func ToHostKey(d HostKeyDTO, idx Resolver) (*hostkey.HostKey, error) {
 	if m.Owner.Kind == "" {
 		m.Owner.Kind = meta.OwnerSystem
 	}
+	resolveScopeOwner(&m.Owner, idx)
 	hostID := d.Spec.HostID
 	if hostID != "" {
 		if id, ok := idx.HostID(hostID); ok {
@@ -305,10 +313,14 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 // ---------------------------------------------------------------------------
 
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
-	// Spec.Models entries are modelref DSL strings — stored verbatim on
-	// the Policy. Validation (Policy.Validate) re-runs the parser.
-	models := make([]string, 0, len(d.Spec.Models))
-	models = append(models, d.Spec.Models...)
+	// Spec.Models entries are modelref DSL strings, canonicalised exactly as
+	// the control API canonicalises them: a document and an API write of the
+	// same grant must produce the same row, or apply reports an update on
+	// every run.
+	models, err := policy.CanonicalizeModelRefs(d.Spec.Models)
+	if err != nil {
+		return nil, fmt.Errorf("policy %q: models: %w", d.Metadata.Name, err)
+	}
 
 	hostKeyIDs := make([]string, 0, len(d.Spec.HostKeys))
 	for _, name := range d.Spec.HostKeys {
@@ -338,8 +350,12 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			return nil, fmt.Errorf("policy %q: rlBindings[%d] rateLimit %q not found",
 				d.Metadata.Name, i, b.RateLimit)
 		}
+		bModels, err := policy.CanonicalizeModelRefs(append([]string{}, b.Models...))
+		if err != nil {
+			return nil, fmt.Errorf("policy %q: rlBindings[%d].models: %w", d.Metadata.Name, i, err)
+		}
 		rlBindings = append(rlBindings, policy.RLBinding{
-			Models:      append([]string{}, b.Models...),
+			Models:      bModels,
 			RateLimitID: id,
 		})
 	}
@@ -350,6 +366,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			m.Owner.ID = hid
 		}
 	}
+	resolveScopeOwner(&m.Owner, idx)
 	return &policy.Policy{
 		Meta: m,
 		Spec: policy.Spec{
@@ -358,7 +375,6 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 			RateLimitID:           rateLimitID,
 			RLBindings:            rlBindings,
 			KeySelection:          policy.KeySelection(d.Spec.KeySelection),
-			SkipDefaultLimits:     d.Spec.SkipDefaultLimits,
 			IncludeDeprecated:     d.Spec.IncludeDeprecated,
 			Enabled:               d.Spec.Enabled,
 			PayloadLoggingEnabled: d.Spec.PayloadLoggingEnabled,
@@ -369,11 +385,15 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 	// Spec.Models is already in wire form (ref strings). Spec.ModelIDs is the
 	// legacy literal-ID grant; emit those rows as model refs, not bare model
-	// slugs, because a bare modelref token means "provider".
+	// slugs, because a bare modelref token means "provider". Only when Models
+	// is empty, though: the two coexist on a row, and rendering both would
+	// make a re-apply of the export widen the grant.
 	models := make([]string, 0, len(p.Spec.Models)+len(p.Spec.ModelIDs))
 	models = append(models, p.Spec.Models...)
-	for _, id := range p.Spec.ModelIDs {
-		models = append(models, legacyModelRef(id, rev))
+	if len(models) == 0 {
+		for _, id := range p.Spec.ModelIDs {
+			models = append(models, legacyModelRef(id, rev))
+		}
 	}
 
 	hostKeys := make([]string, 0, len(p.Spec.HostKeyIDs))
@@ -416,7 +436,6 @@ func FromPolicy(p *policy.Policy, rev ReverseResolver) PolicyDTO {
 			RateLimit:             rlName,
 			RLBindings:            bindings,
 			KeySelection:          string(p.Spec.KeySelection),
-			SkipDefaultLimits:     p.Spec.SkipDefaultLimits,
 			IncludeDeprecated:     p.Spec.IncludeDeprecated,
 			Enabled:               p.Spec.Enabled,
 			PayloadLoggingEnabled: p.Spec.PayloadLoggingEnabled,
@@ -477,6 +496,7 @@ func ToRateLimit(d RateLimitDTO, idx Resolver) (*ratelimit.RateLimit, error) {
 			m.Owner.ID = hid
 		}
 	}
+	resolveScopeOwner(&m.Owner, idx)
 	return &ratelimit.RateLimit{
 		Meta: m,
 		Spec: ratelimit.Spec{
@@ -684,30 +704,46 @@ func FromHostBinding(b *binding.Binding, rev ReverseResolver) HostBindingDTO {
 }
 
 // ---------------------------------------------------------------------------
-// RelayKey
+// Key
 // ---------------------------------------------------------------------------
 
-func ToRelayKey(d RelayKeyDTO, idx Resolver) (*relaykey.RelayKey, error) {
-	policyID, ok := idx.PolicyID(d.Spec.Policy)
-	if !ok {
-		return nil, fmt.Errorf("relaykey %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
-	}
-
-	var revokedAt *time.Time
-	if d.Spec.RevokedAt != nil {
-		t, err := time.Parse(time.RFC3339, *d.Spec.RevokedAt)
-		if err != nil {
-			return nil, fmt.Errorf("relaykey %q: revokedAt: %w", d.Metadata.Name, err)
+func ToKey(d KeyDTO, idx Resolver) (*key.Key, error) {
+	// A Key without a policy resolves through its principal instead
+	// (ServiceAccount.policy, then the policy bindings), so the field is
+	// optional on the wire as it is in the domain.
+	var policyID string
+	if d.Spec.Policy != "" {
+		id, ok := idx.PolicyID(d.Spec.Policy)
+		if !ok {
+			return nil, fmt.Errorf("key %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
 		}
-		revokedAt = &t
+		policyID = id
 	}
 
-	return &relaykey.RelayKey{
-		Meta: d.Metadata.toMeta(),
-		Spec: relaykey.Spec{
+	principal, err := toPrincipal(d.Metadata.Name, d.Spec.Principal, idx)
+	if err != nil {
+		return nil, err
+	}
+
+	expiresAt, err := parseOptionalTime(d.Metadata.Name, "expiresAt", d.Spec.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	revokedAt, err := parseOptionalTime(d.Metadata.Name, "revokedAt", d.Spec.RevokedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	m := d.Metadata.toMeta()
+	resolveScopeOwner(&m.Owner, idx)
+	return &key.Key{
+		Meta: m,
+		Spec: key.Spec{
+			Principal:             principal,
 			PolicyID:              policyID,
 			KeyHash:               d.Spec.KeyHash,
 			Prefix:                d.Spec.Prefix,
+			ExpiresAt:             expiresAt,
 			RevokedAt:             revokedAt,
 			Enabled:               d.Spec.Enabled,
 			PassthroughAllowed:    d.Spec.PassthroughAllowed,
@@ -716,30 +752,496 @@ func ToRelayKey(d RelayKeyDTO, idx Resolver) (*relaykey.RelayKey, error) {
 	}, nil
 }
 
-func FromRelayKey(k *relaykey.RelayKey, rev ReverseResolver) RelayKeyDTO {
+// toPrincipal resolves the wire principal name to an id: a service account
+// slug or a username, per kind.
+func toPrincipal(keyName string, p PrincipalDTO, idx Resolver) (key.Principal, error) {
+	switch key.PrincipalKind(p.Kind) {
+	case key.PrincipalServiceAccount:
+		id, ok := idx.ServiceAccountID(p.Name)
+		if !ok {
+			return key.Principal{}, fmt.Errorf("key %q: service account %q not found", keyName, p.Name)
+		}
+		return key.Principal{Kind: key.PrincipalServiceAccount, ID: id}, nil
+	case key.PrincipalUser:
+		id, ok := idx.UserID(p.Name)
+		if !ok {
+			return key.Principal{}, fmt.Errorf("key %q: user %q not found", keyName, p.Name)
+		}
+		return key.Principal{Kind: key.PrincipalUser, ID: id}, nil
+	default:
+		return key.Principal{}, fmt.Errorf("key %q: principal.kind must be serviceaccount or user, got %q", keyName, p.Kind)
+	}
+}
+
+func parseOptionalTime(name, field string, raw *string) (*time.Time, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, *raw)
+	if err != nil {
+		return nil, fmt.Errorf("key %q: %s: %w", name, field, err)
+	}
+	return &t, nil
+}
+
+func FromKey(k *key.Key, rev ReverseResolver) KeyDTO {
 	policyName, _ := rev.PolicyName(k.Spec.PolicyID)
 	if policyName == "" {
 		policyName = k.Spec.PolicyID
 	}
 
-	var revokedAt *string
-	if k.Spec.RevokedAt != nil {
-		s := k.Spec.RevokedAt.Format(time.RFC3339)
-		revokedAt = &s
+	principal := PrincipalDTO{Kind: string(k.Spec.Principal.Kind), Name: k.Spec.Principal.ID}
+	switch k.Spec.Principal.Kind {
+	case key.PrincipalServiceAccount:
+		if n, ok := rev.ServiceAccountName(k.Spec.Principal.ID); ok {
+			principal.Name = n
+		}
+	case key.PrincipalUser:
+		if n, ok := rev.Username(k.Spec.Principal.ID); ok {
+			principal.Name = n
+		}
 	}
 
-	return RelayKeyDTO{
+	return KeyDTO{
 		APIVersion: APIVersion,
-		Kind:       "RelayKey",
+		Kind:       "Key",
 		Metadata:   metaToWire(k.Meta),
-		Spec: RelayKeySpec{
+		Spec: KeySpec{
+			Principal:             principal,
 			Policy:                policyName,
 			KeyHash:               k.Spec.KeyHash,
 			Prefix:                k.Spec.Prefix,
-			RevokedAt:             revokedAt,
+			ExpiresAt:             formatOptionalTime(k.Spec.ExpiresAt),
+			RevokedAt:             formatOptionalTime(k.Spec.RevokedAt),
 			Enabled:               k.Spec.Enabled,
 			PassthroughAllowed:    k.Spec.PassthroughAllowed,
 			PayloadLoggingEnabled: k.Spec.PayloadLoggingEnabled,
+		},
+	}
+}
+
+func formatOptionalTime(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.Format(time.RFC3339)
+	return &s
+}
+
+// ---------------------------------------------------------------------------
+// Team / Project
+// ---------------------------------------------------------------------------
+
+// resolveScopeOwner rewrites a team-, project-, or user-kind owner from the
+// wire name to its id. Rows in other scopes are untouched.
+func resolveScopeOwner(o *meta.Owner, idx Resolver) {
+	if o.ID == "" {
+		return
+	}
+	switch o.Kind {
+	case meta.OwnerTeam:
+		if id, ok := idx.TeamID(o.ID); ok {
+			o.ID = id
+		}
+	case meta.OwnerProject:
+		if id, ok := idx.ProjectID(o.ID); ok {
+			o.ID = id
+		}
+	case meta.OwnerUser:
+		if id, ok := idx.UserID(o.ID); ok {
+			o.ID = id
+		}
+	}
+}
+
+func toBudget(b *BudgetDTO) *team.Budget {
+	if b == nil {
+		return nil
+	}
+	out := &team.Budget{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+	out.Default()
+	return out
+}
+
+func fromBudget(b *team.Budget) *BudgetDTO {
+	if b == nil {
+		return nil
+	}
+	return &BudgetDTO{Amount: b.Amount, Period: b.Period, OnExceed: b.OnExceed}
+}
+
+func ToTeam(d TeamDTO, _ Resolver) (*team.Team, error) {
+	m := d.Metadata.toMeta()
+	// A Team names a scope: a user-owned one would let its author inherit
+	// every binding made at that scope, so the owner is not the manifest's
+	// to choose.
+	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	return &team.Team{
+		Meta: m,
+		Spec: team.Spec{
+			Enabled: d.Spec.Enabled,
+			Budget:  toBudget(d.Spec.Budget),
+		},
+	}, nil
+}
+
+func FromTeam(t *team.Team, _ ReverseResolver) TeamDTO {
+	return TeamDTO{
+		APIVersion: APIVersion,
+		Kind:       "Team",
+		Metadata:   metaToWire(t.Meta),
+		Spec: TeamSpec{
+			Enabled: t.Spec.Enabled,
+			Budget:  fromBudget(t.Spec.Budget),
+		},
+	}
+}
+
+// ToProject resolves the owning team name → id. Owner mirrors spec.team,
+// so it is re-derived rather than read from the wire form.
+func ToProject(d ProjectDTO, idx Resolver) (*project.Project, error) {
+	teamID, ok := idx.TeamID(d.Spec.Team)
+	if !ok {
+		return nil, fmt.Errorf("project %q: team %q not found", d.Metadata.Name, d.Spec.Team)
+	}
+	p := &project.Project{
+		Meta: d.Metadata.toMeta(),
+		Spec: project.Spec{
+			TeamID:  teamID,
+			Enabled: d.Spec.Enabled,
+			Budget:  toBudget(d.Spec.Budget),
+		},
+	}
+	p.StampOwner()
+	return p, nil
+}
+
+func FromProject(p *project.Project, rev ReverseResolver) ProjectDTO {
+	teamName, _ := rev.TeamName(p.Spec.TeamID)
+	if teamName == "" {
+		teamName = p.Spec.TeamID
+	}
+	wm := metaToWire(p.Meta)
+	wm.Owner.Name = teamName
+	return ProjectDTO{
+		APIVersion: APIVersion,
+		Kind:       "Project",
+		Metadata:   wm,
+		Spec: ProjectSpec{
+			Team:    teamName,
+			Enabled: p.Spec.Enabled,
+			Budget:  fromBudget(p.Spec.Budget),
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ServiceAccount / Group
+// ---------------------------------------------------------------------------
+
+// ToServiceAccount resolves the owning project name → id and the optional
+// policy override. Owner mirrors spec.project, so it is re-derived rather
+// than read from the wire form.
+func ToServiceAccount(d ServiceAccountDTO, idx Resolver) (*serviceaccount.ServiceAccount, error) {
+	projectID, ok := idx.ProjectID(d.Spec.Project)
+	if !ok {
+		return nil, fmt.Errorf("serviceaccount %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+	}
+	var policyID string
+	if d.Spec.Policy != "" {
+		policyID, ok = idx.PolicyID(d.Spec.Policy)
+		if !ok {
+			return nil, fmt.Errorf("serviceaccount %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+		}
+	}
+	sa := &serviceaccount.ServiceAccount{
+		Meta: d.Metadata.toMeta(),
+		Spec: serviceaccount.Spec{
+			ProjectID: projectID,
+			PolicyID:  policyID,
+			Enabled:   d.Spec.Enabled,
+		},
+	}
+	sa.StampOwner()
+	return sa, nil
+}
+
+func FromServiceAccount(sa *serviceaccount.ServiceAccount, rev ReverseResolver) ServiceAccountDTO {
+	projectName, _ := rev.ProjectName(sa.Spec.ProjectID)
+	if projectName == "" {
+		projectName = sa.Spec.ProjectID
+	}
+	policyName := ""
+	if sa.Spec.PolicyID != "" {
+		policyName, _ = rev.PolicyName(sa.Spec.PolicyID)
+		if policyName == "" {
+			policyName = sa.Spec.PolicyID
+		}
+	}
+	wm := metaToWire(sa.Meta)
+	wm.Owner.Name = projectName
+	return ServiceAccountDTO{
+		APIVersion: APIVersion,
+		Kind:       "ServiceAccount",
+		Metadata:   wm,
+		Spec: ServiceAccountSpec{
+			Project: projectName,
+			Policy:  policyName,
+			Enabled: sa.Spec.Enabled,
+		},
+	}
+}
+
+// ToGroup resolves member usernames → user ids.
+func ToGroup(d GroupDTO, idx Resolver) (*group.Group, error) {
+	m := d.Metadata.toMeta()
+	// A Group is a grant target: a user-owned one named after an IdP group
+	// would inherit that group's bindings, so the owner is fixed here.
+	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	var memberIDs []string
+	for _, username := range d.Spec.Members {
+		id, ok := idx.UserID(username)
+		if !ok {
+			return nil, fmt.Errorf("group %q: user %q not found", d.Metadata.Name, username)
+		}
+		memberIDs = append(memberIDs, id)
+	}
+	return &group.Group{
+		Meta: m,
+		Spec: group.Spec{MemberIDs: memberIDs, Enabled: d.Spec.Enabled},
+	}, nil
+}
+
+func FromGroup(g *group.Group, rev ReverseResolver) GroupDTO {
+	var members []string
+	for _, id := range g.Spec.MemberIDs {
+		name, ok := rev.Username(id)
+		if !ok {
+			name = id
+		}
+		members = append(members, name)
+	}
+	return GroupDTO{
+		APIVersion: APIVersion,
+		Kind:       "Group",
+		Metadata:   metaToWire(g.Meta),
+		Spec:       GroupSpec{Members: members, Enabled: g.Spec.Enabled},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Role / RoleBinding / PolicyBinding
+// ---------------------------------------------------------------------------
+
+func ToRole(d RoleDTO, _ Resolver) (*role.Role, error) {
+	m := d.Metadata.toMeta()
+	// A Role is a rule set anyone may be bound to; ownership is relay's,
+	// not the manifest author's.
+	m.Owner = meta.Owner{Kind: meta.OwnerSystem}
+	rules := make([]role.Rule, 0, len(d.Spec.Rules))
+	for _, r := range d.Spec.Rules {
+		rules = append(rules, role.Rule{Kinds: r.Kinds, Verbs: r.Verbs})
+	}
+	return &role.Role{
+		Meta: m,
+		Spec: role.Spec{Rules: rules, Enabled: d.Spec.Enabled},
+	}, nil
+}
+
+func FromRole(r *role.Role, _ ReverseResolver) RoleDTO {
+	rules := make([]RoleRuleDTO, 0, len(r.Spec.Rules))
+	for _, rule := range r.Spec.Rules {
+		rules = append(rules, RoleRuleDTO{Kinds: rule.Kinds, Verbs: rule.Verbs})
+	}
+	return RoleDTO{
+		APIVersion: APIVersion,
+		Kind:       "Role",
+		Metadata:   metaToWire(r.Meta),
+		Spec:       RoleSpec{Rules: rules, Enabled: r.Spec.Enabled},
+	}
+}
+
+// toSubjects resolves named subjects to the form the snapshot indexes:
+// users and service accounts by id, groups by name.
+func toSubjects(name string, subjects []SubjectDTO, idx Resolver) ([]rolebinding.Subject, error) {
+	out := make([]rolebinding.Subject, 0, len(subjects))
+	for _, sub := range subjects {
+		switch rolebinding.SubjectKind(sub.Kind) {
+		case rolebinding.SubjectGroup:
+			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: sub.Name})
+		case rolebinding.SubjectUser:
+			id, ok := idx.UserID(sub.Name)
+			if !ok {
+				return nil, fmt.Errorf("binding %q: user %q not found", name, sub.Name)
+			}
+			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: id})
+		case rolebinding.SubjectServiceAccount:
+			id, ok := idx.ServiceAccountID(sub.Name)
+			if !ok {
+				return nil, fmt.Errorf("binding %q: service account %q not found", name, sub.Name)
+			}
+			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id})
+		default:
+			return nil, fmt.Errorf("binding %q: subject.kind must be user, group, or serviceaccount, got %q", name, sub.Kind)
+		}
+	}
+	return out, nil
+}
+
+func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []SubjectDTO {
+	out := make([]SubjectDTO, 0, len(subjects))
+	for _, sub := range subjects {
+		wire := SubjectDTO{Kind: string(sub.Kind), Name: sub.Name}
+		switch sub.Kind {
+		case rolebinding.SubjectUser:
+			if n, ok := rev.Username(sub.ID); ok {
+				wire.Name = n
+			} else {
+				wire.Name = sub.ID
+			}
+		case rolebinding.SubjectServiceAccount:
+			if n, ok := rev.ServiceAccountName(sub.ID); ok {
+				wire.Name = n
+			} else {
+				wire.Name = sub.ID
+			}
+		}
+		out = append(out, wire)
+	}
+	return out
+}
+
+// ToRoleBinding resolves the role name, the scope target, and the subjects.
+// Owner mirrors spec.scope, so it is re-derived rather than read from the
+// wire form.
+func ToRoleBinding(d RoleBindingDTO, idx Resolver) (*rolebinding.RoleBinding, error) {
+	roleID, ok := idx.RoleID(d.Spec.Role)
+	if !ok {
+		return nil, fmt.Errorf("rolebinding %q: role %q not found", d.Metadata.Name, d.Spec.Role)
+	}
+	scope := meta.Owner{Kind: d.Spec.Scope.Kind, ID: d.Spec.Scope.ref()}
+	switch scope.Kind {
+	case meta.OwnerTeam:
+		id, ok := idx.TeamID(scope.ID)
+		if !ok {
+			return nil, fmt.Errorf("rolebinding %q: team %q not found", d.Metadata.Name, scope.ID)
+		}
+		scope.ID = id
+	case meta.OwnerProject:
+		id, ok := idx.ProjectID(scope.ID)
+		if !ok {
+			return nil, fmt.Errorf("rolebinding %q: project %q not found", d.Metadata.Name, scope.ID)
+		}
+		scope.ID = id
+	}
+	subjects, err := toSubjects(d.Metadata.Name, d.Spec.Subjects, idx)
+	if err != nil {
+		return nil, err
+	}
+	b := &rolebinding.RoleBinding{
+		Meta: d.Metadata.toMeta(),
+		Spec: rolebinding.Spec{
+			RoleID:   roleID,
+			Scope:    scope,
+			Subjects: subjects,
+			Enabled:  d.Spec.Enabled,
+		},
+	}
+	b.StampOwner()
+	return b, nil
+}
+
+func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindingDTO {
+	roleName, _ := rev.RoleName(b.Spec.RoleID)
+	if roleName == "" {
+		roleName = b.Spec.RoleID
+	}
+	scope := WireOwner{Kind: b.Spec.Scope.Kind, Name: b.Spec.Scope.ID}
+	switch b.Spec.Scope.Kind {
+	case meta.OwnerTeam:
+		if name, ok := rev.TeamName(b.Spec.Scope.ID); ok {
+			scope.Name = name
+		}
+	case meta.OwnerProject:
+		if name, ok := rev.ProjectName(b.Spec.Scope.ID); ok {
+			scope.Name = name
+		}
+	}
+	wm := metaToWire(b.Meta)
+	wm.Owner.Name = scope.Name
+	return RoleBindingDTO{
+		APIVersion: APIVersion,
+		Kind:       "RoleBinding",
+		Metadata:   wm,
+		Spec: RoleBindingSpec{
+			Role:     roleName,
+			Scope:    scope,
+			Subjects: fromSubjects(b.Spec.Subjects, rev),
+			Enabled:  b.Spec.Enabled,
+		},
+	}
+}
+
+// ToPolicyBinding resolves the project, the policy, and the subjects. Owner
+// mirrors spec.project.
+func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBinding, error) {
+	projectID, ok := idx.ProjectID(d.Spec.Project)
+	if !ok {
+		return nil, fmt.Errorf("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+	}
+	policyID, ok := idx.PolicyID(d.Spec.Policy)
+	if !ok {
+		return nil, fmt.Errorf("policybinding %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+	}
+	subjects, err := toSubjects(d.Metadata.Name, d.Spec.Subjects, idx)
+	if err != nil {
+		return nil, err
+	}
+	priority := d.Spec.Priority
+	if priority == nil {
+		// The store and the control API both write this default, so a
+		// document that omits priority must translate to the same row or
+		// apply reports an update on every run. An explicit 0 is a real
+		// priority and is carried through.
+		def := policybinding.DefaultPriority
+		priority = &def
+	}
+	b := &policybinding.PolicyBinding{
+		Meta: d.Metadata.toMeta(),
+		Spec: policybinding.Spec{
+			ProjectID: projectID,
+			PolicyID:  policyID,
+			Priority:  priority,
+			Subjects:  subjects,
+			Enabled:   d.Spec.Enabled,
+		},
+	}
+	b.StampOwner()
+	return b, nil
+}
+
+func FromPolicyBinding(b *policybinding.PolicyBinding, rev ReverseResolver) PolicyBindingDTO {
+	projectName, _ := rev.ProjectName(b.Spec.ProjectID)
+	if projectName == "" {
+		projectName = b.Spec.ProjectID
+	}
+	policyName, _ := rev.PolicyName(b.Spec.PolicyID)
+	if policyName == "" {
+		policyName = b.Spec.PolicyID
+	}
+	wm := metaToWire(b.Meta)
+	wm.Owner.Name = projectName
+	effectivePriority := b.EffectivePriority()
+	return PolicyBindingDTO{
+		APIVersion: APIVersion,
+		Kind:       "PolicyBinding",
+		Metadata:   wm,
+		Spec: PolicyBindingSpec{
+			Project:  projectName,
+			Policy:   policyName,
+			Priority: &effectivePriority,
+			Subjects: fromSubjects(b.Spec.Subjects, rev),
+			Enabled:  b.Spec.Enabled,
 		},
 	}
 }

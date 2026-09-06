@@ -79,6 +79,12 @@ type Request struct {
 	// MaxAttempts caps retries (0 → defaultMaxAttempts).
 	MaxAttempts int
 
+	// TeamID and TokenJTI scope the inbound reservation: the team becomes
+	// the kv hash tag, and a jti adds its revocation check to the same
+	// Reserve script. Both empty for a personal key.
+	TeamID   string
+	TokenJTI string
+
 	// Lifecycle is the per-request shared context, constructed by the
 	// handler before Run. Post-flight observers see it via the registered
 	// lifecycle observers (Finalize). Optional — when nil, post-flight skips
@@ -180,17 +186,26 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		maxAttempts = len(req.Keys)
 	}
 
-	modelSlug, hostSlug := "", ""
+	modelSlug, modelID, hostSlug := "", "", ""
 	if req.Model != nil {
 		modelSlug = req.Model.Meta.Name
+		modelID = req.Model.Meta.ID
 	}
 	if req.Host != nil {
 		hostSlug = req.Host.Meta.Name
 	}
 
-	inbound, err = p.Policy.ReserveInbound(ctx, req.Policy, req.Provider, modelSlug, hostSlug)
+	inbound, err = p.Policy.ReserveInbound(ctx, policy.InboundInput{
+		Policy:       req.Policy,
+		ProviderSlug: req.Provider,
+		ModelSlug:    modelSlug,
+		ModelID:      modelID,
+		HostSlug:     hostSlug,
+		TeamID:       req.TeamID,
+		TokenJTI:     req.TokenJTI,
+	})
 	if err != nil {
-		return nil, err // handler maps ExceededError → 429
+		return nil, err // handler maps ExceededError → 429, ErrRevoked → 401
 	}
 
 	var (

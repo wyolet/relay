@@ -17,7 +17,6 @@ import (
 	apphost "github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/proxy"
 	apprl "github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -66,7 +65,12 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	//   2. Header omitted → peek `model` from the body, resolve via
 	//      Policy + HostBinding (proxy-authed only — anonymous traffic
 	//      has no policy and must still pin a host).
-	snap := d.Catalog.Current()
+	snap := SnapshotFrom(ctx)
+	if snap == nil {
+		// Anonymous proxy: no credential middleware ran, so nothing pinned
+		// a snapshot for this request.
+		snap = d.Catalog.Current()
+	}
 	lc := lifecycle.FromContext(ctx)
 	var (
 		host         *apphost.Host
@@ -89,7 +93,7 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 				"anonymous proxy traffic requires "+httpheader.HeaderUpstreamHost+" header naming a configured host")
 			return
 		}
-		plan, b, err := resolveProxyHostByPolicy(r, d.Resolver, RelayKeyFromContext(ctx), lc != nil && lc.PayloadLog)
+		plan, b, err := resolveProxyHostByPolicy(r, d.Resolver, PrincipalFrom(ctx), lc != nil && lc.PayloadLog)
 		if err != nil {
 			d.fireUsageFailure(ctx, "proxy_resolve_error", err.Error())
 			mapProxyResolveErr(w, err)
@@ -132,8 +136,8 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 			lc.HostID = host.Meta.ID
 			lc.HostName = host.Meta.Name
 		}
-		if rk := RelayKeyFromContext(ctx); rk != nil {
-			lc.PolicyID = rk.Spec.PolicyID
+		if p := PrincipalFrom(ctx); p != nil {
+			lc.PolicyID = p.PolicyID()
 		}
 		applyPlanIdentity(lc, resolvedPlan) // Plan overrides when present
 		if spec != nil {
@@ -226,21 +230,25 @@ func resolveSystemRules(snap *appcatalog.Snapshot, bucketName, subject string) [
 	return apprl.ResolveWithScope("proxy", subject, rl)
 }
 
-// relayKeyHashSubject returns the SHA-256 hash of the relay-key token
+// relayKeyHashSubject returns the SHA-256 hash of the key token
 // from ctx, suitable as a per-key rate-limit subject. Empty when no
 // relay key is on ctx (proxy-anonymous path).
 func relayKeyHashSubject(ctx context.Context) string {
-	rk := RelayKeyFromContext(ctx)
-	if rk == nil {
+	p := PrincipalFrom(ctx)
+	if p == nil {
 		return ""
 	}
-	// The snapshot stores Spec.KeyHash already; reuse it for stability.
-	if rk.Spec.KeyHash != "" {
-		return rk.Spec.KeyHash
+	// The principal already carries the hash it authenticated with; a token
+	// has none, so its jti is the per-credential subject.
+	if p.KeyHash != "" {
+		return p.KeyHash
 	}
-	// Fallback shouldn't happen — RelayKeyByHash matched by hash.
+	if p.CredentialKind == CredentialToken {
+		return p.CredentialID
+	}
+	// Fallback shouldn't happen — KeyByHash matched by hash.
 	cls := ClassificationFrom(ctx)
-	sum := sha256.Sum256([]byte(cls.RelayKey))
+	sum := sha256.Sum256([]byte(cls.Key))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -350,16 +358,17 @@ func (pb proxyBody) wrapResult(body io.ReadCloser, lc *lifecycle.Context) io.Rea
 // captureFull arms a tee on the streamed path so payload logging stores
 // the whole body (capped at proxyMaxBodyBuffer) instead of the bare
 // prefix — without serializing client upload and upstream send.
-func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *relaykey.RelayKey, captureFull bool) (*routing.Plan, proxyBody, error) {
-	if rk == nil {
+func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, p *Principal, captureFull bool) (*routing.Plan, proxyBody, error) {
+	if p == nil {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "relay_key_required", Detail: "policy-driven host resolution requires an authenticated relay key"}
 	}
+	snap := SnapshotFrom(r.Context())
 	prefix, err := io.ReadAll(io.LimitReader(r.Body, proxyMaxBodyPeek+1))
 	if err != nil {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_read", Detail: "could not read request body", Inner: err}
 	}
 	if len(prefix) <= proxyMaxBodyPeek {
-		plan, err := resolveProxyModelJSON(prefix, resolver, rk)
+		plan, err := resolveProxyModelJSON(prefix, resolver, p, snap)
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
@@ -367,7 +376,7 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *r
 	}
 
 	if model, ok := scanTopLevelModel(prefix); ok {
-		plan, err := resolveProxyPlan(model, resolver, rk)
+		plan, err := resolveProxyPlan(model, resolver, p, snap)
 		if err != nil {
 			return nil, proxyBody{}, err
 		}
@@ -392,14 +401,14 @@ func resolveProxyHostByPolicy(r *http.Request, resolver *routing.Resolver, rk *r
 	if len(full) > proxyMaxBodyBuffer {
 		return nil, proxyBody{}, &errProxyHostResolve{Reason: "body_too_large", Detail: "request body exceeds proxy buffer limit"}
 	}
-	plan, err := resolveProxyModelJSON(full, resolver, rk)
+	plan, err := resolveProxyModelJSON(full, resolver, p, snap)
 	if err != nil {
 		return nil, proxyBody{}, err
 	}
 	return plan, proxyBody{Reader: io.NopCloser(bytes.NewReader(full)), Prefix: full}, nil
 }
 
-func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, error) {
+func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
 	var peek struct {
 		Model string `json:"model"`
 	}
@@ -409,14 +418,17 @@ func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, rk *relaykey
 	if peek.Model == "" {
 		return nil, &errProxyHostResolve{Reason: "missing_model", Detail: "request body has no 'model' field; cannot resolve upstream host without it"}
 	}
-	return resolveProxyPlan(peek.Model, resolver, rk)
+	return resolveProxyPlan(peek.Model, resolver, p, snap)
 }
 
-func resolveProxyPlan(model string, resolver *routing.Resolver, rk *relaykey.RelayKey) (*routing.Plan, error) {
+func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
 	plan, err := resolver.Resolve(routing.Request{
-		ModelName:    model,
-		RelayKey:     rk,
-		SkipKeyCheck: true,
+		ModelName:             model,
+		Policy:                p.Policy,
+		UserID:                p.UserID,
+		PayloadLoggingEnabled: p.PayloadLogging,
+		SkipKeyCheck:          true,
+		Snapshot:              snap,
 	})
 	if err != nil {
 		return nil, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Model: model, Inner: err}

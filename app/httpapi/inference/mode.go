@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
-	"os"
-	"strings"
-	"sync"
 
 	"github.com/wyolet/relay/pkg/httpheader"
+	"github.com/wyolet/relay/pkg/httpmw"
 )
 
 // Mode classifies the proxy mode of an inbound inference request.
@@ -38,11 +35,11 @@ const (
 // or any settings; gating decisions happen later.
 type Classification struct {
 	Mode Mode
-	// RelayKey is the raw inbound relay-key token. Empty in
+	// Key is the raw inbound key token. Empty in
 	// ModeProxyAnonymous. In ModeNormal pulled from X-WR-API-Key first,
 	// then Authorization (Bearer). In ModeProxyAuthed pulled from
 	// X-WR-API-Key only.
-	RelayKey string
+	Key string
 	// UpstreamAuth is the verbatim Authorization header value (including
 	// the "Bearer " prefix when present) supplied by the caller for proxy
 	// mode. The proxy forwarder re-attaches it on the outbound request.
@@ -91,10 +88,10 @@ func Classify(r *http.Request) (Classification, error) {
 		}
 		return Classification{
 			Mode:         mode,
-			RelayKey:     relay,
+			Key:          relay,
 			UpstreamAuth: authz,
 			UpstreamHost: r.Header.Get(httpheader.HeaderUpstreamHost),
-			ClientIP:     extractIP(r),
+			ClientIP:     httpmw.ClientIP(r, httpmw.TrustedProxies()),
 		}, nil
 	}
 
@@ -110,8 +107,8 @@ func Classify(r *http.Request) (Classification, error) {
 	}
 	return Classification{
 		Mode:     ModeNormal,
-		RelayKey: relay,
-		ClientIP: extractIP(r),
+		Key:      relay,
+		ClientIP: httpmw.ClientIP(r, httpmw.TrustedProxies()),
 	}, nil
 }
 
@@ -156,74 +153,4 @@ func writeClassifyErr(w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
 	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"bad_request","message":"` + err.Error() + `"}}`))
-}
-
-// --- client IP resolution ---
-
-var (
-	trustedProxiesOnce sync.Once
-	trustedProxies     []*net.IPNet
-)
-
-func loadTrustedProxies() {
-	env := os.Getenv("RELAY_TRUSTED_PROXIES")
-	if env == "" {
-		return
-	}
-	for _, seg := range strings.Split(env, ",") {
-		seg = strings.TrimSpace(seg)
-		if seg == "" {
-			continue
-		}
-		if !strings.Contains(seg, "/") {
-			if strings.Contains(seg, ":") {
-				seg += "/128"
-			} else {
-				seg += "/32"
-			}
-		}
-		if _, cidr, err := net.ParseCIDR(seg); err == nil {
-			trustedProxies = append(trustedProxies, cidr)
-		}
-	}
-}
-
-func extractIP(r *http.Request) string {
-	trustedProxiesOnce.Do(loadTrustedProxies)
-
-	remote, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remote = r.RemoteAddr
-	}
-	if len(trustedProxies) == 0 {
-		return remote
-	}
-	peer := net.ParseIP(remote)
-	if peer == nil || !isTrustedProxy(peer) {
-		return remote
-	}
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff == "" {
-		return remote
-	}
-	parts := strings.Split(xff, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		ip := net.ParseIP(strings.TrimSpace(parts[i]))
-		if ip == nil {
-			continue
-		}
-		if !isTrustedProxy(ip) {
-			return ip.String()
-		}
-	}
-	return remote
-}
-
-func isTrustedProxy(ip net.IP) bool {
-	for _, cidr := range trustedProxies {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }

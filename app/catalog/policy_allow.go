@@ -15,6 +15,8 @@
 package catalog
 
 import (
+	"log/slog"
+
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/modelref"
 )
@@ -22,12 +24,20 @@ import (
 // comboKey identifies one allowed (model, host) pair.
 type comboKey struct{ ModelID, HostID string }
 
-// PolicyAllowsCombo reports whether the policy grants (modelID, hostID). A
-// policy with no materialized set is an implicit wildcard (or has no explicit
-// grants tracked here) and allows everything — implicit-wildcard customer
-// policies handle deprecation separately at resolution; tier policies allow
-// all by design.
+// PolicyAllowsCombo reports whether the policy grants (modelID, hostID).
+//
+// An id naming no enabled policy grants nothing. Answering "allowed" for one
+// is the wrong default in the direction that matters: a host key whose tier
+// policy was switched off or deleted would pass the tier gate for every
+// model, and the upstream reservation would find no rules to meter it by
+// (D79). A policy that IS enabled and carries no materialized set is the
+// implicit wildcard and allows everything — implicit-wildcard customer
+// policies handle deprecation separately at resolution, and tier policies
+// allow all by design.
 func (s *Snapshot) PolicyAllowsCombo(policyID, modelID, hostID string) bool {
+	if _, live := s.policiesByID[policyID]; !live {
+		return false
+	}
 	set, ok := s.allowedCombosByPolicy[policyID]
 	if !ok {
 		return true
@@ -54,9 +64,15 @@ func (s *Snapshot) rebuildPolicyAllowSets() {
 		// Parse refs once per policy, not once per (model, host) candidate.
 		refs := make([]modelref.Ref, 0, len(p.Spec.Models))
 		for _, raw := range p.Spec.Models {
-			if r, err := modelref.Parse(raw); err == nil {
-				refs = append(refs, r)
+			r, err := modelref.Parse(raw)
+			if err != nil {
+				// The grant silently stops granting; only a log tells the
+				// operator why the policy suddenly allows less.
+				slog.Warn("catalog: policy model ref unparseable, grant ignored",
+					"policy", p.Meta.Name, "ref", raw, "err", err)
+				continue
 			}
+			refs = append(refs, r)
 		}
 		set := map[comboKey]struct{}{}
 		for _, m := range s.modelsByID {
