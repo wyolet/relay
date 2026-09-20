@@ -131,28 +131,3 @@ func validateBodyMetadata(m map[string]string) map[string]string {
 func incBodyRejected(_ string) {
 	// deliberate no-op for now; callers will hook Prometheus in a future ticket
 }
-
-func validMetaKey(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			c == '_' || c == '.' || c == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validMetaValue(s string) bool {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c > 0x7E || c == ',' || c == '=' {
-			return false
-		}
-	}
-	return true
-}
