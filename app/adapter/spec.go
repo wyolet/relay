@@ -15,18 +15,10 @@
 package adapter
 
 import (
-	"bytes"
-	"context"
-	"crypto/tls"
 	"net/http"
-	"net/http/httptrace"
-	"time"
 
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
-	"github.com/wyolet/relay/pkg/metrics"
 	pkgusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -153,78 +145,6 @@ type InboundPath struct {
 	Summary string
 }
 
-const (
-	defaultTimeout = 5 * time.Minute
-
-	// defaultMaxIdleConnsPerHost keeps hot upstream connections warm. The
-	// stdlib default (2) re-dials nearly every request at high per-host RPS.
-	// Overridable per deployment via SetUpstreamMaxIdleConnsPerHost.
-	defaultMaxIdleConnsPerHost = 128
-
-	// maxIdleConnsScale gives the total idle pool headroom over the per-host
-	// cap so several hot hosts can each keep a full keep-alive pool.
-	maxIdleConnsScale = 8
-
-	idleConnTimeout       = 90 * time.Second
-	tlsHandshakeTimeout   = 10 * time.Second
-	expectContinueTimeout = 1 * time.Second
-)
-
-// maxIdleConnsPerHost is the per-host idle-connection ceiling applied to
-// every upstream transport built after it is set. Read at Build time.
-var maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
-
-// SetUpstreamMaxIdleConnsPerHost overrides the per-host idle-connection cap
-// used by every Spec built afterwards (the composition root wires the
-// RELAY_UPSTREAM_MAX_IDLE_PER_HOST value here). Values < 1 are ignored so a
-// zero config default leaves the built-in 128. Not safe to call concurrently
-// with Build — invoke once at boot, before specs are constructed.
-func SetUpstreamMaxIdleConnsPerHost(n int) {
-	if n >= 1 {
-		maxIdleConnsPerHost = n
-	}
-}
-
-// NewUpstreamTransport builds the tuned upstream transport. http1 empties
-// TLSNextProto on the same tuned base to disable HTTP/2 negotiation for
-// shapes that trip Go's HTTP/2 client bugs (see Spec.UseHTTP1). Exported for
-// the composition root, which applies the same pooling to the proxy runner's
-// client (its upstreams are just as hot as the pipeline's).
-//
-// The returned RoundTripper wraps the transport with connection-reuse
-// accounting (relay_upstream_connections_total) — the tripwire for the
-// MaxIdleConnsPerHost-style churn this pooling exists to prevent.
-func NewUpstreamTransport(http1 bool) http.RoundTripper {
-	perHost := maxIdleConnsPerHost
-	tr := &http.Transport{
-		MaxIdleConns:          perHost * maxIdleConnsScale,
-		MaxIdleConnsPerHost:   perHost,
-		IdleConnTimeout:       idleConnTimeout,
-		TLSHandshakeTimeout:   tlsHandshakeTimeout,
-		ExpectContinueTimeout: expectContinueTimeout,
-	}
-	if http1 {
-		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-	}
-	return connTrackingTransport{base: tr}
-}
-
-// connTrackingTransport counts whether each upstream attempt got a fresh
-// dial or a pooled connection. httptrace composes with any trace already
-// on the context, so this is transparent to callers.
-type connTrackingTransport struct {
-	base http.RoundTripper
-}
-
-var connTrace = &httptrace.ClientTrace{
-	GotConn: func(info httptrace.GotConnInfo) { metrics.UpstreamConn(info.Reused) },
-}
-
-func (t connTrackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	return t.base.RoundTrip(
-		req.WithContext(httptrace.WithClientTrace(req.Context(), connTrace)))
-}
-
 // Build finalises the Spec by constructing its shared HTTP client. The client
 // pools upstream connections via a tuned transport (per-host idle ceiling from
 // SetUpstreamMaxIdleConnsPerHost) and keeps the 5-minute client timeout for
@@ -236,99 +156,4 @@ func (s *Spec) Build() *Spec {
 		Transport: NewUpstreamTransport(s.UseHTTP1),
 	}
 	return s
-}
-
-// PipelineAdapter returns a pipeline.Adapter backed by this spec's upstream
-// path and auth strategy. The returned value is safe for concurrent use.
-func (s *Spec) PipelineAdapter() pipeline.Adapter {
-	return &specAdapter{spec: s}
-}
-
-// specAdapter implements pipeline.Adapter for a Spec.
-type specAdapter struct {
-	spec *Spec
-}
-
-var _ pipeline.Adapter = (*specAdapter)(nil)
-
-// Call issues POST {baseURL}{path}: the host's own path when set (hostPath
-// non-nil, verbatim — an explicit "" appends nothing), else the shape default
-// (spec.UpstreamPathFn / spec.DefaultPath). Auth headers are set per spec.Auth
-// (or spec.OAuthAuth when oauth is true and the spec defines an OAuth
-// variant); forwarded headers are applied first so Relay's own headers win on
-// conflict.
-func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
-	path := a.spec.DefaultPath
-	if a.spec.UpstreamPathFn != nil {
-		path = a.spec.UpstreamPathFn(upstreamModel, stream)
-	}
-	if hostPath != nil {
-		path = *hostPath
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-
-	for k, vs := range hdr {
-		for _, v := range vs {
-			req.Header.Add(k, v)
-		}
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	auth := a.spec.Auth
-	if oauth && a.spec.OAuthAuth.Header != "" {
-		auth = a.spec.OAuthAuth
-	}
-
-	if apiKey != "" && auth.Header != "" {
-		val := apiKey
-		if auth.Scheme != "" {
-			val = auth.Scheme + " " + apiKey
-		}
-		req.Header.Set(auth.Header, val)
-	}
-
-	for k, v := range auth.ExtraHeaders {
-		if req.Header.Get(k) == "" {
-			req.Header.Set(k, v)
-		}
-	}
-
-	return a.spec.client.Do(req)
-}
-
-// ExtractTokens delegates to the spec's extractor, or returns nil if unset.
-func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {
-	if a.spec.ExtractTokens == nil {
-		return nil
-	}
-	return a.spec.ExtractTokens(body)
-}
-
-// Retryable classifies upstream HTTP responses for the pipeline retry loop.
-// Classification is uniform across specs: 401/403→auth, 429→rate-limit,
-// 500-599→server error. Any spec that needs different classification can
-// override by wrapping the returned pipeline.Adapter.
-func (a *specAdapter) Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration) {
-	if resp == nil {
-		return false, 0, 0
-	}
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return true, keypool.FailureAuth, 0
-	case resp.StatusCode == http.StatusTooManyRequests:
-		ra := pipeline.RetryAfterHeader(resp.Header)
-		k := keypool.FailureRateLimitShort
-		if ra > 5*time.Second {
-			k = keypool.FailureRateLimitLong
-		}
-		return true, k, ra
-	case resp.StatusCode >= 500 && resp.StatusCode < 600:
-		return true, keypool.FailureServerError, 0
-	default:
-		return false, 0, 0
-	}
 }
