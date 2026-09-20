@@ -1,0 +1,60 @@
+package clientprofile
+
+import "net/http"
+
+// The interfaces below are optional: the app type-asserts a Profile for
+// each and skips the seam when it is not implemented. Default implements
+// none of them.
+
+// ModelEntry is the neutral view of one catalog model the app hands to a
+// profile for its list projection. No catalog types cross into pkg/.
+type ModelEntry struct {
+	ID          string // catalog model slug, what the client sends as `model`
+	DisplayName string
+	Aliases     []string // resolution-only aliases that also route to this model
+	Hosts       []ModelHost
+}
+
+// ModelHost is one host serving the entry, with its base-tier rates.
+type ModelHost struct {
+	Name             string
+	Priced           bool // false = no pricing row; do not print $0
+	InputUSDPerMtok  float64
+	OutputUSDPerMtok float64
+}
+
+// ModelLister is implemented by a profile whose client expects its own
+// list-models document.
+type ModelLister interface {
+	// Models renders the client's list-models document. contentType is
+	// what to send back; the app writes body verbatim.
+	Models(entries []ModelEntry) (body []byte, contentType string, err error)
+}
+
+// Route is one extra endpoint a profile serves. Path is relative to the
+// profile's /{Name} prefix.
+type Route struct {
+	Method  string
+	Path    string
+	Handler http.Handler
+
+	// Public mounts the route without the relay-key auth chain — for
+	// endpoints a client probes before it has necessarily attached
+	// credentials. Such handlers must stay cheap and say nothing about
+	// the deployment.
+	Public bool
+}
+
+// Router is implemented by a profile needing endpoints beyond the wire
+// shape's own inbound routes (connection probes and the like).
+type Router interface {
+	Routes() []Route
+}
+
+// Attributor is implemented by a profile whose client sends identifying
+// request headers worth recording against the request's usage.
+type Attributor interface {
+	// AttributionHeaders lists request header names to capture into the
+	// request's usage metadata, keyed by the lowercased header name.
+	AttributionHeaders() []string
+}

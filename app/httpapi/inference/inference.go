@@ -139,5 +139,32 @@ func Mount(r chi.Router, d Deps) huma.API {
 		RelayKeyAuthMiddleware(d.Catalog),
 	).Get("/v1/ws", wsHandler(d))
 
+	mountProfileRoutes(r, d)
+
 	return api
+}
+
+// mountProfileRoutes mounts each profile's extra endpoints under its
+// /{profile} prefix. They go on the chi router rather than huma: some are
+// public probes and none carry a typed body. Non-public ones reuse the
+// identical net/http chain /v1/ws uses, so their auth matches /v1/*.
+func mountProfileRoutes(r chi.Router, d Deps) {
+	for _, p := range d.Profiles.Profiles() {
+		router, ok := p.(clientprofile.Router)
+		if !ok {
+			continue
+		}
+		for _, route := range router.Routes() {
+			path := "/" + p.Name() + route.Path
+			if route.Public {
+				r.Method(route.Method, path, route.Handler)
+				continue
+			}
+			r.With(
+				ReadinessMiddleware(d.Catalog),
+				ClassifyMiddleware(),
+				RelayKeyAuthMiddleware(d.Catalog),
+			).Method(route.Method, path, route.Handler)
+		}
+	}
 }

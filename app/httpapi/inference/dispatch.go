@@ -86,8 +86,9 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	// The resolved client profile is a usage dimension; observers read it
 	// off the Context. Empty name = no profile, nothing recorded.
-	if name := clientprofile.FromContext(ctx).Name(); name != "" {
-		lc.Metadata["client"] = name
+	if profile := clientprofile.FromContext(ctx); profile.Name() != "" {
+		lc.Metadata["client"] = profile.Name()
+		applyAttributionHeaders(lc, profile, r.Header)
 	}
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture

@@ -391,9 +391,11 @@ func main() {
 			Translator: relayv1.IdentityTranslator{},
 		}).Build(),
 	}
-	// Client profiles: none registered yet, so the data plane behaves
-	// exactly as it does without them.
 	profiles := clientprofile.New()
+	if err := profiles.Register(clientprofile.ClaudeCode()); err != nil {
+		slog.Error("client profile registration failed", "err", err)
+		os.Exit(1)
+	}
 
 	specRegistry := adapter.NewRegistry(specs...)
 	if err := specRegistry.AssertWired(); err != nil {

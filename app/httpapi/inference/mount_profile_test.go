@@ -26,6 +26,8 @@ func (stubProfile) Name() string             { return "stub" }
 func (stubProfile) Shape() string            { return string(adapters.Anthropic) }
 func (stubProfile) Match(*http.Request) bool { return false }
 
+func (stubProfile) AttributionHeaders() []string { return []string{"x-stub-session-id"} }
+
 // buildPathRegistry is buildTestRegistry's counterpart for mount tests: the
 // anthropic spec carries the inbound path the profile mirrors.
 func buildPathRegistry() *adapter.Registry {

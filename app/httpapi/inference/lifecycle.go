@@ -9,6 +9,7 @@ import (
 
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/reqid"
@@ -48,6 +49,31 @@ func applyObsHeaders(lc *lifecycle.Context, h http.Header, trustEventTime bool) 
 	}
 	if v := h.Get(httpheader.HeaderRequestTags); v != "" && len(v) <= usagelog.MaxTagsHeaderBytes {
 		lc.Metadata[usagelog.MetadataKeyRequestTags] = v
+	}
+}
+
+// MaxAttributionValueBytes caps one recorded attribution value. The values
+// ride into every usage event, so a caller cannot inflate the record.
+const MaxAttributionValueBytes = 256
+
+// applyAttributionHeaders records the client's own identifying request
+// headers onto the lifecycle Context, where the usage hook picks them up as
+// Event.Extras. Hot-path rule: one lookup per declared header and nothing
+// allocated when they are absent.
+func applyAttributionHeaders(lc *lifecycle.Context, p clientprofile.Profile, h http.Header) {
+	attributor, ok := p.(clientprofile.Attributor)
+	if !ok {
+		return
+	}
+	for _, name := range attributor.AttributionHeaders() {
+		v := h.Get(name)
+		if v == "" {
+			continue
+		}
+		if len(v) > MaxAttributionValueBytes {
+			v = v[:MaxAttributionValueBytes]
+		}
+		lc.Metadata[name] = v
 	}
 }
 
