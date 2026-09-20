@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
 	"github.com/wyolet/relay/app/adapter"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpmw"
 )
 
@@ -42,8 +44,40 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 						handleShape(spec, d, w, r)
 					}}, nil
 				})
+				mountProfileAliases(api, d, mw, spec, path)
 			}
 		}
+	}
+}
+
+// mountProfileAliases mirrors one inbound path under /{profile}/ for every
+// registered profile speaking that spec's shape, so a client can point its
+// base URL at the prefix and reach the identical handler. The routes are
+// hidden from the OpenAPI doc — they are the same operation, not a second
+// one — and the profile is set on the request context explicitly rather
+// than relying on the middleware's prefix resolution.
+func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapter.Spec, path adapter.InboundPath) {
+	shapeNamespace := clientprofile.FirstPathSegment(path.Path)
+	for _, pr := range d.Profiles.Profiles() {
+		if pr.Shape() != string(spec.Name) {
+			continue
+		}
+		profile := pr
+		huma.Register(api, huma.Operation{
+			OperationID: path.OperationID + "_" + profile.Name(),
+			Method:      http.MethodPost,
+			Path:        "/" + profile.Name() + strings.TrimPrefix(path.Path, "/"+shapeNamespace),
+			Summary:     path.Summary,
+			Tags:        []string{"inference"},
+			Middlewares: mw,
+			Hidden:      true,
+			Errors:      []int{400, 401, 403, 404, 429, 500, 502, 503},
+		}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+			return &huma.StreamResponse{Body: func(hctx huma.Context) {
+				r, w := humachi.Unwrap(hctx)
+				handleShape(spec, d, w, r.WithContext(clientprofile.WithProfile(r.Context(), profile)))
+			}}, nil
+		})
 	}
 }
 

@@ -52,6 +52,7 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -390,6 +391,10 @@ func main() {
 			Translator: relayv1.IdentityTranslator{},
 		}).Build(),
 	}
+	// Client profiles: none registered yet, so the data plane behaves
+	// exactly as it does without them.
+	profiles := clientprofile.New()
+
 	specRegistry := adapter.NewRegistry(specs...)
 	if err := specRegistry.AssertWired(); err != nil {
 		slog.Error("adapter registry mis-wired", "err", err)
@@ -546,6 +551,7 @@ func main() {
 		Lifecycle:      lifecycleReg,
 		Adapters:       specRegistry.AdapterMap(),
 		Specs:          specRegistry,
+		Profiles:       profiles,
 		RouteMounters:  []inference.RouteMounter{inference.MountRegistry(specRegistry)},
 		TrustEventTime: cfg.DevTrustEventTime,
 	})

@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -69,6 +70,11 @@ type Deps struct {
 	// that satisfies RouteMounter; cmd/relay/main.go wires them in.
 	RouteMounters []RouteMounter
 
+	// Profiles are the client profiles this deployment serves, registered
+	// at the composition root. Nil means none: no /{profile}/ routes, no
+	// profile on the request context, behaviour unchanged.
+	Profiles *clientprofile.Registry
+
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
 	// tooling only; off by default.
@@ -85,6 +91,13 @@ type Pinger interface {
 // Returns the huma.API so the caller can attach test-only operations.
 func Mount(r chi.Router, d Deps) huma.API {
 	httpapi.InstallErrorRewriter()
+
+	// Ahead of every route on r (chi requires middleware before routes), so
+	// header- and User-Agent-selected profiles reach handlers that carry no
+	// /{profile}/ prefix.
+	if d.Profiles != nil {
+		r.Use(clientprofile.Middleware(d.Profiles))
+	}
 
 	cfg := huma.DefaultConfig("Wyolet Relay — Inference", httpapi.Version)
 	cfg.Info.Description = "Data plane. /v1/* endpoints accept OpenAI- and " +

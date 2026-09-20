@@ -36,6 +36,11 @@ const (
 	// by the X-WR-* denylist.
 	HeaderRequestTags = "X-WR-Request-Tags"
 
+	// HeaderClient names the calling client profile (e.g. "claude-code")
+	// explicitly, ahead of path-prefix and User-Agent detection. Stripped
+	// from the upstream request by the X-WR-* denylist.
+	HeaderClient = "X-WR-Client"
+
 	// HeaderWarnings is a response header carrying non-fatal request
 	// adjustments the relay made (e.g. params stripped because the routed
 	// model declares them unsupported) so drops are surfaced, never silent.

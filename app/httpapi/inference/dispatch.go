@@ -26,6 +26,7 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/reqid"
@@ -83,6 +84,11 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
+	// The resolved client profile is a usage dimension; observers read it
+	// off the Context. Empty name = no profile, nothing recorded.
+	if name := clientprofile.FromContext(ctx).Name(); name != "" {
+		lc.Metadata["client"] = name
+	}
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture
 	// gate (lc.PayloadLog) is set once routing resolves the opt-in.
