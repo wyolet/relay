@@ -45,13 +45,17 @@ curl -L https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/mo
 ```
 
 ```toml
-model_catalog_json     = "~/.codex/relay-models.json"
+model_catalog_json      = "~/.codex/relay-models.json"
 model_instructions_file = "~/.codex/relay-prompt.md"
 ```
 
 Match the tag in that second URL to your own `codex --version` — the prompt ships with the binary and changes between releases.
 
-A missing or empty prompt file is loud: Codex refuses to start and names the file. The catalog file on its own is not — every model listed in it would run with no agent prompt at all, and nothing says so.
+Both are **top-level** keys, so they must sit above the first `[table]` header in `config.toml` — above `[model_providers.relay]`, `[projects."…"]`, `[profiles.…]`, all of them. TOML assigns every key after a header to that table, so the same two lines appended to the end of the file silently become `projects."…".model_catalog_json` and are ignored: the picker keeps showing Codex's bundled models and nothing is logged.
+
+Verify placement with `codex exec --strict-config -m <model> "ok"`. Strict mode rejects a key Codex does not recognise and prints its file, line and full dotted path, which is the only signal you get — without it a misplaced key is dropped in silence.
+
+Once the keys are genuinely top-level, a missing or empty prompt file is loud: Codex refuses to start and names the file. The catalog file on its own is not — every model listed in it would run with no agent prompt at all, and nothing says so.
 
 Both values are paths, never URLs — Codex reads them off disk at startup. A leading `~` expands to your home directory, and a relative path resolves against the directory of the config file it appears in (`$CODEX_HOME`, `~/.codex` by default), so `model_catalog_json = "relay-models.json"` picks up `~/.codex/relay-models.json` as well. `model_catalog_json` is also accepted inside a `[profiles.<name>]` block, and it is applied at startup only.
 
