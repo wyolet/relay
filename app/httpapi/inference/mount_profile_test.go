@@ -28,6 +28,55 @@ func (stubProfile) Match(*http.Request) bool { return false }
 
 func (stubProfile) AttributionHeaders() []string { return []string{"x-stub-session-id"} }
 
+// stubMultiShapeProfile speaks both inbound shapes off one prefix, the way
+// a client whose SDK picks the path per wire shape needs.
+type stubMultiShapeProfile struct{ stubProfile }
+
+func (stubMultiShapeProfile) Name() string  { return "stubmulti" }
+func (stubMultiShapeProfile) Shape() string { return string(adapters.OpenAI) }
+func (stubMultiShapeProfile) Shapes() []string {
+	return []string{string(adapters.OpenAI), string(adapters.Anthropic)}
+}
+
+// buildTwoShapeRegistry carries one inbound path per shape, so a mirrored
+// prefix has two paths to cover.
+func buildTwoShapeRegistry() *adapter.Registry {
+	openaiSpec := (&adapter.Spec{
+		Name: adapters.OpenAI,
+		InboundPaths: []adapter.InboundPath{
+			{Path: "/openai/v1/chat/completions", OperationID: "openai_chat_completions", Summary: "Create a chat completion"},
+		},
+		DefaultPath: "/v1/chat/completions",
+		Auth:        adapter.AuthStrategy{Header: "Authorization", Scheme: "Bearer"},
+		Translator:  stubV1Translator{},
+	}).Build()
+	return adapter.NewRegistry(openaiSpec, buildPathRegistry().Specs()[0])
+}
+
+// TestMountRegistry_MultiShapeProfileMirrorsEveryShape pins the seam a
+// client speaking two wire shapes off one base URL depends on.
+func TestMountRegistry_MultiShapeProfileMirrorsEveryShape(t *testing.T) {
+	cat, _ := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	d := buildDeps(t, cat)
+
+	profiles := clientprofile.New()
+	if err := profiles.Register(stubMultiShapeProfile{}); err != nil {
+		t.Fatalf("register profile: %v", err)
+	}
+	d.Profiles = profiles
+
+	r := chi.NewRouter()
+	api := humachi.New(r, huma.DefaultConfig("test", "1"))
+	MountRegistry(buildTwoShapeRegistry())(api, d, nil)
+
+	paths := routePaths(t, r)
+	for _, want := range []string{"/stubmulti/v1/chat/completions", "/stubmulti/v1/messages"} {
+		if !contains(paths, want) {
+			t.Errorf("routes = %v, missing %q", paths, want)
+		}
+	}
+}
+
 // buildPathRegistry is buildTestRegistry's counterpart for mount tests: the
 // anthropic spec carries the inbound path the profile mirrors.
 func buildPathRegistry() *adapter.Registry {

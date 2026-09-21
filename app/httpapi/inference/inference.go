@@ -77,6 +77,12 @@ type Deps struct {
 	// profile on the request context, behaviour unchanged.
 	Profiles *clientprofile.Registry
 
+	// PublicURL is the externally reachable base of this data plane
+	// (RELAY_INFERENCE_API_URL). A client document that has to print the
+	// endpoint its reader should call needs it; empty means derive it per
+	// request from the origin the caller arrived on.
+	PublicURL string
+
 	// TokenCalibrator answers the count-tokens endpoint from the ratio relay measured on completed requests, for upstreams with no counter of their own. Nil is safe: those requests fall through to a byte estimate.
 	TokenCalibrator *tokencount.Calibrator
 

@@ -3,10 +3,12 @@ package inference
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
@@ -55,14 +57,14 @@ func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
 }
 
 // registerProfileModels gives every profile that renders its own
-// list-models document a GET /{profile}/v1/models, on the same auth chain
-// as the shape's inference routes. No adapter filter: relay translates
-// cross-shape, so every model the key can see is reachable from the
-// profile's inbound shape — the /openai/v1/models filter predates that and
-// stays as it is.
+// list-models document a GET under its /{profile} prefix, on the same auth
+// chain as the shape's inference routes. No adapter filter: relay
+// translates cross-shape, so every model the key can see is reachable from
+// the profile's inbound shape — the /openai/v1/models filter predates that
+// and stays as it is.
 func registerProfileModels(api huma.API, d Deps, mw huma.Middlewares) {
 	for _, p := range d.Profiles.Profiles() {
-		lister, ok := p.(clientprofile.ModelLister)
+		render, ok := modelListRenderer(p)
 		if !ok {
 			continue
 		}
@@ -70,7 +72,7 @@ func registerProfileModels(api huma.API, d Deps, mw huma.Middlewares) {
 		huma.Register(api, huma.Operation{
 			OperationID: "list_models_" + name,
 			Method:      http.MethodGet,
-			Path:        "/" + name + "/v1/models",
+			Path:        "/" + name + modelListPath(p),
 			Summary:     "List models in the " + name + " client's own shape",
 			Tags:        []string{"inference"},
 			Middlewares: mw,
@@ -81,16 +83,55 @@ func registerProfileModels(api huma.API, d Deps, mw huma.Middlewares) {
 			if err != nil {
 				return nil, err
 			}
-			body, contentType, err := lister.Models(modelEntries(snap, pol, models))
-			if err != nil {
-				return nil, huma.Error500InternalServerError("render model list", err)
-			}
+			entries := modelEntries(snap, pol, models)
 			return &huma.StreamResponse{Body: func(hctx huma.Context) {
-				hctx.SetHeader("Content-Type", contentType)
-				_, _ = hctx.BodyWriter().Write(body)
+				r, w := humachi.Unwrap(hctx)
+				body, contentType, err := render(clientprofile.ListContext{PublicURL: publicInferenceURL(d, r)}, entries)
+				if err != nil {
+					WriteAPIError(w, http.StatusInternalServerError, "api_error", "render_models", err.Error())
+					return
+				}
+				w.Header().Set("Content-Type", contentType)
+				_, _ = w.Write(body)
 			}}, nil
 		})
 	}
+}
+
+// modelListRenderer picks the profile's list projection, preferring the context-carrying form: a document that has to name the endpoint its client should call cannot be rendered from the entries alone.
+func modelListRenderer(p clientprofile.Profile) (func(clientprofile.ListContext, []clientprofile.ModelEntry) ([]byte, string, error), bool) {
+	if l, ok := p.(clientprofile.ListerWithContext); ok {
+		return l.ModelsWithContext, true
+	}
+	if l, ok := p.(clientprofile.ModelLister); ok {
+		return func(_ clientprofile.ListContext, entries []clientprofile.ModelEntry) ([]byte, string, error) {
+			return l.Models(entries)
+		}, true
+	}
+	return nil, false
+}
+
+// modelListPath is where the profile's client reads its model list, relative to the /{profile} prefix.
+func modelListPath(p clientprofile.Profile) string {
+	if r, ok := p.(clientprofile.ModelListRoute); ok {
+		return r.ModelListPath()
+	}
+	return "/v1/models"
+}
+
+// publicInferenceURL is the base a client should send inference to: the deployment's declared public URL, or — when it declares none — the origin this very request arrived at, which is right for a direct caller and for any proxy that forwards the scheme.
+func publicInferenceURL(d Deps, r *http.Request) string {
+	if d.PublicURL != "" {
+		return strings.TrimSuffix(d.PublicURL, "/")
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if fwd := r.Header.Get("X-Forwarded-Proto"); fwd != "" {
+		scheme = strings.TrimSpace(strings.Split(fwd, ",")[0])
+	}
+	return scheme + "://" + r.Host
 }
 
 // modelEntries projects visible models into the neutral view a profile
@@ -121,6 +162,13 @@ func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Mo
 				MaxOutputTokens: m.Spec.MaxOutputTokens,
 				Reasoning:       m.Spec.Capabilities.Reasoning,
 				ToolCall:        m.Spec.Capabilities.Tools,
+				Vision:          m.Spec.Capabilities.Vision,
+				Temperature:     temperatureSupported(m),
+				Modalities: clientprofile.Modalities{
+					Input:  m.Spec.Modalities.Input,
+					Output: m.Spec.Modalities.Output,
+				},
+				ReleasedAt: s.ReleasedAt,
 			}
 			if e.DisplayName == "" {
 				e.DisplayName = s.Name
@@ -141,6 +189,16 @@ func contextWindow(m *model.Model) int {
 		return m.Spec.ContextWindowTotal
 	}
 	return m.Spec.ContextWindowInput
+}
+
+// temperatureSupported reports whether a caller may send a temperature. The catalog states the negative — UnsupportedParams lists what the upstream rejects for this model — and a picker needs the positive.
+func temperatureSupported(m *model.Model) bool {
+	for _, p := range m.Spec.Capabilities.UnsupportedParams {
+		if p == "temperature" {
+			return false
+		}
+	}
+	return true
 }
 
 // grantedBindings keeps the model's enabled bindings the caller may actually route to. A binding outside the caller's grant must never reach a listing — the row would advertise a route the key cannot take. adapterFilter, when set, additionally keeps only bindings declaring it.
@@ -193,17 +251,67 @@ func snapshotHosts(snap *catalog.Snapshot, bindings []*binding.Binding, snapshot
 		}
 		h := clientprofile.ModelHost{Name: name}
 		if p, ok := snap.PricingForBinding(b); ok {
-			in, okIn := p.RateFor(pricing.MeterTokensInput, 0)
-			out, okOut := p.RateFor(pricing.MeterTokensOutput, 0)
-			if okIn && okOut {
-				h.Priced = true
-				h.InputUSDPerMtok = perMtok(in)
-				h.OutputUSDPerMtok = perMtok(out)
-			}
+			applyRates(&h, p)
 		}
 		hosts = append(hosts, h)
 	}
 	return hosts
+}
+
+// applyRates copies a binding's rate sheet onto the listing host: the base tier first — a host counts as priced only when both sides of a request have a rate — then the cache meters and the above-base tiers.
+func applyRates(h *clientprofile.ModelHost, p *pricing.Pricing) {
+	in, okIn := p.RateFor(pricing.MeterTokensInput, 0)
+	out, okOut := p.RateFor(pricing.MeterTokensOutput, 0)
+	if !okIn || !okOut {
+		return
+	}
+	h.Priced = true
+	h.InputUSDPerMtok = perMtok(in)
+	h.OutputUSDPerMtok = perMtok(out)
+	h.CacheReadUSDPerMtok = rateAt(p, pricing.MeterTokensCacheRead, 0)
+	h.CacheWriteUSDPerMtok = rateAt(p, pricing.MeterTokensCacheCreation, 0)
+	for _, above := range tierThresholds(p) {
+		tier := clientprofile.PriceTier{
+			AboveTokens:          above,
+			CacheReadUSDPerMtok:  rateAt(p, pricing.MeterTokensCacheRead, above),
+			CacheWriteUSDPerMtok: rateAt(p, pricing.MeterTokensCacheCreation, above),
+		}
+		if r, ok := p.RateFor(pricing.MeterTokensInput, above); ok {
+			tier.InputUSDPerMtok = perMtok(r)
+		}
+		if r, ok := p.RateFor(pricing.MeterTokensOutput, above); ok {
+			tier.OutputUSDPerMtok = perMtok(r)
+		}
+		h.Tiers = append(h.Tiers, tier)
+	}
+}
+
+// tierThresholds lists the above-base thresholds the sheet declares, ascending and deduplicated across meters: one meter's tier row raises the price of the whole request past that point, so every meter is re-read there.
+func tierThresholds(p *pricing.Pricing) []int {
+	var out []int
+	seen := map[int]struct{}{}
+	for _, r := range p.Spec.Rates {
+		if r.AboveTokens <= 0 {
+			continue
+		}
+		if _, dup := seen[r.AboveTokens]; dup {
+			continue
+		}
+		seen[r.AboveTokens] = struct{}{}
+		out = append(out, r.AboveTokens)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// rateAt returns the meter's rate at a token count, nil when the sheet prices no such meter — nil is "unpriced", never "free".
+func rateAt(p *pricing.Pricing, meter pricing.Meter, tokens int) *float64 {
+	r, ok := p.RateFor(meter, tokens)
+	if !ok {
+		return nil
+	}
+	v := perMtok(r)
+	return &v
 }
 
 // perMtok normalizes a rate to USD per million tokens.

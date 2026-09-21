@@ -21,6 +21,7 @@
               "clients",
               "claude-code",
               "codex",
+              "opencode",
               "configuration"
             ]
           },

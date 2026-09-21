@@ -1,0 +1,102 @@
+---
+title: "OpenCode"
+description: "Point OpenCode at Relay and run it on any model in the catalog"
+---
+
+[OpenCode](https://github.com/anomalyco/opencode) talks to a custom provider through the Vercel AI SDK, and each SDK package appends its own fixed path to the base URL you configure: `@ai-sdk/openai-compatible` posts to `{baseURL}/chat/completions`, `@ai-sdk/anthropic` to `{baseURL}/messages`. Relay serves both off one base, `https://your-relay/opencode/v1`, so the same URL works whichever package you pick.
+
+Relay translates between wire shapes, so the choice of package does not constrain the model: any model your relay key's policy grants is reachable from either one.
+
+## Setup
+
+Relay renders the models.dev catalog document OpenCode already knows how to read, so the provider block you would otherwise hand-write comes from the relay itself. Download it once, and point OpenCode at the file:
+
+```bash
+curl -H "Authorization: Bearer $RELAY_API_KEY" \
+  https://your-relay/opencode/api.json > ~/.config/opencode/relay-models.json
+
+export OPENCODE_MODELS_PATH=~/.config/opencode/relay-models.json
+export RELAY_API_KEY=sk-wr-your-relay-key
+```
+
+That is the whole setup. The document declares one provider, `relay`, carrying its own base URL, its SDK package and `env: ["RELAY_API_KEY"]` — and a provider whose environment variable is set loads with no configuration block at all. Pick a model with `opencode -m relay/<model>`, or name a default in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "relay/gpt-6-astra",
+  "small_model": "relay/gpt-5-mini"
+}
+```
+
+`OPENCODE_MODELS_PATH` is a file path, not a URL: OpenCode reads it in place of its own cached catalog, and never fetches while it is set. The sibling `OPENCODE_MODELS_URL` does fetch `{source}/api.json`, but it sends no `Authorization` header and offers no way to attach one, so it cannot reach a policy-scoped endpoint — the file is the supported route. The document is a snapshot of what your key could route to at download time; re-run the `curl` after a policy or catalog change.
+
+The models it lists carry the catalog's context window, output cap, prices (including cache and context-tier rates), modalities and capability flags. A model the catalog declares no context window for is left out: OpenCode reads a missing `limit.context` as zero, and a zero silently disables its context-remaining display and its compaction trigger.
+
+### Writing the provider block yourself
+
+If you would rather not carry a file, declare the provider inline. Supply `limit` for every model — the defaults for a provider OpenCode has never heard of are a zero context window and a zero output cap:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "relay/gpt-6-astra",
+  "provider": {
+    "relay": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Wyolet Relay",
+      "options": {
+        "baseURL": "https://your-relay/opencode/v1",
+        "apiKey": "{env:RELAY_API_KEY}"
+      },
+      "models": {
+        "gpt-6-astra": {
+          "name": "GPT-6 Astra",
+          "reasoning": true,
+          "tool_call": true,
+          "attachment": true,
+          "temperature": true,
+          "limit": { "context": 1000000, "output": 128000 },
+          "cost": { "input": 1.25, "output": 10, "cache_read": 0.125 }
+        }
+      }
+    }
+  }
+}
+```
+
+The relay key goes out as `Authorization: Bearer`, which is how Relay expects it.
+
+### The Anthropic package
+
+Swap `npm` for `@ai-sdk/anthropic` and keep the same base URL — the package appends `/messages` to it, and Relay accepts the `x-api-key` header the package sends as a relay key. Prefer this variant when you want OpenCode's Anthropic-side features on the wire as the vendor defines them: the thinking configuration it passes through `options.thinking`, and the prompt-cache breakpoints it injects into the request body, which survive as sent on a route to an Anthropic upstream. Note the `/v1` in the base URL is yours to supply — the package only adds it for `api.anthropic.com` itself.
+
+### Per-agent models
+
+The `agent` block pins any agent to its own `provider/model`, so one relay serves a cheap title model and an expensive build model from a single config:
+
+```json
+{
+  "agent": {
+    "build": { "model": "relay/gpt-6-astra" },
+    "plan": { "model": "relay/gpt-6-astra", "variant": "high" },
+    "title": { "model": "relay/gpt-5-mini" }
+  }
+}
+```
+
+## What you get
+
+- **Usage** — every turn appears in `GET /logs` and the `/usage/*` endpoints, attributed to your relay key, with token counts and timing.
+- **Payloads** — with payload logging enabled, the full request and response bodies are readable at `GET /logs/{request_id}`.
+- **Attribution** — the client's `x-session-id` header is recorded on the usage event as `extras`, alongside `client=opencode`. That is what lets you cost one session; OpenCode sends no agent or turn marker, so below the session the only distinction is the model.
+
+See [Usage & Logging](/concepts/observability) for reading it back.
+
+## Known limits
+
+- **Prompt-cache breakpoints do not cross from a Chat Completions body.** OpenCode injects `cache_control` markers whenever the model id contains `claude` or `anthropic` — including on the openai-compatible path, where they land as a non-standard key on each message. Relay forwards them untouched to an upstream that speaks that shape, but does not yet map them into its canonical cache intent, so on a cross-shape route they are dropped and the turn is billed uncached.
+- **Reasoning comes back as text unless the model declares where to find it.** On the openai-compatible path OpenCode reads reasoning from whatever field `models.<id>.interleaved` names (`reasoning_content` on most upstreams that emit it at all) and re-sends it there on the next turn. Upstreams differ; set `interleaved` to match yours, and expect no separate thinking block from one that returns none.
+- **Attribution stops at the session.** Unlike Claude Code and Codex, OpenCode sends no per-agent or per-turn header, so a sub-agent's spend is separable only by the model it was pinned to.
+- **Model ids must not contain `/`.** OpenCode reads the first segment as the provider id; Relay's ids are slugs and never do, but an alias you invent should not either.
+- **Use `127.0.0.1`, not `localhost`,** in a local base URL.

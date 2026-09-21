@@ -395,7 +395,7 @@ func main() {
 		}).Build(),
 	}
 	profiles := clientprofile.New()
-	for _, p := range []clientprofile.Profile{clientprofile.ClaudeCode(), clientprofile.Codex()} {
+	for _, p := range []clientprofile.Profile{clientprofile.ClaudeCode(), clientprofile.Codex(), clientprofile.OpenCode()} {
 		if err := profiles.Register(p); err != nil {
 			slog.Error("client profile registration failed", "err", err)
 			os.Exit(1)
@@ -564,6 +564,7 @@ func main() {
 		Specs:           specRegistry,
 		Profiles:        profiles,
 		RouteMounters:   []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		PublicURL:       cfg.Runtime.InferenceAPIURL,
 		TokenCalibrator: tokenCalibrator,
 		StreamKeepAlive: cfg.StreamKeepAlive,
 		TrustEventTime:  cfg.DevTrustEventTime,

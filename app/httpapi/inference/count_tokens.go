@@ -10,7 +10,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapter"
-	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/clientprofile"
@@ -120,7 +119,7 @@ func exactCounter(d Deps, profile clientprofile.Profile, plan *routing.Plan) (ad
 	if d.Pipeline == nil || d.Pipeline.Policy == nil {
 		return nil, false
 	}
-	if adapters.Name(profile.Shape()) != plan.HostBinding.Spec.Adapter {
+	if !clientprofile.Speaks(profile, string(plan.HostBinding.Spec.Adapter)) {
 		return nil, false
 	}
 	counter, ok := d.Specs.PipelineAdapter(plan.HostBinding.Spec.Adapter).(adapter.TokenCounter)
