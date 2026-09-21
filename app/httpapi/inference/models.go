@@ -107,11 +107,12 @@ func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Mo
 				continue
 			}
 			seen[s.Name] = struct{}{}
-			e := clientprofile.ModelEntry{ID: s.Name, DisplayName: m.Meta.DisplayName, Hosts: hosts}
+			e := clientprofile.ModelEntry{ID: s.Name, Model: m.Meta.Name, DisplayName: m.Meta.DisplayName, Hosts: hosts}
 			if e.DisplayName == "" {
 				e.DisplayName = s.Name
 			}
 			if strings.EqualFold(s.Name, m.Spec.Pointer) {
+				e.Pointer = true
 				e.Aliases = exactAliases(m.Spec.Aliases)
 			}
 			entries = append(entries, e)

@@ -10,7 +10,9 @@ import "net/http"
 // profile for its list projection. No catalog types cross into pkg/.
 type ModelEntry struct {
 	ID          string // catalog model slug, what the client sends as `model`
+	Model       string // parent model slug; the prefix the ID's snapshot suffix hangs off
 	DisplayName string
+	Pointer     bool     // the snapshot the parent model points at — the "latest" one
 	Aliases     []string // resolution-only aliases that also route to this model
 	Hosts       []ModelHost
 }

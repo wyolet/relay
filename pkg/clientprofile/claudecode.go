@@ -63,29 +63,32 @@ func pickerID(id string) string {
 // Inbound strips the minted prefix, so any suffix the caller appended (an alias bracket, a host pin) rides through untouched.
 func (claudeCode) Inbound(model string) string { return strings.TrimPrefix(model, pickerPrefix) }
 
-// Models renders the Anthropic list-models document, one row per entry
-// plus one per exact alias, each id minted into the form the client's
-// picker keeps.
+// entryLabel names the row in the picker, which shows display_name and description and nothing else: every snapshot of one model carries the parent's display name, so the non-pointer ones would render as identical rows without the snapshot suffix appended here.
+func entryLabel(e ModelEntry) string {
+	if e.Pointer {
+		return e.DisplayName
+	}
+	suffix := e.ID
+	switch {
+	case e.ID == e.Model:
+		suffix = "base"
+	case e.Model != "":
+		suffix = strings.TrimPrefix(e.ID, e.Model+"-")
+	}
+	return e.DisplayName + " (" + suffix + ")"
+}
+
+// Models renders the Anthropic list-models document, one row per entry, each id minted into the form the client's picker keeps. Aliases are left out: an alias is a compatibility spelling of a model already listed, not a separate choice, and it still resolves when the client sends it.
 func (claudeCode) Models(entries []ModelEntry) ([]byte, string, error) {
 	out := anthropicModelList{Data: make([]anthropicModel, 0, len(entries))}
 	for _, e := range entries {
-		description := hostsDescription(e.Hosts)
 		out.Data = append(out.Data, anthropicModel{
 			Type:        "model",
 			ID:          pickerID(e.ID),
-			DisplayName: e.DisplayName,
+			DisplayName: entryLabel(e),
 			CreatedAt:   modelCreatedAt,
-			Description: description,
+			Description: hostsDescription(e.Hosts),
 		})
-		for _, alias := range e.Aliases {
-			out.Data = append(out.Data, anthropicModel{
-				Type:        "model",
-				ID:          pickerID(alias),
-				DisplayName: e.DisplayName + " (alias)",
-				CreatedAt:   modelCreatedAt,
-				Description: description,
-			})
-		}
 	}
 	if n := len(out.Data); n > 0 {
 		out.FirstID = out.Data[0].ID

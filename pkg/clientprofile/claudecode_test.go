@@ -59,15 +59,21 @@ func TestClaudeCode_ModelsProjection(t *testing.T) {
 	body, contentType, err := claudeCodeLister(t).Models([]ModelEntry{
 		{
 			ID:          "claude-sonnet-4-6",
+			Model:       "claude-sonnet-4-6",
 			DisplayName: "Claude Sonnet 4.6",
+			Pointer:     true,
 			Aliases:     []string{"sonnet"},
 			Hosts: []ModelHost{
 				{Name: "anthropic", Priced: true, InputUSDPerMtok: 3, OutputUSDPerMtok: 15},
 				{Name: "bedrock"},
 			},
 		},
-		{ID: "gpt-6-astra", DisplayName: "GPT-6 Astra"},
-		{ID: "gemma4-e4b", DisplayName: "Gemma 4 E4B", Aliases: []string{"gemma"}},
+		{ID: "gpt-6-astra", Model: "gpt-6-astra", DisplayName: "GPT-6 Astra", Pointer: true},
+		// One model, four snapshots: only the pointer row keeps the plain label.
+		{ID: "deepseek-v4-flash", Model: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash", Pointer: true, Aliases: []string{"flash"}},
+		{ID: "deepseek-v4-flash-cloud", Model: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash"},
+		{ID: "deepseek-v4-flash-0731", Model: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash"},
+		{ID: "deepseek-v4-flash-free", Model: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash"},
 	})
 	if err != nil {
 		t.Fatalf("Models: %v", err)
@@ -78,13 +84,20 @@ func TestClaudeCode_ModelsProjection(t *testing.T) {
 
 	const want = `{"data":[` +
 		`{"type":"model","id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6","created_at":"1970-01-01T00:00:00Z","description":"anthropic · $3/$15 per Mtok, bedrock"},` +
-		`{"type":"model","id":"claude/sonnet","display_name":"Claude Sonnet 4.6 (alias)","created_at":"1970-01-01T00:00:00Z","description":"anthropic · $3/$15 per Mtok, bedrock"},` +
 		`{"type":"model","id":"claude/gpt-6-astra","display_name":"GPT-6 Astra","created_at":"1970-01-01T00:00:00Z"},` +
-		`{"type":"model","id":"claude/gemma4-e4b","display_name":"Gemma 4 E4B","created_at":"1970-01-01T00:00:00Z"},` +
-		`{"type":"model","id":"claude/gemma","display_name":"Gemma 4 E4B (alias)","created_at":"1970-01-01T00:00:00Z"}` +
-		`],"has_more":false,"first_id":"claude-sonnet-4-6","last_id":"claude/gemma"}`
+		`{"type":"model","id":"claude/deepseek-v4-flash","display_name":"DeepSeek V4 Flash","created_at":"1970-01-01T00:00:00Z"},` +
+		`{"type":"model","id":"claude/deepseek-v4-flash-cloud","display_name":"DeepSeek V4 Flash (cloud)","created_at":"1970-01-01T00:00:00Z"},` +
+		`{"type":"model","id":"claude/deepseek-v4-flash-0731","display_name":"DeepSeek V4 Flash (0731)","created_at":"1970-01-01T00:00:00Z"},` +
+		`{"type":"model","id":"claude/deepseek-v4-flash-free","display_name":"DeepSeek V4 Flash (free)","created_at":"1970-01-01T00:00:00Z"}` +
+		`],"has_more":false,"first_id":"claude-sonnet-4-6","last_id":"claude/deepseek-v4-flash-free"}`
 	if string(body) != want {
 		t.Errorf("Models body mismatch\n got: %s\nwant: %s", body, want)
+	}
+	// An alias is a spelling of a listed model, not a picker choice.
+	for _, alias := range []string{"sonnet", "flash"} {
+		if strings.Contains(string(body), `"`+pickerPrefix+alias+`"`) {
+			t.Errorf("alias %q must not be listed", alias)
+		}
 	}
 }
 

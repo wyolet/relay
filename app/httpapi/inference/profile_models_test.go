@@ -126,6 +126,28 @@ func TestModelEntries_SnapshotsAliasesAndHosts(t *testing.T) {
 	}
 }
 
+// The parent slug and the pointer bit are what a profile needs to tell one
+// model's snapshots apart — they all carry the same display name.
+func TestModelEntries_CarriesParentSlugAndPointer(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	entries := modelEntries(snap, pol, models)
+
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
+	}
+	for _, e := range entries {
+		if e.Model != "big-model" {
+			t.Errorf("entry %q model = %q, want big-model", e.ID, e.Model)
+		}
+	}
+	if !entries[0].Pointer {
+		t.Errorf("%q is the pointer snapshot", entries[0].ID)
+	}
+	if entries[1].Pointer {
+		t.Errorf("%q is not the pointer snapshot", entries[1].ID)
+	}
+}
+
 func TestModelEntries_SkipsDisabledBindings(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model")
 	disabled := false
