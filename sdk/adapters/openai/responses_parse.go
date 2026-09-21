@@ -166,7 +166,7 @@ func responsesValidateMetadata(m map[string]string) error {
 		if len(v) > 256 {
 			return fmt.Errorf("value for key %q exceeds 256 characters", k)
 		}
-		if !responsesValidMetaKey(k) {
+		if !validMetaKey(k) {
 			return fmt.Errorf("key %q contains invalid characters (DNS-1123 charset required)", k)
 		}
 		if !responsesValidMetaValue(v) {
@@ -174,31 +174,6 @@ func responsesValidateMetadata(m map[string]string) error {
 		}
 	}
 	return nil
-}
-
-func responsesValidMetaKey(s string) bool {
-	if len(s) == 0 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			c == '_' || c == '.' || c == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func responsesValidMetaValue(s string) bool {
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < 0x20 || c > 0x7E {
-			return false
-		}
-	}
-	return true
 }
 
 // ResponsesHints is the minimal set of fields extracted by ResponsesRoutingHints.

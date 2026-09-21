@@ -1,5 +1,7 @@
 package keypool
 
+import "fmt"
+
 // circuitKey returns the Redis key for a secret's circuit-breaker record.
 // format: secret_health:{secret:<keyHash>}
 // Hash tag {secret:<keyHash>} groups circuit state per secret on a single
@@ -14,4 +16,10 @@ func circuitKey(keyHash string) string {
 // state can land on the same Cluster slot if needed.
 func roundRobinKey(poolName string) string {
 	return "pool_rr:{pool:" + poolName + "}"
+}
+
+// lruKey returns the Redis key used to store the last-use timestamp for a
+// key within a named pool.
+func lruKey(poolName, keyHash string) string {
+	return fmt.Sprintf("{pool_lru:%s}:%s", poolName, keyHash)
 }

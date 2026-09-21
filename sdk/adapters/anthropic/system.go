@@ -1,6 +1,9 @@
 package anthropic
 
 import (
+	"encoding/json"
+	"strings"
+
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -30,4 +33,27 @@ func unwrapSystemUserTurn(toolResults []*v1.FunctionCallOutput, textParts []v1.P
 		return nil
 	}
 	return &v1.Message{Role: v1.RoleSystem, Content: []v1.Part{&v1.TextPart{Text: inner}}}
+}
+
+// anthropicExtractSystemText handles system being a plain string or an array
+// of {type:"text", text:"..."} blocks.
+func anthropicExtractSystemText(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
