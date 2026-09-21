@@ -199,11 +199,10 @@ func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err erro
 		keyValue     string // current secret for acq.Key; overridden on a heal-retry
 		attempts     int    // distinct keys tried (a same-key retry doesn't count)
 		connAttempts int    // consecutive dial failures against the host (any key)
-		// Last upstream response observed during retry. Carried into the
-		// final error so callers see *why* upstream rejected (otherwise
-		// "all keys exhausted" hides the actual auth/quota/server message).
+		// Last upstream response observed during retry, carried into the final error: without it "all keys exhausted" hides both the reason upstream rejected (auth? quota? bad model?) and the backoff/rate-limit headers the caller needs to pace its retry.
 		lastStatus int
-		lastBody   string
+		lastHeader http.Header
+		lastBody   []byte
 	)
 loop:
 	for {
@@ -251,7 +250,8 @@ loop:
 		retry, kind, retryAfter := classify(req.Adapter, resp, err)
 		if resp != nil {
 			lastStatus = resp.StatusCode
-			lastBody = readBodyExcerpt(resp, 512)
+			lastHeader = resp.Header.Clone()
+			lastBody = readBodyCapped(resp, maxUpstreamErrorBody)
 		}
 
 		// Dial failure: the host is unreachable, not the key bad. Don't trip
@@ -287,23 +287,27 @@ loop:
 		err = ErrAllKeysExhausted
 	}
 	if errors.Is(err, ErrAllKeysExhausted) && lastStatus != 0 {
-		err = &UpstreamFailureError{Status: lastStatus, Body: lastBody, Cause: err}
+		err = &UpstreamFailureError{Status: lastStatus, Header: lastHeader, Body: lastBody, Cause: err}
 	}
 	return nil, err
 }
 
-// UpstreamFailureError wraps ErrAllKeysExhausted with the last upstream
-// status + body excerpt so handlers can surface what actually went wrong
-// (otherwise the caller just sees "all upstream keys failed" with no
-// context — auth? quota? bad model? unknown).
+// maxUpstreamErrorBody bounds the retained upstream error body. Generous enough that no provider's error JSON is truncated (they run to a few KiB at most with a validation trace), bounded because this buffer outlives the response and a hostile upstream must not be able to pin arbitrary memory per failed request.
+const maxUpstreamErrorBody = 64 << 10
+
+// errorExcerpt bounds how much of the retained body reaches a log line or an error string.
+const errorExcerpt = 512
+
+// UpstreamFailureError wraps ErrAllKeysExhausted with the last upstream response — status, headers and body — so handlers can relay what actually went wrong instead of a generic "all upstream keys failed". Only the LAST attempt is kept: the earlier candidates failed the same way, and the caller acts on one verdict.
 type UpstreamFailureError struct {
 	Status int
-	Body   string
+	Header http.Header
+	Body   []byte
 	Cause  error
 }
 
 func (e *UpstreamFailureError) Error() string {
-	body := e.Body
+	body := bodyExcerpt(e.Body, errorExcerpt)
 	if body == "" {
 		body = "(empty body)"
 	}
@@ -312,13 +316,19 @@ func (e *UpstreamFailureError) Error() string {
 
 func (e *UpstreamFailureError) Unwrap() error { return e.Cause }
 
-// readBodyExcerpt reads up to max bytes from resp.Body, drains the rest,
-// and returns the read bytes as a string. Honors Content-Encoding: gzip
-// (Anthropic compresses error bodies) so the excerpt is human-readable
-// rather than raw deflate. Empty if body is nil or unreadable.
-func readBodyExcerpt(resp *http.Response, max int) string {
+// bodyExcerpt trims b to a short summary for logs and error strings, leaving the retained body itself untouched so it can still be forwarded verbatim.
+func bodyExcerpt(b []byte, max int) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > max {
+		s = s[:max]
+	}
+	return s
+}
+
+// readBodyCapped reads up to max bytes from resp.Body, drains the rest, and returns them. Honors Content-Encoding: gzip (some providers compress error bodies) so the retained bytes are the decoded payload — which is also why the encoding header must not be forwarded alongside them.
+func readBodyCapped(resp *http.Response, max int) []byte {
 	if resp == nil || resp.Body == nil {
-		return ""
+		return nil
 	}
 	defer resp.Body.Close()
 	var src io.Reader = resp.Body
@@ -332,10 +342,10 @@ func readBodyExcerpt(resp *http.Response, max int) string {
 	buf := make([]byte, max)
 	n, _ := io.ReadFull(src, buf)
 	if n == 0 {
-		return ""
+		return nil
 	}
 	_, _ = io.Copy(io.Discard, src)
-	return strings.TrimSpace(string(buf[:n]))
+	return buf[:n]
 }
 
 func shouldRetry(a Adapter, resp *http.Response) bool {

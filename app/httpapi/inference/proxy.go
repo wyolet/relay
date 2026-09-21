@@ -255,9 +255,10 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 		// falling into their naked-429 hammer loop.
 		var ex *pkgratelimit.ExceededError
 		if errors.As(err, &ex) {
-			setRetryAfter(w, ex.RetryAfter)
-			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "rate_limit",
-				ex.Error())
+			// Same condition as the pipeline path, so the same envelope: two error.type values for one rejection makes it unclassifiable by any client that branches on it.
+			secs := setRetryAfter(w, ex.RetryAfter)
+			writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded",
+				rateLimitMessage(ex, secs))
 			return
 		}
 		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", err.Error())
