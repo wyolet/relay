@@ -10,7 +10,11 @@ import (
 )
 
 const (
+	// defaultTimeout bounds two things: a non-streamed upstream call end to end, and — on every call — the wait for the upstream's response headers. It is deliberately NOT a whole-request cap on streams, where a legitimate generation runs for hours and only the pre-first-byte leg needs a deadline for failover.
 	defaultTimeout = 5 * time.Minute
+
+	// defaultStreamIdleTimeout ends a streamed upstream that has stopped sending bytes. Set well above the ~300 s silence watchdogs coding agents use, so a wedged stream is ended by the client's own timeout rather than by relay giving up under it.
+	defaultStreamIdleTimeout = 10 * time.Minute
 
 	// defaultMaxIdleConnsPerHost keeps hot upstream connections warm. The
 	// stdlib default (2) re-dials nearly every request at high per-host RPS.
@@ -29,6 +33,16 @@ const (
 // maxIdleConnsPerHost is the per-host idle-connection ceiling applied to
 // every upstream transport built after it is set. Read at Build time.
 var maxIdleConnsPerHost = defaultMaxIdleConnsPerHost
+
+// streamIdleTimeout is the silence budget applied to every streamed upstream body read by specs built after it is set. Read at Build time.
+var streamIdleTimeout = defaultStreamIdleTimeout
+
+// SetUpstreamStreamIdleTimeout overrides the streamed-response idle deadline for every Spec built afterwards (the composition root wires RELAY_STREAM_IDLE_TIMEOUT_S here). Zero disables the deadline; negative values are ignored. Not safe to call concurrently with Build — invoke once at boot, before specs are constructed.
+func SetUpstreamStreamIdleTimeout(d time.Duration) {
+	if d >= 0 {
+		streamIdleTimeout = d
+	}
+}
 
 // SetUpstreamMaxIdleConnsPerHost overrides the per-host idle-connection cap
 // used by every Spec built afterwards (the composition root wires the
@@ -53,9 +67,11 @@ func SetUpstreamMaxIdleConnsPerHost(n int) {
 func NewUpstreamTransport(http1 bool) http.RoundTripper {
 	perHost := maxIdleConnsPerHost
 	tr := &http.Transport{
-		MaxIdleConns:          perHost * maxIdleConnsScale,
-		MaxIdleConnsPerHost:   perHost,
-		IdleConnTimeout:       idleConnTimeout,
+		MaxIdleConns:        perHost * maxIdleConnsScale,
+		MaxIdleConnsPerHost: perHost,
+		IdleConnTimeout:     idleConnTimeout,
+		// The only whole-response deadline a stream can tolerate: the wait for the upstream's headers. Past that the caller is reading real bytes and any cap would cut a live generation short.
+		ResponseHeaderTimeout: defaultTimeout,
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ExpectContinueTimeout: expectContinueTimeout,
 	}

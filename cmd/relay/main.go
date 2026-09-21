@@ -293,6 +293,7 @@ func main() {
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.
 	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
+	adapter.SetUpstreamStreamIdleTimeout(cfg.StreamIdleTimeout)
 	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
 
 	// Adapter specs — one Spec per supported wire shape. The composition
@@ -545,17 +546,18 @@ func main() {
 	}
 	inferRouter.Use(httpmw.LimitBody(maxBody))
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:         st,
-		Catalog:        cat,
-		Resolver:       routing.New(cat),
-		Pipeline:       pl,
-		Proxy:          proxyPipeline,
-		Lifecycle:      lifecycleReg,
-		Adapters:       specRegistry.AdapterMap(),
-		Specs:          specRegistry,
-		Profiles:       profiles,
-		RouteMounters:  []inference.RouteMounter{inference.MountRegistry(specRegistry)},
-		TrustEventTime: cfg.DevTrustEventTime,
+		Pinger:          st,
+		Catalog:         cat,
+		Resolver:        routing.New(cat),
+		Pipeline:        pl,
+		Proxy:           proxyPipeline,
+		Lifecycle:       lifecycleReg,
+		Adapters:        specRegistry.AdapterMap(),
+		Specs:           specRegistry,
+		Profiles:        profiles,
+		RouteMounters:   []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		StreamKeepAlive: cfg.StreamKeepAlive,
+		TrustEventTime:  cfg.DevTrustEventTime,
 	})
 
 	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →

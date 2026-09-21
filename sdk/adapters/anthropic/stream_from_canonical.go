@@ -7,6 +7,12 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
+// anthropicPingFrame is the shape's no-op stream frame, emitted once at stream open and reused by KeepAliveFrame during upstream silence.
+var anthropicPingFrame = anthropicSSEBytes("ping", `{"type":"ping"}`)
+
+// KeepAliveFrame implements v1.KeepAliver: an Anthropic-shape caller already expects `ping` events, so a comment line would be a second dialect for the same signal.
+func (AnthropicTranslator) KeepAliveFrame() []byte { return anthropicPingFrame }
+
 // ---- NewFromCanonicalStream ----
 
 // NewFromCanonicalStream returns a stateful per-stream function that converts
@@ -75,11 +81,9 @@ func (s *canonicalToAnthropicStream) handleGenerationCreated(data []byte) ([]byt
 			},
 		},
 	})
-	ping, _ := json.Marshal(map[string]string{"type": "ping"})
-
 	var out []byte
 	out = append(out, anthropicSSEBytes("message_start", string(ms))...)
-	out = append(out, anthropicSSEBytes("ping", string(ping))...)
+	out = append(out, anthropicPingFrame...)
 	return out, nil
 }
 

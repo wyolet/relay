@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/wyolet/relay/pkg/crypto"
 )
@@ -68,6 +69,12 @@ type Config struct {
 	// The stdlib default (2) forces a fresh dial on nearly every request at
 	// high per-host RPS; a higher ceiling keeps hot upstream connections warm.
 	UpstreamMaxIdlePerHost int
+
+	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
+	StreamKeepAlive time.Duration
+
+	// StreamIdleTimeout ends a streamed upstream call that has sent no bytes for this long (RELAY_STREAM_IDLE_TIMEOUT_S, default 600s; 0 disables). Deliberately above the clients' own silence watchdogs so relay is never the first to give up. Streams have no total deadline; buffered calls do.
+	StreamIdleTimeout time.Duration
 
 	// Payload logging has no env knobs — its config (enable, backend, S3
 	// settings, credentials) lives in the runtime "payload-logging" settings
@@ -257,6 +264,18 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
 	} else {
 		cfg.UpstreamMaxIdlePerHost = v
+	}
+
+	// Streaming knobs are seconds and accept 0 (= disabled), so they use the plain int reader rather than envPositiveInt.
+	if v := envInt("RELAY_STREAM_KEEPALIVE_S", 15); v < 0 {
+		return nil, fmt.Errorf("RELAY_STREAM_KEEPALIVE_S must be >= 0")
+	} else {
+		cfg.StreamKeepAlive = time.Duration(v) * time.Second
+	}
+	if v := envInt("RELAY_STREAM_IDLE_TIMEOUT_S", 600); v < 0 {
+		return nil, fmt.Errorf("RELAY_STREAM_IDLE_TIMEOUT_S must be >= 0")
+	} else {
+		cfg.StreamIdleTimeout = time.Duration(v) * time.Second
 	}
 
 	if v, err := envPositiveInt("RELAY_HEALTHZ_DEADLINE_MS", 500); err != nil {

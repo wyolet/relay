@@ -7,6 +7,7 @@ package inference
 
 import (
 	"context"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -74,6 +75,9 @@ type Deps struct {
 	// at the composition root. Nil means none: no /{profile}/ routes, no
 	// profile on the request context, behaviour unchanged.
 	Profiles *clientprofile.Registry
+
+	// StreamKeepAlive is how long a streamed response may go without bytes before relay emits the inbound shape's no-op frame itself (RELAY_STREAM_KEEPALIVE_S). Upstreams stay silent through long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes of silence. 0 disables the keepalive.
+	StreamKeepAlive time.Duration
 
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay

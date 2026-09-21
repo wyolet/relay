@@ -28,11 +28,13 @@ var scannerBufPool = sync.Pool{
 // caller as they arrive instead of sitting behind Go's default
 // http.ResponseWriter buffer (~4 KB).
 //
+// dst is an io.Writer rather than an http.ResponseWriter so the keepalive wrapper (pkg/sse) can sit in between; both it and the ResponseWriter satisfy the http.Flusher assertion below.
+//
 // For non-streaming responses the extra Flush calls are harmless;
 // avoiding the branch keeps the code path single and simple. Returns
 // the number of bytes copied + any read/write error io.Copy would
 // have returned.
-func streamCopy(dst http.ResponseWriter, src io.Reader) (int64, error) {
+func streamCopy(dst io.Writer, src io.Reader) (int64, error) {
 	flusher, _ := dst.(http.Flusher)
 	bufp := streamCopyBufPool.Get().(*[]byte)
 	defer streamCopyBufPool.Put(bufp)

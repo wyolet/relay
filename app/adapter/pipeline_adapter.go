@@ -38,8 +38,10 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 	if hostPath != nil {
 		path = *hostPath
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
+	callCtx, cancel := a.callContext(ctx, stream)
+	req, err := http.NewRequestWithContext(callCtx, http.MethodPost, baseURL+path, bytes.NewReader(body))
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -70,7 +72,13 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 		}
 	}
 
-	return a.spec.client.Do(req)
+	resp, err := a.spec.client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = a.bindBody(resp.Body, cancel, stream)
+	return resp, nil
 }
 
 // ExtractTokens delegates to the spec's extractor, or returns nil if unset.
