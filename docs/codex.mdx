@@ -1,0 +1,53 @@
+---
+title: "Codex CLI"
+description: "Point OpenAI's Codex CLI at Relay and run it on any model in the catalog"
+---
+
+[Codex CLI](https://github.com/openai/codex) speaks the OpenAI Responses API and nothing else, and it builds its request URL by appending `/responses` to the `base_url` you configure — it never inserts a `/v1` of its own. Relay serves it a dedicated base, `https://your-relay/codex/v1`, so a turn lands on `POST /codex/v1/responses`.
+
+Relay translates the Responses shape into whatever the routed upstream speaks, so Codex is not limited to OpenAI models — any model your relay key's policy grants works, including Anthropic, Gemini and a self-hosted Ollama build.
+
+## Setup
+
+Add a provider block to `~/.codex/config.toml` (`CODEX_HOME` relocates that directory) and point the top-level `model_provider` at it:
+
+```toml
+model          = "gemma4-e4b"
+model_provider = "relay"
+
+[model_providers.relay]
+name     = "Wyolet Relay"
+base_url = "https://your-relay/codex/v1"
+env_key  = "RELAY_API_KEY"
+wire_api = "responses"
+```
+
+Then `RELAY_API_KEY=sk-wr-your-relay-key codex`. The key goes out as `Authorization: Bearer`, which is how Relay expects a relay key.
+
+Three constraints come from Codex itself. The provider id cannot be `openai`, `ollama`, `lmstudio` or `amazon-bedrock*` — those are reserved and the built-in definition wins. The `name` must be neither `OpenAI` nor `azure`, both of which switch Codex into vendor-specific behaviour. And `wire_api` must be `responses`; `"chat"` is rejected at config load, which breaks every `codex` invocation until you remove it.
+
+### Model names
+
+Codex resolves the model string against a catalog compiled into its binary, and falls back to synthesised metadata with a warning for anything it does not recognise — so any Relay model name works as-is. Naming a model with a known prefix inherits that model's capability flags, which is occasionally what you want and otherwise harmless.
+
+`model_context_window` can only *lower* a recognised model's window, never raise it: Codex clamps the value against its own catalog maximum.
+
+### Per-role models
+
+`[profiles.<name>]` blocks and the `-p/--profile <name>` file layer (`$CODEX_HOME/<name>.config.toml`) both carry their own `model` and `model_provider`, and agent-role files do too — so one Relay can serve a cheap review model and an expensive build model from a single config.
+
+## What you get
+
+- **Usage** — every turn appears in `GET /logs` and the `/usage/*` endpoints, attributed to your relay key, with token counts and timing.
+- **Payloads** — with payload logging enabled, the full request and response bodies are readable at `GET /logs/{request_id}`.
+- **Attribution** — the client's `session-id`, `thread-id`, `x-client-request-id`, `x-codex-installation-id`, `x-codex-window-id`, `x-codex-parent-thread-id`, `x-openai-subagent` and `originator` headers are recorded on the usage event as `extras`, alongside `client=codex`. That is what lets you cost one session, or one sub-agent turn inside it.
+
+See [Usage & Logging](/concepts/observability) for reading it back.
+
+## Known limits
+
+- **`custom` and `namespace` tools are not translated.** Codex ships `apply_patch` as a `{"type":"custom"}` tool and groups tools under `{"type":"namespace"}`; against a non-OpenAI upstream Relay carries only plain function tools, so Codex loses the patch tool and falls back to patching through the shell. Function tools, and every tool on an OpenAI upstream, are unaffected.
+- **No catalog projection yet.** Codex's `model_catalog_json` would let Relay hand it the catalog's real context windows and prices; Relay does not serve that document today, so the picker shows Codex's built-in metadata.
+- **Codex does not retry a 429 and ignores `Retry-After`.** Its only backoff hint is a `try again in Ns` phrase scraped out of the error message text, so a rate-limited turn surfaces to you rather than resolving itself.
+- **A signed-in ChatGPT account overrides `base_url`.** If Codex is logged in, requests can bypass the gateway entirely and reach no Relay; run `codex logout` first.
+- **Use `127.0.0.1`, not `localhost`,** in a local `base_url` — Codex's name resolution fails on the latter.
