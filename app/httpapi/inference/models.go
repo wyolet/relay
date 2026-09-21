@@ -9,6 +9,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -100,10 +101,14 @@ func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Mo
 	entries := make([]clientprofile.ModelEntry, 0, len(models))
 	seen := map[string]struct{}{}
 	for _, m := range models {
-		hosts := modelHosts(snap, pol, m)
+		granted := grantedBindings(snap, pol, m, "")
 		for i := range m.Spec.Snapshots {
 			s := &m.Spec.Snapshots[i]
 			if _, dup := seen[s.Name]; dup {
+				continue
+			}
+			hosts := snapshotHosts(snap, granted, s.Name)
+			if len(hosts) == 0 {
 				continue
 			}
 			seen[s.Name] = struct{}{}
@@ -121,14 +126,14 @@ func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Mo
 	return entries
 }
 
-// modelHosts lists the hosts the caller can actually route m to, carrying
-// each binding's base-tier input/output rates when a pricing row resolves.
-// A host outside the caller's grant must never reach the listing — the
-// description would advertise a route the key cannot take.
-func modelHosts(snap *catalog.Snapshot, pol *policy.Policy, m *model.Model) []clientprofile.ModelHost {
-	var hosts []clientprofile.ModelHost
+// grantedBindings keeps the model's enabled bindings the caller may actually route to. A binding outside the caller's grant must never reach a listing — the row would advertise a route the key cannot take. adapterFilter, when set, additionally keeps only bindings declaring it.
+func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, m *model.Model, adapterFilter adapters.Name) []*binding.Binding {
+	var out []*binding.Binding
 	for _, b := range snap.BindingsForModel(m.Meta.ID) {
 		if !b.IsEnabled() {
+			continue
+		}
+		if adapterFilter != "" && b.Spec.Adapter != adapterFilter {
 			continue
 		}
 		switch {
@@ -139,6 +144,29 @@ func modelHosts(snap *catalog.Snapshot, pol *policy.Policy, m *model.Model) []cl
 		// Policy-less keys have no grant to consult, so the listing keeps
 		// its own reachability rule: a host the relay holds credentials for.
 		case len(snap.HostKeysForHost(b.Spec.HostID)) == 0:
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// servedBy reports whether any of the bindings serves the snapshot name — the same gate routing applies when it picks a binding, so a snapshot no binding serves is not addressable and must not be listed.
+func servedBy(bindings []*binding.Binding, snapshotName string) bool {
+	for _, b := range bindings {
+		if b.Serves(snapshotName) {
+			return true
+		}
+	}
+	return false
+}
+
+// snapshotHosts lists the hosts serving one snapshot name, carrying each
+// binding's base-tier input/output rates when a pricing row resolves.
+func snapshotHosts(snap *catalog.Snapshot, bindings []*binding.Binding, snapshotName string) []clientprofile.ModelHost {
+	var hosts []clientprofile.ModelHost
+	for _, b := range bindings {
+		if !b.Serves(snapshotName) {
 			continue
 		}
 		name, ok := snap.HostSlug(b.Spec.HostID)
@@ -205,7 +233,7 @@ func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, ad
 }
 
 func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*modelsOutput, error) {
-	snap, _, models, err := visibleModels(ctx, d, adapterFilter)
+	snap, pol, models, err := visibleModels(ctx, d, adapterFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +241,7 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 	out.Body.Object = "list"
 	seen := map[string]struct{}{}
 	for _, m := range models {
-		appendModelRows(&out.Body.Data, snap, m, seen)
+		appendModelRows(&out.Body.Data, snap, m, grantedBindings(snap, pol, m, adapterFilter), seen)
 	}
 	return out, nil
 }
@@ -262,10 +290,11 @@ func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*c
 	return snap, pol, out, nil
 }
 
-// appendModelRows emits one row per Snapshot, deduplicating on id.
-// Customer-facing addressability is purely via Snapshot.Name — the
-// Model.Meta.Name slug is admin-only and never exposed here.
-func appendModelRows(out *[]modelObject, snap *catalog.Snapshot, m *model.Model, seen map[string]struct{}) {
+// appendModelRows emits one row per Snapshot that at least one granted
+// binding serves, deduplicating on id. Customer-facing addressability is
+// purely via Snapshot.Name — the Model.Meta.Name slug is admin-only and
+// never exposed here.
+func appendModelRows(out *[]modelObject, snap *catalog.Snapshot, m *model.Model, granted []*binding.Binding, seen map[string]struct{}) {
 	ownedBy := ""
 	if pname, ok := snap.ProviderSlug(m.Meta.Owner.ID); ok {
 		ownedBy = pname
@@ -275,6 +304,9 @@ func appendModelRows(out *[]modelObject, snap *catalog.Snapshot, m *model.Model,
 	for i := range m.Spec.Snapshots {
 		s := &m.Spec.Snapshots[i]
 		if _, dup := seen[s.Name]; dup {
+			continue
+		}
+		if !servedBy(granted, s.Name) {
 			continue
 		}
 		seen[s.Name] = struct{}{}

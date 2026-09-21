@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/wyolet/relay/app/adapters"
@@ -13,6 +14,7 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/pkg/clientprofile"
 )
 
 // entriesFixture builds one model served by a keyed, priced host and a
@@ -145,6 +147,76 @@ func TestModelEntries_CarriesParentSlugAndPointer(t *testing.T) {
 	}
 	if entries[1].Pointer {
 		t.Errorf("%q is not the pointer snapshot", entries[1].ID)
+	}
+}
+
+// restrictBinding pins one binding to the named snapshots, the catalog's
+// way of saying a host serves only part of a model's snapshot set.
+func restrictBinding(t *testing.T, snap *catalog.Snapshot, bindingName string, snapshots ...string) {
+	t.Helper()
+	for _, b := range snap.AllBindings() {
+		if b.Meta.Name == bindingName {
+			b.Spec.Snapshots = snapshots
+			return
+		}
+	}
+	t.Fatalf("binding %q not in snapshot", bindingName)
+}
+
+func hostNames(hosts []clientprofile.ModelHost) []string {
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, h.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// A binding restricted to one snapshot must not advertise the others — the
+// same Serves gate routing applies when it picks a binding.
+func TestModelEntries_HostsFollowTheBindingSnapshotSet(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	restrictBinding(t, snap, "b-priced", "big-model-2026")
+
+	entries := modelEntries(snap, pol, models)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want both snapshots served", len(entries))
+	}
+	if got := hostNames(entries[0].Hosts); len(got) != 2 {
+		t.Errorf("%q hosts = %v, want both", entries[0].ID, got)
+	}
+	if got := hostNames(entries[1].Hosts); len(got) != 1 || got[0] != "free-host" {
+		t.Errorf("%q hosts = %v, want [free-host]", entries[1].ID, got)
+	}
+}
+
+// With the only granted host restricted to one snapshot, the others are not
+// addressable at all and must not be listed.
+func TestModelEntries_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
+	restrictBinding(t, snap, "b-priced", "big-model-2026")
+
+	entries := modelEntries(snap, pol, models)
+	if len(entries) != 1 || entries[0].ID != "big-model-2026" {
+		t.Fatalf("entries = %+v, want big-model-2026 alone", entries)
+	}
+	if got := hostNames(entries[0].Hosts); len(got) != 1 || got[0] != "priced-host" {
+		t.Errorf("hosts = %v, want [priced-host]", got)
+	}
+}
+
+// The OpenAI-shaped listings share the rule: an unserved snapshot is not a
+// model id anyone can send.
+func TestAppendModelRows_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
+	restrictBinding(t, snap, "b-priced", "big-model-2026")
+
+	var rows []modelObject
+	seen := map[string]struct{}{}
+	m := models[0]
+	appendModelRows(&rows, snap, m, grantedBindings(snap, pol, m, ""), seen)
+	if len(rows) != 1 || rows[0].ID != "big-model-2026" {
+		t.Fatalf("rows = %+v, want big-model-2026 alone", rows)
 	}
 }
 
