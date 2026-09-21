@@ -51,15 +51,16 @@ func MountRegistry(reg *adapter.Registry) RouteMounter {
 }
 
 // mountProfileAliases mirrors one inbound path under /{profile}/ for every
-// registered profile speaking that spec's shape, so a client can point its
-// base URL at the prefix and reach the identical handler. The routes are
+// registered profile speaking that spec's shape — a profile speaking
+// several gets the prefix mirrored over each of them, so a client that
+// switches wire shapes keeps the same base URL. The routes are
 // hidden from the OpenAPI doc — they are the same operation, not a second
 // one — and the profile is set on the request context explicitly rather
 // than relying on the middleware's prefix resolution.
 func mountProfileAliases(api huma.API, d Deps, mw huma.Middlewares, spec *adapter.Spec, path adapter.InboundPath) {
 	shapeNamespace := clientprofile.FirstPathSegment(path.Path)
 	for _, pr := range d.Profiles.Profiles() {
-		if pr.Shape() != string(spec.Name) {
+		if !clientprofile.Speaks(pr, string(spec.Name)) {
 			continue
 		}
 		profile := pr

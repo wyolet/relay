@@ -196,6 +196,83 @@ func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
 	}
 }
 
+// A document that prints prices needs the cache meters and the context
+// tiers, each read at its own threshold rather than patched onto the base.
+func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	for _, p := range snap.AllPricings() {
+		p.Spec.Rates = append(p.Spec.Rates,
+			pricing.Rate{Meter: pricing.MeterTokensCacheRead, Unit: pricing.UnitPerMillion, Amount: 0.3},
+			pricing.Rate{Meter: pricing.MeterTokensCacheCreation, Unit: pricing.UnitPerMillion, Amount: 3.75},
+		)
+	}
+
+	entries := modelEntries(snap, pol, models)
+	var priced clientprofile.ModelHost
+	for _, h := range entries[0].Hosts {
+		if h.Name == "priced-host" {
+			priced = h
+		}
+	}
+	if priced.CacheReadUSDPerMtok == nil || *priced.CacheReadUSDPerMtok != 0.3 {
+		t.Errorf("cache read = %v", priced.CacheReadUSDPerMtok)
+	}
+	if priced.CacheWriteUSDPerMtok == nil || *priced.CacheWriteUSDPerMtok != 3.75 {
+		t.Errorf("cache write = %v", priced.CacheWriteUSDPerMtok)
+	}
+	if len(priced.Tiers) != 1 {
+		t.Fatalf("tiers = %+v, want the fixture's single context tier", priced.Tiers)
+	}
+	tier := priced.Tiers[0]
+	// The sheet tiers input alone; the tier still carries every meter's
+	// price at that point, the untiered ones at their base rate.
+	if tier.AboveTokens != 200000 || tier.InputUSDPerMtok != 6 || tier.OutputUSDPerMtok != 15 {
+		t.Errorf("tier = %+v", tier)
+	}
+	if tier.CacheReadUSDPerMtok == nil || *tier.CacheReadUSDPerMtok != 0.3 {
+		t.Errorf("tier cache read = %v", tier.CacheReadUSDPerMtok)
+	}
+}
+
+// A meter the sheet does not price stays absent: nil is "unpriced", which
+// a projection must not print as free.
+func TestModelEntries_UnpricedCacheMetersStayNil(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	for _, h := range modelEntries(snap, pol, models)[0].Hosts {
+		if h.CacheReadUSDPerMtok != nil || h.CacheWriteUSDPerMtok != nil {
+			t.Errorf("%q cache rates = %v / %v, want nil", h.Name, h.CacheReadUSDPerMtok, h.CacheWriteUSDPerMtok)
+		}
+	}
+}
+
+// Modalities, release date and the temperature bit come off the catalog as
+// stated; temperature is the inverse of the parameters the model rejects.
+func TestModelEntries_CarriesModalitiesReleaseDateAndTemperature(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	models[0].Spec.Modalities = model.Modalities{Input: []string{"text", "image"}, Output: []string{"text"}}
+	models[0].Spec.Capabilities = model.Capabilities{Vision: true, UnsupportedParams: []string{"temperature"}}
+	models[0].Spec.Snapshots[0].ReleasedAt = "2026-02-17"
+
+	entries := modelEntries(snap, pol, models)
+	if got := entries[0].ReleasedAt; got != "2026-02-17" {
+		t.Errorf("released at = %q", got)
+	}
+	if got := entries[1].ReleasedAt; got != "" {
+		t.Errorf("undeclared release date = %q, want empty", got)
+	}
+	for _, e := range entries {
+		if len(e.Modalities.Input) != 2 || e.Modalities.Input[1] != "image" {
+			t.Errorf("%q modalities = %+v", e.ID, e.Modalities)
+		}
+		if !e.Vision {
+			t.Errorf("%q must carry the vision capability", e.ID)
+		}
+		if e.Temperature {
+			t.Errorf("%q rejects temperature, so the entry must not offer it", e.ID)
+		}
+	}
+}
+
 // restrictBinding pins one binding to the named snapshots, the catalog's
 // way of saying a host serves only part of a model's snapshot set.
 func restrictBinding(t *testing.T, snap *catalog.Snapshot, bindingName string, snapshots ...string) {

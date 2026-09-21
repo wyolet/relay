@@ -85,6 +85,62 @@ func TestMount_ProfileModelsRouteRegistered(t *testing.T) {
 	}
 }
 
+// OpenCode reads its catalog as a models.dev document rather than a
+// list-models response, so its profile declares its own path — and the
+// document has to name the endpoint the reader should call back on.
+func TestProfileModels_OpenCodeCatalogPathAndAPIURL(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	for _, m := range cat.Current().AllModels() {
+		m.Spec.ContextWindowTotal = 128000
+	}
+	d := buildDeps(t, cat)
+	profiles := clientprofile.New()
+	if err := profiles.Register(clientprofile.OpenCode()); err != nil {
+		t.Fatalf("register profile: %v", err)
+	}
+	d.Profiles = profiles
+
+	get := func(t *testing.T, d Deps) map[string]struct {
+		API    string                     `json:"api"`
+		Models map[string]json.RawMessage `json:"models"`
+	} {
+		t.Helper()
+		r := chi.NewRouter()
+		api := humachi.New(r, huma.DefaultConfig("test", "1"))
+		registerProfileModels(api, d, nil)
+
+		rec := httptest.NewRecorder()
+		req := withNormalContext(httptest.NewRequest(http.MethodGet, "http://relay.internal:8080/opencode/api.json", nil), rk)
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /opencode/api.json = %d — body: %s", rec.Code, rec.Body.String())
+		}
+		var doc map[string]struct {
+			API    string                     `json:"api"`
+			Models map[string]json.RawMessage `json:"models"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+			t.Fatalf("catalog document: %v — body: %s", err, rec.Body.String())
+		}
+		return doc
+	}
+
+	// No configured public URL: the document names the origin the request
+	// arrived on.
+	if got := get(t, d)["relay"]; got.API != "http://relay.internal:8080/opencode/v1" {
+		t.Errorf("api = %q, want the request's own origin", got.API)
+	} else if len(got.Models) == 0 {
+		t.Error("granted models must appear in the catalog document")
+	}
+
+	// Configured: that wins, since the caller may have reached an internal
+	// address the client cannot use.
+	d.PublicURL = "https://relay.example.com/"
+	if got := get(t, d)["relay"].API; got != "https://relay.example.com/opencode/v1" {
+		t.Errorf("api = %q, want the configured public URL", got)
+	}
+}
+
 // The Codex CLI resolves the list endpoint against its base URL as
 // {base_url}/models?client_version=<v>, so with base_url at the profile
 // prefix the path is /codex/v1/models and the query is one the endpoint

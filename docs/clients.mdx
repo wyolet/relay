@@ -14,6 +14,7 @@ SDK sends it as a bearer token or an `x-api-key` header, so this just works.
 | Anthropic | `http://localhost:8080/anthropic` | `/anthropic/v1/messages` |
 | [Claude Code](/claude-code) | `http://localhost:8080/claude-code` | `/claude-code/v1/messages`, plus model discovery and the startup probe |
 | [Codex CLI](/codex) | `http://localhost:8080/codex/v1` | `/codex/v1/responses` |
+| [OpenCode](/opencode) | `http://localhost:8080/opencode/v1` | `/opencode/v1/chat/completions` or `/opencode/v1/messages`, plus the model catalog at `/opencode/api.json` |
 
 <Info>
 Swap `http://localhost:8080` for your relay's public URL in production. The

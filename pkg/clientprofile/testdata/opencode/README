@@ -1,0 +1,13 @@
+requests.txt — the requests opencode 1.17.11 made against a gateway at `options.baseURL = "http://127.0.0.1:<port>/opencode/v1"`, recorded 2026-09-21 for one `opencode run` turn per SDK package: the first two blocks with `npm: "@ai-sdk/openai-compatible"`, the third with `npm: "@ai-sdk/anthropic"` and an otherwise identical config.
+
+One turn produces two requests on either package — a title generation on the small model, then the agent turn carrying the ten built-in tools — and both land on the path the SDK package appends to the base URL: `/chat/completions` for the openai-compatible one, `/messages` for the Anthropic one. The client asks the gateway for no model list and probes no other endpoint; it reads its catalog from its own models source instead (a 4.7 MB `api.json` fetched into `$XDG_CACHE_HOME/opencode/models.json` at startup, which a configured provider then extends).
+
+Auth follows the package: `Authorization: Bearer` on the openai-compatible path, `x-api-key` plus `anthropic-version: 2023-06-01` on the Anthropic one. Both carry `x-session-id` and `x-session-affinity`, which repeat the same session id, and no agent, turn or sub-agent marker of any kind — attribution below the session is by model alone.
+
+`stream_options: {"include_usage": true}` rides every openai-compatible request even though the fixture config sets no `includeUsage`.
+
+`cache_control` breakpoints are injected by the client, not the model: with `npm: "@ai-sdk/anthropic"` they appear as recorded above regardless of which model is being called. A third capture, openai-compatible with the model id renamed to `claude-fable-4-5`, showed the same injection on a Chat Completions body — there as a `cache_control` key on the message object itself, beside `role` and `content` — because the client's caching pass fires on any model id containing `claude` or `anthropic` too.
+
+Prompt, tool-schema and message values are elided: they are the client's own prompts and the recording machine's paths, neither of which is part of the contract. Field names, ordering, header sets and the small scalar values are verbatim. The api keys were dummies.
+
+Refresh this when a client release changes the contract; the profile edits follow the fixture, never the other way round.
