@@ -81,12 +81,17 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Context rather than minting its own. Routing fills the identity ids
 	// later via applyPlanIdentity.
 	cls := ClassificationFrom(ctx)
+	profile := clientprofile.FromContext(ctx)
+	// A profile may hand its client model ids reshaped for that client's own model picker; map them back before anything reads the name — the lifecycle stamp, the host pin and routing (including the alias probe, which matches the caller's raw string) all take it from here. Only ModelName needs it: the body's `model` field is replaced with the binding's upstream name on every path (runBytePass rewrites it, the canonical path re-serializes from plan.UpstreamModel()).
+	if namer, ok := profile.(clientprofile.ModelNamer); ok {
+		in.ModelName = namer.Inbound(in.ModelName)
+	}
 	lc := mintLifecycle(ctx, sourceForMode(cls.Mode), cls.RelayKey, cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
 	// The resolved client profile is a usage dimension; observers read it
 	// off the Context. Empty name = no profile, nothing recorded.
-	if profile := clientprofile.FromContext(ctx); profile.Name() != "" {
+	if profile.Name() != "" {
 		lc.Metadata["client"] = profile.Name()
 		applyAttributionHeaders(lc, profile, r.Header)
 	}

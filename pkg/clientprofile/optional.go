@@ -51,6 +51,12 @@ type Router interface {
 	Routes() []Route
 }
 
+// ModelNamer is implemented by a profile whose client needs model ids reshaped for its picker; the app applies Inbound to the `model` field of every request that resolved to this profile, before routing.
+type ModelNamer interface {
+	// Inbound maps a picker id back to a catalog model reference, and is the identity for anything this profile did not mint.
+	Inbound(model string) string
+}
+
 // Attributor is implemented by a profile whose client sends identifying
 // request headers worth recording against the request's usage.
 type Attributor interface {

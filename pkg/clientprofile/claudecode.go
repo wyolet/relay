@@ -48,18 +48,31 @@ type anthropicModelList struct {
 	LastID  string           `json:"last_id,omitempty"`
 }
 
+// pickerPrefix is the shape the client's own filter forces: Claude Code keeps a discovered model only when its id contains "claude" or "anthropic" (case-insensitive), so every other id is listed as claude/<id>. The "/" reads as provider/model in the picker the way "vertex_ai/claude-…" does, and it fails closed if a minted id ever reaches routing unstripped — the catalog reference grammar (app/modelref) reads "claude/gemma4-e4b" as provider "claude", which no catalog defines, so the request ends in model-not-found rather than mis-routed.
+const pickerPrefix = "claude/"
+
+// pickerID mints the id the client's picker will keep. Ids already carrying the substring go out exactly as the catalog names them, so nothing is listed twice.
+func pickerID(id string) string {
+	lower := strings.ToLower(id)
+	if strings.Contains(lower, "claude") || strings.Contains(lower, "anthropic") {
+		return id
+	}
+	return pickerPrefix + id
+}
+
+// Inbound strips the minted prefix, so any suffix the caller appended (an alias bracket, a host pin) rides through untouched.
+func (claudeCode) Inbound(model string) string { return strings.TrimPrefix(model, pickerPrefix) }
+
 // Models renders the Anthropic list-models document, one row per entry
-// plus one per exact alias. Ids go out exactly as the catalog names them:
-// the client keeps only ids containing "claude" or "anthropic" in its
-// picker, but whether relay should rewrite the rest is a deferred
-// decision, so nothing is filtered or renamed here.
+// plus one per exact alias, each id minted into the form the client's
+// picker keeps.
 func (claudeCode) Models(entries []ModelEntry) ([]byte, string, error) {
 	out := anthropicModelList{Data: make([]anthropicModel, 0, len(entries))}
 	for _, e := range entries {
 		description := hostsDescription(e.Hosts)
 		out.Data = append(out.Data, anthropicModel{
 			Type:        "model",
-			ID:          e.ID,
+			ID:          pickerID(e.ID),
 			DisplayName: e.DisplayName,
 			CreatedAt:   modelCreatedAt,
 			Description: description,
@@ -67,7 +80,7 @@ func (claudeCode) Models(entries []ModelEntry) ([]byte, string, error) {
 		for _, alias := range e.Aliases {
 			out.Data = append(out.Data, anthropicModel{
 				Type:        "model",
-				ID:          alias,
+				ID:          pickerID(alias),
 				DisplayName: e.DisplayName + " (alias)",
 				CreatedAt:   modelCreatedAt,
 				Description: description,

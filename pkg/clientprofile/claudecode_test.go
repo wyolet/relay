@@ -67,6 +67,7 @@ func TestClaudeCode_ModelsProjection(t *testing.T) {
 			},
 		},
 		{ID: "gpt-6-astra", DisplayName: "GPT-6 Astra"},
+		{ID: "gemma4-e4b", DisplayName: "Gemma 4 E4B", Aliases: []string{"gemma"}},
 	})
 	if err != nil {
 		t.Fatalf("Models: %v", err)
@@ -77,9 +78,11 @@ func TestClaudeCode_ModelsProjection(t *testing.T) {
 
 	const want = `{"data":[` +
 		`{"type":"model","id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6","created_at":"1970-01-01T00:00:00Z","description":"anthropic · $3/$15 per Mtok, bedrock"},` +
-		`{"type":"model","id":"sonnet","display_name":"Claude Sonnet 4.6 (alias)","created_at":"1970-01-01T00:00:00Z","description":"anthropic · $3/$15 per Mtok, bedrock"},` +
-		`{"type":"model","id":"gpt-6-astra","display_name":"GPT-6 Astra","created_at":"1970-01-01T00:00:00Z"}` +
-		`],"has_more":false,"first_id":"claude-sonnet-4-6","last_id":"gpt-6-astra"}`
+		`{"type":"model","id":"claude/sonnet","display_name":"Claude Sonnet 4.6 (alias)","created_at":"1970-01-01T00:00:00Z","description":"anthropic · $3/$15 per Mtok, bedrock"},` +
+		`{"type":"model","id":"claude/gpt-6-astra","display_name":"GPT-6 Astra","created_at":"1970-01-01T00:00:00Z"},` +
+		`{"type":"model","id":"claude/gemma4-e4b","display_name":"Gemma 4 E4B","created_at":"1970-01-01T00:00:00Z"},` +
+		`{"type":"model","id":"claude/gemma","display_name":"Gemma 4 E4B (alias)","created_at":"1970-01-01T00:00:00Z"}` +
+		`],"has_more":false,"first_id":"claude-sonnet-4-6","last_id":"claude/gemma"}`
 	if string(body) != want {
 		t.Errorf("Models body mismatch\n got: %s\nwant: %s", body, want)
 	}
@@ -98,6 +101,27 @@ func TestClaudeCode_ModelsEmpty(t *testing.T) {
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
 		t.Fatalf("empty list must stay valid JSON: %v", err)
+	}
+}
+
+func TestClaudeCode_Inbound(t *testing.T) {
+	namer, ok := ClaudeCode().(ModelNamer)
+	if !ok {
+		t.Fatal("ClaudeCode must implement ModelNamer")
+	}
+	cases := map[string]string{
+		"claude/gemma4-e4b":             "gemma4-e4b",
+		"claude/gemma4-e4b[1m]":         "gemma4-e4b[1m]",
+		"claude/gpt-6-astra@openrouter": "gpt-6-astra@openrouter",
+		"claude-sonnet-4-6":             "claude-sonnet-4-6",
+		"gemma4-e4b":                    "gemma4-e4b",
+		"anthropic/claude-sonnet-4-6":   "anthropic/claude-sonnet-4-6",
+		"":                              "",
+	}
+	for in, want := range cases {
+		if got := namer.Inbound(in); got != want {
+			t.Errorf("Inbound(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
