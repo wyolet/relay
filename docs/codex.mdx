@@ -46,7 +46,7 @@ See [Usage & Logging](/concepts/observability) for reading it back.
 
 ## Known limits
 
-- **`custom` and `namespace` tools are not translated.** Codex ships `apply_patch` as a `{"type":"custom"}` tool and groups tools under `{"type":"namespace"}`; against a non-OpenAI upstream Relay carries only plain function tools, so Codex loses the patch tool and falls back to patching through the shell. Function tools, and every tool on an OpenAI upstream, are unaffected.
+- **Hosted tools do not cross to other vendors.** Codex's `apply_patch` (a `custom` tool) and its `namespace` groupings are translated for non-OpenAI upstreams — the model sees a function taking one `input` string and Codex receives a normal `custom_tool_call` back — but `web_search` and other server-side tools have no equivalent elsewhere and are dropped on such routes. Every tool on an OpenAI upstream is forwarded as sent.
 - **No catalog projection yet.** Codex's `model_catalog_json` would let Relay hand it the catalog's real context windows and prices; Relay does not serve that document today, so the picker shows Codex's built-in metadata.
 - **Codex does not retry a 429 and ignores `Retry-After`.** Its only backoff hint is a `try again in Ns` phrase scraped out of the error message text, so a rate-limited turn surfaces to you rather than resolving itself.
 - **A signed-in ChatGPT account overrides `base_url`.** If Codex is logged in, requests can bypass the gateway entirely and reach no Relay; run `codex logout` first.
