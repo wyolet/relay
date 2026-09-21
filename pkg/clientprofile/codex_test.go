@@ -22,10 +22,10 @@ func TestCodex_Identity(t *testing.T) {
 	if _, ok := p.(SessionKeyer); !ok {
 		t.Error("Codex must implement SessionKeyer")
 	}
-	// The client lists no models, probes no endpoint and needs no id reshaping.
-	if _, ok := p.(ModelLister); ok {
-		t.Error("Codex must not implement ModelLister")
+	if _, ok := p.(ModelLister); !ok {
+		t.Error("Codex must implement ModelLister")
 	}
+	// The client probes no endpoint and needs no id reshaping.
 	if _, ok := p.(Router); ok {
 		t.Error("Codex must not implement Router")
 	}
@@ -34,6 +34,71 @@ func TestCodex_Identity(t *testing.T) {
 	}
 	if _, ok := p.(TokenCountRoute); ok {
 		t.Error("Codex must not implement TokenCountRoute")
+	}
+}
+
+// The document is Codex's own /models shape, saved to disk and handed back
+// through model_catalog_json; the field names are pinned against
+// codex-rs/protocol/src/openai_models.rs at tag rust-v0.153.4, so the golden
+// is exact rather than a round-trip.
+func TestCodex_ModelsProjection(t *testing.T) {
+	lister, ok := Codex().(ModelLister)
+	if !ok {
+		t.Fatal("Codex must implement ModelLister")
+	}
+	body, contentType, err := lister.Models([]ModelEntry{
+		{
+			ID:            "deepseek-v4-1-flash-cloud",
+			Model:         "deepseek-v4-1-flash",
+			DisplayName:   "DeepSeek V4.1 Flash",
+			Pointer:       true,
+			ContextWindow: 1000000,
+			Reasoning:     true,
+			ToolCall:      true,
+			Hosts: []ModelHost{
+				{Name: "deepseek", Priced: true, InputUSDPerMtok: 0.28, OutputUSDPerMtok: 0.42},
+				{Name: "ollama-self"},
+			},
+		},
+		// No window and no reasoning: the fields go out empty rather than guessed.
+		{ID: "gemma4-e4b-0731", Model: "gemma4-e4b", DisplayName: "Gemma 4 E4B"},
+	})
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	if contentType != "application/json" {
+		t.Errorf("contentType = %q", contentType)
+	}
+
+	const want = `{"models":[` +
+		`{"slug":"deepseek-v4-1-flash-cloud","display_name":"DeepSeek V4.1 Flash","description":"deepseek · $0.28/$0.42 per Mtok, ollama-self",` +
+		`"base_instructions":"","supported_reasoning_levels":[` +
+		`{"effort":"low","description":"Faster answers, less reasoning"},` +
+		`{"effort":"medium","description":"Balanced reasoning"},` +
+		`{"effort":"high","description":"Slower answers, more reasoning"}],` +
+		`"shell_type":"unified_exec","visibility":"list","supported_in_api":true,"priority":0,` +
+		`"support_verbosity":false,"truncation_policy":{"mode":"bytes","limit":10000},"context_window":1000000,` +
+		`"experimental_supported_tools":[],"availability_nux":null,"upgrade":null,"default_verbosity":null,"apply_patch_tool_type":null},` +
+		`{"slug":"gemma4-e4b-0731","display_name":"Gemma 4 E4B (0731)","description":"",` +
+		`"base_instructions":"","supported_reasoning_levels":[],` +
+		`"shell_type":"unified_exec","visibility":"list","supported_in_api":true,"priority":1,` +
+		`"support_verbosity":false,"truncation_policy":{"mode":"bytes","limit":10000},` +
+		`"experimental_supported_tools":[],"availability_nux":null,"upgrade":null,"default_verbosity":null,"apply_patch_tool_type":null}` +
+		`]}`
+	if string(body) != want {
+		t.Errorf("Models body mismatch\n got: %s\nwant: %s", body, want)
+	}
+}
+
+// Codex rejects a catalog file with no models, so an empty listing stays a
+// valid document the operator can see is empty rather than a broken one.
+func TestCodex_ModelsEmpty(t *testing.T) {
+	body, _, err := Codex().(ModelLister).Models(nil)
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	if string(body) != `{"models":[]}` {
+		t.Errorf("empty catalog = %s", body)
 	}
 }
 

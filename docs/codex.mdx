@@ -32,6 +32,61 @@ Codex resolves the model string against a catalog compiled into its binary, and 
 
 `model_context_window` can only *lower* a recognised model's window, never raise it: Codex clamps the value against its own catalog maximum.
 
+### Model picker
+
+Codex's `/model` picker lists a catalog compiled into its binary. For a provider authenticated with `env_key` it never asks the gateway for a list, so the only way in is `model_catalog_json` — and that file replaces the bundled catalog *wholesale*, including the agent prompt Codex sends with every turn, which the catalog is where Codex keeps. A picker file therefore always comes with a prompt file; the two are one step, not a file and an option.
+
+```bash
+curl -H "Authorization: Bearer $RELAY_API_KEY" \
+  https://your-relay/codex/v1/models > ~/.codex/relay-models.json
+
+curl -L https://raw.githubusercontent.com/openai/codex/rust-v0.153.4/codex-rs/models-manager/prompt.md \
+  > ~/.codex/relay-prompt.md
+```
+
+```toml
+model_catalog_json     = "~/.codex/relay-models.json"
+model_instructions_file = "~/.codex/relay-prompt.md"
+```
+
+Match the tag in that second URL to your own `codex --version` — the prompt ships with the binary and changes between releases.
+
+A missing or empty prompt file is loud: Codex refuses to start and names the file. The catalog file on its own is not — every model listed in it would run with no agent prompt at all, and nothing says so.
+
+Both values are paths, never URLs — Codex reads them off disk at startup. A leading `~` expands to your home directory, and a relative path resolves against the directory of the config file it appears in (`$CODEX_HOME`, `~/.codex` by default), so `model_catalog_json = "relay-models.json"` picks up `~/.codex/relay-models.json` as well. `model_catalog_json` is also accepted inside a `[profiles.<name>]` block, and it is applied at startup only.
+
+The document lists exactly the models your relay key's policy grants, each with the catalog's context window, its hosts and their per-Mtok rates as the picker subtitle, and reasoning-effort options for models the catalog marks as reasoning. It is a snapshot: re-run the `curl` after a policy or catalog change.
+
+If you would rather hand-write the file, this is a complete minimal entry — every key shown is required except `context_window`, and Codex rejects a document with no models:
+
+```json
+{
+  "models": [
+    {
+      "slug": "deepseek-v4-1-flash-cloud",
+      "display_name": "DeepSeek V4.1 Flash",
+      "description": "deepseek",
+      "base_instructions": "",
+      "supported_reasoning_levels": [{ "effort": "medium", "description": "Balanced reasoning" }],
+      "shell_type": "unified_exec",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 0,
+      "support_verbosity": false,
+      "truncation_policy": { "mode": "bytes", "limit": 10000 },
+      "context_window": 1000000,
+      "experimental_supported_tools": [],
+      "availability_nux": null,
+      "upgrade": null,
+      "default_verbosity": null,
+      "apply_patch_tool_type": null
+    }
+  ]
+}
+```
+
+`visibility: "list"` is what puts a row in the picker, `supported_in_api: true` is what keeps it there for a key-authenticated provider, and the list is ordered by ascending `priority`. `context_window` is optional and omitted when the catalog declares none; leaving `max_context_window` out keeps your `model_context_window` override free, since Codex clamps that value against the catalog maximum when one is present. Codex has no field for a maximum output-token count, so Relay does not project one. Unknown keys are ignored, and a model slug absent from the file still routes — Codex synthesises fallback metadata for it with a warning.
+
 ### Per-role models
 
 `[profiles.<name>]` blocks and the `-p/--profile <name>` file layer (`$CODEX_HOME/<name>.config.toml`) both carry their own `model` and `model_provider`, and agent-role files do too — so one Relay can serve a cheap review model and an expensive build model from a single config.
@@ -47,7 +102,7 @@ See [Usage & Logging](/concepts/observability) for reading it back.
 ## Known limits
 
 - **Hosted tools do not cross to other vendors.** Codex's `apply_patch` (a `custom` tool) and its `namespace` groupings are translated for non-OpenAI upstreams — the model sees a function taking one `input` string and Codex receives a normal `custom_tool_call` back — but `web_search` and other server-side tools have no equivalent elsewhere and are dropped on such routes. Every tool on an OpenAI upstream is forwarded as sent.
-- **No catalog projection yet.** Codex's `model_catalog_json` would let Relay hand it the catalog's real context windows and prices; Relay does not serve that document today, so the picker shows Codex's built-in metadata.
+- **The picker's prompt file is Codex's generic one.** `model_instructions_file` applies a single prompt to every model, where Codex's bundled catalog carries a per-model instruction template for each OpenAI model it ships. It also drifts with Codex releases, so re-fetch it at the matching tag when you upgrade.
 - **Codex does not retry a 429 and ignores `Retry-After`.** Its only backoff hint is a `try again in Ns` phrase scraped out of the error message text, so a rate-limited turn surfaces to you rather than resolving itself.
 - **A signed-in ChatGPT account overrides `base_url`.** If Codex is logged in, requests can bypass the gateway entirely and reach no Relay; run `codex logout` first.
 - **Use `127.0.0.1`, not `localhost`,** in a local `base_url` — Codex's name resolution fails on the latter.

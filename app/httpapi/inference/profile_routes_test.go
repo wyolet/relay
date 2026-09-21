@@ -1,10 +1,13 @@
 package inference
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapters"
@@ -79,5 +82,39 @@ func TestMount_ProfileModelsRouteRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("GET /stub/v1/models not registered for a ModelLister profile")
+	}
+}
+
+// The Codex CLI resolves the list endpoint against its base URL as
+// {base_url}/models?client_version=<v>, so with base_url at the profile
+// prefix the path is /codex/v1/models and the query is one the endpoint
+// never declared: it must be ignored, not rejected.
+func TestProfileModels_CodexPathAndUnknownQuery(t *testing.T) {
+	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	d := buildDeps(t, cat)
+	profiles := clientprofile.New()
+	if err := profiles.Register(clientprofile.Codex()); err != nil {
+		t.Fatalf("register profile: %v", err)
+	}
+	d.Profiles = profiles
+
+	r := chi.NewRouter()
+	api := humachi.New(r, huma.DefaultConfig("test", "1"))
+	registerProfileModels(api, d, nil)
+
+	rec := httptest.NewRecorder()
+	req := withNormalContext(httptest.NewRequest(http.MethodGet, "/codex/v1/models?client_version=0.153.4", nil), rk)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /codex/v1/models?client_version= = %d, want 200 — body: %s", rec.Code, rec.Body.String())
+	}
+	var doc struct {
+		Models []json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("catalog document: %v — body: %s", err, rec.Body.String())
+	}
+	if len(doc.Models) == 0 {
+		t.Error("granted models must appear in the catalog document")
 	}
 }
