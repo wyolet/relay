@@ -141,10 +141,11 @@ func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, m *model.Model,
 			if !routing.PolicyAllowsBinding(snap, pol, m, b) {
 				continue
 			}
-		// Policy-less keys have no grant to consult, so the listing keeps
-		// its own reachability rule: a host the relay holds credentials for.
+		// Policy-less keys have no grant to consult, so the listing keeps its own reachability rule: a host the relay holds credentials for, or one that needs none (routing injects the anonymous key there).
 		case len(snap.HostKeysForHost(b.Spec.HostID)) == 0:
-			continue
+			if h, ok := snap.Host(b.Spec.HostID); !ok || !h.Spec.NoAuth {
+				continue
+			}
 		}
 		out = append(out, b)
 	}
@@ -332,23 +333,9 @@ func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
 	return t.UTC().Unix()
 }
 
-// modelHasReachableBinding returns true iff the model has at least one
-// enabled host binding to a host with credentials, optionally restricted
-// to a specific adapter kind.
+// modelHasReachableBinding reports whether a policy-less caller can route m at all: the same reachability rule grantedBindings applies with no policy, optionally restricted to one adapter kind.
 func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Name) bool {
-	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if !hb.IsEnabled() {
-			continue
-		}
-		if adapterFilter != "" && hb.Spec.Adapter != adapterFilter {
-			continue
-		}
-		if len(snap.HostKeysForHost(hb.Spec.HostID)) == 0 {
-			continue
-		}
-		return true
-	}
-	return false
+	return len(grantedBindings(snap, nil, m, adapterFilter)) > 0
 }
 
 // modelHasAdapter returns true iff the model has at least one enabled
