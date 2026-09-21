@@ -457,10 +457,18 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		w.WriteHeader(result.Status)
 		dst, stop := keepAliveWriter(d, w, r, in)
 		defer stop()
-		streamCanonical(d, dst, r, result.Body, echo, trackReasoning, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
+		streamCanonical(d, dst, r, result.Body, echo, trackReasoning, upstreamV1.NewToCanonicalStream(), fromCanonicalStream(inboundV1, canonReq))
 		return
 	}
 	bufferCanonical(d, w, r, result.Body, result.Status, echo, canonReq, upstreamV1, inboundV1)
+}
+
+// fromCanonicalStream builds the inbound shape's per-stream serializer, handing it the request when the shape needs it (v1.RequestAwareStream) — the buffered path already gets it via SerializeResponse.
+func fromCanonicalStream(inboundV1 v1.Translator, canonReq *v1.Request) func([]byte) ([]byte, error) {
+	if aware, ok := inboundV1.(v1.RequestAwareStream); ok && canonReq != nil {
+		return aware.NewFromCanonicalStreamFor(canonReq)
+	}
+	return inboundV1.NewFromCanonicalStream()
 }
 
 // streamCanonical chains upstream→canonical→inbound per-chunk transforms.

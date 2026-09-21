@@ -75,6 +75,24 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 		}
 		return r, nil
 
+	case *ResponsesCustomToolCall:
+		// The freeform input becomes the lowered `input` argument, so a non-OpenAI upstream sees an ordinary tool call; the marker keeps the custom shape recoverable on a same-vendor round-trip (rule 8).
+		args, err := json.Marshal(map[string]string{responsesCustomInputArg: v.Input})
+		if err != nil {
+			return nil, fmt.Errorf("custom_tool_call arguments: %w", err)
+		}
+		return &v1.FunctionCall{
+			ID:           v.ID,
+			CallID:       v.CallID,
+			Name:         v.Name,
+			Arguments:    string(args),
+			Status:       v1.Status(v.Status),
+			ProviderData: responsesCustomCallMarker,
+		}, nil
+
+	case *ResponsesCustomToolCallOutput:
+		return &v1.FunctionCallOutput{CallID: v.CallID, Output: v.Output}, nil
+
 	case *ResponsesRawItem:
 		// canonical: hosted-tool item (web_search_call, mcp_call, …) dropped —
 		// no canonical representation. Round-trips only within Responses, which
@@ -103,8 +121,8 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 //     canonical: foreign reasoning items dropped on Responses input — they
 //     are provider-signed (e.g. Anthropic thinking signatures) and cannot
 //     round-trip cross-vendor (rule 8); their relay-minted id would 400.
-func responsesInputItemFromCanonical(item v1.Item) ResponsesItem {
-	ritem := responsesItemFromCanonical(item)
+func responsesInputItemFromCanonical(item v1.Item, custom *responsesCustomLowering) ResponsesItem {
+	ritem := responsesItemFromCanonical(item, custom)
 	switch v := ritem.(type) {
 	case *ResponsesMessage:
 		if !strings.HasPrefix(v.ID, "msg_") {
@@ -112,6 +130,10 @@ func responsesInputItemFromCanonical(item v1.Item) ResponsesItem {
 		}
 	case *ResponsesFunctionCall:
 		if !strings.HasPrefix(v.ID, "fc_") {
+			v.ID = ""
+		}
+	case *ResponsesCustomToolCall:
+		if !strings.HasPrefix(v.ID, "ctc_") {
 			v.ID = ""
 		}
 	case *ResponsesReasoning:
@@ -123,7 +145,8 @@ func responsesInputItemFromCanonical(item v1.Item) ResponsesItem {
 }
 
 // responsesItemFromCanonical converts a canonical v1.Item to a ResponsesItem.
-func responsesItemFromCanonical(item v1.Item) ResponsesItem {
+// custom decides which function calls go back out as freeform custom_tool_call items; it may be nil when the caller has no request to read tool definitions from, in which case every call stays a function_call.
+func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) ResponsesItem {
 	switch v := item.(type) {
 	case *v1.Message:
 		// The Responses API ties content-part type to role: assistant content
@@ -148,6 +171,15 @@ func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 		}
 
 	case *v1.FunctionCall:
+		if custom.noteCall(v) {
+			return &ResponsesCustomToolCall{
+				ID:     v.ID,
+				CallID: v.CallID,
+				Name:   v.Name,
+				Input:  responsesCustomToolInput(v.Arguments),
+				Status: ResponsesStatus(v.Status),
+			}
+		}
 		return &ResponsesFunctionCall{
 			ID:        v.ID,
 			CallID:    v.CallID,
@@ -157,6 +189,11 @@ func responsesItemFromCanonical(item v1.Item) ResponsesItem {
 		}
 
 	case *v1.FunctionCallOutput:
+		// A tool result carries neither name nor provider data, so its call id — recorded when the matching call was emitted just above — is the only thing that pairs it with a custom tool.
+		if custom.isCustomOutput(v.CallID) {
+			// canonical: typed parts on a custom tool result dropped — the Responses custom_tool_call_output takes a plain string.
+			return &ResponsesCustomToolCallOutput{CallID: v.CallID, Output: v.Output}
+		}
 		out := &ResponsesFunctionCallOutput{
 			CallID: v.CallID,
 			Output: v.Output,

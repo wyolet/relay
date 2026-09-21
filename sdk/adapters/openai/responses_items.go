@@ -261,6 +261,18 @@ func responsesUnmarshalItem(data []byte) (ResponsesItem, error) {
 			return nil, fmt.Errorf("reasoning item: %w", err)
 		}
 		return &v, nil
+	case ResponsesItemTypeCustomToolCall:
+		var v ResponsesCustomToolCall
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("custom_tool_call item: %w", err)
+		}
+		return &v, nil
+	case ResponsesItemTypeCustomToolCallOutput:
+		var v ResponsesCustomToolCallOutput
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("custom_tool_call_output item: %w", err)
+		}
+		return &v, nil
 	default:
 		// Unmodeled item type (hosted-tool calls, future types): capture verbatim
 		// rather than fail the whole parse. Copy the bytes — the source slice may

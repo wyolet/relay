@@ -1,7 +1,9 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -11,6 +13,12 @@ import (
 // one canonical SSE chunk into one or more Responses SSE chunks.
 func (ResponsesTranslator) NewFromCanonicalStream() func(chunk []byte) ([]byte, error) {
 	s := &canonicalToResponsesStream{}
+	return s.translate
+}
+
+// NewFromCanonicalStreamFor is NewFromCanonicalStream seeded with the request (v1.RequestAwareStream): a call of a tool the caller defined as `custom` must stream back as a custom_tool_call, and canonical marks no such difference — only the request's tool definitions do.
+func (ResponsesTranslator) NewFromCanonicalStreamFor(req *v1.Request) func(chunk []byte) ([]byte, error) {
+	s := &canonicalToResponsesStream{custom: newResponsesCustomLowering(req)}
 	return s.translate
 }
 
@@ -27,6 +35,8 @@ type canonicalToResponsesStream struct {
 	outputIndex   map[string]int                 // itemID → outputIndex
 	closedItems   []ResponsesItem
 	lifecycleDone bool
+	seq           int // next sequence_number; per-stream state, never on the Translator (rule 6)
+	custom        *responsesCustomLowering
 }
 
 type responsesStreamItem struct {
@@ -36,6 +46,7 @@ type responsesStreamItem struct {
 	argsBuf     string
 	callID      string
 	name        string
+	custom      bool // this call's tool was defined as `custom` on the request
 }
 
 func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
@@ -81,11 +92,13 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		}
 		// R-3: capture name from item.started so function call events carry it.
 		// Use itemID as provisional callID — the real callID arrives on item.completed.
+		// Custom-ness is decided here, from the name alone, and kept for the item's whole lifecycle: added and done must describe the same item type, and an upstream that omits the name at item.started leaves nothing else to match on.
 		s.outputItems[ev.ItemID] = responsesStreamItem{
 			itemType:    ev.ItemType,
 			outputIndex: ev.Index,
 			name:        ev.Name,
 			callID:      ev.ItemID, // provisional; overwritten from item.completed payload
+			custom:      ev.ItemType == v1.ItemTypeFunctionCall && s.custom.isCustomName(ev.Name),
 		}
 		s.outputIndex[ev.ItemID] = ev.Index
 		switch ev.ItemType {
@@ -106,12 +119,19 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventContentPartAdded, Data: partData})
 
 		case v1.ItemTypeFunctionCall:
-			fcItem := &ResponsesFunctionCall{
+			var callItem ResponsesItem = &ResponsesFunctionCall{
 				ID:     ev.ItemID,
 				Name:   ev.Name,
 				Status: ResponsesStatusInProgress,
 			}
-			addedData, _ := json.Marshal(ResponsesItemAddedEvent{OutputIndex: ev.Index, Item: fcItem})
+			if s.outputItems[ev.ItemID].custom {
+				callItem = &ResponsesCustomToolCall{
+					ID:     ev.ItemID,
+					Name:   ev.Name,
+					Status: ResponsesStatusInProgress,
+				}
+			}
+			addedData, _ := json.Marshal(ResponsesItemAddedEvent{OutputIndex: ev.Index, Item: callItem})
 			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventOutputItemAdded, Data: addedData})
 
 		case v1.ItemTypeReasoning:
@@ -147,6 +167,10 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		case v1.DeltaKindArguments:
 			st.argsBuf += ev.Delta
 			s.outputItems[ev.ItemID] = st
+			if st.custom {
+				// A custom tool's input is the freeform string inside the JSON arguments, which only becomes readable once the object closes — so the whole input ships as one delta from itemDoneFrames.
+				break
+			}
 			// R-3: emit callID and name from stored per-item state.
 			deltaData, _ := json.Marshal(ResponsesFunctionCallArgumentsDeltaEvent{
 				ItemID:      ev.ItemID,
@@ -211,17 +235,37 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventError, Data: errData})
 	}
 
-	return marshalResponsesFrames(frames), nil
+	return s.marshalFrames(frames), nil
 }
 
-// marshalResponsesFrames serializes a slice of ResponsesSSEFrame values to wire bytes.
-func marshalResponsesFrames(frames []ResponsesSSEFrame) []byte {
+// marshalFrames stamps the stream envelope onto each frame and serializes them to wire bytes.
+func (s *canonicalToResponsesStream) marshalFrames(frames []ResponsesSSEFrame) []byte {
 	if len(frames) == 0 {
 		return nil
 	}
 	var buf []byte
 	for _, f := range frames {
+		f.Data = s.stampEnvelope(f.Event, f.Data)
 		buf = append(buf, f.Bytes()...)
 	}
 	return buf
+}
+
+// stampEnvelope prefixes the two fields every Responses event carries: "type", which repeats the event: line because clients dispatch on the JSON and not the SSE field, and "sequence_number", a per-stream counter from 0 that lets a consumer order events and spot a gap.
+//
+// Prefixing rather than re-marshaling keeps the rest of the payload byte-identical to what the event structs produced.
+func (s *canonicalToResponsesStream) stampEnvelope(event string, data []byte) []byte {
+	body := bytes.TrimSpace(data)
+	if len(body) < 2 || body[0] != '{' || body[len(body)-1] != '}' {
+		return data
+	}
+	head := fmt.Sprintf(`{"type":%q,"sequence_number":%d`, event, s.seq)
+	s.seq++
+	if len(body) == 2 { // "{}" — nothing to join onto
+		return []byte(head + "}")
+	}
+	out := make([]byte, 0, len(head)+len(body))
+	out = append(out, head...)
+	out = append(out, ',')
+	return append(out, body[1:]...)
 }

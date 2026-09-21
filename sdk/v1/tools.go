@@ -18,11 +18,14 @@ type ToolsConfig struct {
 
 // FunctionTool is a caller-executed tool. The caller's code receives the
 // tool_call item and submits a tool_result in the next request.
+//
+// ProviderData carries the vendor's original tool definition when a shape with no canonical equivalent was lowered onto this type (rule 8, the tool-side analogue of an item's opaque blob): the owning adapter re-emits it verbatim on a same-vendor round-trip, every other adapter sees the lowered function schema. Customers never construct it.
 type FunctionTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters"` // JSON schema; kept raw to avoid re-encoding user schemas
-	Strict      *bool           `json:"strict,omitempty"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	Parameters   json.RawMessage `json:"parameters"` // JSON schema; kept raw to avoid re-encoding user schemas
+	Strict       *bool           `json:"strict,omitempty"`
+	ProviderData json.RawMessage `json:"provider_data,omitempty"`
 }
 
 func (*FunctionTool) isTool()            {}
@@ -30,18 +33,20 @@ func (*FunctionTool) ToolType() ToolType { return ToolTypeFunction }
 
 func (f *FunctionTool) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type        ToolType        `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		Parameters  json.RawMessage `json:"parameters"`
-		Strict      *bool           `json:"strict,omitempty"`
+		Type         ToolType        `json:"type"`
+		Name         string          `json:"name"`
+		Description  string          `json:"description,omitempty"`
+		Parameters   json.RawMessage `json:"parameters"`
+		Strict       *bool           `json:"strict,omitempty"`
+		ProviderData json.RawMessage `json:"provider_data,omitempty"`
 	}
 	return json.Marshal(wire{
-		Type:        ToolTypeFunction,
-		Name:        f.Name,
-		Description: f.Description,
-		Parameters:  f.Parameters,
-		Strict:      f.Strict,
+		Type:         ToolTypeFunction,
+		Name:         f.Name,
+		Description:  f.Description,
+		Parameters:   f.Parameters,
+		Strict:       f.Strict,
+		ProviderData: f.ProviderData,
 	})
 }
 

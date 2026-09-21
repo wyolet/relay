@@ -1,26 +1,32 @@
 package openai
 
+import v1 "github.com/wyolet/relay/sdk/v1"
+
 // ResponsesItemType is the wire discriminator for the Responses API Input/Output item union.
 type ResponsesItemType string
 
 const (
-	ResponsesItemTypeMessage            ResponsesItemType = "message"
-	ResponsesItemTypeFunctionCall       ResponsesItemType = "function_call"
-	ResponsesItemTypeFunctionCallOutput ResponsesItemType = "function_call_output"
-	ResponsesItemTypeReasoning          ResponsesItemType = "reasoning"
+	ResponsesItemTypeMessage              ResponsesItemType = "message"
+	ResponsesItemTypeFunctionCall         ResponsesItemType = "function_call"
+	ResponsesItemTypeFunctionCallOutput   ResponsesItemType = "function_call_output"
+	ResponsesItemTypeReasoning            ResponsesItemType = "reasoning"
+	ResponsesItemTypeCustomToolCall       ResponsesItemType = "custom_tool_call"
+	ResponsesItemTypeCustomToolCallOutput ResponsesItemType = "custom_tool_call_output"
 )
 
-// responsesCanonicalItemType reports whether an item type has a canonical
-// representation. Everything else (hosted-tool calls) is carried as a
-// ResponsesRawItem and dropped cross-shape, so the streaming path must not emit
-// a canonical item lifecycle for it.
-func responsesCanonicalItemType(t ResponsesItemType) bool {
+// responsesCanonicalItemType maps a wire item type to its canonical one. Everything else (hosted-tool calls) is carried as a ResponsesRawItem and dropped cross-shape, so the streaming path must not emit a canonical item lifecycle for it. A custom tool call is a function call in canonical — the freeform input becomes the lowered `input` argument.
+func responsesCanonicalItemType(t ResponsesItemType) (v1.ItemType, bool) {
 	switch t {
-	case ResponsesItemTypeMessage, ResponsesItemTypeFunctionCall,
-		ResponsesItemTypeFunctionCallOutput, ResponsesItemTypeReasoning:
-		return true
+	case ResponsesItemTypeMessage:
+		return v1.ItemTypeMessage, true
+	case ResponsesItemTypeFunctionCall, ResponsesItemTypeCustomToolCall:
+		return v1.ItemTypeFunctionCall, true
+	case ResponsesItemTypeFunctionCallOutput, ResponsesItemTypeCustomToolCallOutput:
+		return v1.ItemTypeFunctionCallOutput, true
+	case ResponsesItemTypeReasoning:
+		return v1.ItemTypeReasoning, true
 	default:
-		return false
+		return "", false
 	}
 }
 
@@ -39,7 +45,9 @@ const (
 type ResponsesToolType string
 
 const (
-	ResponsesToolTypeFunction ResponsesToolType = "function"
+	ResponsesToolTypeFunction  ResponsesToolType = "function"
+	ResponsesToolTypeCustom    ResponsesToolType = "custom"
+	ResponsesToolTypeNamespace ResponsesToolType = "namespace"
 )
 
 // ResponsesRole enumerates valid message roles in the Responses API.
@@ -67,8 +75,9 @@ const (
 // those (see responsesCanonicalFinishReason / canonicalResponsesStatus).
 
 // ResponsesItem is a sealed interface for elements of the Responses API Input or Output array.
-// The only valid concrete types are *ResponsesMessage, *ResponsesFunctionCall,
-// *ResponsesFunctionCallOutput, and *ResponsesReasoning.
+// Valid concrete types: *ResponsesMessage, *ResponsesFunctionCall,
+// *ResponsesFunctionCallOutput, *ResponsesReasoning, *ResponsesCustomToolCall,
+// *ResponsesCustomToolCallOutput, and *ResponsesRawItem.
 // External packages may not implement this interface.
 type ResponsesItem interface {
 	isResponsesItem()
@@ -84,7 +93,8 @@ type ResponsesPart interface {
 }
 
 // ResponsesTool is a sealed interface for elements of the Responses API Tools array.
-// The only valid concrete type is *ResponsesFunctionTool.
+// Valid concrete types: *ResponsesFunctionTool, *ResponsesCustomTool,
+// *ResponsesNamespaceTool, and *ResponsesRawTool.
 type ResponsesTool interface {
 	isResponsesTool()
 	ResponsesToolType() ResponsesToolType

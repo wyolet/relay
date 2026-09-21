@@ -33,8 +33,9 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// into instructions by canonicalToResponsesRequest — skip them here.
 	input, _ := v1.SplitHoistedSystem(req.Input)
 	inputRaws := make([]json.RawMessage, 0, len(input))
+	custom := newResponsesCustomLowering(req)
 	for _, item := range input {
-		ritem := responsesInputItemFromCanonical(item)
+		ritem := responsesInputItemFromCanonical(item, custom)
 		if ritem == nil {
 			continue
 		}

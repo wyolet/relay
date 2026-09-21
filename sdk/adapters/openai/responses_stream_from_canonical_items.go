@@ -86,6 +86,35 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 				}
 			}
 		}
+		if st.custom {
+			input := responsesCustomToolInput(st.argsBuf)
+			deltaData, _ := json.Marshal(ResponsesCustomToolCallInputDeltaEvent{
+				ItemID:      itemID,
+				OutputIndex: st.outputIndex,
+				Delta:       input,
+			})
+			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventCustomToolCallInputDelta, Data: deltaData})
+			doneData, _ := json.Marshal(ResponsesCustomToolCallInputDoneEvent{
+				ItemID:      itemID,
+				OutputIndex: st.outputIndex,
+				Input:       input,
+			})
+			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventCustomToolCallInputDone, Data: doneData})
+			finalCall := &ResponsesCustomToolCall{
+				ID:     itemID,
+				CallID: callID,
+				Name:   name,
+				Input:  input,
+				Status: ResponsesStatusCompleted,
+			}
+			itemDoneData, _ := json.Marshal(ResponsesOutputItemDoneEvent{
+				OutputIndex: st.outputIndex,
+				Item:        finalCall,
+			})
+			frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventOutputItemDone, Data: itemDoneData})
+			s.closedItems = append(s.closedItems, finalCall)
+			break
+		}
 		argsDoneData, _ := json.Marshal(ResponsesFunctionCallArgumentsDoneEvent{
 			ItemID:      itemID,
 			OutputIndex: st.outputIndex,
