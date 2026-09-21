@@ -15,6 +15,14 @@ type ModelEntry struct {
 	Pointer     bool     // the snapshot the parent model points at — the "latest" one
 	Aliases     []string // resolution-only aliases that also route to this model
 	Hosts       []ModelHost
+
+	// Catalog metadata a picker can show or size a session against. Zero
+	// means the catalog declares nothing, never "zero tokens" — a
+	// projection omits the field rather than printing a made-up number.
+	ContextWindow   int
+	MaxOutputTokens int
+	Reasoning       bool
+	ToolCall        bool
 }
 
 // ModelHost is one host serving the entry, with its base-tier rates.

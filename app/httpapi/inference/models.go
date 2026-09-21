@@ -112,7 +112,16 @@ func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Mo
 				continue
 			}
 			seen[s.Name] = struct{}{}
-			e := clientprofile.ModelEntry{ID: s.Name, Model: m.Meta.Name, DisplayName: m.Meta.DisplayName, Hosts: hosts}
+			e := clientprofile.ModelEntry{
+				ID:              s.Name,
+				Model:           m.Meta.Name,
+				DisplayName:     m.Meta.DisplayName,
+				Hosts:           hosts,
+				ContextWindow:   contextWindow(m),
+				MaxOutputTokens: m.Spec.MaxOutputTokens,
+				Reasoning:       m.Spec.Capabilities.Reasoning,
+				ToolCall:        m.Spec.Capabilities.Tools,
+			}
 			if e.DisplayName == "" {
 				e.DisplayName = s.Name
 			}
@@ -124,6 +133,14 @@ func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Mo
 		}
 	}
 	return entries
+}
+
+// contextWindow is the window a client should size a session against: ContextWindowTotal is the canonical field, ContextWindowInput the fallback for models that publish only the split. 0 = the catalog declares none.
+func contextWindow(m *model.Model) int {
+	if m.Spec.ContextWindowTotal > 0 {
+		return m.Spec.ContextWindowTotal
+	}
+	return m.Spec.ContextWindowInput
 }
 
 // grantedBindings keeps the model's enabled bindings the caller may actually route to. A binding outside the caller's grant must never reach a listing — the row would advertise a route the key cannot take. adapterFilter, when set, additionally keeps only bindings declaring it.

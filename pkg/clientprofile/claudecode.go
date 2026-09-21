@@ -3,7 +3,6 @@ package clientprofile
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 )
 
@@ -63,21 +62,6 @@ func pickerID(id string) string {
 // Inbound strips the minted prefix, so any suffix the caller appended (an alias bracket, a host pin) rides through untouched.
 func (claudeCode) Inbound(model string) string { return strings.TrimPrefix(model, pickerPrefix) }
 
-// entryLabel names the row in the picker, which shows display_name and description and nothing else: every snapshot of one model carries the parent's display name, so the non-pointer ones would render as identical rows without the snapshot suffix appended here.
-func entryLabel(e ModelEntry) string {
-	if e.Pointer {
-		return e.DisplayName
-	}
-	suffix := e.ID
-	switch {
-	case e.ID == e.Model:
-		suffix = "base"
-	case e.Model != "":
-		suffix = strings.TrimPrefix(e.ID, e.Model+"-")
-	}
-	return e.DisplayName + " (" + suffix + ")"
-}
-
 // Models renders the Anthropic list-models document, one row per entry, each id minted into the form the client's picker keeps. Aliases are left out: an alias is a compatibility spelling of a model already listed, not a separate choice, and it still resolves when the client sends it.
 func (claudeCode) Models(entries []ModelEntry) ([]byte, string, error) {
 	out := anthropicModelList{Data: make([]anthropicModel, 0, len(entries))}
@@ -99,31 +83,6 @@ func (claudeCode) Models(entries []ModelEntry) ([]byte, string, error) {
 		return nil, "", err
 	}
 	return body, "application/json", nil
-}
-
-// hostsDescription renders the picker subtitle: every host serving the
-// entry, with its rates when the binding is priced.
-func hostsDescription(hosts []ModelHost) string {
-	parts := make([]string, 0, len(hosts))
-	for _, h := range hosts {
-		if !h.Priced {
-			parts = append(parts, h.Name)
-			continue
-		}
-		parts = append(parts, h.Name+" · $"+usdRate(h.InputUSDPerMtok)+"/$"+usdRate(h.OutputUSDPerMtok)+" per Mtok")
-	}
-	return strings.Join(parts, ", ")
-}
-
-// usdRate formats a per-Mtok amount with at most two decimals and no
-// trailing zeros.
-func usdRate(v float64) string {
-	s := strconv.FormatFloat(v, 'f', 2, 64)
-	if strings.Contains(s, ".") {
-		s = strings.TrimRight(s, "0")
-		s = strings.TrimSuffix(s, ".")
-	}
-	return s
 }
 
 // Routes exposes the connection-warming probe. The client sends it before

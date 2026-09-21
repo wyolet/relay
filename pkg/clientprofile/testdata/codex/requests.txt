@@ -1,0 +1,29 @@
+=== POST /codex/v1/responses
+x-codex-beta-features: remote_compaction_v2
+x-codex-window-id: 01a0c1d8-3348-7993-ad4c-a8d342ba89c8:0
+x-codex-turn-metadata: {"installation_id":"<redacted>","session_id":"01a0c1d8-3348-7993-ad4c-a8d342ba89c8","thread_id":"01a0c1d8-3348-7993-ad4c-a8d342ba89c8","agent_name":"/root","turn_id":"01a0c1d8-336b-7fc2-91cc-9baf8f0388a1","window_id":"01a0c1d8-3348-7993-ad4c-a8d342ba89c8:0","window_number":0,"context_window_id":"01a0c1d8-3348-7993-ad4c-a8e830e97fc2","request_kind":"turn","root_turn_id":"01a0c1d8-336b-7fc2-91cc-9baf8f0388a1","thread_source":"user","sandbox":"seatbelt","sandbox_mode":"read-only","auto_review_enabled":false,"node_repl_auto_review_required":false,"node_repl_disabled":false,"turn_started_at_unix_ms":1789958566764}
+x-client-request-id: 01a0c1d8-3348-7993-ad4c-a8d342ba89c8
+session-id: 01a0c1d8-3348-7993-ad4c-a8d342ba89c8
+thread-id: 01a0c1d8-3348-7993-ad4c-a8d342ba89c8
+accept: text/event-stream
+content-type: application/json
+authorization: Bearer dummy
+originator: codex_exec
+user-agent: codex_exec/0.153.4 (Mac OS 27.0.0; arm64) ghostty/1.3.1 (codex_exec; 0.153.4)
+host: 127.0.0.1:8795
+content-length: 42025
+--- body (41879 bytes; values elided as marked)
+{
+  "model": "gpt-5-6",
+  "instructions": "<16979 chars of the client's system prompt, elided>",
+  "input": [{"type": "message", "role": "developer", "content": "<elided>"}, {"type": "message", "role": "user", "content": "<elided>"}, {"type": "message", "role": "user", "content": "<elided>"}],
+  "tools": [{"type": "function", "name": "exec_command", "description": "<elided>", "parameters": "<elided>"}, {"type": "function", "name": "write_stdin", "description": "<elided>", "parameters": "<elided>"}, {"type": "function", "name": "request_user_input", "description": "<elided>", "parameters": "<elided>"}, {"type": "function", "name": "view_image", "description": "<elided>", "parameters": "<elided>"}, {"type": "namespace", "name": "multi_agent_v1", "description": "<elided>", "parameters": "<elided>"}, {"type": "function", "name": "get_goal", "description": "<elided>", "parameters": "<elided>"}, {"type": "function", "name": "create_goal", "description": "<elided>", "parameters": "<elided>"}, {"type": "function", "name": "update_goal", "description": "<elided>", "parameters": "<elided>"}, {"type": "web_search", "name": null, "description": "<elided>", "parameters": "<elided>"}],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "reasoning": {"summary": "auto"},
+  "store": false,
+  "stream": true,
+  "include": ["reasoning.encrypted_content"],
+  "prompt_cache_key": "01a0c1d8-3348-7993-ad4c-a8d342ba89c8",
+  "client_metadata": {"x-codex-turn-metadata": "<elided JSON blob>", "thread_id": "<elided JSON blob>", "session_id": "<elided JSON blob>", "x-codex-window-id": "<elided JSON blob>", "turn_id": "<elided JSON blob>", "root_turn_id": "<elided JSON blob>", "x-codex-installation-id": "<elided JSON blob>"}
+}

@@ -33,8 +33,9 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	// into instructions by canonicalToResponsesRequest — skip them here.
 	input, _ := v1.SplitHoistedSystem(req.Input)
 	inputRaws := make([]json.RawMessage, 0, len(input))
+	custom := newResponsesCustomLowering(req)
 	for _, item := range input {
-		ritem := responsesInputItemFromCanonical(item)
+		ritem := responsesInputItemFromCanonical(item, custom)
 		if ritem == nil {
 			continue
 		}
@@ -102,11 +103,14 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		User:                 req.User,
 		Stream:               rreq.Stream,
 		Store:                &storeFalse,
-		Include:              []string{"reasoning.encrypted_content"},
+		Include:              []string{includeEncryptedReasoning},
 		PromptCacheKey:       rreq.PromptCacheKey,
 		PromptCacheRetention: rreq.PromptCacheRetention,
 	})
 }
+
+// includeEncryptedReasoning is the one include entry that survives a cross-shape round-trip: SerializeRequest asks for it so the reasoning blob comes back, and responsesItemTo/FromCanonical carry it on the item as provider data.
+const includeEncryptedReasoning = "reasoning.encrypted_content"
 
 // responsesRejectStatefulFields rejects OpenAI-isms that have no canonical equivalent.
 func responsesRejectStatefulFields(req *ResponsesRequest) error {
@@ -125,18 +129,16 @@ func responsesRejectStatefulFields(req *ResponsesRequest) error {
 	if req.Truncation != "" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "truncation")
 	}
-	if req.ServiceTier != "" {
-		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "service_tier")
-	}
+	// canonical: service_tier dropped — it asks the upstream account for a latency/price lane, not for different output, and no other vendor has the concept. Codex sends it on every request when the user configures one, so rejecting it would refuse the whole turn over a hint.
 	if req.SafetyIdentifier != "" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "safety_identifier")
 	}
 	if len(req.ContextManagement) > 0 && string(req.ContextManagement) != "null" {
 		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "context_management")
 	}
-	if len(req.Include) > 0 {
-		return fmt.Errorf("responses_unsupported_canonical: field %q has no canonical equivalent", "include")
-	}
+	// include asks the upstream to attach extra payloads to the response. SerializeRequest re-emits includeEncryptedReasoning unconditionally, so that entry survives the round-trip; the rest name payloads the canonical response has no field to carry.
+	//
+	// canonical: include[<anything but includeEncryptedReasoning>] dropped — an unrequested enrichment degrades the answer, it does not corrupt it, and Codex sends include with no opt-out, so refusing the field would refuse every turn.
 	if len(req.Prompt) > 0 && string(req.Prompt) != "null" {
 		// A stored prompt template lives in OpenAI's server-side store and carries
 		// the actual instructions. Cross-shape we can't resolve it, and silently

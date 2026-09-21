@@ -59,23 +59,18 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 	if len(req.Tools) > 0 {
 		tc := &v1.ToolsConfig{}
 		for _, t := range req.Tools {
-			ft, ok := t.(*ResponsesFunctionTool)
-			if !ok {
-				// canonical: hosted-tool definition (web_search, mcp, …) dropped —
-				// not expressible to a non-OpenAI upstream. Skip rather than 400
-				// the whole request (rule 11: annotated, not silent).
+			if ns, ok := t.(*ResponsesNamespaceTool); ok {
+				// canonical: namespace grouping dropped — canonical's tool list is flat and no other vendor groups tools, so the inner tools are hoisted out under their own names (which is what a namespaced call is named on the wire; the group rides a separate `namespace` field). Two namespaces sharing an inner tool name collapse onto one canonical tool.
+				for _, inner := range ns.Tools {
+					if ct := responsesToolToCanonical(inner); ct != nil {
+						tc.Definitions = append(tc.Definitions, ct)
+					}
+				}
 				continue
 			}
-			params := ft.Parameters
-			if params == nil {
-				params = json.RawMessage(`{}`)
+			if ct := responsesToolToCanonical(t); ct != nil {
+				tc.Definitions = append(tc.Definitions, ct)
 			}
-			tc.Definitions = append(tc.Definitions, &v1.FunctionTool{
-				Name:        ft.Name,
-				Description: ft.Description,
-				Parameters:  params,
-				Strict:      ft.Strict,
-			})
 		}
 		tc.Parallel = req.ParallelToolCalls
 		if req.ToolChoice != nil {
@@ -122,6 +117,28 @@ func responsesRequestToCanonical(req *ResponsesRequest) (*v1.Request, error) {
 	}
 
 	return cr, nil
+}
+
+// responsesToolToCanonical maps one tool definition to a canonical function tool, or nil when it has no canonical form.
+func responsesToolToCanonical(t ResponsesTool) *v1.FunctionTool {
+	switch v := t.(type) {
+	case *ResponsesFunctionTool:
+		params := v.Parameters
+		if params == nil {
+			params = json.RawMessage(`{}`)
+		}
+		return &v1.FunctionTool{
+			Name:        v.Name,
+			Description: v.Description,
+			Parameters:  params,
+			Strict:      v.Strict,
+		}
+	case *ResponsesCustomTool:
+		return responsesCustomToolToCanonical(v)
+	default:
+		// canonical: hosted-tool definition (web_search, mcp, …) and nested namespaces dropped — not expressible to a non-OpenAI upstream. Skip rather than 400 the whole request (rule 11: annotated, not silent).
+		return nil
+	}
 }
 
 // canonicalToResponsesRequest maps a canonical *v1.Request back to a *ResponsesRequest.
@@ -205,6 +222,11 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 		for _, tool := range tc.Definitions {
 			ft, ok := tool.(*v1.FunctionTool)
 			if !ok {
+				continue
+			}
+			// A tool lowered from `custom` goes back out verbatim: only the original definition carries the freeform format the upstream needs.
+			if ct := responsesCustomToolFromCanonical(ft); ct != nil {
+				rreq.Tools = append(rreq.Tools, ct)
 				continue
 			}
 			params := ft.Parameters

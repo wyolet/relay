@@ -150,6 +150,52 @@ func TestModelEntries_CarriesParentSlugAndPointer(t *testing.T) {
 	}
 }
 
+// Every snapshot of a model inherits the model's catalog metadata: a
+// profile sizes a session and labels capabilities off these.
+func TestModelEntries_CarriesCatalogMetadata(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	models[0].Spec.ContextWindowTotal = 1000000
+	models[0].Spec.MaxOutputTokens = 384000
+	models[0].Spec.Capabilities = model.Capabilities{Reasoning: true, Tools: true}
+
+	entries := modelEntries(snap, pol, models)
+	if len(entries) != 2 {
+		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
+	}
+	for _, e := range entries {
+		if e.ContextWindow != 1000000 {
+			t.Errorf("%q context window = %d", e.ID, e.ContextWindow)
+		}
+		if e.MaxOutputTokens != 384000 {
+			t.Errorf("%q max output tokens = %d", e.ID, e.MaxOutputTokens)
+		}
+		if !e.Reasoning || !e.ToolCall {
+			t.Errorf("%q capabilities = reasoning:%v toolCall:%v", e.ID, e.Reasoning, e.ToolCall)
+		}
+	}
+}
+
+// A model publishing only the input/output split still gets a window; a
+// model declaring none gets a zero, never a substituted number.
+func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
+	snap, pol, models := entriesFixture(t, "prov/big-model")
+	models[0].Spec.ContextWindowInput = 272000
+
+	entries := modelEntries(snap, pol, models)
+	if len(entries) == 0 {
+		t.Fatal("no entries")
+	}
+	if entries[0].ContextWindow != 272000 {
+		t.Errorf("context window = %d, want the input window", entries[0].ContextWindow)
+	}
+
+	snap, pol, models = entriesFixture(t, "prov/big-model")
+	entries = modelEntries(snap, pol, models)
+	if entries[0].ContextWindow != 0 || entries[0].MaxOutputTokens != 0 {
+		t.Errorf("undeclared metadata = %d/%d, want zeros", entries[0].ContextWindow, entries[0].MaxOutputTokens)
+	}
+}
+
 // restrictBinding pins one binding to the named snapshots, the catalog's
 // way of saying a host serves only part of a model's snapshot set.
 func restrictBinding(t *testing.T, snap *catalog.Snapshot, bindingName string, snapshots ...string) {

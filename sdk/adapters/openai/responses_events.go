@@ -12,6 +12,8 @@ const (
 	ResponsesEventOutputItemDone             = "response.output_item.done"
 	ResponsesEventFunctionCallArgumentsDelta = "response.function_call_arguments.delta"
 	ResponsesEventFunctionCallArgumentsDone  = "response.function_call_arguments.done"
+	ResponsesEventCustomToolCallInputDelta   = "response.custom_tool_call_input.delta"
+	ResponsesEventCustomToolCallInputDone    = "response.custom_tool_call_input.done"
 	ResponsesEventReasoningTextDelta         = "response.reasoning_text.delta"
 	ResponsesEventReasoningTextDone          = "response.reasoning_text.done"
 	ResponsesEventReasoningSummaryTextDelta  = "response.reasoning_summary_text.delta"

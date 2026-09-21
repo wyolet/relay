@@ -395,9 +395,11 @@ func main() {
 		}).Build(),
 	}
 	profiles := clientprofile.New()
-	if err := profiles.Register(clientprofile.ClaudeCode()); err != nil {
-		slog.Error("client profile registration failed", "err", err)
-		os.Exit(1)
+	for _, p := range []clientprofile.Profile{clientprofile.ClaudeCode(), clientprofile.Codex()} {
+		if err := profiles.Register(p); err != nil {
+			slog.Error("client profile registration failed", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	specRegistry := adapter.NewRegistry(specs...)

@@ -84,7 +84,8 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		if itemProbe.ID == "" || itemProbe.Type == "" {
 			return nil, nil
 		}
-		if !responsesCanonicalItemType(itemProbe.Type) {
+		canonType, canonical := responsesCanonicalItemType(itemProbe.Type)
+		if !canonical {
 			// Unmodeled item type (hosted-tool call): its output_item.done drops
 			// at responsesItemToCanonical, so emitting item.started here would
 			// orphan a started-without-completed. Skip the lifecycle entirely.
@@ -92,7 +93,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		}
 		startData, _ := json.Marshal(v1.ItemStartedEvent{
 			ItemID:   itemProbe.ID,
-			ItemType: v1.ItemType(itemProbe.Type),
+			ItemType: canonType,
 			// Name rides item.started for function_call items so downstream
 			// serializers that emit the tool name at item-start (Anthropic) have it.
 			Name:  itemProbe.Name,
@@ -243,8 +244,9 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		//     canonical events don't already convey.
 		//  2. Hosted-tool / annotation / audio events (web_search_call.*,
 		//     file_search_call.*, code_interpreter_call.*, image_generation_call.*,
-		//     mcp_call.*, custom_tool_call_input.*, output_text.annotation.added,
-		//     audio.*) — no canonical representation exists yet.
+		//     mcp_call.*, output_text.annotation.added, audio.*) — no canonical
+		//     representation exists yet.
+		//  3. custom_tool_call_input.delta/.done — canonical arguments are a JSON object, so a freeform text delta cannot be re-encoded chunk by chunk; the full input arrives on the item's output_item.done instead.
 		//
 		// canonical: hosted-tool / annotation / audio stream events dropped — no
 		// canonical event. Note mcp_call.failed / mcp_list_tools.failed carry an

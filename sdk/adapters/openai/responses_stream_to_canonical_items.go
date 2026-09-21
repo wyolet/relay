@@ -64,6 +64,8 @@ func responsesItemID(item ResponsesItem) string {
 		return v.ID
 	case *ResponsesReasoning:
 		return v.ID
+	case *ResponsesCustomToolCall:
+		return v.ID
 	default:
 		return ""
 	}

@@ -42,7 +42,7 @@ func TestResponsesItemFromCanonical_RoleDrivenTextType(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := partType(responsesItemFromCanonical(tc.item)); got != tc.want {
+			if got := partType(responsesItemFromCanonical(tc.item, nil)); got != tc.want {
 				t.Fatalf("part type = %q, want %q", got, tc.want)
 			}
 		})
