@@ -264,3 +264,29 @@ func TestClaudeCode_AgainstRecordedRequests(t *testing.T) {
 		}
 	}
 }
+
+// The client resolves the count-tokens endpoint against its base URL, so the path must be the one it asks for, relative to the profile prefix.
+func TestClaudeCode_TokenCountRoute(t *testing.T) {
+	route, ok := ClaudeCode().(TokenCountRoute)
+	if !ok {
+		t.Fatal("ClaudeCode must implement TokenCountRoute")
+	}
+	if got := route.TokenCountPath(); got != "/v1/messages/count_tokens" {
+		t.Errorf("TokenCountPath = %q", got)
+	}
+}
+
+func TestClaudeCode_SessionKey(t *testing.T) {
+	keyer, ok := ClaudeCode().(SessionKeyer)
+	if !ok {
+		t.Fatal("ClaudeCode must implement SessionKeyer")
+	}
+	h := http.Header{}
+	if got := keyer.SessionKey(h); got != "" {
+		t.Errorf("SessionKey without the header = %q, want empty", got)
+	}
+	h.Set("X-Claude-Code-Session-Id", "sess-42")
+	if got := keyer.SessionKey(h); got != "sess-42" {
+		t.Errorf("SessionKey = %q, want sess-42", got)
+	}
+}

@@ -127,3 +127,9 @@ Keep your relay key out of shared dotfiles and version control — treat the wra
 - Setting `ANTHROPIC_BASE_URL` disables Claude Code's MCP tool search by default; re-enable it with `ENABLE_TOOL_SEARCH=true` if you use it.
 - Proxy mode does no translation — Claude Code's native Anthropic requests are forwarded byte-for-byte.
 - When an upstream rejects a request, Relay forwards that response as it stands — original status, `Retry-After` and body — instead of flattening it into a generic gateway error, so the client backs off on the provider's own terms.
+
+## Known limits
+
+- **Silence before the first byte.** Relay's keepalive frames start once the upstream has sent its response headers. Some servers — Ollama among them — hold the headers until the first token is ready, so a model that spends longer than Claude Code's idle limit (300 s by default) processing the prompt is cut off by the client before Relay can send anything. In practice this only happens with CPU-bound inference; on a GPU or a hosted upstream, prompt processing finishes in seconds. Accepted as-is; a smaller `--tools` set or `--bare` shrinks the prompt if a slow box is all you have.
+- **Cross-shape prompt caching.** When Relay translates to a non-Anthropic upstream, `cache_control` markers are not carried, and the `system` array is flattened into one instruction block. Same-shape Anthropic upstreams forward both untouched.
+- **`/context` before the first turn.** Relay answers `count_tokens` exactly only where the upstream can count (Anthropic today); elsewhere the figure is calibrated from earlier turns of the session or estimated, and the `X-WR-Token-Count` response header says which.

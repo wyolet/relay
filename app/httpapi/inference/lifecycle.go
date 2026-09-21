@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -75,6 +76,18 @@ func applyAttributionHeaders(lc *lifecycle.Context, p clientprofile.Profile, h h
 		}
 		lc.Metadata[name] = v
 	}
+}
+
+// applySessionKey records the caller's conversation id under the profile-neutral key observers read. Which header carries it is the client's business and stays inside the profile.
+func applySessionKey(lc *lifecycle.Context, p clientprofile.Profile, h http.Header) {
+	v := sessionKeyFor(p, h)
+	if v == "" {
+		return
+	}
+	if len(v) > MaxAttributionValueBytes {
+		v = v[:MaxAttributionValueBytes]
+	}
+	lc.Metadata[tokencount.MetadataKeySession] = v
 }
 
 // sourceForMode maps a request mode to its runner-source label.

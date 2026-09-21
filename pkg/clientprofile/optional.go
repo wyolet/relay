@@ -66,3 +66,15 @@ type Attributor interface {
 	// request's usage metadata, keyed by the lowercased header name.
 	AttributionHeaders() []string
 }
+
+// TokenCountRoute is implemented by a profile whose client asks the gateway to count a prompt's input tokens before sending it.
+type TokenCountRoute interface {
+	// TokenCountPath is the endpoint's path relative to the profile's /{Name} prefix. The app mounts POST there behind the inference auth chain and answers with the count for the request body.
+	TokenCountPath() string
+}
+
+// SessionKeyer is implemented by a profile whose client marks the requests of one conversation, so relay can keep per-conversation observations without the app knowing which header carries the mark.
+type SessionKeyer interface {
+	// SessionKey returns the conversation identifier h carries, or "" when the client sent none.
+	SessionKey(h http.Header) string
+}

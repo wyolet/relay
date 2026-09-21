@@ -152,3 +152,9 @@ var attributionHeaders = []string{
 }
 
 func (claudeCode) AttributionHeaders() []string { return attributionHeaders }
+
+// TokenCountPath is the endpoint the client polls to size a prompt before sending it; unserved, it falls back to counting characters.
+func (claudeCode) TokenCountPath() string { return "/v1/messages/count_tokens" }
+
+// SessionKey reads the per-conversation marker the client sends on every request of one session — attributionHeaders[0], named once so the two uses cannot drift apart.
+func (claudeCode) SessionKey(h http.Header) string { return h.Get(attributionHeaders[0]) }

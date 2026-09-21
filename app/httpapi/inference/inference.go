@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
@@ -75,6 +76,9 @@ type Deps struct {
 	// at the composition root. Nil means none: no /{profile}/ routes, no
 	// profile on the request context, behaviour unchanged.
 	Profiles *clientprofile.Registry
+
+	// TokenCalibrator answers the count-tokens endpoint from the ratio relay measured on completed requests, for upstreams with no counter of their own. Nil is safe: those requests fall through to a byte estimate.
+	TokenCalibrator *tokencount.Calibrator
 
 	// StreamKeepAlive is how long a streamed response may go without bytes before relay emits the inbound shape's no-op frame itself (RELAY_STREAM_KEEPALIVE_S). Upstreams stay silent through long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes of silence. 0 disables the keepalive.
 	StreamKeepAlive time.Duration
@@ -144,6 +148,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	).Get("/v1/ws", wsHandler(d))
 
 	mountProfileRoutes(r, d)
+	mountTokenCountRoutes(r, d)
 
 	return api
 }

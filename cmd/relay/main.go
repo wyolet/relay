@@ -43,6 +43,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
+	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
 	relayweb "github.com/wyolet/relay/cmd/relay/web"
@@ -357,6 +358,7 @@ func main() {
 				{Path: "/anthropic/v1/messages", OperationID: "anthropic_messages", Summary: "Create a message (Anthropic Messages shape)"},
 			},
 			DefaultPath:   "/v1/messages",
+			CountPath:     "/v1/messages/count_tokens",
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
@@ -462,6 +464,10 @@ func main() {
 	go payloadCtl.Run(listenerCtx)
 	slog.Debug("payloadlog: observer wired (config via settings: payload-logging)")
 
+	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; one kv write per completed request, post-flight only.
+	tokenCalibrator := tokencount.NewCalibrator(kvStore)
+	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
+
 	// Admission control: a per-pod in-flight cap on inference requests. Rides
 	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
 	// pre-flight so a shed request is never counted as in-flight, Collect
@@ -556,6 +562,7 @@ func main() {
 		Specs:           specRegistry,
 		Profiles:        profiles,
 		RouteMounters:   []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		TokenCalibrator: tokenCalibrator,
 		StreamKeepAlive: cfg.StreamKeepAlive,
 		TrustEventTime:  cfg.DevTrustEventTime,
 	})

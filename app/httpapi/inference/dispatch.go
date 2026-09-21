@@ -95,6 +95,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	if profile.Name() != "" {
 		lc.Metadata["client"] = profile.Name()
 		applyAttributionHeaders(lc, profile, r.Header)
+		applySessionKey(lc, profile, r.Header)
 	}
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture

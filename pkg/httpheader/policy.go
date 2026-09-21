@@ -46,6 +46,9 @@ const (
 	// model declares them unsupported) so drops are surfaced, never silent.
 	HeaderWarnings = "X-WR-Warnings"
 
+	// HeaderTokenCount is a response header naming how an input-token count was arrived at: "exact" from the upstream's own counter, "calibrated" from the ratio relay measured on this session's or model's traffic, "estimated" from bytes alone. A caller that cares about precision can tell the three apart.
+	HeaderTokenCount = "X-WR-Token-Count"
+
 	// HeaderShouldRetry tells the caller whether retrying this exact request can succeed. Some SDKs trust it over their own status heuristics, so relay emits it on every error it writes rather than leaving a forwarded upstream error as the only response that carries one.
 	HeaderShouldRetry = "X-Should-Retry"
 )
