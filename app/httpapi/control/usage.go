@@ -11,86 +11,98 @@ import (
 	"context"
 	"encoding/base64"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/relaykey"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/usagelog"
 )
 
 // --- read scoping ---
 //
-// Usage and log events carry the sha256 hash of the inbound bearer
-// (relay_key_hash), so "the caller's traffic" is exactly "events whose hash
-// belongs to a relay-key the caller owns". Under a scoping Authorizer,
-// every usage/logs read is narrowed to that set; admins (and the
-// single-user default authorizer) read the whole stream.
+// A caller reads the whole stream only when a binding at the global scope
+// grants usage/logs read. Otherwise the stream narrows to what is
+// attributable to them: events in a project they may see, plus events they
+// are the principal of. Those two are a disjunction, carried on the query as
+// ScopeProjectID / ScopePrincipalID.
 
-type relayKeyLister interface {
-	List(ctx context.Context) ([]*relaykey.RelayKey, error)
+// readScope is the slice of the usage/log stream a caller may read.
+// unrestricted is the whole stream; otherwise an event qualifies when its
+// project or its principal is listed. Both lists empty means "no events at
+// all", never "everything".
+type readScope struct {
+	unrestricted bool
+	projectIDs   []string
+	principalIDs []string
+	keyHashes    []string
 }
 
-func relayKeysOf(d Deps) relayKeyLister {
-	if d.Stores == nil || d.Stores.RelayKey == nil {
-		return nil
-	}
-	return d.Stores.RelayKey
+// allows reports whether one already-fetched event is inside the scope.
+func (s readScope) allows(ev usagelog.Event) bool {
+	return s.unrestricted ||
+		slices.Contains(s.projectIDs, ev.ProjectID) ||
+		slices.Contains(s.principalIDs, ev.PrincipalID) ||
+		slices.Contains(s.keyHashes, ev.RelayKeyHash)
 }
 
-// relayKeyScope decides what slice of the usage/log stream the caller may
-// read. unrestricted=true means the whole stream. Otherwise hashes lists
-// the bearer hashes of the caller's relay-keys — possibly empty, which
-// means "no events at all", never "everything".
-func relayKeyScope(ctx context.Context, authzr authz.Authorizer, keys relayKeyLister) (hashes []string, unrestricted bool, err error) {
-	// Probe with a non-read verb: OwnerScoped grants it to admins only;
-	// the single-user authorizer grants any authenticated caller.
-	if authzr.Authorize(ctx, "usage.read_all", authz.Resource{Kind: "usage"}) == nil {
-		return nil, true, nil
+// scopeOf resolves the caller's read scope for kind ("usage" or "logs"). It
+// is the authorization for these endpoints: an empty scope reads nothing.
+func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catalog, kind string) (readScope, error) {
+	// A nil owner resolves to the global scope, so this passes only for a
+	// binding that reaches every row — which is exactly "unrestricted".
+	if authzr.Authorize(ctx, kind+".read", authz.Resource{Kind: kind}) == nil {
+		return readScope{unrestricted: true}, nil
 	}
 	s, ok := authzr.(authz.Scoper)
-	if !ok || keys == nil {
-		return nil, false, nil // cannot resolve ownership → scope to nothing
+	if !ok {
+		return readScope{}, nil // cannot resolve scope → scope to nothing
 	}
-	all, err := keys.List(ctx)
-	if err != nil {
-		return nil, false, huma.Error500InternalServerError(err.Error())
-	}
-	for _, k := range all {
-		if k.Spec.KeyHash != "" && s.Visible(ctx, "relay-key", k.Meta.Owner) {
-			hashes = append(hashes, k.Spec.KeyHash)
+	var sc readScope
+	if cat != nil {
+		for _, p := range cat.Current().AllProjects() {
+			if s.Visible(ctx, kind, "", meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}) {
+				sc.projectIDs = append(sc.projectIDs, p.Meta.ID)
+			}
 		}
 	}
-	return hashes, false, nil
+	// The caller's own traffic, named by the principal every event carries.
+	// Enumerating their keys instead would list every key row per read and
+	// hand the store a hash list that grows with the deployment — and a
+	// rotated key's old hash drops out of it the moment grace ends, which
+	// the principal id never does.
+	if a := actor.From(ctx); a != nil && a.UserID != "" {
+		sc.principalIDs = append(sc.principalIDs, a.UserID)
+		// Events written before the principal field existed name only the
+		// key hash. Reading the hashes off the caller's own key rows (the
+		// snapshot's principal index, no Postgres) keeps that history
+		// readable to the person who produced it.
+		if cat != nil {
+			sc.keyHashes = cat.Current().KeyHashesForUser(a.UserID)
+		}
+	}
+	return sc, nil
 }
 
-// scopeEventQuery narrows q to the given hashes, intersecting any caller-
-// supplied relay_key_hash filter. Returns false when the scoped caller can
-// match no events — the handler must short-circuit to an empty result,
-// because an empty hash filter downstream means "unfiltered".
-func scopeEventQuery(q *usagelog.EventQuery, hashes []string) bool {
-	if len(hashes) == 0 {
-		return false
-	}
-	if len(q.RelayKeyHash) == 0 {
-		q.RelayKeyHash = hashes
+// scopeEventQuery narrows q to sc. Returns false when the caller can match no
+// events — the handler must short-circuit to an empty result, because an
+// empty scope downstream means "unfiltered".
+func scopeEventQuery(q *usagelog.EventQuery, sc readScope) bool {
+	if sc.unrestricted {
 		return true
 	}
-	owned := make(map[string]struct{}, len(hashes))
-	for _, h := range hashes {
-		owned[h] = struct{}{}
+	if len(sc.projectIDs) == 0 && len(sc.principalIDs) == 0 && len(sc.keyHashes) == 0 {
+		return false
 	}
-	kept := q.RelayKeyHash[:0:0]
-	for _, h := range q.RelayKeyHash {
-		if _, ok := owned[h]; ok {
-			kept = append(kept, h)
-		}
-	}
-	q.RelayKeyHash = kept
-	return len(kept) > 0
+	q.ScopeProjectID, q.ScopePrincipalID = sc.projectIDs, sc.principalIDs
+	q.ScopeRelayKeyHash = sc.keyHashes
+	return true
 }
 
 // --- shared input filters ---
@@ -102,6 +114,9 @@ type UsageFilterInput struct {
 	RequestID    string   `query:"request_id" doc:"Exact match on a single request id (deep-link one event)."`
 	RelayKeyHash []string `query:"relay_key_hash" doc:"Match any of the given sha256 hashes of the inbound bearer."`
 	PolicyID     []string `query:"policy_id" doc:"Match any of the given Policy.metadata.id values."`
+	ProjectID    []string `query:"project_id" doc:"Match any of the given Project.metadata.id values."`
+	TeamID       []string `query:"team_id" doc:"Match any of the given Team.metadata.id values."`
+	PrincipalID  []string `query:"principal_id" doc:"Match any of the given principal ids (ServiceAccount.metadata.id or user id)."`
 	ModelID      []string `query:"model_id" doc:"Match any of the given Model.metadata.id values."`
 	HostID       []string `query:"host_id" doc:"Match any of the given Host.metadata.id values."`
 	Source       []string `query:"source" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
@@ -181,6 +196,9 @@ func (f UsageFilterInput) toEventQuery() (usagelog.EventQuery, error) {
 		RequestID:      f.RequestID,
 		RelayKeyHash:   f.RelayKeyHash,
 		PolicyID:       f.PolicyID,
+		ProjectID:      f.ProjectID,
+		TeamID:         f.TeamID,
+		PrincipalID:    f.PrincipalID,
 		ModelID:        f.ModelID,
 		HostID:         f.HostID,
 		Source:         f.Source,
@@ -255,6 +273,21 @@ func effectiveWindow(q usagelog.EventQuery) time.Duration {
 	return q.Since
 }
 
+// requestedWindow is the span the query asked for, used when the result
+// carries none of its own: readers derive from/to from the events they
+// saw, so an empty result would otherwise report a zero window.
+func requestedWindow(q usagelog.EventQuery) (time.Time, time.Time) {
+	to := q.To
+	if to.IsZero() {
+		to = time.Now()
+	}
+	from := q.From
+	if from.IsZero() {
+		from = to.Add(-q.Since)
+	}
+	return from, to
+}
+
 // --- /usage/events ---
 
 type usageEventsInput struct {
@@ -277,7 +310,7 @@ type usageEventsOutput struct {
 
 type usageSummaryInput struct {
 	UsageFilterInput
-	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model\" | \"host\" | \"policy\" | \"provider\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
+	GroupBy string `query:"group_by" doc:"\"source\" (default) | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\" (group by a caller tag's value)."`
 }
 
 type usageSummaryOutput struct {
@@ -289,7 +322,7 @@ type usageSummaryOutput struct {
 type usageTimeSeriesInput struct {
 	UsageFilterInput
 	Interval string `query:"interval" doc:"Bucket width (e.g. \"5m\", \"1h\", \"1d\"). Required."`
-	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series."`
+	GroupBy  string `query:"group_by" doc:"Optional dimension to split series by: \"source\" | \"model\" | \"host\" | \"policy\" | \"provider\" | \"project\" | \"team\" | \"principal\" (event-time slugs) | \"model_id\" | \"host_id\" | \"policy_id\" | \"project_id\" | \"team_id\" | \"principal_id\" | \"credential_id\" | \"relay_key_hash\" | \"host_key_id\" | \"finish_reason\" | \"error_kind\" | \"tags.<key>\". Empty returns a single series."`
 }
 
 type usageTimeSeriesOutput struct {
@@ -315,9 +348,6 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageEventsInput) (*usageEventsOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		q, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
@@ -330,11 +360,11 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			q.CursorTS, q.CursorID = ts, id
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
-		if !unrestricted && !scopeEventQuery(&q, hashes) {
+		if !scopeEventQuery(&q, sc) {
 			out := &usageEventsOutput{}
 			out.Body.Events = []usagelog.Event{}
 			return out, nil
@@ -373,19 +403,19 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageSummaryInput) (*usageSummaryOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		base, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
-		if !unrestricted && !scopeEventQuery(&base, hashes) {
-			return &usageSummaryOutput{Body: usagelog.SummaryResult{Rows: []usagelog.SummaryRow{}}}, nil
+		from, to := requestedWindow(base)
+		if !scopeEventQuery(&base, sc) {
+			return &usageSummaryOutput{Body: usagelog.SummaryResult{
+				Rows: []usagelog.SummaryRow{}, From: from, To: to,
+			}}, nil
 		}
 		q := usagelog.SummaryQuery{EventQuery: base, GroupBy: in.GroupBy}
 		res, err := d.UsageReader.Summary(ctx, q)
@@ -394,6 +424,12 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		if res.Rows == nil {
 			res.Rows = []usagelog.SummaryRow{}
+		}
+		if res.From.IsZero() {
+			res.From = from
+		}
+		if res.To.IsZero() {
+			res.To = to
 		}
 		return &usageSummaryOutput{Body: res}, nil
 	})
@@ -415,18 +451,15 @@ func registerUsage(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{400, 401, 500},
 	}, func(ctx context.Context, in *usageTimeSeriesInput) (*usageTimeSeriesOutput, error) {
-		if err := d.Authz.Authorize(ctx, "usage.read", authz.Resource{Kind: "usage"}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		base, err := in.toEventQuery()
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
-		hashes, unrestricted, err := relayKeyScope(ctx, d.Authz, relayKeysOf(d))
+		sc, err := scopeOf(ctx, d.Authz, d.Catalog, "usage")
 		if err != nil {
 			return nil, err
 		}
-		scopedOut := !unrestricted && !scopeEventQuery(&base, hashes)
+		scopedOut := !scopeEventQuery(&base, sc)
 		interval, err := parseInterval(in.Interval)
 		if err != nil {
 			return nil, err

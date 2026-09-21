@@ -32,7 +32,7 @@ func TestResolvePolicyless_NoAuthHostInjectsAnonKey(t *testing.T) {
 	}
 	snap := catalog.Build([]*provider.Provider{prov}, []*host.Host{h}, nil, nil, []*model.Model{m}, nil, nil, nil, []*binding.Binding{b})
 
-	plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{m}, &m.Spec.Snapshots[0], "")
+	plan, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{m}, &m.Spec.Snapshots[0], "", "")
 	if err != nil {
 		t.Fatalf("resolvePolicyless NoAuth host with no real keys: %v", err)
 	}

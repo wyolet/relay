@@ -15,11 +15,11 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
@@ -80,11 +80,11 @@ func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
 	}
 
 	st := newStack(t)
-	relayKey := st.seedHappyPathForModel(mockURL, "sk-mock", probe.Model)
+	key := st.seedHappyPathForModel(mockURL, "sk-mock", probe.Model)
 
 	relayReq, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions", bytes.NewReader(body))
 	relayReq.Header.Set("Content-Type", "application/json")
-	relayReq.Header.Set("Authorization", "Bearer "+relayKey)
+	relayReq.Header.Set("Authorization", "Bearer "+key)
 
 	relayResp, err := http.DefaultClient.Do(relayReq)
 	if err != nil {
@@ -180,12 +180,12 @@ func TestMockReplay_StreamingWithParallelTools(t *testing.T) {
 	}
 
 	st := newStack(t)
-	relayKey := st.seedHappyPathForModel(mockURL, "sk-mock", probe.Model)
+	key := st.seedHappyPathForModel(mockURL, "sk-mock", probe.Model)
 
 	// Same body through relay. Don't set Accept; let relay/mock negotiate.
 	relayReq, _ := http.NewRequest(http.MethodPost, st.inference.URL+"/v1/chat/completions", bytes.NewReader(body))
 	relayReq.Header.Set("Content-Type", "application/json")
-	relayReq.Header.Set("Authorization", "Bearer "+relayKey)
+	relayReq.Header.Set("Authorization", "Bearer "+key)
 
 	relayResp, err := http.DefaultClient.Do(relayReq)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestMockReplay_StreamingWithParallelTools(t *testing.T) {
 
 // seedHappyPathForModel mirrors seedHappyPath but lets the caller pin
 // the model name (snapshot Name) so it matches the upstream wire shape.
-// Returns the cleartext relay-key bearer.
+// Returns the cleartext key bearer.
 func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName string) string {
 	s.t.Helper()
 	ctx := context.Background()
@@ -287,14 +287,14 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, pol), "policy")
 
-	const relayKeyPlain = "rk_mock_smoke"
-	rk := &relaykey.RelayKey{
+	const keyPlain = "rk_mock_smoke"
+	rk := &key.Key{
 		Meta: meta.Metadata{ID: ids.New(), Name: "rk-mock", Owner: meta.Owner{Kind: meta.OwnerUser, ID: ids.New()}},
-		Spec: relaykey.Spec{PolicyID: pol.Meta.ID, KeyHash: sha256Hex(relayKeyPlain), Prefix: "rk_mock"},
+		Spec: key.Spec{PolicyID: pol.Meta.ID, KeyHash: sha256Hex(keyPlain), Prefix: "rk_mock"},
 	}
-	mustUpsert(s.t, s.stores.RelayKey.Upsert(ctx, rk), "relaykey")
+	mustUpsert(s.t, s.stores.Key.Upsert(ctx, rk), "relaykey")
 	if err := s.cat.Reload(ctx); err != nil {
 		s.t.Fatalf("Reload: %v", err)
 	}
-	return relayKeyPlain
+	return keyPlain
 }

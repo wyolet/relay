@@ -11,14 +11,16 @@ package catalog
 // each inner refSet is also copied, because the reconciler mutates them.
 func (s *Snapshot) clone() *Snapshot {
 	c := &Snapshot{
+		gen:             nextSnapshotGen(),
 		providersByID:   shallowMap(s.providersByID),
 		providersByName: shallowMap(s.providersByName),
 
 		hostsByID:   shallowMap(s.hostsByID),
 		hostsByName: shallowMap(s.hostsByName),
 
-		policiesByID:   shallowMap(s.policiesByID),
-		policiesByName: shallowMap(s.policiesByName),
+		policiesByID:         shallowMap(s.policiesByID),
+		policiesByName:       shallowMap(s.policiesByName),
+		disabledPoliciesByID: shallowMap(s.disabledPoliciesByID),
 
 		modelsByID:      shallowMap(s.modelsByID),
 		modelsByName:    copySliceMap(s.modelsByName),
@@ -32,12 +34,25 @@ func (s *Snapshot) clone() *Snapshot {
 		overlaysByTarget: shallowMap(s.overlaysByTarget),
 		modelTemplates:   shallowMap(s.modelTemplates),
 
-		hostKeysByID:     shallowMap(s.hostKeysByID),
+		hostKeysByID: shallowMap(s.hostKeysByID),
+		// Replaced wholesale by rebuildHostKeysByHost, never appended in
+		// place, so the slice headers can be shared with the source.
+		hostKeysByHost:   shallowMap(s.hostKeysByHost),
 		rateLimitsByID:   shallowMap(s.rateLimitsByID),
 		rateLimitsByName: shallowMap(s.rateLimitsByName),
 
-		relayKeysByID:   shallowMap(s.relayKeysByID),
-		relayKeysByHash: shallowMap(s.relayKeysByHash),
+		keysByID:   shallowMap(s.keysByID),
+		keysByHash: shallowMap(s.keysByHash),
+		// The index helpers replace a principal's slice wholesale, so the
+		// headers can be shared with the snapshot this clone came from.
+		keysByPrincipal: shallowMap(s.keysByPrincipal),
+		// Subject lists are replaced wholesale by the reindex helpers, never
+		// appended to, so the slices themselves can be shared.
+		subjectsByKey: shallowMap(s.subjectsByKey),
+		// Replaced wholesale by the index helpers, never appended in place.
+		hashesByUser: shallowMap(s.hashesByUser),
+
+		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
 
 		modelsByPolicy:        copySliceMap(s.modelsByPolicy),
 		hostKeysByPolicy:      copySliceMap(s.hostKeysByPolicy),
@@ -57,6 +72,37 @@ func (s *Snapshot) clone() *Snapshot {
 		refsByHostKey:   copyRefMap(s.refsByHostKey),
 		refsByRateLimit: copyRefMap(s.refsByRateLimit),
 		refsByPolicy:    copyRefMap(s.refsByPolicy),
+		refsByTeam:      copyRefMap(s.refsByTeam),
+		refsByProject:   copyRefMap(s.refsByProject),
+
+		refsByServiceAccount: copyRefMap(s.refsByServiceAccount),
+		refsByRole:           copyRefMap(s.refsByRole),
+
+		teamsByID:   shallowMap(s.teamsByID),
+		teamsByName: shallowMap(s.teamsByName),
+
+		projectsByID:   shallowMap(s.projectsByID),
+		projectsByName: shallowMap(s.projectsByName),
+		projectsByTeam: copySliceMap(s.projectsByTeam),
+
+		serviceAccountsByID:      shallowMap(s.serviceAccountsByID),
+		serviceAccountsByName:    shallowMap(s.serviceAccountsByName),
+		serviceAccountsByProject: copySliceMap(s.serviceAccountsByProject),
+
+		groupsByID:   shallowMap(s.groupsByID),
+		groupsByName: shallowMap(s.groupsByName),
+		groupsByUser: copySliceMap(s.groupsByUser),
+
+		rolesByID:   shallowMap(s.rolesByID),
+		rolesByName: shallowMap(s.rolesByName),
+
+		roleBindingsByID:      shallowMap(s.roleBindingsByID),
+		roleBindingsBySubject: copySliceMap(s.roleBindingsBySubject),
+
+		policyBindingsByID:      shallowMap(s.policyBindingsByID),
+		policyBindingsByProject: copySliceMap(s.policyBindingsByProject),
+
+		now: s.now,
 	}
 	return c
 }

@@ -11,16 +11,25 @@
 package catalog
 
 import (
+	"time"
+
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 )
 
 // Build assembles a Snapshot from entity slices using the same sanitize rules
@@ -30,48 +39,68 @@ func Build(
 	provs []*provider.Provider,
 	hosts []*host.Host,
 	pols []*policy.Policy,
-	rks []*relaykey.RelayKey,
+	rks []*key.Key,
 	models []*model.Model,
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 ) *Snapshot {
-	return build(provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil)
+	return build(nil, provs, hosts, pols, rks, models, keys, rls, pricings, bindings, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func build(
+	now func() time.Time,
 	provs []*provider.Provider,
 	hosts []*host.Host,
 	pols []*policy.Policy,
-	rks []*relaykey.RelayKey,
+	rks []*key.Key,
 	models []*model.Model,
 	keys []*hostkey.HostKey,
 	rls []*ratelimit.RateLimit,
 	pricings []*pricing.Pricing,
 	bindings []*binding.Binding,
 	ovls []*overlay.Overlay,
+	teams []*team.Team,
+	projects []*project.Project,
+	sas []*serviceaccount.ServiceAccount,
+	groups []*group.Group,
+	roles []*role.Role,
+	roleBindings []*rolebinding.RoleBinding,
+	policyBindings []*policybinding.PolicyBinding,
 ) *Snapshot {
-	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings))
+	s := newEmptySnapshot(len(provs), len(hosts), len(pols), len(rks), len(models), len(keys), len(rls), len(pricings), len(bindings), len(teams), len(projects), len(sas), len(groups), len(roles), len(roleBindings), len(policyBindings))
+	s.now = now
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
-	rlIDs := setFromIDs(rls, func(r *ratelimit.RateLimit) string { return r.Meta.ID })
+	// pols carries disabled rows too — addPolicies routes them aside (D77).
+	// A host's tier menu lists only the ones still switched on. A host key
+	// keeps its tier policy either way, so its lookup reads the full map: the
+	// key stays put across a disable and comes back with it, and the tier
+	// gate is what denies it meanwhile (D79).
 	polByID := make(map[string]*policy.Policy, len(pols))
-	polIDSet := make(idSet, len(pols))
+	enabledPolByID := make(map[string]*policy.Policy, len(pols))
 	for _, p := range pols {
 		polByID[p.Meta.ID] = p
-		polIDSet[p.Meta.ID] = struct{}{}
+		if p.IsEnabled() {
+			enabledPolByID[p.Meta.ID] = p
+		}
 	}
 
 	s.addProviders(provs)
-	s.addRateLimits(rls)
-	s.addHosts(hosts, polByID)
+	// Tenancy first: every kind below can be project-owned and sanitizes
+	// against the project map.
+	s.addTeams(teams)
+	s.addProjects(projects, snapIDs(s.teamsByID))
+	s.addRateLimits(rls, snapIDs(s.projectsByID))
+	s.addHosts(hosts, enabledPolByID)
 	s.addModels(models, providerIDs)
 	// Overlays swap templates for effective rows BEFORE indexing, so
 	// aliases/refs below index the merged spec.
 	s.applyOverlays(ovls)
-	s.addHostKeys(keys, hostIDs, polByID)
+	s.addHostKeys(keys, hostIDs, snapIDs(s.projectsByID), func(id string) (*policy.Policy, bool) { p, ok := polByID[id]; return p, ok })
+	s.rebuildHostKeysByHost()
 	// Droppable kinds (models: missing provider; hostkeys: missing host /
 	// tier policy) are in place now, so dependents sanitize against the
 	// post-drop snapshot membership — the input enabled-id sets would keep
@@ -79,8 +108,16 @@ func build(
 	// cascade's fixpoint.
 	memberModelIDs := snapIDs(s.modelsByID)
 	memberKeyIDs := snapIDs(s.hostKeysByID)
-	s.addPolicies(pols, memberModelIDs, memberKeyIDs, rlIDs)
-	s.addRelayKeys(rks, polIDSet)
+	s.addPolicies(pols, memberModelIDs, memberKeyIDs, snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
+	s.addGroups(groups)
+	s.addRoles(roles)
+	// Service accounts sanitize against the policies just indexed; keys
+	// then sanitize against the accounts.
+	s.addServiceAccounts(sas, snapIDs(s.projectsByID), s.policyResolvable)
+	// Against snapshot membership, not the input ids: addPolicies may have
+	// dropped a policy whose project is missing, and a key naming it must go
+	// too — the incremental cascade reaches that fixpoint.
+	s.addKeys(rks, s.policyResolvable, snapIDs(s.serviceAccountsByID))
 	s.computePolicyReverseJoins()
 	s.addPricings(pricings, hostIDs, memberModelIDs)
 	s.addBindings(bindings, memberModelIDs, hostIDs)
@@ -90,18 +127,24 @@ func build(
 		s.indexModelSnapshots(m)
 	}
 	s.rebuildPolicyAllowSets()
+	// Bindings last: they sanitize against the roles, tenancy rows and
+	// policies already indexed above.
+	s.addRoleBindings(roleBindings, snapIDs(s.rolesByID), snapIDs(s.teamsByID), snapIDs(s.projectsByID))
+	s.addPolicyBindings(policyBindings, snapIDs(s.projectsByID), s.policyResolvable)
 
 	return s
 }
 
-func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings int) *Snapshot {
+func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricings, nBindings, nTeams, nProjects, nSAs, nGroups, nRoles, nRoleBindings, nPolicyBindings int) *Snapshot {
 	return &Snapshot{
+		gen:                   nextSnapshotGen(),
 		providersByID:         make(map[string]*provider.Provider, nProvs),
 		providersByName:       make(map[string]*provider.Provider, nProvs),
 		hostsByID:             make(map[string]*host.Host, nHosts),
 		hostsByName:           make(map[string]*host.Host, nHosts),
 		policiesByID:          make(map[string]*policy.Policy, nPols),
 		policiesByName:        make(map[string]*policy.Policy, nPols),
+		disabledPoliciesByID:  map[string]*policy.Policy{},
 		modelsByID:            make(map[string]*model.Model, nModels),
 		modelsByName:          map[string][]*model.Model{},
 		snapshotsByName:       map[string]snapshotRef{},
@@ -110,10 +153,15 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		overlaysByTarget:      map[string]*overlay.Overlay{},
 		modelTemplates:        map[string]*model.Model{},
 		hostKeysByID:          make(map[string]*hostkey.HostKey, nKeys),
+		hostKeysByHost:        map[string][]*hostkey.HostKey{},
 		rateLimitsByID:        make(map[string]*ratelimit.RateLimit, nRLs),
 		rateLimitsByName:      make(map[string]*ratelimit.RateLimit, nRLs),
-		relayKeysByID:         make(map[string]*relaykey.RelayKey, nRks),
-		relayKeysByHash:       make(map[string]*relaykey.RelayKey, nRks),
+		keysByID:              make(map[string]*key.Key, nRks),
+		keysByHash:            make(map[string]*key.Key, nRks),
+		keysByPrincipal:       make(map[string][]*key.Key, nRks),
+		subjectsByKey:         make(map[string][]string, nRks),
+		hashesByUser:          map[string][]string{},
+		tokenVersionByUser:    map[string]int{},
 		modelsByPolicy:        map[string][]*model.Model{},
 		hostKeysByPolicy:      map[string][]*hostkey.HostKey{},
 		rateLimitByPolicy:     map[string]*ratelimit.RateLimit{},
@@ -129,5 +177,31 @@ func newEmptySnapshot(nProvs, nHosts, nPols, nRks, nModels, nKeys, nRLs, nPricin
 		refsByHostKey:         map[string]refSet{},
 		refsByRateLimit:       map[string]refSet{},
 		refsByPolicy:          map[string]refSet{},
+		refsByTeam:            map[string]refSet{},
+		refsByProject:         map[string]refSet{},
+		teamsByID:             make(map[string]*team.Team, nTeams),
+		teamsByName:           make(map[string]*team.Team, nTeams),
+		projectsByID:          make(map[string]*project.Project, nProjects),
+		projectsByName:        make(map[string]*project.Project, nProjects),
+		projectsByTeam:        map[string][]*project.Project{},
+		refsByServiceAccount:  map[string]refSet{},
+		refsByRole:            map[string]refSet{},
+
+		serviceAccountsByID:      make(map[string]*serviceaccount.ServiceAccount, nSAs),
+		serviceAccountsByName:    make(map[string]*serviceaccount.ServiceAccount, nSAs),
+		serviceAccountsByProject: map[string][]*serviceaccount.ServiceAccount{},
+
+		groupsByID:   make(map[string]*group.Group, nGroups),
+		groupsByName: make(map[string]*group.Group, nGroups),
+		groupsByUser: map[string][]string{},
+
+		rolesByID:   make(map[string]*role.Role, nRoles),
+		rolesByName: make(map[string]*role.Role, nRoles),
+
+		roleBindingsByID:      make(map[string]*rolebinding.RoleBinding, nRoleBindings),
+		roleBindingsBySubject: map[string][]*rolebinding.RoleBinding{},
+
+		policyBindingsByID:      make(map[string]*policybinding.PolicyBinding, nPolicyBindings),
+		policyBindingsByProject: map[string][]*policybinding.PolicyBinding{},
 	}
 }

@@ -11,6 +11,7 @@ them straight is the key to understanding the whole security model.
 | Your app | Inference plane (`/v1/*`) | **Relay key** — `Authorization: Bearer <relay-key>` |
 | A browser / the dashboard | Control plane | **Session cookie** (`relay_session`) |
 | An operator or CI | Control plane | **Admin bearer** — `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
+| The `relay` CLI | Control plane | The admin bearer for `relay apply` / `relay export`; a password login for `relay token mint`, which needs a user session |
 
 ## Relay keys (your apps)
 
@@ -26,6 +27,41 @@ can scope it, rate-limit it, and revoke it on its own.
 
 Each relay key points at a **policy**, which decides what it can do — see
 [the mental model](/introduction#the-mental-model).
+
+## Inference tokens
+
+`/v1/*` also accepts a relay-signed **token** in the same
+`Authorization: Bearer` header, minted for a specific project by a session
+holder with `tokens.mint` (`POST /api/auth/token`). Relay tells a key from a
+token by shape — a token looks like a JWT (`ey…`, two `.` separators); a key
+never does — so the same header works for either.
+
+A token names the user it was minted for and the project it's scoped to; it
+carries no secret beyond its own signature, so leaking one exposes only what
+that user's bindings already grant inside that project. See
+[the GitOps token example](/concepts/gitops#minting-a-token) for how to mint
+one.
+
+### Revoking a token
+
+Three ways to invalidate a token, from narrowest to widest:
+
+- `POST /api/auth/token/revoke` — the caller revokes the token it just
+  presented (self-service, no session needed).
+- `DELETE /api/auth/token/{jti}` — revoke one token by its id. Its mint is
+  read from the audit log, and the caller needs `tokens.revoke` at the
+  token's project (the user who minted it always may). Only the fallback for
+  a mint that is no longer in the log — passing `team_id` and `exp` — requires
+  an admin.
+- `POST /api/auth/token/revoke-all` — the caller bumps their own
+  `token_version`, invalidating every token they hold at once. A caller with
+  `users.update` at the global scope can do the same for another user with
+  `POST /api/users/by-id/{id}/revoke-tokens`, and disabling an account with
+  `PUT /api/users/by-id/{id}` bumps it too.
+
+Rejections all answer `401`. Both revocation paths — a denylisted `jti` and a
+token behind the user's `token_version` — carry the code `token_revoked`; an
+expired token carries `unauthenticated` with the message `token expired`.
 
 ## Host keys (your provider credentials)
 
@@ -73,6 +109,15 @@ The admin surface (dashboard + CRUD + ops endpoints) accepts either:
 - the **admin bearer**, `RELAY_ADMIN_TOKEN` — a break-glass credential for
   operators and CI that coexists with sessions.
 
+The CLI uses both: `relay apply` and `relay export` send the admin bearer
+(`$RELAY_ADMIN_TOKEN` or `--token`), while `relay token mint` logs in with a
+password and carries the session it gets back, because a token names the user
+it was minted for and the admin bearer names no user.
+
+An account is disabled with `PUT /api/users/by-id/{id}` (`{"disabled": true}`).
+It then fails password login and every inference token it holds stops
+verifying; an open session is not destroyed.
+
 Run the control plane on its own port (`RELAY_CONTROL_PORT`) and keep it off
 the public internet; expose only the inference plane.
 
@@ -84,10 +129,125 @@ log a deprecation warning.
 
 ## Authorization
 
-Every authenticated control-plane caller has full access. Access is controlled
-at the network boundary you run — keep the control plane on its own port and
-off the public internet. Granular, role-based permissions arrive with the
-multi-user version.
+`RELAY_AUTHZ` picks how the control plane authorizes a caller:
+
+| Value | Behaviour |
+| --- | --- |
+| `single` (default) | Every authenticated caller may perform every action. Access is controlled at your network boundary. |
+| `rbac` | Each action is checked against the caller's role bindings. Anything not granted is denied. |
+
+The admin bearer (`RELAY_ADMIN_TOKEN`) and any user carrying the `admin` role
+bypass the check in both modes — that is the break-glass path, and it is why a
+fresh `rbac` deployment is never locked out.
+
+<Note>
+`RELAY_MULTI_USER` is deprecated. If `RELAY_AUTHZ` is unset, a truthy
+`RELAY_MULTI_USER` is still read as `RELAY_AUTHZ=rbac` (with a startup
+warning) so an existing multi-user deployment doesn't silently drop to
+`single`. Set `RELAY_AUTHZ` explicitly and drop `RELAY_MULTI_USER`.
+</Note>
+
+### The model
+
+Four pieces, and one rule that connects them:
+
+- A **Role** is a set of `(kinds, verbs)` rules. It carries no scope.
+- A **RoleBinding** grants one Role to subjects — users, groups, or service
+  accounts — at one **scope**: a project, a team, or global (`{kind: system}`).
+- Every resource resolves to a **scope chain**: a project-owned row lives in
+  `[project, team, global]`, a team-owned row in `[team, global]`, and catalog
+  or personal rows in `[global]`.
+- A binding at scope *S* grants its Role on every resource whose chain
+  contains *S*. A team binding therefore covers every project in that team,
+  current and future; a project binding never reaches a sibling project.
+
+Two rules need no binding at all:
+
+- **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every
+  verb on it.
+- **Catalog reads.** Providers, hosts, models, host bindings, pricings, and
+  system rate limits are readable by any authenticated caller. Mutating them
+  needs a binding (and still passes the governance settings).
+
+A row whose project or team is disabled or deleted collapses to `[global]`, so
+only an admin can reach it to repair it.
+
+### Built-in roles
+
+Seeded as system rows on boot; bind them, don't edit them.
+
+| Role | Bind at | Grants |
+| --- | --- | --- |
+| `admin` | global | every verb on every kind |
+| `auditor` | global | read audit, usage, and request logs everywhere |
+| `catalog-editor` | global | mutate the shared catalog layer |
+| `team-admin` | team | everything scoped under the team, plus its projects, bindings, and `apply` |
+| `project-admin` | project | everything inside one project |
+| `developer` | project | read the project's configuration; own its keys and service accounts; mint tokens |
+| `viewer` | project or team | read-only, plus usage |
+
+### Writing bindings
+
+Roles and bindings are ordinary manifests — `POST /api/apply` them from a repo
+or create them through the API.
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: RoleBinding
+metadata:
+  name: platform-admins
+  owner: {kind: team, name: platform}   # = scope target; system for global bindings
+spec:
+  role: team-admin
+  scope:
+    kind: team                 # system (= global) | team | project
+    name: platform             # omitted for system
+  subjects:
+    - {kind: group, name: platform-eng}          # IdP or local group
+    - {kind: user, name: alice}
+    - {kind: serviceaccount, name: ci-deployer}  # SA slug; project inferred
+```
+
+A custom Role, if the built-ins don't fit (licensed feature):
+
+```yaml
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Role
+metadata:
+  name: developer
+  owner: {kind: system}        # system = built-in; user = custom
+spec:
+  rules:
+    - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits]
+      verbs: [get, list]
+    - kinds: [keys, service-accounts]
+      verbs: [get, list, create, update, delete, rotate]
+    - kinds: [tokens]
+      verbs: [mint]
+    - kinds: [usage, logs]
+      verbs: [read]
+```
+
+`kinds` are the API plurals (`providers`, `keys`, `policies`, …) plus `*`;
+`verbs` are `get list create update delete rotate health attach detach read
+mint reload generate snapshot apply` plus `*`.
+
+### Groups
+
+A binding names a group by name. The name is satisfied by a local `Group` row
+(for deployments without an identity provider) **and** by a group claim your
+IdP asserts at login — the two union, so you can start local and move to SSO
+without rewriting bindings. Three virtual groups always exist and never need a
+row: `system:authenticated`, `system:serviceaccounts`, and
+`system:serviceaccounts:<project>`.
+
+### Reads
+
+List endpoints return only the rows the caller could `get`, and a row they may
+not see answers `404`, not `403` — existence is not leaked. Usage and request
+logs narrow the same way: a caller with a global binding reads the whole
+stream, everyone else reads the events of the projects they can see plus the
+events their own keys produced.
 
 <Note>
 Run the control plane on its own port behind your network controls, and use

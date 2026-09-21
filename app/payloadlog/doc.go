@@ -15,7 +15,7 @@
 //     the bounded, drop-on-full Emitter → Sink.
 //
 // Capture is OFF by default and gated per request via lc.PayloadLog, set at
-// the inference entry from the routing Plan (Policy or RelayKey opt-in).
+// the inference entry from the routing Plan (Policy or Key opt-in).
 // Bodies are stored raw; the only transform is a configurable size cap that
 // truncates oversized bodies and flags the Record. Operator-internal: there
 // is no read endpoint — payloads are an offline artifact, joinable to usage

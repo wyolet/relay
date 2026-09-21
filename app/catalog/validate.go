@@ -6,11 +6,11 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 )
 
 // validateCross runs the few cross-entity rules that *must* hard-fail.
@@ -28,7 +28,7 @@ func validateCross(
 	hostIDs map[string]struct{},
 	_ []*host.Host,
 	_ []*policy.Policy,
-	_ []*relaykey.RelayKey,
+	_ []*key.Key,
 	enabledModels []*model.Model,
 	_ []*hostkey.HostKey,
 	_ []*ratelimit.RateLimit,

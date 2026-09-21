@@ -80,15 +80,15 @@ type Service struct {
 	// 404 on a policy the caller may not see, and host-key / policy rows
 	// inside other projections are dropped. Nil leaves every row visible
 	// (the single-user default). kind is the singular resource kind
-	// ("policy", "host-key").
-	Visible func(kind string, owner meta.Owner) bool
+	// ("policy", "host-key"); id is that row's metadata.id.
+	Visible func(kind, id string, owner meta.Owner) bool
 }
 
-func (s *Service) visible(kind string, owner meta.Owner) bool {
+func (s *Service) visible(kind, id string, owner meta.Owner) bool {
 	if s.Visible == nil {
 		return true
 	}
-	return s.Visible(kind, owner)
+	return s.Visible(kind, id, owner)
 }
 
 // ── view shapes ─────────────────────────────────────────────────────────────
@@ -247,14 +247,14 @@ func (s *Service) ModelPolicies(ctx context.Context, ref string) (ModelRef, []Mo
 
 	rows := []ModelPolicyRow{}
 	for _, p := range idx.policies {
-		if !s.visible("policy", p.Meta.Owner) {
+		if !s.visible("policy", p.Meta.ID, p.Meta.Owner) {
 			continue
 		}
 		hostSlug, granted, _ := idx.policyGrantsModel(p, m, provSlug, modelHosts)
 		if !granted {
 			continue
 		}
-		rlID := p.SelectRateLimitID(provSlug, m.Meta.Name, hostSlug)
+		rlID, _ := p.SelectRateLimitID(provSlug, m.Meta.Name, hostSlug)
 		rows = append(rows, ModelPolicyRow{
 			ID:     p.Meta.ID,
 			Name:   p.Meta.Name,

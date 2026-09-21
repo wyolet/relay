@@ -12,18 +12,29 @@
 package catalog
 
 import (
+	"slices"
 	"sort"
+	"sync/atomic"
+	"time"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
@@ -31,6 +42,9 @@ import (
 // construction and never written after — read accessors are safe to call
 // from any goroutine.
 type Snapshot struct {
+	// gen names this view; see nextSnapshotGen.
+	gen uint64
+
 	providersByID   map[string]*provider.Provider
 	providersByName map[string]*provider.Provider
 
@@ -39,6 +53,12 @@ type Snapshot struct {
 
 	policiesByID   map[string]*policy.Policy
 	policiesByName map[string]*policy.Policy
+	// disabledPoliciesByID holds the rows an operator switched off. They are
+	// deliberately out of every index above — nothing routes through them —
+	// but a key, service account or policy binding that names one is KEPT,
+	// and resolution hands the row back so the request answers 403
+	// policy_disabled instead of falling through to a broader grant.
+	disabledPoliciesByID map[string]*policy.Policy
 
 	modelsByID map[string]*model.Model
 	// modelsByName is multivalued: an alias may legitimately point at more
@@ -89,12 +109,35 @@ type Snapshot struct {
 	modelTemplates map[string]*model.Model
 
 	hostKeysByID map[string]*hostkey.HostKey
+	// hostKeysByHost is the per-host pool, sorted by slug, materialized at
+	// build/reconcile so the request path takes a slice header instead of
+	// scanning and sorting every key in the deployment.
+	hostKeysByHost map[string][]*hostkey.HostKey
 
 	rateLimitsByID   map[string]*ratelimit.RateLimit
 	rateLimitsByName map[string]*ratelimit.RateLimit
 
-	relayKeysByID   map[string]*relaykey.RelayKey
-	relayKeysByHash map[string]*relaykey.RelayKey
+	keysByID map[string]*key.Key
+	// keysByHash indexes Spec.KeyHash and, while the key is in its
+	// rotation grace window, Spec.PreviousKeyHash.
+	keysByHash map[string]*key.Key
+	// keysByPrincipal groups keys by "<principal kind>:<id>", so a group or
+	// service-account write reindexes that principal's keys instead of
+	// walking every key in the deployment.
+	keysByPrincipal map[string][]*key.Key
+	// subjectsByKey holds each key's precomputed subject list (identity +
+	// groups + system groups), so the request path copies a slice header
+	// instead of rebuilding it. Recomputed when a group, service account or
+	// project write can change it.
+	subjectsByKey map[string][]string
+	// hashesByUser holds every hash a user's own keys authenticate under,
+	// disabled keys included: the usage read scope answers "the rows my own
+	// keys produced", and disabling a key does not un-own its past traffic.
+	hashesByUser map[string][]string
+
+	// tokenVersionByUser mirrors users.token_version — the only user state
+	// the snapshot carries, so token verification stays a map read.
+	tokenVersionByUser map[string]int
 
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
@@ -123,13 +166,65 @@ type Snapshot struct {
 	// reference this row. Used by the COW reconciler to enumerate dependents
 	// when a parent is evicted. Allocated even for empty snapshots so
 	// registerRefs has somewhere to write.
-	refsByProvider  map[string]refSet
-	refsByHost      map[string]refSet
-	refsByModel     map[string]refSet
-	refsByHostKey   map[string]refSet
-	refsByRateLimit map[string]refSet
-	refsByPolicy    map[string]refSet
+	refsByProvider       map[string]refSet
+	refsByHost           map[string]refSet
+	refsByModel          map[string]refSet
+	refsByHostKey        map[string]refSet
+	refsByRateLimit      map[string]refSet
+	refsByPolicy         map[string]refSet
+	refsByTeam           map[string]refSet
+	refsByProject        map[string]refSet
+	refsByServiceAccount map[string]refSet
+	refsByRole           map[string]refSet
+
+	teamsByID   map[string]*team.Team
+	teamsByName map[string]*team.Team
+
+	projectsByID   map[string]*project.Project
+	projectsByName map[string]*project.Project
+	// projectsByTeam groups a team's projects (sorted by name).
+	projectsByTeam map[string][]*project.Project
+
+	serviceAccountsByID   map[string]*serviceaccount.ServiceAccount
+	serviceAccountsByName map[string]*serviceaccount.ServiceAccount
+	// serviceAccountsByProject groups a project's accounts (sorted by name).
+	serviceAccountsByProject map[string][]*serviceaccount.ServiceAccount
+
+	groupsByID   map[string]*group.Group
+	groupsByName map[string]*group.Group
+	// groupsByUser maps a user id to the names of the groups holding them,
+	// sorted — the form the subject list needs.
+	groupsByUser map[string][]string
+
+	rolesByID   map[string]*role.Role
+	rolesByName map[string]*role.Role
+
+	roleBindingsByID map[string]*rolebinding.RoleBinding
+	// roleBindingsBySubject keys on the subject string ("user:<id>",
+	// "group:<name>", "serviceaccount:<id>"), sorted by binding name.
+	roleBindingsBySubject map[string][]*rolebinding.RoleBinding
+
+	policyBindingsByID map[string]*policybinding.PolicyBinding
+	// policyBindingsByProject holds a project's bindings, sorted by
+	// effective priority then name — the order resolution reads them in.
+	policyBindingsByProject map[string][]*policybinding.PolicyBinding
+
+	// now is the clock the time-dependent indices (a rotated key's grace
+	// window) read. Nil means wall clock; a test installs its own so a
+	// grace transition is reachable without sleeping.
+	now func() time.Time
 }
+
+// clock returns the snapshot's time source, defaulting to the wall clock.
+func (s *Snapshot) clock() time.Time {
+	if s == nil || s.now == nil {
+		return time.Now()
+	}
+	return s.now()
+}
+
+// global is the outermost scope every chain ends in.
+var global = meta.Owner{Kind: meta.OwnerSystem}
 
 // snapshotRef links a Snapshot back to its owning Model. Stored in the
 // snapshot-name index so request-time lookup can return both in one shot.
@@ -273,6 +368,15 @@ func (s *Snapshot) Policy(id string) (*policy.Policy, bool) {
 	return p, ok
 }
 
+// DisabledPolicy returns the Policy with this id when it is present but
+// switched off. Resolution calls it after Policy misses, so a credential
+// pointing at a disabled policy answers 403 policy_disabled rather than
+// silently resolving to something broader.
+func (s *Snapshot) DisabledPolicy(id string) (*policy.Policy, bool) {
+	p, ok := s.disabledPoliciesByID[id]
+	return p, ok
+}
+
 // PolicyByName returns the enabled Policy with this slug, or false.
 func (s *Snapshot) PolicyByName(name string) (*policy.Policy, bool) {
 	p, ok := s.policiesByName[name]
@@ -336,7 +440,7 @@ func (s *Snapshot) HostKey(id string) (*hostkey.HostKey, bool) {
 	return k, ok
 }
 
-// AllProviders / AllPolicies / AllHostKeys / AllRelayKeys / AllRateLimits
+// AllProviders / AllPolicies / AllHostKeys / AllKeys / AllRateLimits
 // / AllPricings return the full enabled set in stable slug order. Used
 // by the debug-snapshot endpoint; never on the hot path.
 
@@ -370,10 +474,10 @@ func (s *Snapshot) AllHostKeys() []*hostkey.HostKey {
 	return out
 }
 
-// AllRelayKeys returns every RelayKey in the snapshot, sorted by slug.
-func (s *Snapshot) AllRelayKeys() []*relaykey.RelayKey {
-	out := make([]*relaykey.RelayKey, 0, len(s.relayKeysByID))
-	for _, k := range s.relayKeysByID {
+// AllKeys returns every Key in the snapshot, sorted by slug.
+func (s *Snapshot) AllKeys() []*key.Key {
+	out := make([]*key.Key, 0, len(s.keysByID))
+	for _, k := range s.keysByID {
 		out = append(out, k)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
@@ -403,20 +507,27 @@ func (s *Snapshot) AllPricings() []*pricing.Pricing {
 // HostKeysForHost returns every enabled HostKey whose Spec.HostID
 // matches hostID. Order is by hostkey slug — stable across snapshots.
 // Used by routing's policy-less flow (settings.Inference.AllowMissingPolicy)
-// where the policy doesn't narrow the pool.
+// where the policy doesn't narrow the pool. The returned slice is the
+// snapshot's own: callers must not mutate or append to it.
 func (s *Snapshot) HostKeysForHost(hostID string) []*hostkey.HostKey {
-	out := make([]*hostkey.HostKey, 0)
+	return s.hostKeysByHost[hostID]
+}
+
+// rebuildHostKeysByHost recomputes the per-host pool from hostKeysByID.
+// Cheap enough to run whole on any host-key write — the map is small and
+// this runs off the request path.
+func (s *Snapshot) rebuildHostKeysByHost() {
+	byHost := make(map[string][]*hostkey.HostKey, len(s.hostKeysByHost))
 	for _, k := range s.hostKeysByID {
-		if k.Spec.HostID != hostID {
-			continue
-		}
 		if !k.IsEnabled() {
 			continue
 		}
-		out = append(out, k)
+		byHost[k.Spec.HostID] = append(byHost[k.Spec.HostID], k)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
-	return out
+	for _, list := range byHost {
+		sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	}
+	s.hostKeysByHost = byHost
 }
 
 // RateLimit returns the enabled RateLimit with this id, or false.
@@ -444,17 +555,101 @@ func (s *Snapshot) Hosts() []*host.Host {
 	return out
 }
 
-// RelayKey returns the enabled RelayKey with this id, or false.
-func (s *Snapshot) RelayKey(id string) (*relaykey.RelayKey, bool) {
-	k, ok := s.relayKeysByID[id]
+// Key returns the enabled Key with this id, or false.
+func (s *Snapshot) Key(id string) (*key.Key, bool) {
+	k, ok := s.keysByID[id]
 	return k, ok
 }
 
-// RelayKeyByHash is the hot-path inbound-auth lookup. Returns the RelayKey
-// whose Spec.KeyHash matches. Caller checks IsActive.
-func (s *Snapshot) RelayKeyByHash(hash string) (*relaykey.RelayKey, bool) {
-	k, ok := s.relayKeysByHash[hash]
-	return k, ok
+// KeyByHash is the hot-path inbound-auth lookup. matchedPrevious is true
+// when the hash matched the pre-rotation credential, which the caller must
+// then check against the grace window. Caller checks IsActive.
+func (s *Snapshot) KeyByHash(hash string) (k *key.Key, matchedPrevious bool) {
+	k, ok := s.keysByHash[hash]
+	if !ok {
+		return nil, false
+	}
+	return k, k.Spec.KeyHash != hash
+}
+
+// snapshotGen numbers every Snapshot ever built or cloned, so a consumer can
+// tell one apart from its successor without holding a pointer to it (and
+// keeping the whole catalog alive). Starts at 1: the zero value names the
+// pre-boot empty snapshot.
+var snapshotGen atomic.Uint64
+
+func nextSnapshotGen() uint64 { return snapshotGen.Add(1) }
+
+// Generation identifies this snapshot. Two snapshots are the same view if
+// and only if their generations match.
+func (s *Snapshot) Generation() uint64 { return s.gen }
+
+// KeyHashesForUser returns the hashes every Key of this user authenticates
+// under, the pre-rotation one included. Read from the principal index, so it
+// costs the user's own keys rather than a walk of the deployment's.
+func (s *Snapshot) KeyHashesForUser(userID string) []string {
+	return s.hashesByUser[userID]
+}
+
+// indexUserKeyHashes records the hashes k authenticates under against its
+// user principal. Called for every key row, enabled or not, so a disabled
+// key stays inside its owner's read scope even though it is in no routing
+// index. A hard delete of a disabled key leaves its entry behind until the
+// next full reload rebuilds the map.
+func (s *Snapshot) indexUserKeyHashes(k *key.Key) {
+	if k.Spec.Principal.Kind != key.PrincipalUser || k.Spec.Principal.ID == "" {
+		return
+	}
+	have := s.hashesByUser[k.Spec.Principal.ID]
+	next := have
+	for _, h := range []string{k.Spec.KeyHash, k.Spec.PreviousKeyHash} {
+		if h == "" || slices.Contains(next, h) {
+			continue
+		}
+		if len(next) == len(have) {
+			// Copy on first append: the header is shared with the snapshot
+			// this one was cloned from.
+			next = append(append(make([]string, 0, len(have)+2), have...), h)
+			continue
+		}
+		next = append(next, h)
+	}
+	if len(next) != len(have) {
+		s.hashesByUser[k.Spec.Principal.ID] = next
+	}
+}
+
+// dropUserKeyHashes removes the hashes k held from its owner's list.
+func (s *Snapshot) dropUserKeyHashes(k *key.Key) {
+	if k.Spec.Principal.Kind != key.PrincipalUser || k.Spec.Principal.ID == "" {
+		return
+	}
+	have := s.hashesByUser[k.Spec.Principal.ID]
+	out := make([]string, 0, len(have))
+	for _, h := range have {
+		if h != k.Spec.KeyHash && h != k.Spec.PreviousKeyHash {
+			out = append(out, h)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.hashesByUser, k.Spec.Principal.ID)
+		return
+	}
+	s.hashesByUser[k.Spec.Principal.ID] = out
+}
+
+// SubjectsForKey returns the precomputed subjects the key's principal acts
+// under. The returned slice must not be mutated.
+func (s *Snapshot) SubjectsForKey(keyID string) []string {
+	return s.subjectsByKey[keyID]
+}
+
+// TokenVersion returns the user's current token version. Absent (ok=false)
+// means the user is unknown to this snapshot, which invalidates any token
+// claiming to be theirs.
+func (s *Snapshot) TokenVersion(userID string) (int, bool) {
+	v, ok := s.tokenVersionByUser[userID]
+	return v, ok
 }
 
 // ModelsInPolicy returns the Models attached to this Policy in declaration
@@ -527,6 +722,228 @@ func (s *Snapshot) BindingsForModel(modelID string) []*binding.Binding {
 func (s *Snapshot) AllBindings() []*binding.Binding {
 	out := make([]*binding.Binding, 0, len(s.bindingsByID))
 	for _, b := range s.bindingsByID {
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// Team returns the enabled Team with this id, or false.
+func (s *Snapshot) Team(id string) (*team.Team, bool) {
+	t, ok := s.teamsByID[id]
+	return t, ok
+}
+
+// TeamByName returns the enabled Team with this slug, or false.
+func (s *Snapshot) TeamByName(name string) (*team.Team, bool) {
+	t, ok := s.teamsByName[name]
+	return t, ok
+}
+
+// Project returns the enabled Project with this id, or false.
+func (s *Snapshot) Project(id string) (*project.Project, bool) {
+	p, ok := s.projectsByID[id]
+	return p, ok
+}
+
+// ProjectByName returns the enabled Project with this slug, or false.
+func (s *Snapshot) ProjectByName(name string) (*project.Project, bool) {
+	p, ok := s.projectsByName[name]
+	return p, ok
+}
+
+// ProjectsInTeam returns the team's projects, sorted by project name. The
+// returned slice must not be mutated.
+func (s *Snapshot) ProjectsInTeam(teamID string) []*project.Project {
+	return s.projectsByTeam[teamID]
+}
+
+// AllTeams returns every Team in the snapshot, sorted by slug.
+func (s *Snapshot) AllTeams() []*team.Team {
+	out := make([]*team.Team, 0, len(s.teamsByID))
+	for _, t := range s.teamsByID {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllProjects returns every Project in the snapshot, sorted by slug.
+func (s *Snapshot) AllProjects() []*project.Project {
+	out := make([]*project.Project, 0, len(s.projectsByID))
+	for _, p := range s.projectsByID {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// ScopeChain returns the scopes a row with this owner lives in, most
+// specific first. A nil owner is a global resource (settings, list calls).
+// An owner whose project or team is absent collapses to the global scope,
+// which is what lets an admin still reach the row.
+func (s *Snapshot) ScopeChain(o *meta.Owner) []meta.Owner {
+	if o == nil {
+		return []meta.Owner{global}
+	}
+	switch o.Kind {
+	case meta.OwnerProject:
+		if p, ok := s.projectsByID[o.ID]; ok {
+			return []meta.Owner{*o, {Kind: meta.OwnerTeam, ID: p.Spec.TeamID}, global}
+		}
+	case meta.OwnerTeam:
+		if _, ok := s.teamsByID[o.ID]; ok {
+			return []meta.Owner{*o, global}
+		}
+	}
+	return []meta.Owner{global}
+}
+
+// ScopeChainFor is ScopeChain for a row that is itself a scope. A Team and
+// a Project define the scope they live in; their owner does not name it (a
+// Team is system-owned, a Project team-owned), so a binding at the scope a
+// row defines would otherwise never reach that row. Every other kind
+// delegates to ScopeChain.
+func (s *Snapshot) ScopeChainFor(kind, id string, o *meta.Owner) []meta.Owner {
+	if id == "" {
+		return s.ScopeChain(o)
+	}
+	switch kind {
+	case "team":
+		return []meta.Owner{{Kind: meta.OwnerTeam, ID: id}, global}
+	case "project":
+		if p, ok := s.projectsByID[id]; ok {
+			return []meta.Owner{
+				{Kind: meta.OwnerProject, ID: id},
+				{Kind: meta.OwnerTeam, ID: p.Spec.TeamID},
+				global,
+			}
+		}
+		// Not in the snapshot yet (a create) or no longer in it (disabled):
+		// the owner still names the team, and that is the scope the write
+		// has to be authorized at.
+		return s.ScopeChain(o)
+	}
+	return s.ScopeChain(o)
+}
+
+// ServiceAccount returns the enabled ServiceAccount with this id, or false.
+func (s *Snapshot) ServiceAccount(id string) (*serviceaccount.ServiceAccount, bool) {
+	sa, ok := s.serviceAccountsByID[id]
+	return sa, ok
+}
+
+// ServiceAccountByName returns the enabled ServiceAccount with this slug, or false.
+func (s *Snapshot) ServiceAccountByName(name string) (*serviceaccount.ServiceAccount, bool) {
+	sa, ok := s.serviceAccountsByName[name]
+	return sa, ok
+}
+
+// ServiceAccountsForProject returns the project's accounts, sorted by name.
+// The returned slice must not be mutated.
+func (s *Snapshot) ServiceAccountsForProject(projectID string) []*serviceaccount.ServiceAccount {
+	return s.serviceAccountsByProject[projectID]
+}
+
+// AllServiceAccounts returns every ServiceAccount in the snapshot, sorted by slug.
+func (s *Snapshot) AllServiceAccounts() []*serviceaccount.ServiceAccount {
+	out := make([]*serviceaccount.ServiceAccount, 0, len(s.serviceAccountsByID))
+	for _, sa := range s.serviceAccountsByID {
+		out = append(out, sa)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// Group returns the enabled Group with this id, or false.
+func (s *Snapshot) Group(id string) (*group.Group, bool) {
+	g, ok := s.groupsByID[id]
+	return g, ok
+}
+
+// GroupByName returns the enabled Group with this slug, or false.
+func (s *Snapshot) GroupByName(name string) (*group.Group, bool) {
+	g, ok := s.groupsByName[name]
+	return g, ok
+}
+
+// GroupsForUser returns the names of the groups holding this user, sorted.
+// The returned slice must not be mutated.
+func (s *Snapshot) GroupsForUser(userID string) []string {
+	return s.groupsByUser[userID]
+}
+
+// AllGroups returns every Group in the snapshot, sorted by slug.
+func (s *Snapshot) AllGroups() []*group.Group {
+	out := make([]*group.Group, 0, len(s.groupsByID))
+	for _, g := range s.groupsByID {
+		out = append(out, g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// Role returns the enabled Role with this id, or false.
+func (s *Snapshot) Role(id string) (*role.Role, bool) {
+	r, ok := s.rolesByID[id]
+	return r, ok
+}
+
+// RoleByName returns the enabled Role with this slug, or false.
+func (s *Snapshot) RoleByName(name string) (*role.Role, bool) {
+	r, ok := s.rolesByName[name]
+	return r, ok
+}
+
+// RoleBinding returns the enabled RoleBinding with this id, or false.
+func (s *Snapshot) RoleBinding(id string) (*rolebinding.RoleBinding, bool) {
+	b, ok := s.roleBindingsByID[id]
+	return b, ok
+}
+
+// RoleBindingsForSubject returns the bindings naming this subject
+// ("user:<id>", "group:<name>", "serviceaccount:<id>"), sorted by binding
+// name. The returned slice must not be mutated.
+func (s *Snapshot) RoleBindingsForSubject(subject string) []*rolebinding.RoleBinding {
+	return s.roleBindingsBySubject[subject]
+}
+
+// AllRoles returns every Role in the snapshot, sorted by slug.
+func (s *Snapshot) AllRoles() []*role.Role {
+	out := make([]*role.Role, 0, len(s.rolesByID))
+	for _, r := range s.rolesByID {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })
+	return out
+}
+
+// AllRoleBindings returns every RoleBinding in the snapshot, sorted by slug.
+func (s *Snapshot) AllRoleBindings() []*rolebinding.RoleBinding {
+	out := make([]*rolebinding.RoleBinding, 0, len(s.roleBindingsByID))
+	for _, b := range s.roleBindingsByID {
+		out = append(out, b)
+	}
+	sortRoleBindings(out)
+	return out
+}
+
+// PolicyBinding returns the enabled PolicyBinding with this id, or false.
+func (s *Snapshot) PolicyBinding(id string) (*policybinding.PolicyBinding, bool) {
+	b, ok := s.policyBindingsByID[id]
+	return b, ok
+}
+
+// PolicyBindingsForProject returns the project's policy bindings, ordered by
+// effective priority then name. The returned slice must not be mutated.
+func (s *Snapshot) PolicyBindingsForProject(projectID string) []*policybinding.PolicyBinding {
+	return s.policyBindingsByProject[projectID]
+}
+
+// AllPolicyBindings returns every PolicyBinding in the snapshot, sorted by slug.
+func (s *Snapshot) AllPolicyBindings() []*policybinding.PolicyBinding {
+	out := make([]*policybinding.PolicyBinding, 0, len(s.policyBindingsByID))
+	for _, b := range s.policyBindingsByID {
 		out = append(out, b)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Meta.Name < out[j].Meta.Name })

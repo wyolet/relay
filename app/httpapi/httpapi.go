@@ -76,7 +76,9 @@ func installErrorRewriter() {
 			code = "internal_error"
 		}
 		return &OpenAIError{
-			Err:        OpenAIErrorInner{Type: errType, Code: code, Message: msg},
+			// huma reports which field failed validation in errs; without
+			// carrying them a 422 says only "unprocessable entity".
+			Err:        OpenAIErrorInner{Type: errType, Code: code, Message: msg, Details: errorDetails(errs)},
 			HTTPStatus: status,
 		}
 	}
@@ -87,6 +89,26 @@ type OpenAIErrorInner struct {
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
+	// Details carries huma's per-field validation errors, which the flat
+	// OpenAI shape has no other place for.
+	Details []*huma.ErrorDetail `json:"details,omitempty"`
+}
+
+// errorDetails projects the errors huma passed to NewError onto the detail
+// shape, using each one's own detail when it has one.
+func errorDetails(errs []error) []*huma.ErrorDetail {
+	var out []*huma.ErrorDetail
+	for _, e := range errs {
+		if e == nil {
+			continue
+		}
+		if d, ok := e.(huma.ErrorDetailer); ok {
+			out = append(out, d.ErrorDetail())
+			continue
+		}
+		out = append(out, &huma.ErrorDetail{Message: e.Error()})
+	}
+	return out
 }
 
 // OpenAIError implements huma.StatusError with the OpenAI-compatible shape:
@@ -110,7 +132,7 @@ func installSchemaNamer() {}
 // clean PascalCase schema ids in the generated OpenAPI:
 //
 //   - The entity types Provider / Host / Model / HostKey / RateLimit /
-//     Policy / Pricing / RelayKey keep their bare names.
+//     Policy / Pricing / Key / ServiceAccount / Group keep their bare names.
 //   - Sub-types defined inside an entity package get the entity name
 //     prepended so the 8 colliding `Spec` types become `ProviderSpec`,
 //     `HostSpec`, `ModelSpec`, etc. without renaming the Go types.
@@ -136,7 +158,19 @@ var entityNameByPkg = map[string]string{
 	"github.com/wyolet/relay/app/ratelimit": "RateLimit",
 	"github.com/wyolet/relay/app/policy":    "Policy",
 	"github.com/wyolet/relay/app/pricing":   "Pricing",
-	"github.com/wyolet/relay/app/relaykey":  "RelayKey",
+	"github.com/wyolet/relay/app/key":       "Key",
+	"github.com/wyolet/relay/app/team":      "Team",
+	"github.com/wyolet/relay/app/project":   "Project",
+
+	"github.com/wyolet/relay/app/serviceaccount": "ServiceAccount",
+	"github.com/wyolet/relay/app/group":          "Group",
+	"github.com/wyolet/relay/app/role":           "Role",
+	"github.com/wyolet/relay/app/rolebinding":    "RoleBinding",
+	"github.com/wyolet/relay/app/policybinding":  "PolicyBinding",
+
+	// Not a catalog entity, but its Event/Actor/Resource/Request names
+	// collide with usage.Event and authz.Resource in the shared registry.
+	"github.com/wyolet/relay/app/audit": "Audit",
 }
 
 func schemaNamer(t reflect.Type, hint string) string {

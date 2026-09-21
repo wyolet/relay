@@ -16,6 +16,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 )
@@ -64,6 +65,14 @@ func (s *memStore[T]) Delete(_ context.Context, id string) error {
 type noSettings struct{}
 
 func (noSettings) Setting(string) (any, bool) { return nil, false }
+
+// testRBAC is the enforcing authorizer over an empty catalog: no teams, no
+// projects, no bindings. Every allow it grants comes from the two rules that
+// need no binding — personal rows and catalog reads.
+func testRBAC() authz.RBAC {
+	snap := appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	return authz.RBAC{Snap: func() authz.Snapshot { return snap }}
+}
 
 var scopeActors = map[string]*actor.Actor{
 	"alice": {UserID: "u-alice", Username: "alice"},
@@ -165,15 +174,17 @@ const (
 	operatorID = "01950000-0000-7000-8000-0000000000e1"
 )
 
-func TestOwnerScopedList(t *testing.T) {
-	h, _ := newScopeHarness(t, authz.OwnerScoped{}, seedThings()...)
+func TestRBACList(t *testing.T) {
+	h, _ := newScopeHarness(t, testRBAC(), seedThings()...)
 
 	tests := []struct {
 		who       string
 		wantNames []string
 	}{
-		{"alice", []string{"catalog-row", "alice-row"}},
-		{"bob", []string{"catalog-row", "bob-row"}},
+		// operator-row's owner names no user, so it reads like the catalog
+		// row it is rather than hiding from everyone.
+		{"alice", []string{"catalog-row", "alice-row", "operator-row"}},
+		{"bob", []string{"catalog-row", "bob-row", "operator-row"}},
 		{"root", []string{"catalog-row", "alice-row", "bob-row", "operator-row"}},
 		{"token", []string{"catalog-row", "alice-row", "bob-row", "operator-row"}},
 	}
@@ -207,8 +218,8 @@ func TestOwnerScopedList(t *testing.T) {
 	}
 }
 
-func TestOwnerScopedGet(t *testing.T) {
-	h, _ := newScopeHarness(t, authz.OwnerScoped{}, seedThings()...)
+func TestRBACGet(t *testing.T) {
+	h, _ := newScopeHarness(t, testRBAC(), seedThings()...)
 
 	tests := []struct {
 		name string
@@ -221,7 +232,7 @@ func TestOwnerScopedGet(t *testing.T) {
 		{"catalog row", "alice", catalogID, 200},
 		{"foreign row hidden as 404", "alice", bobID, 404},
 		{"foreign row by slug hidden as 404", "alice", "bob-row", 404},
-		{"operator row hidden as 404", "alice", operatorID, 404},
+		{"operator row reads like a catalog row", "alice", operatorID, 200},
 		{"admin sees foreign row", "root", bobID, 200},
 		{"admin token sees operator row", "token", operatorID, 200},
 	}
@@ -235,8 +246,8 @@ func TestOwnerScopedGet(t *testing.T) {
 	}
 }
 
-func TestOwnerScopedCreate(t *testing.T) {
-	h, store := newScopeHarness(t, authz.OwnerScoped{})
+func TestRBACCreate(t *testing.T) {
+	h, store := newScopeHarness(t, testRBAC())
 
 	// A plain user create gets stamped user-owned with the caller's id.
 	w := scopeReq(t, h, "alice", http.MethodPost, "/rate-limits", `{"metadata":{"name":"mine","displayName":"Mine"}}`)
@@ -265,7 +276,7 @@ func TestOwnerScopedCreate(t *testing.T) {
 	}
 }
 
-func TestOwnerScopedUpdateDelete(t *testing.T) {
+func TestRBACUpdateDelete(t *testing.T) {
 	tests := []struct {
 		name   string
 		who    string
@@ -275,7 +286,7 @@ func TestOwnerScopedUpdateDelete(t *testing.T) {
 	}{
 		{"update own", "alice", http.MethodPut, aliceID, 200},
 		{"update foreign is 404", "alice", http.MethodPut, bobID, 404},
-		{"update operator row is 404", "alice", http.MethodPut, operatorID, 404},
+		{"update operator row is 403", "alice", http.MethodPut, operatorID, 403},
 		{"update catalog row is 403", "alice", http.MethodPut, catalogID, 403},
 		{"admin updates foreign", "root", http.MethodPut, bobID, 200},
 		{"admin token updates operator row", "token", http.MethodPut, operatorID, 200},
@@ -286,7 +297,7 @@ func TestOwnerScopedUpdateDelete(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, _ := newScopeHarness(t, authz.OwnerScoped{}, seedThings()...)
+			h, _ := newScopeHarness(t, testRBAC(), seedThings()...)
 			body := ""
 			if tt.method == http.MethodPut {
 				body = `{"metadata":{"name":"renamed"}}`
@@ -323,6 +334,13 @@ func TestAlwaysAllowUnscoped(t *testing.T) {
 	}
 	if w := scopeReq(t, h, "alice", http.MethodPut, "/rate-limits/by-id/"+bobID, `{"metadata":{"name":"renamed"}}`); w.Code != 200 {
 		t.Fatalf("update foreign = %d, want 200: %s", w.Code, w.Body)
+	}
+	if w := scopeReq(t, h, "alice", http.MethodPost, "/rate-limits",
+		`{"metadata":{"name":"shared","owner":{"kind":"host","id":"h-1"}}}`); w.Code != 201 {
+		t.Fatalf("create a catalog-owned row = %d, want 201: %s", w.Code, w.Body)
+	}
+	if w := scopeReq(t, h, "alice", http.MethodDelete, "/rate-limits/by-id/"+bobID, ""); w.Code != 204 {
+		t.Fatalf("delete foreign = %d, want 204: %s", w.Code, w.Body)
 	}
 	// Unauthenticated is still rejected.
 	if w := scopeReq(t, h, "", http.MethodGet, "/rate-limits", ""); w.Code != 401 {

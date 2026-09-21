@@ -3,6 +3,8 @@ package settings
 import (
 	"strings"
 	"testing"
+
+	"github.com/wyolet/relay/app/license"
 )
 
 // oidcReader serves a canned auth:oidc section value.
@@ -15,7 +17,15 @@ func (f oidcReader) Setting(section string) (any, bool) {
 	return nil, false
 }
 
+// setOIDCEnv is the licensed overlay: SSO is a gated feature, so every
+// enabled-OIDC case needs a license to get past validation.
 func setOIDCEnv(t *testing.T) {
+	t.Helper()
+	grantLicense(t, license.FeatureSSO)
+	setOIDCEnvVars(t)
+}
+
+func setOIDCEnvVars(t *testing.T) {
 	t.Helper()
 	t.Setenv("WYOLET_AUTH_MODE", "oidc")
 	t.Setenv("WYOLET_OIDC_ISSUER", "https://idp.example.com")

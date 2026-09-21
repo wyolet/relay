@@ -9,7 +9,7 @@
 //   - No keypool, no per-key circuit breaker, no retry/failover. The
 //     caller's Authorization is the upstream credential; one attempt.
 //   - System-owned rate limits only (inference-api-proxy for authed,
-//     inference-api-proxy-anonymous for anonymous), keyed by relay-key
+//     inference-api-proxy-anonymous for anonymous), keyed by key
 //     hash or client IP respectively.
 //   - Same tee + detached post-flight pattern as app/pipeline: the
 //     post-flight goroutine commits the reservation and extracts
@@ -82,7 +82,7 @@ type Request struct {
 	// supplied (typically "Bearer …"). Forwarded as-is.
 	UpstreamAuth string
 
-	// RateScope is the limiter bucket subject — the relay-key hash for
+	// RateScope is the limiter bucket subject — the key hash for
 	// authed, the client IP for anonymous. Empty disables limiting.
 	RateScope string
 	// Rules is the resolved rule set (system-owned for proxy mode).

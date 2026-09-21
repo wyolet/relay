@@ -18,6 +18,7 @@ import (
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -27,7 +28,6 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -45,7 +45,7 @@ type polListD []*policy.Policy
 type modListD []*model.Model
 type keyListD []*hostkey.HostKey
 type rlListD []*ratelimit.RateLimit
-type rkListD []*relaykey.RelayKey
+type rkListD []*key.Key
 type rcListD []*pricing.Pricing
 type bndListD []*binding.Binding
 
@@ -56,14 +56,14 @@ func (l polListD) List(context.Context) ([]*policy.Policy, error)      { return 
 func (l modListD) List(context.Context) ([]*model.Model, error)        { return l, nil }
 func (l keyListD) List(context.Context) ([]*hostkey.HostKey, error)    { return l, nil }
 func (l rlListD) List(context.Context) ([]*ratelimit.RateLimit, error) { return l, nil }
-func (l rkListD) List(context.Context) ([]*relaykey.RelayKey, error)   { return l, nil }
+func (l rkListD) List(context.Context) ([]*key.Key, error)             { return l, nil }
 func (l rcListD) List(context.Context) ([]*pricing.Pricing, error)     { return l, nil }
 
 // buildDispatchCatalog creates a catalog with a model bound to the given
 // hostName (Meta.Name) with the provided adapter. Returns the catalog and
 // the relay key that authorises access. An optional Capabilities value is
 // applied to the model.
-func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name, caps ...model.Capabilities) (*catalog.Catalog, *relaykey.RelayKey) {
+func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Name, caps ...model.Capabilities) (*catalog.Catalog, *Principal) {
 	t.Helper()
 
 	provID := meta.NewID()
@@ -102,9 +102,18 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 		Meta: meta.Metadata{ID: polID, Name: "p", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hostID}},
 		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
 	}
-	rk := &relaykey.RelayKey{
+	k := &key.Key{
 		Meta: meta.Metadata{ID: rkID, Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
-		Spec: relaykey.Spec{PolicyID: polID, KeyHash: "testhash"},
+		Spec: key.Spec{PolicyID: polID, KeyHash: "testhash"},
+	}
+	// The edge resolves the key to a principal before anything downstream
+	// runs; tests start from that same resolved state.
+	pr := &Principal{
+		CredentialKind: CredentialKey,
+		CredentialID:   k.Meta.ID,
+		KeyHash:        k.Spec.KeyHash,
+		Key:            k,
+		Policy:         pol,
 	}
 
 	cat := catalog.New(
@@ -114,14 +123,14 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 		modListD{m},
 		keyListD{hk},
 		rlListD{},
-		rkListD{rk},
+		rkListD{k},
 		rcListD{},
 		bndListD{b},
 	)
 	if err := cat.Reload(t.Context()); err != nil {
 		t.Fatalf("catalog reload: %v", err)
 	}
-	return cat, rk
+	return cat, pr
 }
 
 // stubAdapter is a minimal pipeline.Adapter for tests.
@@ -222,9 +231,10 @@ func buildDeps(t *testing.T, cat *catalog.Catalog) Deps {
 
 // withNormalContext injects a ModeNormal classification and relay key into
 // r's context, simulating what the classifier + auth middleware would do.
-func withNormalContext(r *http.Request, rk *relaykey.RelayKey) *http.Request {
+func withNormalContext(r *http.Request, p *Principal) *http.Request {
 	ctx := WithClassification(r.Context(), Classification{Mode: ModeNormal})
-	ctx = context.WithValue(ctx, ctxRelayKeyT{}, rk)
+	ctx = context.WithValue(ctx, ctxKeyT{}, p.Key)
+	ctx = context.WithValue(ctx, ctxPrincipalT{}, p)
 	return r.WithContext(ctx)
 }
 
@@ -251,7 +261,7 @@ func parseDispatchErr(t *testing.T, body []byte) errBody {
 // dispatch entry. This is the routing-stage capture the runner-side
 // failure firing alone could not reach.
 func TestDispatch_RoutingFailure_EmitsUsageEvent(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	var gotKind string
@@ -266,7 +276,7 @@ func TestDispatch_RoutingFailure_EmitsUsageEvent(t *testing.T) {
 	d.Lifecycle = reg
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -335,11 +345,11 @@ func TestInjectRelayUsage(t *testing.T) {
 // byte-pass path (IsNativePath returns true). The pipeline fails on the stub
 // adapter, but the cross-shape "translate_request" error does NOT fire.
 func TestDispatch_Responses_OpenAIProperHost_BytePass(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -364,11 +374,11 @@ func TestDispatch_Responses_OpenAIProperHost_BytePass(t *testing.T) {
 // returning an error on ParseRequest, we get a 400 translate_request error —
 // which proves dispatch tried to translate (not byte-pass).
 func TestDispatch_Responses_OpenAICompatHost_CrossShape(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -390,11 +400,11 @@ func TestDispatch_Responses_OpenAICompatHost_CrossShape(t *testing.T) {
 // TestDispatch_Responses_AnthropicHost_CrossShape verifies that a host with
 // Adapter=Anthropic also routes to the cross-shape canonical chain.
 func TestDispatch_Responses_AnthropicHost_CrossShape(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	cat, pr := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -416,11 +426,11 @@ func TestDispatch_Responses_AnthropicHost_CrossShape(t *testing.T) {
 // Inbound=OpenAIEmbeddings on a host with adapter=anthropic returns 400
 // embeddings_unsupported_host.
 func TestDispatch_EmbeddingsGuard_AnthropicHost(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	cat, pr := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/embeddings", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -443,11 +453,11 @@ func TestDispatch_EmbeddingsGuard_AnthropicHost(t *testing.T) {
 // Inbound=OpenAIEmbeddings on a host with adapter=openai passes the guard
 // even when the host name is not "openai" (e.g. "ollama-self", "together").
 func TestDispatch_EmbeddingsGuard_OpenAICompatHost(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/embeddings", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -468,11 +478,11 @@ func TestDispatch_EmbeddingsGuard_OpenAICompatHost(t *testing.T) {
 // TestDispatch_EmbeddingsGuard_OpenAINamedHost verifies that the guard
 // also accepts the canonical host "openai" (adapter=openai).
 func TestDispatch_EmbeddingsGuard_OpenAINamedHost(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/embeddings", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -497,11 +507,11 @@ func TestDispatch_EmbeddingsGuard_OpenAINamedHost(t *testing.T) {
 // marshal_request — which proves the canonical request flowed into the upstream
 // serialize step (where the real Anthropic translator would emit cache_control).
 func TestDispatch_CanonicalInbound_ReachesUpstream(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	cat, pr := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -523,11 +533,11 @@ func TestDispatch_CanonicalInbound_ReachesUpstream(t *testing.T) {
 // TestDispatch_CanonicalInbound_InvalidBody surfaces v1.Parse errors as
 // translate_request — proving the identity translator's parse path is wired.
 func TestDispatch_CanonicalInbound_InvalidBody(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
+	cat, pr := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/generate", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	// Valid JSON but no input → v1.Parse rejects it.
@@ -635,11 +645,11 @@ func TestExtractModelStream_StreamSignals(t *testing.T) {
 // Inbound=OpenAI request is not blocked by either the Responses or
 // Embeddings guard (the guards are shape-conditional).
 func TestDispatch_NormalOpenAI_UnaffectedByGuards(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "groq", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{

@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/hostkey"
 )
@@ -39,16 +40,17 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error400BadRequest("value is required")
 		}
 		existing, err := d.Stores.HostKey.Get(ctx, in.ID)
-		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "host-key", existing.Meta.Owner) {
+		if err != nil || existing == nil || !visibleTo(ctx, d.Authz, "host-key", existing.Meta.ID, existing.Meta.Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("host-key %q not found", in.ID))
 		}
-		if err := d.Authz.Authorize(ctx, "host-keys.update", authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
+		if err := d.Authz.Authorize(ctx, "host-keys.rotate", authz.Resource{Kind: "host-key", ID: in.ID, Owner: &existing.Meta.Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		if existing.Spec.ValueFrom.Kind != hostkey.ValueKindStored && existing.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
 			return nil, huma.Error400BadRequest("rotate is supported only for stored- and oauth-mode host-keys")
 		}
 		existing.Spec.Value = in.Body.Value
+		audit.Changed(ctx, []string{"spec.value", "spec.valueKeyVersion"})
 		if err := d.Stores.HostKey.Upsert(ctx, existing); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

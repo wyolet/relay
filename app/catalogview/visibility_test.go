@@ -12,7 +12,7 @@ import (
 
 // asAlice is a Visible predicate for the tests: alice sees non-user rows
 // and her own; bob's and operator rows (empty owner id) are hidden.
-func asAlice(_ string, owner meta.Owner) bool {
+func asAlice(_, _ string, owner meta.Owner) bool {
 	if owner.Kind != meta.OwnerUser {
 		return true
 	}

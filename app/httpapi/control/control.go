@@ -7,16 +7,21 @@ package control
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/keypool"
+	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/session"
@@ -39,6 +44,25 @@ type Deps struct {
 	// it; the session middleware (installed by Mount) reads from it.
 	Sessions *session.Manager
 
+	// TokenSigner holds the inference-token signing key. nil (or an empty
+	// signer) disables minting and revoke-by-token.
+	TokenSigner *TokenSigner
+
+	// TokenDenylist is where a revoked token's jti is written for the data
+	// plane to read. nil disables per-token revocation (the token-version
+	// bump still works).
+	TokenDenylist TokenDenylist
+
+	// MintLimiter caps how often one user may mint an inference token.
+	// nil leaves minting unmetered.
+	MintLimiter MintLimiter
+
+	// RotateTokenKey generates a fresh signing key, installs it on both
+	// planes (keeping the outgoing one on the verifier) and records the new
+	// ref in the auth:tokens section. Wired by the composition root, which
+	// owns the secret store and the master key; nil disables the endpoint.
+	RotateTokenKey func(ctx context.Context) error
+
 	// AdminToken is the cleartext break-glass bearer. Empty disables the
 	// bypass. Validated by AdminTokenMiddleware; not used directly by
 	// handlers.
@@ -48,6 +72,10 @@ type Deps struct {
 	// d.Authz.Authorize before mutations; today's impl is permissive for
 	// any authenticated caller.
 	Authz authz.Authorizer
+
+	// License is the gate for licensed features and the backing of the
+	// /license endpoints. nil is a community deployment.
+	License license.Service
 
 	// Catalog is the in-memory snapshot used for slug→id resolution on
 	// reads. Writes go through Stores.
@@ -65,6 +93,17 @@ type Deps struct {
 	// from a separate store.
 	UsageReader usagelog.Reader
 
+	// Audit receives one event per audited admin request. nil disables
+	// audit capture entirely (no middleware, no rows).
+	Audit *audit.Emitter
+
+	// AuditReader serves GET /audit. nil disables the endpoint.
+	AuditReader audit.Reader
+
+	// TrustedProxies is the proxy set the audit middleware honours
+	// X-Forwarded-For behind. nil records the peer address.
+	TrustedProxies []*net.IPNet
+
 	// PayloadReader serves /payloads/* read-side endpoints (the Logs view).
 	// nil disables them — e.g. minimal builds or deployments where captured
 	// bodies are consumed from a separate store.
@@ -79,6 +118,11 @@ type Deps struct {
 	// with the data plane. Overlays host.Status on host reads. nil disables
 	// the overlay (Status stays absent → UI shows "unknown").
 	HostHealth HostHealthReader
+
+	// PublicURL is the deployment's externally reachable control-plane
+	// origin. Exported manifests reference the schema endpoint under it;
+	// empty renders the reference relative.
+	PublicURL string
 
 	// RuntimeConfig is the public config served at GET /config.json for the
 	// embedded admin UI. Zero value is fine (UI falls back to origin defaults).
@@ -112,6 +156,10 @@ func Mount(r chi.Router, d Deps) huma.API {
 		r.Use(d.Sessions.Middleware)
 	}
 	r.Use(AdminTokenMiddleware(d.AdminToken))
+	// Audit last in the chain so it sees the Actor either auth path set.
+	if d.Audit != nil {
+		r.Use(audit.Middleware(d.Audit, d.TrustedProxies))
+	}
 
 	cfg := huma.DefaultConfig("Wyolet Relay — Control", httpapi.Version)
 	cfg.Info.Description = "Admin plane. Authentication, catalog CRUD, and " +
@@ -126,17 +174,18 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// endpoints omit it.
 	protect := huma.Middlewares{httpapi.HumaAuth(RequireActor)}
 
-	registerVersion(api)          // public
+	registerVersion(api, d) // public (the license block is admin-only)
+	registerLicense(api, d, protect)
 	registerConfigJSON(api, d)    // public: GET /config.json for the embedded UI
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
 	registerCRUD(api, d, protect) // 8 kinds × CRUD
 	registerHostKeyRotate(api, d, protect)
-	registerRelayKeyRotate(api, d, protect)
+	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
 	registerReferences(api, d, protect)
-	registerPolicyRelayKeys(api, d, protect)
+	registerPolicyKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
 	registerSubresources(api, d, protect)  // /models/{ref}/hosts, /models/{ref}/pricing, /hosts/{ref}/models
@@ -145,6 +194,12 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerDebug(api, d, protect)
 	registerUsage(api, d, protect)
 	registerLogs(api, d, protect)
+	registerAudit(api, d, protect)
+	registerApply(api, d, protect)
+	registerExport(api, d, protect)
+	registerSchemas(r) // public: the JSON Schemas the manifests reference
+	registerTokens(api, d, protect)
+	registerUsers(api, d, protect)
 
 	// OpenAPI shim: enrich generated schemas with metadata the domain types
 	// deliberately don't carry (no huma tags in app/ratelimit). The spec is
@@ -156,7 +211,24 @@ func Mount(r chi.Router, d Deps) huma.API {
 		s.Description = "Measurement period, in whole seconds."
 	})
 
+	// The control API is mounted in front of the SPA's NotFound fallback,
+	// which answers HTML. A client calling a renamed or removed endpoint
+	// must get a 404 it can parse, not the admin UI's index page.
+	r.NotFound(writeNotFoundJSON)
+
 	return api
+}
+
+func writeNotFoundJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(httpapi.OpenAIError{
+		Err: httpapi.OpenAIErrorInner{
+			Type:    "invalid_request_error",
+			Code:    "not_found",
+			Message: "no such endpoint: " + r.Method + " " + r.URL.Path,
+		},
+	})
 }
 
 // meterEnum projects the domain's closed meter set to []any for huma.Schema.Enum.

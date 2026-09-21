@@ -9,10 +9,17 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/wyolet/relay/pkg/crypto"
+)
+
+// Authorizer modes for RELAY_AUTHZ.
+const (
+	AuthzSingle = "single"
+	AuthzRBAC   = "rbac"
 )
 
 // Config holds every RELAY_* setting parsed and validated at startup.
@@ -40,15 +47,24 @@ type Config struct {
 	CHDSN             string
 	OTLPEndpoint      string
 
+	// PublicURL is the deployment's externally reachable control-plane
+	// origin (RELAY_PUBLIC_URL). Exported manifests reference the schema
+	// endpoint under it; empty renders the reference relative.
+	PublicURL string
+
 	// Auth
 	AdminToken string
 	MasterKey  []byte // already parsed via crypto.ParseMasterKey; nil if unset
 
-	// MultiUser selects the owner-scoped authorizer on the control API:
-	// each user sees and mutates only the rows they own; catalog rows stay
-	// readable by all and admin-mutable. Off (the default) keeps the
-	// single-user always-allow behavior.
-	MultiUser bool
+	// Authz selects the control-plane authorizer. "single" (the default)
+	// grants every authenticated caller every action; "rbac" evaluates the
+	// caller's RoleBindings against each row's scope chain.
+	Authz string
+
+	// MigrateOnBoot runs the pending up-migrations at startup
+	// (RELAY_MIGRATE_ON_BOOT, default true). Set it false while rolling the
+	// schema back, so a restarting pod doesn't re-apply what was just undone.
+	MigrateOnBoot bool
 
 	// Behavior knobs
 	CHRetentionDays int
@@ -192,15 +208,41 @@ func Load() (*Config, error) {
 
 	// --- Auth ---
 	cfg.AdminToken = os.Getenv("RELAY_ADMIN_TOKEN")
+	cfg.PublicURL = strings.TrimSuffix(os.Getenv("RELAY_PUBLIC_URL"), "/")
 
-	// --- RELAY_MULTI_USER ---
-	switch v := os.Getenv("RELAY_MULTI_USER"); v {
-	case "", "off":
-		cfg.MultiUser = false
-	case "on":
-		cfg.MultiUser = true
+	// --- RELAY_AUTHZ ---
+	switch v := os.Getenv("RELAY_AUTHZ"); v {
+	case "":
+		// RELAY_MULTI_USER is what pre-IAM deployments set. Ignoring it
+		// would silently drop an upgraded multi-user relay to "single",
+		// where every authenticated user is an admin.
+		if multiUserOn() {
+			slog.Warn("config: RELAY_MULTI_USER is deprecated and was read as RELAY_AUTHZ=rbac; set RELAY_AUTHZ explicitly")
+			cfg.Authz = AuthzRBAC
+		} else {
+			cfg.Authz = AuthzSingle
+		}
+	case AuthzSingle:
+		// An explicit "single" wins, but the pair is contradictory: the
+		// deployment asked for multi-user and gets every caller an admin.
+		if multiUserOn() {
+			slog.Warn("config: RELAY_AUTHZ=single with RELAY_MULTI_USER=on — every authenticated caller is an admin; set RELAY_AUTHZ=rbac for role-based access")
+		}
+		cfg.Authz = AuthzSingle
+	case AuthzRBAC:
+		cfg.Authz = AuthzRBAC
 	default:
-		return nil, fmt.Errorf(`RELAY_MULTI_USER must be "on" or "off", got %q`, v)
+		return nil, fmt.Errorf(`RELAY_AUTHZ must be %q or %q, got %q`, AuthzSingle, AuthzRBAC, v)
+	}
+
+	// --- RELAY_MIGRATE_ON_BOOT ---
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_MIGRATE_ON_BOOT"))); v {
+	case "", "on", "1", "true":
+		cfg.MigrateOnBoot = true
+	case "off", "0", "false":
+		cfg.MigrateOnBoot = false
+	default:
+		return nil, fmt.Errorf(`RELAY_MIGRATE_ON_BOOT must be "on" or "off", got %q`, v)
 	}
 
 	// --- Behavior knobs ---
@@ -304,4 +346,15 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// multiUserOn reports whether the deprecated RELAY_MULTI_USER flag is set to
+// something truthy. Anything else — including its old "off" — leaves the
+// authorizer alone.
+func multiUserOn() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_MULTI_USER"))) {
+	case "on", "1", "true", "yes":
+		return true
+	}
+	return false
 }

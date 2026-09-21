@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+
+	"github.com/wyolet/relay/app/license"
 )
 
 // AuthOIDC is the auth:oidc settings section: inbound OpenID Connect login
@@ -41,6 +43,11 @@ type AuthOIDC struct {
 	// config, never in code.
 	AuthParams map[string]string `json:"authParams,omitempty"`
 
+	// GroupsClaim names the id-token claim carrying the user's IdP groups
+	// (default "groups"); empty after an explicit "" write means the
+	// provider asserts none.
+	GroupsClaim *string `json:"groupsClaim,omitempty"`
+
 	// Registration gates first-login auto-provisioning: "open" creates a
 	// user row on first successful OIDC login; "closed" (default) rejects
 	// subjects with no existing user row.
@@ -62,6 +69,15 @@ func (c *AuthOIDC) EffectiveScopes() []string {
 	return []string{"openid", "profile", "email"}
 }
 
+// EffectiveGroupsClaim returns the id-token claim to read groups from, or
+// "" when the deployment has explicitly opted out.
+func (c *AuthOIDC) EffectiveGroupsClaim() string {
+	if c.GroupsClaim == nil {
+		return "groups"
+	}
+	return *c.GroupsClaim
+}
+
 // OpenRegistration reports whether first-login auto-provisioning is on.
 func (c *AuthOIDC) OpenRegistration() bool { return c.Registration == "open" }
 
@@ -70,6 +86,9 @@ func (c *AuthOIDC) OpenRegistration() bool { return c.Registration == "open" }
 func (c *AuthOIDC) Validate() error {
 	if !c.Enabled {
 		return nil
+	}
+	if err := requireLicense(AuthOIDCSection, license.FeatureSSO); err != nil {
+		return err
 	}
 	if c.Issuer == "" {
 		return fmt.Errorf("auth:oidc: issuer is required when enabled")

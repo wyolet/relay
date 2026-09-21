@@ -47,6 +47,12 @@
     "WireMeta": {
       "additionalProperties": false,
       "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "description": {
           "type": "string"
         },
@@ -81,6 +87,14 @@
           "type": "string"
         },
         "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
           "type": "string"
         },
         "name": {

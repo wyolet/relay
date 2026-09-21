@@ -2,11 +2,11 @@ package inference
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net/http"
 	"time"
 
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -16,21 +16,69 @@ import (
 
 // mintLifecycle creates the per-request lifecycle Context at the inference
 // entry, before routing. It carries the identity known at entry — request
-// id, runner source, relay-key hash, client IP — and a stamped timing
+// id, runner source, key hash, client IP — and a stamped timing
 // anchor. Routing fills the (policy, model, host) ids later via
 // applyPlanIdentity; the runner stamps the remaining timing marks. The
 // caller stashes the returned Context on ctx with lifecycle.ContextWith so
 // every downstream phase (routing failures included) shares this one.
-func mintLifecycle(ctx context.Context, source, relayKeyToken, clientIP string) *lifecycle.Context {
+//
+// Tenancy + principal attribution is copied here, once: the Principal the
+// auth middleware resolved plus at most three snapshot map reads for the
+// project/team/service-account slugs. Post-flight observers must never
+// re-resolve them — the row they name may be gone by then.
+func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientIP string) *lifecycle.Context {
 	lc := lifecycle.NewContext(reqid.From(ctx), source, time.Now())
-	if relayKeyToken != "" {
-		sum := sha256.Sum256([]byte(relayKeyToken))
-		lc.RelayKeyHash = hex.EncodeToString(sum[:])
-	}
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP
 	}
+	if p := PrincipalFrom(ctx); p != nil {
+		// The hash the auth middleware matched on — empty for a token, which
+		// presents no key. Re-hashing the bearer here would stamp a hash on
+		// token traffic that matches no key row.
+		lc.RelayKeyHash = p.KeyHash
+		// The snapshot the credential resolved against, so the slugs named
+		// here describe the same rows the principal was built from.
+		snap := SnapshotFrom(ctx)
+		if snap == nil && cat != nil {
+			snap = cat.Current()
+		}
+		if snap != nil {
+			applyPrincipalIdentity(lc, snap, p)
+		}
+	}
 	return lc
+}
+
+// applyPrincipalIdentity fills the tenancy + principal fields from the
+// resolved Principal, resolving the three slugs against snapshot rows the
+// ids already point at. A user principal carries no slug: users are not in
+// the snapshot and looking one up would be a Postgres call on the hot path.
+func applyPrincipalIdentity(lc *lifecycle.Context, snap *appcatalog.Snapshot, p *Principal) {
+	lc.CredentialKind = p.CredentialKind
+	lc.CredentialID = p.CredentialID
+	switch {
+	case p.ServiceAccountID != "":
+		lc.PrincipalKind = string(key.PrincipalServiceAccount)
+		lc.PrincipalID = p.ServiceAccountID
+		if sa, ok := snap.ServiceAccount(p.ServiceAccountID); ok {
+			lc.PrincipalName = sa.Meta.Name
+		}
+	case p.UserID != "":
+		lc.PrincipalKind = string(key.PrincipalUser)
+		lc.PrincipalID = p.UserID
+	}
+	if p.ProjectID != "" {
+		lc.ProjectID = p.ProjectID
+		if proj, ok := snap.Project(p.ProjectID); ok {
+			lc.ProjectName = proj.Meta.Name
+		}
+	}
+	if p.TeamID != "" {
+		lc.TeamID = p.TeamID
+		if t, ok := snap.Team(p.TeamID); ok {
+			lc.TeamName = t.Meta.Name
+		}
+	}
 }
 
 // applyObsHeaders captures the inbound observability headers onto the

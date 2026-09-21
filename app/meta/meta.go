@@ -22,6 +22,9 @@ var Validator = func() *validator.Validate {
 	if err := v.RegisterValidation("slug", isDNS1123Slug); err != nil {
 		panic("meta: register slug validator: " + err.Error())
 	}
+	if err := v.RegisterValidation("budgetamount", isBudgetAmount); err != nil {
+		panic("meta: register budgetamount validator: " + err.Error())
+	}
 	return v
 }()
 
@@ -37,6 +40,14 @@ func isDNS1123Slug(fl validator.FieldLevel) bool {
 	return dnsLabel.MatchString(s)
 }
 
+// budgetAmount is a plain decimal USD amount with at most two fractional
+// digits. Money is carried as a string so no float rounding creeps in.
+var budgetAmount = regexp.MustCompile(`^\d+(\.\d{1,2})?$`)
+
+func isBudgetAmount(fl validator.FieldLevel) bool {
+	return budgetAmount.MatchString(fl.Field().String())
+}
+
 // Metadata is the identity tuple stamped on every domain row.
 //
 //   - ID is the immutable primary key (UUIDv7). Server-stamped on create.
@@ -47,9 +58,11 @@ func isDNS1123Slug(fl validator.FieldLevel) bool {
 //   - Description is free text documenting the row.
 //   - Owner identifies provenance.
 //   - Labels are arbitrary k/v selectors.
+//   - Annotations are free-form k/v notes; never filtered or selected on.
 //   - CreatedAt/UpdatedAt are server-derived, read-only provenance read
 //     from the row's dedicated columns (NOT the metadata JSONB — see
-//     MarshalJSONB, which serializes only Description/Owner/Labels). They
+//     MarshalJSONB, which serializes only Description/Owner/Labels/
+//     Annotations). They
 //     are omitted from YAML manifests (yaml:"-") since seed/apply must not
 //     set them; the store stamps them on read.
 type Metadata struct {
@@ -59,6 +72,7 @@ type Metadata struct {
 	Description string            `json:"description,omitempty" yaml:"description,omitempty"`
 	Owner       Owner             `json:"owner,omitempty"       yaml:"owner,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"      yaml:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty" yaml:"annotations,omitempty"`
 	CreatedAt   time.Time         `json:"createdAt,omitempty"   yaml:"-"`
 	UpdatedAt   time.Time         `json:"updatedAt,omitempty"   yaml:"-"`
 
@@ -96,4 +110,6 @@ const (
 	OwnerProvider OwnerKind = "provider"
 	OwnerHost     OwnerKind = "host"
 	OwnerUser     OwnerKind = "user"
+	OwnerTeam     OwnerKind = "team"
+	OwnerProject  OwnerKind = "project"
 )

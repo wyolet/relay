@@ -50,8 +50,10 @@ type Resource struct {
 // default AlwaysAllowAuthenticated) leaves reads unfiltered.
 type Scoper interface {
 	// Visible reports whether the current actor may see a row of kind
-	// with the given owner in lists and reads.
-	Visible(ctx context.Context, kind string, owner meta.Owner) bool
+	// with the given id and owner in lists and reads. id is the row's own
+	// metadata.id — it is what puts a scope-defining row (Team, Project)
+	// inside the scope it defines; pass "" when there is no row.
+	Visible(ctx context.Context, kind, id string, owner meta.Owner) bool
 }
 
 // Authorizer is the policy-decision interface. Authorize returns nil to

@@ -114,6 +114,7 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 
 	var issues []Issue
 	issues = append(issues, checkDuplicateNames(g)...)
+	issues = append(issues, checkProjectRefs(g)...)
 	issues = append(issues, checkProviderRefs(g)...)
 	issues = append(issues, checkHostRefs(g)...)
 	issues = append(issues, checkModelRefs(g)...)
@@ -121,7 +122,15 @@ func ValidateGraph(docs []manifest.Document) []Issue {
 	issues = append(issues, checkPolicyRefs(g)...)
 	issues = append(issues, checkPricingRefs(g)...)
 	issues = append(issues, checkBindingRefs(g)...)
-	issues = append(issues, checkRelayKeyRefs(g)...)
+	issues = append(issues, checkServiceAccountRefs(g)...)
+	issues = append(issues, checkRoleBindingRefs(g)...)
+	issues = append(issues, checkPolicyBindingRefs(g)...)
+	issues = append(issues, checkKeyRefs(g)...)
+	// RateLimit has no other cross-refs, so its owning Project is checked
+	// here rather than in a check of its own.
+	for _, rl := range g.RateLimits {
+		issues = append(issues, checkOwnerProject(g, "RateLimit", rl.Metadata.Name, rl.Metadata.Owner)...)
+	}
 	issues = append(issues, checkOrphans(g)...)
 
 	sortIssues(issues)
@@ -138,9 +147,17 @@ type graph struct {
 	HostKeys     map[string]*manifest.HostKeyDTO
 	Policies     map[string]*manifest.PolicyDTO
 	RateLimits   map[string]*manifest.RateLimitDTO
-	RelayKeys    map[string]*manifest.RelayKeyDTO
+	Keys         map[string]*manifest.KeyDTO
 	Pricings     map[string]*manifest.PricingDTO
 	HostBindings map[string]*manifest.HostBindingDTO
+	Teams        map[string]*manifest.TeamDTO
+	Projects     map[string]*manifest.ProjectDTO
+
+	ServiceAccounts map[string]*manifest.ServiceAccountDTO
+	Groups          map[string]*manifest.GroupDTO
+	Roles           map[string]*manifest.RoleDTO
+	RoleBindings    map[string]*manifest.RoleBindingDTO
+	PolicyBindings  map[string]*manifest.PolicyBindingDTO
 
 	// duplicates tracks names that appeared more than once within a kind.
 	// Each entry holds the kind + name; checkDuplicateNames emits issues.
@@ -155,9 +172,17 @@ func buildGraph(docs []manifest.Document) *graph {
 		HostKeys:     map[string]*manifest.HostKeyDTO{},
 		Policies:     map[string]*manifest.PolicyDTO{},
 		RateLimits:   map[string]*manifest.RateLimitDTO{},
-		RelayKeys:    map[string]*manifest.RelayKeyDTO{},
+		Keys:         map[string]*manifest.KeyDTO{},
 		Pricings:     map[string]*manifest.PricingDTO{},
 		HostBindings: map[string]*manifest.HostBindingDTO{},
+		Teams:        map[string]*manifest.TeamDTO{},
+		Projects:     map[string]*manifest.ProjectDTO{},
+
+		ServiceAccounts: map[string]*manifest.ServiceAccountDTO{},
+		Groups:          map[string]*manifest.GroupDTO{},
+		Roles:           map[string]*manifest.RoleDTO{},
+		RoleBindings:    map[string]*manifest.RoleBindingDTO{},
+		PolicyBindings:  map[string]*manifest.PolicyBindingDTO{},
 	}
 	for i := range docs {
 		d := &docs[i]
@@ -198,16 +223,58 @@ func buildGraph(docs []manifest.Document) *graph {
 				g.RateLimits[d.RateLimit.Metadata.Name] = d.RateLimit
 				return dup
 			})
-		case d.RelayKey != nil:
-			indexOne(g, "RelayKey", d.RelayKey.Metadata.Name, func() bool {
-				_, dup := g.RelayKeys[d.RelayKey.Metadata.Name]
-				g.RelayKeys[d.RelayKey.Metadata.Name] = d.RelayKey
+		case d.Key != nil:
+			indexOne(g, "Key", d.Key.Metadata.Name, func() bool {
+				_, dup := g.Keys[d.Key.Metadata.Name]
+				g.Keys[d.Key.Metadata.Name] = d.Key
 				return dup
 			})
 		case d.Pricing != nil:
 			indexOne(g, "Pricing", d.Pricing.Metadata.Name, func() bool {
 				_, dup := g.Pricings[d.Pricing.Metadata.Name]
 				g.Pricings[d.Pricing.Metadata.Name] = d.Pricing
+				return dup
+			})
+		case d.Team != nil:
+			indexOne(g, "Team", d.Team.Metadata.Name, func() bool {
+				_, dup := g.Teams[d.Team.Metadata.Name]
+				g.Teams[d.Team.Metadata.Name] = d.Team
+				return dup
+			})
+		case d.Project != nil:
+			indexOne(g, "Project", d.Project.Metadata.Name, func() bool {
+				_, dup := g.Projects[d.Project.Metadata.Name]
+				g.Projects[d.Project.Metadata.Name] = d.Project
+				return dup
+			})
+		case d.ServiceAccount != nil:
+			indexOne(g, "ServiceAccount", d.ServiceAccount.Metadata.Name, func() bool {
+				_, dup := g.ServiceAccounts[d.ServiceAccount.Metadata.Name]
+				g.ServiceAccounts[d.ServiceAccount.Metadata.Name] = d.ServiceAccount
+				return dup
+			})
+		case d.Group != nil:
+			indexOne(g, "Group", d.Group.Metadata.Name, func() bool {
+				_, dup := g.Groups[d.Group.Metadata.Name]
+				g.Groups[d.Group.Metadata.Name] = d.Group
+				return dup
+			})
+		case d.Role != nil:
+			indexOne(g, "Role", d.Role.Metadata.Name, func() bool {
+				_, dup := g.Roles[d.Role.Metadata.Name]
+				g.Roles[d.Role.Metadata.Name] = d.Role
+				return dup
+			})
+		case d.RoleBinding != nil:
+			indexOne(g, "RoleBinding", d.RoleBinding.Metadata.Name, func() bool {
+				_, dup := g.RoleBindings[d.RoleBinding.Metadata.Name]
+				g.RoleBindings[d.RoleBinding.Metadata.Name] = d.RoleBinding
+				return dup
+			})
+		case d.PolicyBinding != nil:
+			indexOne(g, "PolicyBinding", d.PolicyBinding.Metadata.Name, func() bool {
+				_, dup := g.PolicyBindings[d.PolicyBinding.Metadata.Name]
+				g.PolicyBindings[d.PolicyBinding.Metadata.Name] = d.PolicyBinding
 				return dup
 			})
 		case d.HostBinding != nil:

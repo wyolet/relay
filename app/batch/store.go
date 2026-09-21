@@ -27,12 +27,18 @@ func NewStore(pool *pgxpool.Pool) *Store { return &Store{q: gen.New(pool)} }
 // Create inserts a new batch record (status, counts; items added separately).
 func (s *Store) Create(ctx context.Context, b *Batch) error {
 	if err := s.q.CreateBatch(ctx, gen.CreateBatchParams{
-		ID:           b.ID,
-		RelayKeyHash: b.RelayKeyHash,
-		PolicyID:     b.PolicyID,
-		InboundShape: b.InboundShape,
-		Status:       string(b.Status),
-		TotalItems:   int32(b.TotalItems),
+		ID:             b.ID,
+		RelayKeyHash:   b.RelayKeyHash,
+		PolicyID:       b.PolicyID,
+		InboundShape:   b.InboundShape,
+		Status:         string(b.Status),
+		TotalItems:     int32(b.TotalItems),
+		ProjectID:      b.ProjectID,
+		TeamID:         b.TeamID,
+		PrincipalKind:  b.PrincipalKind,
+		PrincipalID:    b.PrincipalID,
+		CredentialKind: b.CredentialKind,
+		CredentialID:   b.CredentialID,
 	}); err != nil {
 		return fmt.Errorf("batch: create: %w", err)
 	}
@@ -114,6 +120,14 @@ func toBatch(r gen.Batch) *Batch {
 		Status:       Status(r.Status),
 		TotalItems:   int(r.TotalItems),
 		CreatedAt:    r.CreatedAt.Time,
+		Attribution: Attribution{
+			ProjectID:      r.ProjectID,
+			TeamID:         r.TeamID,
+			PrincipalKind:  r.PrincipalKind,
+			PrincipalID:    r.PrincipalID,
+			CredentialKind: r.CredentialKind,
+			CredentialID:   r.CredentialID,
+		},
 	}
 	if r.CompletedAt.Valid {
 		t := r.CompletedAt.Time

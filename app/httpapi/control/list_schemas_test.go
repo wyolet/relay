@@ -5,13 +5,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/project"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/filter"
 )
 
@@ -187,18 +191,18 @@ func TestHostFilter(t *testing.T) {
 	}
 }
 
-func TestRelayKeyFilter(t *testing.T) {
+func TestKeyFilter(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	items := []*relaykey.RelayKey{
-		{Meta: meta.Metadata{Name: "live"}, Spec: relaykey.Spec{PolicyID: "p1"}},
-		{Meta: meta.Metadata{Name: "dead"}, Spec: relaykey.Spec{PolicyID: "p1", RevokedAt: &now}},
-		{Meta: meta.Metadata{Name: "other"}, Spec: relaykey.Spec{PolicyID: "p2"}},
+	items := []*key.Key{
+		{Meta: meta.Metadata{Name: "live"}, Spec: key.Spec{PolicyID: "p1"}},
+		{Meta: meta.Metadata{Name: "dead"}, Spec: key.Spec{PolicyID: "p1", RevokedAt: &now}},
+		{Meta: meta.Metadata{Name: "other"}, Spec: key.Spec{PolicyID: "p2"}},
 	}
-	got, _ := applyQ(t, relayKeyFilter, "revoked=true", items)
+	got, _ := applyQ(t, keyFilter, "revoked=true", items)
 	if len(got) != 1 || got[0].Meta.Name != "dead" {
 		t.Fatalf("revoked=true => %v, want [dead]", names(got))
 	}
-	got, _ = applyQ(t, relayKeyFilter, "policy_id=p1", items)
+	got, _ = applyQ(t, keyFilter, "policy_id=p1", items)
 	if want := []string{"dead", "live"}; !eqNames(got, want) { // default sort=name
 		t.Fatalf("policy_id=p1 => %v, want %v", names(got), want)
 	}
@@ -216,11 +220,15 @@ func names[T any](rows []*T) []string {
 			out[i] = v.Meta.Name
 		case *host.Host:
 			out[i] = v.Meta.Name
-		case *relaykey.RelayKey:
+		case *key.Key:
 			out[i] = v.Meta.Name
 		case *hostkey.HostKey:
 			out[i] = v.Meta.Name
 		case *pricing.Pricing:
+			out[i] = v.Meta.Name
+		case *serviceaccount.ServiceAccount:
+			out[i] = v.Meta.Name
+		case *group.Group:
 			out[i] = v.Meta.Name
 		}
 	}
@@ -238,4 +246,107 @@ func eqNames[T any](rows []*T, want []string) bool {
 		}
 	}
 	return true
+}
+
+func TestTeamAndProjectFilters(t *testing.T) {
+	off := false
+	teams := []*team.Team{
+		{Meta: meta.Metadata{Name: "platform", Labels: map[string]string{"env": "prod"}}},
+		{Meta: meta.Metadata{Name: "research"}, Spec: team.Spec{Enabled: &off}},
+	}
+	got, _ := applyQ(t, teamFilter, "enabled=true", teams)
+	if len(got) != 1 || got[0].Meta.Name != "platform" {
+		t.Fatalf("enabled=true => %v, want [platform]", names(got))
+	}
+	got, _ = applyQ(t, teamFilter, "label=env%3Dprod", teams)
+	if len(got) != 1 || got[0].Meta.Name != "platform" {
+		t.Fatalf("label=env=prod => %v, want [platform]", names(got))
+	}
+	if _, err := teamFilter.Parse(url.Values{"annotation": {"a=b"}}); err == nil {
+		t.Fatal("annotations are not filterable; ?annotation= should 400")
+	}
+
+	projects := []*project.Project{
+		{Meta: meta.Metadata{Name: "ml-search", Labels: map[string]string{"env": "prod"}}, Spec: project.Spec{TeamID: "t1"}},
+		{Meta: meta.Metadata{Name: "ranking"}, Spec: project.Spec{TeamID: "t1", Enabled: &off}},
+		{Meta: meta.Metadata{Name: "lab"}, Spec: project.Spec{TeamID: "t2"}},
+	}
+	gotP, _ := applyQ(t, projectFilter, "team_id=t1&enabled=true", projects)
+	if len(gotP) != 1 || gotP[0].Meta.Name != "ml-search" {
+		t.Fatalf("team_id=t1&enabled=true => %v, want [ml-search]", names(gotP))
+	}
+	gotP, _ = applyQ(t, projectFilter, "label=env%3Dprod", projects)
+	if len(gotP) != 1 || gotP[0].Meta.Name != "ml-search" {
+		t.Fatalf("label=env=prod => %v, want [ml-search]", names(gotP))
+	}
+	if _, err := projectFilter.Parse(url.Values{"bogus": {"1"}}); err == nil {
+		t.Fatal("unknown key should 400")
+	}
+}
+
+func TestKeyFilter_PrincipalAndExpiry(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	sa, alice := "sa-1", "user-1"
+	items := []*key.Key{
+		{Meta: meta.Metadata{Name: "indexer"}, Spec: key.Spec{
+			Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa},
+		}},
+		{Meta: meta.Metadata{Name: "expired"}, Spec: key.Spec{
+			Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa},
+			ExpiresAt: &past,
+		}},
+		{Meta: meta.Metadata{Name: "personal"}, Spec: key.Spec{
+			Principal: key.Principal{Kind: key.PrincipalUser, ID: alice},
+			ExpiresAt: &future,
+		}},
+	}
+	got, _ := applyQ(t, keyFilter, "principal_kind=serviceaccount&principal_id="+sa, items)
+	if want := []string{"expired", "indexer"}; !eqNames(got, want) {
+		t.Fatalf("principal filter => %v, want %v", names(got), want)
+	}
+	got, _ = applyQ(t, keyFilter, "expired=true", items)
+	if len(got) != 1 || got[0].Meta.Name != "expired" {
+		t.Fatalf("expired=true => %v, want [expired]", names(got))
+	}
+	got, _ = applyQ(t, keyFilter, "principal_kind=user", items)
+	if len(got) != 1 || got[0].Meta.Name != "personal" {
+		t.Fatalf("principal_kind=user => %v, want [personal]", names(got))
+	}
+	if _, err := keyFilter.Parse(url.Values{"principal_kind": {"robot"}}); err == nil {
+		t.Fatal("unknown principal_kind must 400")
+	}
+}
+
+func TestServiceAccountAndGroupFilters(t *testing.T) {
+	off := false
+	sas := []*serviceaccount.ServiceAccount{
+		{Meta: meta.Metadata{Name: "indexer", Labels: map[string]string{"env": "prod"}}, Spec: serviceaccount.Spec{ProjectID: "p1", PolicyID: "pol1"}},
+		{Meta: meta.Metadata{Name: "ranker"}, Spec: serviceaccount.Spec{ProjectID: "p1", Enabled: &off}},
+		{Meta: meta.Metadata{Name: "lab-bot"}, Spec: serviceaccount.Spec{ProjectID: "p2"}},
+	}
+	got, _ := applyQ(t, serviceAccountFilter, "project_id=p1&enabled=true", sas)
+	if len(got) != 1 || got[0].Meta.Name != "indexer" {
+		t.Fatalf("project_id=p1&enabled=true => %v, want [indexer]", names(got))
+	}
+	got, _ = applyQ(t, serviceAccountFilter, "policy_id=pol1", sas)
+	if len(got) != 1 || got[0].Meta.Name != "indexer" {
+		t.Fatalf("policy_id=pol1 => %v, want [indexer]", names(got))
+	}
+	got, _ = applyQ(t, serviceAccountFilter, "label=env%3Dprod", sas)
+	if len(got) != 1 || got[0].Meta.Name != "indexer" {
+		t.Fatalf("label=env=prod => %v, want [indexer]", names(got))
+	}
+
+	groups := []*group.Group{
+		{Meta: meta.Metadata{Name: "data-science", Labels: map[string]string{"env": "prod"}}},
+		{Meta: meta.Metadata{Name: "retired"}, Spec: group.Spec{Enabled: &off}},
+	}
+	gotG, _ := applyQ(t, groupFilter, "enabled=true", groups)
+	if len(gotG) != 1 || gotG[0].Meta.Name != "data-science" {
+		t.Fatalf("enabled=true => %v, want [data-science]", names(gotG))
+	}
+	if _, err := groupFilter.Parse(url.Values{"bogus": {"1"}}); err == nil {
+		t.Fatal("unknown key should 400")
+	}
 }

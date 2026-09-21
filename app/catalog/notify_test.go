@@ -7,7 +7,7 @@ import (
 // ── parseEvent ────────────────────────────────────────────────────────────────
 
 func TestParseEvent_HappyPath(t *testing.T) {
-	kinds := []string{"provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"}
+	kinds := []string{"provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey", "team", "project"}
 	ops := []string{"upsert", "delete"}
 	for _, kind := range kinds {
 		for _, op := range ops {

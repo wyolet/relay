@@ -84,7 +84,7 @@ func proxyTestBody(model string, padding int, modelLast bool) []byte {
 }
 
 func TestResolveProxyHostByPolicy_BodyLadder(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	resolver := routing.New(cat)
 
 	cases := []struct {
@@ -103,7 +103,7 @@ func TestResolveProxyHostByPolicy_BodyLadder(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(tc.body))
-			plan, pb, err := resolveProxyHostByPolicy(r, resolver, rk, false)
+			plan, pb, err := resolveProxyHostByPolicy(r, resolver, prin, false)
 			if tc.wantReason != "" {
 				e, ok := err.(*errProxyHostResolve)
 				if !ok || e.Reason != tc.wantReason {
@@ -143,7 +143,7 @@ func TestResolveProxyHostByPolicy_BodyLadder(t *testing.T) {
 // upstream, verifying the upstream receives the byte-identical body with
 // the original Content-Length (no chunked degradation).
 func TestProxyForward_StreamedBodyByteIdentical(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	resolver := routing.New(cat)
 	body := proxyTestBody("test-model", 2<<20, false)
 
@@ -157,7 +157,7 @@ func TestProxyForward_StreamedBodyByteIdentical(t *testing.T) {
 	defer srv.Close()
 
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-	_, pb, err := resolveProxyHostByPolicy(r, resolver, rk, false)
+	_, pb, err := resolveProxyHostByPolicy(r, resolver, prin, false)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestProxyForward_StreamedBodyByteIdentical(t *testing.T) {
 // ends up with the full body — or, past the capture cap, a flagged
 // partial one with the upstream forward unaffected.
 func TestProxyForward_PayloadTeeCapture(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	resolver := routing.New(cat)
 
 	cases := []struct {
@@ -223,7 +223,7 @@ func TestProxyForward_PayloadTeeCapture(t *testing.T) {
 			lc := lifecycle.NewContext("req-tee", "proxy", time.Now())
 			lc.PayloadLog = tc.logging
 
-			_, pb, err := resolveProxyHostByPolicy(r, resolver, rk, lc.PayloadLog)
+			_, pb, err := resolveProxyHostByPolicy(r, resolver, prin, lc.PayloadLog)
 			if err != nil {
 				t.Fatalf("resolve: %v", err)
 			}
@@ -274,7 +274,7 @@ func TestProxyForward_PayloadTeeCapture(t *testing.T) {
 // post-flight hook then reads lc.RequestBody from its own goroutine —
 // under -race this exercises the concurrent send + post-flight handoff.
 func TestProxyForward_TeeStreamsWhileClientSending(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
+	cat, prin := buildDispatchCatalog(t, "openai", adapters.OpenAI)
 	resolver := routing.New(cat)
 	body := proxyTestBody("test-model", 2<<20, false)
 	cut := len(body) - (256 << 10) // tail the client withholds
@@ -332,7 +332,7 @@ func TestProxyForward_TeeStreamsWhileClientSending(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", pr)
 		lc := lifecycle.NewContext("req-stream", "proxy", time.Now())
 		lc.PayloadLog = true
-		_, pb, err := resolveProxyHostByPolicy(r, resolver, rk, true)
+		_, pb, err := resolveProxyHostByPolicy(r, resolver, prin, true)
 		if err != nil {
 			t.Errorf("resolve: %v", err)
 			return

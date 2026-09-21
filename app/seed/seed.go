@@ -1,40 +1,21 @@
-// Package seed orchestrates loading YAML config into Postgres for the app/
-// arch. The flow:
+// Package seed loads a directory of manifest YAMLs into Postgres at boot.
 //
-//  1. Parse every YAML in the source dir (multi-doc supported).
-//  2. List every row from each entity store to learn existing name→id bindings.
-//  3. For YAML names that have no PG row yet, mint a fresh UUIDv7 and add it
-//     to the resolver map.
-//  4. Translate each DTO → domain object via manifest.ToXxx using the merged
-//     resolver, stamping Meta.ID from the same map.
-//  5. Upsert in dependency order: Provider, Host, RateLimit, HostKey, Model,
-//     Policy, RelayKey.
-//
-// Diffing, dry-run, and identity (User) handling are deliberately omitted —
-// this is the minimal "make the rows be there" path. Idempotent: re-running
-// over the same YAML is a no-op for unchanged rows and an in-place update
-// for changed ones.
+// It is app/apply driven from a directory: the same parse → mint → translate
+// → diff → upsert path the control plane's POST /apply runs, with no
+// authorizer (boot has no actor) and no prune (a catalog tree is additive).
+// ClearDirty maps to apply's Force. Everything else — bucket order, id
+// minting, the dirty-row skip, the change vocabulary — lives in app/apply.
 package seed
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/manifest"
-	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
-	appsecret "github.com/wyolet/relay/app/secret"
-	"github.com/wyolet/relay/internal/storage/gen"
 )
 
 // Options configures a seed run.
@@ -47,20 +28,43 @@ type Options struct {
 	// them to the catalog version and clearing their dirty flag. Default false:
 	// dirty rows are skipped so re-seeding never clobbers operator changes.
 	ClearDirty bool
+
+	// CatalogKindsOnly refuses the tenancy kinds. The boot paths set it: a
+	// catalog tree is fetched by tag from a public repository and must not be
+	// able to mint a Key, a ServiceAccount or a RoleBinding on the way in.
+	// Those kinds reach Postgres through `relay seed --apply`, `relay apply`
+	// or the control API, all of which have an actor to authorize.
+	CatalogKindsOnly bool
 }
 
-// Result summarises a seed run.
+// tenancyKinds are the kinds a catalog tree may not carry: they name
+// principals, credentials or grants rather than shared catalog templates.
+var tenancyKinds = map[string]bool{
+	"Team": true, "Project": true, "Group": true, "ServiceAccount": true,
+	"Key": true, "Role": true, "RoleBinding": true, "PolicyBinding": true,
+}
+
+// Result summarises a seed run. Per-kind counts are the rows the run
+// reconciled — created, updated, or already matching the manifest.
 type Result struct {
-	Providers    int
-	Hosts        int
-	RateLimits   int
-	HostKeys     int
-	Models       int
-	Pricings     int
-	HostBindings int
-	Policies     int
-	RelayKeys    int
-	Skipped      int // dirty rows preserved (operator-edited; not re-seeded)
+	Teams           int
+	Projects        int
+	Providers       int
+	Hosts           int
+	RateLimits      int
+	HostKeys        int
+	Models          int
+	Pricings        int
+	HostBindings    int
+	Policies        int
+	ServiceAccounts int
+	Groups          int
+	Roles           int
+	RoleBindings    int
+	PolicyBindings  int
+	Keys            int
+	Overlays        int
+	Skipped         int // dirty rows preserved (operator-edited; not re-seeded)
 }
 
 // Run executes the seed pipeline end-to-end.
@@ -76,355 +80,85 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("seed: load yaml: %w", err)
 	}
-
-	q := gen.New(opts.Pool)
-	secReg, secStored := appsecret.Wire(q, opts.Pool, opts.MasterKey)
-	stores := storeSet{
-		provider:    provider.NewStore(q),
-		host:        host.NewStore(q),
-		ratelimit:   ratelimit.NewStore(q),
-		hostkey:     hostkey.NewStore(q, secReg, secStored),
-		model:       model.NewStore(q),
-		policy:      policy.NewStore(opts.Pool),
-		pricing:     pricing.NewStore(opts.Pool),
-		hostbinding: binding.NewStore(opts.Pool),
-		relaykey:    relaykey.NewStore(q),
+	docs, settingDocs, refused := splitSeedDocs(docs, opts.CatalogKindsOnly)
+	// A Setting in a seeded tree is not applied here and would otherwise
+	// vanish without a trace, so each one is named.
+	for _, name := range settingDocs {
+		slog.Warn("seed: Setting document not applied; load it with RELAY_SETTINGS_DIR",
+			"dir", opts.YAMLDir, "document", name)
+	}
+	if len(refused) > 0 {
+		slog.Warn("seed: refusing tenancy documents from a catalog tree",
+			"dir", opts.YAMLDir, "count", len(refused), "documents", refused)
 	}
 
-	resolver, err := buildResolver(ctx, stores)
+	plan, err := apply.Plan(ctx, docs, apply.Options{
+		Stores: apply.NewStores(opts.Pool, opts.MasterKey),
+		Force:  opts.ClearDirty,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("seed: %w", err)
 	}
+	if _, err := apply.Execute(ctx, plan, nil); err != nil {
+		return nil, fmt.Errorf("seed: %w", err)
+	}
+	// A conflict is a row someone wrote between plan and write. The seed
+	// leaves it alone, which is silent unless it is said out loud.
+	for _, e := range plan.Entries {
+		if e.Action == apply.ActionConflict {
+			slog.Warn("seed: row changed during the run and was left alone",
+				"kind", e.Kind, "name", e.Name)
+		}
+	}
+	return tally(plan), nil
+}
 
-	// Bucket docs by kind so we can upsert in dependency order.
-	var (
-		provDocs []*manifest.ProviderDTO
-		hostDocs []*manifest.HostDTO
-		rlDocs   []*manifest.RateLimitDTO
-		hkDocs   []*manifest.HostKeyDTO
-		mDocs    []*manifest.ModelDTO
-		prDocs   []*manifest.PricingDTO
-		bndDocs  []*manifest.HostBindingDTO
-		polDocs  []*manifest.PolicyDTO
-		rkDocs   []*manifest.RelayKeyDTO
-	)
+// splitSeedDocs separates what apply takes from what this path leaves out:
+// Settings, which have their own loader (settings.SeedDir), and — for a
+// catalog tree — the tenancy kinds. Both are returned as "Kind/name" for the
+// caller to log.
+func splitSeedDocs(docs []manifest.Document, catalogKindsOnly bool) (keep []manifest.Document, settings, tenancy []string) {
+	keep = docs[:0]
 	for _, d := range docs {
 		switch {
-		case d.Provider != nil:
-			provDocs = append(provDocs, d.Provider)
-		case d.Host != nil:
-			hostDocs = append(hostDocs, d.Host)
-		case d.RateLimit != nil:
-			rlDocs = append(rlDocs, d.RateLimit)
-		case d.HostKey != nil:
-			hkDocs = append(hkDocs, d.HostKey)
-		case d.Model != nil:
-			mDocs = append(mDocs, d.Model)
-		case d.Pricing != nil:
-			prDocs = append(prDocs, d.Pricing)
-		case d.HostBinding != nil:
-			bndDocs = append(bndDocs, d.HostBinding)
-		case d.Policy != nil:
-			polDocs = append(polDocs, d.Policy)
-		case d.RelayKey != nil:
-			rkDocs = append(rkDocs, d.RelayKey)
+		case d.Setting != nil:
+			// A Setting carries no Payload, so its name isn't in docName.
+			settings = append(settings, d.Kind()+"/"+d.Setting.Metadata.Name)
+		case catalogKindsOnly && tenancyKinds[d.Kind()]:
+			tenancy = append(tenancy, d.Kind()+"/"+docName(d))
+		default:
+			keep = append(keep, d)
 		}
 	}
+	return keep, settings, tenancy
+}
 
-	// Mint ids for any names not yet in PG. Doing this before translate so the
-	// resolver is complete when cross-refs are resolved.
-	mintIDs(resolver.Providers, provDocs, func(d *manifest.ProviderDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.Hosts, hostDocs, func(d *manifest.HostDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.RateLimits, rlDocs, func(d *manifest.RateLimitDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.HostKeys, hkDocs, func(d *manifest.HostKeyDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.Models, mDocs, func(d *manifest.ModelDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.Pricings, prDocs, func(d *manifest.PricingDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.Bindings, bndDocs, func(d *manifest.HostBindingDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.Policies, polDocs, func(d *manifest.PolicyDTO) string { return d.Metadata.Name })
-	mintIDs(resolver.RelayKeys, rkDocs, func(d *manifest.RelayKeyDTO) string { return d.Metadata.Name })
+// docName is the metadata name of a document, for logs.
+func docName(d manifest.Document) string {
+	if m := d.Meta(); m != nil {
+		return m.Name
+	}
+	return ""
+}
 
+func tally(p *apply.Result) *Result {
 	res := &Result{}
-
-	for _, d := range provDocs {
-		p, err := manifest.ToProvider(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: provider %q: %w", d.Metadata.Name, err)
-		}
-		p.Meta.ID = resolver.Providers[d.Metadata.Name]
-		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
+	counters := map[string]*int{
+		"Team": &res.Teams, "Project": &res.Projects, "Provider": &res.Providers,
+		"Host": &res.Hosts, "RateLimit": &res.RateLimits, "HostKey": &res.HostKeys,
+		"Model": &res.Models, "Pricing": &res.Pricings, "HostBinding": &res.HostBindings,
+		"Policy": &res.Policies, "ServiceAccount": &res.ServiceAccounts,
+		"Group": &res.Groups, "Role": &res.Roles, "RoleBinding": &res.RoleBindings,
+		"PolicyBinding": &res.PolicyBindings, "Key": &res.Keys, "Overlay": &res.Overlays,
+	}
+	for _, e := range p.Entries {
+		if e.Action == apply.ActionSkipDirty {
 			res.Skipped++
 			continue
 		}
-		if err := stores.provider.Upsert(ctx, p); err != nil {
-			return nil, fmt.Errorf("seed: upsert provider %q: %w", d.Metadata.Name, err)
-		}
-		res.Providers++
-	}
-	for _, d := range hostDocs {
-		h, err := manifest.ToHost(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: host %q: %w", d.Metadata.Name, err)
-		}
-		h.Meta.ID = resolver.Hosts[d.Metadata.Name]
-		if resolver.skip(h.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.host.Upsert(ctx, h); err != nil {
-			return nil, fmt.Errorf("seed: upsert host %q: %w", d.Metadata.Name, err)
-		}
-		res.Hosts++
-	}
-	for _, d := range rlDocs {
-		rl, err := manifest.ToRateLimit(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: ratelimit %q: %w", d.Metadata.Name, err)
-		}
-		rl.Meta.ID = resolver.RateLimits[d.Metadata.Name]
-		if resolver.skip(rl.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.ratelimit.Upsert(ctx, rl); err != nil {
-			return nil, fmt.Errorf("seed: upsert ratelimit %q: %w", d.Metadata.Name, err)
-		}
-		res.RateLimits++
-	}
-	for _, d := range hkDocs {
-		k, err := manifest.ToHostKey(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: hostkey %q: %w", d.Metadata.Name, err)
-		}
-		k.Meta.ID = resolver.HostKeys[d.Metadata.Name]
-		if resolver.skip(k.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.hostkey.Upsert(ctx, k); err != nil {
-			return nil, fmt.Errorf("seed: upsert hostkey %q: %w", d.Metadata.Name, err)
-		}
-		res.HostKeys++
-	}
-	for _, d := range mDocs {
-		m, err := manifest.ToModel(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: model %q: %w", d.Metadata.Name, err)
-		}
-		m.Meta.ID = resolver.Models[d.Metadata.Name]
-		if resolver.skip(m.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.model.Upsert(ctx, m); err != nil {
-			return nil, fmt.Errorf("seed: upsert model %q: %w", d.Metadata.Name, err)
-		}
-		res.Models++
-	}
-	for _, d := range prDocs {
-		p, err := manifest.ToPricing(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: pricing %q: %w", d.Metadata.Name, err)
-		}
-		p.Meta.ID = resolver.Pricings[d.Metadata.Name]
-		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.pricing.Upsert(ctx, p); err != nil {
-			return nil, fmt.Errorf("seed: upsert pricing %q: %w", d.Metadata.Name, err)
-		}
-		res.Pricings++
-	}
-	for _, d := range bndDocs {
-		b, err := manifest.ToHostBinding(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: hostbinding %q: %w", d.Metadata.Name, err)
-		}
-		b.Meta.ID = resolver.Bindings[d.Metadata.Name]
-		if resolver.skip(b.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.hostbinding.Upsert(ctx, b); err != nil {
-			return nil, fmt.Errorf("seed: upsert hostbinding %q: %w", d.Metadata.Name, err)
-		}
-		res.HostBindings++
-	}
-	for _, d := range polDocs {
-		p, err := manifest.ToPolicy(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: policy %q: %w", d.Metadata.Name, err)
-		}
-		p.Meta.ID = resolver.Policies[d.Metadata.Name]
-		if resolver.skip(p.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.policy.Upsert(ctx, p); err != nil {
-			return nil, fmt.Errorf("seed: upsert policy %q: %w", d.Metadata.Name, err)
-		}
-		res.Policies++
-	}
-	for _, d := range rkDocs {
-		k, err := manifest.ToRelayKey(*d, resolver)
-		if err != nil {
-			return nil, fmt.Errorf("seed: relaykey %q: %w", d.Metadata.Name, err)
-		}
-		k.Meta.ID = resolver.RelayKeys[d.Metadata.Name]
-		if resolver.skip(k.Meta.ID, opts.ClearDirty) {
-			res.Skipped++
-			continue
-		}
-		if err := stores.relaykey.Upsert(ctx, k); err != nil {
-			return nil, fmt.Errorf("seed: upsert relaykey %q: %w", d.Metadata.Name, err)
-		}
-		res.RelayKeys++
-	}
-
-	return res, nil
-}
-
-// storeSet bundles the entity stores so the orchestration code
-// doesn't need to thread each individually.
-type storeSet struct {
-	provider    *provider.Store
-	host        *host.Store
-	ratelimit   *ratelimit.Store
-	hostkey     *hostkey.Store
-	model       *model.Store
-	policy      *policy.Store
-	pricing     *pricing.Store
-	hostbinding *binding.Store
-	relaykey    *relaykey.Store
-}
-
-// indexBuilder is a mutable resolver populated from PG + freshly minted ids.
-// It satisfies manifest.Resolver directly.
-type indexBuilder struct {
-	Providers  map[string]string
-	Hosts      map[string]string
-	RateLimits map[string]string
-	HostKeys   map[string]string
-	Models     map[string]string
-	Pricings   map[string]string
-	Bindings   map[string]string
-	Policies   map[string]string
-	RelayKeys  map[string]string
-
-	// Dirty is keyed by row id: true when the existing PG row was operator-
-	// edited. Populated from the List sweep in buildResolver so the upsert
-	// loops can skip protected rows without a second round-trip.
-	Dirty map[string]bool
-}
-
-// skip reports whether the row with id should be left untouched this run:
-// it is dirty and the run was not told to clear dirty rows.
-func (i *indexBuilder) skip(id string, clearDirty bool) bool {
-	return i.Dirty[id] && !clearDirty
-}
-
-func (i *indexBuilder) ProviderID(n string) (string, bool)  { v, ok := i.Providers[n]; return v, ok }
-func (i *indexBuilder) HostID(n string) (string, bool)      { v, ok := i.Hosts[n]; return v, ok }
-func (i *indexBuilder) PolicyID(n string) (string, bool)    { v, ok := i.Policies[n]; return v, ok }
-func (i *indexBuilder) ModelID(n string) (string, bool)     { v, ok := i.Models[n]; return v, ok }
-func (i *indexBuilder) HostKeyID(n string) (string, bool)   { v, ok := i.HostKeys[n]; return v, ok }
-func (i *indexBuilder) RateLimitID(n string) (string, bool) { v, ok := i.RateLimits[n]; return v, ok }
-func (i *indexBuilder) PricingID(n string) (string, bool)   { v, ok := i.Pricings[n]; return v, ok }
-func (i *indexBuilder) BindingID(n string) (string, bool)   { v, ok := i.Bindings[n]; return v, ok }
-
-func buildResolver(ctx context.Context, s storeSet) (*indexBuilder, error) {
-	idx := &indexBuilder{
-		Providers:  map[string]string{},
-		Hosts:      map[string]string{},
-		RateLimits: map[string]string{},
-		HostKeys:   map[string]string{},
-		Models:     map[string]string{},
-		Pricings:   map[string]string{},
-		Bindings:   map[string]string{},
-		Policies:   map[string]string{},
-		RelayKeys:  map[string]string{},
-		Dirty:      map[string]bool{},
-	}
-	provs, err := s.provider.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list providers: %w", err)
-	}
-	for _, p := range provs {
-		idx.Providers[p.Meta.Name] = p.Meta.ID
-		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
-	}
-	hosts, err := s.host.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list hosts: %w", err)
-	}
-	for _, h := range hosts {
-		idx.Hosts[h.Meta.Name] = h.Meta.ID
-		idx.Dirty[h.Meta.ID] = h.Meta.Dirty
-	}
-	rls, err := s.ratelimit.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list ratelimits: %w", err)
-	}
-	for _, r := range rls {
-		idx.RateLimits[r.Meta.Name] = r.Meta.ID
-		idx.Dirty[r.Meta.ID] = r.Meta.Dirty
-	}
-	hks, err := s.hostkey.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list hostkeys: %w", err)
-	}
-	for _, k := range hks {
-		idx.HostKeys[k.Meta.Name] = k.Meta.ID
-		idx.Dirty[k.Meta.ID] = k.Meta.Dirty
-	}
-	models, err := s.model.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list models: %w", err)
-	}
-	for _, m := range models {
-		idx.Models[m.Meta.Name] = m.Meta.ID
-		idx.Dirty[m.Meta.ID] = m.Meta.Dirty
-	}
-	prs, err := s.pricing.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list pricings: %w", err)
-	}
-	for _, p := range prs {
-		idx.Pricings[p.Meta.Name] = p.Meta.ID
-		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
-	}
-	bnds, err := s.hostbinding.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list hostbindings: %w", err)
-	}
-	for _, b := range bnds {
-		idx.Bindings[b.Meta.Name] = b.Meta.ID
-		idx.Dirty[b.Meta.ID] = b.Meta.Dirty
-	}
-	pols, err := s.policy.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list policies: %w", err)
-	}
-	for _, p := range pols {
-		idx.Policies[p.Meta.Name] = p.Meta.ID
-		idx.Dirty[p.Meta.ID] = p.Meta.Dirty
-	}
-	rks, err := s.relaykey.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed: list relaykeys: %w", err)
-	}
-	for _, k := range rks {
-		idx.RelayKeys[k.Meta.Name] = k.Meta.ID
-		idx.Dirty[k.Meta.ID] = k.Meta.Dirty
-	}
-	return idx, nil
-}
-
-func mintIDs[T any](into map[string]string, docs []T, name func(T) string) {
-	for _, d := range docs {
-		n := name(d)
-		if _, ok := into[n]; !ok {
-			into[n] = meta.NewID()
+		if c := counters[e.Kind]; c != nil {
+			*c++
 		}
 	}
+	return res
 }

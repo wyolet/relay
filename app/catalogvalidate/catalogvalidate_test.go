@@ -165,11 +165,11 @@ func TestValidateGraph_PricingMissingTargetModel(t *testing.T) {
 	}
 }
 
-func TestValidateGraph_RelayKeyMissingPolicy(t *testing.T) {
+func TestValidateGraph_KeyMissingPolicy(t *testing.T) {
 	docs := fixture()
-	docs = append(docs, manifest.Document{RelayKey: &manifest.RelayKeyDTO{
+	docs = append(docs, manifest.Document{Key: &manifest.KeyDTO{
 		Metadata: manifest.WireMeta{Name: "k1"},
-		Spec:     manifest.RelayKeySpec{Policy: "ghost-policy", KeyHash: "x"},
+		Spec:     manifest.KeySpec{Policy: "ghost-policy", KeyHash: "x"},
 	}})
 	issues := ValidateGraph(docs)
 	if !hasRefMissing(issues, "Policy", "ghost-policy") {

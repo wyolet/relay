@@ -145,6 +145,11 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 	var unreachable *pipeline.UpstreamUnreachableError
 	var exceeded *pkgratelimit.ExceededError
 	switch {
+	case errors.Is(err, pkgratelimit.ErrRevoked):
+		// The token's jti is on the team's denylist — the check rides the
+		// Reserve script, so this lands before any upstream call.
+		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "token_revoked",
+			"this token has been revoked")
 	case errors.As(err, &exceeded):
 		// Relay's own inbound rate limit rejected the request before any
 		// upstream call. This MUST be a 429 with Retry-After from the

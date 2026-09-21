@@ -103,7 +103,7 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary: "Read this model's overlay: patch, pristine template, effective spec, quarantine state",
 		Tags:    []string{"models"}, Middlewares: protect, Errors: []int{401, 404},
 	}, func(ctx context.Context, in *overlayIDInput) (*overlayOut, error) {
-		if err := d.Authz.Authorize(ctx, "models.overlay.read", authz.Resource{Kind: "model", ID: in.ID}); err != nil {
+		if err := d.Authz.Authorize(ctx, "models.overlay.get", authz.Resource{Kind: "model", ID: in.ID}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
 		tmpl, err := getTemplate(ctx, in.ID)

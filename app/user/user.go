@@ -22,15 +22,20 @@ const RoleAdmin = "admin"
 
 // User is one account row.
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	Email        string    `json:"email,omitempty"`
-	PasswordHash string    `json:"-"`
-	OIDCSubject  string    `json:"oidcSubject,omitempty"`
-	Roles        []string  `json:"roles,omitempty"`
-	Disabled     bool      `json:"disabled,omitempty"`
-	CreatedAt    time.Time `json:"createdAt,omitempty"`
-	UpdatedAt    time.Time `json:"updatedAt,omitempty"`
+	ID           string   `json:"id"`
+	Username     string   `json:"username"`
+	Email        string   `json:"email,omitempty"`
+	PasswordHash string   `json:"-"`
+	OIDCSubject  string   `json:"oidcSubject,omitempty"`
+	Roles        []string `json:"roles,omitempty"`
+	Disabled     bool     `json:"disabled,omitempty"`
+
+	// TokenVersion is the generation every inference token this user holds
+	// must carry. Bumping it invalidates all of them at once.
+	TokenVersion int `json:"tokenVersion,omitempty"`
+
+	CreatedAt time.Time `json:"createdAt,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
 // HasRole reports whether the user carries role.

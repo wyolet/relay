@@ -30,6 +30,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/ids"
@@ -52,7 +53,7 @@ type oidcUserStore interface {
 
 // sessionLogin is the slice of session.Manager the callback needs.
 type sessionLogin interface {
-	LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error
+	LoginOIDC(ctx context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error
 }
 
 // oidcDeps carries the seams the two handlers use, injectable for tests.
@@ -146,6 +147,13 @@ func (od *oidcDeps) start(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
+// auditLoginDenied records a failed SSO login. The subject (or the username,
+// once one is known) is all the identity there is on these paths.
+func auditLoginDenied(ctx context.Context, name string) {
+	audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: name},
+		audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: name})
+}
+
 func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 	cfg := od.cfg()
 	if !cfg.Enabled {
@@ -155,22 +163,26 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 	if e := r.URL.Query().Get("error"); e != "" {
 		slog.Warn("oidc callback: provider returned error", "error", e,
 			"description", r.URL.Query().Get("error_description"))
+		auditLoginDenied(r.Context(), "")
 		http.Error(w, "login failed at identity provider: "+e, http.StatusBadGateway)
 		return
 	}
 
 	fs, ok := od.takeFlowCookie(w, r)
 	if !ok {
+		auditLoginDenied(r.Context(), "")
 		http.Error(w, "login flow expired — start again", http.StatusBadRequest)
 		return
 	}
 	qstate := r.URL.Query().Get("state")
 	if qstate == "" || subtle.ConstantTimeCompare([]byte(qstate), []byte(fs.State)) != 1 {
+		auditLoginDenied(r.Context(), "")
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
+		auditLoginDenied(r.Context(), "")
 		http.Error(w, "missing code", http.StatusBadRequest)
 		return
 	}
@@ -188,6 +200,7 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 	tok, err := oauth.New(oc).Exchange(r.Context(), code, fs.Verifier)
 	if err != nil {
 		slog.Error("oidc callback: code exchange failed", "err", err)
+		auditLoginDenied(r.Context(), "")
 		http.Error(w, "code exchange failed", http.StatusBadGateway)
 		return
 	}
@@ -195,6 +208,7 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 	claims, err := idTokenClaims(tok)
 	if err != nil {
 		slog.Error("oidc callback: id_token unusable", "err", err)
+		auditLoginDenied(r.Context(), "")
 		http.Error(w, "identity provider returned no usable identity", http.StatusBadGateway)
 		return
 	}
@@ -204,32 +218,40 @@ func (od *oidcDeps) callback(w http.ResponseWriter, r *http.Request) {
 	u, err := od.users.ByOIDCSubject(ctx, subject)
 	if err != nil {
 		slog.Error("oidc callback: user lookup failed", "err", err)
+		auditLoginDenied(ctx, subject)
 		http.Error(w, "user lookup failed", http.StatusInternalServerError)
 		return
 	}
 	if u == nil {
 		if !cfg.OpenRegistration() {
+			auditLoginDenied(ctx, subject)
 			http.Error(w, "no account for this identity (registration is closed)", http.StatusForbidden)
 			return
 		}
 		u, err = od.provision(ctx, subject, claims)
 		if err != nil {
 			slog.Error("oidc callback: provision failed", "err", err)
+			auditLoginDenied(ctx, subject)
 			http.Error(w, "account provisioning failed", http.StatusInternalServerError)
 			return
 		}
 		slog.Info("oidc: user auto-provisioned", "username", u.Username)
 	}
 	if u.Disabled {
+		auditLoginDenied(ctx, u.Username)
 		http.Error(w, "account disabled", http.StatusForbidden)
 		return
 	}
 
-	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, subject, claims.Sid, u.Roles...); err != nil {
+	if err := od.sessions.LoginOIDC(ctx, u.ID, u.Username, subject, claims.Sid, claims.groups(cfg.EffectiveGroupsClaim()), u.Roles...); err != nil {
 		slog.Error("oidc callback: session create failed", "err", err)
+		auditLoginDenied(ctx, u.Username)
 		http.Error(w, "session create failed", http.StatusInternalServerError)
 		return
 	}
+	audit.Record(ctx, "auth.login",
+		audit.Resource{Kind: "user", ID: u.ID, Name: u.Username}, audit.StatusAllowed,
+		audit.Actor{Kind: audit.ActorUser, ID: u.ID, Name: u.Username})
 	target := cfg.PostLoginURL
 	if target == "" {
 		target = "/"
@@ -304,6 +326,26 @@ type idClaims struct {
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`
 	Sid               string `json:"sid"`
+
+	// raw keeps the decoded payload so the groups claim — whose name is
+	// deployment config, not a fixed field — can be read out of it.
+	raw map[string]any
+}
+
+// groups returns the string values of the named claim. Providers render it
+// as an array of strings; anything else is ignored rather than guessed at.
+func (c *idClaims) groups(claim string) []string {
+	if c == nil || claim == "" {
+		return nil
+	}
+	list, _ := c.raw[claim].([]any)
+	out := make([]string, 0, len(list))
+	for _, v := range list {
+		if name, ok := v.(string); ok && name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // idTokenClaims extracts claims from the token response's id_token. The
@@ -335,6 +377,7 @@ func idTokenClaims(tok *oauth.Token) (*idClaims, error) {
 		if err := json.Unmarshal(payload, &c); err != nil {
 			return nil, fmt.Errorf("id_token claims: %w", err)
 		}
+		_ = json.Unmarshal(payload, &c.raw)
 		if c.Sub == "" {
 			return nil, fmt.Errorf("id_token has no sub")
 		}

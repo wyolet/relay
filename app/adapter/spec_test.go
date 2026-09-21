@@ -382,7 +382,7 @@ func TestSpecAdapter_OAuth_FallsBackWhenNoVariant(t *testing.T) {
 // Security edge: relay's resolved credential must win over any Authorization
 // header forwarded from the caller (the auth header is Set, not Add).
 func TestSpecAdapter_OAuth_OverridesForwardedAuthHeader(t *testing.T) {
-	hdr := http.Header{"Authorization": []string{"Bearer caller-relay-key"}}
+	hdr := http.Header{"Authorization": []string{"Bearer caller-key"}}
 	got := callCapture(t, dualAuthSpec(), "sk-ant-oat01-upstream", hdr, true)
 	if got.auth != "Bearer sk-ant-oat01-upstream" {
 		t.Errorf("Authorization = %q, want the upstream credential to override the forwarded one", got.auth)

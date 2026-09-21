@@ -19,7 +19,7 @@ func (s *Snapshot) addModels(models []*model.Model, providers idSet) {
 // sanitizeModel drops the model if its owning Provider isn't enabled.
 // Deprecation.Replacement is left as-is (informational, not a hot-path lookup).
 func sanitizeModel(m *model.Model, providers idSet) (*model.Model, bool) {
-	if _, ok := providers[m.Meta.Owner.ID]; !ok {
+	if !providers(m.Meta.Owner.ID) {
 		return nil, false
 	}
 	clean := *m

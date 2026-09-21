@@ -295,10 +295,22 @@ func matches(ev Event, q EventQuery, cutoff time.Time) bool {
 	if q.RequestID != "" && ev.RequestID != q.RequestID {
 		return false
 	}
+	if !inScope(q, ev) {
+		return false
+	}
 	if !inList(q.RelayKeyHash, ev.RelayKeyHash) {
 		return false
 	}
 	if !inList(q.PolicyID, ev.PolicyID) {
+		return false
+	}
+	if !inList(q.ProjectID, ev.ProjectID) {
+		return false
+	}
+	if !inList(q.TeamID, ev.TeamID) {
+		return false
+	}
+	if !inList(q.PrincipalID, ev.PrincipalID) {
 		return false
 	}
 	if !inList(q.ModelID, ev.ModelID) {
@@ -430,6 +442,14 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.RelayKeyHash
 	case "policy_id":
 		return ev.PolicyID
+	case "project_id":
+		return ev.ProjectID
+	case "team_id":
+		return ev.TeamID
+	case "principal_id":
+		return ev.PrincipalID
+	case "credential_id":
+		return ev.CredentialID
 	case "model_id":
 		return ev.ModelID
 	case "host_id":
@@ -448,6 +468,12 @@ func groupKey(ev Event, groupBy string) string {
 		return ev.Policy
 	case "provider":
 		return ev.Provider
+	case "project":
+		return ev.Project
+	case "team":
+		return ev.Team
+	case "principal":
+		return ev.Principal
 	default: // "source"
 		return ev.Source
 	}
@@ -502,4 +528,28 @@ func percentile(sortedAsc []int64, p float64) int64 {
 	}
 	idx := int(float64(len(sortedAsc)-1) * p)
 	return sortedAsc[idx]
+}
+
+// inScope applies the read-scope disjunction: within the caller's projects
+// OR from one of the caller's own keys. No scope set means no narrowing.
+func inScope(q EventQuery, ev Event) bool {
+	if len(q.ScopeProjectID) == 0 && len(q.ScopeRelayKeyHash) == 0 && len(q.ScopePrincipalID) == 0 {
+		return true
+	}
+	for _, p := range q.ScopeProjectID {
+		if p != "" && p == ev.ProjectID {
+			return true
+		}
+	}
+	for _, h := range q.ScopeRelayKeyHash {
+		if h != "" && h == ev.RelayKeyHash {
+			return true
+		}
+	}
+	for _, p := range q.ScopePrincipalID {
+		if p != "" && p == ev.PrincipalID {
+			return true
+		}
+	}
+	return false
 }

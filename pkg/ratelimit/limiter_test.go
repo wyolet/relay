@@ -170,7 +170,7 @@ func TestTokens_PostHocOnly(t *testing.T) {
 
 	// Commit each with 20 tokens → total 100 (equal to amount; still allowed with > comparator).
 	for i, res := range reservations {
-		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"tokens": 20}}); err != nil {
+		if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"input": 12, "output": 8}}); err != nil {
 			t.Fatalf("commit %d: %v", i+1, err)
 		}
 	}
@@ -181,7 +181,7 @@ func TestTokens_PostHocOnly(t *testing.T) {
 		t.Fatalf("6th reserve (rate==amount should pass): %v", err)
 	}
 	// Commit 1 more token → total 101 > 100.
-	if err := l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"tokens": 1}}); err != nil {
+	if err := l.Commit(ctx, res6, Observations{Tokens: map[string]int64{"input": 1}}); err != nil {
 		t.Fatalf("commit 6: %v", err)
 	}
 
@@ -193,6 +193,33 @@ func TestTokens_PostHocOnly(t *testing.T) {
 	var ee *ExceededError
 	if !errors.As(err, &ee) || ee.Rule.Meter != "tokens" {
 		t.Fatalf("expected tokens meter exceeded, got %v", err)
+	}
+}
+
+// Bare "tokens" counts input + output. The other keys break those two
+// down (reasoning ⊂ output, cache reads ⊂ input), so summing the whole map
+// charged one request several times over.
+func TestBareTokensMeterCountsInputPlusOutputOnly(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+	l := newTestLimiter(t, &now)
+	ctx := context.Background()
+	rules := []Rule{tokRule("Route:test-route:rl-tokens", "tokens", 100, time.Minute)}
+
+	res, err := l.Reserve(ctx, testScope, rules)
+	if err != nil {
+		t.Fatalf("reserve: %v", err)
+	}
+	// 60 real tokens, reported alongside the sub-meters that break them down.
+	obs := Observations{Tokens: map[string]int64{
+		"input": 40, "output": 20,
+		"reasoning": 15, "cache_read": 30, "cache_creation": 25,
+	}}
+	if err := l.Commit(ctx, res, obs); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	// The old sum was 130 > 100 and would have refused the next reserve.
+	if _, err := l.Reserve(ctx, testScope, rules); err != nil {
+		t.Fatalf("reserve after 60 counted tokens: %v — sub-meters were double-counted", err)
 	}
 }
 

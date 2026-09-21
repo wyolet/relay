@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wyolet/relay/app/key"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
@@ -57,7 +58,16 @@ func testService(t *testing.T, handler jobq.Handler) (*Service, *jobq.Queue, con
 	}
 	t.Cleanup(func() { cancel(); q.Wait() })
 	// runner is nil: these tests drive a stub handler, never Service.Handler().
-	return NewService(NewStore(pool), q, nil), q, cancel
+	return NewService(NewStore(pool), q, nil, nil), q, cancel
+}
+
+// keyCaller is a submission by a service-account key: the owner token is the
+// key hash, as it has always been.
+func keyCaller(hash, policyID string) *Caller {
+	c := &Caller{KeyHash: hash, PolicyID: policyID}
+	c.PrincipalKind, c.PrincipalID = string(key.PrincipalServiceAccount), "sa-"+hash
+	c.CredentialKind, c.CredentialID = "key", "k-"+hash
+	return c
 }
 
 func waitCounts(t *testing.T, svc *Service, id, hash string, state jobq.State, want int, timeout time.Duration) *BatchView {
@@ -87,7 +97,7 @@ func TestIntegration_SubmitRunResults(t *testing.T) {
 	const hash = "ownerhash1"
 
 	items := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
-	id, err := svc.Submit(ctx, hash, "policy1", "openai", items)
+	id, err := svc.Submit(ctx, keyCaller(hash, "policy1"), "openai", items)
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -119,7 +129,7 @@ func TestIntegration_OwnerIsolation(t *testing.T) {
 	svc, _, _ := testService(t, func(_ context.Context, j *jobq.Job) ([]byte, error) { return j.Input(), nil })
 	ctx := context.Background()
 
-	id, err := svc.Submit(ctx, "owner", "p", "openai", [][]byte{[]byte("x")})
+	id, err := svc.Submit(ctx, keyCaller("owner", "p"), "openai", [][]byte{[]byte("x")})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -148,7 +158,7 @@ func TestIntegration_Cancel(t *testing.T) {
 	ctx := context.Background()
 	const hash = "cancelowner"
 
-	id, err := svc.Submit(ctx, hash, "p", "openai", [][]byte{[]byte("1"), []byte("2")})
+	id, err := svc.Submit(ctx, keyCaller(hash, "p"), "openai", [][]byte{[]byte("1"), []byte("2")})
 	if err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -169,4 +179,116 @@ func TestIntegration_Cancel(t *testing.T) {
 		t.Fatalf("batch status = %s, want cancelled", b.Status)
 	}
 	waitCounts(t, svc, id, hash, jobq.StateCancelled, 2, 3*time.Second)
+}
+
+// A submission records the principal's tenancy so an item that runs minutes
+// later is attributed to who submitted it, not to whatever the credential
+// resolves to at execution time.
+func TestIntegration_SubmitRecordsAttribution(t *testing.T) {
+	var seen Attribution
+	// Mirrors Service.Handler: the item reads its attribution off its own job
+	// metadata, which is what the runner puts on the lifecycle.
+	capture := func(_ context.Context, job *jobq.Job) ([]byte, error) {
+		seen = Attribution{
+			ProjectID:      job.Meta(metaProjectID),
+			TeamID:         job.Meta(metaTeamID),
+			PrincipalKind:  job.Meta(metaPrincipalKind),
+			PrincipalID:    job.Meta(metaPrincipalID),
+			CredentialKind: job.Meta(metaCredentialKind),
+			CredentialID:   job.Meta(metaCredentialID),
+		}
+		return job.Input(), nil
+	}
+	svc, _, _ := testService(t, capture)
+	ctx := context.Background()
+	const hash = "attribhash"
+
+	c := &Caller{KeyHash: hash, PolicyID: "policy1"}
+	c.ProjectID, c.TeamID = "p1", "t1"
+	c.PrincipalKind, c.PrincipalID = string(key.PrincipalServiceAccount), "sa1"
+	c.CredentialKind, c.CredentialID = "key", "k1"
+	id, err := svc.Submit(ctx, c, "openai", [][]byte{[]byte("a")})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	b, err := svc.store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if b.ProjectID != "p1" || b.TeamID != "t1" {
+		t.Fatalf("tenancy: %q / %q", b.ProjectID, b.TeamID)
+	}
+	if b.PrincipalKind != string(key.PrincipalServiceAccount) || b.PrincipalID != "sa1" {
+		t.Fatalf("principal: %q / %q", b.PrincipalKind, b.PrincipalID)
+	}
+	if b.CredentialKind != "key" || b.CredentialID != "k1" {
+		t.Fatalf("credential: %q / %q", b.CredentialKind, b.CredentialID)
+	}
+
+	waitCounts(t, svc, id, hash, jobq.StateCompleted, 1, 3*time.Second)
+	if seen != b.Attribution {
+		t.Fatalf("execution read %+v from job metadata, want %+v", seen, b.Attribution)
+	}
+}
+
+// tokenCaller is a submission by an inference token: it presents no key, so
+// the owner token falls back to the principal.
+func tokenCaller(userID, jti, policyID string) *Caller {
+	c := &Caller{PolicyID: policyID}
+	c.ProjectID, c.TeamID = "p1", "t1"
+	c.PrincipalKind, c.PrincipalID = string(key.PrincipalUser), userID
+	c.CredentialKind, c.CredentialID = "token", jti
+	return c
+}
+
+// A token authenticates a submission exactly as a key does: rejecting it
+// meant tokens could reach /v1/chat/completions but not /v1/batches.
+func TestIntegration_SubmitAcceptsATokenCaller(t *testing.T) {
+	echo := func(_ context.Context, job *jobq.Job) ([]byte, error) { return job.Input(), nil }
+	svc, _, _ := testService(t, echo)
+	ctx := context.Background()
+
+	c := tokenCaller("u-alice", "jti-1", "policy1")
+	id, err := svc.Submit(ctx, c, "openai", [][]byte{[]byte("a")})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	b, err := svc.store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if b.CredentialKind != "token" || b.CredentialID != "jti-1" {
+		t.Fatalf("credential: %q / %q", b.CredentialKind, b.CredentialID)
+	}
+	waitCounts(t, svc, id, c.Owner(), jobq.StateCompleted, 1, 3*time.Second)
+
+	// Two token callers must not reach each other's batches just because
+	// neither presents a key hash.
+	other := tokenCaller("u-bob", "jti-2", "policy1")
+	if _, err := svc.Status(ctx, id, other.Owner()); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("status as another token holder: err = %v, want ErrForbidden", err)
+	}
+}
+
+// The policy recorded is the one the auth layer resolved (key → service
+// account → policy binding), not the key row's own field, which is empty for
+// a key that inherits its policy.
+func TestIntegration_SubmitRecordsTheResolvedPolicy(t *testing.T) {
+	echo := func(_ context.Context, job *jobq.Job) ([]byte, error) { return job.Input(), nil }
+	svc, _, _ := testService(t, echo)
+	ctx := context.Background()
+
+	c := keyCaller("inherited", "bound-policy")
+	id, err := svc.Submit(ctx, c, "openai", [][]byte{[]byte("a")})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	b, err := svc.store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if b.PolicyID != "bound-policy" {
+		t.Fatalf("policy = %q, want the resolved one", b.PolicyID)
+	}
 }

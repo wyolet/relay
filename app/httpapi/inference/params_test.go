@@ -120,12 +120,12 @@ func TestStripCanonicalParamsNothingSet(t *testing.T) {
 // before the pipeline runs, so no live upstream is needed). top_p is also
 // flagged but absent from the body, so it must not be reported dropped.
 func TestDispatch_BytePass_StripsUnsupportedParams(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI,
+	cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI,
 		model.Capabilities{UnsupportedParams: []string{"temperature", "top_p"}})
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{
@@ -146,11 +146,11 @@ func TestDispatch_BytePass_StripsUnsupportedParams(t *testing.T) {
 // TestDispatch_BytePass_UnflaggedModelUntouched: no capability flags → the
 // guard must not fire at all, temperature or not.
 func TestDispatch_BytePass_UnflaggedModelUntouched(t *testing.T) {
-	cat, rk := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "ollama-self", adapters.OpenAI)
 	d := buildDeps(t, cat)
 
 	r := httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil)
-	r = withNormalContext(r, rk)
+	r = withNormalContext(r, pr)
 	w := httptest.NewRecorder()
 
 	Dispatch(d, w, r, DispatchInput{

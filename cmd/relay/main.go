@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -31,6 +33,7 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
+	applicense "github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/metricslog"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
@@ -38,6 +41,7 @@ import (
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/routing"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/session"
@@ -48,6 +52,7 @@ import (
 	relayweb "github.com/wyolet/relay/cmd/relay/web"
 	"github.com/wyolet/relay/internal/config"
 	"github.com/wyolet/relay/internal/identity"
+	"github.com/wyolet/relay/internal/license"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/jobq"
@@ -66,6 +71,10 @@ import (
 	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
+// builtinRoleSeedLock is the advisory-lock id the built-in role seed
+// serializes on. Arbitrary but fixed: every pod must pick the same number.
+const builtinRoleSeedLock int64 = 0x52454C41595F5242
+
 func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
@@ -79,13 +88,28 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "migrate":
-			slog.Debug("relay: 'migrate' subcommand currently runs implicitly on boot")
+			if err := runMigrate(os.Args[2:]); err != nil {
+				slog.Error("migrate failed", "err", err)
+				os.Exit(1)
+			}
 			return
 		case "seed":
 			if err := runSeed(os.Args[2:]); err != nil {
 				slog.Error("seed failed", "err", err)
 				os.Exit(1)
 			}
+			return
+		case "apply":
+			runCLI("apply", runApply, os.Args[2:])
+			return
+		case "export":
+			runCLI("export", runExport, os.Args[2:])
+			return
+		case "keygen":
+			runCLI("keygen", runKeygen, os.Args[2:])
+			return
+		case "token":
+			runCLI("token", runToken, os.Args[2:])
 			return
 		}
 	}
@@ -102,9 +126,13 @@ func main() {
 
 	bootCtx := context.Background()
 
+	if !cfg.MigrateOnBoot {
+		slog.Warn("storage: boot migrations disabled (RELAY_MIGRATE_ON_BOOT=off); the schema is left as found")
+	}
 	st, err := storagemod.Open(bootCtx, cfg.PGDSN,
 		storagemod.WithMaxConns(cfg.PGMaxConns),
-		storagemod.WithMinConns(cfg.PGMinConns))
+		storagemod.WithMinConns(cfg.PGMinConns),
+		storagemod.WithMigrateOnBoot(cfg.MigrateOnBoot))
 	if err != nil {
 		slog.Error("storage.Open failed", "err", err)
 		os.Exit(1)
@@ -152,6 +180,24 @@ func main() {
 		slog.Info("settings: seeded from YAML", "dir", settingsDir, "sections", seeded)
 	}
 
+	// License: verified offline, never fatal. Resolved before hydrate so
+	// the first settings decode already sees the gate. The environment wins
+	// over the stored value; a bad or expired one degrades to community.
+	licenseSvc := license.New(nil)
+	var storedLicense string
+	if row, err := stores.Settings.Get(bootCtx, settings.SectionLicense); err == nil {
+		if l, ok := row.Value.(*settings.License); ok {
+			storedLicense = l.Value
+		}
+	}
+	if info, err := licenseSvc.Set(storedLicense); err != nil {
+		slog.Warn("license: unusable — running as community", "err", err)
+	} else if info.Licensed {
+		slog.Info("license: verified", "customer", info.Customer,
+			"expiresAt", info.ExpiresAt, "features", info.Features, "grace", info.Grace)
+	}
+	settings.SetLicenseGate(licenseSvc)
+
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
 	// hydrateLoop launches below, after settings-change subscribers are
@@ -175,6 +221,37 @@ func main() {
 	usersStore := user.NewStore(gen.New(st.Pool()))
 	if err := user.SeedFromIdentity(bootCtx, usersStore, idStore, slog.Default()); err != nil {
 		slog.Error("user seed from identity YAML failed", "err", err)
+		os.Exit(1)
+	}
+
+	cat.UseTokenVersions(usersStore)
+
+	// Inference tokens: the signing key is generated on first boot and kept
+	// under the master key; both planes hold it in memory and follow the
+	// auth:tokens section from there.
+	tokenSigner := &control.TokenSigner{}
+	tokenVerifier := &inference.TokenVerifier{}
+	if err := loadTokenSigningKey(bootCtx, st.Pool(), stores, cfg.MasterKey, tokenSigner, tokenVerifier); err != nil {
+		slog.Error("auth: inference-token signing key unavailable", "err", err)
+		os.Exit(1)
+	}
+	// PUT /license writes the section; the watcher is what carries the change
+	// to the other pods (and back to this one after a NOTIFY).
+	settingswatch.New(cat, settings.SectionLicense, applyLicenseSection(licenseSvc), slog.Default()).Start()
+
+	settingswatch.New(cat, settings.AuthTokensSection, func(a settings.AuthTokens) {
+		if err := applyAuthTokensSection(listenerCtx, st.Pool(), stores, cfg.MasterKey, a, tokenSigner, tokenVerifier); err != nil {
+			slog.Error("auth: inference-token signing key reload failed", "err", err)
+		}
+	}, slog.Default()).Start()
+
+	// Built-in roles: seed-if-absent, so an operator's edits survive and a
+	// fresh deployment always has the seven system rows to bind against.
+	seedLock := func(ctx context.Context, fn func(context.Context) error) error {
+		return storagemod.WithAdvisoryLock(ctx, st.Pool(), builtinRoleSeedLock, fn)
+	}
+	if err := role.SeedBuiltins(bootCtx, stores.Role, slog.Default(), seedLock); err != nil {
+		slog.Error("built-in role seed failed", "err", err)
 		os.Exit(1)
 	}
 
@@ -254,10 +331,15 @@ func main() {
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.New(kvStore, cookieSecure, "sess:")
+	sessMgr.UseGroups(func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 
 	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
 	// the boot, not the first login attempt.
-	if oidcEnv, err := settings.AuthOIDCEnv(); err != nil {
+	// An unlicensed overlay is refused, not fatal: a deployment that loses
+	// its license keeps booting and keeps serving password login.
+	if oidcEnv, err := settings.AuthOIDCEnv(); errors.Is(err, applicense.ErrRequired) {
+		slog.Warn("auth: oidc login requires a license — falling back to password login", "err", err)
+	} else if err != nil {
 		slog.Error("auth: invalid WYOLET_* OIDC env overlay", "err", err)
 		os.Exit(1)
 	} else if oidcEnv != nil {
@@ -437,7 +519,7 @@ func main() {
 	// Payload logging: the second lifecycle observer. Always wired; its
 	// runtime config lives in the "payload-logging" settings section, so it
 	// toggles and reconfigures (backend / bucket / credentials) without a
-	// restart. Per-request capture is still gated by the Policy/RelayKey
+	// restart. Per-request capture is still gated by the Policy/Key
 	// opt-in resolved at the inference entry. S3 credentials resolve through
 	// the shared secret registry.
 	payloadCHBootCfg := payloadCHBoot{
@@ -486,6 +568,16 @@ func main() {
 	// change (mirrors the sink Controller).
 	payloadReader := newPayloadReaderResolver(cat, stores.Secrets, payloadCHBootCfg, slog.Default())
 
+	// Admin audit log: bounded emitter → PG, retention from the "audit"
+	// settings section. Wired before hydration so the first settings reload
+	// lands on the emitter.
+	auditStore := audit.NewStore(gen.New(st.Pool()))
+	auditEmitter := audit.NewEmitter(auditStore, slog.Default())
+	defer auditEmitter.Close()
+	settingswatch.New(cat, settings.SectionAudit, func(a settings.Audit) {
+		auditEmitter.SetRetentionDays(a.RetentionDays)
+	}, slog.Default()).Start()
+
 	// Request-parsing depth lives in the "parsing" settings section and
 	// hot-swaps the openai adapter's rich-parse toggle. The vendor setter
 	// is confined here (composition root) so app/ stays vendor-neutral.
@@ -516,11 +608,18 @@ func main() {
 		slog.Error("batch payload store init failed", "err", err)
 		os.Exit(1)
 	}
+	// RBAC makes a credential's grants the whole access model, so a key whose
+	// policy does not resolve has no access rather than the shared pool's.
+	var routingOpts []routing.Option
+	if cfg.Authz == config.AuthzRBAC {
+		routingOpts = append(routingOpts, routing.RequirePolicy())
+	}
 	batchQueue := jobq.New(st.Pool(), batchPayloads, jobq.Options{})
 	batchSvc := batch.NewService(
 		batch.NewStore(st.Pool()),
 		batchQueue,
-		&batch.Runner{Resolver: routing.New(cat), Pipeline: pl, Specs: specRegistry, Catalog: cat},
+		&batch.Runner{Resolver: routing.New(cat, routingOpts...), Pipeline: pl, Specs: specRegistry, Catalog: cat},
+		batchCaller,
 	)
 	batchQueue.Register(batch.Queue, batchSvc.Handler())
 	if err := batchQueue.Start(listenerCtx); err != nil {
@@ -540,7 +639,8 @@ func main() {
 	inference.Mount(inferRouter, inference.Deps{
 		Pinger:         st,
 		Catalog:        cat,
-		Resolver:       routing.New(cat),
+		Tokens:         tokenVerifier,
+		Resolver:       routing.New(cat, routingOpts...),
 		Pipeline:       pl,
 		Proxy:          proxyPipeline,
 		Lifecycle:      lifecycleReg,
@@ -551,12 +651,12 @@ func main() {
 	})
 
 	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →
-	// relay-key auth), mounted directly on chi like /v1/ws since it isn't a
+	// key auth), mounted directly on chi like /v1/ws since it isn't a
 	// huma operation.
 	inferRouter.With(
 		inference.ReadinessMiddleware(cat),
 		inference.ClassifyMiddleware(),
-		inference.RelayKeyAuthMiddleware(cat),
+		inference.PrincipalMiddleware(cat, tokenVerifier),
 	).Mount("/v1/batches", batchSvc.Routes())
 
 	inferAddr := ":8080"
@@ -587,33 +687,49 @@ func main() {
 		if len(cfg.ControlAllowOrigins) > 0 {
 			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 		}
-		// /config.json stays at the listener ROOT — the UI fetches it at boot,
-		// before it knows the /api prefix. It advertises controlApiUrl=/api so
-		// the SPA's API client targets /api/* while the SPA's own routes
-		// (/models, /policies, …) fall through to the embedded UI below.
-		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(runtimeConfig(cfg), cat))
 		// Control API under /api so its CRUD paths (/models, /policies, …) don't
 		// shadow the SPA's identically-named client-side routes on the shared
 		// control origin (a hard-reload of /models must serve the UI, not JSON).
 		var authorizer authz.Authorizer = authz.AlwaysAllowAuthenticated{}
-		if cfg.MultiUser {
-			authorizer = authz.OwnerScoped{}
+		if cfg.Authz == config.AuthzRBAC {
+			authorizer = authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
 		}
+		// Which authorizer is live decides whether an authenticated user is
+		// an admin; an upgrade that silently picks the wrong one is exactly
+		// what an operator needs to see in the first lines of a boot log.
+		slog.Info("relay control: authorization mode", "authz", cfg.Authz)
+		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
 			Identity:      idStore,
-			Users:         usersStore,
-			Sessions:      sessMgr,
-			AdminToken:    cfg.AdminToken,
-			Authz:         authorizer,
-			Catalog:       cat,
-			Stores:        stores,
-			CookieSecure:  cookieSecure,
-			UsageReader:   usageReader,
-			PayloadReader: payloadReader,
-			Selector:      selector,
-			HostHealth:    hostHealth,
-			RuntimeConfig: runtimeConfig(cfg),
+			TokenSigner:   tokenSigner,
+			TokenDenylist: kvStore,
+			MintLimiter:   limiter,
+			RotateTokenKey: func(ctx context.Context) error {
+				return rotateTokenSigningKey(ctx, st.Pool(), stores, cfg.MasterKey, tokenSigner, tokenVerifier)
+			},
+			Users:          usersStore,
+			Sessions:       sessMgr,
+			AdminToken:     cfg.AdminToken,
+			Authz:          authorizer,
+			License:        licenseSvc,
+			Catalog:        cat,
+			Stores:         stores,
+			CookieSecure:   cookieSecure,
+			UsageReader:    usageReader,
+			Audit:          auditEmitter,
+			AuditReader:    auditStore,
+			TrustedProxies: httpmw.TrustedProxies(),
+			PayloadReader:  payloadReader,
+			Selector:       selector,
+			HostHealth:     hostHealth,
+			PublicURL:      cfg.PublicURL,
+			RuntimeConfig:  runtimeConfig(cfg),
 		}
+		// /config.json stays at the listener ROOT — the UI fetches it at boot,
+		// before it knows the /api prefix. It advertises controlApiUrl=/api so
+		// the SPA's API client targets /api/* while the SPA's own routes
+		// (/models, /policies, …) fall through to the embedded UI below.
+		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(ctrlDeps))
 		ctrlRouter.Route("/api", func(r chi.Router) {
 			control.Mount(r, ctrlDeps)
 		})
@@ -623,9 +739,12 @@ func main() {
 		// control API mounts under.
 		control.MountOIDCCallbackRoot(ctrlRouter, ctrlDeps)
 		ctrlRouter.Handle("/metrics", metrics.Handler())
-		// Embedded admin UI: same-origin SPA served as the fallback after all
-		// API operations. Only mounted when a real dist was baked in (image
-		// build) and not explicitly disabled.
+		// Embedded admin UI: same-origin SPA served as the fallback for
+		// everything the routes above do not claim. Paths under /api never
+		// reach it — the control API answers its own 404s in JSON, so a UI
+		// calling a renamed endpoint gets an error it can parse. Only
+		// mounted when a real dist was baked in (image build) and not
+		// explicitly disabled.
 		if !cfg.UIDisable && relayweb.Present() {
 			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
 			slog.Debug("relay control: serving embedded UI")
@@ -750,17 +869,25 @@ func loadDotEnv(path string) {
 	}
 }
 
-// catalogSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader by
-// reading the current snapshot per lookup, so each call sees the latest
-// post-NOTIFY state.
+// catalogSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader. It
+// serves the snapshot the request was authenticated against, so the rules a
+// request is metered by come from the same catalog view its policy did; off
+// the request path (batch, boot) there is none and the current one answers.
 type catalogSnapReader struct{ cat *appcatalog.Catalog }
 
-func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
+func (r catalogSnapReader) snap(ctx context.Context) *appcatalog.Snapshot {
+	if s := inference.SnapshotFrom(ctx); s != nil {
+		return s
+	}
+	return r.cat.Current()
 }
 
-func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
+func (r catalogSnapReader) Policy(ctx context.Context, id string) (*policy.Policy, bool) {
+	return r.snap(ctx).Policy(id)
+}
+
+func (r catalogSnapReader) RateLimit(ctx context.Context, id string) (*ratelimit.RateLimit, bool) {
+	return r.snap(ctx).RateLimit(id)
 }
 
 // keyRefresher implements appsecret.Refresher. It re-resolves a host key's

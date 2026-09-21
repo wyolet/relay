@@ -3,21 +3,30 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sort"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 )
 
 // commitWithGrants recomputes the per-policy allowed-combo sets (a function of
 // providers + hosts + models + policies) then atomically publishes the clone.
-// Used by every Apply that can change a grant; hostkey/ratelimit/relaykey/
+// Used by every Apply that can change a grant; hostkey/ratelimit/key/
 // pricing writes don't affect grants and call c.snap.Store directly.
 func (c *Catalog) commitWithGrants(s *Snapshot) {
 	s.rebuildPolicyAllowSets()
@@ -29,7 +38,7 @@ func (c *Catalog) commitWithGrants(s *Snapshot) {
 // re-appearance whose earlier delete-cascade stripped dependents (policy
 // grants, relay keys, host keys) that only source truth still records, so an
 // incremental patch would leave them permanently lost. Leaf kinds with no
-// dependents (pricing, relaykey) skip this and stay incremental. Caller must
+// dependents (pricing, key) skip this and stay incremental. Caller must
 // hold c.rmu; returns (handled, err).
 func (c *Catalog) recoverAbsentLocked(kind refKind, id string) (bool, error) {
 	if rowPresent(c.snap.Load(), refKey{Kind: kind, ID: id}) {
@@ -230,7 +239,7 @@ func (c *Catalog) ApplyHostKeyUpsert(k *hostkey.HostKey) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), s.policiesByID)
+	clean, keep := sanitizeHostKey(k, snapIDs(s.hostsByID), snapIDs(s.projectsByID), s.policyLookup)
 	if !keep {
 		deleteHostKey(s, k.Meta.ID)
 		c.snap.Store(s)
@@ -261,6 +270,7 @@ func insertHostKey(s *Snapshot, k *hostkey.HostKey) {
 	s.hostKeysByID[k.Meta.ID] = k
 	s.registerRefs(refKey{Kind: refHostKey, ID: k.Meta.ID}, outboundHostKeyRefs(k))
 	rebuildHostKeysByPolicy(s)
+	s.rebuildHostKeysByHost()
 }
 
 func deleteHostKey(s *Snapshot, id string) {
@@ -273,6 +283,7 @@ func deleteHostKey(s *Snapshot, id string) {
 	for polID, keys := range s.hostKeysByPolicy {
 		s.hostKeysByPolicy[polID] = removeHostKeyFromSlice(keys, id)
 	}
+	s.rebuildHostKeysByHost()
 	cascadeDelete(s, refHostKey, id)
 	resanitizePoliciesAfterParentChange(s)
 }
@@ -292,12 +303,22 @@ func (c *Catalog) ApplyRateLimitUpsert(r *ratelimit.RateLimit) error {
 		return err
 	}
 	s := c.snap.Load().clone()
-	// Strip stale name index when slug changed for the same id.
-	if prev, ok := s.rateLimitsByID[r.Meta.ID]; ok && prev.Meta.Name != r.Meta.Name {
-		delete(s.rateLimitsByName, prev.Meta.Name)
+	clean, keep := sanitizeRateLimit(r, snapIDs(s.projectsByID))
+	if !keep {
+		deleteRateLimit(s, r.Meta.ID)
+		c.snap.Store(s)
+		return nil
 	}
-	s.rateLimitsByID[r.Meta.ID] = r
-	s.rateLimitsByName[r.Meta.Name] = r
+	// Strip stale name index when slug changed for the same id.
+	if prev, ok := s.rateLimitsByID[clean.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refRateLimit, ID: prev.Meta.ID}, outboundRateLimitRefs(prev))
+		if prev.Meta.Name != clean.Meta.Name {
+			delete(s.rateLimitsByName, prev.Meta.Name)
+		}
+	}
+	s.rateLimitsByID[clean.Meta.ID] = clean
+	s.rateLimitsByName[clean.Meta.Name] = clean
+	s.registerRefs(refKey{Kind: refRateLimit, ID: clean.Meta.ID}, outboundRateLimitRefs(clean))
 	c.snap.Store(s)
 	return nil
 }
@@ -316,6 +337,7 @@ func deleteRateLimit(s *Snapshot, id string) {
 	if !ok {
 		return
 	}
+	s.unregisterRefs(refKey{Kind: refRateLimit, ID: id}, outboundRateLimitRefs(r))
 	delete(s.rateLimitsByID, id)
 	delete(s.rateLimitsByName, r.Meta.Name)
 	// Remove from policy reverse join.
@@ -331,20 +353,33 @@ func deleteRateLimit(s *Snapshot, id string) {
 // ── Policy ────────────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyPolicyUpsert(p *policy.Policy) error {
-	if !p.IsEnabled() {
-		return c.ApplyPolicyDelete(p.Meta.ID)
-	}
 	if err := p.Validate(); err != nil {
 		return err
 	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
+	// Absent means the row was never here, or a delete-cascade stripped
+	// dependents only source truth still records — true whether or not the
+	// arriving row is enabled, so a policy created disabled recovers too.
 	if handled, err := c.recoverAbsentLocked(refPolicy, p.Meta.ID); handled {
 		return err
 	}
 	s := c.snap.Load().clone()
-	clean := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID))
+	clean, keep := sanitizePolicy(p, snapIDs(s.modelsByID), snapIDs(s.hostKeysByID), snapIDs(s.rateLimitsByID), snapIDs(s.projectsByID))
+	if !keep {
+		deletePolicy(s, p.Meta.ID)
+		c.commitWithGrants(s)
+		return nil
+	}
+	if !clean.IsEnabled() {
+		disablePolicy(s, clean)
+		c.commitWithGrants(s)
+		return nil
+	}
 	insertPolicy(s, clean)
+	// The row that just landed may invalidate its dependents — an owner or
+	// host change can leave a host key's tier policy no longer its host's.
+	cascadeDelete(s, refPolicy, clean.Meta.ID)
 	c.commitWithGrants(s)
 	return nil
 }
@@ -358,7 +393,33 @@ func (c *Catalog) ApplyPolicyDelete(id string) error {
 	return nil
 }
 
+// disablePolicy takes the row out of every routing index but keeps it, and
+// every row naming it, in the snapshot: those requests answer 403
+// policy_disabled instead of falling through to a broader grant (D77).
+func disablePolicy(s *Snapshot, p *policy.Policy) {
+	if old, ok := s.policiesByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
+		delete(s.policiesByID, old.Meta.ID)
+		delete(s.policiesByName, old.Meta.Name)
+		delete(s.modelsByPolicy, old.Meta.ID)
+		delete(s.hostKeysByPolicy, old.Meta.ID)
+		delete(s.rateLimitByPolicy, old.Meta.ID)
+	}
+	if old, ok := s.disabledPoliciesByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
+	}
+	s.disabledPoliciesByID[p.Meta.ID] = p
+	// Still a ref holder: losing its project has to evict it, or the rows
+	// naming it keep answering 403 against a policy nothing can reach.
+	s.registerRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(p))
+	resanitizeHostsAfterPolicyChange(s)
+}
+
 func insertPolicy(s *Snapshot, p *policy.Policy) {
+	if off, ok := s.disabledPoliciesByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: p.Meta.ID}, outboundPolicyRefs(off))
+		delete(s.disabledPoliciesByID, p.Meta.ID)
+	}
 	if old, ok := s.policiesByID[p.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
 		delete(s.policiesByID, old.Meta.ID)
@@ -389,8 +450,13 @@ func insertPolicy(s *Snapshot, p *policy.Policy) {
 }
 
 func deletePolicy(s *Snapshot, id string) {
+	if off, ok := s.disabledPoliciesByID[id]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(off))
+		delete(s.disabledPoliciesByID, id)
+	}
 	p, ok := s.policiesByID[id]
 	if !ok {
+		cascadeDelete(s, refPolicy, id)
 		return
 	}
 	s.unregisterRefs(refKey{Kind: refPolicy, ID: id}, outboundPolicyRefs(p))
@@ -477,11 +543,21 @@ func deletePricing(s *Snapshot, id string) {
 	delete(s.pricingsByID, id)
 }
 
-// ── RelayKey ──────────────────────────────────────────────────────────────
+// ── Key ──────────────────────────────────────────────────────────────
 
-func (c *Catalog) ApplyRelayKeyUpsert(k *relaykey.RelayKey) error {
+func (c *Catalog) ApplyKeyUpsert(k *key.Key) error {
 	if !k.IsEnabled() {
-		return c.ApplyRelayKeyDelete(k.Meta.ID)
+		// Disabling stops the key routing but leaves its hashes in its
+		// owner's read scope — the traffic it already produced is theirs.
+		if err := c.ApplyKeyDelete(k.Meta.ID); err != nil {
+			return err
+		}
+		c.rmu.Lock()
+		defer c.rmu.Unlock()
+		s := c.snap.Load().clone()
+		s.indexUserKeyHashes(k)
+		c.snap.Store(s)
+		return nil
 	}
 	if err := k.Validate(); err != nil {
 		return err
@@ -489,51 +565,448 @@ func (c *Catalog) ApplyRelayKeyUpsert(k *relaykey.RelayKey) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	clean, keep := sanitizeRelayKey(k, snapIDs(s.policiesByID))
+	clean, keep := sanitizeKey(k, s.policyResolvable, snapIDs(s.serviceAccountsByID))
 	if !keep {
-		deleteRelayKey(s, k.Meta.ID)
+		deleteKey(s, k.Meta.ID)
 		c.snap.Store(s)
 		return nil
 	}
-	insertRelayKey(s, clean)
+	insertKey(s, clean)
 	c.snap.Store(s)
 	return nil
 }
 
-func (c *Catalog) ApplyRelayKeyDelete(id string) error {
+func (c *Catalog) ApplyKeyDelete(id string) error {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	s := c.snap.Load().clone()
-	deleteRelayKey(s, id)
+	deleteKey(s, id)
 	c.snap.Store(s)
 	return nil
 }
 
-func insertRelayKey(s *Snapshot, k *relaykey.RelayKey) {
-	if old, ok := s.relayKeysByID[k.Meta.ID]; ok {
-		s.unregisterRefs(refKey{Kind: refRelayKey, ID: old.Meta.ID}, outboundRelayKeyRefs(old))
-		if old.Spec.KeyHash != "" {
-			delete(s.relayKeysByHash, old.Spec.KeyHash)
-		}
-		delete(s.relayKeysByID, old.Meta.ID)
+func insertKey(s *Snapshot, k *key.Key) {
+	if old, ok := s.keysByID[k.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refRelayKey, ID: old.Meta.ID}, outboundKeyRefs(old))
+		unindexKeyHashes(s, old)
+		deindexKeyPrincipal(s, old)
+		delete(s.keysByID, old.Meta.ID)
 	}
-	s.relayKeysByID[k.Meta.ID] = k
+	s.keysByID[k.Meta.ID] = k
+	s.indexUserKeyHashes(k)
+	indexKeyPrincipal(s, k)
+	s.subjectsByKey[k.Meta.ID] = keySubjects(s, k)
 	if k.Spec.KeyHash != "" {
-		s.relayKeysByHash[k.Spec.KeyHash] = k
+		indexKeyHash(s, k.Spec.KeyHash, k)
 	}
-	s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundRelayKeyRefs(k))
+	// The pre-rotation hash is indexed only while its grace window is open,
+	// so an expired grace drops out on the next reconcile or reload.
+	if k.InGrace(s.clock()) {
+		indexKeyHash(s, k.Spec.PreviousKeyHash, k)
+	}
+	s.registerRefs(refKey{Kind: refRelayKey, ID: k.Meta.ID}, outboundKeyRefs(k))
 }
 
-func deleteRelayKey(s *Snapshot, id string) {
-	k, ok := s.relayKeysByID[id]
+// indexKeyHash claims a hash slot for k. A slot already held by a different
+// key is left alone: overwriting it would move that key's live traffic
+// (including a rotation grace window) onto this one.
+func indexKeyHash(s *Snapshot, hash string, k *key.Key) {
+	if held, ok := s.keysByHash[hash]; ok && held.Meta.ID != k.Meta.ID {
+		slog.Warn("catalog: key hash already indexed by another key; keeping the first",
+			"held_key", held.Meta.ID, "rejected_key", k.Meta.ID)
+		return
+	}
+	s.keysByHash[hash] = k
+}
+
+func deleteKey(s *Snapshot, id string) {
+	k, ok := s.keysByID[id]
 	if !ok {
 		return
 	}
-	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundRelayKeyRefs(k))
-	if k.Spec.KeyHash != "" {
-		delete(s.relayKeysByHash, k.Spec.KeyHash)
+	s.unregisterRefs(refKey{Kind: refRelayKey, ID: id}, outboundKeyRefs(k))
+	unindexKeyHashes(s, k)
+	s.dropUserKeyHashes(k)
+	deindexKeyPrincipal(s, k)
+	delete(s.keysByID, id)
+	delete(s.subjectsByKey, id)
+}
+
+// unindexKeyHashes drops only the slots this key actually holds — a hash it
+// lost to another key (see indexKeyHash) still belongs to that one.
+func unindexKeyHashes(s *Snapshot, k *key.Key) {
+	for _, h := range []string{k.Spec.KeyHash, k.Spec.PreviousKeyHash} {
+		if h == "" {
+			continue
+		}
+		if held, ok := s.keysByHash[h]; ok && held.Meta.ID == k.Meta.ID {
+			delete(s.keysByHash, h)
+		}
 	}
-	delete(s.relayKeysByID, id)
+}
+
+// ── ServiceAccount ────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyServiceAccountUpsert(sa *serviceaccount.ServiceAccount) error {
+	if !sa.IsEnabled() {
+		return c.ApplyServiceAccountDelete(sa.Meta.ID)
+	}
+	if err := sa.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refServiceAccount, sa.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	clean, keep := sanitizeServiceAccount(sa, snapIDs(s.projectsByID), s.policyResolvable)
+	if !keep {
+		deleteServiceAccount(s, sa.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	insertServiceAccount(s, clean)
+	reindexKeySubjects(s, key.PrincipalServiceAccount, clean.Meta.ID)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyServiceAccountDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteServiceAccount(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertServiceAccount(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	if old, ok := s.serviceAccountsByID[sa.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refServiceAccount, ID: old.Meta.ID}, outboundServiceAccountRefs(old))
+		delete(s.serviceAccountsByName, old.Meta.Name)
+		delete(s.serviceAccountsByID, old.Meta.ID)
+		removeServiceAccountFromProject(s, old)
+	}
+	s.serviceAccountsByID[sa.Meta.ID] = sa
+	s.serviceAccountsByName[sa.Meta.Name] = sa
+	insertServiceAccountIntoProject(s, sa)
+	s.registerRefs(refKey{Kind: refServiceAccount, ID: sa.Meta.ID}, outboundServiceAccountRefs(sa))
+}
+
+func deleteServiceAccount(s *Snapshot, id string) {
+	sa, ok := s.serviceAccountsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refServiceAccount, ID: id}, outboundServiceAccountRefs(sa))
+	delete(s.serviceAccountsByID, id)
+	delete(s.serviceAccountsByName, sa.Meta.Name)
+	removeServiceAccountFromProject(s, sa)
+	cascadeDelete(s, refServiceAccount, id)
+}
+
+// insertServiceAccountIntoProject keeps serviceAccountsByProject sorted by
+// account name, the order build() produces.
+func insertServiceAccountIntoProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := append(s.serviceAccountsByProject[sa.Spec.ProjectID], sa)
+	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	s.serviceAccountsByProject[sa.Spec.ProjectID] = list
+}
+
+func removeServiceAccountFromProject(s *Snapshot, sa *serviceaccount.ServiceAccount) {
+	list := s.serviceAccountsByProject[sa.Spec.ProjectID]
+	out := make([]*serviceaccount.ServiceAccount, 0, len(list))
+	for _, cur := range list {
+		if cur.Meta.ID != sa.Meta.ID {
+			out = append(out, cur)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.serviceAccountsByProject, sa.Spec.ProjectID)
+		return
+	}
+	s.serviceAccountsByProject[sa.Spec.ProjectID] = out
+}
+
+// ── Group ─────────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyGroupUpsert(g *group.Group) error {
+	if !g.IsEnabled() {
+		return c.ApplyGroupDelete(g.Meta.ID)
+	}
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	old, hadOld := s.groupsByID[g.Meta.ID]
+	insertGroup(s, g)
+	if hadOld {
+		reindexMemberSubjects(s, old.Spec.MemberIDs)
+	}
+	reindexMemberSubjects(s, g.Spec.MemberIDs)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyGroupDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	members := []string(nil)
+	if g, ok := s.groupsByID[id]; ok {
+		members = g.Spec.MemberIDs
+	}
+	deleteGroup(s, id)
+	reindexMemberSubjects(s, members)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertGroup(s *Snapshot, g *group.Group) {
+	if old, ok := s.groupsByID[g.Meta.ID]; ok {
+		delete(s.groupsByName, old.Meta.Name)
+		delete(s.groupsByID, old.Meta.ID)
+		removeGroupFromUsers(s, old)
+	}
+	s.groupsByID[g.Meta.ID] = g
+	s.groupsByName[g.Meta.Name] = g
+	for _, uid := range g.Spec.MemberIDs {
+		list := append(s.groupsByUser[uid], g.Meta.Name)
+		sort.Strings(list)
+		s.groupsByUser[uid] = list
+	}
+}
+
+func deleteGroup(s *Snapshot, id string) {
+	g, ok := s.groupsByID[id]
+	if !ok {
+		return
+	}
+	delete(s.groupsByID, id)
+	delete(s.groupsByName, g.Meta.Name)
+	removeGroupFromUsers(s, g)
+}
+
+func removeGroupFromUsers(s *Snapshot, g *group.Group) {
+	for _, uid := range g.Spec.MemberIDs {
+		list := s.groupsByUser[uid]
+		out := make([]string, 0, len(list))
+		for _, name := range list {
+			if name != g.Meta.Name {
+				out = append(out, name)
+			}
+		}
+		if len(out) == 0 {
+			delete(s.groupsByUser, uid)
+			continue
+		}
+		s.groupsByUser[uid] = out
+	}
+}
+
+// ── Role ──────────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyRoleUpsert(r *role.Role) error {
+	if !r.IsEnabled() {
+		return c.ApplyRoleDelete(r.Meta.ID)
+	}
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refRole, r.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	insertRole(s, r)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyRoleDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteRole(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertRole(s *Snapshot, r *role.Role) {
+	if old, ok := s.rolesByID[r.Meta.ID]; ok {
+		delete(s.rolesByName, old.Meta.Name)
+		delete(s.rolesByID, old.Meta.ID)
+	}
+	s.rolesByID[r.Meta.ID] = r
+	s.rolesByName[r.Meta.Name] = r
+}
+
+func deleteRole(s *Snapshot, id string) {
+	r, ok := s.rolesByID[id]
+	if !ok {
+		return
+	}
+	delete(s.rolesByID, id)
+	delete(s.rolesByName, r.Meta.Name)
+	cascadeDelete(s, refRole, id)
+}
+
+// ── RoleBinding ───────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyRoleBindingUpsert(b *rolebinding.RoleBinding) error {
+	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
+		// A binding that names nobody grants nothing. It reaches us with an
+		// empty subject list when PG cascaded the last one away; treating it
+		// as a delete keeps the stale grant out of the snapshot, which
+		// Validate would otherwise reject and leave in place.
+		return c.ApplyRoleBindingDelete(b.Meta.ID)
+	}
+	if err := b.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	clean, keep := sanitizeRoleBinding(b, snapIDs(s.rolesByID), snapIDs(s.teamsByID), snapIDs(s.projectsByID))
+	if !keep {
+		deleteRoleBinding(s, b.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	insertRoleBinding(s, clean)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyRoleBindingDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteRoleBinding(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertRoleBinding(s *Snapshot, b *rolebinding.RoleBinding) {
+	if old, ok := s.roleBindingsByID[b.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refRoleBinding, ID: old.Meta.ID}, outboundRoleBindingRefs(old))
+		delete(s.roleBindingsByID, old.Meta.ID)
+		removeRoleBindingFromSubjects(s, old)
+	}
+	s.roleBindingsByID[b.Meta.ID] = b
+	for i := range b.Spec.Subjects {
+		key := b.Spec.Subjects[i].Key()
+		list := append(s.roleBindingsBySubject[key], b)
+		sortRoleBindings(list)
+		s.roleBindingsBySubject[key] = list
+	}
+	s.registerRefs(refKey{Kind: refRoleBinding, ID: b.Meta.ID}, outboundRoleBindingRefs(b))
+}
+
+func deleteRoleBinding(s *Snapshot, id string) {
+	b, ok := s.roleBindingsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refRoleBinding, ID: id}, outboundRoleBindingRefs(b))
+	delete(s.roleBindingsByID, id)
+	removeRoleBindingFromSubjects(s, b)
+}
+
+func removeRoleBindingFromSubjects(s *Snapshot, b *rolebinding.RoleBinding) {
+	for i := range b.Spec.Subjects {
+		key := b.Spec.Subjects[i].Key()
+		list := s.roleBindingsBySubject[key]
+		out := make([]*rolebinding.RoleBinding, 0, len(list))
+		for _, cur := range list {
+			if cur.Meta.ID != b.Meta.ID {
+				out = append(out, cur)
+			}
+		}
+		if len(out) == 0 {
+			delete(s.roleBindingsBySubject, key)
+			continue
+		}
+		s.roleBindingsBySubject[key] = out
+	}
+}
+
+// ── PolicyBinding ─────────────────────────────────────────────────────────
+
+// A policy binding names a project, subjects and a policy — none of which
+// the allowed-combo sets are a function of — so these two publish directly
+// instead of rebuilding every policy's grants.
+func (c *Catalog) ApplyPolicyBindingUpsert(b *policybinding.PolicyBinding) error {
+	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
+		// Same rule as ApplyRoleBindingUpsert: no subjects, no binding.
+		return c.ApplyPolicyBindingDelete(b.Meta.ID)
+	}
+	if err := b.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	clean, keep := sanitizePolicyBinding(b, snapIDs(s.projectsByID), s.policyResolvable)
+	if !keep {
+		deletePolicyBinding(s, b.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	insertPolicyBinding(s, clean)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyPolicyBindingDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deletePolicyBinding(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertPolicyBinding(s *Snapshot, b *policybinding.PolicyBinding) {
+	if old, ok := s.policyBindingsByID[b.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refPolicyBinding, ID: old.Meta.ID}, outboundPolicyBindingRefs(old))
+		delete(s.policyBindingsByID, old.Meta.ID)
+		removePolicyBindingFromProject(s, old)
+	}
+	s.policyBindingsByID[b.Meta.ID] = b
+	list := append(s.policyBindingsByProject[b.Spec.ProjectID], b)
+	sortPolicyBindings(list)
+	s.policyBindingsByProject[b.Spec.ProjectID] = list
+	s.registerRefs(refKey{Kind: refPolicyBinding, ID: b.Meta.ID}, outboundPolicyBindingRefs(b))
+}
+
+func deletePolicyBinding(s *Snapshot, id string) {
+	b, ok := s.policyBindingsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refPolicyBinding, ID: id}, outboundPolicyBindingRefs(b))
+	delete(s.policyBindingsByID, id)
+	removePolicyBindingFromProject(s, b)
+}
+
+func removePolicyBindingFromProject(s *Snapshot, b *policybinding.PolicyBinding) {
+	list := s.policyBindingsByProject[b.Spec.ProjectID]
+	out := make([]*policybinding.PolicyBinding, 0, len(list))
+	for _, cur := range list {
+		if cur.Meta.ID != b.Meta.ID {
+			out = append(out, cur)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.policyBindingsByProject, b.Spec.ProjectID)
+		return
+	}
+	s.policyBindingsByProject[b.Spec.ProjectID] = out
 }
 
 // ── Binding ───────────────────────────────────────────────────────────────
@@ -559,6 +1032,145 @@ func deleteBinding(s *Snapshot, id string) {
 	} else {
 		s.bindingsByModel[b.Spec.ModelID] = newList
 	}
+}
+
+// ── Team ──────────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyTeamUpsert(t *team.Team) error {
+	if !t.IsEnabled() {
+		return c.ApplyTeamDelete(t.Meta.ID)
+	}
+	if err := t.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refTeam, t.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	insertTeam(s, t)
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyTeamDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteTeam(s, id)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertTeam(s *Snapshot, t *team.Team) {
+	if old, ok := s.teamsByID[t.Meta.ID]; ok {
+		delete(s.teamsByName, old.Meta.Name)
+		delete(s.teamsByID, old.Meta.ID)
+	}
+	s.teamsByID[t.Meta.ID] = t
+	s.teamsByName[t.Meta.Name] = t
+}
+
+func deleteTeam(s *Snapshot, id string) {
+	t, ok := s.teamsByID[id]
+	if !ok {
+		return
+	}
+	delete(s.teamsByID, id)
+	delete(s.teamsByName, t.Meta.Name)
+	cascadeDelete(s, refTeam, id)
+}
+
+// ── Project ───────────────────────────────────────────────────────────────
+
+func (c *Catalog) ApplyProjectUpsert(p *project.Project) error {
+	if !p.IsEnabled() {
+		return c.ApplyProjectDelete(p.Meta.ID)
+	}
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if handled, err := c.recoverAbsentLocked(refProject, p.Meta.ID); handled {
+		return err
+	}
+	s := c.snap.Load().clone()
+	clean, keep := sanitizeProject(p, snapIDs(s.teamsByID))
+	if !keep {
+		deleteProject(s, p.Meta.ID)
+		c.snap.Store(s)
+		return nil
+	}
+	// A project's slug is part of its service accounts' subjects, so a
+	// rename reaches every key under it — but only a rename does. Any other
+	// project edit leaves every subject list unchanged.
+	old, existed := s.projectsByID[clean.Meta.ID]
+	insertProject(s, clean)
+	if !existed || old.Meta.Name != clean.Meta.Name {
+		reindexAllKeySubjects(s)
+	}
+	c.snap.Store(s)
+	return nil
+}
+
+func (c *Catalog) ApplyProjectDelete(id string) error {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	s := c.snap.Load().clone()
+	deleteProject(s, id)
+	reindexAllKeySubjects(s)
+	c.snap.Store(s)
+	return nil
+}
+
+func insertProject(s *Snapshot, p *project.Project) {
+	if old, ok := s.projectsByID[p.Meta.ID]; ok {
+		s.unregisterRefs(refKey{Kind: refProject, ID: old.Meta.ID}, outboundProjectRefs(old))
+		delete(s.projectsByName, old.Meta.Name)
+		delete(s.projectsByID, old.Meta.ID)
+		removeProjectFromTeam(s, old)
+	}
+	s.projectsByID[p.Meta.ID] = p
+	s.projectsByName[p.Meta.Name] = p
+	insertProjectIntoTeam(s, p)
+	s.registerRefs(refKey{Kind: refProject, ID: p.Meta.ID}, outboundProjectRefs(p))
+}
+
+func deleteProject(s *Snapshot, id string) {
+	p, ok := s.projectsByID[id]
+	if !ok {
+		return
+	}
+	s.unregisterRefs(refKey{Kind: refProject, ID: id}, outboundProjectRefs(p))
+	delete(s.projectsByID, id)
+	delete(s.projectsByName, p.Meta.Name)
+	removeProjectFromTeam(s, p)
+	cascadeDelete(s, refProject, id)
+}
+
+// insertProjectIntoTeam keeps projectsByTeam sorted by project name, the
+// order build() produces.
+func insertProjectIntoTeam(s *Snapshot, p *project.Project) {
+	list := append(s.projectsByTeam[p.Spec.TeamID], p)
+	sort.Slice(list, func(i, j int) bool { return list[i].Meta.Name < list[j].Meta.Name })
+	s.projectsByTeam[p.Spec.TeamID] = list
+}
+
+func removeProjectFromTeam(s *Snapshot, p *project.Project) {
+	list := s.projectsByTeam[p.Spec.TeamID]
+	out := make([]*project.Project, 0, len(list))
+	for _, cur := range list {
+		if cur.Meta.ID != p.Meta.ID {
+			out = append(out, cur)
+		}
+	}
+	if len(out) == 0 {
+		delete(s.projectsByTeam, p.Spec.TeamID)
+		return
+	}
+	s.projectsByTeam[p.Spec.TeamID] = out
 }
 
 // ── Cascade helpers ───────────────────────────────────────────────────────
@@ -602,7 +1214,10 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 		}
 		return validateHostKeyInSnap(hk, s) == nil
 	case refPolicy:
-		p, ok := s.policiesByID[k.ID]
+		// Disabled rows are checked too: one whose project disappears has to
+		// be evicted, or the keys naming it answer 403 against a policy no
+		// operator can reach any more.
+		p, ok := s.policyLookup(k.ID)
 		if !ok {
 			return true
 		}
@@ -624,11 +1239,11 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 		}
 		return false
 	case refRelayKey:
-		rk, ok := s.relayKeysByID[k.ID]
+		rk, ok := s.keysByID[k.ID]
 		if !ok {
 			return true
 		}
-		return validateRelayKeyInSnap(rk, s) == nil
+		return validateKeyInSnap(rk, s) == nil
 	case refBinding:
 		b, ok := s.bindingsByID[k.ID]
 		if !ok {
@@ -637,6 +1252,36 @@ func dependentStillValid(s *Snapshot, k refKey) bool {
 		_, modelOK := s.modelsByID[b.Spec.ModelID]
 		_, hostOK := s.hostsByID[b.Spec.HostID]
 		return modelOK && hostOK
+	case refRateLimit:
+		r, ok := s.rateLimitsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateRateLimitInSnap(r, s) == nil
+	case refProject:
+		p, ok := s.projectsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateProjectInSnap(p, s) == nil
+	case refServiceAccount:
+		sa, ok := s.serviceAccountsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateServiceAccountInSnap(sa, s) == nil
+	case refRoleBinding:
+		b, ok := s.roleBindingsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validateRoleBindingInSnap(b, s) == nil
+	case refPolicyBinding:
+		b, ok := s.policyBindingsByID[k.ID]
+		if !ok {
+			return true
+		}
+		return validatePolicyBindingInSnap(b, s) == nil
 	}
 	return true
 }
@@ -660,16 +1305,35 @@ func rowPresent(s *Snapshot, k refKey) bool {
 		_, ok := s.rateLimitsByID[k.ID]
 		return ok
 	case refPolicy:
-		_, ok := s.policiesByID[k.ID]
-		return ok
+		// Disabled counts as present: the row is in the snapshot, just out of
+		// the routing indices, so re-enabling it is a patch, not a recovery.
+		return s.policyResolvable(k.ID)
 	case refPricing:
 		_, ok := s.pricingsByID[k.ID]
 		return ok
 	case refRelayKey:
-		_, ok := s.relayKeysByID[k.ID]
+		_, ok := s.keysByID[k.ID]
 		return ok
 	case refBinding:
 		_, ok := s.bindingsByID[k.ID]
+		return ok
+	case refTeam:
+		_, ok := s.teamsByID[k.ID]
+		return ok
+	case refProject:
+		_, ok := s.projectsByID[k.ID]
+		return ok
+	case refServiceAccount:
+		_, ok := s.serviceAccountsByID[k.ID]
+		return ok
+	case refRole:
+		_, ok := s.rolesByID[k.ID]
+		return ok
+	case refRoleBinding:
+		_, ok := s.roleBindingsByID[k.ID]
+		return ok
+	case refPolicyBinding:
+		_, ok := s.policyBindingsByID[k.ID]
 		return ok
 	}
 	return false
@@ -687,7 +1351,7 @@ func deleteDirect(s *Snapshot, k refKey) {
 	case refPricing:
 		deletePricing(s, k.ID)
 	case refRelayKey:
-		deleteRelayKey(s, k.ID)
+		deleteKey(s, k.ID)
 	case refRateLimit:
 		deleteRateLimit(s, k.ID)
 	case refProvider:
@@ -696,6 +1360,18 @@ func deleteDirect(s *Snapshot, k refKey) {
 		deleteHost(s, k.ID)
 	case refBinding:
 		deleteBinding(s, k.ID)
+	case refTeam:
+		deleteTeam(s, k.ID)
+	case refProject:
+		deleteProject(s, k.ID)
+	case refServiceAccount:
+		deleteServiceAccount(s, k.ID)
+	case refRole:
+		deleteRole(s, k.ID)
+	case refRoleBinding:
+		deleteRoleBinding(s, k.ID)
+	case refPolicyBinding:
+		deletePolicyBinding(s, k.ID)
 	}
 }
 

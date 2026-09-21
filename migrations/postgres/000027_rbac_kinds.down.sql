@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS policy_binding_subjects_notify ON policy_binding_subjects;
+DROP TRIGGER IF EXISTS role_binding_subjects_notify ON role_binding_subjects;
+DROP TRIGGER IF EXISTS policy_bindings_notify ON policy_bindings;
+DROP TRIGGER IF EXISTS role_bindings_notify ON role_bindings;
+DROP TRIGGER IF EXISTS roles_notify ON roles;
+DROP TABLE IF EXISTS policy_binding_subjects;
+DROP TABLE IF EXISTS role_binding_subjects;
+DROP TABLE IF EXISTS policy_bindings;
+DROP TABLE IF EXISTS role_bindings;
+DROP TABLE IF EXISTS roles;

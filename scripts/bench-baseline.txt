@@ -1,0 +1,18 @@
+# allocs/op per benchmark, the floor bench-gate compares against.
+# Regenerate with 'make bench-baseline' after an intentional change.
+app/catalog/BenchmarkGroupUpsert10kKeys 14050
+app/catalog/BenchmarkHostKeysForHost 0
+app/catalog/BenchmarkProjectUpsert10kKeys 10298
+app/catalog/BenchmarkSnapshotClone10kKeys 10274
+app/httpapi/inference/BenchmarkBindingMatch 0
+app/httpapi/inference/BenchmarkKeyPrincipal 28
+app/httpapi/inference/BenchmarkTokenPrincipal 28
+app/httpapi/inference/BenchmarkTokenPrincipalColdCache 44
+app/policy/BenchmarkReserveInboundKey 109
+app/policy/BenchmarkReserveInboundToken 120
+app/policy/BenchmarkResolveRules 8
+app/routing/BenchmarkResolvePolicyless 3
+app/routing/BenchmarkResolveTwoBindings 5
+pkg/crypto/BenchmarkParseToken 19
+pkg/crypto/BenchmarkSignToken 12
+pkg/crypto/BenchmarkTokenKeyID 9
