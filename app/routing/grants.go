@@ -1,19 +1,21 @@
-// PolicyAllows answers "is this Model reachable through this Policy?"
-// without picking a binding or a key — the question /v1/models needs to
-// answer. Mirrors the allowed-paths logic in Resolve so the two stay in
-// sync. Resolve is binding-aware (legacy + DSL + wildcard match against
-// specific (provider, model, host) triples); PolicyAllows reduces to
-// "is there *any* binding under this policy that would be allowed?"
+// PolicyAllowsBinding answers "would Resolve route this Model over this
+// binding under this Policy?" — the per-binding decision inventory
+// endpoints need, without picking a key. It mirrors the allowed-paths
+// logic in Resolve (legacy + DSL + wildcard match against specific
+// (provider, model, host) triples, plus the key-coverage gate) so the two
+// stay in sync. PolicyAllows reduces it to "is there *any* enabled binding
+// that passes?"
 package routing
 
 import (
+	"github.com/wyolet/relay/app/binding"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 )
 
-// PolicyAllows reports whether m is reachable through pol given snap's
-// hostkey coverage. Used to enumerate accessible models for inventory
+// PolicyAllows reports whether m is reachable through pol over any of its
+// enabled bindings. Used to enumerate accessible models for inventory
 // endpoints. Single-shot; not optimised for tight loops.
 func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model) bool {
 	if pol == nil || m == nil || !m.IsEnabled() {
@@ -24,30 +26,33 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model)
 			return true
 		}
 	}
-	deprecated := isDeprecated(m)
-	wildcardGrant := len(pol.Spec.ModelIDs) == 0 && len(pol.Spec.Models) == 0
-
-	keyHosts := map[string]struct{}{}
-	for _, k := range snap.HostKeysInPolicy(pol.Meta.ID) {
-		keyHosts[k.Spec.HostID] = struct{}{}
-	}
-
 	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if !hb.IsEnabled() {
-			continue
-		}
-		if _, ok := keyHosts[hb.Spec.HostID]; !ok {
-			continue
-		}
-		// Explicit policies consult the precomputed allow-set; implicit
-		// wildcards allow any non-deprecated model (mirrors Resolve).
-		if wildcardGrant {
-			if !deprecated || pol.Spec.IncludeDeprecated {
-				return true
-			}
-		} else if snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.Spec.HostID) {
+		if hb.IsEnabled() && PolicyAllowsBinding(snap, pol, m, hb) {
 			return true
 		}
 	}
 	return false
+}
+
+// PolicyAllowsBinding reports whether pol would let Resolve route m over
+// hb: first the key-coverage gate (a NoAuth host needs no HostKey — Resolve
+// injects the anonymous one), then the grant check. Callers filter enabled
+// bindings themselves.
+func PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, hb *binding.Binding) bool {
+	if snap == nil || pol == nil || m == nil || hb == nil {
+		return false
+	}
+	h, ok := snap.Host(hb.Spec.HostID)
+	if !ok {
+		return false
+	}
+	if !h.Spec.NoAuth && len(hostKeysForHost(snap, pol, hb.Spec.HostID)) == 0 {
+		return false
+	}
+	if len(pol.Spec.ModelIDs) == 0 && len(pol.Spec.Models) == 0 {
+		// Implicit wildcard: a NoAuth host skips the key gate that is such a
+		// policy's only real authz, so reaching one takes an explicit grant.
+		return (!isDeprecated(m) || pol.Spec.IncludeDeprecated) && !h.Spec.NoAuth
+	}
+	return snap.PolicyAllowsCombo(pol.Meta.ID, m.Meta.ID, hb.Spec.HostID)
 }

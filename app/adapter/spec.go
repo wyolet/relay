@@ -16,6 +16,7 @@ package adapter
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/routing"
@@ -65,6 +66,11 @@ type Spec struct {
 	// Gemini's "/v1beta/models/{model}:generateContent" vs
 	// ":streamGenerateContent". When nil, DefaultPath is used verbatim.
 	UpstreamPathFn func(upstreamModel string, stream bool) string
+
+	// CountPath is the upstream path that counts a request's input tokens without generating, e.g. "/v1/messages/count_tokens". Set only for vendors that expose one: it is what makes this spec's pipeline.Adapter a TokenCounter, and an empty value means relay must estimate instead.
+	//
+	// Unlike DefaultPath it is not overridable per host — Host.Spec.Path rewrites the generation path only — so on a host that relocates the whole API the count request still goes to the shape's own location, and the mismatch surfaces as an upstream error rather than as a wrong number.
+	CountPath string
 
 	// Auth configures how the upstream is authenticated with an API-key
 	// credential (the default).
@@ -131,6 +137,10 @@ type Spec struct {
 	// client is the shared *http.Client for this spec's pipeline.Adapter.
 	// Populated by Build.
 	client *http.Client
+
+	// syncTimeout caps a non-streamed call end to end; idleTimeout is the silence budget on a streamed body (0 = none). Both are snapshotted by Build so the hot path reads an immutable field, matching how the transport reads its pooling knob.
+	syncTimeout time.Duration
+	idleTimeout time.Duration
 }
 
 // InboundPath describes one inbound HTTP route for a spec.
@@ -145,15 +155,14 @@ type InboundPath struct {
 	Summary string
 }
 
-// Build finalises the Spec by constructing its shared HTTP client. The client
-// pools upstream connections via a tuned transport (per-host idle ceiling from
-// SetUpstreamMaxIdleConnsPerHost) and keeps the 5-minute client timeout for
-// long streamed responses. Must be called once after all fields are set,
-// before the spec is added to a Registry. Returns s for chaining.
+// Build finalises the Spec by constructing its shared HTTP client and snapshotting the per-call deadlines. The client pools upstream connections via a tuned transport (per-host idle ceiling from SetUpstreamMaxIdleConnsPerHost).
+//
+// It carries no Client.Timeout: that is a whole-request cap, which would kill any generation streamed for longer than it — the header wait is bounded by the transport instead, and streamed bodies by the idle deadline.
+//
+// Must be called once after all fields are set, before the spec is added to a Registry. Returns s for chaining.
 func (s *Spec) Build() *Spec {
-	s.client = &http.Client{
-		Timeout:   defaultTimeout,
-		Transport: NewUpstreamTransport(s.UseHTTP1),
-	}
+	s.syncTimeout = defaultTimeout
+	s.idleTimeout = streamIdleTimeout
+	s.client = &http.Client{Transport: NewUpstreamTransport(s.UseHTTP1)}
 	return s
 }

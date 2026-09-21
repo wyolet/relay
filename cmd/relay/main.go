@@ -43,6 +43,7 @@ import (
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
+	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/app/usagelog"
 	"github.com/wyolet/relay/app/user"
 	relayweb "github.com/wyolet/relay/cmd/relay/web"
@@ -52,6 +53,7 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpmw"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -292,6 +294,7 @@ func main() {
 	// Upstream connection pooling: applies to every adapter Spec built below
 	// and to the proxy runner's client. Must run before the specs.
 	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
+	adapter.SetUpstreamStreamIdleTimeout(cfg.StreamIdleTimeout)
 	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
 
 	// Adapter specs — one Spec per supported wire shape. The composition
@@ -355,6 +358,7 @@ func main() {
 				{Path: "/anthropic/v1/messages", OperationID: "anthropic_messages", Summary: "Create a message (Anthropic Messages shape)"},
 			},
 			DefaultPath:   "/v1/messages",
+			CountPath:     "/v1/messages/count_tokens",
 			Auth:          anthropicAuth,
 			Translator:    pkganthropic.AnthropicTranslator{},
 			ExtractTokens: pkganthropic.ExtractTokens,
@@ -390,6 +394,12 @@ func main() {
 			Translator: relayv1.IdentityTranslator{},
 		}).Build(),
 	}
+	profiles := clientprofile.New()
+	if err := profiles.Register(clientprofile.ClaudeCode()); err != nil {
+		slog.Error("client profile registration failed", "err", err)
+		os.Exit(1)
+	}
+
 	specRegistry := adapter.NewRegistry(specs...)
 	if err := specRegistry.AssertWired(); err != nil {
 		slog.Error("adapter registry mis-wired", "err", err)
@@ -453,6 +463,10 @@ func main() {
 	payloadCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
 	go payloadCtl.Run(listenerCtx)
 	slog.Debug("payloadlog: observer wired (config via settings: payload-logging)")
+
+	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; one kv write per completed request, post-flight only.
+	tokenCalibrator := tokencount.NewCalibrator(kvStore)
+	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
 
 	// Admission control: a per-pod in-flight cap on inference requests. Rides
 	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
@@ -538,16 +552,19 @@ func main() {
 	}
 	inferRouter.Use(httpmw.LimitBody(maxBody))
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:         st,
-		Catalog:        cat,
-		Resolver:       routing.New(cat),
-		Pipeline:       pl,
-		Proxy:          proxyPipeline,
-		Lifecycle:      lifecycleReg,
-		Adapters:       specRegistry.AdapterMap(),
-		Specs:          specRegistry,
-		RouteMounters:  []inference.RouteMounter{inference.MountRegistry(specRegistry)},
-		TrustEventTime: cfg.DevTrustEventTime,
+		Pinger:          st,
+		Catalog:         cat,
+		Resolver:        routing.New(cat),
+		Pipeline:        pl,
+		Proxy:           proxyPipeline,
+		Lifecycle:       lifecycleReg,
+		Adapters:        specRegistry.AdapterMap(),
+		Specs:           specRegistry,
+		Profiles:        profiles,
+		RouteMounters:   []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		TokenCalibrator: tokenCalibrator,
+		StreamKeepAlive: cfg.StreamKeepAlive,
+		TrustEventTime:  cfg.DevTrustEventTime,
 	})
 
 	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →

@@ -117,6 +117,19 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 	return &Acquisition{Key: key, Reservation: res}, nil
 }
 
+// PickKey selects a healthy key exactly as Acquire does but reserves nothing. For the side calls that are not generations — counting a prompt's tokens — where charging the caller's request/token budget would shrink the budget for the generation it is preparing. The circuit breaker still applies, so a key the pool has opened is never handed out here either.
+func (s *Service) PickKey(ctx context.Context, pol *Policy, keys []*hostkey.HostKey) (*hostkey.HostKey, error) {
+	if s == nil || s.selector == nil {
+		return nil, fmt.Errorf("policy.Service.PickKey: selector not configured")
+	}
+	scope, algo := "", keypool.KeySelectionPrioritized
+	if pol != nil {
+		scope = pol.Meta.Name
+		algo = pol.EffectiveKeySelection()
+	}
+	return s.selector.Pick(ctx, scope, algo, keys)
+}
+
 // Commit returns the upstream reservation to the bucket.
 func (s *Service) Commit(ctx context.Context, acq *Acquisition, obs pkgratelimit.Observations) error {
 	if acq == nil || acq.Reservation == nil || s.limiter == nil {

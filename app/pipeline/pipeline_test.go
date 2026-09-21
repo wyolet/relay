@@ -630,6 +630,63 @@ func TestAllKeysExhausted_Returns503Sentinel(t *testing.T) {
 	}
 }
 
+// Exhausting every key must not discard the response that caused it: the
+// handler forwards the last upstream status, headers and body as-is, so all
+// three have to survive failover intact (the body well past the excerpt the
+// error string shows).
+func TestAllKeysExhausted_KeepsLastUpstreamResponse(t *testing.T) {
+	t.Parallel()
+
+	bigBody := `{"type":"error","error":{"message":"` + strings.Repeat("x", 2000) + `"}}`
+	adp := &fakeAdapter{
+		callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 429,
+				Header: http.Header{
+					"Retry-After":                       {"7"},
+					"Anthropic-Ratelimit-Unified-Reset": {"1750000000"},
+				},
+				Body: io.NopCloser(strings.NewReader(bigBody)),
+			}, nil
+		},
+		retryFn: func(*http.Response) (bool, keypool.FailureKind, time.Duration) {
+			return true, keypool.FailureRateLimitShort, 0
+		},
+	}
+
+	p := newPipeline()
+	_, err := p.Run(context.Background(), &pipeline.Request{
+		Adapter:     adp,
+		Keys:        []*hostkey.HostKey{makeKey("h1", "sk-1"), makeKey("h2", "sk-2")},
+		Policy:      makePolicy(),
+		MaxAttempts: 2,
+	})
+
+	var upstream *pipeline.UpstreamFailureError
+	if !errors.As(err, &upstream) {
+		t.Fatalf("err = %v, want *UpstreamFailureError", err)
+	}
+	if upstream.Status != 429 {
+		t.Errorf("Status = %d, want 429", upstream.Status)
+	}
+	if got := upstream.Header.Get("Retry-After"); got != "7" {
+		t.Errorf("Retry-After = %q, want %q", got, "7")
+	}
+	if got := upstream.Header.Get("Anthropic-Ratelimit-Unified-Reset"); got != "1750000000" {
+		t.Errorf("rate-limit header = %q", got)
+	}
+	if string(upstream.Body) != bigBody {
+		t.Errorf("Body truncated: %d bytes, want %d", len(upstream.Body), len(bigBody))
+	}
+	if adp.callCount.Load() != 2 {
+		t.Errorf("callCount = %d, want 2", adp.callCount.Load())
+	}
+	// The error string stays short even though the full body is retained.
+	if len(err.Error()) > 700 {
+		t.Errorf("error string is %d bytes — logs must get the excerpt, not the body", len(err.Error()))
+	}
+}
+
 func TestNoKeys_Returns_ErrNoKeys(t *testing.T) {
 	t.Parallel()
 

@@ -1,0 +1,11 @@
+requests.txt — every request claude-cli 2.1.278 made against a gateway at
+`ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/claude-code`, recorded 2026-09-21
+with CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 and
+CLAUDE_CODE_GATEWAY_HINT_HEADERS=1 for one `claude -p` turn.
+
+Request bodies are omitted (they carry the recording machine's paths), and
+the X-WR-API-Key the recording machine's own settings injected is redacted —
+it is not part of the client's contract.
+
+Refresh this when a client release changes the contract; the profile edits
+follow the fixture, never the other way round.

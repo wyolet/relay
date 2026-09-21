@@ -13,8 +13,14 @@ import (
 
 // PipelineAdapter returns a pipeline.Adapter backed by this spec's upstream
 // path and auth strategy. The returned value is safe for concurrent use.
+//
+// A spec declaring a CountPath gets the variant that also satisfies TokenCounter, so a caller's type assertion answers "does this upstream count tokens for us" without consulting the spec.
 func (s *Spec) PipelineAdapter() pipeline.Adapter {
-	return &specAdapter{spec: s}
+	base := &specAdapter{spec: s}
+	if s.CountPath != "" {
+		return &countingSpecAdapter{specAdapter: base}
+	}
+	return base
 }
 
 // specAdapter implements pipeline.Adapter for a Spec.
@@ -38,7 +44,25 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 	if hostPath != nil {
 		path = *hostPath
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path, bytes.NewReader(body))
+	callCtx, cancel := a.callContext(ctx, stream)
+	req, err := a.newRequest(callCtx, baseURL+path, apiKey, body, hdr, oauth)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	resp, err := a.spec.client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = a.bindBody(resp.Body, cancel, stream)
+	return resp, nil
+}
+
+// newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type.
+func (a *specAdapter) newRequest(ctx context.Context, url, apiKey string, body []byte, hdr http.Header, oauth bool) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +93,7 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 			req.Header.Set(k, v)
 		}
 	}
-
-	return a.spec.client.Do(req)
+	return req, nil
 }
 
 // ExtractTokens delegates to the spec's extractor, or returns nil if unset.

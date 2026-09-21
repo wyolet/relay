@@ -12,6 +12,7 @@ SDK sends it as a bearer token or an `x-api-key` header, so this just works.
 | --- | --- | --- |
 | OpenAI | `http://localhost:8080/openai/v1` | `/openai/v1/chat/completions` |
 | Anthropic | `http://localhost:8080/anthropic` | `/anthropic/v1/messages` |
+| [Claude Code](/claude-code) | `http://localhost:8080/claude-code` | `/claude-code/v1/messages`, plus model discovery and the startup probe |
 
 <Info>
 Swap `http://localhost:8080` for your relay's public URL in production. The
