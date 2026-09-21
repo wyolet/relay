@@ -1,30 +1,60 @@
 ---
 title: "Claude Code"
-description: "Route Claude Code through Relay to track usage and capture payloads"
+description: "Point Claude Code at Relay to route it to any model in the catalog, or to observe its own Anthropic traffic"
 ---
 
-[Claude Code](https://claude.com/claude-code) talks to the Anthropic API, so
-you can point it at Relay and get **usage tracking and full payload capture**
-for every Claude Code session — without changing how you log in. Your existing
-Claude subscription or API key keeps working; Relay simply sits in the middle,
-observing and forwarding.
+[Claude Code](https://claude.com/claude-code) speaks the Anthropic Messages API, and Relay serves it a dedicated base URL — `https://your-relay/claude-code` — that carries the messages endpoint plus what the client probes around it: model discovery (`GET /claude-code/v1/models`) and the startup connection probe (`HEAD /claude-code/api/hello`).
 
-## How it works
+Two ways to use it. In **routed mode** a relay key is the credential and Relay picks the upstream from the key's policy, so Claude Code can drive any model in your catalog. In **proxy mode** Claude Code keeps its own Claude login and Relay only observes and forwards.
 
-This uses [proxy mode](/concepts/proxy-mode). Claude Code keeps authenticating
-to Anthropic with **its own credentials** — those flow through Relay untouched
-in the `Authorization` header. Relay identifies the traffic by your **relay
-key**, sent in `X-WR-API-Key`, and forwards the request verbatim to Anthropic.
+## Routed mode
+
+Claude Code authenticates with a **relay key**, and Relay resolves the model through the key's policy like any other client — including **non-Anthropic models** (a self-hosted Ollama build, OpenAI, Gemini), which Relay translates into and out of the Anthropic shape on the way.
+
+Set the base URL and the key; Relay accepts the key as a bearer token:
+
+```bash
+export ANTHROPIC_BASE_URL="https://your-relay/claude-code"
+export ANTHROPIC_AUTH_TOKEN="sk-wr-your-relay-key"
+```
+
+### Model discovery
+
+Set `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` and `/model` lists the models the key's policy grants, each row subtitled with the hosts serving it and their input/output rates per million tokens where the binding is priced.
+
+Non-Anthropic models appear as `claude/<model>`. Claude Code keeps only picker entries whose id contains `claude` or `anthropic`, so Relay lists everything else under that prefix and strips it again on the way in — `--model claude/gemma4-e4b` and `--model gemma4-e4b` both reach the same model.
+
+### Subagents
+
+A custom agent file's `model:` is sent verbatim, so any model in your catalog can be pinned per agent — put `model: gemma4-e4b` in the frontmatter of `.claude/agents/reviewer.md` and that subagent runs on it while the main loop stays where it is. To remap the built-in aliases instead, set `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, or `ANTHROPIC_DEFAULT_HAIKU_MODEL`.
+
+### Settings
+
+To route every session, put the same values under `env` in `~/.claude/settings.json` (or a project-level `.claude/settings.json`):
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://your-relay/claude-code",
+    "ANTHROPIC_AUTH_TOKEN": "sk-wr-your-relay-key",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+    "CLAUDE_CODE_GATEWAY_HINT_HEADERS": "1"
+  }
+}
+```
+
+Two more are worth setting: `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to match the context window of the model you route to (the built-in default assumes a Claude window), and `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` so requests carry the client's agent and request-class headers — see [attribution](#what-you-get) below.
+
+## Proxy mode
+
+[Proxy mode](/concepts/proxy-mode) keeps Claude Code authenticating to Anthropic with **its own credentials** — they flow through Relay untouched in the `Authorization` header. Relay identifies the traffic by your **relay key**, sent in `X-WR-API-Key`, and forwards the request verbatim to Anthropic, so your OAuth login or `ANTHROPIC_API_KEY` is unchanged and Relay only adds observability.
 
 <Frame caption="Claude Code keeps its own Anthropic credential; Relay observes and forwards.">
   <img className="block dark:hidden" src="/images/architecture/claude-code.svg" alt="Claude Code routed through Relay in proxy mode" />
   <img className="hidden dark:block" src="/images/architecture/claude-code-dark.svg" alt="Claude Code routed through Relay in proxy mode" />
 </Frame>
 
-Because Relay never substitutes the credential, your Claude Code auth (OAuth
-login or `ANTHROPIC_API_KEY`) is unchanged — Relay only adds observability.
-
-## Prerequisites
+### Prerequisites
 
 1. **Proxy mode enabled** on your relay:
 
@@ -35,77 +65,65 @@ login or `ANTHROPIC_API_KEY`) is unchanged — Relay only adds observability.
      -d '{"enabled": true}'
    ```
 
-2. **A relay key** whose policy grants the Claude models Claude Code uses
-   (Sonnet, Opus, Haiku). In authenticated proxy mode without an explicit
-   host header, Relay reads the `model` from the request and resolves the
-   upstream host from this key's policy — so the models must be granted.
+2. **A relay key** whose policy grants the Claude models Claude Code uses (Sonnet, Opus, Haiku). In authenticated proxy mode without an explicit host header, Relay reads the `model` from the request and resolves the upstream host from this key's policy — so the models must be granted.
 
-3. *(Optional)* **Payload logging** turned on, if you want to capture the full
-   request/response bodies — see [Usage & Logging](/concepts/observability).
+3. *(Optional)* **Payload logging** turned on, if you want to capture the full request/response bodies — see [Usage & Logging](/concepts/observability).
 
-## Setup
+### Setup
 
-Set three things via environment variables: the relay's Anthropic base URL,
-and two custom headers (`X-WR-API-Key` and `X-WR-Proxy-Mode`). Claude Code's
-own login stays as-is and flows through as the upstream credential.
+Set three things via environment variables: the relay's Claude Code base URL, and two custom headers (`X-WR-API-Key` and `X-WR-Proxy-Mode`). Claude Code's own login stays as-is and flows through as the upstream credential.
 
-### Option A — a wrapper command
+#### Option A — a wrapper command
 
 Drop a small script on your `PATH` (e.g. `wcc`) so you opt in per-invocation:
 
 ```bash
 #!/usr/bin/env bash
 # Claude Code routed through Wyolet Relay.
-export ANTHROPIC_BASE_URL="https://your-relay/anthropic"
+export ANTHROPIC_BASE_URL="https://your-relay/claude-code"
 export ANTHROPIC_CUSTOM_HEADERS=$'X-WR-API-Key: sk-wr-your-relay-key\nX-WR-Proxy-Mode: Proxy'
 exec claude "$@"
 ```
 
-Run `wcc` instead of `claude` when you want the session tracked; plain `claude`
-stays direct.
+Run `wcc` instead of `claude` when you want the session tracked; plain `claude` stays direct.
 
-### Option B — Claude Code settings
+#### Option B — Claude Code settings
 
-To route every session, set the same values under `env` in
-`~/.claude/settings.json` (or a project-level `.claude/settings.json`):
+To route every session, set the same values under `env` in `~/.claude/settings.json` (or a project-level `.claude/settings.json`):
 
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "https://your-relay/anthropic",
+    "ANTHROPIC_BASE_URL": "https://your-relay/claude-code",
     "ANTHROPIC_CUSTOM_HEADERS": "X-WR-API-Key: sk-wr-your-relay-key\nX-WR-Proxy-Mode: Proxy"
   }
 }
 ```
 
 <Info>
-`ANTHROPIC_BASE_URL` is host + the `/anthropic` prefix; Claude Code appends
-`/v1/messages` itself. `ANTHROPIC_CUSTOM_HEADERS` is newline-separated
-`Name: Value` pairs.
+`ANTHROPIC_BASE_URL` is host + the `/claude-code` prefix; Claude Code appends `/v1/messages` and the discovery and probe paths itself. `ANTHROPIC_CUSTOM_HEADERS` is newline-separated `Name: Value` pairs.
 </Info>
+
+Model discovery works here too, and lists the same thing it lists in routed mode: the models your **relay key's policy** grants from Relay's catalog. The request itself still goes to the host your own credential belongs to.
 
 ## What you get
 
 Once a session runs through Relay:
 
-- **Usage** — every Claude Code request appears in `GET /logs` and the
-  `/usage/*` endpoints, attributed to your relay key, with token counts and
-  timing. Great for seeing what Claude Code actually costs.
-- **Payloads** — with payload logging enabled, the full prompts and
-  completions are captured and readable at `GET /logs/{request_id}` — exactly
-  what Claude Code sent and what the model returned.
+- **Usage** — every Claude Code request appears in `GET /logs` and the `/usage/*` endpoints, attributed to your relay key, with token counts and timing. Great for seeing what Claude Code actually costs.
+- **Payloads** — with payload logging enabled, the full prompts and completions are captured and readable at `GET /logs/{request_id}` — exactly what Claude Code sent and what the model returned.
+- **Attribution** — the client's own `x-claude-code-session-id`, `-agent-id`, `-parent-agent-id` and `-request-class` headers (plus the extra hint headers when `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`) are recorded on the usage event as `extras`, alongside `client=claude-code`. That's what lets you group and cost a whole session, or one subagent inside it.
 
 See [Usage & Logging](/concepts/observability) for reading it back.
 
+On the routed path, Relay emits the Anthropic shape's own `ping` frame while an upstream is silent, so a long generation doesn't trip the client's idle watchdog. The interval is 15 s by default (`RELAY_STREAM_KEEPALIVE_S`); see [Configuration](/configuration) for it and the matching upstream idle timeout.
+
 <Warning>
-Keep your relay key out of shared dotfiles and version control — treat the
-wrapper script or `settings.json` as secret-bearing. Payload capture records
-prompt and completion text; scope it to the keys you mean to debug.
+Keep your relay key out of shared dotfiles and version control — treat the wrapper script or `settings.json` as secret-bearing. Payload capture records prompt and completion text; scope it to the keys you mean to debug.
 </Warning>
 
 ## Notes
 
-- Setting `ANTHROPIC_BASE_URL` disables Claude Code's MCP tool search by
-  default; re-enable it with `ENABLE_TOOL_SEARCH=true` if you use it.
-- Proxy mode does no translation — Claude Code's native Anthropic requests are
-  forwarded byte-for-byte.
+- Setting `ANTHROPIC_BASE_URL` disables Claude Code's MCP tool search by default; re-enable it with `ENABLE_TOOL_SEARCH=true` if you use it.
+- Proxy mode does no translation — Claude Code's native Anthropic requests are forwarded byte-for-byte.
+- When an upstream rejects a request, Relay forwards that response as it stands — original status, `Retry-After` and body — instead of flattening it into a generic gateway error, so the client backs off on the provider's own terms.

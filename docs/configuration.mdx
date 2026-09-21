@@ -38,6 +38,13 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_MAX_REQUEST_BYTES` | _(unlimited)_ | Reject inbound request bodies larger than this many bytes. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Timeout for the `/healthz` dependency checks. |
 
+### Streaming
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RELAY_STREAM_KEEPALIVE_S` | `15` | Seconds of upstream silence after which Relay emits the inbound wire shape's own no-op stream frame, so clients that abort on silence keep waiting. `0` disables it. |
+| `RELAY_STREAM_IDLE_TIMEOUT_S` | `600` | Seconds of upstream silence after which Relay gives up on a streamed call. Streams have no total deadline — this is their only bound. Keep it above your client's own stream watchdog; `0` disables it. |
+
 ### Storage backends
 
 | Variable | Default | Description |
