@@ -1,44 +1,42 @@
-name: Publish image
+name: Release
 
-# Builds and pushes the multi-arch relay images (lean + all-in-one) to BOTH
-# ghcr.io/wyolet/relay and docker.io/wyolet/relay on every version tag (and on
-# demand). The image bakes in the pinned admin UI + catalog (see Dockerfile).
+# A v*.*.* tag on main is the release: pushes the relay images (lean +
+# standalone) to BOTH ghcr.io/wyolet/relay and docker.io/wyolet/relay, the Helm
+# chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
+# image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
 #
-# Required repo secrets:
-#   DOCKERHUB_TOKEN   — Docker Hub access token (secret). The username is the
-#                       repo VARIABLE DOCKERHUB_USERNAME (vars.*, not secret).
-#
-# The UI release asset is fetched from the now-public wyolet/relay-ui using the
-# workflow's built-in GITHUB_TOKEN — no dedicated PAT. Companion artifact
-# versions (UI_VERSION, CATALOG_REF) come from versions.env (the release BOM).
+# Repo settings:
+#   DOCKERHUB_TOKEN (secret) + DOCKERHUB_USERNAME (variable) — required.
+#   RELEASE_TELEGRAM_TOKEN (secret) + RELEASE_TELEGRAM_CHAT (variable) —
+#   optional failure notification; skipped when unset.
 #
 # First publish creates each package private; make them public (ghcr: org
 # package settings; Docker Hub: repo settings) so users can pull without auth.
 
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Version tag to publish (e.g. v0.1.0)'
-        required: true
-      ui_version:
-        description: 'relay-ui release tag to embed (default: UI_VERSION from versions.env)'
-        required: false
-      catalog_ref:
-        description: 'relay-catalog ref to seed (default: CATALOG_VERSION from versions.env)'
-        required: false
+    tags: ['v*.*.*']
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
+env:
+  TAG: ${{ github.ref_name }}
+
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A tag on an unmerged commit would publish unreviewed code.
+      - name: Require tag on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$TAG ($GITHUB_SHA) is not on origin/main"; exit 1; }
 
       - name: Require secrets
         env:
@@ -66,27 +64,50 @@ jobs:
       - name: Resolve versions
         id: v
         run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          echo "version=${REF#v}" >> "$GITHUB_OUTPUT"
-          # Companion pins come from versions.env (the release BOM); explicit
-          # workflow_dispatch inputs override.
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           set -a; . ./versions.env; set +a
-          UI="${{ github.event.inputs.ui_version }}";  [ -n "$UI" ]  || UI="$UI_VERSION"
-          CAT="${{ github.event.inputs.catalog_ref }}"; [ -n "$CAT" ] || CAT="$CATALOG_VERSION"
-          [ -n "$UI" ]  || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
-          [ -n "$CAT" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
-          echo "ui_version=$UI"   >> "$GITHUB_OUTPUT"
-          echo "catalog_ref=$CAT" >> "$GITHUB_OUTPUT"
+          [ -n "$UI_VERSION" ]      || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
+          [ -n "$CATALOG_VERSION" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
+          echo "ui_version=$UI_VERSION"        >> "$GITHUB_OUTPUT"
+          echo "catalog_ref=$CATALOG_VERSION"  >> "$GITHUB_OUTPUT"
 
-      - name: Build and push lean + standalone (multi-arch, both registries)
+      - name: Build and push lean + standalone (both registries)
         env:
           VERSION: ${{ steps.v.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ steps.v.outputs.ui_version }}
           CATALOG_REF: ${{ steps.v.outputs.catalog_ref }}
+        run: docker buildx bake -f docker-bake.hcl --push release
+
+      - uses: azure/setup-helm@v4
+
+      # Chart version and appVersion both equal the image tag (tag without v),
+      # so the chart version pins the image.
+      - name: Push chart
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          # Args, dual-registry tags, and no-cache-filter (force a fresh
-          # asset fetch) are all declared in docker-bake.hcl.
-          # `release` = the prod + standalone bake group (same set `make
-          # release` publishes locally).
-          docker buildx bake -f docker-bake.hcl --push release
+          helm package chart --version "$VERSION" --app-version "$VERSION"
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --generate-notes
+
+      - name: Notify failure
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.RELEASE_TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ vars.RELEASE_TELEGRAM_CHAT }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT" ] || exit 0
+          curl -fsS "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT}" \
+            --data-urlencode "parse_mode=Markdown" \
+            --data-urlencode "text=🛠 *Build failed* · relay \`${TAG}\`
+          🔎 [workflow run](${RUN_URL})"

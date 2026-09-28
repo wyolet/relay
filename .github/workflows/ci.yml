@@ -43,3 +43,11 @@ jobs:
           go test ./...
           (cd sdk && go test ./...)
           (cd jobq && go test ./...)
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint
+        run: helm lint chart
