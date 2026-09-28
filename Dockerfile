@@ -52,7 +52,7 @@ COPY go.work go.work.sum ./
 COPY go.mod go.sum ./
 COPY sdk/go.mod sdk/go.sum ./sdk/
 COPY jobq/go.mod jobq/go.sum ./jobq/
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 # Land the fetched UI (may be empty if no token + private repo). The .gitkeep
 # guarantees dist/ is non-empty so `//go:embed all:dist` always compiles; an
@@ -64,7 +64,9 @@ RUN touch cmd/relay/web/dist/.gitkeep
 # (bare `docker build`). The release pipeline passes the git tag via
 # docker-bake.hcl.
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/wyolet/relay/app/httpapi.Version=${VERSION}" \
     -o /relay ./cmd/relay
 

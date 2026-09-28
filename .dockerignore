@@ -12,6 +12,8 @@ deploy/
 !deploy/standalone-entrypoint.sh
 integration/
 bench/
+chart/
+.tmp/
 
 # UI dist is fetched inside the image build, never from the context.
 cmd/relay/web/dist/
