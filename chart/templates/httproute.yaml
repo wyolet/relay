@@ -1,0 +1,51 @@
+{{- if .Values.gateway.enabled }}
+{{- if .Values.gateway.inference.host }}
+# Inference (data plane) → /v1/* + /healthz.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "relay.fullname" . }}-inference
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    app.kubernetes.io/plane: inference
+spec:
+  hostnames:
+    - {{ .Values.gateway.inference.host | quote }}
+  parentRefs:
+    - name: {{ include "relay.fullname" . }}
+      sectionName: inference-https
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "relay.fullname" . }}
+          port: {{ .Values.service.inferencePort }}
+{{- end }}
+{{- if .Values.gateway.control.host }}
+---
+# Control plane → UI, CRUD, /metrics, /version.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "relay.fullname" . }}-control
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    app.kubernetes.io/plane: control
+spec:
+  hostnames:
+    - {{ .Values.gateway.control.host | quote }}
+  parentRefs:
+    - name: {{ include "relay.fullname" . }}
+      sectionName: control-https
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "relay.fullname" . }}-control
+          port: {{ .Values.service.controlPort }}
+{{- end }}
+{{- end }}

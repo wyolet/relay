@@ -1,0 +1,113 @@
+name: Release
+
+# A v*.*.* tag on main is the release: pushes the relay images (lean +
+# standalone) to BOTH ghcr.io/wyolet/relay and docker.io/wyolet/relay, the Helm
+# chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
+# image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
+#
+# Repo settings:
+#   DOCKERHUB_TOKEN (secret) + DOCKERHUB_USERNAME (variable) — required.
+#   RELEASE_TELEGRAM_TOKEN (secret) + RELEASE_TELEGRAM_CHAT (variable) —
+#   optional failure notification; skipped when unset.
+#
+# First publish creates each package private; make them public (ghcr: org
+# package settings; Docker Hub: repo settings) so users can pull without auth.
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A tag on an unmerged commit would publish unreviewed code.
+      - name: Require tag on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::$TAG ($GITHUB_SHA) is not on origin/main"; exit 1; }
+
+      - name: Require secrets
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets are required"; exit 1; }
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve versions
+        id: v
+        run: |
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          set -a; . ./versions.env; set +a
+          [ -n "$UI_VERSION" ]      || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
+          [ -n "$CATALOG_VERSION" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
+          echo "ui_version=$UI_VERSION"        >> "$GITHUB_OUTPUT"
+          echo "catalog_ref=$CATALOG_VERSION"  >> "$GITHUB_OUTPUT"
+
+      - name: Build and push lean + standalone (both registries)
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          GIT_REVISION: ${{ github.sha }}
+          UI_VERSION: ${{ steps.v.outputs.ui_version }}
+          CATALOG_REF: ${{ steps.v.outputs.catalog_ref }}
+        run: docker buildx bake -f docker-bake.hcl --push release
+
+      - uses: azure/setup-helm@v4
+
+      # Chart version and appVersion both equal the image tag (tag without v),
+      # so the chart version pins the image.
+      - name: Push chart
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          helm package chart --version "$VERSION" --app-version "$VERSION"
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --verify-tag --generate-notes
+
+      - name: Notify failure
+        if: failure()
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.RELEASE_TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT: ${{ vars.RELEASE_TELEGRAM_CHAT }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$TELEGRAM_TOKEN" ] && [ -n "$TELEGRAM_CHAT" ] || exit 0
+          curl -fsS "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT}" \
+            --data-urlencode "parse_mode=Markdown" \
+            --data-urlencode "text=🛠 *Build failed* · relay \`${TAG}\`
+          🔎 [workflow run](${RUN_URL})"
