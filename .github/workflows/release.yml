@@ -4,9 +4,13 @@ name: Release
 # standalone) to BOTH ghcr.io/wyolet/relay and docker.io/wyolet/relay, the Helm
 # chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
 # image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
+# Images build on a remote BuildKit pod in parallel with the test gate; the
+# chart is published only after both pass.
 #
 # Repo settings:
 #   DOCKERHUB_TOKEN (secret) + DOCKERHUB_USERNAME (variable) — required.
+#   CI_KUBECONFIG (secret) — required; may exec into the BuildKit pod and
+#   annotate the ArgoCD applications listed in ARGOCD_APPS.
 #   RELEASE_TELEGRAM_TOKEN (secret) + RELEASE_TELEGRAM_CHAT (variable) —
 #   optional failure notification; skipped when unset.
 #
@@ -21,11 +25,17 @@ permissions:
   contents: write
   packages: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   TAG: ${{ github.ref_name }}
+  BUILDKIT_ENDPOINT: kube-pod://buildkit-0?namespace=buildkit
+  ARGOCD_APPS: relay relay-saas
 
 jobs:
-  release:
+  guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,16 +48,52 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
             || { echo "::error::$TAG ($GITHUB_SHA) is not on origin/main"; exit 1; }
 
+  test:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - uses: azure/setup-helm@v4
+
+      - run: make check
+
+  build:
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Require secrets
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
         run: |
           [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets are required"; exit 1; }
+          [ -n "$CI_KUBECONFIG" ] || { echo "::error::CI_KUBECONFIG secret is required"; exit 1; }
 
-      - uses: docker/setup-qemu-action@v3
+      - name: Write kubeconfig
+        env:
+          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
+          printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver: remote
+          endpoint: ${{ env.BUILDKIT_ENDPOINT }}
 
+      - run: docker buildx inspect --bootstrap
+
+      # Registry auth stays on the runner; buildx forwards it to buildkitd per session.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -77,16 +123,21 @@ jobs:
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ steps.v.outputs.ui_version }}
           CATALOG_REF: ${{ steps.v.outputs.catalog_ref }}
-        run: docker buildx bake -f docker-bake.hcl --push release
+        run: docker buildx bake -f docker-bake.hcl --push --set '*.platform=linux/amd64' release
+
+  publish:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: azure/setup-helm@v4
 
       # Chart version and appVersion both equal the image tag (tag without v),
       # so the chart version pins the image.
       - name: Push chart
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
         run: |
+          VERSION="${TAG#v}"
           helm package chart --version "$VERSION" --app-version "$VERSION"
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
@@ -98,8 +149,23 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 \
             || gh release create "$TAG" --verify-tag --generate-notes
 
+      # Deploy now instead of waiting for ArgoCD's poll interval.
+      - name: Refresh ArgoCD applications
+        env:
+          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
+          printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
+          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
+          read -ra apps <<< "$ARGOCD_APPS"
+          kubectl -n argocd annotate application "${apps[@]}" argocd.argoproj.io/refresh=normal --overwrite
+
+  notify:
+    needs: [guard, test, build, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
       - name: Notify failure
-        if: failure()
         env:
           TELEGRAM_TOKEN: ${{ secrets.RELEASE_TELEGRAM_TOKEN }}
           TELEGRAM_CHAT: ${{ vars.RELEASE_TELEGRAM_CHAT }}
