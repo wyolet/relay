@@ -16,6 +16,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/apply"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -77,6 +78,8 @@ func registerExport(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
+		// A bundle is the caller's whole visible configuration in one read.
+		audit.Record(ctx, "system.export", audit.Resource{Kind: "system", Name: "export"}, audit.StatusAllowed)
 
 		out := &exportOutput{}
 		if in.Format == "json" {

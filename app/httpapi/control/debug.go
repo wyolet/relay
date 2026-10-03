@@ -18,6 +18,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -112,6 +113,8 @@ func registerDebug(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 
 		if in.Detail == "full" {
+			// Every row the data plane holds, keys and host keys included.
+			audit.Record(ctx, "debug.snapshot", audit.Resource{Kind: "debug", Name: "full"}, audit.StatusAllowed)
 			out.Body.Providers = snap.AllProviders()
 			out.Body.Hosts = snap.Hosts()
 			out.Body.Models = snap.AllModels()
