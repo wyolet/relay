@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Allocation gate over `go test -bench . -benchmem` output read on stdin.
 #
-#   benchgate.sh --baseline <file>              write "<pkg>/<Benchmark> <allocs>"
+#   benchgate.sh --baseline <file>              write "<pkg>/<Benchmark> <allocs> [<tolerance>]"
 #   benchgate.sh --check <file> [--tolerance N] fail on an allocs/op regression
+#
+# --tolerance applies to entries without a tolerance column of their own.
 #
 # Only allocs/op is gated; ns/op is too noisy on shared CI runners. Repeated
 # measurements of the same benchmark collapse to their minimum.
@@ -61,10 +63,22 @@ if [ -z "$mins" ]; then
 fi
 
 if [ "$mode" = "baseline" ]; then
+	# Regenerating keeps each entry's own tolerance (the optional third column).
+	entries=$(printf '%s\n' "$mins" | awk -v old="$file" '
+		BEGIN {
+			while ((getline line < old) > 0) {
+				sub(/#.*/, "", line)
+				if (split(line, f, /[ \t]+/) >= 3) own[f[1]] = f[3]
+			}
+		}
+		{ print $0 (($1 in own) ? " " own[$1] : "") }
+	')
 	{
 		echo "# allocs/op per benchmark, the floor bench-gate compares against."
+		echo "# An optional third column is that entry's tolerance in percent, for"
+		echo "# benchmarks whose count varies run to run (map growth)."
 		echo "# Regenerate with 'make bench-baseline' after an intentional change."
-		echo "$mins"
+		echo "$entries"
 	} >"$file"
 	echo "benchgate: wrote $(printf '%s\n' "$mins" | wc -l | tr -d ' ') entries to $file"
 	exit 0
@@ -75,7 +89,7 @@ BEGIN {
 	while ((getline line < baseline) > 0) {
 		sub(/#.*/, "", line)
 		if (line ~ /^[ \t]*$/) continue
-		split(line, f, /[ \t]+/)
+		if (split(line, f, /[ \t]+/) >= 3) own[f[1]] = f[3] + 0
 		base[f[1]] = f[2] + 0
 	}
 	close(baseline)
@@ -84,7 +98,7 @@ BEGIN {
 {
 	if (!($1 in base)) { printf "%-58s %8d %8s %7s\n", $1, $2, "-", "new"; next }
 	seen[$1] = 1
-	limit = base[$1] * (100 + tol)
+	limit = base[$1] * (100 + (($1 in own) ? own[$1] : tol))
 	status = ($2 * 100 <= limit) ? "ok" : "REGRESS"
 	if (status == "REGRESS") failed++
 	printf "%-58s %8d %8d %7s\n", $1, $2, base[$1], status
