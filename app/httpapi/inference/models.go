@@ -211,7 +211,7 @@ func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, userID string, 
 			continue
 		}
 		if pol != nil {
-			if !routing.PolicyAllowsBinding(snap, pol, m, b) {
+			if !routing.PolicyAllowsBinding(snap, pol, m, b, userID) {
 				continue
 			}
 		} else if !routing.PolicylessAllowsBinding(snap, m, b, userID) {
@@ -398,7 +398,7 @@ func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*c
 	pol := principal.Policy
 	var out []*model.Model
 	for _, m := range snap.AllModels() {
-		if !routing.PolicyAllows(snap, pol, m) {
+		if !routing.PolicyAllows(snap, pol, m, principal.UserID) {
 			continue
 		}
 		if adapterFilter != "" && !modelHasAdapter(snap, m, adapterFilter) {

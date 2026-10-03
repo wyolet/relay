@@ -266,7 +266,7 @@ candidates:
 				continue
 			}
 			h, ok := snap.Host(hb.Spec.HostID)
-			if !ok {
+			if !ok || !personalRowsVisible(hb, h, req.UserID) {
 				continue
 			}
 			anyEnabledBnd = true
@@ -419,6 +419,18 @@ func tierAllowedKeys(snap *appcatalog.Snapshot, keys []*hostkey.HostKey, modelID
 	return out
 }
 
+// personalRowsVisible reports whether the binding and its host exist for
+// userID. A personal (user-owned) row serves only its owner: otherwise any
+// user could slot their own endpoint under every grant of a shared model. A
+// user owner with no id is an operator row and stays shared.
+func personalRowsVisible(hb *binding.Binding, h *host.Host, userID string) bool {
+	return ownerSees(hb.Meta.Owner, userID) && ownerSees(h.Meta.Owner, userID)
+}
+
+func ownerSees(o meta.Owner, userID string) bool {
+	return o.Kind != meta.OwnerUser || o.ID == "" || o.ID == userID
+}
+
 // isDeprecated reports whether m's lifecycle status excludes it from
 // wildcard grants by default. Both "deprecated" and "sunset" qualify;
 // "active" (or unset) does not.
@@ -493,7 +505,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				continue
 			}
 			h, ok := snap.Host(hb.Spec.HostID)
-			if !ok {
+			if !ok || !personalRowsVisible(hb, h, userID) {
 				continue
 			}
 			anyEnabledBnd = true

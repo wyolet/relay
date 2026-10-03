@@ -215,7 +215,7 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if PolicyAllows(snap, caller, f.model) {
+	if PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = true, but the policy holds no host key for the model's host")
 	}
 	caller.Spec.HostKeyIDs = []string{f.keyA.Meta.ID}
@@ -227,7 +227,7 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if !PolicyAllows(snap, caller, f.model) {
+	if !PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = false with a granted, keyed model")
 	}
 
@@ -251,7 +251,7 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA, otherBnd},
 	)
-	if PolicyAllows(snap, caller, f.model) {
+	if PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = true, but the key's tier policy does not grant this model")
 	}
 	if _, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap}); !errors.Is(err, ErrNoKeys) {
@@ -276,7 +276,7 @@ func TestPolicyAllows_ListsNoAuthHost(t *testing.T) {
 		nil, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if !PolicyAllows(snap, caller, f.model) {
+	if !PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = false for an explicitly granted model on a NoAuth host")
 	}
 }
@@ -297,7 +297,7 @@ func TestPolicyAllows_DisabledPolicyGrantsNothing(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if PolicyAllows(snap, caller, f.model) {
+	if PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = true for a disabled policy")
 	}
 }
