@@ -7,12 +7,14 @@ package control
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/user"
 )
 
@@ -76,6 +78,7 @@ func registerUsers(api huma.API, d Deps, protect huma.Middlewares) {
 // *user.Store satisfies it; tests supply a fake.
 type userWriter interface {
 	Get(ctx context.Context, id string) (*user.User, error)
+	List(ctx context.Context) ([]*user.User, error)
 	Upsert(ctx context.Context, u *user.User) error
 	BumpTokenVersion(ctx context.Context, id string) error
 }
@@ -104,14 +107,42 @@ func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *userUpdateInput) (*userUpdateOutput, error) {
-		return updateUser(ctx, d.Users, d.Authz, in)
+		var sessions sessionEnder
+		if d.Sessions != nil {
+			sessions = d.Sessions
+		}
+		return updateUser(ctx, d.Users, d.Authz, sessions, in)
 	})
+}
+
+func isActiveAdmin(disabled bool, roles []string) bool {
+	return !disabled && slices.Contains(roles, user.RoleAdmin)
+}
+
+// keepOneAdmin refuses a change that would leave no enabled admin: nobody
+// could grant the role back short of editing the database.
+func keepOneAdmin(ctx context.Context, users userWriter, changing string) error {
+	all, err := users.List(ctx)
+	if err != nil {
+		return huma.Error500InternalServerError(err.Error())
+	}
+	for _, other := range all {
+		if other.ID != changing && isActiveAdmin(other.Disabled, other.Roles) {
+			return nil
+		}
+	}
+	return huma.Error409Conflict("this is the last enabled admin; grant the role to another account first")
+}
+
+// sessionEnder ends every session a user holds. *session.Manager satisfies it.
+type sessionEnder interface {
+	DestroyUser(ctx context.Context, userID string) error
 }
 
 // updateUser applies the two editable fields. Authorization is at the global
 // scope, like the list: an account belongs to the deployment, not to a team,
 // so a binding inside one project is not a grant to edit anyone.
-func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *userUpdateInput) (*userUpdateOutput, error) {
+func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, sessions sessionEnder, in *userUpdateInput) (*userUpdateOutput, error) {
 	owner := meta.Owner{Kind: meta.OwnerSystem}
 	if err := az.Authorize(ctx, "users.update", authz.Resource{Kind: "user", ID: in.ID, Owner: &owner}); err != nil {
 		return nil, mapAuthzErr(err)
@@ -123,19 +154,41 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *
 	if u == nil {
 		return nil, huma.Error404NotFound("user not found")
 	}
-	wasDisabled := u.Disabled
+	wasDisabled, oldRoles := u.Disabled, u.Roles
+	disabled, roles := u.Disabled, u.Roles
 	if in.Body.Disabled != nil {
-		u.Disabled = *in.Body.Disabled
+		disabled = *in.Body.Disabled
 	}
 	if in.Body.Roles != nil {
-		u.Roles = *in.Body.Roles
+		roles = *in.Body.Roles
 	}
+	// users.update is not a grant to hand out roles, or its holder could
+	// make themselves an admin.
+	if !slices.Equal(roles, oldRoles) {
+		if err := refcheck.RequireAdmin(ctx, az, "changing roles"); err != nil {
+			return nil, huma.Error403Forbidden(err.Error())
+		}
+	}
+	if isActiveAdmin(wasDisabled, oldRoles) && !isActiveAdmin(disabled, roles) {
+		if err := keepOneAdmin(ctx, users, u.ID); err != nil {
+			return nil, err
+		}
+	}
+	u.Disabled, u.Roles = disabled, roles
 	if err := users.Upsert(ctx, u); err != nil {
 		return nil, huma.Error500InternalServerError(err.Error())
 	}
-	// The snapshot already drops a disabled account's token version, but a
-	// later re-enable would revive every token minted before the disable.
-	if u.Disabled && !wasDisabled {
+	// A live session keeps the roles it logged in with; end it so the next
+	// login reads the row as it is now.
+	if sessions != nil && (u.Disabled != wasDisabled || !slices.Equal(u.Roles, oldRoles)) {
+		if err := sessions.DestroyUser(ctx, u.ID); err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
+	}
+	// The snapshot drops a disabled account's token version, which stops its
+	// tokens and personal keys; only a version change reaches the snapshot,
+	// so both directions bump (re-enabling revives no pre-disable token).
+	if u.Disabled != wasDisabled {
 		if err := users.BumpTokenVersion(ctx, in.ID); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

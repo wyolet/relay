@@ -13,9 +13,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/sdk/oauth"
 )
 
@@ -408,6 +412,30 @@ func TestOIDCFlow_AuditsLogin(t *testing.T) {
 			t.Fatalf("event = action %q status %q, want auth.login denied", ev.Action, ev.Outcome.Status)
 		}
 	})
+}
+
+// The root callback is mounted outside the /api group, so it has to bring
+// the audit middleware itself or SSO logins through it leave no row.
+func TestOIDCRootCallbackAuditsLogin(t *testing.T) {
+	idp := newFakeIdP(t)
+	od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "open")
+	sink := &auditSink{}
+	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := chi.NewRouter()
+	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false, "sess:"), Audit: em}, od)
+
+	loc, flow := driveStart(t, od)
+	cb := httptest.NewRequest("GET", "/auth/callback?code="+idp.issuedCode+"&state="+loc.Query().Get("state"), nil)
+	cb.AddCookie(flow)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, cb)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("callback: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	em.Close()
+	if evs := sink.all(); len(evs) != 1 || evs[0].Action != "auth.login" || evs[0].Outcome.Status != audit.StatusAllowed {
+		t.Fatalf("events = %+v, want one allowed auth.login", evs)
+	}
 }
 
 // Guard: the id_token parser rejects garbage tokens.

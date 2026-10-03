@@ -41,7 +41,7 @@ func TestResolvePolicyless_RefusesAnotherUsersHostKey(t *testing.T) {
 	if !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys — caller %s spent user %s's host key", err, callerA, userB)
 	}
-	if PolicylessAllows(snap, f.model, "", callerA) {
+	if anyMode.PolicylessAllows(snap, f.model, "", callerA) {
 		t.Error("another user's key makes the model listed to a policy-less caller")
 	}
 }
@@ -58,7 +58,7 @@ func TestResolvePolicyless_SpendsTheCallersOwnHostKey(t *testing.T) {
 	if len(plan.Keys) != 1 || plan.Keys[0].Meta.ID != f.keyA.Meta.ID {
 		t.Fatalf("keys = %v, want the caller's own key", plan.Keys)
 	}
-	if !PolicylessAllows(snap, f.model, "", owner) {
+	if !anyMode.PolicylessAllows(snap, f.model, "", owner) {
 		t.Error("the caller's own key does not make the model listed")
 	}
 }
@@ -94,7 +94,7 @@ func TestResolvePolicyless_UnknownCallerGetsSystemKeysOnly(t *testing.T) {
 	if !errors.Is(err, ErrNoKeys) {
 		t.Fatalf("err = %v, want ErrNoKeys — an unknown caller reached a user-owned key", err)
 	}
-	if PolicylessAllows(snap, f.model, "", "") {
+	if anyMode.PolicylessAllows(snap, f.model, "", "") {
 		t.Error("a user-owned key's model is listed to a caller with no id")
 	}
 }

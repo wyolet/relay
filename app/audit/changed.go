@@ -36,6 +36,13 @@ func Changed(ctx context.Context, fields []string) {
 	if f == nil {
 		return
 	}
+	c := changeOf(fields)
+	f.mu.Lock()
+	f.change = c
+	f.mu.Unlock()
+}
+
+func changeOf(fields []string) *Change {
 	kept := make([]string, 0, len(fields))
 	for _, p := range fields {
 		if p == "" || secretSegments[leafOf(p)] {
@@ -43,12 +50,42 @@ func Changed(ctx context.Context, fields []string) {
 		}
 		kept = append(kept, p)
 	}
-	f.mu.Lock()
 	if len(kept) == 0 {
-		f.change = &Change{}
-	} else {
-		f.change = &Change{Fields: kept}
+		return &Change{}
 	}
+	return &Change{Fields: kept}
+}
+
+// Row is one change a bulk write made.
+type Row struct {
+	Action   string
+	Resource Resource
+	Status   string // empty = StatusAllowed
+	Fields   []string
+}
+
+// RecordEach replaces the request's single row with one per change: a bulk
+// write (apply) makes many changes in one request, and each is its own
+// audited action. No-op outside an audited request.
+func RecordEach(ctx context.Context, rows []Row) {
+	f := fromContext(ctx)
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.each = rows
+	f.mu.Unlock()
+}
+
+// Discard drops the request's row: a dry run changes nothing, and its
+// authorization pass would otherwise read as the writes it only planned.
+func Discard(ctx context.Context) {
+	f := fromContext(ctx)
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	f.discard = true
 	f.mu.Unlock()
 }
 

@@ -215,7 +215,7 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if PolicyAllows(snap, caller, f.model) {
+	if anyMode.PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = true, but the policy holds no host key for the model's host")
 	}
 	caller.Spec.HostKeyIDs = []string{f.keyA.Meta.ID}
@@ -227,7 +227,7 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if !PolicyAllows(snap, caller, f.model) {
+	if !anyMode.PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = false with a granted, keyed model")
 	}
 
@@ -251,7 +251,7 @@ func TestPolicyAllows_RequiresAKeyResolveWouldUse(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA, otherBnd},
 	)
-	if PolicyAllows(snap, caller, f.model) {
+	if anyMode.PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = true, but the key's tier policy does not grant this model")
 	}
 	if _, err := (&Resolver{}).Resolve(Request{ModelName: "m1", Policy: caller, Snapshot: snap}); !errors.Is(err, ErrNoKeys) {
@@ -276,7 +276,7 @@ func TestPolicyAllows_ListsNoAuthHost(t *testing.T) {
 		nil, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if !PolicyAllows(snap, caller, f.model) {
+	if !anyMode.PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = false for an explicitly granted model on a NoAuth host")
 	}
 }
@@ -297,7 +297,7 @@ func TestPolicyAllows_DisabledPolicyGrantsNothing(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if PolicyAllows(snap, caller, f.model) {
+	if anyMode.PolicyAllows(snap, caller, f.model, "") {
 		t.Fatal("PolicyAllows = true for a disabled policy")
 	}
 }
@@ -405,7 +405,7 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		[]*hostkey.HostKey{f.keyA}, nil, nil,
 		[]*binding.Binding{f.bindingA},
 	)
-	if !PolicylessAllows(shared, f.model, "", "") {
+	if !anyMode.PolicylessAllows(shared, f.model, "", "") {
 		t.Fatal("a system-owned key's model is not listed")
 	}
 
@@ -420,7 +420,7 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		nil, nil, nil,
 		[]*binding.Binding{noAuth.bindingA},
 	)
-	if !PolicylessAllows(open, noAuth.model, "", "") {
+	if !anyMode.PolicylessAllows(open, noAuth.model, "", "") {
 		t.Error("a NoAuth host's model is not listed, but the flow serves it with the anonymous key")
 	}
 	if _, err := (&Resolver{}).resolvePolicyless(open, []*model.Model{noAuth.model}, &noAuth.model.Spec.Snapshots[0], "", ""); err != nil {
@@ -447,12 +447,12 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		[]*hostkey.HostKey{gated.keyA}, nil, nil,
 		[]*binding.Binding{gated.bindingA, otherBnd},
 	)
-	if PolicylessAllows(tiered, gated.model, "", "") {
+	if anyMode.PolicylessAllows(tiered, gated.model, "", "") {
 		t.Error("a model the key's tier does not grant is listed anyway")
 	}
 
 	// The adapter filter narrows without changing the pool rule.
-	if PolicylessAllows(shared, f.model, "not-a-registered-shape", "") {
+	if anyMode.PolicylessAllows(shared, f.model, "not-a-registered-shape", "") {
 		t.Error("the adapter filter is ignored")
 	}
 
@@ -473,7 +473,7 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 		caller string
 		want   bool
 	}{{caller: owner, want: true}, {caller: meta.NewID()}, {caller: ""}} {
-		listed := PolicylessAllows(personal, owned.model, "", tc.caller)
+		listed := anyMode.PolicylessAllows(personal, owned.model, "", tc.caller)
 		_, err := (&Resolver{}).resolvePolicyless(personal, []*model.Model{owned.model}, &owned.model.Spec.Snapshots[0], "", tc.caller)
 		if served := err == nil; listed != tc.want || served != tc.want {
 			t.Errorf("caller %q: listed=%v served=%v, want %v for both (err %v)", tc.caller, listed, served, tc.want, err)

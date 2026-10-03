@@ -342,6 +342,9 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 			kept = append(kept, e)
 			continue
 		}
+		if err := authzr.Authorize(ctx, "system.apply", authz.Resource{Kind: "system", Owner: applyScope(e.owner)}); err != nil {
+			return &AuthzError{Entry: e, Err: err}
+		}
 		if err := authzr.Authorize(ctx, e.plural+"."+string(verbOf(e.Action)), res); err != nil {
 			return &AuthzError{Entry: e, Err: err}
 		}
@@ -350,6 +353,24 @@ func Authorize(ctx context.Context, p *Result, authzr authz.Authorizer) error {
 	p.Entries = kept
 	recount(p)
 	return nil
+}
+
+// applyScope is the scope a write's system.apply is checked at: the row's
+// tenancy scope, or global for anything else. A personal owner maps to
+// global so owning the row never stands in for the apply grant.
+func applyScope(o meta.Owner) *meta.Owner {
+	switch o.Kind {
+	case meta.OwnerTeam, meta.OwnerProject:
+		return &o
+	}
+	return &meta.Owner{Kind: meta.OwnerSystem}
+}
+
+// Authorized returns the RBAC action the entry was authorized under, the
+// resource kind it names, and the row's owner — what an audit row for the
+// change records.
+func (e Entry) Authorized() (action, kind string, owner meta.Owner) {
+	return e.plural + "." + string(verbOf(e.Action)), singularOf(e.plural), e.owner
 }
 
 // verbOf maps a plan action to the RBAC verb the row is authorized under.

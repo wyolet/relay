@@ -7,7 +7,6 @@ package control
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -80,8 +79,8 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 			k.Meta.Name = slug.Unique(base, slugTakenFn(d.Stores.Key, func(rk *key.Key) *meta.Metadata { return &rk.Meta }))
 		}
 		k.Spec.Principal = in.Body.Spec.Principal
-		if err := stampKeyOwner(ctx, d, k); err != nil {
-			return nil, err
+		if err := refs(d).KeyOwner(ctx, k); err != nil {
+			return nil, refErr(err)
 		}
 		// Authorize AFTER owner stamping, same as the generic create path.
 		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &k.Meta.Owner}); err != nil {
@@ -115,39 +114,4 @@ func registerKeyCreate(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.Key = created
 		return out, nil
 	})
-}
-
-// stampKeyOwner derives the key's owner from its principal: a service
-// account contributes its project, a user owns their own keys. An account
-// the caller may not see is reported as absent.
-func stampKeyOwner(ctx context.Context, d Deps, k *key.Key) error {
-	switch k.Spec.Principal.Kind {
-	case key.PrincipalServiceAccount:
-		if d.Stores == nil || d.Stores.ServiceAccount == nil {
-			return huma.Error400BadRequest("service accounts are not available on this relay")
-		}
-		sa, err := d.Stores.ServiceAccount.Get(ctx, k.Spec.Principal.ID)
-		if err != nil || sa == nil || !visibleTo(ctx, d.Authz, "service-account", sa.Meta.ID, sa.Meta.Owner) {
-			return huma.Error404NotFound(fmt.Sprintf("service-account %q not found", k.Spec.Principal.ID))
-		}
-		k.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}
-		return nil
-	case key.PrincipalUser:
-		k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: k.Spec.Principal.ID}
-		// stampOwnerID rejects naming another user unless the caller is the
-		// break-glass admin token, which may issue on anyone's behalf.
-		if err := stampOwnerID(ctx, &k.Meta.Owner); err != nil {
-			return huma.Error400BadRequest(err.Error())
-		}
-		k.Spec.Principal.ID = k.Meta.Owner.ID
-		if d.Users != nil && k.Meta.Owner.ID != "" {
-			u, err := d.Users.Get(ctx, k.Meta.Owner.ID)
-			if err != nil || u == nil {
-				return huma.Error404NotFound(fmt.Sprintf("user %q not found", k.Meta.Owner.ID))
-			}
-		}
-		return nil
-	default:
-		return huma.Error400BadRequest("spec.principal.kind must be serviceaccount or user")
-	}
 }

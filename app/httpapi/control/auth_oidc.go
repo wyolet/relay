@@ -100,9 +100,17 @@ func MountOIDCCallbackRoot(r chi.Router, d Deps) {
 	if d.Users == nil || d.Sessions == nil || d.Catalog == nil {
 		return
 	}
-	od := newOIDCDeps(d)
+	mountOIDCCallbackRoot(r, d, newOIDCDeps(d))
+}
+
+func mountOIDCCallbackRoot(r chi.Router, d Deps, od *oidcDeps) {
 	r.Group(func(g chi.Router) {
 		g.Use(d.Sessions.Middleware)
+		// Outside /api nothing installs the audit middleware, and the login
+		// row the callback records needs one.
+		if d.Audit != nil {
+			g.Use(audit.Middleware(d.Audit, d.TrustedProxies))
+		}
 		g.Get("/auth/callback", od.callback)
 	})
 }

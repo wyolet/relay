@@ -41,16 +41,33 @@ var ErrCrossShape = errors.New("batch: cross-shape dispatch not yet supported")
 // is no longer in the snapshot. The item fails rather than running policy-less.
 var ErrPolicyUnavailable = errors.New("batch: policy_unavailable")
 
+// ErrCredentialInvalid is returned when the credential that submitted an item
+// has since been revoked, expired, disabled, or rotated out.
+var ErrCredentialInvalid = errors.New("batch: credential no longer valid")
+
 // Run executes one item. requestID ties the usage event to the item (the jobq
 // job id); policyID is the policy the submission already resolved to (the
-// resolution order lives in the auth layer, not here), tokenJTI is the
-// submitting token's jti (empty for a key) so the reservation refuses a
-// revoked one, and attr is the submission's attribution as recorded at
-// submit. It returns the upstream status and the buffered response body.
-// Usage emits automatically with source="batch" when the pipeline body
-// closes.
-func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID, tokenJTI string, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
+// resolution order lives in the auth layer, not here), tok carries the
+// submitting token's claims (zero for a key) so a revoked one is refused, and
+// attr is the submission's attribution as recorded at submit. It returns the
+// upstream status and the buffered response body. Usage emits automatically
+// with source="batch" when the pipeline body closes.
+func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID string, tok TokenClaims, attr Attribution, inbound adapters.Name, body []byte) (int, []byte, error) {
 	snap := rn.Catalog.Current()
+	tokenJTI := tok.JTI
+
+	// An item may run long after submit: the credential is re-checked against
+	// the current snapshot exactly as a WebSocket frame re-checks it.
+	submitter := &inference.Principal{
+		ProjectID: attr.ProjectID, CredentialKind: attr.CredentialKind, KeyHash: relayKeyHash,
+		TokenExp: tok.Expires, TokenVer: tok.Version,
+	}
+	if attr.PrincipalKind == string(key.PrincipalUser) {
+		submitter.UserID = attr.PrincipalID
+	}
+	if err := submitter.Recheck(snap, time.Now()); err != nil {
+		return 0, nil, fmt.Errorf("%w: %v", ErrCredentialInvalid, err)
+	}
 
 	modelName, _, err := inference.ExtractModelStream(body)
 	if err != nil {

@@ -199,8 +199,10 @@ func TestDisablingAUserRevokesTokensAndRefusesMintAndLogin(t *testing.T) {
 		t.Errorf("rejection code = %q, want token_revoked", reason)
 	}
 
-	if code, _, raw := f.mint(us); code != http.StatusForbidden {
-		t.Errorf("mint on a disabled account = %d: %s, want 403", code, raw)
+	// Disabling ends the account's live sessions, so the old cookie no
+	// longer authenticates at all.
+	if code, _, raw := f.mint(us); code != http.StatusUnauthorized {
+		t.Errorf("mint on a disabled account = %d: %s, want 401", code, raw)
 	}
 
 	fresh := f.freshSession()

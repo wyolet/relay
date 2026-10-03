@@ -34,6 +34,39 @@ type inflight struct {
 	// forced is set by Record for handlers that never call Authorize; it
 	// bypasses the marking rule entirely.
 	forced *decision
+	// each, set by RecordEach, replaces the single row with one per change;
+	// discard drops the request's row altogether.
+	each    []Row
+	discard bool
+}
+
+// events assembles every row the request earns.
+func (f *inflight) events(code int) []Event {
+	f.mu.Lock()
+	discard, each := f.discard, f.each
+	f.mu.Unlock()
+	if discard {
+		return nil
+	}
+	if len(each) == 0 {
+		if ev, ok := f.event(code); ok {
+			return []Event{ev}
+		}
+		return nil
+	}
+	out := make([]Event, 0, len(each))
+	for _, r := range each {
+		status := r.Status
+		if status == "" {
+			status = StatusAllowed
+		}
+		out = append(out, Event{
+			Actor: f.actor, Action: r.Action, Resource: r.Resource,
+			Outcome: Outcome{Status: status, Code: code}, Request: f.request,
+			Change: changeOf(r.Fields),
+		})
+	}
+	return out
 }
 
 type ctxKey struct{}
@@ -60,6 +93,12 @@ func (f *inflight) event(code int) (Event, bool) {
 	defer f.mu.Unlock()
 
 	d, ok := f.forced, f.forced != nil
+	// A request with no credential acted for nobody; only handlers that
+	// record themselves (login attempts) write a row for one, so an
+	// unauthenticated flood cannot fill the audit queue.
+	if !ok && f.actor.Kind == ActorAnonymous {
+		return Event{}, false
+	}
 	if !ok {
 		var found decision
 		found, ok = markDecision(f.decisions, f.readRoute)

@@ -26,8 +26,8 @@ import (
 // rules and a key pool the caller never had.
 func TestRun_MissingPolicyFailsTheItem(t *testing.T) {
 	rn, _, _ := runnerFixture(t)
-	_, _, err := rn.Run(context.Background(), "item-1", "", meta.NewID(), "",
-		Attribution{}, adapters.OpenAI, []byte(`{"model":"test-model"}`))
+	_, _, err := rn.Run(context.Background(), "item-1", fixtureKeyHash, meta.NewID(), TokenClaims{},
+		keyAttr(), adapters.OpenAI, []byte(`{"model":"test-model"}`))
 	if !errors.Is(err, ErrPolicyUnavailable) {
 		t.Fatalf("err = %v, want ErrPolicyUnavailable", err)
 	}
@@ -50,8 +50,8 @@ func TestRun_PinsItsSnapshot(t *testing.T) {
 	rn, _, policyID := runnerFixture(t)
 	rn.Resolver = routing.New(empty)
 
-	_, _, err := rn.Run(context.Background(), "item-1", "", policyID, "",
-		Attribution{}, adapters.OpenAI, []byte(`{"model":"test-model"}`))
+	_, _, err := rn.Run(context.Background(), "item-1", fixtureKeyHash, policyID, TokenClaims{},
+		keyAttr(), adapters.OpenAI, []byte(`{"model":"test-model"}`))
 	if err == nil {
 		t.Fatal("expected the run to fail past routing on the unreachable upstream")
 	}

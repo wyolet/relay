@@ -16,9 +16,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/apply"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
+	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/app/refcheck"
 )
 
 type applyInput struct {
@@ -95,12 +98,18 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			if errors.Is(err, license.ErrRequired) || errors.Is(err, authz.ErrForbidden) {
 				return nil, huma.Error403Forbidden(err.Error())
 			}
+			// A reference the caller may not see answers like any refused row:
+			// generic, so the plan step cannot probe another scope's names.
+			var re *refcheck.Error
+			if errors.As(err, &re) && re.Status == http.StatusNotFound {
+				return nil, &applyFailure{status: http.StatusForbidden, Message: "forbidden"}
+			}
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		// The endpoint has no gate of its own: the plan is authorized row by
-		// row, and a dry run runs the same pass so a caller who may write
-		// nothing never gets the diff back.
+		// Every write needs system.apply at its scope plus the row's own verb;
+		// a dry run runs the same pass so a caller who may write nothing never
+		// gets the diff back.
 		if err := apply.Authorize(ctx, plan, d.Authz); err != nil {
 			var ae *apply.AuthzError
 			if errors.As(err, &ae) {
@@ -119,6 +128,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.Plan = plan.Entries
 		out.Body.Counts = plan.Counts
 		if in.DryRun {
+			audit.Discard(ctx)
 			return out, nil
 		}
 
@@ -126,6 +136,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			var se *apply.StoreError
 			if errors.As(err, &se) {
+				recordApplied(ctx, d, se.Applied, &se.Entry)
 				return nil, &applyFailure{
 					status: http.StatusInternalServerError, Message: se.Error(),
 					Plan: plan.Entries, Applied: se.Applied,
@@ -133,7 +144,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
-		_ = applied
+		recordApplied(ctx, d, applied, nil)
 		// Execute may have downgraded entries to conflict; report the plan
 		// as it actually ran.
 		out.Body.Plan = plan.Entries
@@ -141,6 +152,36 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.Applied = true
 		return out, nil
 	})
+}
+
+// recordApplied audits each change that landed as its own row, plus the
+// write that failed, if any. Nothing landed leaves the request's single row.
+func recordApplied(ctx context.Context, d Deps, applied []apply.Entry, failed *apply.Entry) {
+	var snap *appcatalog.Snapshot
+	if d.Catalog != nil {
+		snap = d.Catalog.Current()
+	}
+	row := func(e apply.Entry, status string) audit.Row {
+		action, kind, owner := e.Authorized()
+		fields := e.ChangedFields
+		if e.Action != apply.ActionUpdate {
+			fields = []string{audit.AnyField}
+		}
+		return audit.Row{
+			Action: action, Status: status, Fields: fields,
+			Resource: audit.Resource{Kind: kind, ID: e.ID, Name: e.Name, Owner: &owner, Scope: audit.ScopeOf(snap, &owner)},
+		}
+	}
+	rows := make([]audit.Row, 0, len(applied)+1)
+	for _, e := range applied {
+		rows = append(rows, row(e, audit.StatusAllowed))
+	}
+	if failed != nil {
+		rows = append(rows, row(*failed, audit.StatusError))
+	}
+	if len(rows) > 0 {
+		audit.RecordEach(ctx, rows)
+	}
 }
 
 // parseBundle reads a multi-document YAML body, or a JSON envelope of the

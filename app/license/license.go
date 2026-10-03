@@ -16,8 +16,8 @@ import (
 	"time"
 )
 
-// FeatureSSO gates all IdP-backed control-plane login (OIDC today, SAML
-// later). Community deployments keep password login.
+// FeatureSSO gates enterprise identity integrations (SAML, SCIM). OIDC login
+// is community and never consults it.
 const FeatureSSO = "sso"
 
 // FeatureCustomRoles gates authoring Roles of your own. The built-in roles

@@ -37,16 +37,8 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 		if incoming == nil {
 			return nil
 		}
-		if err := checkHostKeyRefsVisible(ctx, d, incoming.Spec.HostKeyIDs, incoming.Meta.Owner); err != nil {
-			return err
-		}
-		if err := checkRateLimitRefVisible(ctx, d, incoming.Spec.RateLimitID, incoming.Meta.Owner); err != nil {
-			return err
-		}
-		for _, b := range incoming.Spec.RLBindings {
-			if err := checkRateLimitRefVisible(ctx, d, b.RateLimitID, incoming.Meta.Owner); err != nil {
-				return err
-			}
+		if err := refs(d).Policy(ctx, incoming); err != nil {
+			return refErr(err)
 		}
 		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {
 			return nil

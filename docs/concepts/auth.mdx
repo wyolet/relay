@@ -147,6 +147,12 @@ warning) so an existing multi-user deployment doesn't silently drop to
 `single`. Set `RELAY_AUTHZ` explicitly and drop `RELAY_MULTI_USER`.
 </Note>
 
+<Warning>
+Under `single`, OIDC with `registration: open` makes every user your identity
+provider can authenticate an admin. The relay logs a warning at startup for
+this pairing; use `rbac` or `registration: closed`.
+</Warning>
+
 ### The model
 
 Four pieces, and one rule that connects them:

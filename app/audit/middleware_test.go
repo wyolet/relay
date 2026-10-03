@@ -92,11 +92,6 @@ func TestMiddlewareActorKinds(t *testing.T) {
 			actor:    &actor.Actor{AdminToken: true, Username: "admin-token"},
 			wantKind: ActorAdminToken, wantName: "admin-token",
 		},
-		{
-			name:     "no actor",
-			actor:    nil,
-			wantKind: ActorAnonymous,
-		},
 	}
 
 	for _, tt := range tests {
@@ -113,6 +108,66 @@ func TestMiddlewareActorKinds(t *testing.T) {
 				t.Fatalf("actor.IP = %q, want the peer address 10.0.0.7", got.IP)
 			}
 		})
+	}
+}
+
+// A request with no credential did nothing on anyone's behalf; recording each
+// one would let an unauthenticated flood fill the audit queue. Login attempts
+// record themselves and still land.
+func TestMiddlewareSkipsUnauthenticatedRequests(t *testing.T) {
+	if evs := serve(t, nil, http.MethodPut, "/api/policies/by-id/p-1", "10.0.0.7:5555", "", "policies.update", http.StatusUnauthorized); len(evs) != 0 {
+		t.Fatalf("unauthenticated write produced %d events, want 0", len(evs))
+	}
+	sink := &memSink{}
+	em := NewEmitter(sink, quietLogger())
+	h := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodDelete, "/api/keys/by-id/k-1", nil))
+	login := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Record(r.Context(), "auth.login", Resource{Kind: "user", Name: "mallory"}, StatusDenied, Actor{Kind: ActorAnonymous, Name: "mallory"})
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	login.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
+	em.Close()
+	evs := sink.all()
+	if len(evs) != 1 || evs[0].Action != "auth.login" {
+		t.Fatalf("events = %+v, want only the recorded login attempt", evs)
+	}
+}
+
+// A bulk write is many changes in one request: each is its own row, with
+// the fields it touched minus secret-bearing paths. A dry run is none.
+func TestMiddlewareWritesOneRowPerRecordedChange(t *testing.T) {
+	sink := &memSink{}
+	em := NewEmitter(sink, quietLogger())
+	authzr := Authorizer{Inner: authz.AlwaysAllowAuthenticated{}}
+	run := func(fn func(context.Context)) {
+		h := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = authzr.Authorize(r.Context(), "teams.create", authz.Resource{Kind: "team"})
+			fn(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodPost, "/api/apply", nil)
+		h.ServeHTTP(httptest.NewRecorder(), req.WithContext(actor.WithActor(req.Context(), &actor.Actor{UserID: "u-1"})))
+	}
+	run(func(ctx context.Context) {
+		RecordEach(ctx, []Row{
+			{Action: "teams.create", Resource: Resource{Kind: "team", Name: "a"}, Fields: []string{AnyField}},
+			{Action: "host-keys.update", Resource: Resource{Kind: "host-key", Name: "b"}, Fields: []string{"spec.value", "spec.enabled"}},
+		})
+	})
+	run(Discard)
+	em.Close()
+	evs := sink.all()
+	if len(evs) != 2 {
+		t.Fatalf("events = %d, want one per change and none for the dry run", len(evs))
+	}
+	if evs[0].Action != "teams.create" || evs[1].Action != "host-keys.update" || evs[1].Resource.Name != "b" {
+		t.Fatalf("events = %+v", evs)
+	}
+	if f := evs[1].Change; f == nil || len(f.Fields) != 1 || f.Fields[0] != "spec.enabled" {
+		t.Fatalf("change = %+v, want [spec.enabled] with the secret path dropped", f)
 	}
 }
 

@@ -138,6 +138,9 @@ type Snapshot struct {
 	// tokenVersionByUser mirrors users.token_version — the only user state
 	// the snapshot carries, so token verification stays a map read.
 	tokenVersionByUser map[string]int
+	// usersLoaded records that tokenVersionByUser came from a users source,
+	// so an absent id means a disabled or deleted user rather than "unknown".
+	usersLoaded bool
 
 	// Reverse joins precomputed from Policy.Spec.* lists, so the hot path
 	// doesn't iterate.
@@ -650,6 +653,16 @@ func (s *Snapshot) SubjectsForKey(keyID string) []string {
 func (s *Snapshot) TokenVersion(userID string) (int, bool) {
 	v, ok := s.tokenVersionByUser[userID]
 	return v, ok
+}
+
+// UserEnabled reports whether a user may still act. True when no users
+// source is attached: the snapshot cannot tell, and keys predate users.
+func (s *Snapshot) UserEnabled(userID string) bool {
+	if !s.usersLoaded {
+		return true
+	}
+	_, ok := s.tokenVersionByUser[userID]
+	return ok
 }
 
 // ModelsInPolicy returns the Models attached to this Policy in declaration

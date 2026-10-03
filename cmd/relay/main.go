@@ -9,7 +9,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,7 +32,6 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
-	applicense "github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/metricslog"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
@@ -343,11 +341,7 @@ func main() {
 
 	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
 	// the boot, not the first login attempt.
-	// An unlicensed overlay is refused, not fatal: a deployment that loses
-	// its license keeps booting and keeps serving password login.
-	if oidcEnv, err := settings.AuthOIDCEnv(); errors.Is(err, applicense.ErrRequired) {
-		slog.Warn("auth: oidc login requires a license — falling back to password login", "err", err)
-	} else if err != nil {
+	if oidcEnv, err := settings.AuthOIDCEnv(); err != nil {
 		slog.Error("auth: invalid WYOLET_* OIDC env overlay", "err", err)
 		os.Exit(1)
 	} else if oidcEnv != nil {
@@ -631,10 +625,11 @@ func main() {
 		os.Exit(1)
 	}
 	// RBAC makes a credential's grants the whole access model, so a key whose
-	// policy does not resolve has no access rather than the shared pool's.
+	// policy does not resolve has no access rather than the shared pool's,
+	// and users are separate tenants whose personal hosts serve only them.
 	var routingOpts []routing.Option
 	if cfg.Authz == config.AuthzRBAC {
-		routingOpts = append(routingOpts, routing.RequirePolicy())
+		routingOpts = append(routingOpts, routing.RequirePolicy(), routing.PersonalRowsOwnerOnly())
 	}
 	batchQueue := jobq.New(st.Pool(), batchPayloads, jobq.Options{})
 	batchSvc := batch.NewService(
@@ -724,6 +719,7 @@ func main() {
 		// an admin; an upgrade that silently picks the wrong one is exactly
 		// what an operator needs to see in the first lines of a boot log.
 		slog.Info("relay control: authorization mode", "authz", cfg.Authz)
+		warnSingleUserOpenRegistration(cfg.Authz, settings.EffectiveAuthOIDC(cat))
 		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
 			Identity:      idStore,

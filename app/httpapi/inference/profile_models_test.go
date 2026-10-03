@@ -90,7 +90,7 @@ func entriesFixture(t *testing.T, grants ...string) (*catalog.Snapshot, *policy.
 
 func TestModelEntries_SnapshotsAliasesAndHosts(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model")
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 
 	if len(entries) != 2 {
 		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
@@ -132,7 +132,7 @@ func TestModelEntries_SnapshotsAliasesAndHosts(t *testing.T) {
 // model's snapshots apart — they all carry the same display name.
 func TestModelEntries_CarriesParentSlugAndPointer(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model")
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 
 	if len(entries) != 2 {
 		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
@@ -158,7 +158,7 @@ func TestModelEntries_CarriesCatalogMetadata(t *testing.T) {
 	models[0].Spec.MaxOutputTokens = 384000
 	models[0].Spec.Capabilities = model.Capabilities{Reasoning: true, Tools: true}
 
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	if len(entries) != 2 {
 		t.Fatalf("entries len = %d, want one per snapshot", len(entries))
 	}
@@ -181,7 +181,7 @@ func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model")
 	models[0].Spec.ContextWindowInput = 272000
 
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	if len(entries) == 0 {
 		t.Fatal("no entries")
 	}
@@ -190,7 +190,7 @@ func TestModelEntries_ContextWindowFallsBackToInput(t *testing.T) {
 	}
 
 	snap, pol, models = entriesFixture(t, "prov/big-model")
-	entries = modelEntries(snap, pol, "", models)
+	entries = modelEntries(nil, snap, pol, "", models)
 	if entries[0].ContextWindow != 0 || entries[0].MaxOutputTokens != 0 {
 		t.Errorf("undeclared metadata = %d/%d, want zeros", entries[0].ContextWindow, entries[0].MaxOutputTokens)
 	}
@@ -207,7 +207,7 @@ func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
 		)
 	}
 
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	var priced clientprofile.ModelHost
 	for _, h := range entries[0].Hosts {
 		if h.Name == "priced-host" {
@@ -238,7 +238,7 @@ func TestModelEntries_CarriesCacheRatesAndTiers(t *testing.T) {
 // a projection must not print as free.
 func TestModelEntries_UnpricedCacheMetersStayNil(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model")
-	for _, h := range modelEntries(snap, pol, "", models)[0].Hosts {
+	for _, h := range modelEntries(nil, snap, pol, "", models)[0].Hosts {
 		if h.CacheReadUSDPerMtok != nil || h.CacheWriteUSDPerMtok != nil {
 			t.Errorf("%q cache rates = %v / %v, want nil", h.Name, h.CacheReadUSDPerMtok, h.CacheWriteUSDPerMtok)
 		}
@@ -253,7 +253,7 @@ func TestModelEntries_CarriesModalitiesReleaseDateAndTemperature(t *testing.T) {
 	models[0].Spec.Capabilities = model.Capabilities{Vision: true, UnsupportedParams: []string{"temperature"}}
 	models[0].Spec.Snapshots[0].ReleasedAt = "2026-02-17"
 
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	if got := entries[0].ReleasedAt; got != "2026-02-17" {
 		t.Errorf("released at = %q", got)
 	}
@@ -301,7 +301,7 @@ func TestModelEntries_HostsFollowTheBindingSnapshotSet(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model")
 	restrictBinding(t, snap, "b-priced", "big-model-2026")
 
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	if len(entries) != 2 {
 		t.Fatalf("entries = %d, want both snapshots served", len(entries))
 	}
@@ -319,7 +319,7 @@ func TestModelEntries_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
 	restrictBinding(t, snap, "b-priced", "big-model-2026")
 
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	if len(entries) != 1 || entries[0].ID != "big-model-2026" {
 		t.Fatalf("entries = %+v, want big-model-2026 alone", entries)
 	}
@@ -337,7 +337,7 @@ func TestAppendModelRows_SkipsSnapshotsNoGrantedBindingServes(t *testing.T) {
 	var rows []modelObject
 	seen := map[string]struct{}{}
 	m := models[0]
-	appendModelRows(&rows, snap, m, grantedBindings(snap, pol, "", m, ""), seen)
+	appendModelRows(&rows, snap, m, grantedBindings(nil, snap, pol, "", m, ""), seen)
 	if len(rows) != 1 || rows[0].ID != "big-model-2026" {
 		t.Fatalf("rows = %+v, want big-model-2026 alone", rows)
 	}
@@ -349,7 +349,7 @@ func TestModelEntries_SkipsDisabledBindings(t *testing.T) {
 	for _, b := range snap.AllBindings() {
 		b.Spec.Enabled = &disabled
 	}
-	for _, e := range modelEntries(snap, pol, "", models) {
+	for _, e := range modelEntries(nil, snap, pol, "", models) {
 		if len(e.Hosts) != 0 {
 			t.Fatalf("disabled bindings must not surface a host: %+v", e.Hosts)
 		}
@@ -360,7 +360,7 @@ func TestModelEntries_SkipsDisabledBindings(t *testing.T) {
 // otherwise name a route the caller's key cannot take.
 func TestModelEntries_ListsOnlyGrantedHosts(t *testing.T) {
 	snap, pol, models := entriesFixture(t, "prov/big-model@priced-host")
-	entries := modelEntries(snap, pol, "", models)
+	entries := modelEntries(nil, snap, pol, "", models)
 	if len(entries) == 0 {
 		t.Fatal("no entries")
 	}

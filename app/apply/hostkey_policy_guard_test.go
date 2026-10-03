@@ -16,7 +16,7 @@ func TestApplyRejectsAHostKeyOnAForeignPolicy(t *testing.T) {
 		"p-1": {Meta: meta.Metadata{ID: "p-1", Name: "openai-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}}},
 		"p-2": {Meta: meta.Metadata{ID: "p-2", Name: "team-pol", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "proj-1"}}},
 	}
-	check := checkHostKeyPolicy(pols)
+	check := checkHostKeyPolicy(nil, pols)
 	ok := &hostkey.HostKey{Meta: meta.Metadata{Name: "k"}, Spec: hostkey.Spec{HostID: "h-1", PolicyID: "p-1"}}
 	if err := check(context.Background(), ok); err != nil {
 		t.Fatalf("host-owned policy of the key's own host: %v", err)
@@ -34,9 +34,9 @@ func TestApplyRejectsAHostKeyOnAForeignPolicy(t *testing.T) {
 	if err := check(context.Background(), otherHost); err == nil {
 		t.Error("a policy owned by a different host was accepted")
 	}
-	// A policy this run cannot resolve is left to the snapshot's own drop.
+	// A policy naming nothing is refused, as the API refuses it.
 	unknown := &hostkey.HostKey{Meta: meta.Metadata{Name: "k"}, Spec: hostkey.Spec{HostID: "h-1", PolicyID: "p-9"}}
-	if err := check(context.Background(), unknown); err != nil {
-		t.Errorf("unresolvable policy = %v, want it left alone", err)
+	if err := check(context.Background(), unknown); err == nil {
+		t.Error("unresolvable policy accepted")
 	}
 }

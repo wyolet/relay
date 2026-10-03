@@ -57,7 +57,12 @@ func (a Authorizer) scopeOf(owner *meta.Owner) []string {
 	if a.Snap == nil {
 		return nil
 	}
-	snap := a.Snap()
+	return ScopeOf(a.Snap(), owner)
+}
+
+// ScopeOf renders an owner's scope chain the way Authorize records it, for
+// rows written through RecordEach.
+func ScopeOf(snap *catalog.Snapshot, owner *meta.Owner) []string {
 	if snap == nil {
 		return nil
 	}

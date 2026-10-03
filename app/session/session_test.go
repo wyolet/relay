@@ -153,7 +153,14 @@ type commitFailStore struct {
 	err error
 }
 
-func (c *commitFailStore) Set(context.Context, string, []byte, time.Duration) error { return c.err }
+// Set fails session commits only; Login's per-user index write goes through
+// so the handler reaches the commit this test is about.
+func (c *commitFailStore) Set(ctx context.Context, key string, v []byte, ttl time.Duration) error {
+	if strings.HasPrefix(key, "sess:user:") {
+		return c.Store.Set(ctx, key, v, ttl)
+	}
+	return c.err
+}
 
 func TestCommitFailure_CleanErrorResponse(t *testing.T) {
 	var logBuf bytes.Buffer

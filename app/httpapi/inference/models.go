@@ -82,7 +82,7 @@ func registerProfileModels(api huma.API, d Deps, mw huma.Middlewares) {
 			if err != nil {
 				return nil, err
 			}
-			entries := modelEntries(snap, principal.Policy, principal.UserID, models)
+			entries := modelEntries(d.Resolver, snap, principal.Policy, principal.UserID, models)
 			return &huma.StreamResponse{Body: func(hctx huma.Context) {
 				r, w := humachi.Unwrap(hctx)
 				body, contentType, err := render(clientprofile.ListContext{PublicURL: publicInferenceURL(d, r)}, entries)
@@ -137,11 +137,11 @@ func publicInferenceURL(d Deps, r *http.Request) string {
 // renders. One entry per addressable snapshot name; a model's aliases ride
 // its pointer snapshot, which is what an alias resolves to. pol is nil on
 // the policy-less path, where userID scopes the shared key pool.
-func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, userID string, models []*model.Model) []clientprofile.ModelEntry {
+func modelEntries(r *routing.Resolver, snap *catalog.Snapshot, pol *policy.Policy, userID string, models []*model.Model) []clientprofile.ModelEntry {
 	entries := make([]clientprofile.ModelEntry, 0, len(models))
 	seen := map[string]struct{}{}
 	for _, m := range models {
-		granted := grantedBindings(snap, pol, userID, m, "")
+		granted := grantedBindings(r, snap, pol, userID, m, "")
 		for i := range m.Spec.Snapshots {
 			s := &m.Spec.Snapshots[i]
 			if _, dup := seen[s.Name]; dup {
@@ -201,7 +201,7 @@ func temperatureSupported(m *model.Model) bool {
 }
 
 // grantedBindings keeps the model's enabled bindings the caller may actually route to. A binding outside the caller's grant must never reach a listing — the row would advertise a route the key cannot take. With no policy, userID scopes the shared key pool exactly as resolution does. adapterFilter, when set, additionally keeps only bindings declaring it.
-func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, userID string, m *model.Model, adapterFilter adapters.Name) []*binding.Binding {
+func grantedBindings(r *routing.Resolver, snap *catalog.Snapshot, pol *policy.Policy, userID string, m *model.Model, adapterFilter adapters.Name) []*binding.Binding {
 	var out []*binding.Binding
 	for _, b := range snap.BindingsForModel(m.Meta.ID) {
 		if !b.IsEnabled() {
@@ -211,10 +211,10 @@ func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, userID string, 
 			continue
 		}
 		if pol != nil {
-			if !routing.PolicyAllowsBinding(snap, pol, m, b) {
+			if !r.PolicyAllowsBinding(snap, pol, m, b, userID) {
 				continue
 			}
-		} else if !routing.PolicylessAllowsBinding(snap, m, b, userID) {
+		} else if !r.PolicylessAllowsBinding(snap, m, b, userID) {
 			continue
 		}
 		out = append(out, b)
@@ -362,7 +362,7 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 	out.Body.Object = "list"
 	seen := map[string]struct{}{}
 	for _, m := range models {
-		appendModelRows(&out.Body.Data, snap, m, grantedBindings(snap, principal.Policy, principal.UserID, m, adapterFilter), seen)
+		appendModelRows(&out.Body.Data, snap, m, grantedBindings(d.Resolver, snap, principal.Policy, principal.UserID, m, adapterFilter), seen)
 	}
 	return out, nil
 }
@@ -388,7 +388,7 @@ func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*c
 		}
 		var out []*model.Model
 		for _, m := range snap.AllModels() {
-			if routing.PolicylessAllows(snap, m, adapterFilter, principal.UserID) {
+			if d.Resolver.PolicylessAllows(snap, m, adapterFilter, principal.UserID) {
 				out = append(out, m)
 			}
 		}
@@ -398,7 +398,7 @@ func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*c
 	pol := principal.Policy
 	var out []*model.Model
 	for _, m := range snap.AllModels() {
-		if !routing.PolicyAllows(snap, pol, m) {
+		if !d.Resolver.PolicyAllows(snap, pol, m, principal.UserID) {
 			continue
 		}
 		if adapterFilter != "" && !modelHasAdapter(snap, m, adapterFilter) {
