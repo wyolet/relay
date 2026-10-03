@@ -1,9 +1,9 @@
 //go:build integration
 
 // Live ClickHouse schema-upgrade check. Runs only with -tags=integration AND
-// RELAY_CH_DSN set (else skipped).
+// RELAY_TEST_CH_DSN set (else skipped).
 //
-//	RELAY_CH_DSN=clickhouse://default@host:9000/relay \
+//	RELAY_TEST_CH_DSN=clickhouse://default@host:9000/relay \
 //	  go test -tags=integration ./pkg/usage/clickhouse/ -run Integration -v
 package clickhouse
 
@@ -20,11 +20,11 @@ import (
 
 // A table without the attribution columns must be upgraded in place by
 // ensureSchema, not rejected. ensureSchema addresses usage_events unqualified,
-// so the fixture gets a throwaway database instead of RELAY_CH_DSN's own.
+// so the fixture gets a throwaway database instead of RELAY_TEST_CH_DSN's own.
 func TestIntegration_EnsureSchemaAddsAttributionColumns(t *testing.T) {
-	dsn := os.Getenv("RELAY_CH_DSN")
+	dsn := os.Getenv("RELAY_TEST_CH_DSN")
 	if dsn == "" {
-		t.Skip("RELAY_CH_DSN unset; skipping live ClickHouse schema check")
+		t.Skip("RELAY_TEST_CH_DSN unset; skipping live ClickHouse schema check")
 	}
 	opts, err := clickhouse.ParseDSN(dsn)
 	if err != nil {
