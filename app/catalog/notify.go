@@ -194,6 +194,11 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 	if _, err := conn.Exec(ctx, "LISTEN catalog_events"); err != nil {
 		return err
 	}
+	// Writes committed before LISTEN attached (boot, or while reconnecting)
+	// fired NOTIFYs nobody heard; every later write is heard from here on.
+	if err := l.reloadAll(ctx); err != nil {
+		return err
+	}
 	slog.Info("catalog notify: listening on catalog_events")
 
 	for {
@@ -214,6 +219,17 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 			}
 		}
 	}
+}
+
+// reloadAll rebuilds the catalog snapshot and the settings cache from PG.
+func (l *Listener) reloadAll(ctx context.Context) error {
+	if err := l.cat.Reload(ctx); err != nil {
+		return err
+	}
+	if l.cat.settings.store == nil {
+		return nil
+	}
+	return l.cat.settings.reload(ctx)
 }
 
 // flushLoop drains and applies the debouncer on a 1-second ticker or when

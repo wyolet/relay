@@ -3,27 +3,17 @@
 package catalog
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/provider"
 )
 
-// Hydrate runs the initial Reload and only *constructs* the Listener;
-// LISTEN catalog_events is issued later inside listener.Run. A write
-// committed in that window (replica B applies an admin write while replica
-// A boots) fires a NOTIFY nobody hears — the row is invisible to this
-// process until an unrelated event for the same row or a manual /reload.
-//
-// The window is made deterministic here: the write commits after Hydrate
-// returns (Reload done) and before Run is started (no LISTEN yet). No
-// sleeps race against the bug — the NOTIFY provably precedes the LISTEN.
-// Correct behavior (LISTEN attached before the first snapshot is built)
-// makes the write visible shortly after Run starts.
+// Hydrate runs the initial Reload and only constructs the Listener; LISTEN
+// is issued later inside Run. A write committed in that window fires a
+// NOTIFY nobody hears, so it must still reach the snapshot once LISTEN
+// attaches. The write provably precedes LISTEN: Run has not started yet.
 func TestIntegration_WriteDuringBootWindowNotLost(t *testing.T) {
-	t.Skip("known bug: LISTEN-after-load boot window loses writes; unskip with the fix")
 	pool, ctx, cancel := setupDB(t)
 	defer cancel()
 
@@ -37,7 +27,6 @@ func TestIntegration_WriteDuringBootWindowNotLost(t *testing.T) {
 		t.Fatalf("Hydrate: %v", err)
 	}
 
-	// The boot window: initial Reload complete, LISTEN not yet issued.
 	p := &provider.Provider{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "boot-window-prov",
@@ -48,17 +37,8 @@ func TestIntegration_WriteDuringBootWindowNotLost(t *testing.T) {
 		t.Fatalf("upsert during boot window: %v", err)
 	}
 
-	listenerCtx, listenerCancel := context.WithCancel(ctx)
-	defer listenerCancel()
-	go func() { _ = listener.Run(listenerCtx) }()
-
-	// Generous budget: LISTEN attach + several 1s debounce flush cycles.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := cat.Current().Provider(p.Meta.ID); ok {
-			return // write survived the boot window
-		}
-		time.Sleep(100 * time.Millisecond)
+	runListener(t, ctx, cat, listener)
+	if _, ok := cat.Current().Provider(p.Meta.ID); !ok {
+		t.Fatalf("provider %s committed before LISTEN attached is missing from the snapshot", p.Meta.ID)
 	}
-	t.Fatalf("provider %s committed during the boot window (post-Reload, pre-LISTEN) never reached the snapshot: the NOTIFY fired before LISTEN attached and the write is lost until a manual reload", p.Meta.ID)
 }
