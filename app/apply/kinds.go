@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
@@ -218,7 +219,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "HostKey", Docs: hkDocs, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
-		Check: checkHostKeyPolicy(pols),
+		Check: checkHostKeyPolicy(b.opts.Authz, pols),
 	}); err != nil {
 		return err
 	}
@@ -381,8 +382,8 @@ func (b *builder) policyByID(docs []*manifest.PolicyDTO) (map[string]*policy.Pol
 // seed included: a key whose tier policy is not host-owned by its own host
 // drops out of the snapshot. pols covers tier policies the same bundle
 // declares, which plan after host keys.
-func checkHostKeyPolicy(pols map[string]*policy.Policy) func(context.Context, *hostkey.HostKey) error {
-	c := refcheck.Checker{Rows: refcheck.Lookup{
+func checkHostKeyPolicy(a authz.Authorizer, pols map[string]*policy.Policy) func(context.Context, *hostkey.HostKey) error {
+	c := refcheck.Checker{Authz: a, Rows: refcheck.Lookup{
 		Policy: func(_ context.Context, id string) *policy.Policy { return pols[id] },
 	}}
 	return c.HostKey

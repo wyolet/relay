@@ -388,6 +388,13 @@ func (c Checker) Policy(ctx context.Context, p *policy.Policy) error {
 // HostKey requires the key's tier policy to be host-owned by the key's own
 // host; a mismatched key drops out of the snapshot and answers no_keys.
 func (c Checker) HostKey(ctx context.Context, k *hostkey.HostKey) error {
+	// An env reference reads the relay's own environment; through the key's
+	// health probe it would answer for any variable the caller names.
+	if k.Spec.ValueFrom.Kind == hostkey.ValueKindEnv {
+		if err := RequireAdmin(ctx, c.Authz, "an env-sourced host key"); err != nil {
+			return err
+		}
+	}
 	if c.Rows.Policy == nil {
 		return nil
 	}
