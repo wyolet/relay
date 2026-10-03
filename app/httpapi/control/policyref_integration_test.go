@@ -8,13 +8,9 @@ package control
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/actor"
@@ -23,40 +19,12 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 func setupPolicyRefDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	_ = m.Drop() // tolerate "no schema" on first run
-	src2, _ := iofs.New(pgmigrations.FS, ".")
-	m2, err := migrate.NewWithSourceInstance("iofs", src2, dsn)
-	if err != nil {
-		t.Fatalf("migrate re-init: %v", err)
-	}
-	if err := m2.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool, ctx
+	return storagetest.Pool(t), context.Background()
 }
 
 // visibleCtx carries an admin actor so RBAC.Visible bypasses unconditionally

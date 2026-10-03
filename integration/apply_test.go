@@ -372,7 +372,7 @@ func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
 
 	// A store bundle whose project store is backed by a closed pool: the
 	// team write lands, the project write fails, and the error names both.
-	second, err := pgxpool.New(ctx, os.Getenv("RELAY_TEST_PG_DSN"))
+	second, err := pgxpool.New(ctx, st.dsn)
 	if err != nil {
 		t.Fatalf("pgxpool: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
 func TestIntegration_SeedMatchesApply(t *testing.T) {
 	st := newStack(t)
 	ctx := context.Background()
-	pool := testPool(t)
+	pool := testPool(t, st.dsn)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "bundle.yaml"), []byte(bundle), 0o600); err != nil {
 		t.Fatalf("write yaml: %v", err)
@@ -418,7 +418,7 @@ func TestIntegration_SeedMatchesApply(t *testing.T) {
 	}
 	seeded := goldenRows(t, st)
 
-	store, err := storagemod.Open(ctx, os.Getenv("RELAY_TEST_PG_DSN"))
+	store, err := storagemod.Open(ctx, st.dsn)
 	if err != nil {
 		t.Fatalf("storage.Open: %v", err)
 	}
@@ -669,7 +669,7 @@ spec:
 func TestIntegration_BootSeedRefusesTenancyKinds(t *testing.T) {
 	st := newStack(t)
 	ctx := context.Background()
-	pool := testPool(t)
+	pool := testPool(t, st.dsn)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(catalogAndTenancyBundle), 0o600); err != nil {
 		t.Fatalf("write yaml: %v", err)
@@ -730,7 +730,7 @@ spec: {}
 func TestIntegration_SeedAppliesAnOwnerChange(t *testing.T) {
 	st := newStack(t)
 	ctx := context.Background()
-	pool := testPool(t)
+	pool := testPool(t, st.dsn)
 	dir := t.TempDir()
 
 	write := func(hostName string) {

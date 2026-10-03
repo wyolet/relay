@@ -164,15 +164,12 @@ func walkUsernameOwnedKeysAfterUpgrade(t *testing.T) {
 		t.Fatalf("seed the other user: %v", err)
 	}
 
-	m := migrator(t)
-	// A failure between the two steps below would leave the shared schema
-	// behind head for everything that runs after this test.
-	t.Cleanup(func() { _ = m.Up() })
+	m := migrator(t, st.dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
-	insertUsernameOwnedKey(t, "mine", "sluggy")
-	insertUsernameOwnedKey(t, "theirs", "otherguy")
+	insertUsernameOwnedKey(t, st.dsn, "mine", "sluggy")
+	insertUsernameOwnedKey(t, st.dsn, "theirs", "otherguy")
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate back up to head: %v", err)
 	}
@@ -454,10 +451,10 @@ func (s *stack) waitForSnapshot(t *testing.T, cond func(*appcatalog.Snapshot) bo
 
 // insertUsernameOwnedKey writes a pre-tenancy key row: owned by a username
 // rather than a user id, with no principal at all.
-func insertUsernameOwnedKey(t *testing.T, name, username string) {
+func insertUsernameOwnedKey(t *testing.T, dsn, name, username string) {
 	t.Helper()
 	hash := sha256Hex(name)
-	if _, err := testPool(t).Exec(context.Background(),
+	if _, err := testPool(t, dsn).Exec(context.Background(),
 		`INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec)
 		 VALUES ($1, $2, '', $3, $4::jsonb, $5::jsonb)`,
 		ids.New(), name, hash,

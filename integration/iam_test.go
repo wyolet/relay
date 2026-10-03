@@ -19,21 +19,20 @@ import (
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/user"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
-// testPool opens a second pool for the seed loader, which takes a pool
-// rather than the already-wired stores.
-func testPool(t *testing.T) *pgxpool.Pool {
+// testPool opens a second pool on dsn for the seed loader and raw SQL, which
+// take a pool rather than the already-wired stores.
+func testPool(t *testing.T, dsn string) *pgxpool.Pool {
 	t.Helper()
-	pool, err := pgxpool.New(context.Background(), os.Getenv("RELAY_TEST_PG_DSN"))
+	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("pgxpool: %v", err)
 	}
@@ -178,7 +177,7 @@ spec: {}
 
 func TestIntegration_SeedTenancy(t *testing.T) {
 	st := newStack(t)
-	pool := testPool(t)
+	pool := testPool(t, st.dsn)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "tenancy.yaml"), []byte(seedTeamYAML), 0o600); err != nil {
 		t.Fatalf("write yaml: %v", err)
@@ -377,7 +376,7 @@ func TestIntegration_KeyCreateAndRotate(t *testing.T) {
 
 	// The principal and the previous hash live in columns. A copy in the spec
 	// JSONB is a second source of truth that a column-only write leaves stale.
-	p := testPool(t)
+	p := testPool(t, st.dsn)
 	var specPrincipalID, specPrevious *string
 	if err := p.QueryRow(context.Background(),
 		`SELECT spec->'principal'->>'id', spec->>'previousKeyHash' FROM relay_keys WHERE id = $1`,
@@ -530,7 +529,7 @@ spec:
 
 func TestIntegration_SeedSubjects(t *testing.T) {
 	st := newStack(t)
-	pool := testPool(t)
+	pool := testPool(t, st.dsn)
 	ctx := context.Background()
 
 	alice := &user.User{ID: ids.New(), Username: "alice"}
@@ -573,37 +572,23 @@ func TestIntegration_SeedSubjects(t *testing.T) {
 
 // ── migration 0026 backfill ──────────────────────────────────────────────
 
-func migrator(t *testing.T) *migrate.Migrate {
-	t.Helper()
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migration source: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, os.Getenv("RELAY_TEST_PG_DSN"))
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	t.Cleanup(func() { _, _ = m.Close() })
-	return m
-}
-
 // TestIntegration_KeyPrincipalBackfill drives migration 0026 against rows
 // that predate it: one key owned by a real user, one whose owner carries
 // no id.
 func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
-	st := newStack(t) // truncates, and leaves the schema at head
+	dsn := storagetest.DB(t)
+	p := testPool(t, dsn)
 	ctx := context.Background()
 	userID := ids.New()
-	if err := st.users.Upsert(ctx, &user.User{ID: userID, Username: "alice"}); err != nil {
+	if err := user.NewStore(gen.New(p)).Upsert(ctx, &user.User{ID: userID, Username: "alice"}); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	m := migrator(t)
+	m := migrator(t, dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
 
-	p := testPool(t)
 	insert := func(name, ownerJSON string) {
 		t.Helper()
 		_, err := p.Exec(ctx,
@@ -710,11 +695,6 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 	if owned.userID != userID || owned.principal != "user" || owned.ownerKind != "user" {
 		t.Errorf("after a round trip the user key is %+v, want its user principal and owner", owned)
 	}
-
-	// Leave the schema at head: stepping to 26 dropped everything above it.
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate back up to head: %v", err)
-	}
 }
 
 // TestIntegration_SlugOwnedKeyBackfill covers a pre-0026 key whose owner
@@ -729,11 +709,11 @@ func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	m := migrator(t)
+	m := migrator(t, st.dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
-	p := testPool(t)
+	p := testPool(t, st.dsn)
 	keyID := ids.New()
 	if _, err := p.Exec(ctx,
 		`INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec)
@@ -789,16 +769,15 @@ func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
 // UNIQUE constraint. An operator who already has a team called `system` keeps
 // it, and the generated project hangs off that id.
 func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T) {
-	st := newStack(t)
+	dsn := storagetest.EmptyDB(t)
 	ctx := context.Background()
 
-	m := migrator(t)
-	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate down to 25: %v", err)
+	m := migrator(t, dsn)
+	if err := m.Migrate(25); err != nil {
+		t.Fatalf("migrate to 25: %v", err)
 	}
-	_ = st
 
-	p := testPool(t)
+	p := testPool(t, dsn)
 	existingTeam := ids.New()
 	if _, err := p.Exec(ctx,
 		`INSERT INTO teams (id, name, display_name, metadata, spec)
@@ -835,10 +814,6 @@ func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T
 		t.Errorf("legacy project hangs off %q (%q), want the existing team %q",
 			teamID, displayName, existingTeam)
 	}
-
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate back up to head: %v", err)
-	}
 }
 
 // Rolling back below the tenancy tables leaves rows whose owner names a team
@@ -847,9 +822,9 @@ func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T
 // and pins that the down migration puts those owners back into the shape an
 // older binary understands.
 func TestIntegration_Migration25DownRewritesTenantOwners(t *testing.T) {
-	newStack(t) // truncates, schema at head
+	dsn := storagetest.DB(t)
 	ctx := context.Background()
-	p := testPool(t)
+	p := testPool(t, dsn)
 
 	teamID, projectID := ids.New(), ids.New()
 	if _, err := p.Exec(ctx,
@@ -889,7 +864,7 @@ func TestIntegration_Migration25DownRewritesTenantOwners(t *testing.T) {
 		t.Fatalf("seed rate limit: %v", err)
 	}
 
-	m := migrator(t)
+	m := migrator(t, dsn)
 	if err := m.Migrate(24); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate down to 24: %v", err)
 	}

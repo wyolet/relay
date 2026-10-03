@@ -9,55 +9,23 @@ package role_test
 
 import (
 	"context"
-	"os"
 	"sync"
 	"testing"
-
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 // roleSeedLock mirrors cmd/relay's builtinRoleSeedLock — the id every pod
 // serialises the built-in role seed on.
 const roleSeedLock int64 = 0x52454C41595F5242
 
-func setupRoleDB(t *testing.T) (*pgxpool.Pool, context.Context) {
-	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool, ctx
-}
-
 // Pods booting together must converge on one row per built-in name, and a
 // re-seed after that must not re-mint the ids RoleBindings point at.
 func TestIntegration_ConcurrentSeedBuiltinsProducesEachRoleOnce(t *testing.T) {
-	pool, ctx := setupRoleDB(t)
+	pool, ctx := storagetest.Pool(t), context.Background()
 	store := role.NewStore(gen.New(pool))
 
 	builtins, err := role.Builtins()

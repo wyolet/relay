@@ -8,57 +8,24 @@
 package control
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 )
-
-func setupRotateRaceDB(t *testing.T) (*pgxpool.Pool, context.Context) {
-	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool, ctx
-}
 
 // N clients rotate the same key at once, with a plain PUT racing them. A rotation
 // that read a superseded hash must be refused with 409 rather than handed a
@@ -67,7 +34,7 @@ func setupRotateRaceDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 // reads after an earlier rotation committed is a second rotation, not a
 // lost update — what may never happen is two live hashes.)
 func TestIntegration_ConcurrentRotatesLeaveOneLiveHash(t *testing.T) {
-	pool, ctx := setupRotateRaceDB(t)
+	pool, ctx := setupPolicyRefDB(t)
 	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
 		t.Fatalf("BootstrapStores: %v", err)

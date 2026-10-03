@@ -5,12 +5,11 @@ package batch
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/wyolet/relay/app/key"
-	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/jobq"
 	"github.com/wyolet/relay/jobq/payload"
 )
@@ -22,22 +21,10 @@ import (
 
 func testService(t *testing.T, handler jobq.Handler) (*Service, *jobq.Queue, context.CancelFunc) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set")
-	}
 	ctx := context.Background()
-	st, err := storagemod.Open(ctx, dsn) // runs relay migrations incl. 000019_batches
-	if err != nil {
-		t.Fatalf("storage open: %v", err)
-	}
-	t.Cleanup(st.Close)
-	pool := st.Pool()
+	pool := storagetest.Pool(t)
 	if err := jobq.Migrate(ctx, pool); err != nil {
 		t.Fatalf("jobq migrate: %v", err)
-	}
-	if _, err := pool.Exec(ctx, "TRUNCATE batches CASCADE; TRUNCATE jobq_jobs"); err != nil {
-		t.Fatalf("truncate: %v", err)
 	}
 	ps, err := payload.NewFileStore(t.TempDir())
 	if err != nil {

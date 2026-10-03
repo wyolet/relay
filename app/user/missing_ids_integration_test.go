@@ -7,44 +7,17 @@ package user_test
 
 import (
 	"context"
-	"os"
 	"testing"
-
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 func setupUserDB(t *testing.T) (*user.Store, context.Context) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return user.NewStore(gen.New(pool)), ctx
+	return user.NewStore(gen.New(storagetest.Pool(t))), context.Background()
 }
 
 func TestMissingIDsReportsOnlyAbsentUsers(t *testing.T) {

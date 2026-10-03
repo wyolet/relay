@@ -12,15 +12,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
@@ -35,7 +29,7 @@ import (
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
@@ -48,31 +42,11 @@ func suffix() string {
 // the policy-less pool cares about, then hydrates a Catalog over it with
 // AllowMissingPolicy set to allow.
 // policylessCatalog returns the hydrated catalog and the per-run name suffix
-// every row it seeded carries. The database is shared and never reset, so the
-// suffix is how a test tells its own rows from a previous run's.
+// every row it seeded carries.
 func policylessCatalog(t *testing.T, allow bool) (*appcatalog.Catalog, string) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := storagetest.Pool(t)
 
 	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {

@@ -417,7 +417,7 @@ spec:
 
 func TestIntegration_SeedRBAC(t *testing.T) {
 	st := newStack(t)
-	pool := testPool(t)
+	pool := testPool(t, st.dsn)
 	ctx := context.Background()
 
 	alice := &user.User{ID: ids.New(), Username: "alice"}

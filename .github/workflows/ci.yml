@@ -28,9 +28,9 @@ jobs:
 
       - name: Vet
         run: |
-          go vet ./...
-          (cd sdk && go vet ./...)
-          (cd jobq && go vet ./...)
+          for mod in . sdk jobq; do
+            (cd "$mod" && go vet ./... && go vet -tags=integration ./...)
+          done
 
       - name: Build
         run: |
@@ -38,13 +38,8 @@ jobs:
           (cd sdk && go build ./...)
           (cd jobq && go build ./...)
 
+      # Every module's unit tests, under -race.
       - name: Test
-        run: |
-          go test ./...
-          (cd sdk && go test ./...)
-          (cd jobq && go test ./...)
-
-      - name: Race
         run: make test-race
 
       - name: Fuzz
@@ -53,11 +48,27 @@ jobs:
       - name: Allocation gate
         run: make bench-gate
 
-  # Split off `check`: the coverage run rebuilds every package instrumented,
-  # which roughly doubles the test time and would otherwise serialise behind
-  # race + fuzz.
-  coverage:
+  # Integration-tagged tests against a Postgres service. Each test creates a
+  # database of its own from a migrated template, so packages run in parallel.
+  # The Redis tests start their own containers through the runner's Docker.
+  integration:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: relay_test
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay_test"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -66,14 +77,39 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      # Unit profiles only — this job has no Postgres service, so the store
-      # packages that `make test-integration` covers are absent from the merge.
-      # COVER_ENFORCE stays 0 (the Makefile default): the tiers report but do
-      # not fail until the packages reach them.
+      - name: Integration tests
+        run: make test-integration-run
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage
+          path: .cover/*.out
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # Merges the unit profiles of every module with the integration profiles:
+  # store packages only get credit from the integration run.
+  coverage:
+    runs-on: ubuntu-latest
+    needs: integration
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Unit profiles
+        run: make test-cover
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: integration-coverage
+          path: .cover
+
       - name: Coverage tiers
-        run: |
-          make test-cover
-          make cover-check
+        run: make cover-check COVER_ENFORCE=1
 
   chart:
     runs-on: ubuntu-latest

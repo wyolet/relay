@@ -1,15 +1,16 @@
 //go:build integration
 
 // Live PostgreSQL round-trip smoke. Runs only with -tags=integration AND
-// RELAY_PG_DSN set (else skipped). Validates schema DDL, CopyFrom column
+// RELAY_TEST_PG_DSN set (else skipped). Validates schema DDL, CopyFrom column
 // mapping, and reader SQL against a real server.
 //
-//	RELAY_PG_DSN=postgres://user:pass@host/db \
+//	RELAY_TEST_PG_DSN=postgres://user:pass@host/db \
 //	  go test -tags=integration ./pkg/usage/postgres/ -run Integration -v
 package postgres
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -21,24 +22,26 @@ import (
 func costPtr(n int64) *int64 { return &n }
 
 func TestIntegration_RoundTrip(t *testing.T) {
-	dsn := os.Getenv("RELAY_PG_DSN")
+	dsn := os.Getenv("RELAY_TEST_PG_DSN")
 	if dsn == "" {
-		t.Skip("RELAY_PG_DSN unset; skipping live PostgreSQL smoke")
+		t.Skip("RELAY_TEST_PG_DSN unset; skipping live PostgreSQL smoke")
 	}
 
 	ctx := context.Background()
 
+	// The table lives on a database other runs may share.
+	table := fmt.Sprintf("usage_events_smoke_%d", time.Now().UnixNano())
 	s, err := New(ctx, Config{
 		DSN:           dsn,
 		RetentionDays: 90,
 		FlushInterval: 200 * time.Millisecond,
-		Table:         "usage_events_smoke_test",
+		Table:         table,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() {
-		s.pool.Exec(ctx, "DROP TABLE IF EXISTS usage_events_smoke_test")
+		s.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table)
 		s.Close()
 	}()
 

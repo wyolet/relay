@@ -65,6 +65,7 @@ import (
 	"github.com/wyolet/relay/internal/identity"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/lifecycle"
@@ -78,6 +79,7 @@ import (
 // inference listener, the live catalog, and the stores used to seed it.
 type stack struct {
 	t          *testing.T
+	dsn        string // the stack's own database
 	cat        *appcatalog.Catalog
 	stores     *appcatalog.Stores
 	users      *user.Store
@@ -88,9 +90,9 @@ type stack struct {
 	lifecycle  *lifecycle.Registry
 }
 
-// newStack boots the relay against the supplied DSN. The compose pg
-// must already be up. Returns a stack with two httptest servers for
-// the two planes; t.Cleanup tears everything down.
+// newStack boots the relay against a fresh database of its own. Returns a
+// stack with two httptest servers for the two planes; t.Cleanup tears
+// everything down.
 func newStack(t *testing.T) *stack { return newStackAuthz(t, "") }
 
 // newStackAuthz boots the stack under the named authorizer mode; the empty
@@ -100,22 +102,13 @@ func newStack(t *testing.T) *stack { return newStackAuthz(t, "") }
 func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	t.Helper()
 
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; skipping integration test")
-	}
-
+	dsn := storagetest.DB(t)
 	ctx := context.Background()
 	st, err := storagemod.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("storage.Open: %v", err)
 	}
 	t.Cleanup(st.Close)
-
-	// Truncate every catalog table so the test starts clean. Each test
-	// gets the entire schema to itself; we don't share a DB across tests
-	// because NOTIFY plumbing is global and would cross-pollinate.
-	truncateAll(t, st)
 
 	cat, listener, stores, err := appcatalog.Bootstrap(ctx, appcatalog.BootstrapOptions{
 		Pool: st.Pool(),
@@ -277,6 +270,7 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 
 	return &stack{
 		t:          t,
+		dsn:        dsn,
 		cat:        cat,
 		stores:     stores,
 		users:      usersStore,

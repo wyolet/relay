@@ -18,7 +18,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/seed"
-	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	sdkcatalog "github.com/wyolet/relay/sdk/catalog"
 )
 
@@ -27,17 +27,8 @@ import (
 // all. The embedded catalog is the shipped data the repo carries, rebuilt
 // here as manifest documents and seeded through the boot path.
 func TestIntegration_EmbeddedCatalogSeedsCleanly(t *testing.T) {
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; skipping integration test")
-	}
 	ctx := context.Background()
-	st, err := storagemod.Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("storage.Open: %v", err)
-	}
-	t.Cleanup(st.Close)
-	truncateAll(t, st)
+	pool := storagetest.Pool(t)
 
 	idx, err := sdkcatalog.Load()
 	if err != nil {
@@ -46,7 +37,7 @@ func TestIntegration_EmbeddedCatalogSeedsCleanly(t *testing.T) {
 	dir := t.TempDir()
 	want := writeCatalogManifests(t, idx.Catalog, filepath.Join(dir, "catalog.yaml"))
 
-	res, err := seed.Run(ctx, seed.Options{Pool: st.Pool(), YAMLDir: dir, CatalogKindsOnly: true})
+	res, err := seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir, CatalogKindsOnly: true})
 	if err != nil {
 		t.Fatalf("seed embedded catalog: %v", err)
 	}
@@ -61,7 +52,7 @@ func TestIntegration_EmbeddedCatalogSeedsCleanly(t *testing.T) {
 	}
 
 	// The snapshot build must keep every seeded row, not drop it as invalid.
-	cat, _, _, err := appcatalog.Bootstrap(ctx, appcatalog.BootstrapOptions{Pool: st.Pool()})
+	cat, _, _, err := appcatalog.Bootstrap(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
 		t.Fatalf("catalog.Bootstrap: %v", err)
 	}

@@ -11,52 +11,20 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/settings"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
-
-func setupTokenKeyDB(t *testing.T) (*pgxpool.Pool, context.Context) {
-	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool, ctx
-}
 
 // Four pods starting together must agree on one signing-key ref, and it
 // must resolve to a usable Ed25519 seed — a second key would make every
 // token the loser minted verify nowhere.
 func TestIntegration_ConcurrentBootsGenerateOneSigningKey(t *testing.T) {
-	pool, ctx := setupTokenKeyDB(t)
+	pool, ctx := storagetest.Pool(t), context.Background()
 	masterKey := make([]byte, 32)
 	for i := range masterKey {
 		masterKey[i] = byte(i + 1)
