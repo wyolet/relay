@@ -279,6 +279,47 @@ func TestMigrateDownRefusesATargetAboveTheSchemaVersion(t *testing.T) {
 	}
 }
 
+// A migration that fails half-way leaves the schema dirty, and every later
+// migrate refuses it. Forcing the version clears the flag so the next boot
+// migrates again; a version with no migration is refused.
+func TestMigrateForceClearsADirtySchema(t *testing.T) {
+	dsn := scratchDB(t, "relay_mig_force")
+	head := headVersion(t)
+	if err := storagemod.MigrateTo(dsn, 25); err != nil {
+		t.Fatalf("migrate to 25: %v", err)
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET dirty = true`); err != nil {
+		t.Fatalf("mark dirty: %v", err)
+	}
+	if _, err := storagemod.Open(ctx, dsn); err == nil {
+		t.Fatal("boot migrated a dirty schema")
+	}
+
+	if err := storagemod.ForceVersion(dsn, 9999); err == nil {
+		t.Fatal("forcing a version with no migration was accepted")
+	}
+	if err := storagemod.ForceVersion(dsn, 25); err != nil {
+		t.Fatalf("force 25: %v", err)
+	}
+	if v, dirty := schemaVersion(t, dsn); v != 25 || dirty {
+		t.Fatalf("after force the schema is at %d (dirty=%v), want 25 clean", v, dirty)
+	}
+	st, err := storagemod.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("boot after force: %v", err)
+	}
+	st.Close()
+	if v, _ := schemaVersion(t, dsn); v != head {
+		t.Errorf("boot after force left the schema at %d, want head %d", v, head)
+	}
+}
+
 // A pod restarting mid-rollback must not re-apply the migrations the
 // operator just unwound.
 func TestBootWithMigrationsOffLeavesTheSchemaVersion(t *testing.T) {
