@@ -10,6 +10,11 @@
 -include .env
 export
 
+# go test without the deployment endpoints .env exports, so a test can only
+# reach servers named by RELAY_TEST_* variables. Absolute path: a PATH-shadowing
+# `env` shell script (some installers drop one in ~/.local/bin) ignores its args.
+GO_TEST := /usr/bin/env -u RELAY_PG_DSN -u RELAY_CH_DSN -u RELAY_REDIS_ADDR -u RELAY_OTLP_ENDPOINT go test
+
 # Release BOM: pinned companion-artifact versions (UI_VERSION, CATALOG_VERSION).
 include versions.env
 
@@ -339,22 +344,22 @@ clean: ## drop UI dist + binary
 	rm -f relay
 
 test: ## go test ./... (all modules)
-	go test ./...
-	cd sdk && go test ./...
-	cd jobq && go test ./...
+	$(GO_TEST) ./...
+	cd sdk && $(GO_TEST) ./...
+	cd jobq && $(GO_TEST) ./...
 
 test-race: ## unit tests under -race (all modules)
-	go test -race ./...
-	cd sdk && go test -race ./...
-	cd jobq && go test -race ./...
+	$(GO_TEST) -race ./...
+	cd sdk && $(GO_TEST) -race ./...
+	cd jobq && $(GO_TEST) -race ./...
 
 # One target at a time: `go test -fuzz` fuzzes a single function per run.
 FUZZ_TIME ?= 30s
 test-fuzz: ## fuzz the token parser and the bearer classifier ($(FUZZ_TIME) each)
-	go test -run '^$$' -fuzz '^FuzzParseToken$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
-	go test -run '^$$' -fuzz '^FuzzTokenKeyID$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
-	go test -run '^$$' -fuzz '^FuzzLooksLikeToken$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
-	go test -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
+	$(GO_TEST) -run '^$$' -fuzz '^FuzzParseToken$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
+	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenKeyID$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
+	$(GO_TEST) -run '^$$' -fuzz '^FuzzLooksLikeToken$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
+	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 
 # Coverage. COVER_PKGS is shared by the unit and integration profiles so the
 # two are mergeable: store packages only get credit from integration runs.
@@ -365,9 +370,9 @@ COVER_ENFORCE ?= 0
 
 test-cover: ## unit tests of every module with coverprofiles in $(COVER_DIR)
 	@mkdir -p $(COVER_DIR)
-	go test -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/unit.out ./...
-	cd sdk && go test -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/sdk.out ./...
-	cd jobq && go test -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq.out ./...
+	$(GO_TEST) -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/unit.out ./...
+	cd sdk && $(GO_TEST) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/sdk.out ./...
+	cd jobq && $(GO_TEST) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq.out ./...
 
 cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 	@profiles=$$(ls $(COVER_DIR)/*.out 2>/dev/null); \
@@ -386,7 +391,7 @@ BENCH_COUNT           ?= 1
 # failing `go test` would otherwise be masked by the parser's exit status.
 define RUN_BENCH
 out=$$(mktemp); \
-	go test -bench . -run '^$$$$' -benchmem -count=$(1) $(BENCH_PKGS) >"$$out" \
+	$(GO_TEST) -bench . -run '^$$$$' -benchmem -count=$(1) $(BENCH_PKGS) >"$$out" \
 		|| { cat "$$out"; rm -f "$$out"; exit 1; }; \
 	./scripts/benchgate.sh $(2) <"$$out"; \
 	status=$$?; rm -f "$$out"; exit $$status
@@ -439,10 +444,10 @@ test-integration: ## spin up ephemeral pg, run integration-tagged tests with -ra
 test-integration-run: ## integration-tagged tests of every module against $$RELAY_TEST_PG_DSN
 	@[ -n "$$RELAY_TEST_PG_DSN" ] || { echo "test-integration-run: set RELAY_TEST_PG_DSN"; exit 1; }
 	@mkdir -p $(COVER_DIR)
-	go test -tags=integration -race \
+	$(GO_TEST) -tags=integration -race \
 		-coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/integration.out ./... ; \
 		status=$$?; \
-		cd jobq && go test -tags=integration -race \
+		cd jobq && $(GO_TEST) -tags=integration -race \
 			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq-integration.out ./... || status=$$?; \
 		exit $$status
 
@@ -474,7 +479,7 @@ smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-moc
 			-fixtures-dir $(MOCK_FIXTURES) >/tmp/spec-mock-openai.log 2>&1 & \
 		  sleep 2 && echo "mock started on :5180 (log: /tmp/spec-mock-openai.log)" )
 	docker compose -f $(COMPOSE_TEST) up -d --wait
-	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race -run TestMockReplay -v ./integration/ ; \
+	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' $(GO_TEST) -tags=integration -race -run TestMockReplay -v ./integration/ ; \
 		status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status

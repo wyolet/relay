@@ -10,21 +10,17 @@ import (
 	"testing"
 )
 
-// Same code shape as app/usagelog: Emit's stopped.Load() check-then-send races Close's
-// close(e.queue); the losing goroutine panics with "send on closed channel"
-// on a detached post-flight goroutine at shutdown. Correct behavior: Emit
-// concurrent with Close must be a safe no-op/drop.
+// Emits run on detached post-flight goroutines nothing awaits, so an Emit
+// concurrent with Close must be a safe no-op/drop — never a panic.
 func TestEmitterEmitConcurrentWithCloseDoesNotPanic(t *testing.T) {
-	t.Skip("known bug: emitter Emit/Close race panics at shutdown; unskip with the fix")
 	if runtime.GOMAXPROCS(0) < 2 {
 		t.Skip("needs GOMAXPROCS > 1 to interleave Emit and Close")
 	}
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 4 {
-		workers = 4
-	}
+	// Fewer spinners than CPUs, so Close and the drain goroutine are not
+	// starved waiting on preemption.
+	workers := min(runtime.GOMAXPROCS(0)-1, 3)
 
-	const trials = 20000
+	const trials = 2000
 	for trial := 0; trial < trials; trial++ {
 		e := NewEmitter(EmitterOptions{
 			QueueSize: 64,

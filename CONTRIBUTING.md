@@ -40,6 +40,7 @@ test-integration-run` runs the same tests against any server named by
 migrated template) and drops it afterwards, so the role needs `CREATEDB`. The
 Redis tests start containers through testcontainers; on colima, set
 `TESTCONTAINERS_RYUK_DISABLED=true` and point `DOCKER_HOST` at the colima socket.
+The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test targets drop the `RELAY_*_DSN` values `.env` exports, so tests never reach a deployment's databases.
 
 The repo is a **two-module monorepo**: the server module
 (`github.com/wyolet/relay`) and the public, vendorable SDK

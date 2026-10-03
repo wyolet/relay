@@ -29,6 +29,7 @@ type EmitterOptions struct {
 // invariant; the drop count is exposed via Dropped().
 type Emitter struct {
 	queue chan Record
+	stop  chan struct{}
 	sinks []Sink
 	log   *slog.Logger
 
@@ -50,6 +51,7 @@ func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
 	}
 	e := &Emitter{
 		queue: make(chan Record, qsize),
+		stop:  make(chan struct{}),
 		sinks: sinks,
 		log:   log,
 	}
@@ -88,12 +90,13 @@ func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }
 func (e *Emitter) QueueDepth() int { return len(e.queue) }
 
 // Close drains pending Records, then closes any Closer sink. Subsequent
-// Emit calls are no-ops.
+// Emit calls are no-ops. The queue is never closed: an Emit racing Close
+// would panic on the send.
 func (e *Emitter) Close() {
 	if e.stopped.Swap(true) {
 		return
 	}
-	close(e.queue)
+	close(e.stop)
 	e.wg.Wait()
 	for _, sink := range e.sinks {
 		if c, ok := sink.(Closer); ok {
@@ -106,14 +109,31 @@ func (e *Emitter) Close() {
 
 func (e *Emitter) drain() {
 	defer e.wg.Done()
-	for r := range e.queue {
-		for _, sink := range e.sinks {
-			if err := sink.Write(r); err != nil {
-				e.log.Warn("payloadlog: sink write failed",
-					"err", err,
-					"request_id", r.RequestID,
-				)
+	for {
+		select {
+		case r := <-e.queue:
+			e.write(r)
+		case <-e.stop:
+			// Flush what was queued before Close; later racing Emits are lost.
+			for {
+				select {
+				case r := <-e.queue:
+					e.write(r)
+				default:
+					return
+				}
 			}
+		}
+	}
+}
+
+func (e *Emitter) write(r Record) {
+	for _, sink := range e.sinks {
+		if err := sink.Write(r); err != nil {
+			e.log.Warn("payloadlog: sink write failed",
+				"err", err,
+				"request_id", r.RequestID,
+			)
 		}
 	}
 }

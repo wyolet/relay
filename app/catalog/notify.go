@@ -35,6 +35,7 @@ import (
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // ── payload types ─────────────────────────────────────────────────────────────
@@ -141,6 +142,10 @@ type Listener struct {
 	pool   *pgxpool.Pool
 	stores listenerStores
 	deb    *debouncer
+
+	// reloadPending marks a failed fallback reload; every flush retries it
+	// until it succeeds. Touched only by the flush goroutine.
+	reloadPending bool
 }
 
 // NewListener constructs a Listener. Call Run to start it.
@@ -189,6 +194,11 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 	if _, err := conn.Exec(ctx, "LISTEN catalog_events"); err != nil {
 		return err
 	}
+	// Writes committed before LISTEN attached (boot, or while reconnecting)
+	// fired NOTIFYs nobody heard; every later write is heard from here on.
+	if err := l.reloadAll(ctx); err != nil {
+		return err
+	}
 	slog.Info("catalog notify: listening on catalog_events")
 
 	for {
@@ -209,6 +219,17 @@ func (l *Listener) listen(ctx context.Context, flushCh chan<- struct{}) error {
 			}
 		}
 	}
+}
+
+// reloadAll rebuilds the catalog snapshot and the settings cache from PG.
+func (l *Listener) reloadAll(ctx context.Context) error {
+	if err := l.cat.Reload(ctx); err != nil {
+		return err
+	}
+	if l.cat.settings.store == nil {
+		return nil
+	}
+	return l.cat.settings.reload(ctx)
 }
 
 // flushLoop drains and applies the debouncer on a 1-second ticker or when
@@ -241,33 +262,55 @@ func (l *Listener) applyDrained(ctx context.Context) {
 	// Every incremental apply clones the whole snapshot, so a bulk write
 	// (an apply of a large bundle) would clone once per row. Past this size
 	// one full rebuild is cheaper and reaches the same state.
-	if len(events) > reloadBatchThreshold {
-		if err := l.cat.Reload(ctx); err != nil {
-			slog.Error("catalog notify: bulk reload failed", "events", len(events), "err", err)
-			return
-		}
-		// Reload rebuilds catalog rows only — the settings cache is loaded
-		// separately, so its events have to be applied even here or a
-		// section change inside a bulk write never lands.
-		for _, e := range events {
-			if e.Kind != "settings" {
-				continue
-			}
-			if err := l.applyEvent(ctx, e); err != nil {
-				slog.Error("catalog notify: apply error", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
-			}
-		}
-		slog.Info("catalog notify: bulk change reloaded", "events", len(events))
+	if l.reloadPending || len(events) > reloadBatchThreshold {
+		l.reloadAndApplySettings(ctx, events)
 		return
 	}
 	sort.SliceStable(events, func(i, j int) bool {
 		return kindOrder[events[i].Kind] < kindOrder[events[j].Kind]
 	})
+	var failed []drainedEvent
 	for _, e := range events {
 		if err := l.applyEvent(ctx, e); err != nil {
-			slog.Error("catalog notify: apply error", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			slog.Error("catalog notify: apply error, falling back to reload", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			metrics.CatalogApplyFailed(e.Kind)
+			failed = append(failed, e)
 		}
 	}
+	// The drained event is gone from the debouncer, so a failed apply would
+	// leave the snapshot diverged from PG until the next write to that row.
+	if len(failed) > 0 {
+		l.reloadAndApplySettings(ctx, failed)
+	}
+}
+
+// reloadAndApplySettings rebuilds the snapshot from PG and applies the
+// settings events among events. Reload rebuilds catalog rows only — the
+// settings cache is loaded separately, so its events must be applied here or
+// they never land. Anything that still fails is retried on the next flush.
+func (l *Listener) reloadAndApplySettings(ctx context.Context, events []drainedEvent) {
+	if err := l.cat.Reload(ctx); err != nil {
+		slog.Error("catalog notify: reload failed, retrying next flush", "events", len(events), "err", err)
+		l.reloadPending = true
+		for _, e := range events {
+			if e.Kind == "settings" {
+				l.deb.requeue(e)
+			}
+		}
+		return
+	}
+	l.reloadPending = false
+	for _, e := range events {
+		if e.Kind != "settings" {
+			continue
+		}
+		if err := l.applyEvent(ctx, e); err != nil {
+			slog.Error("catalog notify: apply error, retrying next flush", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			metrics.CatalogApplyFailed(e.Kind)
+			l.deb.requeue(e)
+		}
+	}
+	slog.Info("catalog notify: catalog reloaded", "events", len(events))
 }
 
 // reloadBatchThreshold is the drained-event count past which a full rebuild

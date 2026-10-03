@@ -5,11 +5,9 @@ import (
 	"testing"
 )
 
-// Resanitize replaces rows in ByID; the sibling indices (modelsByName,
-// snapshotsByName, snapshotAliases, modelsByPolicy) must serve the same row
-// generation rather than the pre-sanitize copies.
-func TestApply_ResanitizeKeepsSiblingIndicesCoherent(t *testing.T) {
-	t.Skip("known bug: resanitize leaves sibling indices stale; unskip with the fix")
+// After a host delete, every model index (modelsByName, snapshotsByName,
+// modelsByPolicy) must serve the same row pointer as modelsByID.
+func TestApply_HostDeleteKeepsModelIndicesCoherent(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {

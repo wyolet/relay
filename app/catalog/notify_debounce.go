@@ -33,6 +33,17 @@ func (d *debouncer) push(e notifyEvent) bool {
 	return len(d.pending) >= debounceCap
 }
 
+// requeue puts back an event that failed to apply, unless a newer event for
+// the same row arrived since the drain.
+func (d *debouncer) requeue(e drainedEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	k := eventKey{e.Kind, e.ID}
+	if _, newer := d.pending[k]; !newer {
+		d.pending[k] = e.Op
+	}
+}
+
 type drainedEvent struct {
 	Kind string
 	ID   string

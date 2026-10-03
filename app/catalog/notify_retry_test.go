@@ -35,14 +35,9 @@ func (f *flakyModelGetter) Get(_ context.Context, id string) (*model.Model, erro
 	return nil, nil
 }
 
-// A NOTIFY event is drained from the debouncer and applyEvent fails once
-// with a transient store error. The listener's whole job is convergence, so
-// the event must eventually be applied (re-queued into the debouncer, or a
-// full Reload scheduled). Today applyDrained only logs the error and the
-// event vanishes: the snapshot diverges from PG until an unrelated event
-// for the same row or a manual /reload.
+// A drained NOTIFY event whose apply fails with a transient store error is
+// gone from the debouncer, so the listener must still converge on PG state.
 func TestNotify_TransientApplyFailureEventuallyApplied(t *testing.T) {
-	t.Skip("known bug: NOTIFY events dropped on transient applyEvent failure; unskip with the fix")
 	ctx := context.Background()
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 
@@ -73,22 +68,66 @@ func TestNotify_TransientApplyFailureEventuallyApplied(t *testing.T) {
 	}
 	l.deb.push(notifyEvent{Kind: "model", Op: "upsert", ID: m3.Meta.ID})
 
-	// First flush cycle: store.Get fails transiently; the row is available
-	// on every subsequent call.
+	// store.Get fails on this flush; the fallback must still land the row.
 	l.applyDrained(ctx)
-
-	// Subsequent flush cycles: a converging listener re-applies the failed
-	// event (or falls back to a reload). Drive the flush deterministically —
-	// no listener goroutine, no PG.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		l.applyDrained(ctx)
-		if _, ok := c.Current().Model(m3.Meta.ID); ok {
-			return // converged
-		}
-		time.Sleep(20 * time.Millisecond)
+	if _, ok := c.Current().Model(m3.Meta.ID); !ok {
+		t.Fatalf("model %s missing after a transient apply failure (store.Get calls: %d)", m3.Meta.ID, getter.calls)
 	}
-	t.Fatalf("model %s never reached the snapshot after a transient applyEvent failure: "+
-		"the drained NOTIFY event was dropped permanently (store.Get calls: %d — never retried)",
-		m3.Meta.ID, getter.calls)
+}
+
+// failingModelList fails List while fail is set — a store outage that also
+// breaks the fallback reload.
+type failingModelList struct {
+	mutModList
+	fail bool
+}
+
+func (l *failingModelList) List(ctx context.Context) ([]*model.Model, error) {
+	if l.fail {
+		return nil, errors.New("pg unavailable")
+	}
+	return l.mutModList.List(ctx)
+}
+
+// When the fallback reload fails too, the next flush retries it even with no
+// new events, so the pod converges once the store recovers.
+func TestNotify_FailedFallbackReloadRetriedNextFlush(t *testing.T) {
+	ctx := context.Background()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
+
+	list := &failingModelList{mutModList: mutModList{models: models}}
+	c := New(provs, hosts, pols, list, keys, rls, rks, rcList{}, bnds)
+	if err := c.Reload(ctx); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+
+	m3 := &model.Model{
+		Meta: meta.Metadata{
+			ID: meta.NewID(), Name: "gpt-late",
+			Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provs[0].Meta.ID},
+		},
+		Spec: model.Spec{
+			Snapshots: []model.Snapshot{{Name: "gpt-late-2025-01-01", OriginalName: "gpt-late-2025-01-01"}},
+			Pointer:   "gpt-late-2025-01-01",
+		},
+	}
+	list.models = append(append([]*model.Model{}, models...), m3)
+	list.fail = true
+
+	l := &Listener{
+		cat:    c,
+		deb:    newDebouncer(time.Second),
+		stores: listenerStores{model: &flakyModelGetter{m: m3}},
+	}
+	l.deb.push(notifyEvent{Kind: "model", Op: "upsert", ID: m3.Meta.ID})
+	l.applyDrained(ctx)
+	if _, ok := c.Current().Model(m3.Meta.ID); ok {
+		t.Fatal("precondition: model applied although every store read failed")
+	}
+
+	list.fail = false
+	l.applyDrained(ctx) // no new events
+	if _, ok := c.Current().Model(m3.Meta.ID); !ok {
+		t.Fatalf("model %s missing after the store recovered", m3.Meta.ID)
+	}
 }
