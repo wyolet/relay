@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -220,5 +221,19 @@ func TestApplyGroupUpsert_UpdatesGroupsForUser(t *testing.T) {
 	}
 	if got := c.Current().GroupsForUser(f.alice); len(got) != 0 {
 		t.Errorf("GroupsForUser(alice) = %v, want empty after group delete", got)
+	}
+}
+
+// The system: prefix names relay's own group subjects; an IdP asserting a
+// group by that name must not slip a user into a reserved subject.
+func TestIdPGroupsCannotClaimReservedSubjects(t *testing.T) {
+	subs := UserSubjects("u-1", nil, []string{"system:serviceaccounts", "system:masters", "platform-eng"})
+	for _, s := range subs {
+		if s == SubjectServiceAccounts || s == "group:system:masters" {
+			t.Fatalf("subjects = %v, carry the IdP-asserted %q", subs, s)
+		}
+	}
+	if !slices.Contains(subs, "group:platform-eng") || !slices.Contains(subs, SubjectAuthenticated) {
+		t.Fatalf("subjects = %v, want the ordinary IdP group and the authenticated catch-all", subs)
 	}
 }

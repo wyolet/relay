@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/wyolet/relay/app/key"
 )
@@ -49,7 +50,8 @@ func UserSubjects(userID string, localGroups, idpGroups []string) []string {
 		names = append(names, g)
 	}
 	for _, g := range idpGroups {
-		if _, dup := seen[g]; dup || g == "" {
+		// system: names relay's own subjects; an IdP must not assert one.
+		if _, dup := seen[g]; dup || g == "" || strings.HasPrefix(g, "system:") {
 			continue
 		}
 		seen[g] = struct{}{}
