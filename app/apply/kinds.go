@@ -213,7 +213,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "HostKey", Docs: hkDocs, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
 		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
-		Check: checkHostKeyPolicy(pols),
+		Check: checkHostKeyPolicy(pols), Keep: keepHostKeySecret,
 	}); err != nil {
 		return err
 	}
@@ -270,6 +270,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
 		Upsert: s.Key.Upsert, Delete: s.Key.Delete,
+		Keep: keepKeyServerFields,
 	}); err != nil {
 		return err
 	}
@@ -337,6 +338,26 @@ func detachThenDelete(refs policy.DetachStores, del func(context.Context, string
 		}
 		return del(ctx, id)
 	}
+}
+
+// keepHostKeySecret keeps the stored secret of a stored or oauth host key
+// whose document carries no value, as an export does; Store.Upsert leaves
+// the ciphertext untouched when it sees Resolved and no Value.
+func keepHostKeySecret(prev, next *hostkey.HostKey) {
+	kind := next.Spec.ValueFrom.Kind
+	if next.Spec.Value != "" || kind != prev.Spec.ValueFrom.Kind ||
+		(kind != hostkey.ValueKindStored && kind != hostkey.ValueKindOAuth) {
+		return
+	}
+	next.Resolved = prev.Resolved
+}
+
+// keepKeyServerFields carries the rotation state a manifest cannot author
+// (the fields are yaml:"-") onto the declared key, so the diff ignores it and
+// an update keeps it.
+func keepKeyServerFields(prev, next *key.Key) {
+	next.Spec.PreviousKeyHash = prev.Spec.PreviousKeyHash
+	next.Spec.GraceUntil = prev.Spec.GraceUntil
 }
 
 // checkPrunedTenancy refuses pruning a team or project with rows still under
@@ -468,6 +489,9 @@ type kindWiring[D any, T any] struct {
 	// reads one row, not the plan). Runs on create and update only, and
 	// reports the same error the API's guard for that rule reports.
 	Check func(context.Context, *T) error
+	// Keep copies server-managed state from the stored row onto the declared
+	// one before the diff, so neither the diff nor an update touches it.
+	Keep func(prev, next *T)
 }
 
 func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T]) error {
@@ -517,6 +541,9 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				m.Owner = k.Meta(prev).Owner
 			}
 			e.owner = m.Owner
+			if k.Keep != nil {
+				k.Keep(prev, obj)
+			}
 			fields := changedFields(viewOf(k.Kind, prev, k.Meta(prev)), viewOf(k.Kind, obj, m))
 			if len(fields) == 0 {
 				e.Action = ActionUnchanged
