@@ -1,0 +1,180 @@
+//go:build integration
+
+// upgrade_test.go loads rows the way the pre-tenancy schema (migration 24)
+// wrote them, runs the tenancy migrations over them, and checks the upgraded
+// relay still serves them as before.
+package integration_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/golang-migrate/migrate/v4"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/wyolet/relay/app/adapters"
+	"github.com/wyolet/relay/app/binding"
+	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/pkg/ids"
+)
+
+// preTenancyVersion is the last schema version before teams and projects.
+const preTenancyVersion = 24
+
+// upgradeDB is a scratch database migrated to the pre-tenancy schema, with
+// stores bound to it.
+type upgradeDB struct {
+	dsn    string
+	pool   *pgxpool.Pool
+	m      *migrate.Migrate
+	cat    *appcatalog.Catalog
+	stores *appcatalog.Stores
+}
+
+func newUpgradeDB(t *testing.T, name string) *upgradeDB {
+	t.Helper()
+	dsn := scratchDB(t, name)
+	m := scratchMigrator(t, dsn)
+	if err := m.Migrate(preTenancyVersion); err != nil {
+		t.Fatalf("migrate to %d: %v", preTenancyVersion, err)
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+	return &upgradeDB{dsn: dsn, pool: pool, m: m, cat: cat, stores: stores}
+}
+
+func (u *upgradeDB) upgrade(t *testing.T) {
+	t.Helper()
+	if err := u.m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		t.Fatalf("migrate up: %v", err)
+	}
+}
+
+// hydrate loads the upgraded rows with the policy-less flow switched on.
+func (u *upgradeDB) hydrate(t *testing.T) {
+	t.Helper()
+	ctx := context.Background()
+	raw, err := json.Marshal(settings.Inference{AllowMissingPolicy: true})
+	if err != nil {
+		t.Fatalf("marshal settings: %v", err)
+	}
+	if _, err := u.stores.Settings.Upsert(ctx, settings.SectionInference, raw); err != nil {
+		t.Fatalf("upsert settings: %v", err)
+	}
+	if _, err := u.cat.Hydrate(ctx, u.stores, appcatalog.BootstrapOptions{Pool: u.pool}); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+}
+
+// seedRoute writes one routable model behind one host key, the way the
+// pre-tenancy control API wrote them, and returns the model's name.
+func (u *upgradeDB) seedRoute(t *testing.T, hostKeyOwner meta.Owner) string {
+	t.Helper()
+	ctx := context.Background()
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	prov := &provider.Provider{Meta: meta.Metadata{ID: ids.New(), Name: "acme", Owner: system}}
+	mustUpsert(t, u.stores.Provider.Upsert(ctx, prov), "provider")
+	h := &host.Host{
+		Meta: meta.Metadata{ID: ids.New(), Name: "acme-api", Owner: system},
+		Spec: host.Spec{BaseURL: "https://acme.example.com"},
+	}
+	mustUpsert(t, u.stores.Host.Upsert(ctx, h), "host")
+	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "acme-api-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
+	mustUpsert(t, u.stores.Policy.Upsert(ctx, tier), "tier policy")
+	t.Setenv("UPGRADE_TEST_HOST_KEY", "sk-upstream")
+	hk := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: hostKeyOwner},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "UPGRADE_TEST_HOST_KEY"}},
+	}
+	mustUpsert(t, u.stores.HostKey.Upsert(ctx, hk), "host key")
+	md := &model.Model{
+		Meta: meta.Metadata{ID: ids.New(), Name: "acme-chat", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: prov.Meta.ID}},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "acme-chat"}}, Pointer: "acme-chat"},
+	}
+	mustUpsert(t, u.stores.Model.Upsert(ctx, md), "model")
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: ids.New(), Name: "acme-chat-on-acme-api", Owner: system},
+		Spec: binding.Spec{ModelID: md.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.OpenAI},
+	}
+	mustUpsert(t, u.stores.Binding.Upsert(ctx, b), "binding")
+	return "acme-chat"
+}
+
+// insertPreTenancyKey writes a relay_keys row as the pre-tenancy control API
+// did for the admin token: owner kind user with no id, and no policy.
+func (u *upgradeDB) insertPreTenancyKey(t *testing.T, plaintext string) {
+	t.Helper()
+	hash := sha256Hex(plaintext)
+	if _, err := u.pool.Exec(context.Background(),
+		`INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec)
+		 VALUES ($1, 'ci-bot', 'CI bot', $2,
+		         '{"owner":{"kind":"user"}}'::jsonb,
+		         jsonb_build_object('keyHash', $2::text, 'prefix', 'rk_ci'))`,
+		ids.New(), hash); err != nil {
+		t.Fatalf("insert pre-tenancy key: %v", err)
+	}
+}
+
+// authenticate runs the inference credential middleware and returns the
+// status and the principal it resolved.
+func authenticate(t *testing.T, cat *appcatalog.Catalog, plaintext string) (int, *inference.Principal) {
+	t.Helper()
+	var seen *inference.Principal
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = inference.PrincipalFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	h := inference.ClassifyMiddleware()(inference.PrincipalMiddleware(cat, nil)(inner))
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	r.Header.Set("Authorization", "Bearer "+plaintext)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w.Code, seen
+}
+
+// A key with no policy served the policy-less flow before the upgrade. The
+// migration parks it in the legacy project, and it must keep serving exactly
+// as before: under the inference setting in single mode, refused under rbac.
+func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
+	u := newUpgradeDB(t, "relay_upg_policyless")
+	modelName := u.seedRoute(t, meta.Owner{Kind: meta.OwnerSystem})
+	u.insertPreTenancyKey(t, "rk_ci_plaintext")
+	u.upgrade(t)
+	u.hydrate(t)
+
+	code, p := authenticate(t, u.cat, "rk_ci_plaintext")
+	if code != http.StatusOK {
+		t.Fatalf("upgraded key answered %d, want it authenticated", code)
+	}
+	if p.Policy != nil {
+		t.Fatalf("upgraded key resolved policy %q, want none", p.Policy.Meta.Name)
+	}
+	req := routing.Request{ModelName: modelName, UserID: p.UserID, Snapshot: u.cat.Current()}
+	if _, err := routing.New(u.cat).Resolve(req); err != nil {
+		t.Fatalf("single mode: the upgraded key no longer routes: %v", err)
+	}
+	if _, err := routing.New(u.cat, routing.RequirePolicy()).Resolve(req); !errors.Is(err, routing.ErrPolicyless) {
+		t.Fatalf("rbac mode: err = %v, want the policy-less refusal", err)
+	}
+}

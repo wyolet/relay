@@ -17,6 +17,7 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/pkg/metrics"
 )
@@ -302,8 +303,10 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 			p.Policy = pol
 		}
 	}
+	var bindings []*policybinding.PolicyBinding
 	if p.Policy == nil && p.ProjectID != "" {
-		for _, b := range snap.PolicyBindingsForProject(p.ProjectID) {
+		bindings = snap.PolicyBindingsForProject(p.ProjectID)
+		for _, b := range bindings {
 			if !bindingMatches(b, p.Subjects) {
 				continue
 			}
@@ -327,6 +330,11 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 	// which routing gates on settings.Inference.AllowMissingPolicy. Anything
 	// scoped to a project — a token always is — must resolve a policy.
 	if p.CredentialKind == CredentialKey && p.ProjectID == "" {
+		return true
+	}
+	// Keys the tenancy migration parked in the legacy project had no policy
+	// before it and keep that behaviour until an operator binds one there.
+	if p.CredentialKind == CredentialKey && p.ProjectID == project.LegacyID && len(bindings) == 0 {
 		return true
 	}
 	writeForbidden(w, "no_policy", "no policy is bound to this principal")
