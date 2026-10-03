@@ -117,6 +117,16 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 		t.Fatalf("catalog.Bootstrap: %v", err)
 	}
 
+	usersStore := user.NewStore(gen.New(st.Pool()))
+	// Token verification reads the per-user version off the snapshot. The
+	// composition root attaches the source before the first build; Bootstrap
+	// has already built one here, so refresh the map straight away. Before
+	// the listener starts: its reload reads the source.
+	cat.UseTokenVersions(usersStore)
+	if err := cat.ReloadTokenVersions(ctx); err != nil {
+		t.Fatalf("catalog.ReloadTokenVersions: %v", err)
+	}
+
 	lctx, cancel := context.WithCancel(ctx)
 	listenerDone := make(chan struct{})
 	go func() {
@@ -199,14 +209,6 @@ func newStackAuthz(t *testing.T, mode string, identityDir ...string) *stack {
 	auditStore := audit.NewStore(gen.New(st.Pool()))
 	auditEmitter := audit.NewEmitter(auditStore, slog.Default())
 	t.Cleanup(auditEmitter.Close)
-	usersStore := user.NewStore(gen.New(st.Pool()))
-	// Token verification reads the per-user version off the snapshot. The
-	// composition root attaches the source before the first build; Bootstrap
-	// has already built one here, so refresh the map straight away.
-	cat.UseTokenVersions(usersStore)
-	if err := cat.ReloadTokenVersions(ctx); err != nil {
-		t.Fatalf("catalog.ReloadTokenVersions: %v", err)
-	}
 
 	var idStore *identity.Store
 	if len(identityDir) > 0 && identityDir[0] != "" {
