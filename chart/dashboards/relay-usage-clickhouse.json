@@ -1,0 +1,780 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": [
+    "relay",
+    "relay-saas",
+    "usage",
+    "clickhouse"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "clickhouse",
+        "multi": false,
+        "name": "ch",
+        "options": [],
+        "query": "grafana-clickhouse-datasource",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Relay \u2014 Usage (ClickHouse)",
+  "uid": "relay-usage-ch",
+  "version": 1,
+  "weekStart": "",
+  "description": "Relay usage analytics from ClickHouse (relay.usage_events). Requires the grafana-clickhouse-datasource plugin + the ClickHouse-Relay datasource.",
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Throughput",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Requests by requested_model",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, requested_model AS model, count() AS reqs FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time, model ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Requests by status",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, toString(status) AS status, count() AS reqs FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time, status ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "Latency & overhead",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "duration_ms quantiles by model",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT requested_model AS model, round(quantile(0.50)(duration_ms),1) AS p50, round(quantile(0.75)(duration_ms),1) AS p75, round(quantile(0.95)(duration_ms),1) AS p95, round(quantile(0.99)(duration_ms),1) AS p99, count() AS reqs FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY model ORDER BY reqs DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Total request duration (ms) percentiles per requested model."
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Pure relay overhead quantiles",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 10,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, round(quantile(0.50)(duration_ms - (upstream_response_end - upstream_start)/1000.0),2) AS p50, round(quantile(0.95)(duration_ms - (upstream_response_end - upstream_start)/1000.0),2) AS p95, round(quantile(0.99)(duration_ms - (upstream_response_end - upstream_start)/1000.0),2) AS p99 FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "duration_ms minus upstream response time = relay-attributable overhead (ms)."
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Pre-upstream overhead quantiles",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 10,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, round(quantile(0.50)(upstream_start/1000.0),3) AS p50, round(quantile(0.95)(upstream_start/1000.0),3) AS p95, round(quantile(0.99)(upstream_start/1000.0),3) AS p99 FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "upstream_start offset (ms): time from request start until the upstream call began."
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Tokens, errors, keys",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 18,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tokens by model (sum over token map)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, requested_model AS model, sum(arraySum(mapValues(tokens))) AS tokens FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time, model ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Sum of all values in the tokens map (input+output+...) per model."
+    },
+    {
+      "id": 10,
+      "type": "piechart",
+      "title": "Error kind breakdown",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 19,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT multiIf(error_kind = '', '(none)', error_kind) AS error_kind, count() AS c FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY error_kind ORDER BY c DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "pieType": "donut",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Streamed vs non-streamed",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 19,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, countIf(streamed = 1) AS streamed, countIf(streamed = 0) AS non_streamed FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 40,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Top relay keys by request count",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 1,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT relay_key_hash, count() AS reqs, sum(arraySum(mapValues(tokens))) AS tokens, round(quantile(0.95)(duration_ms),1) AS p95_ms FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY relay_key_hash ORDER BY reqs DESC LIMIT 20",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Failover rate (attempts > 1)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 27,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT $__timeInterval(ts) AS time, countIf(attempts > 1) / count() AS failover_rate FROM relay.usage_events WHERE $__timeFilter(ts) GROUP BY time ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Fraction of requests that required more than one upstream attempt."
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Cost",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Cost (USD) by provider / day",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${ch}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${ch}"
+          },
+          "editorType": "sql",
+          "format": 2,
+          "meta": {
+            "builderOptions": {
+              "database": "relay",
+              "table": "usage_events",
+              "queryType": "table",
+              "mode": "list"
+            }
+          },
+          "queryType": "sql",
+          "rawSql": "SELECT toStartOfDay(ts) AS time, provider, sum(cost_nanos)/1e9 AS cost_usd FROM relay.usage_events WHERE $__timeFilter(ts) AND cost_nanos >= 0 GROUP BY time, provider ORDER BY time",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": false
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Daily spend per provider. cost_nanos < 0 (unpriced) rows are excluded."
+    }
+  ]
+}

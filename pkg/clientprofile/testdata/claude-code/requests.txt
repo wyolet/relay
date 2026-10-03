@@ -1,0 +1,71 @@
+=== HEAD /claude-code/api/hello
+Connection: keep-alive
+User-Agent: Bun/1.4.3
+Accept: */*
+Host: 127.0.0.1:8791
+Accept-Encoding: gzip, deflate, br, zstd
+
+=== GET /claude-code/v1/models?limit=1000
+Authorization: Bearer dummy
+User-Agent: claude-code/2.1.278
+X-WR-API-Key: <redacted>
+X-WR-Proxy-Mode: Proxy
+anthropic-version: 2023-06-01
+Connection: keep-alive
+Accept: */*
+Host: 127.0.0.1:8791
+Accept-Encoding: gzip, deflate, br, zstd
+
+=== POST /claude-code/v1/messages?beta=true
+Accept: application/json
+Authorization: Bearer dummy
+Content-Type: application/json
+User-Agent: claude-cli/2.1.278 (external, sdk-cli)
+X-Claude-Code-Session-Id: fe318fce-bd0e-4355-a928-02190ad1196f
+X-Stainless-Arch: arm64
+X-Stainless-Lang: js
+X-Stainless-OS: MacOS
+X-Stainless-Package-Version: 0.112.1
+X-Stainless-Retry-Count: 0
+X-Stainless-Runtime: node
+X-Stainless-Runtime-Version: v26.3.0
+X-Stainless-Timeout: 600
+X-WR-API-Key: <redacted>
+X-WR-Proxy-Mode: Proxy
+anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24
+anthropic-dangerous-direct-browser-access: true
+anthropic-version: 2023-06-01
+x-app: cli
+x-claude-code-request-class: main
+Connection: keep-alive
+Host: 127.0.0.1:8791
+Accept-Encoding: gzip, deflate, br, zstd
+Content-Length: 110811
+--- body (110811 bytes)  [omitted: machine-specific system prompt]
+
+=== POST /claude-code/v1/messages?beta=true
+Accept: application/json
+Authorization: Bearer dummy
+Content-Type: application/json
+User-Agent: claude-cli/2.1.278 (external, sdk-cli)
+X-Claude-Code-Session-Id: fe318fce-bd0e-4355-a928-02190ad1196f
+X-Stainless-Arch: arm64
+X-Stainless-Lang: js
+X-Stainless-OS: MacOS
+X-Stainless-Package-Version: 0.112.1
+X-Stainless-Retry-Count: 0
+X-Stainless-Runtime: node
+X-Stainless-Runtime-Version: v26.3.0
+X-Stainless-Timeout: 300
+X-WR-API-Key: <redacted>
+X-WR-Proxy-Mode: Proxy
+anthropic-beta: claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24
+anthropic-dangerous-direct-browser-access: true
+anthropic-version: 2023-06-01
+x-app: cli
+x-claude-code-request-class: main
+Connection: keep-alive
+Host: 127.0.0.1:8791
+Accept-Encoding: gzip, deflate, br, zstd
+Content-Length: 110812
+--- body (110812 bytes)  [omitted: machine-specific system prompt]

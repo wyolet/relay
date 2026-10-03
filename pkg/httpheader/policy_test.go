@@ -46,6 +46,14 @@ func TestStrip_RemovesXWRHeaders(t *testing.T) {
 	}
 }
 
+func TestStrip_RemovesClientHeader(t *testing.T) {
+	h := http.Header{HeaderClient: {"claude-code"}}
+	Strip(h)
+	if h.Get(HeaderClient) != "" {
+		t.Errorf("%s should be stripped (X-WR-* denylist)", HeaderClient)
+	}
+}
+
 func TestStrip_RemovesCookie(t *testing.T) {
 	h := http.Header{"Cookie": {"sid=abc"}, "Content-Type": {"application/json"}}
 	Strip(h)

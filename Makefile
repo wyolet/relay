@@ -1,7 +1,7 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
-        version release release-minor release-major \
-        sqlc-generate test test-race test-fuzz test-cover cover-check \
+        version release release-patch release-minor release-major _release _release-preflight \
+        check chart-lint sqlc-generate test test-race test-fuzz test-cover cover-check \
         bench-gate bench-baseline test-integration smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean schemas catalog-validate catalog-embed lint-rules
@@ -26,6 +26,9 @@ CURRENT_VERSION  := $(LATEST_TAG:v%=%)
 VERSION_MAJOR    := $(word 1,$(subst ., ,$(CURRENT_VERSION)))
 VERSION_MINOR    := $(word 2,$(subst ., ,$(CURRENT_VERSION)))
 VERSION_PATCH    := $(word 3,$(subst ., ,$(CURRENT_VERSION)))
+NEXT_PATCH       := v$(VERSION_MAJOR).$(VERSION_MINOR).$(shell echo $$(($(VERSION_PATCH) + 1)))
+NEXT_MINOR       := v$(VERSION_MAJOR).$(shell echo $$(($(VERSION_MINOR) + 1))).0
+NEXT_MAJOR       := v$(shell echo $$(($(VERSION_MAJOR) + 1))).0.0
 
 # Compose: prod-shape base + dev overrides (dev-stack-wired, builds locally).
 # `docker compose up` without -f auto-loads docker-compose.override.yml instead
@@ -81,14 +84,16 @@ help: ## Show this help
 	@echo '  make local-image       bake into local docker daemon as relay:dev'
 	@echo '  make run-local         boot the local image on :8080'
 	@echo ''
-	@echo '🏷️  Release (semver via git tags):'
+	@echo '🏷️  Release (tag + push; CI publishes images + chart):'
 	@echo '  make version           show current version'
-	@echo '  make release           bump patch (X.Y.Z → X.Y.(Z+1))'
-	@echo '  make release-minor     bump minor'
-	@echo '  make release-major     bump major'
+	@echo '  make release           tag next patch (X.Y.Z → X.Y.(Z+1))'
+	@echo '  make release-minor     tag next minor'
+	@echo '  make release-major     tag next major'
 	@echo ''
 	@echo '🧰 Go:'
 	@echo '  make sqlc-generate     regenerate sqlc code'
+	@echo '  make check             CI gate: gofmt, codebase rules, vet, tests, chart lint'
+	@echo '  make chart-lint        helm lint chart/'
 	@echo '  make test              go test ./...'
 	@echo '  make test-race         unit tests under -race'
 	@echo '  make test-fuzz         each fuzz target for $(FUZZ_TIME)'
@@ -234,47 +239,42 @@ run-local: local-image ## boot the local image on :8080
 version: ## show current version from git tags
 	@echo "Current: $(LATEST_TAG)  (M=$(VERSION_MAJOR) m=$(VERSION_MINOR) p=$(VERSION_PATCH))"
 
-release: ## bump patch + build + push + tag
-	git fetch --tags --force --prune
-	$(eval NEW_PATCH := $(shell echo $$(($(VERSION_PATCH) + 1))))
-	$(eval NEW_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(NEW_PATCH))
-	@echo "📦 current: $(LATEST_TAG)"
-	@echo "🚀 next:    v$(NEW_VERSION)"
-	@if git rev-parse "v$(NEW_VERSION)" >/dev/null 2>&1; then \
-		echo "⚠️  tag v$(NEW_VERSION) already exists. delete locally: git tag -d v$(NEW_VERSION)"; exit 1; \
-	fi
-	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push release
-	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
-	git push origin "v$(NEW_VERSION)"
-	@echo "✅ released v$(NEW_VERSION)"
+# A pushed v*.*.* tag on main is the release: CI (.github/workflows/release.yml)
+# builds and pushes the images and the chart. These targets only tag.
+#   SKIP_CHECK=1 make release   # skip the local test gate
+# Tags are fetched first, then a sub-make re-reads them to compute the next tag.
+release: release-patch ## tag + push the next patch version
 
-release-minor: ## bump minor + build + push + tag
-	git fetch --tags --force --prune
-	$(eval NEW_MINOR := $(shell echo $$(($(VERSION_MINOR) + 1))))
-	$(eval NEW_VERSION := $(VERSION_MAJOR).$(NEW_MINOR).0)
-	@echo "📦 current: $(LATEST_TAG)"
-	@echo "🚀 next:    v$(NEW_VERSION)"
-	@if git rev-parse "v$(NEW_VERSION)" >/dev/null 2>&1; then \
-		echo "⚠️  tag v$(NEW_VERSION) already exists. delete locally: git tag -d v$(NEW_VERSION)"; exit 1; \
-	fi
-	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push release
-	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
-	git push origin "v$(NEW_VERSION)"
-	@echo "✅ released v$(NEW_VERSION)"
+release-patch: ## tag + push the next patch version
+	@git fetch -q --tags --force origin
+	@$(MAKE) --no-print-directory _release BUMP=PATCH
 
-release-major: ## bump major + build + push + tag
-	git fetch --tags --force --prune
-	$(eval NEW_MAJOR := $(shell echo $$(($(VERSION_MAJOR) + 1))))
-	$(eval NEW_VERSION := $(NEW_MAJOR).0.0)
-	@echo "📦 current: $(LATEST_TAG)"
-	@echo "🚀 next:    v$(NEW_VERSION)"
-	@if git rev-parse "v$(NEW_VERSION)" >/dev/null 2>&1; then \
-		echo "⚠️  tag v$(NEW_VERSION) already exists. delete locally: git tag -d v$(NEW_VERSION)"; exit 1; \
-	fi
-	VERSION=$(NEW_VERSION) GIT_REVISION=$(GIT_REVISION) UI_VERSION=$(UI_VERSION) CATALOG_REF=$(CATALOG_VERSION) docker buildx bake -f docker-bake.hcl --push release
-	git tag -a "v$(NEW_VERSION)" -m "Release v$(NEW_VERSION)"
-	git push origin "v$(NEW_VERSION)"
-	@echo "✅ released v$(NEW_VERSION)"
+release-minor: ## tag + push the next minor version
+	@git fetch -q --tags --force origin
+	@$(MAKE) --no-print-directory _release BUMP=MINOR
+
+release-major: ## tag + push the next major version
+	@git fetch -q --tags --force origin
+	@$(MAKE) --no-print-directory _release BUMP=MAJOR
+
+RELEASE_TAG = $(NEXT_$(BUMP))
+
+_release: _release-preflight
+	git tag -a $(RELEASE_TAG) -m "Release $(RELEASE_TAG)"
+	git push origin $(RELEASE_TAG)
+	@echo "✓ tagged $(RELEASE_TAG) (from $(LATEST_TAG)); CI builds and publishes it."
+
+# The tag must point at what's on origin/main, or CI builds something unreviewed.
+_release-preflight:
+	@[ -n "$(RELEASE_TAG)" ] || { echo "✗ BUMP must be PATCH, MINOR or MAJOR"; exit 1; }
+	@! git rev-parse $(RELEASE_TAG) >/dev/null 2>&1 || { echo "✗ tag $(RELEASE_TAG) already exists"; exit 1; }
+	@git diff --quiet && git diff --cached --quiet \
+		|| { echo "✗ uncommitted changes — commit or stash first"; exit 1; }
+	@git fetch -q origin main
+	@[ "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" ] \
+		|| { echo "✗ HEAD is not origin/main — release from a pushed main"; exit 1; }
+	@[ "$(SKIP_CHECK)" = "1" ] && echo "⚠ SKIP_CHECK=1 — skipping test gate" \
+		|| $(MAKE) --no-print-directory check
 
 # --- control plane ---
 
@@ -395,6 +395,19 @@ bench-baseline: ## regenerate $(BENCH_BASELINE) from the current tree
 
 lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
 	./scripts/check-codebase-rules.sh
+
+check: ## the CI gate: gofmt, codebase rules, vet, tests, chart lint
+	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
+		[ -z "$$unformatted" ] || { echo "These files need gofmt:"; echo "$$unformatted"; exit 1; }
+	$(MAKE) --no-print-directory lint-rules
+	go vet ./...
+	cd sdk && go vet ./...
+	cd jobq && go vet ./...
+	$(MAKE) --no-print-directory test
+	$(MAKE) --no-print-directory chart-lint
+
+chart-lint: ## helm lint chart/
+	helm lint chart
 
 schemas: ## regenerate JSON Schemas for catalog kinds → schemas/v1alpha2/
 	go run ./cmd/catalog-schemas schemas/v1alpha2

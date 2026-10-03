@@ -97,19 +97,9 @@ func TestResponsesParseRequest_StatefulFieldsRejected(t *testing.T) {
 			"truncation",
 		},
 		{
-			"service_tier",
-			func(m map[string]any) { m["service_tier"] = "premium" },
-			"service_tier",
-		},
-		{
 			"safety_identifier",
 			func(m map[string]any) { m["safety_identifier"] = "safe_123" },
 			"safety_identifier",
-		},
-		{
-			"include",
-			func(m map[string]any) { m["include"] = []string{"reasoning"} },
-			"include",
 		},
 		{
 			"context_management",
@@ -133,6 +123,58 @@ func TestResponsesParseRequest_StatefulFieldsRejected(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// The Codex CLI sends include and (when configured) service_tier on every
+// request with no opt-out, so both must parse rather than 400 the turn.
+func TestResponsesParseRequest_HintFieldsAccepted(t *testing.T) {
+	cases := map[string]map[string]any{
+		"codex include":   {"include": []string{includeEncryptedReasoning}},
+		"unknown include": {"include": []string{"message.output_text.logprobs"}},
+		"mixed include":   {"include": []string{includeEncryptedReasoning, "file_search_call.results"}},
+		"service_tier":    {"service_tier": "priority"},
+	}
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := map[string]any{"model": "gpt-5", "input": "hi"}
+			for k, v := range extra {
+				m[k] = v
+			}
+			req, err := (ResponsesTranslator{}).ParseRequest(mustJSON(m))
+			if err != nil {
+				t.Fatalf("ParseRequest: %v", err)
+			}
+			if len(req.Input) != 1 {
+				t.Fatalf("input len: %d", len(req.Input))
+			}
+		})
+	}
+}
+
+// Whatever the caller asked to have included, the outbound request asks for
+// the one entry the canonical round-trip can carry back.
+func TestResponsesSerializeRequest_IncludeIsEncryptedReasoningOnly(t *testing.T) {
+	req, err := (ResponsesTranslator{}).ParseRequest(mustJSON(map[string]any{
+		"model":   "gpt-5",
+		"input":   "hi",
+		"include": []string{"file_search_call.results"},
+	}))
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	body, err := (ResponsesTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("SerializeRequest: %v", err)
+	}
+	var wire struct {
+		Include []string `json:"include"`
+	}
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(wire.Include) != 1 || wire.Include[0] != includeEncryptedReasoning {
+		t.Errorf("include = %v, want [%s]", wire.Include, includeEncryptedReasoning)
 	}
 }
 

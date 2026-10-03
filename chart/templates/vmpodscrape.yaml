@@ -1,0 +1,25 @@
+{{- if .Values.vmPodScrape.enabled }}
+# VictoriaMetrics pod scrape for relay's /metrics endpoint on the CONTROL plane.
+# This cluster runs the VictoriaMetrics operator (operator.victoriametrics.com),
+# NOT prometheus-operator — so we use VMPodScrape, not a ServiceMonitor.
+# The stack's vmagent selects VMPodScrapes across all namespaces, so this CR
+# lives alongside the app in its own namespace. The resulting scrape job label
+# is "<namespace>/<name>" e.g. "relay-saas/relay-saas".
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: {{ include "relay.fullname" . }}
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+    {{- with .Values.vmPodScrape.labels }}{{ toYaml . | nindent 4 }}{{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "relay.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    # relay exposes Prometheus metrics at /metrics on the CONTROL plane port.
+    - port: control
+      path: /metrics
+      interval: {{ .Values.vmPodScrape.interval }}
+      scrapeTimeout: {{ .Values.vmPodScrape.scrapeTimeout }}
+{{- end }}

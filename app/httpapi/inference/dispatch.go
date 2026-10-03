@@ -26,9 +26,11 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/reqid"
+	"github.com/wyolet/relay/pkg/sse"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -80,9 +82,21 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	// Context rather than minting its own. Routing fills the identity ids
 	// later via applyPlanIdentity.
 	cls := ClassificationFrom(ctx)
+	profile := clientprofile.FromContext(ctx)
+	// A profile may hand its client model ids reshaped for that client's own model picker; map them back before anything reads the name — the lifecycle stamp, the host pin and routing (including the alias probe, which matches the caller's raw string) all take it from here. Only ModelName needs it: the body's `model` field is replaced with the binding's upstream name on every path (runBytePass rewrites it, the canonical path re-serializes from plan.UpstreamModel()).
+	if namer, ok := profile.(clientprofile.ModelNamer); ok {
+		in.ModelName = namer.Inbound(in.ModelName)
+	}
 	lc := mintLifecycle(ctx, d.Catalog, sourceForMode(cls.Mode), cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
+	// The resolved client profile is a usage dimension; observers read it
+	// off the Context. Empty name = no profile, nothing recorded.
+	if profile.Name() != "" {
+		lc.Metadata["client"] = profile.Name()
+		applyAttributionHeaders(lc, profile, r.Header)
+		applySessionKey(lc, profile, r.Header)
+	}
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture
 	// gate (lc.PayloadLog) is set once routing resolves the opt-in.
@@ -296,7 +310,25 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	w.WriteHeader(result.Status)
 	// Byte-pass is same-shape / vendor-native — relay_usage is canonical-only,
 	// so nothing is injected here; the upstream body streams through verbatim.
-	_, _ = streamCopy(w, result.Body)
+	dst, stop := keepAliveWriter(d, w, r, in)
+	defer stop()
+	_, _ = streamCopy(dst, result.Body)
+}
+
+// keepAliveWriter wraps w so relay emits the inbound shape's no-op frame while the upstream is silent, returning the writer to stream through and the stop func the caller must defer.
+//
+// A no-op (w unchanged) unless this is a stream, a keepalive interval is configured, and the inbound shape has a canonical translator — byte-pass-only shapes (embeddings) are not SSE at all and must never have frames spliced into them.
+func keepAliveWriter(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) (io.Writer, func()) {
+	if !in.Stream || d.StreamKeepAlive <= 0 {
+		return w, func() {}
+	}
+	spec := d.Specs.Spec(in.Inbound)
+	if spec == nil || spec.BytePass || spec.Translator == nil {
+		return w, func() {}
+	}
+	ka := sse.NewKeepAlive(w, v1.KeepAliveFrameFor(spec.Translator), d.StreamKeepAlive)
+	ka.Start(r.Context())
+	return ka, ka.Stop
 }
 
 // dispatchCanonical handles cross-shape dispatch via the canonical v1 chain.
@@ -432,10 +464,20 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 	trackReasoning := in.Inbound == adapters.Canonical
 	if in.Stream {
 		w.WriteHeader(result.Status)
-		streamCanonical(d, w, r, result.Body, echo, trackReasoning, upstreamV1.NewToCanonicalStream(), inboundV1.NewFromCanonicalStream())
+		dst, stop := keepAliveWriter(d, w, r, in)
+		defer stop()
+		streamCanonical(d, dst, r, result.Body, echo, trackReasoning, upstreamV1.NewToCanonicalStream(), fromCanonicalStream(inboundV1, canonReq))
 		return
 	}
 	bufferCanonical(d, w, r, result.Body, result.Status, echo, canonReq, upstreamV1, inboundV1)
+}
+
+// fromCanonicalStream builds the inbound shape's per-stream serializer, handing it the request when the shape needs it (v1.RequestAwareStream) — the buffered path already gets it via SerializeResponse.
+func fromCanonicalStream(inboundV1 v1.Translator, canonReq *v1.Request) func([]byte) ([]byte, error) {
+	if aware, ok := inboundV1.(v1.RequestAwareStream); ok && canonReq != nil {
+		return aware.NewFromCanonicalStreamFor(canonReq)
+	}
+	return inboundV1.NewFromCanonicalStream()
 }
 
 // streamCanonical chains upstream→canonical→inbound per-chunk transforms.
@@ -448,7 +490,8 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 // generation.completed event) — never as a standalone frame, so the canonical
 // client reads it off the event it already parses. One-frame lookahead lets
 // us reach "the last frame" before flushing it.
-func streamCanonical(d Deps, w http.ResponseWriter, r *http.Request, body io.ReadCloser, echo, trackReasoning bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
+// w is an io.Writer (not the ResponseWriter) so the keepalive wrapper can sit in between; the status line is already written by the caller.
+func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, echo, trackReasoning bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
 	sbufp := scannerBufPool.Get().(*[]byte)
