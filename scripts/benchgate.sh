@@ -10,7 +10,7 @@ set -euo pipefail
 
 mode=""
 file=""
-tolerance=${BENCH_ALLOC_TOLERANCE:-20}
+tolerance=${BENCH_ALLOC_TOLERANCE:-0}
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in

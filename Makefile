@@ -379,7 +379,7 @@ cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 # Allocation gate. ns/op is not gated — too noisy on shared runners.
 BENCH_PKGS            := ./app/httpapi/inference ./pkg/crypto ./app/policy ./app/catalog ./app/routing
 BENCH_BASELINE        := scripts/bench-baseline.txt
-BENCH_ALLOC_TOLERANCE ?= 20
+BENCH_ALLOC_TOLERANCE ?= 0
 BENCH_COUNT           ?= 1
 
 # Piped through a temp file, not a pipeline: /bin/sh has no pipefail, so a
