@@ -13,6 +13,13 @@ import (
 // or disabling them must end the sessions they already hold.
 func TestIntegration_RoleChangeAndDisableEndLiveSessions(t *testing.T) {
 	st := newStack(t)
+	spare := st.seedLogin(t, "spare-admin", "pw-spare")
+	if u, _ := st.users.Get(t.Context(), spare); u != nil {
+		u.Roles = []string{user.RoleAdmin}
+		if err := st.users.Upsert(t.Context(), u); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, change := range []string{`{"roles":[]}`, `{"disabled":true}`} {
 		id := st.seedLogin(t, "op", "pw-op")
 		u, _ := st.users.Get(t.Context(), id)
