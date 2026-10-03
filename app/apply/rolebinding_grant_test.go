@@ -7,8 +7,10 @@ import (
 
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/team"
 )
 
 // scopedTeamAuthz grants a fixed set of actions at one team and nothing
@@ -36,10 +38,13 @@ func TestApplyRefusesAnEscalatingRoleBinding(t *testing.T) {
 		Meta: meta.Metadata{ID: "r-narrow", Name: "team-reader", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: role.Spec{Rules: []role.Rule{{Kinds: []string{"keys"}, Verbs: []string{"get"}}}},
 	}
-	roles := map[string]*role.Role{wide.Meta.ID: wide, narrow.Meta.ID: narrow}
+	rows := &Rows{
+		Roles: []*role.Role{wide, narrow},
+		Teams: []*team.Team{{Meta: meta.Metadata{ID: "t-1"}}, {Meta: meta.Metadata{ID: "t-2"}}},
+	}
 	holder := scopedTeamAuthz{teamID: "t-1", actions: map[string]bool{"keys.get": true}}
-	b := &builder{rows: &Rows{}, opts: Options{Authz: holder}}
-	check := b.checkRoleBindingGrant(roles)
+	b := &builder{rows: rows, opts: Options{Authz: holder}}
+	check := refsFor(b, refcheck.Checker.RoleBinding)
 
 	binding := func(roleID, teamID string) *rolebinding.RoleBinding {
 		rb := &rolebinding.RoleBinding{Meta: meta.Metadata{Name: "rb"}}
@@ -58,8 +63,8 @@ func TestApplyRefusesAnEscalatingRoleBinding(t *testing.T) {
 	}
 
 	// A loader with no authorizer (the boot seed) writes what it is given.
-	seed := &builder{rows: &Rows{}}
-	if err := seed.checkRoleBindingGrant(roles)(context.Background(), binding(wide.Meta.ID, "t-1")); err != nil {
-		t.Fatalf("boot seed = %v, want no gate", err)
+	seed := &builder{rows: rows}
+	if refsFor(seed, refcheck.Checker.RoleBinding) != nil {
+		t.Fatal("boot seed has a grant gate, want none")
 	}
 }

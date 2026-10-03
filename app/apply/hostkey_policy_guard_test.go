@@ -34,9 +34,9 @@ func TestApplyRejectsAHostKeyOnAForeignPolicy(t *testing.T) {
 	if err := check(context.Background(), otherHost); err == nil {
 		t.Error("a policy owned by a different host was accepted")
 	}
-	// A policy this run cannot resolve is left to the snapshot's own drop.
+	// A policy naming nothing is refused, as the API refuses it.
 	unknown := &hostkey.HostKey{Meta: meta.Metadata{Name: "k"}, Spec: hostkey.Spec{HostID: "h-1", PolicyID: "p-9"}}
-	if err := check(context.Background(), unknown); err != nil {
-		t.Errorf("unresolvable policy = %v, want it left alone", err)
+	if err := check(context.Background(), unknown); err == nil {
+		t.Error("unresolvable policy accepted")
 	}
 }

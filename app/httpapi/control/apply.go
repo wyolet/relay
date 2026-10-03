@@ -19,6 +19,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/manifest"
+	"github.com/wyolet/relay/app/refcheck"
 )
 
 type applyInput struct {
@@ -94,6 +95,12 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			}
 			if errors.Is(err, license.ErrRequired) || errors.Is(err, authz.ErrForbidden) {
 				return nil, huma.Error403Forbidden(err.Error())
+			}
+			// A reference the caller may not see answers like any refused row:
+			// generic, so the plan step cannot probe another scope's names.
+			var re *refcheck.Error
+			if errors.As(err, &re) && re.Status == http.StatusNotFound {
+				return nil, &applyFailure{status: http.StatusForbidden, Message: "forbidden"}
 			}
 			return nil, huma.Error400BadRequest(err.Error())
 		}

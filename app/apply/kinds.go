@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
@@ -23,6 +22,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -74,6 +74,10 @@ type builder struct {
 	// lic gates the features a manifest may declare. Nil is no gate — see
 	// Options.License.
 	lic license.Checker
+
+	// declared holds the rows this run writes, by id, so a later kind's
+	// reference checks see what an earlier kind in the same bundle declared.
+	declared map[string]any
 
 	entries []Entry
 	// deletes are collected per kind in the same order the upserts run and
@@ -181,6 +185,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "Project", Docs: projDocs, Names: b.idx.Projects, Rows: b.rows.Projects,
 		To: manifest.ToProject, Meta: func(p *project.Project) *meta.Metadata { return &p.Meta },
 		Upsert: s.Project.Upsert, Delete: s.Project.Delete,
+		Check: refsFor(b, refcheck.Checker.Project),
 	}); err != nil {
 		return err
 	}
@@ -242,6 +247,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "Policy", Docs: polDocs, Names: b.idx.Policies, Rows: b.rows.Policies,
 		To: manifest.ToPolicy, Meta: func(p *policy.Policy) *meta.Metadata { return &p.Meta },
 		Upsert: s.Policy.Upsert, Delete: deletePolicyWithDetach(s),
+		Check: refsFor(b, refcheck.Checker.Policy),
 	}); err != nil {
 		return err
 	}
@@ -249,6 +255,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "Group", Docs: grpDocs, Names: b.idx.Groups, Rows: b.rows.Groups,
 		To: manifest.ToGroup, Meta: func(g *group.Group) *meta.Metadata { return &g.Meta },
 		Upsert: s.Group.Upsert, Delete: s.Group.Delete,
+		Check: refsFor(b, refcheck.Checker.Group),
 	}); err != nil {
 		return err
 	}
@@ -263,6 +270,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "ServiceAccount", Docs: saDocs, Names: b.idx.ServiceAccounts, Rows: b.rows.ServiceAccounts,
 		To: manifest.ToServiceAccount, Meta: func(sa *serviceaccount.ServiceAccount) *meta.Metadata { return &sa.Meta },
 		Upsert: s.ServiceAccount.Upsert, Delete: s.ServiceAccount.Delete,
+		Check: refsFor(b, refcheck.Checker.ServiceAccount),
 	}); err != nil {
 		return err
 	}
@@ -270,20 +278,17 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "Key", Docs: keyDocs, Names: b.idx.Keys, Rows: b.rows.Keys,
 		To: manifest.ToKey, Meta: func(k *key.Key) *meta.Metadata { return &k.Meta },
 		Upsert: s.Key.Upsert, Delete: s.Key.Delete,
+		Check: refsFor(b, refcheck.Checker.Key),
 	}); err != nil {
 		return err
 	}
 	// Bindings last: they name roles, tenancy rows, policies, and the
 	// principals every kind above just wrote.
-	roles, err := b.roleByID(roleDocs)
-	if err != nil {
-		return err
-	}
 	if err := planKind(ctx, b, kindWiring[manifest.RoleBindingDTO, rolebinding.RoleBinding]{
 		Kind: "RoleBinding", Docs: rbDocs, Names: b.idx.RoleBindings, Rows: b.rows.RoleBindings,
 		To: manifest.ToRoleBinding, Meta: func(x *rolebinding.RoleBinding) *meta.Metadata { return &x.Meta },
 		Upsert: s.RoleBinding.Upsert, Delete: s.RoleBinding.Delete,
-		Check: b.checkRoleBindingGrant(roles),
+		Check: refsFor(b, refcheck.Checker.RoleBinding),
 	}); err != nil {
 		return err
 	}
@@ -291,6 +296,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "PolicyBinding", Docs: pbDocs, Names: b.idx.PolicyBindings, Rows: b.rows.PolicyBindings,
 		To: manifest.ToPolicyBinding, Meta: func(x *policybinding.PolicyBinding) *meta.Metadata { return &x.Meta },
 		Upsert: s.PolicyBinding.Upsert, Delete: s.PolicyBinding.Delete,
+		Check: refsFor(b, refcheck.Checker.PolicyBinding),
 	}); err != nil {
 		return err
 	}
@@ -370,52 +376,15 @@ func (b *builder) policyByID(docs []*manifest.PolicyDTO) (map[string]*policy.Pol
 	return out, nil
 }
 
-// roleByID indexes every Role this run can resolve, stored plus declared.
-func (b *builder) roleByID(docs []*manifest.RoleDTO) (map[string]*role.Role, error) {
-	out := make(map[string]*role.Role, len(b.rows.Roles)+len(docs))
-	for _, r := range b.rows.Roles {
-		out[r.Meta.ID] = r
-	}
-	for _, d := range docs {
-		r, err := manifest.ToRole(*d, b.idx)
-		if err != nil {
-			return nil, fmt.Errorf("apply: Role %q: %w", d.Metadata.Name, err)
-		}
-		r.Meta.ID = b.idx.Roles[d.Metadata.Name]
-		out[r.Meta.ID] = r
-	}
-	return out, nil
-}
-
-// checkHostKeyPolicy is the API's host-key rule in the loader: a key whose
-// tier policy is not host-owned by the key's own host is dropped from the
-// snapshot, so accepting it here would report a clean apply for a key that
-// answers no_keys. A policy this run cannot resolve is left alone.
+// checkHostKeyPolicy runs the API's host-key rule in every load, the boot
+// seed included: a key whose tier policy is not host-owned by its own host
+// drops out of the snapshot. pols covers tier policies the same bundle
+// declares, which plan after host keys.
 func checkHostKeyPolicy(pols map[string]*policy.Policy) func(context.Context, *hostkey.HostKey) error {
-	return func(_ context.Context, k *hostkey.HostKey) error {
-		pol, ok := pols[k.Spec.PolicyID]
-		if !ok {
-			return nil
-		}
-		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != k.Spec.HostID {
-			return fmt.Errorf("policy %q is not host-owned by host %q (owner=%s/%s)",
-				pol.Meta.Name, k.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
-		}
-		return nil
-	}
-}
-
-// checkRoleBindingGrant applies the API's escalation rule to a declared
-// binding: the caller must already hold every permission the bound role
-// grants at the binding's scope.
-func (b *builder) checkRoleBindingGrant(roles map[string]*role.Role) func(context.Context, *rolebinding.RoleBinding) error {
-	return func(ctx context.Context, rb *rolebinding.RoleBinding) error {
-		r, ok := roles[rb.Spec.RoleID]
-		if !ok {
-			return nil
-		}
-		return authz.CheckGrant(ctx, b.opts.Authz, r, rb.Spec.Scope)
-	}
+	c := refcheck.Checker{Rows: refcheck.Lookup{
+		Policy: func(_ context.Context, id string) *policy.Policy { return pols[id] },
+	}}
+	return c.HostKey
 }
 
 // kindWiring is the per-kind glue planKind needs: the documents, the name→id
@@ -498,7 +467,17 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 				if err := k.Check(ctx, obj); err != nil {
 					return &InvalidError{Kind: k.Kind, Name: name, Err: err}
 				}
+				// The check re-derives owners that mirror a spec field; a
+				// document must not move a row into another scope that way.
+				if found && !b.admin && m.Owner != k.Meta(prev).Owner {
+					return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("owner is derived from the spec and cannot move from %s/%s", k.Meta(prev).Owner.Kind, k.Meta(prev).Owner.ID)}
+				}
+				e.owner = m.Owner
 			}
+			if b.declared == nil {
+				b.declared = map[string]any{}
+			}
+			b.declared[m.ID] = obj
 			if err := b.governs(settings.OpEdit, route.Singular, e.owner); err != nil {
 				return &GovernanceError{Kind: k.Kind, Name: name, Err: err}
 			}

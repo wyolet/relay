@@ -21,7 +21,6 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
@@ -38,6 +37,7 @@ import (
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
@@ -458,38 +458,64 @@ func registerKind[T any](
 	})
 }
 
-// stampOwnerID fills Owner.ID from the acting user on user-owned rows so
-// ownership is recorded with an identity to key on. Admin-token callers
-// carry no UserID: their rows keep an empty owner id and behave as
-// operator/shared rows. A client-supplied owner.id must be truthful — only
-// the break-glass admin token may set someone else's.
-func stampOwnerID(ctx context.Context, o *meta.Owner) error {
-	if o.Kind != meta.OwnerUser {
-		return nil
-	}
-	a := actor.From(ctx)
-	if a == nil {
-		return nil
-	}
-	switch {
-	case o.ID == "":
-		o.ID = a.UserID
-	case o.ID == a.UserID || a.AdminToken:
-	default:
-		return errors.New("owner.id must be empty or match the calling user")
-	}
-	return nil
+func stampOwnerID(ctx context.Context, o *meta.Owner) error { return refcheck.StampOwnerID(ctx, o) }
+
+func visibleTo(ctx context.Context, a authz.Authorizer, kind, id string, owner meta.Owner) bool {
+	return refcheck.Visible(ctx, a, kind, id, owner)
 }
 
-// visibleTo reports whether the actor in ctx may see the identified row.
-// True whenever the configured Authorizer doesn't scope reads (the
-// single-user default).
-func visibleTo(ctx context.Context, a authz.Authorizer, kind, id string, owner meta.Owner) bool {
-	s, ok := a.(authz.Scoper)
-	if !ok {
-		return true
+// refs is the shared cross-row rule set, reading referenced rows from the
+// stores. A store that is not wired skips the checks needing it.
+func refs(d Deps) refcheck.Checker {
+	c := refcheck.Checker{Authz: d.Authz}
+	if d.Users != nil {
+		c.Rows.MissingUsers = d.Users.MissingIDs
 	}
-	return s.Visible(ctx, kind, id, owner)
+	s := d.Stores
+	if s == nil {
+		return c
+	}
+	if s.Policy != nil {
+		c.Rows.Policy = getOrNil(s.Policy.Get)
+	}
+	if s.RateLimit != nil {
+		c.Rows.RateLimit = getOrNil(s.RateLimit.Get)
+	}
+	if s.HostKey != nil {
+		c.Rows.HostKey = getOrNil(s.HostKey.Get)
+	}
+	if s.Project != nil {
+		c.Rows.Project = getOrNil(s.Project.Get)
+	}
+	if s.Team != nil {
+		c.Rows.Team = getOrNil(s.Team.Get)
+	}
+	if s.Role != nil {
+		c.Rows.Role = getOrNil(s.Role.Get)
+	}
+	if s.ServiceAccount != nil {
+		c.Rows.ServiceAccount = getOrNil(s.ServiceAccount.Get)
+	}
+	return c
+}
+
+func getOrNil[T any](get func(context.Context, string) (*T, error)) func(context.Context, string) *T {
+	return func(ctx context.Context, id string) *T {
+		v, err := get(ctx, id)
+		if err != nil {
+			return nil
+		}
+		return v
+	}
+}
+
+// refErr renders a refcheck refusal as the HTTP error it carries.
+func refErr(err error) error {
+	var re *refcheck.Error
+	if errors.As(err, &re) {
+		return huma.NewError(re.Status, re.Msg)
+	}
+	return err
 }
 
 // slugTakenFn returns the existence predicate slug.Unique needs to mint a
@@ -514,6 +540,7 @@ func slugTakenFn[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) fu
 // chosen status; bare errors default to 403, matching the original
 // "guard rejects = forbidden" contract.
 func mapGuardErr(err error) error {
+	err = refErr(err)
 	var se huma.StatusError
 	if errors.As(err, &se) {
 		return err
@@ -566,20 +593,7 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 			(incoming.Spec.ValueFrom.Kind == hostkey.ValueKindStored || incoming.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth) {
 			return fmt.Errorf("value cannot be set on update — use POST /host-keys/by-id/{id}/rotate to rotate the credential")
 		}
-		// Cross-entity invariant: policy must be host-owned by the
-		// hostkey's HostID. Per-row Validate() can't see other stores.
-		if d.Stores == nil || d.Stores.Policy == nil {
-			return nil
-		}
-		pol, err := d.Stores.Policy.Get(ctx, incoming.Spec.PolicyID)
-		if err != nil || pol == nil {
-			return fmt.Errorf("policy %q does not exist", incoming.Spec.PolicyID)
-		}
-		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != incoming.Spec.HostID {
-			return fmt.Errorf("policy %q is not host-owned by host %q (owner=%s/%s)",
-				pol.Meta.Name, incoming.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
-		}
-		return nil
+		return refs(d).HostKey(ctx, incoming)
 	}
 }
 
@@ -594,229 +608,47 @@ func guardKeyPolicy(d Deps) mutationGuard[key.Key] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner)
+		return refs(d).PolicyRef(ctx, incoming.Spec.PolicyID, incoming.Meta.Owner)
 	}
 }
 
-// guardServiceAccount re-derives the account's owner from spec.projectId
-// on every write (spec is the source of truth, owner mirrors it) and
-// rejects a project or policy the caller may not see.
 func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 	return func(ctx context.Context, action string, _, incoming *serviceaccount.ServiceAccount) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		incoming.StampOwner()
-		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
-			return err
-		}
-		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner)
+		return refs(d).ServiceAccount(ctx, incoming)
 	}
 }
 
-// checkProjectRefVisible rejects a row whose project doesn't exist (400) or
-// isn't visible to the caller (404 — a project the caller may not see must
-// not be confirmed to exist).
-func checkProjectRefVisible(ctx context.Context, d Deps, projectID string) error {
-	if d.Stores == nil || d.Stores.Project == nil {
-		return nil
-	}
-	p, err := d.Stores.Project.Get(ctx, projectID)
-	if err != nil || p == nil {
-		return huma.Error400BadRequest(fmt.Sprintf("project %q does not exist", projectID))
-	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok {
-		return nil
-	}
-	if !s.Visible(ctx, "project", p.Meta.ID, p.Meta.Owner) {
-		return errRefNotVisible("project", projectID)
-	}
-	return nil
-}
-
-// guardGroupMembers rejects a member id that is not a user. Membership is
-// what a role binding resolves through, so a typo'd id would silently
-// grant nothing.
 func guardGroupMembers(d Deps) mutationGuard[group.Group] {
 	return func(ctx context.Context, action string, _, incoming *group.Group) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		if d.Users == nil {
-			return nil
-		}
-		missing, err := d.Users.MissingIDs(ctx, incoming.Spec.MemberIDs)
-		if err != nil {
-			return huma.Error500InternalServerError(err.Error())
-		}
-		if len(missing) > 0 {
-			return huma.Error400BadRequest(fmt.Sprintf("user %q does not exist", missing[0]))
-		}
-		return nil
+		return refs(d).Group(ctx, incoming)
 	}
 }
 
-// guardProject re-derives the project's owner from spec.teamId on every
-// write (spec is the source of truth, owner mirrors it) and rejects a team
-// the caller may not see.
 func guardProject(d Deps) mutationGuard[project.Project] {
 	return func(ctx context.Context, action string, _, incoming *project.Project) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		incoming.StampOwner()
-		return checkTeamRefVisible(ctx, d, incoming.Spec.TeamID)
+		return refs(d).Project(ctx, incoming)
 	}
 }
 
-// checkTeamRefVisible rejects a project whose team doesn't exist (400) or
-// isn't visible to the caller (404 — a team the caller may not see must
-// not be confirmed to exist).
-func checkTeamRefVisible(ctx context.Context, d Deps, teamID string) error {
-	if d.Stores == nil || d.Stores.Team == nil {
-		return nil
-	}
-	t, err := d.Stores.Team.Get(ctx, teamID)
-	if err != nil || t == nil {
-		return huma.Error400BadRequest(fmt.Sprintf("team %q does not exist", teamID))
-	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok {
-		return nil
-	}
-	if !s.Visible(ctx, "team", t.Meta.ID, t.Meta.Owner) {
-		return errRefNotVisible("team", teamID)
-	}
-	return nil
-}
-
-// checkPolicyRefVisible rejects a policy the caller may not see, and a
-// project-owned policy referenced from a personal (user-owned) row unless
-// the caller may create keys in that project. A project's upstream
-// credentials must stay inside the project's attribution and limits; a
-// member of the project is inside them, and their personal key then carries
-// the project (see buildPrincipal on the data plane).
 func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string, refOwner meta.Owner) error {
-	if policyID == "" {
-		return nil
-	}
-	if d.Stores == nil || d.Stores.Policy == nil {
-		return nil
-	}
-	p, err := d.Stores.Policy.Get(ctx, policyID)
-	if err != nil || p == nil {
-		return huma.Error400BadRequest(fmt.Sprintf("policy %q does not exist", policyID))
-	}
-	if s, ok := d.Authz.(authz.Scoper); ok && !s.Visible(ctx, "policy", p.Meta.ID, p.Meta.Owner) {
-		return errRefNotVisible("policy", policyID)
-	}
-	// A host-owned policy is a tier definition — the menu an upstream
-	// publishes, carrying rules and no inbound grants. Binding one would give
-	// a caller a policy with no host keys behind it.
-	if p.Meta.Owner.Kind == meta.OwnerHost {
-		return huma.Error400BadRequest(fmt.Sprintf(
-			"policy %q is a host tier policy and cannot be bound", p.Meta.Name))
-	}
-	if refOwner.Kind == meta.OwnerUser && p.Meta.Owner.Kind == meta.OwnerProject {
-		owner := p.Meta.Owner
-		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &owner}); err != nil {
-			return huma.Error400BadRequest("personal rows cannot reference project resources")
-		}
-	}
-	return checkSharedOwner("policy", p.Meta.Name, p.Meta.Owner, refOwner)
+	return refErr(refs(d).PolicyRef(ctx, policyID, refOwner))
 }
 
-// checkRateLimitRefVisible applies the policy-ref rule to a RateLimit named
-// by a policy: it must exist, be visible, and belong to the referrer's own
-// scope or be shared.
 func checkRateLimitRefVisible(ctx context.Context, d Deps, rateLimitID string, refOwner meta.Owner) error {
-	if rateLimitID == "" {
-		return nil
-	}
-	if d.Stores == nil || d.Stores.RateLimit == nil {
-		return nil
-	}
-	rl, err := d.Stores.RateLimit.Get(ctx, rateLimitID)
-	if err != nil || rl == nil {
-		return huma.Error400BadRequest(fmt.Sprintf("rate-limit %q does not exist", rateLimitID))
-	}
-	if s, ok := d.Authz.(authz.Scoper); ok && !s.Visible(ctx, "rate-limit", rl.Meta.ID, rl.Meta.Owner) {
-		return errRefNotVisible("rate-limit", rateLimitID)
-	}
-	// The rule the policy ref already follows: a personal row must not meter
-	// itself against a project's limits (D51/D70).
-	if refOwner.Kind == meta.OwnerUser && refOwner.ID != "" && rl.Meta.Owner.Kind == meta.OwnerProject {
-		owner := rl.Meta.Owner
-		if err := d.Authz.Authorize(ctx, "keys.create", authz.Resource{Kind: "key", Owner: &owner}); err != nil {
-			return huma.Error400BadRequest("personal rows cannot reference project resources")
-		}
-	}
-	return checkSharedOwner("rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
+	return refErr(refs(d).RateLimitRef(ctx, rateLimitID, refOwner))
 }
 
-// checkSharedOwner enforces D74 for a project-owned referrer: the row it
-// names must live in the same project or be system-owned (shared). Visible
-// is not enough — a `get` grant on another tenant's row must not become
-// inference through that tenant's credentials and limits. Referrers owned by
-// the catalog tiers (system, host, provider) are unconstrained.
-func checkSharedOwner(kind, name string, owner, refOwner meta.Owner) error {
-	if refOwner.Kind != meta.OwnerProject {
-		return nil
-	}
-	switch owner.Kind {
-	case meta.OwnerSystem:
-		return nil
-	case meta.OwnerUser:
-		// A user owner with no id names nobody: an operator/shared row (the
-		// admin token carries no user id), which every scope may reference.
-		if owner.ID == "" {
-			return nil
-		}
-	case meta.OwnerProject:
-		if owner.ID == refOwner.ID {
-			return nil
-		}
-	}
-	return huma.Error400BadRequest(fmt.Sprintf(
-		"%s %q belongs to another scope (%s) and cannot be referenced from this project", kind, name, owner.Kind))
-}
-
-// errRefNotVisible is the shared answer for a referenced row the caller may
-// not see: 404, because confirming its existence is itself the leak. A row
-// that exists for nobody answers 400 at each call site — an id naming
-// nothing is a bad request, not a hidden row.
-func errRefNotVisible(kind, id string) error {
-	return huma.Error404NotFound(fmt.Sprintf("%s %q not found", kind, id))
-}
-
-// checkHostKeyRefsVisible rejects host-key ids the caller may not see — a
-// policy referencing a foreign host-key would spend someone else's upstream
-// credential. Missing rows pass through (host-key existence is deliberately
-// not checked at policy write time; the inference path handles it).
 func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string, refOwner meta.Owner) error {
-	if len(keyIDs) == 0 {
-		return nil
-	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok || d.Stores == nil || d.Stores.HostKey == nil {
-		return nil
-	}
-	for _, id := range keyIDs {
-		k, err := d.Stores.HostKey.Get(ctx, id)
-		if err != nil || k == nil {
-			continue
-		}
-		if !s.Visible(ctx, "host-key", k.Meta.ID, k.Meta.Owner) {
-			return errRefNotVisible("host-key", id)
-		}
-		// Same rule as checkPolicyRefVisible: a personal policy must not
-		// spend a project's upstream credential (D51).
-		if refOwner.Kind == meta.OwnerUser && k.Meta.Owner.Kind == meta.OwnerProject {
-			return huma.Error400BadRequest("personal rows cannot reference project resources")
-		}
-	}
-	return nil
+	return refErr(refs(d).HostKeyRefs(ctx, keyIDs, refOwner))
 }
 
 // enrichHostStatus returns an enrichFn that overlays observed runtime health
@@ -1073,109 +905,22 @@ func guardRole(d Deps) mutationGuard[role.Role] {
 	}
 }
 
-// guardRoleBinding re-derives the binding's owner from spec.scope (spec is
-// the source of truth, owner mirrors it) and rejects a role, a scope target,
-// or an id-bearing subject the caller may not see. Group subjects are
-// unchecked: an IdP group has no row.
 func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 	return func(ctx context.Context, action string, _, incoming *rolebinding.RoleBinding) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		incoming.StampOwner()
-		r, err := checkRoleRefVisible(ctx, d, incoming.Spec.RoleID)
-		if err != nil {
-			return err
-		}
-		// Binding a role hands out every permission in it, so the binder
-		// must already hold each one at the scope being bound.
-		if err := authz.CheckGrant(ctx, d.Authz, r, incoming.Spec.Scope); err != nil {
-			return huma.Error403Forbidden(err.Error())
-		}
-		switch incoming.Spec.Scope.Kind {
-		case meta.OwnerTeam:
-			if err := checkTeamRefVisible(ctx, d, incoming.Spec.Scope.ID); err != nil {
-				return err
-			}
-		case meta.OwnerProject:
-			if err := checkProjectRefVisible(ctx, d, incoming.Spec.Scope.ID); err != nil {
-				return err
-			}
-		}
-		return checkSubjectsExist(ctx, d, incoming.Spec.Subjects)
+		return refs(d).RoleBinding(ctx, incoming)
 	}
 }
 
-// guardPolicyBinding re-derives the binding's owner from spec.projectId,
-// rejects a project, policy, or subject the caller may not see, and fills in
-// the default priority so the row reads back with the value it orders by.
 func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 	return func(ctx context.Context, action string, _, incoming *policybinding.PolicyBinding) error {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		incoming.StampOwner()
-		// Absent means the default; an explicit 0 is a real priority.
-		if incoming.Spec.Priority == nil {
-			def := policybinding.DefaultPriority
-			incoming.Spec.Priority = &def
-		}
-		if err := checkProjectRefVisible(ctx, d, incoming.Spec.ProjectID); err != nil {
-			return err
-		}
-		if err := checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID, incoming.Meta.Owner); err != nil {
-			return err
-		}
-		return checkSubjectsExist(ctx, d, incoming.Spec.Subjects)
+		return refs(d).PolicyBinding(ctx, incoming)
 	}
-}
-
-// checkRoleRefVisible rejects a binding whose role does not exist (400) or
-// is not visible to the caller (404), and returns the role so the caller can
-// check what binding it would grant.
-func checkRoleRefVisible(ctx context.Context, d Deps, roleID string) (*role.Role, error) {
-	if d.Stores == nil || d.Stores.Role == nil {
-		return nil, nil
-	}
-	r, err := d.Stores.Role.Get(ctx, roleID)
-	if err != nil || r == nil {
-		return nil, huma.Error400BadRequest(fmt.Sprintf("role %q does not exist", roleID))
-	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok {
-		return r, nil
-	}
-	if !s.Visible(ctx, "role", r.Meta.ID, r.Meta.Owner) {
-		return nil, errRefNotVisible("role", roleID)
-	}
-	return r, nil
-}
-
-// checkSubjectsExist rejects an id-bearing subject that names no row. Group
-// subjects carry a name an IdP may supply, so they are never checked.
-func checkSubjectsExist(ctx context.Context, d Deps, subjects []rolebinding.Subject) error {
-	for i := range subjects {
-		sub := &subjects[i]
-		switch sub.Kind {
-		case rolebinding.SubjectUser:
-			if d.Users == nil {
-				continue
-			}
-			u, err := d.Users.Get(ctx, sub.ID)
-			if err != nil || u == nil {
-				return huma.Error400BadRequest(fmt.Sprintf("user %q does not exist", sub.ID))
-			}
-		case rolebinding.SubjectServiceAccount:
-			if d.Stores == nil || d.Stores.ServiceAccount == nil {
-				continue
-			}
-			sa, err := d.Stores.ServiceAccount.Get(ctx, sub.ID)
-			if err != nil || sa == nil {
-				return huma.Error400BadRequest(fmt.Sprintf("service account %q does not exist", sub.ID))
-			}
-		}
-	}
-	return nil
 }
 
 // registerCRUD wires the eight kinds onto api. metaOf closures + slug
