@@ -23,13 +23,20 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/team"
+	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
@@ -178,6 +185,100 @@ func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
 	}
 	if _, err := routing.New(u.cat, routing.RequirePolicy()).Resolve(req); !errors.Is(err, routing.ErrPolicyless) {
 		t.Fatalf("rbac mode: err = %v, want the policy-less refusal", err)
+	}
+}
+
+// The older binary reads a key's policy from spec.policyId only. A key that
+// resolved its policy through its service account or a policy binding must
+// carry that same policy after a rollback, not turn policy-less.
+func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
+	dsn := scratchDB(t, "relay_rollback_policy")
+	st, err := storagemod.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: st.Pool()})
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	tm := &team.Team{Meta: meta.Metadata{ID: ids.New(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	mustUpsert(t, stores.Team.Upsert(ctx, tm), "team")
+	mkProject := func(name string) *project.Project {
+		p := &project.Project{Meta: meta.Metadata{ID: ids.New(), Name: name}, Spec: project.Spec{TeamID: tm.Meta.ID}}
+		p.StampOwner()
+		mustUpsert(t, stores.Project.Upsert(ctx, p), "project")
+		return p
+	}
+	bound, unbound := mkProject("ml-search"), mkProject("sandbox")
+	mkPolicy := func(name string, p *project.Project) *policy.Policy {
+		pol := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: name, Owner: meta.Owner{Kind: meta.OwnerProject, ID: p.Meta.ID}}}
+		mustUpsert(t, stores.Policy.Upsert(ctx, pol), "policy")
+		return pol
+	}
+	direct, everyAccount, override := mkPolicy("direct", bound), mkPolicy("every-account", bound), mkPolicy("override", bound)
+	mkAccount := func(name string, p *project.Project, policyID string) *serviceaccount.ServiceAccount {
+		sa := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: ids.New(), Name: name}, Spec: serviceaccount.Spec{ProjectID: p.Meta.ID, PolicyID: policyID}}
+		sa.StampOwner()
+		mustUpsert(t, stores.ServiceAccount.Upsert(ctx, sa), "service account")
+		return sa
+	}
+	indexer := mkAccount("indexer", bound, "")
+	reporter := mkAccount("reporter", bound, override.Meta.ID)
+	tester := mkAccount("tester", unbound, "")
+	mkBinding := func(name string, pol *policy.Policy, priority int, sub rolebinding.Subject) {
+		b := &policybinding.PolicyBinding{
+			Meta: meta.Metadata{ID: ids.New(), Name: name},
+			Spec: policybinding.Spec{ProjectID: bound.Meta.ID, PolicyID: pol.Meta.ID, Priority: &priority, Subjects: []rolebinding.Subject{sub}},
+		}
+		b.StampOwner()
+		mustUpsert(t, stores.PolicyBinding.Upsert(ctx, b), "policy binding")
+	}
+	// Both bindings match the indexer; the lower priority wins, though it
+	// names the account only through the group every account is in.
+	mkBinding("indexer-direct", direct, 100, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: indexer.Meta.ID})
+	mkBinding("all-accounts", everyAccount, 10, rolebinding.Subject{Kind: rolebinding.SubjectGroup, Name: "system:serviceaccounts"})
+
+	keys := map[string]*serviceaccount.ServiceAccount{"rk_indexer": indexer, "rk_reporter": reporter, "rk_tester": tester}
+	for plaintext, sa := range keys {
+		k := &key.Key{
+			Meta: meta.Metadata{ID: ids.New(), Name: sa.Meta.Name + "-key", Owner: meta.Owner{Kind: meta.OwnerProject, ID: sa.Spec.ProjectID}},
+			Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sa.Meta.ID}, KeyHash: sha256Hex(plaintext)},
+		}
+		mustUpsert(t, stores.Key.Upsert(ctx, k), "key")
+	}
+
+	// What the data plane resolves today is what the rollback must write.
+	if _, err := cat.Hydrate(ctx, stores, appcatalog.BootstrapOptions{Pool: st.Pool()}); err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	want := map[string]string{}
+	for plaintext, sa := range keys {
+		_, p := authenticate(t, cat, plaintext)
+		if p != nil && p.Policy != nil {
+			want[sa.Meta.Name+"-key"] = p.Policy.Meta.ID
+		} else {
+			want[sa.Meta.Name+"-key"] = ""
+		}
+	}
+	if want["indexer-key"] != everyAccount.Meta.ID || want["reporter-key"] != override.Meta.ID || want["tester-key"] != "" {
+		t.Fatalf("fixture resolves %v, want indexer→every-account, reporter→override, tester→none", want)
+	}
+
+	if err := storagemod.MigrateTo(dsn, 26); err != nil {
+		t.Fatalf("migrate down to 26: %v", err)
+	}
+	for name, policyID := range want {
+		var got string
+		if err := st.Pool().QueryRow(ctx,
+			`SELECT coalesce(spec->>'policyId', '') FROM relay_keys WHERE name = $1`, name).Scan(&got); err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if got != policyID {
+			t.Errorf("%s: spec.policyId = %q after rollback, want %q", name, got, policyID)
+		}
 	}
 }
 
