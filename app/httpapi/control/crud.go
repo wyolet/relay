@@ -310,6 +310,11 @@ func registerKind[T any](
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
 				m.Owner.Kind = defaultOwnerKind
 			}
+			// Roles stay authorable as personal rows (license-gated); a team or
+			// group only ever names a shared scope.
+			if (singular == "team" || singular == "group") && m.Owner.Kind != meta.OwnerSystem {
+				return nil, huma.Error400BadRequest(singular + " owner.kind must be system; omit owner on create")
+			}
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
