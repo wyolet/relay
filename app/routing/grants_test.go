@@ -18,6 +18,9 @@ import (
 // grantsFixture builds one model bound to a single host. noAuth makes the
 // host keyless; withKey attaches a hostkey to the policy. grants are the
 // policy's modelref grants (empty = implicit wildcard).
+// anyMode is a Resolver with default options; these grants hold in every mode.
+var anyMode *routing.Resolver
+
 func grantsFixture(t *testing.T, noAuth, withKey bool, grants ...string) (*catalog.Snapshot, *policy.Policy, *model.Model) {
 	t.Helper()
 
@@ -69,21 +72,21 @@ func grantsFixture(t *testing.T, noAuth, withKey bool, grants ...string) (*catal
 // so an explicit grant is enough to make the model listable.
 func TestPolicyAllows_NoAuthHostNeedsNoKey(t *testing.T) {
 	snap, pol, m := grantsFixture(t, true, false, "prov/the-model")
-	if !routing.PolicyAllows(snap, pol, m, "") {
+	if !anyMode.PolicyAllows(snap, pol, m, "") {
 		t.Fatal("explicitly granted model on a NoAuth host must be allowed without a hostkey")
 	}
 }
 
 func TestPolicyAllows_KeyedHostWithoutAKeyIsDenied(t *testing.T) {
 	snap, pol, m := grantsFixture(t, false, false, "prov/the-model")
-	if routing.PolicyAllows(snap, pol, m, "") {
+	if anyMode.PolicyAllows(snap, pol, m, "") {
 		t.Fatal("a host requiring auth must not be listable without a hostkey on the policy")
 	}
 }
 
 func TestPolicyAllows_KeyedHostWithAKeyIsAllowed(t *testing.T) {
 	snap, pol, m := grantsFixture(t, false, true, "prov/the-model")
-	if !routing.PolicyAllows(snap, pol, m, "") {
+	if !anyMode.PolicyAllows(snap, pol, m, "") {
 		t.Fatal("granted model on a keyed host with a key must be allowed")
 	}
 }
@@ -93,7 +96,7 @@ func TestPolicyAllows_KeyedHostWithAKeyIsAllowed(t *testing.T) {
 func TestPolicyAllowsBinding_WildcardDoesNotReachNoAuthHost(t *testing.T) {
 	snap, pol, m := grantsFixture(t, true, false)
 	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if routing.PolicyAllowsBinding(snap, pol, m, hb, "") {
+		if anyMode.PolicyAllowsBinding(snap, pol, m, hb, "") {
 			t.Fatal("an implicit-wildcard policy must not reach an ungranted NoAuth host")
 		}
 	}
@@ -102,10 +105,10 @@ func TestPolicyAllowsBinding_WildcardDoesNotReachNoAuthHost(t *testing.T) {
 func TestPolicyAllowsBinding_NilArgs(t *testing.T) {
 	snap, pol, m := grantsFixture(t, true, false, "prov/the-model")
 	hb := snap.BindingsForModel(m.Meta.ID)[0]
-	if routing.PolicyAllowsBinding(nil, pol, m, hb, "") ||
-		routing.PolicyAllowsBinding(snap, nil, m, hb, "") ||
-		routing.PolicyAllowsBinding(snap, pol, nil, hb, "") ||
-		routing.PolicyAllowsBinding(snap, pol, m, nil, "") {
+	if anyMode.PolicyAllowsBinding(nil, pol, m, hb, "") ||
+		anyMode.PolicyAllowsBinding(snap, nil, m, hb, "") ||
+		anyMode.PolicyAllowsBinding(snap, pol, nil, hb, "") ||
+		anyMode.PolicyAllowsBinding(snap, pol, m, nil, "") {
 		t.Fatal("nil arguments must deny")
 	}
 }

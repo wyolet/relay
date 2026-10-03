@@ -44,10 +44,13 @@ func (policylessOn) Setting(string) (any, bool) {
 	return &settings.Inference{AllowMissingPolicy: true}, true
 }
 
-// Another user's personal host must never take a share of a grant written
-// against the shared catalog: the grant names the model, not whose endpoint
-// serves it.
-func TestPersonalHostNotRoutableByOtherUsers(t *testing.T) {
+// anyMode is a Resolver with default options, for checks every mode shares.
+var anyMode *Resolver
+
+// Under RBAC another user's personal host must never take a share of a grant
+// written against the shared catalog: the grant names the model, not whose
+// endpoint serves it.
+func TestPersonalHostNotRoutableByOtherUsersUnderRBAC(t *testing.T) {
 	userA, userB := meta.NewID(), meta.NewID()
 	f, personal, snap := personalHostFixture(userB)
 	pol := &policy.Policy{
@@ -63,6 +66,7 @@ func TestPersonalHostNotRoutableByOtherUsers(t *testing.T) {
 		snap.AllBindings(),
 	)
 	r := &Resolver{cfg: policylessOn{}}
+	PersonalRowsOwnerOnly()(r)
 	for _, caller := range []string{userA, ""} {
 		plan, err := r.Resolve(Request{ModelName: "m1", Policy: pol, UserID: caller, Snapshot: snap})
 		if err != nil {
@@ -71,7 +75,7 @@ func TestPersonalHostNotRoutableByOtherUsers(t *testing.T) {
 		if plan.Host.Meta.ID == personal.Meta.ID {
 			t.Fatalf("caller %q routed to user B's personal host", caller)
 		}
-		if !PolicyAllowsBinding(snap, pol, f.model, snap.AllBindings()[0], caller) {
+		if !r.PolicyAllowsBinding(snap, pol, f.model, snap.AllBindings()[0], caller) {
 			continue
 		}
 		t.Fatalf("caller %q: user B's binding is listed as granted", caller)
@@ -83,23 +87,46 @@ func TestPersonalHostNotRoutableByOtherUsers(t *testing.T) {
 	if plan.Host.Meta.ID == personal.Meta.ID {
 		t.Fatal("policy-less caller A routed to user B's personal host")
 	}
-	if PolicylessAllowsBinding(snap, f.model, snap.AllBindings()[0], userA) {
+	if r.PolicylessAllowsBinding(snap, f.model, snap.AllBindings()[0], userA) {
 		t.Fatal("user B's binding is listed to policy-less caller A")
 	}
 }
 
-// The owner still reaches their own endpoint.
-func TestPersonalHostRoutableByItsOwner(t *testing.T) {
+// Under RBAC the owner still reaches their own endpoint.
+func TestPersonalHostRoutableByItsOwnerUnderRBAC(t *testing.T) {
 	userB := meta.NewID()
 	f, personal, snap := personalHostFixture(userB)
-	plan, err := (&Resolver{cfg: policylessOn{}}).Resolve(Request{ModelName: "m1", UserID: userB, Snapshot: snap})
+	r := &Resolver{cfg: policylessOn{}}
+	PersonalRowsOwnerOnly()(r)
+	plan, err := r.Resolve(Request{ModelName: "m1", UserID: userB, Snapshot: snap})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if plan.Host.Meta.ID != personal.Meta.ID {
 		t.Fatalf("owner routed to %q, want their own host", plan.Host.Meta.Name)
 	}
-	if !PolicylessAllows(snap, f.model, "", userB) {
+	if !r.PolicylessAllows(snap, f.model, "", userB) {
 		t.Fatal("owner's model not listed")
+	}
+}
+
+// Under single-user authorization every caller is the operator, so the
+// operator's personal host stays reachable by any credential — including a
+// service-account key, which carries no user id.
+func TestPersonalHostSharedInSingleUserMode(t *testing.T) {
+	userB := meta.NewID()
+	f, personal, snap := personalHostFixture(userB)
+	r := &Resolver{cfg: policylessOn{}}
+	for _, caller := range []string{meta.NewID(), ""} {
+		plan, err := r.Resolve(Request{ModelName: "m1", UserID: caller, Snapshot: snap})
+		if err != nil {
+			t.Fatalf("caller %q: Resolve: %v", caller, err)
+		}
+		if plan.Host.Meta.ID != personal.Meta.ID {
+			t.Fatalf("caller %q routed to %q, want the shared personal host (its binding sorts first)", caller, plan.Host.Meta.Name)
+		}
+		if !r.PolicylessAllowsBinding(snap, f.model, snap.AllBindings()[0], caller) {
+			t.Fatalf("caller %q: personal binding not listed", caller)
+		}
 	}
 }

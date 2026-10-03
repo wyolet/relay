@@ -5,6 +5,9 @@
 // (provider, model, host) triples, plus the key + tier gate) so the two
 // stay in sync. PolicyAllows reduces it to "is there *any* enabled binding
 // that passes?"
+//
+// They are Resolver methods so listings obey the same options resolution
+// does; every one is nil-safe (a nil Resolver applies the defaults).
 package routing
 
 import (
@@ -19,12 +22,12 @@ import (
 // enabled bindings. Used to enumerate accessible models for inventory
 // endpoints. Single-shot; not optimised for tight loops. userID is the
 // calling user, which decides whether personal rows exist for the caller.
-func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, userID string) bool {
+func (r *Resolver) PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, userID string) bool {
 	if pol == nil || m == nil || !m.IsEnabled() || !pol.IsEnabled() {
 		return false
 	}
 	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if hb.IsEnabled() && PolicyAllowsBinding(snap, pol, m, hb, userID) {
+		if hb.IsEnabled() && r.PolicyAllowsBinding(snap, pol, m, hb, userID) {
 			return true
 		}
 	}
@@ -35,12 +38,12 @@ func PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model,
 // hb: first the grant check, then the same key + tier gate Resolve applies
 // (a NoAuth host yields the anonymous key), so a listed binding is one the
 // caller can actually reach. Callers filter enabled bindings themselves.
-func PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, hb *binding.Binding, userID string) bool {
+func (r *Resolver) PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, hb *binding.Binding, userID string) bool {
 	if snap == nil || pol == nil || m == nil || hb == nil || !pol.IsEnabled() {
 		return false
 	}
 	h, ok := snap.Host(hb.Spec.HostID)
-	if !ok || !personalRowsVisible(hb, h, userID) {
+	if !ok || !r.personalRowsVisible(hb, h, userID) {
 		return false
 	}
 	var allowed bool
@@ -62,7 +65,7 @@ func PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Policy, m *model
 //
 // Mirrors resolvePolicyless step for step: enabled model, not deprecated,
 // enabled binding, resolvable host, and a key the D73 pool actually yields.
-func PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapters.Name, userID string) bool {
+func (r *Resolver) PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapters.Name, userID string) bool {
 	if m == nil || !m.IsEnabled() || isDeprecated(m) {
 		return false
 	}
@@ -73,7 +76,7 @@ func PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapter
 		if adapter != "" && hb.Spec.Adapter != adapter {
 			continue
 		}
-		if PolicylessAllowsBinding(snap, m, hb, userID) {
+		if r.PolicylessAllowsBinding(snap, m, hb, userID) {
 			return true
 		}
 	}
@@ -83,12 +86,12 @@ func PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapter
 // PolicylessAllowsBinding is the per-binding form of PolicylessAllows: would
 // resolvePolicyless route m over hb for userID. Callers filter enabled
 // bindings themselves.
-func PolicylessAllowsBinding(snap *appcatalog.Snapshot, m *model.Model, hb *binding.Binding, userID string) bool {
+func (r *Resolver) PolicylessAllowsBinding(snap *appcatalog.Snapshot, m *model.Model, hb *binding.Binding, userID string) bool {
 	if snap == nil || m == nil || hb == nil || !m.IsEnabled() || isDeprecated(m) {
 		return false
 	}
 	h, ok := snap.Host(hb.Spec.HostID)
-	if !ok || !personalRowsVisible(hb, h, userID) {
+	if !ok || !r.personalRowsVisible(hb, h, userID) {
 		return false
 	}
 	return len(policylessKeys(snap, m, h, userID)) > 0

@@ -625,10 +625,11 @@ func main() {
 		os.Exit(1)
 	}
 	// RBAC makes a credential's grants the whole access model, so a key whose
-	// policy does not resolve has no access rather than the shared pool's.
+	// policy does not resolve has no access rather than the shared pool's,
+	// and users are separate tenants whose personal hosts serve only them.
 	var routingOpts []routing.Option
 	if cfg.Authz == config.AuthzRBAC {
-		routingOpts = append(routingOpts, routing.RequirePolicy())
+		routingOpts = append(routingOpts, routing.RequirePolicy(), routing.PersonalRowsOwnerOnly())
 	}
 	batchQueue := jobq.New(st.Pool(), batchPayloads, jobq.Options{})
 	batchSvc := batch.NewService(

@@ -106,7 +106,7 @@ func TestResolvePolicyless_KeyPoolScope(t *testing.T) {
 			}
 			// The listing answers the same question, or it advertises models
 			// the flow would refuse.
-			if got := PolicylessAllows(snap, f.model, "", callerID); got != tc.want {
+			if got := anyMode.PolicylessAllows(snap, f.model, "", callerID); got != tc.want {
 				t.Errorf("PolicylessAllows = %v, want %v — the listing and the flow disagree", got, tc.want)
 			}
 		})
@@ -277,7 +277,7 @@ func TestPolicyAllowsMatchesResolve(t *testing.T) {
 			for round := 0; round < 40; round++ {
 				snap, caller, models := randomGrantCatalog(r)
 				for _, m := range models {
-					listed := PolicyAllows(snap, caller, m, "")
+					listed := anyMode.PolicyAllows(snap, caller, m, "")
 					_, err := (&Resolver{}).Resolve(Request{
 						ModelName: m.Spec.Snapshots[0].Name, Policy: caller, Snapshot: snap,
 					})
@@ -305,7 +305,7 @@ func TestPolicylessAllowsMatchesResolvePolicyless(t *testing.T) {
 			for round := 0; round < 40; round++ {
 				snap, _, models := randomGrantCatalog(r)
 				for _, m := range models {
-					listed := PolicylessAllows(snap, m, "", "")
+					listed := anyMode.PolicylessAllows(snap, m, "", "")
 					_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{m}, &m.Spec.Snapshots[0], "", "")
 					if served := err == nil; listed != served {
 						t.Fatalf("round %d, model %q: PolicylessAllows=%v but resolvePolicyless served=%v (err %v)",
@@ -479,7 +479,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 					t.Fatalf("Resolve: %v", err)
 				}
 				// The listing agrees with the flow in every cell.
-				if got, want := PolicyAllows(snap, caller, f.model, ""), tc.wantErr == nil; got != want {
+				if got, want := anyMode.PolicyAllows(snap, caller, f.model, ""), tc.wantErr == nil; got != want {
 					t.Errorf("PolicyAllows = %v, want %v", got, want)
 				}
 			})
@@ -575,10 +575,10 @@ func TestTierGate_MatrixAcrossResolutionAndListing(t *testing.T) {
 			if !tc.grant && !errors.Is(err, ErrNoKeys) {
 				t.Errorf("Resolve err = %v, want ErrNoKeys", err)
 			}
-			if got := PolicyAllows(snap, caller, f.model, ""); got != tc.grant {
+			if got := anyMode.PolicyAllows(snap, caller, f.model, ""); got != tc.grant {
 				t.Errorf("PolicyAllows = %v, want %v", got, tc.grant)
 			}
-			if got := PolicylessAllows(snap, f.model, "", ""); got != tc.grant {
+			if got := anyMode.PolicylessAllows(snap, f.model, "", ""); got != tc.grant {
 				t.Errorf("PolicylessAllows = %v, want %v", got, tc.grant)
 			}
 			_, err = (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
@@ -620,7 +620,7 @@ func TestTierGate_KeyStillServesTheModelItsTierGrants(t *testing.T) {
 	if _, err := (&Resolver{}).Resolve(Request{ModelName: "other", Policy: caller, Snapshot: snap}); err != nil {
 		t.Fatalf("the model the tier does grant is unreachable: %v", err)
 	}
-	if !PolicyAllows(snap, caller, other, "") {
+	if !anyMode.PolicyAllows(snap, caller, other, "") {
 		t.Error("PolicyAllows hides the model the tier grants")
 	}
 }
@@ -743,19 +743,19 @@ func TestPolicyAllows_NilInputs(t *testing.T) {
 		[]*policy.Policy{f.tierA}, nil, []*model.Model{f.model},
 		[]*hostkey.HostKey{f.keyA}, nil, nil, []*binding.Binding{f.bindingA})
 
-	if PolicyAllows(snap, nil, f.model, "") {
+	if anyMode.PolicyAllows(snap, nil, f.model, "") {
 		t.Error("a nil policy grants something")
 	}
-	if PolicyAllows(snap, f.tierA, nil, "") {
+	if anyMode.PolicyAllows(snap, f.tierA, nil, "") {
 		t.Error("a nil model is reachable")
 	}
-	if PolicylessAllows(snap, nil, "", "") {
+	if anyMode.PolicylessAllows(snap, nil, "", "") {
 		t.Error("a nil model is listed policy-less")
 	}
 	off := false
 	disabledModel := *f.model
 	disabledModel.Spec.Enabled = &off
-	if PolicylessAllows(snap, &disabledModel, "", "") {
+	if anyMode.PolicylessAllows(snap, &disabledModel, "", "") {
 		t.Error("a disabled model is listed")
 	}
 }
