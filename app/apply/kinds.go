@@ -201,7 +201,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := planKind(ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
 		Kind: "RateLimit", Docs: rlDocs, Names: b.idx.RateLimits, Rows: b.rows.RateLimits,
 		To: manifest.ToRateLimit, Meta: func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta },
-		Upsert: s.RateLimit.Upsert, Delete: s.RateLimit.Delete,
+		Upsert: s.RateLimit.Upsert, Delete: detachRefsThenDelete(s.Policy, policy.DetachRateLimit, s.RateLimit.Delete),
 	}); err != nil {
 		return err
 	}
@@ -212,7 +212,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := planKind(ctx, b, kindWiring[manifest.HostKeyDTO, hostkey.HostKey]{
 		Kind: "HostKey", Docs: hkDocs, Names: b.idx.HostKeys, Rows: b.rows.HostKeys,
 		To: manifest.ToHostKey, Meta: func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta },
-		Upsert: s.HostKey.Upsert, Delete: s.HostKey.Delete,
+		Upsert: s.HostKey.Upsert, Delete: detachRefsThenDelete(s.Policy, policy.DetachHostKey, s.HostKey.Delete),
 		Check: checkHostKeyPolicy(pols), Keep: keepHostKeySecret,
 	}); err != nil {
 		return err
@@ -390,6 +390,18 @@ func (b *builder) checkPrunedTenancy() error {
 		}
 	}
 	return nil
+}
+
+// detachRefsThenDelete strips the policies' references to a pruned host key
+// or rate limit before deleting it, as the control API's delete does.
+func detachRefsThenDelete(pols policy.Policies, detach func(context.Context, policy.Policies, string) error,
+	del func(context.Context, string) error) func(context.Context, string) error {
+	return func(ctx context.Context, id string) error {
+		if err := detach(ctx, pols, id); err != nil {
+			return err
+		}
+		return del(ctx, id)
+	}
 }
 
 // checkRoleDocs refuses Role documents apply must not write: a name the

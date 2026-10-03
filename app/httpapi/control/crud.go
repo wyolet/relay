@@ -908,40 +908,14 @@ func enrichHostKeyPoliciesAll(d Deps) enrichListFn[hostkey.HostKey] {
 	}
 }
 
-// cascadeHostKeyDetach returns a cascade that strips the deleted HostKey's
-// id from every Policy.Spec.HostKeyIDs that references it. Required because
-// the policy_host_keys join table FK-constrains a HostKey delete; without
-// detachment Postgres rejects with SQLSTATE 23503. Walks the Policy store
-// directly (not the snapshot) so disabled policies are caught too.
+// cascadeHostKeyDetach strips the deleted HostKey from every policy that
+// names it (see policy.DetachHostKey). Shared with apply's prune.
 func cascadeHostKeyDetach(d Deps) cascadeFn[hostkey.HostKey] {
 	return func(ctx context.Context, k *hostkey.HostKey) error {
 		if k == nil || d.Stores == nil || d.Stores.Policy == nil {
 			return nil
 		}
-		pols, err := d.Stores.Policy.List(ctx)
-		if err != nil {
-			return fmt.Errorf("list policies: %w", err)
-		}
-		for _, p := range pols {
-			before := p.Spec.HostKeyIDs
-			filtered := before[:0:0]
-			changed := false
-			for _, id := range before {
-				if id == k.Meta.ID {
-					changed = true
-					continue
-				}
-				filtered = append(filtered, id)
-			}
-			if !changed {
-				continue
-			}
-			p.Spec.HostKeyIDs = filtered
-			if err := d.Stores.Policy.Upsert(ctx, p); err != nil {
-				return fmt.Errorf("detach from policy %q: %w", p.Meta.Name, err)
-			}
-		}
-		return nil
+		return policy.DetachHostKey(ctx, d.Stores.Policy, k.Meta.ID)
 	}
 }
 
@@ -978,48 +952,14 @@ func cascadePolicyDetach(d Deps) cascadeFn[policy.Policy] {
 	}
 }
 
-// cascadeRateLimitDetach strips the deleted RateLimit id from every
-// policy's Spec.RLBindings before the row is removed. The flat
-// policies.rate_limit_id column is already handled by PG (FK SET NULL),
-// but RLBindings lives in the spec JSONB and PG can't touch it.
-// Without this, a deleted RL would leave dangling binding ids that the
-// catalog snapshot would silently drop on reload — workable, but the
-// data plane sees a stale view until reload runs.
+// cascadeRateLimitDetach strips the deleted RateLimit from every policy's
+// RLBindings (see policy.DetachRateLimit). Shared with apply's prune.
 func cascadeRateLimitDetach(d Deps) cascadeFn[ratelimit.RateLimit] {
 	return func(ctx context.Context, r *ratelimit.RateLimit) error {
 		if r == nil || d.Stores == nil || d.Stores.Policy == nil {
 			return nil
 		}
-		pols, err := d.Stores.Policy.List(ctx)
-		if err != nil {
-			return fmt.Errorf("list policies: %w", err)
-		}
-		for _, p := range pols {
-			if len(p.Spec.RLBindings) == 0 {
-				continue
-			}
-			filtered := make([]policy.RLBinding, 0, len(p.Spec.RLBindings))
-			changed := false
-			for _, b := range p.Spec.RLBindings {
-				if b.RateLimitID == r.Meta.ID {
-					changed = true
-					continue
-				}
-				filtered = append(filtered, b)
-			}
-			if !changed {
-				continue
-			}
-			if len(filtered) == 0 {
-				p.Spec.RLBindings = nil
-			} else {
-				p.Spec.RLBindings = filtered
-			}
-			if err := d.Stores.Policy.Upsert(ctx, p); err != nil {
-				return fmt.Errorf("detach from policy %q: %w", p.Meta.Name, err)
-			}
-		}
-		return nil
+		return policy.DetachRateLimit(ctx, d.Stores.Policy, r.Meta.ID)
 	}
 }
 
