@@ -67,6 +67,18 @@ type Caller struct {
 	KeyHash string
 	// PolicyID is the already-resolved policy, not the key's raw field.
 	PolicyID string
+	// TokenVer and TokenExp are the token's version and expiry claims; zero
+	// for a key.
+	TokenVer int
+	TokenExp int64
+}
+
+// TokenClaims are the submitting token's revocation-relevant claims, carried
+// on each item so execution re-checks them. Zero for a key.
+type TokenClaims struct {
+	JTI     string
+	Version int
+	Expires int64
 }
 
 // TokenJTI returns the jti of the token the submission arrived with, or ""

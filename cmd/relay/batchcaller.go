@@ -18,7 +18,7 @@ func batchCaller(ctx context.Context) *batch.Caller {
 	if p == nil {
 		return nil
 	}
-	c := &batch.Caller{KeyHash: p.KeyHash, PolicyID: p.PolicyID()}
+	c := &batch.Caller{KeyHash: p.KeyHash, PolicyID: p.PolicyID(), TokenVer: p.TokenVer, TokenExp: p.TokenExp}
 	c.ProjectID, c.TeamID = p.ProjectID, p.TeamID
 	c.CredentialKind, c.CredentialID = p.CredentialKind, p.CredentialID
 	switch {

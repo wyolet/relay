@@ -32,6 +32,8 @@ const (
 	metaCredentialID   = "credential_id"
 	metaPolicyID       = "policy_id"
 	metaTokenJTI       = "token_jti"
+	metaTokenVer       = "token_ver"
+	metaTokenExp       = "token_exp"
 )
 
 // ErrForbidden is returned when a caller asks about a batch they don't own.
@@ -69,12 +71,14 @@ func (s *Service) caller(ctx context.Context) *Caller {
 // failure so jobq records it (the body is not retained in v1 — follow-up).
 func (s *Service) Handler() jobq.Handler {
 	return func(ctx context.Context, job *jobq.Job) ([]byte, error) {
+		ver, _ := strconv.Atoi(job.Meta(metaTokenVer))
+		exp, _ := strconv.ParseInt(job.Meta(metaTokenExp), 10, 64)
 		status, out, err := s.runner.Run(
 			ctx,
 			job.ID,
 			job.Meta(metaKeyHash),
 			job.Meta(metaPolicyID),
-			job.Meta(metaTokenJTI),
+			TokenClaims{JTI: job.Meta(metaTokenJTI), Version: ver, Expires: exp},
 			Attribution{
 				ProjectID:      job.Meta(metaProjectID),
 				TeamID:         job.Meta(metaTeamID),
@@ -140,6 +144,8 @@ func (s *Service) Submit(ctx context.Context, c *Caller, inbound string, items [
 				metaInbound:  inbound,
 				metaPolicyID: c.PolicyID,
 				metaTokenJTI: c.TokenJTI(),
+				metaTokenVer: strconv.Itoa(c.TokenVer),
+				metaTokenExp: strconv.FormatInt(c.TokenExp, 10),
 				// Carried per item so execution reads the submission's
 				// attribution without a second trip to the batch row.
 				metaProjectID:      attr.ProjectID,

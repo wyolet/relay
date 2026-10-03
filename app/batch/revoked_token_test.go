@@ -44,6 +44,27 @@ func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateL
 	return r.cat.Current().RateLimit(id)
 }
 
+// The fixture's one live credential: a personal key, and the user's token
+// version a token submission is checked against.
+const (
+	fixtureKeyHash = "fixture-key-hash"
+	fixtureUser    = "u-1"
+)
+
+type fixtureVersions map[string]int
+
+func (v fixtureVersions) TokenVersions(context.Context) (map[string]int, error) { return v, nil }
+
+// keyAttr and tokenAttr are submissions by the fixture's key and its user.
+func keyAttr() Attribution {
+	return Attribution{PrincipalKind: string(key.PrincipalUser), PrincipalID: fixtureUser, CredentialKind: inference.CredentialKey}
+}
+
+func tokenAttr(teamID, jti string) Attribution {
+	return Attribution{TeamID: teamID, PrincipalKind: string(key.PrincipalUser), PrincipalID: fixtureUser,
+		CredentialKind: inference.CredentialToken, CredentialID: jti}
+}
+
 // runnerFixture wires a Runner over an in-memory catalog and a pipeline whose
 // reservation runs against kv.Mem, so a batch item reaches the same inbound
 // Reserve a live request does.
@@ -73,6 +94,10 @@ func runnerFixture(t *testing.T) (*Runner, kv.Store, string) {
 		Spec: policy.Spec{ModelIDs: []string{modID}, HostKeyIDs: []string{hkID}},
 	}
 
+	rk := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerUser, ID: fixtureUser}},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalUser, ID: fixtureUser}, KeyHash: fixtureKeyHash},
+	}
 	cat := appcatalog.New(
 		lister[provider.Provider]{prov},
 		lister[host.Host]{h},
@@ -80,10 +105,11 @@ func runnerFixture(t *testing.T) (*Runner, kv.Store, string) {
 		lister[model.Model]{m},
 		lister[hostkey.HostKey]{hk},
 		lister[ratelimit.RateLimit]{},
-		lister[key.Key]{},
+		lister[key.Key]{rk},
 		lister[pricing.Pricing]{},
 		lister[binding.Binding]{b},
 	)
+	cat.UseTokenVersions(fixtureVersions{fixtureUser: 0})
 	if err := cat.Reload(t.Context()); err != nil {
 		t.Fatalf("catalog reload: %v", err)
 	}
@@ -118,17 +144,42 @@ func TestRunRevokedTokenItemFails(t *testing.T) {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	attr := Attribution{TeamID: teamID, CredentialKind: inference.CredentialToken, CredentialID: jti}
-	_, _, err := rn.Run(ctx, "item-1", "", policyID, jti, attr, adapters.OpenAI, []byte(`{"model":"test-model"}`))
+	_, _, err := rn.Run(ctx, "item-1", "", policyID, TokenClaims{JTI: jti}, tokenAttr(teamID, jti), adapters.OpenAI, []byte(`{"model":"test-model"}`))
 	if !errors.Is(err, pkgratelimit.ErrRevoked) {
 		t.Fatalf("err = %v, want ErrRevoked", err)
 	}
 
 	// A live (unrevoked) token gets past the reservation and only then fails
 	// on the unreachable upstream — the check is that token's, not blanket.
-	_, _, err = rn.Run(ctx, "item-2", "", policyID, "jti-live", attr, adapters.OpenAI, []byte(`{"model":"test-model"}`))
+	_, _, err = rn.Run(ctx, "item-2", "", policyID, TokenClaims{JTI: "jti-live"}, tokenAttr(teamID, "jti-live"), adapters.OpenAI, []byte(`{"model":"test-model"}`))
 	if errors.Is(err, pkgratelimit.ErrRevoked) {
 		t.Fatalf("unrevoked token refused: %v", err)
+	}
+}
+
+// A queued item runs under the credential that submitted it, so that
+// credential has to still be valid when the item runs — the same checks a
+// long-lived WebSocket repeats per frame.
+func TestRunRefusesItemsWhoseCredentialLapsed(t *testing.T) {
+	rn, _, policyID := runnerFixture(t)
+	ctx := context.Background()
+	body := []byte(`{"model":"test-model"}`)
+	cases := map[string]struct {
+		hash string
+		tok  TokenClaims
+		attr Attribution
+	}{
+		"key no longer in the catalog": {hash: "gone-key-hash", attr: keyAttr()},
+		"token from before revoke-all": {tok: TokenClaims{JTI: "j", Version: 7}, attr: tokenAttr("", "j")},
+		"token past its expiry":        {tok: TokenClaims{JTI: "j", Expires: time.Now().Add(-time.Minute).Unix()}, attr: tokenAttr("", "j")},
+	}
+	for name, tc := range cases {
+		if _, _, err := rn.Run(ctx, "item", tc.hash, policyID, tc.tok, tc.attr, adapters.OpenAI, body); !errors.Is(err, ErrCredentialInvalid) {
+			t.Errorf("%s: err = %v, want ErrCredentialInvalid", name, err)
+		}
+	}
+	if _, _, err := rn.Run(ctx, "item", fixtureKeyHash, policyID, TokenClaims{}, keyAttr(), adapters.OpenAI, body); errors.Is(err, ErrCredentialInvalid) {
+		t.Errorf("live key refused: %v", err)
 	}
 }
 
