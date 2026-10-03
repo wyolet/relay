@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,6 +27,7 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/ids"
@@ -176,5 +178,55 @@ func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
 	}
 	if _, err := routing.New(u.cat, routing.RequirePolicy()).Resolve(req); !errors.Is(err, routing.ErrPolicyless) {
 		t.Fatalf("rbac mode: err = %v, want the policy-less refusal", err)
+	}
+}
+
+// The pre-tenancy admin token stamped a user owner with no id on what it
+// created. Nobody owns such a row, so the upgrade hands it to the system: a
+// shared host key has to stay in the pool policy-less callers draw from.
+func TestUpgradeHandsOwnerlessUserRowsToTheSystem(t *testing.T) {
+	u := newUpgradeDB(t, "relay_upg_owner")
+	ctx := context.Background()
+	adminOwned := meta.Owner{Kind: meta.OwnerUser}
+	modelName := u.seedRoute(t, adminOwned)
+
+	h := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "admin-host", Owner: adminOwned}, Spec: host.Spec{BaseURL: "https://admin.example.com"}}
+	mustUpsert(t, u.stores.Host.Upsert(ctx, h), "host")
+	md := &model.Model{
+		Meta: meta.Metadata{ID: ids.New(), Name: "admin-model", Owner: adminOwned},
+		Spec: model.Spec{Snapshots: []model.Snapshot{{Name: "admin-model"}}, Pointer: "admin-model"},
+	}
+	mustUpsert(t, u.stores.Model.Upsert(ctx, md), "model")
+	b := &binding.Binding{
+		Meta: meta.Metadata{ID: ids.New(), Name: "admin-model-on-admin-host", Owner: adminOwned},
+		Spec: binding.Spec{ModelID: md.Meta.ID, HostID: h.Meta.ID, Adapter: adapters.OpenAI},
+	}
+	mustUpsert(t, u.stores.Binding.Upsert(ctx, b), "binding")
+	pol := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "admin-policy", Owner: adminOwned}}
+	mustUpsert(t, u.stores.Policy.Upsert(ctx, pol), "policy")
+	rl := &ratelimit.RateLimit{
+		Meta: meta.Metadata{ID: ids.New(), Name: "admin-limit", Owner: adminOwned},
+		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute)}}},
+	}
+	mustUpsert(t, u.stores.RateLimit.Upsert(ctx, rl), "rate limit")
+
+	u.upgrade(t)
+
+	for _, table := range []string{"secrets", "policies", "rate_limits", "hosts", "host_bindings", "models"} {
+		var ownerless int
+		if err := u.pool.QueryRow(ctx,
+			`SELECT count(*) FROM `+table+`
+			  WHERE metadata->'owner'->>'kind' = 'user'
+			    AND coalesce(metadata->'owner'->>'id', '') = ''`).Scan(&ownerless); err != nil {
+			t.Fatalf("count %s: %v", table, err)
+		}
+		if ownerless != 0 {
+			t.Errorf("%s: %d rows still owned by a user with no id, want them system-owned", table, ownerless)
+		}
+	}
+
+	u.hydrate(t)
+	if _, err := routing.New(u.cat).Resolve(routing.Request{ModelName: modelName, Snapshot: u.cat.Current()}); err != nil {
+		t.Fatalf("the admin-created host key dropped out of the policy-less pool: %v", err)
 	}
 }
