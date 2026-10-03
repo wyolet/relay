@@ -31,6 +31,7 @@ type EmitterOptions struct {
 // Drop counter is exposed via Dropped() for /metrics or assertions.
 type Emitter struct {
 	queue chan Event
+	stop  chan struct{}
 	sinks []Sink
 	log   *slog.Logger
 
@@ -52,6 +53,7 @@ func NewEmitter(opts EmitterOptions, sinks ...Sink) *Emitter {
 	}
 	e := &Emitter{
 		queue: make(chan Event, qsize),
+		stop:  make(chan struct{}),
 		sinks: sinks,
 		log:   log,
 	}
@@ -95,12 +97,13 @@ func (e *Emitter) QueueDepth() int { return len(e.queue) }
 // and returns once all sinks have processed everything in flight. After
 // the queue drains, any sink implementing Closer is closed (flush final
 // batch, close remote conn) so buffered/remote backends lose nothing on
-// graceful shutdown. Subsequent Emit calls are no-ops.
+// graceful shutdown. Subsequent Emit calls are no-ops. The queue is never
+// closed: an Emit racing Close would panic on the send.
 func (e *Emitter) Close() {
 	if e.stopped.Swap(true) {
 		return
 	}
-	close(e.queue)
+	close(e.stop)
 	e.wg.Wait()
 	for _, sink := range e.sinks {
 		if c, ok := sink.(Closer); ok {
@@ -113,14 +116,31 @@ func (e *Emitter) Close() {
 
 func (e *Emitter) drain() {
 	defer e.wg.Done()
-	for ev := range e.queue {
-		for _, sink := range e.sinks {
-			if err := sink.Write(ev); err != nil {
-				e.log.Warn("usagelog: sink write failed",
-					"err", err,
-					"request_id", ev.RequestID,
-				)
+	for {
+		select {
+		case ev := <-e.queue:
+			e.write(ev)
+		case <-e.stop:
+			// Flush what was queued before Close; later racing Emits are lost.
+			for {
+				select {
+				case ev := <-e.queue:
+					e.write(ev)
+				default:
+					return
+				}
 			}
+		}
+	}
+}
+
+func (e *Emitter) write(ev Event) {
+	for _, sink := range e.sinks {
+		if err := sink.Write(ev); err != nil {
+			e.log.Warn("usagelog: sink write failed",
+				"err", err,
+				"request_id", ev.RequestID,
+			)
 		}
 	}
 }
