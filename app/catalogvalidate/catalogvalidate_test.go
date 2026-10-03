@@ -90,6 +90,20 @@ func TestValidateGraph_BindingSnapshotNotInModel(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_DuplicateModelHostBinding(t *testing.T) {
+	docs := fixture()
+	dup := *docs[3].HostBinding
+	dup.Metadata.Name = "gpt-x-openai-host-2"
+	docs = append(docs, manifest.Document{HostBinding: &dup})
+	issues := ValidateGraph(docs)
+	for _, is := range issues {
+		if is.Kind == KindInvariant && strings.Contains(is.Message, "duplicate (model=") {
+			return
+		}
+	}
+	t.Fatalf("expected duplicate (model, host) issue, got:\n%s", Format(issues))
+}
+
 func TestValidateGraph_BindingAdapter(t *testing.T) {
 	for adapter, wantErr := range map[string]bool{
 		"": false, "openai_responses": false, "anthropic": false,

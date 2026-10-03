@@ -75,7 +75,8 @@ func TestIntegration_EmbeddedCatalogSeedsCleanly(t *testing.T) {
 }
 
 // writeCatalogManifests renders c as one multi-document manifest file — one
-// Model per served snapshot slug, one HostBinding and Pricing per (slug, host)
+// Model per served (snapshot slug, upstream), one HostBinding and Pricing per
+// (Model, host)
 // — and returns the document count per kind.
 func writeCatalogManifests(t *testing.T, c *sdkcatalog.Catalog, path string) map[string]int {
 	t.Helper()
@@ -107,7 +108,11 @@ func writeCatalogManifests(t *testing.T, c *sdkcatalog.Catalog, path string) map
 		infos[mi.MetadataName] = mi
 	}
 
-	models := map[string]bool{}
+	// The flattened form drops the parent Model, so two Models declaring the
+	// same snapshot slug on one host arrive as two entries with that slug.
+	// Keying by (slug, upstream) keeps them as distinct Models, as in the tree.
+	modelNames := map[[2]string]string{}
+	usedNames := map[string]bool{}
 	for _, h := range c.Hosts {
 		add("Host", manifest.HostDTO{
 			APIVersion: manifest.APIVersion, Kind: "Host",
@@ -119,8 +124,15 @@ func writeCatalogManifests(t *testing.T, c *sdkcatalog.Catalog, path string) map
 		})
 
 		for _, b := range h.Models {
-			if !models[b.MetadataName] {
-				models[b.MetadataName] = true
+			key := [2]string{b.MetadataName, b.Name}
+			modelName, ok := modelNames[key]
+			if !ok {
+				modelName = b.MetadataName
+				for n := 2; usedNames[modelName]; n++ {
+					modelName = fmt.Sprintf("%s-%d", b.MetadataName, n)
+				}
+				modelNames[key] = modelName
+				usedNames[modelName] = true
 				owner := ""
 				if len(b.Providers) > 0 {
 					owner = b.Providers[0]
@@ -132,13 +144,13 @@ func writeCatalogManifests(t *testing.T, c *sdkcatalog.Catalog, path string) map
 						Metadata: manifest.WireMeta{Name: owner},
 					})
 				}
-				add("Model", modelDoc(t, b, infos[b.MetadataName], owner))
+				add("Model", modelDoc(t, modelName, b, infos[b.MetadataName], owner))
 			}
 
 			bd := manifest.HostBindingDTO{
 				APIVersion: manifest.APIVersion, Kind: "HostBinding",
 				Metadata: manifest.WireMeta{Name: fmt.Sprintf("binding-%d", counts["HostBinding"])},
-				Spec:     manifest.HostBindingSpec{Model: b.MetadataName, Host: h.Name, Adapter: b.Adapter},
+				Spec:     manifest.HostBindingSpec{Model: modelName, Host: h.Name, Adapter: b.Adapter},
 			}
 			if len(b.Pricing) > 0 {
 				pd := manifest.PricingDTO{
@@ -147,7 +159,7 @@ func writeCatalogManifests(t *testing.T, c *sdkcatalog.Catalog, path string) map
 						Name:  fmt.Sprintf("pricing-%d", counts["Pricing"]),
 						Owner: manifest.WireOwner{Kind: meta.OwnerHost, Name: h.Name},
 					},
-					Spec: manifest.PricingSpec{Currency: "USD", TargetModels: []string{b.MetadataName}},
+					Spec: manifest.PricingSpec{Currency: "USD", TargetModels: []string{modelName}},
 				}
 				for _, r := range b.Pricing {
 					pd.Spec.Rates = append(pd.Spec.Rates, manifest.PricingRateDTO{
@@ -167,7 +179,7 @@ func writeCatalogManifests(t *testing.T, c *sdkcatalog.Catalog, path string) map
 	return counts
 }
 
-func modelDoc(t *testing.T, b sdkcatalog.Binding, mi sdkcatalog.ModelInfo, owner string) manifest.ModelDTO {
+func modelDoc(t *testing.T, name string, b sdkcatalog.Binding, mi sdkcatalog.ModelInfo, owner string) manifest.ModelDTO {
 	t.Helper()
 	// The SDK mirror carries the same json tags as the domain bag.
 	raw, err := json.Marshal(mi.Capabilities)
@@ -185,7 +197,7 @@ func modelDoc(t *testing.T, b sdkcatalog.Binding, mi sdkcatalog.ModelInfo, owner
 	return manifest.ModelDTO{
 		APIVersion: manifest.APIVersion, Kind: "Model",
 		Metadata: manifest.WireMeta{
-			Name: b.MetadataName, DisplayName: mi.DisplayName, Description: mi.Description,
+			Name: name, DisplayName: mi.DisplayName, Description: mi.Description,
 			Owner: manifest.WireOwner{Kind: meta.OwnerProvider, Name: owner},
 		},
 		Spec: manifest.ModelSpec{
