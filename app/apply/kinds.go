@@ -297,6 +297,9 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planOverlays(ovDocs); err != nil {
 		return err
 	}
+	if err := b.checkPrunedTenancy(); err != nil {
+		return err
+	}
 
 	for i := len(b.deletes) - 1; i >= 0; i-- {
 		b.entries = append(b.entries, b.deletes[i]...)
@@ -334,6 +337,38 @@ func detachThenDelete(refs policy.DetachStores, del func(context.Context, string
 		}
 		return del(ctx, id)
 	}
+}
+
+// checkPrunedTenancy refuses pruning a team or project with rows still under
+// it, as the control API's delete does. Rows this run prunes too are deleted
+// explicitly, children first, so they are not in the way.
+func (b *builder) checkPrunedTenancy() error {
+	pruned := map[string]bool{}
+	for _, kind := range b.deletes {
+		for _, e := range kind {
+			pruned[e.Kind+"/"+e.ID] = true
+		}
+	}
+	gone := func(kind, id string) bool { return pruned[kind+"/"+id] }
+	under := project.Rows{
+		ServiceAccounts: b.rows.ServiceAccounts, Keys: b.rows.Keys, Policies: b.rows.Policies,
+		HostKeys: b.rows.HostKeys, RateLimits: b.rows.RateLimits, PolicyBindings: b.rows.PolicyBindings,
+	}
+	for _, kind := range b.deletes {
+		for _, e := range kind {
+			var deps []string
+			switch e.Kind {
+			case "Team":
+				deps = project.OfTeam(e.ID, b.rows.Projects, gone)
+			case "Project":
+				deps = under.Dependents(e.ID, gone)
+			}
+			if len(deps) > 0 {
+				return &InvalidError{Kind: e.Kind, Name: e.Name, Err: &project.DependentsError{Rows: deps}}
+			}
+		}
+	}
+	return nil
 }
 
 // checkRoleDocs refuses Role documents apply must not write: a name the

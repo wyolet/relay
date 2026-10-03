@@ -653,11 +653,14 @@ func guardGroupMembers(d Deps) mutationGuard[group.Group] {
 }
 
 // guardProject re-derives the project's owner from spec.teamId on every
-// write (spec is the source of truth, owner mirrors it) and rejects a team
-// the caller may not see.
+// write (spec is the source of truth, owner mirrors it), rejects a team the
+// caller may not see, and refuses deleting a project with rows under it.
 func guardProject(d Deps) mutationGuard[project.Project] {
-	return func(ctx context.Context, action string, _, incoming *project.Project) error {
-		if action == "delete" || incoming == nil {
+	return func(ctx context.Context, action string, existing, incoming *project.Project) error {
+		if action == "delete" {
+			return refuseProjectWithRows(ctx, d, existing)
+		}
+		if incoming == nil {
 			return nil
 		}
 		incoming.StampOwner()
@@ -1198,7 +1201,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(t *team.Team) error { return t.Validate() },
 		meta.OwnerSystem,
 		listScanResolver(d.Stores.Team, tmeta),
-		nil,
+		guardTeamDelete(d),
 		nil,
 		nil,
 		nil,
