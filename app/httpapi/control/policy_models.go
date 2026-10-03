@@ -38,7 +38,7 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 			return nil
 		}
 		if err := refs(d).Policy(ctx, incoming); err != nil {
-			return err
+			return refErr(err)
 		}
 		if len(incoming.Spec.Models) == 0 && len(incoming.Spec.RLBindings) == 0 {
 			return nil

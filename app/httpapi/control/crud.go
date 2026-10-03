@@ -558,7 +558,6 @@ func slugTakenFn[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) fu
 // chosen status; bare errors default to 403, matching the original
 // "guard rejects = forbidden" contract.
 func mapGuardErr(err error) error {
-	err = refErr(err)
 	var se huma.StatusError
 	if errors.As(err, &se) {
 		return err
@@ -611,7 +610,7 @@ func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
 			(incoming.Spec.ValueFrom.Kind == hostkey.ValueKindStored || incoming.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth) {
 			return fmt.Errorf("value cannot be set on update — use POST /host-keys/by-id/{id}/rotate to rotate the credential")
 		}
-		return refs(d).HostKey(ctx, incoming)
+		return refErr(refs(d).HostKey(ctx, incoming))
 	}
 }
 
@@ -626,7 +625,7 @@ func guardKeyPolicy(d Deps) mutationGuard[key.Key] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).PolicyRef(ctx, incoming.Spec.PolicyID, incoming.Meta.Owner)
+		return refErr(refs(d).PolicyRef(ctx, incoming.Spec.PolicyID, incoming.Meta.Owner))
 	}
 }
 
@@ -635,7 +634,7 @@ func guardServiceAccount(d Deps) mutationGuard[serviceaccount.ServiceAccount] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).ServiceAccount(ctx, incoming)
+		return refErr(refs(d).ServiceAccount(ctx, incoming))
 	}
 }
 
@@ -644,7 +643,7 @@ func guardGroupMembers(d Deps) mutationGuard[group.Group] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).Group(ctx, incoming)
+		return refErr(refs(d).Group(ctx, incoming))
 	}
 }
 
@@ -653,7 +652,7 @@ func guardProject(d Deps) mutationGuard[project.Project] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).Project(ctx, incoming)
+		return refErr(refs(d).Project(ctx, incoming))
 	}
 }
 
@@ -919,7 +918,7 @@ func guardRole(d Deps) mutationGuard[role.Role] {
 		if d.License == nil || !d.License.Has(license.FeatureCustomRoles) {
 			return huma.Error403Forbidden(license.ErrRequired.Error())
 		}
-		return refs(d).Role(ctx, incoming)
+		return refErr(refs(d).Role(ctx, incoming))
 	}
 }
 
@@ -928,7 +927,7 @@ func guardHostBinding(d Deps) mutationGuard[binding.Binding] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).HostBinding(ctx, incoming)
+		return refErr(refs(d).HostBinding(ctx, incoming))
 	}
 }
 
@@ -937,7 +936,7 @@ func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).RoleBinding(ctx, incoming)
+		return refErr(refs(d).RoleBinding(ctx, incoming))
 	}
 }
 
@@ -946,7 +945,7 @@ func guardPolicyBinding(d Deps) mutationGuard[policybinding.PolicyBinding] {
 		if action == "delete" || incoming == nil {
 			return nil
 		}
-		return refs(d).PolicyBinding(ctx, incoming)
+		return refErr(refs(d).PolicyBinding(ctx, incoming))
 	}
 }
 
