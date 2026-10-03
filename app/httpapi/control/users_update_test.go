@@ -42,7 +42,7 @@ func disableUserInput(id string, disabled bool) *userUpdateInput {
 func TestDisablingAUserBumpsTheTokenVersion(t *testing.T) {
 	users := updateUsers{"u-1": {ID: "u-1", Username: "alice", TokenVersion: 3}}
 
-	out, err := updateUser(context.Background(), users, allowAuthz{}, disableUserInput("u-1", true))
+	out, err := updateUser(context.Background(), users, allowAuthz{}, nil, disableUserInput("u-1", true))
 	if err != nil {
 		t.Fatalf("updateUser: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestDisablingAUserBumpsTheTokenVersion(t *testing.T) {
 
 	// A second disable changes nothing, so it must not invalidate tokens
 	// minted after the first one.
-	if _, err := updateUser(context.Background(), users, allowAuthz{}, disableUserInput("u-1", true)); err != nil {
+	if _, err := updateUser(context.Background(), users, allowAuthz{}, nil, disableUserInput("u-1", true)); err != nil {
 		t.Fatalf("updateUser: %v", err)
 	}
 	if got := users["u-1"].TokenVersion; got != 4 {
@@ -72,7 +72,7 @@ func TestUpdatingRolesLeavesTheTokenVersionAlone(t *testing.T) {
 	roles := []string{user.RoleAdmin}
 	in.Body.Roles = &roles
 
-	if _, err := updateUser(context.Background(), users, allowAuthz{}, in); err != nil {
+	if _, err := updateUser(context.Background(), users, allowAuthz{}, nil, in); err != nil {
 		t.Fatalf("updateUser: %v", err)
 	}
 	if got := users["u-1"].Roles; len(got) != 1 || got[0] != user.RoleAdmin {
@@ -87,7 +87,7 @@ func TestUserUpdateAuthorizesAtTheGlobalScope(t *testing.T) {
 	c := &captureAuthz{}
 	users := updateUsers{"u-1": {ID: "u-1", Username: "alice"}}
 
-	if _, err := updateUser(context.Background(), users, c, disableUserInput("u-1", true)); err == nil {
+	if _, err := updateUser(context.Background(), users, c, nil, disableUserInput("u-1", true)); err == nil {
 		t.Fatal("a forbidden caller updated the account")
 	}
 	if c.got.Owner == nil || c.got.Owner.Kind != meta.OwnerSystem {

@@ -7,6 +7,7 @@ package control
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -104,14 +105,23 @@ func registerUserUpdate(api huma.API, d Deps, protect huma.Middlewares) {
 		Middlewares: protect,
 		Errors:      []int{401, 403, 404, 500},
 	}, func(ctx context.Context, in *userUpdateInput) (*userUpdateOutput, error) {
-		return updateUser(ctx, d.Users, d.Authz, in)
+		var sessions sessionEnder
+		if d.Sessions != nil {
+			sessions = d.Sessions
+		}
+		return updateUser(ctx, d.Users, d.Authz, sessions, in)
 	})
+}
+
+// sessionEnder ends every session a user holds. *session.Manager satisfies it.
+type sessionEnder interface {
+	DestroyUser(ctx context.Context, userID string) error
 }
 
 // updateUser applies the two editable fields. Authorization is at the global
 // scope, like the list: an account belongs to the deployment, not to a team,
 // so a binding inside one project is not a grant to edit anyone.
-func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *userUpdateInput) (*userUpdateOutput, error) {
+func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, sessions sessionEnder, in *userUpdateInput) (*userUpdateOutput, error) {
 	owner := meta.Owner{Kind: meta.OwnerSystem}
 	if err := az.Authorize(ctx, "users.update", authz.Resource{Kind: "user", ID: in.ID, Owner: &owner}); err != nil {
 		return nil, mapAuthzErr(err)
@@ -123,7 +133,7 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *
 	if u == nil {
 		return nil, huma.Error404NotFound("user not found")
 	}
-	wasDisabled := u.Disabled
+	wasDisabled, oldRoles := u.Disabled, u.Roles
 	if in.Body.Disabled != nil {
 		u.Disabled = *in.Body.Disabled
 	}
@@ -132,6 +142,13 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, in *
 	}
 	if err := users.Upsert(ctx, u); err != nil {
 		return nil, huma.Error500InternalServerError(err.Error())
+	}
+	// A live session keeps the roles it logged in with; end it so the next
+	// login reads the row as it is now.
+	if sessions != nil && (u.Disabled != wasDisabled || !slices.Equal(u.Roles, oldRoles)) {
+		if err := sessions.DestroyUser(ctx, u.ID); err != nil {
+			return nil, huma.Error500InternalServerError(err.Error())
+		}
 	}
 	// The snapshot already drops a disabled account's token version, but a
 	// later re-enable would revive every token minted before the disable.

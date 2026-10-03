@@ -43,6 +43,7 @@ const (
 // middleware via Middleware(); use Login/Logout/Actor in handlers.
 type Manager struct {
 	sm *scs.SessionManager
+	st *kvStore
 	// groupsOf resolves a user's local group names. Set once at
 	// composition (from the catalog snapshot); nil means "no local
 	// groups", which is correct for deployments without the tenancy rows.
@@ -65,7 +66,8 @@ func New(store kv.Store, secure bool, keyPrefix string) *Manager {
 	sm.Cookie.Secure = secure
 	sm.Cookie.SameSite = http.SameSiteStrictMode
 	sm.Cookie.Path = "/"
-	sm.Store = &kvStore{kv: store, prefix: keyPrefix}
+	st := &kvStore{kv: store, prefix: keyPrefix}
+	sm.Store = st
 	// scs's default ErrorFunc logs the bare error via the stdlib logger —
 	// which the slog bridge renders as an attribute-less INFO line — and
 	// writes a text/plain 500. Ours keeps the failure attributable. On the
@@ -83,7 +85,7 @@ func New(store kv.Store, secure bool, keyPrefix string) *Manager {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(body))
 	}
-	return &Manager{sm: sm}
+	return &Manager{sm: sm, st: st}
 }
 
 // UseGroups attaches the local-group source used to build each session
@@ -193,6 +195,29 @@ func (m *Manager) Login(ctx context.Context, userID, username string, roles ...s
 		b, _ := json.Marshal(roles)
 		m.sm.Put(ctx, keyRoles, string(b))
 	}
+	if userID == "" {
+		return nil
+	}
+	// Indexed by user so DestroyUser can find every session one account holds.
+	return m.st.kv.Set(ctx, m.st.userIndexKey(userID, m.sm.Token(ctx)), []byte(m.sm.Token(ctx)), defaultExpiry)
+}
+
+// DestroyUser ends every session the user holds, on every pod sharing the
+// store. A session carries the roles it logged in with, so a role change or
+// a disable has to end it rather than wait out its expiry.
+func (m *Manager) DestroyUser(ctx context.Context, userID string) error {
+	entries, err := m.st.kv.Range(ctx, m.st.userIndexKey(userID, ""))
+	if err != nil {
+		return fmt.Errorf("session destroy user (kv range): %w", err)
+	}
+	for _, e := range entries {
+		if err := m.st.kv.Del(ctx, m.st.key(string(e.Value))); err != nil {
+			return fmt.Errorf("session destroy user (kv del): %w", err)
+		}
+		if err := m.st.kv.Del(ctx, e.Key); err != nil {
+			return fmt.Errorf("session destroy user (kv del): %w", err)
+		}
+	}
 	return nil
 }
 
@@ -236,6 +261,12 @@ type kvEntry struct {
 }
 
 func (s *kvStore) key(token string) string { return s.prefix + token }
+
+// userIndexKey names one session in the per-user index. Session tokens are
+// base64url, so the "user:" segment never collides with a token key.
+func (s *kvStore) userIndexKey(userID, token string) string {
+	return s.prefix + "user:" + userID + ":" + token
+}
 
 func (s *kvStore) Find(token string) ([]byte, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
