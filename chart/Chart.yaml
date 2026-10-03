@@ -1,0 +1,23 @@
+apiVersion: v2
+name: relay
+description: |
+  Wyolet Relay — high-throughput LLM router. Single self-migrating binary serving
+  the inference (data) plane and the control plane, with its OWN bundled
+  PostgreSQL (config truth), ClickHouse (usage/payload events), and Valkey
+  (hot state + rate-limit counters). Relay never shares the platform's managed
+  Postgres — it provisions and owns its data stores.
+type: application
+# Both set from the release tag at package time; the image tag follows appVersion.
+version: 0.0.0
+appVersion: "0.0.0"
+keywords:
+  - llm
+  - router
+  - gateway
+  - openai
+  - anthropic
+home: https://github.com/wyolet/relay
+sources:
+  - https://github.com/wyolet/relay
+maintainers:
+  - name: wyolet

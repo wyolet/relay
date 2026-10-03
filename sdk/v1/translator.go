@@ -31,3 +31,8 @@ type Translator interface {
 	// the vendor's stream shape. Returns nil for identity.
 	NewFromCanonicalStream() func(chunk []byte) ([]byte, error)
 }
+
+// RequestAwareStream is an optional companion to Translator for wire shapes whose outbound stream cannot be rendered from the canonical events alone — the shape of an item can depend on how the matching tool was DEFINED on the request. Callers holding the canonical request should prefer it; the seed becomes per-stream closure state, so the Translator value stays stateless.
+type RequestAwareStream interface {
+	NewFromCanonicalStreamFor(req *Request) func(chunk []byte) ([]byte, error)
+}

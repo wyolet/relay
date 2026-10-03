@@ -103,13 +103,15 @@ drop-on-full — never block the response.
 
 ## Releases & images
 
-CI in this repository runs tests, vet, gofmt, and the codebase-rule checks
-only — it does **not** build or publish container images. Official images
-(`wyolet/relay:latest` lean, `:standalone` all-in-one, and `:<version>` tags)
-are built and published to Docker Hub and GHCR by the maintainers, out of band,
-from a `v*` git tag. To build an image yourself, use the `Dockerfile` /
-`docker-bake.hcl` at the repo root (`docker buildx bake`), or
-`docker compose up --build`.
+CI on pull requests and `main` runs tests, vet, gofmt, the codebase-rule
+checks, and `helm lint` of the chart (`make check` runs the same gate locally).
+A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
+images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
+Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`
+with chart version = image version. Maintainers cut releases with
+`make release` (or `release-minor` / `release-major`), which only tags and
+pushes. To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at
+the repo root (`docker buildx bake`), or `docker compose up --build`.
 
 ## Reporting bugs / requesting features
 

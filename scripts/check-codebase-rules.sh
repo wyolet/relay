@@ -43,6 +43,10 @@ echo "license boundary — app/ never imports the verifier (it receives app/lice
 hits=$(grep -rn 'wyolet/relay/internal/license' app/ --include='*.go' || true)
 if [ -n "$hits" ]; then note "app/ imports internal/license (the gate seam is app/license):"; echo "$hits"; else ok "clean"; fi
 
+echo "client profiles — no client names in app/ outside the composition root:"
+hits=$(grep -rniE 'claude-code|claude_code|claudecode|codex|opencode' app/ --include='*.go' | grep -v '_test.go' || true)
+if [ -n "$hits" ]; then note "app/ names a client (profiles live in pkg/clientprofile, registered in cmd/relay/main.go):"; echo "$hits"; else ok "clean"; fi
+
 echo "catalogview isolation — the hot path never imports the UX read-model:"
 hits=$(grep -rn 'wyolet/relay/app/catalogview' app/routing/ app/pipeline/ app/keypool/ --include='*.go' || true)
 if [ -n "$hits" ]; then note "routing/pipeline/keypool imports app/catalogview (UX views must stay off the hot path):"; echo "$hits"; else ok "clean"; fi

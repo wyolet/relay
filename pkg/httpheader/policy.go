@@ -36,11 +36,33 @@ const (
 	// by the X-WR-* denylist.
 	HeaderRequestTags = "X-WR-Request-Tags"
 
+	// HeaderClient names the calling client profile (e.g. "claude-code")
+	// explicitly, ahead of path-prefix and User-Agent detection. Stripped
+	// from the upstream request by the X-WR-* denylist.
+	HeaderClient = "X-WR-Client"
+
 	// HeaderWarnings is a response header carrying non-fatal request
 	// adjustments the relay made (e.g. params stripped because the routed
 	// model declares them unsupported) so drops are surfaced, never silent.
 	HeaderWarnings = "X-WR-Warnings"
+
+	// HeaderTokenCount is a response header naming how an input-token count was arrived at: "exact" from the upstream's own counter, "calibrated" from the ratio relay measured on this session's or model's traffic, "estimated" from bytes alone. A caller that cares about precision can tell the three apart.
+	HeaderTokenCount = "X-WR-Token-Count"
+
+	// HeaderShouldRetry tells the caller whether retrying this exact request can succeed. Some SDKs trust it over their own status heuristics, so relay emits it on every error it writes rather than leaving a forwarded upstream error as the only response that carries one.
+	HeaderShouldRetry = "X-Should-Retry"
 )
+
+// UpstreamErrorAllowlist is the set copied from a failed upstream response onto the error relay writes in its place: backoff timing, quota counters, the provider's request id for support tickets, and the content type describing the forwarded bytes. Deliberately narrow — Content-Length would misdescribe what relay writes, Set-Cookie and hop-by-hop headers leak provider transport state into a relay response.
+var UpstreamErrorAllowlist = []string{
+	"Retry-After",
+	HeaderShouldRetry,
+	"X-Request-Id",
+	"Content-Type",
+	// Per-vendor rate-limit families: Anthropic's unified counters and the x-ratelimit-* convention OpenAI and its compatibles emit.
+	"Anthropic-Ratelimit-*",
+	"X-Ratelimit-*",
+}
 
 // SafeUpstreamError returns a user-safe error message for an upstream failure,
 // redacting URLs, IP addresses, and other internal details.

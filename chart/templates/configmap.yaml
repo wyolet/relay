@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "relay.fullname" . }}
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+data:
+  RELAY_PORT: {{ .Values.relay.port | quote }}
+  RELAY_CONTROL_PORT: {{ .Values.relay.controlPort | quote }}
+  RELAY_MODE: {{ .Values.relay.mode | quote }}
+  RELAY_CLUSTER_MODE: {{ .Values.relay.clusterMode | quote }}
+  RELAY_STATE_BACKEND: {{ .Values.relay.stateBackend | quote }}
+  RELAY_EVENTLOG_BACKEND: {{ .Values.relay.eventlogBackend | quote }}
+  RELAY_EVENTLOG_DIR: {{ .Values.relay.eventlogDir | quote }}
+  RELAY_BATCH_PAYLOAD_DIR: {{ .Values.relay.batchPayloadDir | quote }}
+  RELAY_SETTINGS_DIR: {{ .Values.relay.settingsDir | quote }}
+  {{- with .Values.relay.pgMaxConns }}
+  RELAY_PG_MAX_CONNS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.pgMinConns }}
+  RELAY_PG_MIN_CONNS: {{ . | quote }}
+  {{- end }}
+  RELAY_REDIS_ADDR: {{ include "relay.redisAddr" . | quote }}
+  {{- with .Values.relay.redisPoolSize }}
+  RELAY_REDIS_POOL_SIZE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.redisMinIdleConns }}
+  RELAY_REDIS_MIN_IDLE_CONNS: {{ . | quote }}
+  {{- end }}
+  RELAY_CH_RETENTION_DAYS: {{ .Values.clickhouse.retentionDays | quote }}
+  RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
+  RELAY_COOKIE_SECURE: {{ .Values.relay.cookieSecure | quote }}
+  RELAY_HEALTHZ_DEADLINE_MS: {{ .Values.relay.healthzDeadlineMs | quote }}
+  {{- with .Values.relay.maxRequestBytes }}
+  RELAY_MAX_REQUEST_BYTES: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.controlAllowOrigins }}
+  RELAY_CONTROL_ALLOW_ORIGINS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.catalogVersion }}
+  RELAY_CATALOG_VERSION: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.relay.catalogUrl }}
+  RELAY_CATALOG_URL: {{ . | quote }}
+  {{- end }}
+  {{- $inferenceUrl := .Values.relay.inferenceApiUrl }}
+  {{- if and (not $inferenceUrl) .Values.gateway.enabled .Values.gateway.inference.host }}
+  {{- $inferenceUrl = printf "https://%s" .Values.gateway.inference.host }}
+  {{- else if and (not $inferenceUrl) .Values.ingress.enabled .Values.ingress.inference.host }}
+  {{- $inferenceUrl = printf "https://%s" .Values.ingress.inference.host }}
+  {{- end }}
+  {{- with $inferenceUrl }}
+  RELAY_INFERENCE_API_URL: {{ . | quote }}
+  {{- end }}
+  GOMEMLIMIT: {{ .Values.goMemLimit | quote }}
+  GOGC: {{ .Values.goGC | quote }}

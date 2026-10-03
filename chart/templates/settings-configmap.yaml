@@ -1,0 +1,30 @@
+# Settings sections seeded into the DB on first boot via RELAY_SETTINGS_DIR.
+# Seed-if-absent: a live `PUT /settings/<section>` is authoritative thereafter,
+# so this declares the *initial* value, not a continuously-enforced one.
+# Mounted read-only by subPath (no ConfigMap ..data symlink tree) so relay's
+# recursive settings loader reads each file exactly once.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "relay.fullname" . }}-settings
+  labels:
+    {{- include "relay.labels" . | nindent 4 }}
+data:
+  payload-logging.yaml: |
+    apiVersion: relay.wyolet.dev/v1alpha2
+    kind: Setting
+    metadata:
+      name: payload-logging
+    spec:
+      # Request/response body capture (the /logs UI). backend "clickhouse"
+      # reuses RELAY_CH_DSN — the same bundled CH that holds usage events — so
+      # there is no extra store and no credentials in this row. Per-request
+      # capture still requires a policy/relay-key opt-in on top of `enabled`.
+      enabled: {{ .Values.relay.payloadLogging.enabled }}
+      backend: {{ .Values.relay.payloadLogging.backend | quote }}
+      maxBytes: {{ .Values.relay.payloadLogging.maxBytes | int }}
+      {{- if eq .Values.relay.payloadLogging.backend "clickhouse" }}
+      clickhouse:
+        retentionDays: {{ .Values.relay.payloadLogging.retentionDays | int }}
+        walDir: {{ .Values.relay.payloadLogging.walDir | quote }}
+      {{- end }}

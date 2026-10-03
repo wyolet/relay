@@ -2,16 +2,10 @@ package kv
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	mrand "math/rand/v2"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -196,178 +190,6 @@ func (r *Redis) Range(ctx context.Context, prefix string) ([]Entry, error) {
 	return entries, nil
 }
 
-const (
-	luaAcquire = `
-for i, k in ipairs(KEYS) do
-  if redis.call('SET', k, ARGV[1], 'NX', 'PX', ARGV[2]) == false then
-    for j = 1, i-1 do redis.call('DEL', KEYS[j]) end
-    return 0
-  end
-end
-return 1`
-
-	luaRelease = `
-local n = 0
-for i, k in ipairs(KEYS) do
-  if redis.call('GET', k) == ARGV[1] then
-    redis.call('DEL', k)
-    n = n + 1
-  end
-end
-return n`
-)
-
-// WithLock implements the blocking Store contract over SET NX PX: acquisition
-// is retried with jittered backoff (5-25ms) until it succeeds or ctx is done,
-// matching Mem's block-until-acquired semantics. The all-or-nothing Lua
-// acquire (partial holds are rolled back before returning 0) keeps opposite
-// key orders deadlock-free while polling.
-// Cluster safety: all keys must share the same hash tag, else CROSSSLOT.
-func (r *Redis) WithLock(ctx context.Context, keys []string, fn func(context.Context) error) error {
-	sorted := make([]string, len(keys))
-	copy(sorted, keys)
-	sort.Strings(sorted)
-	// deduplicate
-	deduped := sorted[:0]
-	for i, k := range sorted {
-		if i == 0 || k != sorted[i-1] {
-			deduped = append(deduped, k)
-		}
-	}
-
-	tokenBytes := make([]byte, 16)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return err
-	}
-	token := hex.EncodeToString(tokenBytes)
-	ttlMs := strconv.FormatInt(int64(30*time.Second/time.Millisecond), 10)
-
-	for {
-		acquired, err := r.runLua(ctx, "state.withlock.acquire", luaAcquire, deduped, token, ttlMs)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(string(acquired)) != "0" {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Duration(5+mrand.IntN(21)) * time.Millisecond):
-		}
-	}
-	defer func() {
-		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = r.runLua(releaseCtx, "state.withlock.release", luaRelease, deduped, token)
-	}()
-	return fn(ctx)
-}
-
-// runLua is an internal helper; it is NOT the exported RunScript.
-// It does SCRIPT LOAD → EVALSHA with EVAL fallback.
-func (r *Redis) runLua(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
-	sha, err := r.loadSHA(ctx, name, script)
-	if err != nil {
-		return nil, err
-	}
-	result, err := r.client.EvalSha(ctx, sha, keys, args...).Result()
-	if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
-		// Reload and retry.
-		r.shas.Delete(name)
-		sha, err = r.loadSHA(ctx, name, script)
-		if err != nil {
-			return nil, err
-		}
-		result, err = r.client.EvalSha(ctx, sha, keys, args...).Result()
-		if err != nil {
-			// Final fallback: plain EVAL.
-			result, err = r.client.Eval(ctx, script, keys, args...).Result()
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-	return redisResultToBytes(result)
-}
-
-func (r *Redis) loadSHA(ctx context.Context, name, script string) (string, error) {
-	if v, ok := r.shas.Load(name); ok {
-		return v.(string), nil
-	}
-	sha, err := r.client.ScriptLoad(ctx, script).Result()
-	if err != nil {
-		return "", fmt.Errorf("state: SCRIPT LOAD %q: %w", name, err)
-	}
-	actual, _ := r.shas.LoadOrStore(name, sha)
-	return actual.(string), nil
-}
-
-// RunScript implements Scripter.
-func (r *Redis) RunScript(ctx context.Context, name, script string, keys []string, args ...any) ([]byte, error) {
-	r.inflight.Add(1)
-	defer r.inflight.Done()
-	return r.runLua(ctx, name, script, keys, args...)
-}
-
-// RunScriptBatch implements BatchScripter: it issues every call in a single
-// pipeline (one network round trip on single-node; one per involved node on
-// Cluster, dispatched together). Each call is an independent EVALSHA — the
-// batch is NOT a transaction, so a per-call failure does not roll back the
-// others. Keys within one call must share a hash tag; keys ACROSS calls may
-// differ (that is the point — it batches away sequential round trips for
-// operations that cannot share a CROSSSLOT-safe script).
-func (r *Redis) RunScriptBatch(ctx context.Context, calls []ScriptCall) []ScriptResult {
-	r.inflight.Add(1)
-	defer r.inflight.Done()
-
-	results := make([]ScriptResult, len(calls))
-	if len(calls) == 0 {
-		return results
-	}
-
-	// Best-effort preload; an empty sha falls back to plain EVAL in-pipeline.
-	shas := make([]string, len(calls))
-	for i, c := range calls {
-		if sha, err := r.loadSHA(ctx, c.Name, c.Script); err == nil {
-			shas[i] = sha
-		}
-	}
-
-	cmds := make([]*redis.Cmd, len(calls))
-	// Pipelined returns the first command error; individual results are read
-	// from each Cmder below regardless, so the aggregate error is ignored.
-	_, _ = r.client.Pipelined(ctx, func(p redis.Pipeliner) error {
-		for i, c := range calls {
-			if shas[i] != "" {
-				cmds[i] = p.EvalSha(ctx, shas[i], c.Keys, c.Args...)
-			} else {
-				cmds[i] = p.Eval(ctx, c.Script, c.Keys, c.Args...)
-			}
-		}
-		return nil
-	})
-
-	for i, cmd := range cmds {
-		v, err := cmd.Result()
-		if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
-			// Script evicted between preload and exec; re-run this one directly
-			// (runLua reloads the SHA and falls back to EVAL).
-			r.shas.Delete(calls[i].Name)
-			b, rerr := r.runLua(ctx, calls[i].Name, calls[i].Script, calls[i].Keys, calls[i].Args...)
-			results[i] = ScriptResult{Value: b, Err: rerr}
-			continue
-		}
-		if err != nil {
-			results[i] = ScriptResult{Err: err}
-			continue
-		}
-		b, cerr := redisResultToBytes(v)
-		results[i] = ScriptResult{Value: b, Err: cerr}
-	}
-	return results
-}
-
 func (r *Redis) Close() error {
 	done := make(chan struct{})
 	go func() {
@@ -379,23 +201,4 @@ func (r *Redis) Close() error {
 	case <-time.After(5 * time.Second):
 	}
 	return r.client.Close()
-}
-
-// redisResultToBytes converts a redis Eval result to []byte.
-// Integer → decimal string bytes.
-// String/[]byte → as-is bytes.
-// Slice → JSON-encoded bytes.
-func redisResultToBytes(v any) ([]byte, error) {
-	switch val := v.(type) {
-	case int64:
-		return []byte(strconv.FormatInt(val, 10)), nil
-	case string:
-		return []byte(val), nil
-	case []byte:
-		return val, nil
-	case nil:
-		return nil, nil
-	default:
-		return json.Marshal(val)
-	}
 }

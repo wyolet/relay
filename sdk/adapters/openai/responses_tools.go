@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// ResponsesFunctionTool is the only supported tool type in Responses API v1.
+// ResponsesFunctionTool is a JSON-schema tool definition.
 type ResponsesFunctionTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -68,7 +68,7 @@ func (ts *ResponsesTools) UnmarshalJSON(data []byte) error {
 
 // ResponsesRawTool carries a tool definition whose `type` the adapter does not
 // model — the hosted/server-side tools (web_search, file_search, code_interpreter,
-// image_generation, computer_use, mcp, local_shell, custom). It exists so an
+// image_generation, computer_use, mcp, local_shell). It exists so an
 // unmodeled tool def round-trips verbatim instead of hard-erroring the whole
 // request. Cross-shape it is dropped at responsesRequestToCanonical with an
 // annotation (it can't be expressed to a non-OpenAI upstream); within-vendor is
@@ -82,8 +82,7 @@ func (*ResponsesRawTool) isResponsesTool()                       {}
 func (r *ResponsesRawTool) ResponsesToolType() ResponsesToolType { return r.Type }
 func (r *ResponsesRawTool) MarshalJSON() ([]byte, error)         { return r.Raw, nil }
 
-// responsesUnmarshalTool decodes a single tool. Function tools map to canonical;
-// every other (hosted-tool) type is captured verbatim as a ResponsesRawTool.
+// responsesUnmarshalTool decodes a single tool. Function, custom and namespace tools map to canonical; every other (hosted-tool) type is captured verbatim as a ResponsesRawTool.
 func responsesUnmarshalTool(data []byte) (ResponsesTool, error) {
 	var probe struct {
 		Type ResponsesToolType `json:"type"`
@@ -97,6 +96,20 @@ func responsesUnmarshalTool(data []byte) (ResponsesTool, error) {
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("function tool: %w", err)
 		}
+		return &v, nil
+	case ResponsesToolTypeCustom:
+		var v ResponsesCustomTool
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("custom tool: %w", err)
+		}
+		v.Raw = append(json.RawMessage(nil), data...)
+		return &v, nil
+	case ResponsesToolTypeNamespace:
+		var v ResponsesNamespaceTool
+		if err := json.Unmarshal(data, &v); err != nil {
+			return nil, fmt.Errorf("namespace tool: %w", err)
+		}
+		v.Raw = append(json.RawMessage(nil), data...)
 		return &v, nil
 	default:
 		return &ResponsesRawTool{Type: probe.Type, Raw: append(json.RawMessage(nil), data...)}, nil
