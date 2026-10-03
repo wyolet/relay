@@ -328,7 +328,7 @@ func TestIntegration_KeyCreateAndRotate(t *testing.T) {
 		t.Fatalf("POST /api/keys for an unknown user = %d: %s", code, raw)
 	}
 
-	// A user principal the caller cannot claim (no owner id to stamp, and
+	// A user principal the caller cannot claim (no owner id to set, and
 	// none supplied) fails validation rather than landing an orphan row.
 	code, raw = st.adminDo(http.MethodPost, "/api/keys",
 		`{"metadata":{"name":"anonymous"},"spec":{"principal":{"kind":"user"}}}`)

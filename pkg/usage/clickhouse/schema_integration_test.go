@@ -18,13 +18,9 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// A table created before the attribution columns existed must be upgraded in
-// place by ensureSchema, not rejected as incompatible — that is what the
-// ADD COLUMN IF NOT EXISTS list is for.
-//
-// ensureSchema addresses usage_events unqualified, so the legacy fixture gets
-// its own throwaway database: RELAY_CH_DSN usually points at a shared dev
-// server whose real table must not be touched.
+// A table without the attribution columns must be upgraded in place by
+// ensureSchema, not rejected. ensureSchema addresses usage_events unqualified,
+// so the fixture gets a throwaway database instead of RELAY_CH_DSN's own.
 func TestIntegration_EnsureSchemaAddsAttributionColumns(t *testing.T) {
 	dsn := os.Getenv("RELAY_CH_DSN")
 	if dsn == "" {
@@ -61,13 +57,13 @@ func TestIntegration_EnsureSchemaAddsAttributionColumns(t *testing.T) {
 
 	// The pre-attribution schema is this file's DDL truncated at the first
 	// new column, so the fixture can't drift from the current one.
-	legacy := strings.SplitN(createTableSQL, "    project_id", 2)[0]
-	legacy = strings.TrimSuffix(strings.TrimRight(legacy, " \n"), ",") + `
+	withoutAttribution := strings.SplitN(createTableSQL, "    project_id", 2)[0]
+	withoutAttribution = strings.TrimSuffix(strings.TrimRight(withoutAttribution, " \n"), ",") + `
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, model_id, policy_id)`
-	if err := conn.Exec(ctx, legacy); err != nil {
-		t.Fatalf("create legacy table: %v", err)
+	if err := conn.Exec(ctx, withoutAttribution); err != nil {
+		t.Fatalf("create table without attribution columns: %v", err)
 	}
 
 	if err := ensureSchema(ctx, conn, 30); err != nil {

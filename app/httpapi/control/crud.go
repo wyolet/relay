@@ -294,15 +294,9 @@ func registerKind[T any](
 				}
 				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-			// system is reserved for seed paths (Store.Upsert directly,
-			// bypassing this handler) except on kinds whose default owner IS
-			// system — Team, Group and Role name a scope or a grant, so a
-			// personal row of those kinds would let any caller mint one and
-			// inherit whatever already binds to its name. Kinds without a
-			// default (Model, HostKey) require the caller to specify
-			// owner.kind because their valid owner is per-row.
-			// role-bindings are exempt too: their owner mirrors spec.scope,
-			// and a global binding's scope IS system (D42).
+			// system is reserved for seed paths, except where it is the kind's
+			// default (a personal Team, Group or Role would inherit whatever binds
+			// to its name) and role-bindings, whose owner mirrors spec.scope.
 			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem &&
 				singular != "role-binding" {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")

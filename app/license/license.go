@@ -7,8 +7,7 @@
 // root builds the real implementation and hands it in.
 //
 // Feature names are the vocabulary of the license file's `features` array.
-// "sso" and "custom-roles" are gated today; "scim", "orgs" and
-// "audit-export" are reserved for the milestones that implement them.
+// A license may carry names this build does not gate; they unlock nothing.
 package license
 
 import (
@@ -16,8 +15,8 @@ import (
 	"time"
 )
 
-// FeatureSSO gates enterprise identity integrations (SAML, SCIM). OIDC login
-// is community and never consults it.
+// FeatureSSO is the license name for enterprise identity integrations. OIDC
+// login is community and never consults it.
 const FeatureSSO = "sso"
 
 // FeatureCustomRoles gates authoring Roles of your own. The built-in roles

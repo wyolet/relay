@@ -41,23 +41,17 @@ func wsHandler(d Deps) http.HandlerFunc {
 		}
 
 		perFrame := func(fw http.ResponseWriter, fr *http.Request) {
-			// The upgrade pinned the snapshot its credential resolved
-			// against, and a connection then lives for hours: inheriting
-			// that pin would serve every later frame from a catalog frozen
-			// at handshake time. Each frame re-pins the live snapshot, so a
-			// frame is still internally consistent but never stale.
+			// A connection lives for hours, so each frame re-pins the live
+			// snapshot instead of inheriting the handshake's: consistent
+			// within a frame, never stale across frames.
 			var snap *appcatalog.Snapshot
 			if d.Catalog != nil {
 				snap = d.Catalog.Current()
 			}
 			fr = fr.WithContext(WithSnapshot(fr.Context(), snap))
-			// The credential was checked once, at the upgrade. Re-run the
-			// revocation checks per frame so a revoked key or token stops
-			// working without waiting for the client to reconnect, and
-			// re-resolve the policy against this frame's snapshot — a
-			// rebound policy binding must reach a live connection too.
-			// Frames run concurrently, so the re-resolution writes to a
-			// copy and never to the connection's shared principal.
+			// Revocation and policy resolution re-run per frame so a revoked
+			// credential or rebound policy reaches a live connection. Frames
+			// run concurrently, so this writes to a copy of the principal.
 			if p := PrincipalFrom(fr.Context()); p != nil && snap != nil {
 				if err := p.Recheck(snap, time.Now()); err != nil {
 					writeAuthErr(fw, err.Error())
@@ -93,7 +87,7 @@ func framePrincipal(p *Principal, snap *appcatalog.Snapshot) *Principal {
 	if frame.Key != nil && frame.Key.Spec.PolicyID != "" {
 		// Disabled included, so a policy switched off mid-connection answers
 		// policy_disabled instead of falling through to the account's or the
-		// project's broader grant (D77).
+		// project's broader grant.
 		if pol, ok := policyOrDisabled(snap, frame.Key.Spec.PolicyID); ok {
 			frame.Policy = pol
 		}

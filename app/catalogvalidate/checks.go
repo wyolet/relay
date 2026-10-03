@@ -760,10 +760,9 @@ func checkOrphans(g *graph) []Issue {
 		})
 	}
 
-	// HostKey → at least one Policy a caller can actually route through.
-	// A team- or project-owned Policy reaches its host keys the same way a
-	// user-owned one does, so counting only user/system owners reports a
-	// referenced key as unreachable.
+	// HostKey → at least one Policy a caller can route through. Team- and
+	// project-owned policies count too, or a referenced key reads as
+	// unreachable.
 	keyReferenced := map[string]bool{}
 	for _, pol := range g.Policies {
 		switch pol.Metadata.Owner.Kind {

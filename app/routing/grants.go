@@ -64,7 +64,7 @@ func (r *Resolver) PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Po
 // user, scoping the pool exactly as resolution does.
 //
 // Mirrors resolvePolicyless step for step: enabled model, not deprecated,
-// enabled binding, resolvable host, and a key the D73 pool actually yields.
+// enabled binding, resolvable host, and a key the policy-less pool yields.
 func (r *Resolver) PolicylessAllows(snap *appcatalog.Snapshot, m *model.Model, adapter adapters.Name, userID string) bool {
 	if m == nil || !m.IsEnabled() || isDeprecated(m) {
 		return false

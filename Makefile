@@ -342,7 +342,7 @@ test: ## go test ./... (all modules)
 	cd sdk && go test ./...
 	cd jobq && go test ./...
 
-test-race: ## unit tests under -race (hot path, IAM, shared libs)
+test-race: ## unit tests under -race (app, pkg, cmd, internal)
 	go test -race ./app/... ./pkg/... ./cmd/... ./internal/...
 
 # One target at a time: `go test -fuzz` fuzzes a single function per run.
@@ -357,7 +357,7 @@ test-fuzz: ## fuzz the token parser and the bearer classifier ($(FUZZ_TIME) each
 # two are mergeable: store packages only get credit from integration runs.
 COVER_DIR   ?= .cover
 COVER_PKGS  ?= ./app/...,./pkg/...,./internal/...,./cmd/...
-# Tiers are aspirational until the test plan lands; set to 1 to make them fail CI.
+# Tier thresholds are reported, not enforced, by default; set to 1 to make them fail CI.
 COVER_ENFORCE ?= 0
 
 test-cover: ## unit tests with a coverprofile in $(COVER_DIR)

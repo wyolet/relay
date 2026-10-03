@@ -5,12 +5,11 @@ import (
 	"testing"
 )
 
-// audit 2026-07-04 [P3 RESTRUCTURE]: resanitize replaces rows in ByID but
-// leaves sibling indices (modelsByName/snapshotsByName/snapshotAliases/
-// modelsByPolicy) pointing at the pre-sanitize copies — all indices must
-// serve the same row generation.
+// Resanitize replaces rows in ByID; the sibling indices (modelsByName,
+// snapshotsByName, snapshotAliases, modelsByPolicy) must serve the same row
+// generation rather than the pre-sanitize copies.
 func TestApply_ResanitizeKeepsSiblingIndicesCoherent(t *testing.T) {
-	t.Skip("audit 2026-07-04: resanitize leaves sibling indices stale — known-broken, unskip with the fix")
+	t.Skip("known bug: resanitize leaves sibling indices stale; unskip with the fix")
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {

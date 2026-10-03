@@ -313,10 +313,8 @@ func FromHostKey(k *hostkey.HostKey, rev ReverseResolver) HostKeyDTO {
 // ---------------------------------------------------------------------------
 
 func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
-	// Spec.Models entries are modelref DSL strings, canonicalised exactly as
-	// the control API canonicalises them: a document and an API write of the
-	// same grant must produce the same row, or apply reports an update on
-	// every run.
+	// Canonicalised exactly as the control API does, or apply reports an
+	// update on every run for a grant the API wrote.
 	models, err := policy.CanonicalizeModelRefs(d.Spec.Models)
 	if err != nil {
 		return nil, fmt.Errorf("policy %q: models: %w", d.Metadata.Name, err)
@@ -1199,10 +1197,9 @@ func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBin
 	}
 	priority := d.Spec.Priority
 	if priority == nil {
-		// The store and the control API both write this default, so a
-		// document that omits priority must translate to the same row or
-		// apply reports an update on every run. An explicit 0 is a real
-		// priority and is carried through.
+		// The store and control API write this default, so an omitted
+		// priority must match or apply reports an update every run. An
+		// explicit 0 is a real priority and is kept.
 		def := policybinding.DefaultPriority
 		priority = &def
 	}

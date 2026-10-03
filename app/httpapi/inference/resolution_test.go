@@ -197,7 +197,7 @@ func TestDispatch_UpstreamHostHeaderNamingNoHost(t *testing.T) {
 // the order itself — a key's own policy first, then the service account's
 // override, then the bindings — so what is left is how the binding list is
 // ordered within that last step, and what a binding pointing at a policy that
-// is switched off or gone does to the walk (D77).
+// is switched off or gone does to the walk.
 func TestPolicyResolution_TiesAndDisabled(t *testing.T) {
 	const subject = "group:system:authenticated"
 

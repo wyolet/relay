@@ -1,6 +1,5 @@
-// escalation.go holds the rule that keeps a RoleBinding from handing out
-// more than the binder has: binding a role is granting every permission in
-// it, so the binder must already hold each one at the binding's scope.
+// Binding a role grants every permission in it, so the binder must already
+// hold each one at the binding's scope.
 package authz
 
 import (

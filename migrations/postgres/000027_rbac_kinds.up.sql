@@ -2,8 +2,7 @@
 --
 -- A Role is a global rule set; a RoleBinding grants it to subjects at one
 -- scope (global | team | project); a PolicyBinding points subjects inside a
--- Project at one Policy. The rows are stored, validated and indexed now;
--- nothing evaluates them yet.
+-- Project at one Policy. Bindings are evaluated when RELAY_AUTHZ=rbac.
 --
 -- Subjects live in junction tables rather than the spec JSONB so a deleted
 -- user or service account disappears from every binding through the FK.

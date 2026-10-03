@@ -334,8 +334,8 @@ func TestWithLockContention(t *testing.T) {
 	}
 }
 
-// Sentinel: skipped — standalone Redis is the default tested topology.
-// Sentinel topology is exercised in HITL (PER-248).
+// Sentinel topology is not covered here: standalone Redis is the tested
+// integration topology.
 func TestSentinelSkipped(t *testing.T) {
-	t.Skip("Sentinel exercised in HITL PER-248; standalone is default integration topology")
+	t.Skip("Sentinel is not covered by the integration suite; standalone is the tested topology")
 }

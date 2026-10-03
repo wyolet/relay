@@ -174,8 +174,7 @@ func policylessCatalog(t *testing.T, allow bool) (*appcatalog.Catalog, string) {
 	return cat, sfx
 }
 
-// TestIntegration_ListModelsPolicylessMatchesResolve is the D73 agreement at
-// the endpoint: with policy-less traffic allowed, /v1/models lists exactly the
+// With policy-less traffic allowed, /v1/models lists exactly the
 // models the policy-less flow would serve — shared keys only, tier gate
 // applied, a keyless host included.
 func TestIntegration_ListModelsPolicylessMatchesResolve(t *testing.T) {
@@ -242,7 +241,7 @@ func TestIntegration_ListModelsPolicylessMatchesResolve(t *testing.T) {
 	}
 }
 
-// D82: under rbac authorization the flag is not read at all — the listing
+// Under rbac authorization the flag is not read at all — the listing
 // refuses and the flow answers the same missing-policy error, so a key with
 // no policy sees nothing either way.
 func TestIntegration_ListModelsPolicylessRefusedUnderRBAC(t *testing.T) {

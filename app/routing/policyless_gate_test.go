@@ -25,7 +25,7 @@ func (openPolicyless) Setting(section string) (any, bool) {
 	return &settings.Inference{AllowMissingPolicy: true}, true
 }
 
-// D82: the operator setting opens policy-less traffic only under
+// The operator setting opens policy-less traffic only under
 // single-user authorization. Under rbac the grants a credential carries are
 // the whole access model, so a key whose policy does not resolve is refused
 // with the same missing-policy error the setting-off path answers.

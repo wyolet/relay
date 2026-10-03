@@ -150,11 +150,9 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 	if in.Host != nil {
 		hostSlug = in.Host.Meta.Name
 	}
-	// A miss here means the key's tier policy is disabled or gone. Unreachable
-	// in practice: the tier gate drops such a key before it is ever selected,
-	// because PolicyAllowsCombo grants nothing for a policy that is not
-	// enabled. Left nil-tolerant rather than fatal — an unmetered request is
-	// the failure this ordering exists to prevent.
+	// A miss (tier policy disabled or gone) is unreachable in practice: the
+	// tier gate drops such a key before selection. Nil-tolerant rather than
+	// fatal; an unmetered request is the failure that gate prevents.
 	tier, _ := s.snap.Policy(ctx, key.Spec.PolicyID)
 	rules := s.rulesFor(ctx, tier, in.Provider, modelSlug, hostSlug, modelID)
 	if len(rules) == 0 || s.limiter == nil {

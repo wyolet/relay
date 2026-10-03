@@ -1,6 +1,5 @@
-// cli_client.go is the shared HTTP plumbing for the control-plane
-// subcommands (apply, export, token). Plain net/http against the same
-// endpoints an operator would curl — no generated client, no new module.
+// The CLI subcommands use plain net/http against the endpoints an operator
+// would curl, so they need no generated client or extra module.
 package main
 
 import (

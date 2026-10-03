@@ -1,7 +1,7 @@
 //go:build integration
 
 // migration_test.go covers the schema-lifecycle promises the rollback story
-// rests on: the key backfill has to give every legacy key its own service
+// rests on: the key backfill has to give every principal-less key its own service
 // account however long its name is, a down-migration has to land on the
 // version it was asked for and converge when the schema is brought back up,
 // a target above the current version is a mistake rather than an
@@ -30,7 +30,7 @@ import (
 )
 
 // scratchPrefix marks every database these tests create, so a run that dies
-// before its cleanup can be swept up by the next one.
+// before its cleanup can be dropped by the next one.
 const scratchPrefix = "relay_scratch_"
 
 // scratchDB creates a database of its own next to the one the suite runs
@@ -54,7 +54,7 @@ func scratchDB(t *testing.T, name string) string {
 		t.Fatalf("admin pool: %v", err)
 	}
 	defer admin.Close()
-	// A run killed mid-test never gets its cleanup, so sweep what earlier
+	// A run killed mid-test never gets its cleanup, so drop what earlier
 	// runs left behind before adding one more.
 	rows, err := admin.Query(ctx,
 		`SELECT datname FROM pg_database WHERE datname LIKE $1`, scratchPrefix+"%")
@@ -153,9 +153,9 @@ func schemaVersion(t *testing.T, dsn string) (version uint, dirty bool) {
 	return uint(v), dirty
 }
 
-// insertLegacyKey writes a relay_keys row from before the principal columns
-// existed: an owner naming a user that carries no id.
-func insertLegacyKey(t *testing.T, dsn, name string) {
+// insertKeyWithoutPrincipal writes a relay_keys row from before the principal
+// columns existed: an owner naming a user that carries no id.
+func insertKeyWithoutPrincipal(t *testing.T, dsn, name string) {
 	t.Helper()
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -171,10 +171,10 @@ func insertLegacyKey(t *testing.T, dsn, name string) {
 	}
 }
 
-// Every legacy key gets a service account of its own, whatever its name:
-// two keys whose names share a long prefix must not land on one principal,
-// which would let either key spend the other's grants.
-func TestMigrationGivesLongLegacyKeyNamesDistinctServiceAccounts(t *testing.T) {
+// Every principal-less key gets a service account of its own, whatever its
+// name: two keys whose names share a long prefix must not land on one
+// principal, which would let either key spend the other's grants.
+func TestMigrationGivesLongKeyNamesDistinctServiceAccounts(t *testing.T) {
 	dsn := scratchDB(t, "relay_mig_names")
 	m := scratchMigrator(t, dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
@@ -183,8 +183,8 @@ func TestMigrationGivesLongLegacyKeyNamesDistinctServiceAccounts(t *testing.T) {
 
 	prefix := strings.Repeat("a", 66)
 	first, second := prefix+"one", prefix+"two"
-	insertLegacyKey(t, dsn, first)
-	insertLegacyKey(t, dsn, second)
+	insertKeyWithoutPrincipal(t, dsn, first)
+	insertKeyWithoutPrincipal(t, dsn, second)
 
 	if err := m.Migrate(26); err != nil {
 		t.Fatalf("migrate to 26: %v", err)
@@ -202,7 +202,7 @@ func TestMigrationGivesLongLegacyKeyNamesDistinctServiceAccounts(t *testing.T) {
 		t.Fatalf("count accounts: %v", err)
 	}
 	if accounts != 2 {
-		t.Errorf("service accounts = %d, want one per legacy key", accounts)
+		t.Errorf("service accounts = %d, want one per key", accounts)
 	}
 
 	var principals int

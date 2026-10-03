@@ -89,7 +89,7 @@ func NewStores(pool *pgxpool.Pool, masterKey []byte) *Stores {
 }
 
 // Rows is every existing row of every kind, loaded once so planning,
-// pruning, and export share a single sweep of Postgres.
+// pruning, and export share a single read of Postgres.
 type Rows struct {
 	Providers  []*provider.Provider
 	Hosts      []*host.Host

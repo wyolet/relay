@@ -158,10 +158,9 @@ func registerMisc(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		out := &reloadOutput{}
 		out.Body.Status = "ok"
-		// Re-verify the license off the reloaded settings, so an operator
-		// can install or renew one without a restart. A bad stored value is
-		// reported in the body rather than failing the reload: the catalog
-		// rebuild the caller asked for did happen.
+		// Re-verify the license so a renewal needs no restart. A bad stored
+		// value is reported in the body rather than failing the reload,
+		// because the catalog rebuild did happen.
 		if d.License != nil {
 			if _, err := d.License.Set(settings.LicenseFrom(d.Catalog).Value); err != nil {
 				slog.Warn("control: stored license does not verify", "err", err)

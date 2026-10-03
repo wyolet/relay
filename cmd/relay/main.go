@@ -747,10 +747,9 @@ func main() {
 			PublicURL:      cfg.PublicURL,
 			RuntimeConfig:  runtimeConfig(cfg),
 		}
-		// /config.json stays at the listener ROOT — the UI fetches it at boot,
-		// before it knows the /api prefix. It advertises controlApiUrl=/api so
-		// the SPA's API client targets /api/* while the SPA's own routes
-		// (/models, /policies, …) fall through to the embedded UI below.
+		// /config.json stays at the listener root: the UI fetches it before
+		// it knows the /api prefix, which config.json advertises as
+		// controlApiUrl.
 		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(ctrlDeps))
 		ctrlRouter.Route("/api", func(r chi.Router) {
 			control.Mount(r, ctrlDeps)
@@ -761,12 +760,9 @@ func main() {
 		// control API mounts under.
 		control.MountOIDCCallbackRoot(ctrlRouter, ctrlDeps)
 		ctrlRouter.Handle("/metrics", metrics.Handler())
-		// Embedded admin UI: same-origin SPA served as the fallback for
-		// everything the routes above do not claim. Paths under /api never
-		// reach it — the control API answers its own 404s in JSON, so a UI
-		// calling a renamed endpoint gets an error it can parse. Only
-		// mounted when a real dist was baked in (image build) and not
-		// explicitly disabled.
+		// The embedded SPA is the fallback for unclaimed paths, but never
+		// under /api: a UI calling a renamed endpoint must get a JSON 404 it
+		// can parse. Mounted only when a dist was baked in and not disabled.
 		if !cfg.UIDisable && relayweb.Present() {
 			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
 			slog.Debug("relay control: serving embedded UI")

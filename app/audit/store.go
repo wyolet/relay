@@ -1,5 +1,3 @@
-// store.go is the data-access layer for audit events: the Emitter's Sink
-// and the read side behind GET /api/audit.
 package audit
 
 import (

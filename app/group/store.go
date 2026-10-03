@@ -1,7 +1,5 @@
-// store.go is the data-access layer for Group. Spec.MemberIDs lives in the
-// group_members junction table (FK to users, so deleting a user drops the
-// membership), not in the JSONB spec column. Upsert fans out across both
-// inside a single transaction.
+// Spec.MemberIDs lives in the group_members junction, not the spec JSONB, so
+// the FK to users drops a deleted user's memberships.
 package group
 
 import (
@@ -17,16 +15,14 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Group data-access type. Holds a pool so Upsert can run a
-// multi-table transaction.
+// Store holds a pool rather than Queries so Upsert can run a multi-table
+// transaction.
 type Store struct {
 	pool *pgxpool.Pool
 }
 
-// NewStore constructs a Store bound to a pool.
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-// List returns every Group row, hydrating MemberIDs from the junction.
 func (s *Store) List(ctx context.Context) ([]*Group, error) {
 	q := gen.New(s.pool)
 	rows, err := q.ListGroups(ctx)
@@ -53,7 +49,7 @@ func (s *Store) List(ctx context.Context) ([]*Group, error) {
 	return out, nil
 }
 
-// Get returns the Group with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*Group, error) {
 	q := gen.New(s.pool)
 	r, err := q.GetGroup(ctx, id)
@@ -77,7 +73,6 @@ func (s *Store) Get(ctx context.Context, id string) (*Group, error) {
 	return g, nil
 }
 
-// Upsert writes g across groups + group_members in a single tx.
 func (s *Store) Upsert(ctx context.Context, g *Group) error {
 	params, err := toUpsertParams(g)
 	if err != nil {
@@ -111,7 +106,7 @@ func (s *Store) Upsert(ctx context.Context, g *Group) error {
 	return nil
 }
 
-// Delete removes a Group by id. Junction rows cascade via FK.
+// Delete relies on the FK to cascade the junction rows.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.pool).DeleteGroup(ctx, id)
 }

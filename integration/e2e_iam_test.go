@@ -35,7 +35,7 @@ func TestOperatorWalk(t *testing.T) {
 	t.Run("UnresolvedHostKeyDoesNotBlockTheControlPlane", walkUnresolvedHostKey)
 	t.Run("MintedTokenSpendsAndItsUsageCarriesTheProject", walkTokenUsageAttribution)
 	t.Run("TeamAdminCannotRebindTheirOwnBindingToTheAdminRole", walkRoleBindingUpdateEscalation)
-	t.Run("LegacyKeysListForTheirOwnerAfterTheUpgrade", walkLegacyKeysAfterUpgrade)
+	t.Run("UsernameOwnedKeysListForTheirOwnerAfterTheUpgrade", walkUsernameOwnedKeysAfterUpgrade)
 	t.Run("PolicyBindingPriorityZeroBeatsAnUnsetPriority", walkPolicyBindingPriority)
 	t.Run("WebSocketFramesFollowAPolicyBindingChange", walkWebSocketFollowsRebinding)
 }
@@ -156,7 +156,7 @@ func walkRoleBindingUpdateEscalation(t *testing.T) {
 // bindings yet. The backfill gives each key its owner's uuid, and a caller
 // with no binding still sees the rows that are personally theirs — only
 // those.
-func walkLegacyKeysAfterUpgrade(t *testing.T) {
+func walkUsernameOwnedKeysAfterUpgrade(t *testing.T) {
 	st := newStackAuthz(t, "rbac")
 	ctx := context.Background()
 	mineID := st.seedLogin(t, "sluggy", "pw-sluggy")
@@ -171,8 +171,8 @@ func walkLegacyKeysAfterUpgrade(t *testing.T) {
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
-	insertLegacySlugKey(t, "mine", "sluggy")
-	insertLegacySlugKey(t, "theirs", "otherguy")
+	insertUsernameOwnedKey(t, "mine", "sluggy")
+	insertUsernameOwnedKey(t, "theirs", "otherguy")
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate back up to head: %v", err)
 	}
@@ -193,7 +193,7 @@ func walkLegacyKeysAfterUpgrade(t *testing.T) {
 		t.Fatalf("decode key list: %v", err)
 	}
 	if list.Total != 1 || len(list.Items) != 1 {
-		t.Fatalf("key list = %d rows, want the caller's own legacy key only: %s", list.Total, raw)
+		t.Fatalf("key list = %d rows, want the caller's own key only: %s", list.Total, raw)
 	}
 	if got := list.Items[0]; got.Metadata.Name != "mine" || got.Metadata.Owner.ID != mineID {
 		t.Errorf("listed key = %q owned by %q, want \"mine\" owned by %s",
@@ -452,9 +452,9 @@ func (s *stack) waitForSnapshot(t *testing.T, cond func(*appcatalog.Snapshot) bo
 	}
 }
 
-// insertLegacySlugKey writes a pre-tenancy key row: owned by a username
+// insertUsernameOwnedKey writes a pre-tenancy key row: owned by a username
 // rather than a user id, with no principal at all.
-func insertLegacySlugKey(t *testing.T, name, username string) {
+func insertUsernameOwnedKey(t *testing.T, name, username string) {
 	t.Helper()
 	hash := sha256Hex(name)
 	if _, err := testPool(t).Exec(context.Background(),
@@ -463,7 +463,7 @@ func insertLegacySlugKey(t *testing.T, name, username string) {
 		ids.New(), name, hash,
 		`{"owner":{"kind":"user","id":"`+username+`"}}`,
 		`{"keyHash":"`+hash+`","prefix":"sk-wr-`+name+`"}`); err != nil {
-		t.Fatalf("insert legacy key %q: %v", name, err)
+		t.Fatalf("insert username-owned key %q: %v", name, err)
 	}
 }
 

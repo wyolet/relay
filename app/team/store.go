@@ -1,5 +1,3 @@
-// store.go is the data-access layer for Team. Same shape as the other
-// entity stores.
 package team
 
 import (
@@ -14,15 +12,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Team data-access type.
 type Store struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
 func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
 
-// List returns every Team row.
 func (s *Store) List(ctx context.Context) ([]*Team, error) {
 	rows, err := s.q.ListTeams(ctx)
 	if err != nil {
@@ -39,7 +34,7 @@ func (s *Store) List(ctx context.Context) ([]*Team, error) {
 	return out, nil
 }
 
-// Get returns the Team with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*Team, error) {
 	r, err := s.q.GetTeam(ctx, id)
 	if err != nil {
@@ -51,7 +46,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Team, error) {
 	return fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
 }
 
-// Upsert writes t. Caller stamps Meta.ID.
+// Upsert expects Meta.ID set by the caller.
 func (s *Store) Upsert(ctx context.Context, t *Team) error {
 	params, err := toUpsertParams(t)
 	if err != nil {
@@ -60,7 +55,7 @@ func (s *Store) Upsert(ctx context.Context, t *Team) error {
 	return s.q.UpsertTeam(ctx, params)
 }
 
-// Delete removes a Team by id. Projects cascade via FK.
+// Delete relies on the FK to cascade the team's projects.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteTeam(ctx, id)
 }

@@ -286,7 +286,7 @@ func TestRBACAfterTeamDelete(t *testing.T) {
 	}
 }
 
-// Invariant 6: the two entry points can never disagree.
+// Visible and Authorize(get) must never disagree.
 func TestVisibleMatchesAuthorizeGet(t *testing.T) {
 	cat := newFixture(t)
 	rbac := authz.RBAC{Snap: func() authz.Snapshot { return cat.Current() }}
@@ -357,7 +357,7 @@ func TestDefaultDeny(t *testing.T) {
 	if err := rbac.Authorize(ctxOf(stranger), "keys.get", authz.Resource{Kind: "key", Owner: projectOwner(p1ID)}); !errors.Is(err, authz.ErrForbidden) {
 		t.Fatalf("keys.get = %v, want forbidden", err)
 	}
-	// The list call is admitted (D67) but every row is filtered out.
+	// The list call is admitted but every row is filtered out.
 	if err := rbac.Authorize(ctxOf(stranger), "keys.list", authz.Resource{Kind: "key"}); err != nil {
 		t.Fatalf("keys.list = %v, want allowed with an empty result", err)
 	}

@@ -1,8 +1,6 @@
-// Custom POST /keys: generates the bearer plaintext server-side
-// via key.Generate, persists only the hash + prefix, and returns
-// the plaintext exactly once on the create response. The generic CRUD
-// POST in registerKind is skipped for this kind (skipCreate=true) so
-// callers can't sneak a precomputed keyHash through.
+// Keys skip the generic CRUD create (skipCreate=true) so a caller cannot
+// supply a precomputed keyHash: the plaintext is generated here, only its
+// hash is stored, and it is returned exactly once.
 package control
 
 import (

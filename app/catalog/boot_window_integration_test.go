@@ -11,10 +11,6 @@ import (
 	"github.com/wyolet/relay/app/provider"
 )
 
-// TestIntegration_WriteDuringBootWindowNotLost reproduces the audit finding
-// "Listener LISTENs only after initial Reload — boot window loses writes"
-// (audit 2026-07-04, audit-catalog.md, boot.go Hydrate + notify.go listen).
-//
 // Hydrate runs the initial Reload and only *constructs* the Listener;
 // LISTEN catalog_events is issued later inside listener.Run. A write
 // committed in that window (replica B applies an admin write while replica
@@ -27,7 +23,7 @@ import (
 // Correct behavior (LISTEN attached before the first snapshot is built)
 // makes the write visible shortly after Run starts.
 func TestIntegration_WriteDuringBootWindowNotLost(t *testing.T) {
-	t.Skip("audit 2026-07-04: LISTEN-after-load boot window loses writes — known-broken, unskip with the fix")
+	t.Skip("known bug: LISTEN-after-load boot window loses writes; unskip with the fix")
 	pool, ctx, cancel := setupDB(t)
 	defer cancel()
 

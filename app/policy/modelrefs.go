@@ -1,7 +1,5 @@
-// modelrefs.go holds the canonical form of a policy's catalog-ref grants.
-// Every writer of a Policy row — the control API and apply — must store the
-// same string for the same grant, or the two disagree forever: apply would
-// report an update on every run against a row the API just normalised.
+// The control API and apply must store the same string for the same grant,
+// or apply reports an update on every run against a row the API normalised.
 package policy
 
 import (

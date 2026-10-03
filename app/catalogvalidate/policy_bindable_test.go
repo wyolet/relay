@@ -27,10 +27,10 @@ func policyBindingDoc(name, project, pol string) manifest.Document {
 	}}
 }
 
-// D74: the graph linter mirrors the control-plane rule: a
-// binder may name only its own project's policy or a system-owned shared
-// one, and a host tier policy is never bindable.
-func TestValidateGraph_D74BindablePolicy(t *testing.T) {
+// The graph linter mirrors the control-plane rule: a binder may name only its
+// own project's policy or a system-owned shared one, and a host tier policy
+// is never bindable.
+func TestValidateGraph_BindsOnlyOwnProjectOrSharedPolicy(t *testing.T) {
 	base := func(extra ...manifest.Document) []manifest.Document {
 		docs := append(fixture(),
 			teamDoc("platform"),

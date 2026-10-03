@@ -185,8 +185,8 @@ func TestReserveInbound_RevokedJTI(t *testing.T) {
 	}
 }
 
-// TestReserveInbound_ScopeTag pins D26: a project-scoped caller anchors on
-// its team, everyone else keeps the policy slug.
+// A project-scoped caller anchors its counters on its team; everyone else
+// keeps the policy slug.
 func TestReserveInbound_ScopeTag(t *testing.T) {
 	rule := appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 10, Window: appratelimit.Window(time.Minute), Strategy: appratelimit.StrategyFixedWindow}
 

@@ -240,11 +240,9 @@ func (l *Limiter) buildCommitCall(res *Reservation, obs Observations, now time.T
 		for i, rule := range res.tokRules {
 			m := rule.Meter
 			if m == "tokens" {
-				// Input and output are the uncached counts, and their sum is
-				// what a provider reports as the total; the cache, reasoning
-				// and server-tool counters are metered by their own
-				// tokens.<key> meters. Summing the whole map billed one
-				// request several times over.
+				// Input + output is the provider's total; cache, reasoning
+				// and server-tool counts have their own tokens.<key> meters,
+				// so summing the whole map would count a request several times.
 				tokAmounts[i] = obs.Tokens["input"] + obs.Tokens["output"]
 			} else if strings.HasPrefix(m, "tokens.") {
 				key := m[len("tokens."):]

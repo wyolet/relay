@@ -1,7 +1,5 @@
-// Bug-reproduction tests for the 2026-07-04 audit (audit-sdk-adapters.md).
-// Each test asserts the CORRECT wire behavior and is expected to FAIL until
-// the corresponding finding is fixed; once red is confirmed they are t.Skip'd
-// with an audit marker so the suite stays green.
+// Bug-reproduction tests. Each asserts the correct wire behavior and is
+// skipped until the bug it reproduces is fixed, so the suite stays green.
 package anthropic
 
 import (
@@ -123,12 +121,12 @@ func TestAnthropicSerializeRequest_ThinkingTextToolUseReplay_SingleAssistantMess
 // (only auto/none are allowed), so the relay would manufacture a guaranteed
 // upstream 400 out of a valid canonical request.
 //
-// The safe behavior (per the audit's suggested fix): keep the synthetic
+// The safe behavior: keep the synthetic
 // structured-output tool but do NOT force tool_choice when thinking is
 // enabled. This test asserts only the non-contradiction — whatever
 // resolution lands, the wire body must not carry both halves of the 400.
 func TestAnthropicSerializeRequest_StructuredOutputWithThinking_NoForcedToolChoice(t *testing.T) {
-	t.Skip("audit 2026-07-04: structured-output forces tool_choice while thinking enabled — known-broken, unskip with the fix")
+	t.Skip("known bug: structured-output forces tool_choice while thinking enabled; unskip with the fix")
 	const model = "claude-fable-5"
 	req := &v1.Request{
 		Model:      v1.ModelRefs{model},

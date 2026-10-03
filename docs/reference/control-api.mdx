@@ -135,13 +135,30 @@ cannot be retrieved later, only rotated.
 
 ## Teams, projects, and RBAC
 
-Beyond the CRUD surface above, these kinds have their own sub-resources:
+`teams`, `projects`, `groups`, `service-accounts`, `keys`, `roles`,
+`role-bindings`, and `policy-bindings` use the CRUD surface above, except
+that a key is created through its own endpoint so the plaintext never comes
+from the caller. The other endpoints for these kinds:
 
 ```
-POST   /api/models/by-id/{id}/overlay        set an overlay on a catalog model
-GET    /api/models/by-id/{id}/overlay        read it
+POST   /api/keys                               create a key; the plaintext is returned once
+POST   /api/keys/by-id/{id}/rotate             replace the plaintext; graceSeconds keeps the old one valid for a window
+POST   /api/policies/by-id/{id}/keys/{keyId}   attach a key to a policy
+DELETE /api/policies/by-id/{id}/keys/{keyId}   detach it (409 if the key points at another policy)
+GET    /api/{plural}/by-id/{id}/references     rows that reference this one, before a delete
+GET    /api/license                            the live license
+PUT    /api/license                            install a license
+```
+
+Tokens, users, the audit log, and apply/export are covered below; see
+[License](/concepts/license) for what a license unlocks.
+
+## Model overlays
+
+```
+GET    /api/models/by-id/{id}/overlay        read the overlay on a catalog model
+PUT    /api/models/by-id/{id}/overlay        set it
 DELETE /api/models/by-id/{id}/overlay        remove it
-GET    /api/{plural}/by-id/{id}/references   reverse-reference lookup (blast radius before a delete)
 ```
 
 ## Tokens

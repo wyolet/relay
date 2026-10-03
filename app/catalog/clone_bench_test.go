@@ -80,8 +80,8 @@ func BenchmarkSnapshotClone10kKeys(b *testing.B) {
 	}
 }
 
-// BenchmarkGroupUpsert10kKeys is the write that used to walk every key to
-// reindex subjects.
+// BenchmarkGroupUpsert10kKeys measures a group write against many keys, which
+// must not walk every key to reindex subjects.
 func BenchmarkGroupUpsert10kKeys(b *testing.B) {
 	c := benchCatalog(b, 10000)
 	g := c.Current().AllGroups()[0]

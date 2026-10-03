@@ -183,7 +183,7 @@ func PersonalRowsOwnerOnly() Option { return func(r *Resolver) { r.personalOwner
 // RequirePolicy refuses policy-less traffic whatever
 // settings.Inference.AllowMissingPolicy says. RBAC authorization wires it:
 // there a credential's grants are the whole access model, so a key whose
-// policy does not resolve has no access rather than the shared pool's (D82).
+// policy does not resolve has no access rather than the shared pool's.
 func RequirePolicy() Option { return func(r *Resolver) { r.requirePolicy = true } }
 
 // New constructs a Resolver against the live catalog. The Resolver
@@ -212,10 +212,9 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 	if len(models) == 0 {
 		return nil, ErrModelNotFound
 	}
-	// Policy-less flow: when the caller resolved no Policy, the behavior is
-	// decided by settings.Inference.AllowMissingPolicy. When allowed, the
-	// request bypasses the policy-grant + policy-RL paths and just needs a
-	// (model, host) triple the relay has a hostkey for.
+	// Policy-less flow, gated by settings.Inference.AllowMissingPolicy: no
+	// policy grant or rate limit applies, only a (model, host) pair the relay
+	// holds a host key for.
 	if req.Policy == nil {
 		if !r.allowPolicylessTraffic() {
 			return nil, ErrPolicyless
@@ -297,12 +296,9 @@ candidates:
 				continue
 			}
 			anyAllowed = true
-			// Keys — Policy.HostKeyIDs intersect Owner.ID == host.ID. A
-			// candidate the policy allows but has no usable key for is not the
-			// answer: keep walking, since a later binding of the same model may
-			// reach a host the policy does hold a key for. Proxy mode
-			// (SkipKeyCheck) bypasses the gate; the caller's own upstream
-			// credentials replace the keypool.
+			// A binding with no usable key keeps the walk going: a later one
+			// may reach a host the policy holds a key for. Proxy mode
+			// (SkipKeyCheck) uses the caller's own upstream credentials.
 			if req.SkipKeyCheck && !h.Routable() {
 				continue
 			}
@@ -433,7 +429,7 @@ func tierAllowedKeys(snap *appcatalog.Snapshot, keys []*hostkey.HostKey, modelID
 // personalRowsVisible reports whether the binding and its host exist for
 // userID. Owner-only, a personal row serves only its owner: otherwise any
 // user could slot their own endpoint under every grant of a shared model. A
-// user owner with no id (what an admin-token create stamps) is an operator
+// user owner with no id (what an admin-token create writes) is an operator
 // row and stays shared. Nil-safe: a nil Resolver shares personal rows.
 func (r *Resolver) personalRowsVisible(hb *binding.Binding, h *host.Host, userID string) bool {
 	if r == nil || !r.personalOwnerOnly {
@@ -554,8 +550,8 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 // policylessKeys returns the keys a request with no policy may spend against
 // h for m, or nil when the pair is unreachable. A keyless upstream gets the
 // synthetic anonymous key; everything else draws from the shared pool and
-// passes the tier gate. The single definition of the D73 pool: resolution and
-// the /v1/models listing both read it, so the two cannot drift.
+// passes the tier gate. Resolution and the /v1/models listing both read this
+// single definition of the policy-less pool, so the two cannot drift.
 func policylessKeys(snap *appcatalog.Snapshot, m *model.Model, h *host.Host, userID string) []*hostkey.HostKey {
 	if !h.Routable() {
 		return nil

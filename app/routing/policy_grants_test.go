@@ -66,7 +66,7 @@ func newTenancy() (*team.Team, *project.Project) {
 	return tm, proj
 }
 
-// D73: the pool a policy-less request draws on is the host's system-owned
+// The pool a policy-less request draws on is the host's system-owned
 // credentials plus the caller's own. A project's credential is reachable
 // only through that project's policy, which is what holds the spend inside
 // its limits and attribution — TestResolvePolicyless_SkipsProjectOwnedKeys
@@ -391,7 +391,7 @@ func randomGrantCatalog(r *rand.Rand) (*catalog.Snapshot, *policy.Policy, []*mod
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: policy.Spec{IncludeDeprecated: r.Intn(2) == 0},
 	}
-	// One of: implicit wildcard, a legacy id grant, or a ref grant.
+	// One of: implicit wildcard, a model-id grant, or a ref grant.
 	switch r.Intn(3) {
 	case 1:
 		caller.Spec.ModelIDs = []string{modelIDs[r.Intn(len(modelIDs))]}
@@ -448,7 +448,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 				spec: policy.Spec{Models: []string{"acme/m1"}},
 			},
 			{
-				name: "a legacy id grant serves it regardless",
+				name: "a model-id grant serves it regardless",
 			},
 		} {
 			t.Run(string(status)+"/"+tc.name, func(t *testing.T) {
@@ -458,7 +458,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 					Meta: meta.Metadata{ID: meta.NewID(), Name: "caller", Owner: meta.Owner{Kind: meta.OwnerUser}},
 					Spec: tc.spec,
 				}
-				if tc.name == "a legacy id grant serves it regardless" {
+				if tc.name == "a model-id grant serves it regardless" {
 					caller.Spec.ModelIDs = []string{f.model.Meta.ID}
 				}
 				caller.Spec.HostKeyIDs = []string{f.keyA.Meta.ID}
@@ -511,7 +511,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 	}
 }
 
-// D79: the tier gate decides which of a host's keys may serve a given model,
+// The tier gate decides which of a host's keys may serve a given model,
 // and it answers the same way through resolution, the policy-less flow and
 // both listings. The matrix is the four shapes a tier can take.
 func TestTierGate_MatrixAcrossResolutionAndListing(t *testing.T) {

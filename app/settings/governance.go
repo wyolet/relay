@@ -96,11 +96,9 @@ func (e *MutationError) Error() string { return e.Reason }
 func Governs(r Reader, op Op, kind, ownerKind string) error {
 	switch ownerKind {
 	case ownerSystem:
-		// A Team, Group or Role is system-owned when nobody owns it
-		// personally — a scope or a grant belongs to the deployment, not to
-		// whoever created it. That is not the "the relay's own row" the
-		// system tier protects, so these follow the tenant tier and stay
-		// editable through CRUD.
+		// A Team, Group or Role is system-owned because it belongs to the
+		// deployment, not because it is the relay's own row, so it follows
+		// the tenant tier and stays editable through CRUD.
 		if tenancyKinds[kind] {
 			return nil
 		}

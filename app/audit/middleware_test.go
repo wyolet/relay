@@ -196,7 +196,7 @@ func TestMiddlewareFillsRequestAndCode(t *testing.T) {
 		t.Fatalf("outcome = %+v, want 204/allowed", ev.Outcome)
 	}
 	if ev.ID == "" || ev.TS.IsZero() {
-		t.Fatalf("id/ts not stamped: %+v", ev)
+		t.Fatalf("id/ts not set: %+v", ev)
 	}
 }
 

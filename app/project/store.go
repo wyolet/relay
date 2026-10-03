@@ -1,5 +1,5 @@
-// store.go is the data-access layer for Project. team_id is a real column
-// (FK cascade) so deleting a Team drops its Projects without parsing JSONB.
+// team_id is a real column (FK cascade) so deleting a Team drops its Projects
+// without parsing JSONB.
 package project
 
 import (
@@ -14,15 +14,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Project data-access type.
 type Store struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
 func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
 
-// List returns every Project row.
 func (s *Store) List(ctx context.Context) ([]*Project, error) {
 	rows, err := s.q.ListProjects(ctx)
 	if err != nil {
@@ -39,7 +36,7 @@ func (s *Store) List(ctx context.Context) ([]*Project, error) {
 	return out, nil
 }
 
-// Get returns the Project with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*Project, error) {
 	r, err := s.q.GetProject(ctx, id)
 	if err != nil {
@@ -51,7 +48,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Project, error) {
 	return fromRow(r.ID, r.Name, r.DisplayName, r.TeamID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
 }
 
-// Upsert writes p. Caller stamps Meta.ID; Owner is re-derived from TeamID.
+// Upsert expects Meta.ID set by the caller and re-derives Owner from TeamID.
 func (s *Store) Upsert(ctx context.Context, p *Project) error {
 	p.StampOwner()
 	params, err := toUpsertParams(p)
@@ -61,7 +58,6 @@ func (s *Store) Upsert(ctx context.Context, p *Project) error {
 	return s.q.UpsertProject(ctx, params)
 }
 
-// Delete removes a Project by id.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteProject(ctx, id)
 }

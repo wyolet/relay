@@ -21,11 +21,10 @@ import (
 	"github.com/wyolet/relay/pkg/ids"
 )
 
-// Events written before the principal and project columns existed carry only
-// a key hash. TestScopeOfCoversLegacyEventsByOwnKeyHash pins that a caller
-// still reads their own history: the hashes come off their own key rows in
-// the snapshot — current and pre-rotation both — and no other principal's.
-func TestScopeOfCoversLegacyEventsByOwnKeyHash(t *testing.T) {
+// Events without principal and project columns carry only a key hash; a
+// caller still reads their own through the current and pre-rotation hashes of
+// their own key rows, and no other principal's.
+func TestScopeOfCoversHashOnlyEventsByOwnKeyHash(t *testing.T) {
 	yes := true
 	k := &key.Key{Meta: meta.Metadata{ID: ids.New(), Name: "alice-key",
 		Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}}

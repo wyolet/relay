@@ -214,14 +214,14 @@ spec:
     - {kind: serviceaccount, name: ci-deployer}  # SA slug; project inferred
 ```
 
-A custom Role, if the built-ins don't fit (licensed feature):
+A custom Role, if the built-ins don't fit (licensed feature). Its name must
+not be one of the built-in role names:
 
 ```yaml
 apiVersion: relay.wyolet.dev/v1alpha2
 kind: Role
 metadata:
-  name: developer
-  owner: {kind: system}        # system = built-in; user = custom
+  name: ml-developer
 spec:
   rules:
     - kinds: [policies, keys, service-accounts, policy-bindings, host-keys, rate-limits]
@@ -236,7 +236,7 @@ spec:
 
 `kinds` are the API plurals (`providers`, `keys`, `policies`, …) plus `*`;
 `verbs` are `get list create update delete rotate health attach detach read
-mint reload generate snapshot apply` plus `*`.
+mint revoke reload generate snapshot apply` plus `*`.
 
 ### Groups
 

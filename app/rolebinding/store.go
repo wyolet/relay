@@ -1,9 +1,6 @@
-// store.go is the data-access layer for RoleBinding. Spec.RoleID and
-// Spec.Scope live in their own columns (FK cascade, scope index) and
-// Spec.Subjects in the role_binding_subjects junction — a subject with an
-// id also fills the matching FK column, so deleting a user or a service
-// account drops it from every binding. Upsert fans out across both tables
-// inside a single transaction.
+// Subjects live in the role_binding_subjects junction, where a subject with an
+// id also fills the matching FK column so deleting a user or service account
+// drops it from every binding.
 package rolebinding
 
 import (
@@ -19,16 +16,14 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the RoleBinding data-access type. Holds a pool so Upsert can run
-// a multi-table transaction.
+// Store holds a pool rather than Queries so Upsert can run a multi-table
+// transaction.
 type Store struct {
 	pool *pgxpool.Pool
 }
 
-// NewStore constructs a Store bound to a pool.
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-// List returns every RoleBinding row, hydrating Subjects from the junction.
 func (s *Store) List(ctx context.Context) ([]*RoleBinding, error) {
 	q := gen.New(s.pool)
 	rows, err := q.ListRoleBindings(ctx)
@@ -55,7 +50,7 @@ func (s *Store) List(ctx context.Context) ([]*RoleBinding, error) {
 	return out, nil
 }
 
-// Get returns the RoleBinding with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*RoleBinding, error) {
 	q := gen.New(s.pool)
 	r, err := q.GetRoleBinding(ctx, id)
@@ -79,8 +74,7 @@ func (s *Store) Get(ctx context.Context, id string) (*RoleBinding, error) {
 	return b, nil
 }
 
-// Upsert writes b across role_bindings + role_binding_subjects in one tx.
-// Owner is re-derived from Spec.Scope.
+// Upsert re-derives Owner from Spec.Scope.
 func (s *Store) Upsert(ctx context.Context, b *RoleBinding) error {
 	b.StampOwner()
 	params, err := toUpsertParams(b)
@@ -120,7 +114,7 @@ func (s *Store) Upsert(ctx context.Context, b *RoleBinding) error {
 	return nil
 }
 
-// Delete removes a RoleBinding by id. Junction rows cascade via FK.
+// Delete relies on the FK to cascade the junction rows.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.pool).DeleteRoleBinding(ctx, id)
 }

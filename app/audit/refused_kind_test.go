@@ -7,7 +7,7 @@ import (
 	"github.com/wyolet/relay/app/authz"
 )
 
-// A fallback row's resource.kind must read the same as a handler-stamped
+// A fallback row's resource.kind must read the same as a handler-recorded
 // one, or a UI filtering by kind has to sample both vocabularies. The
 // plural table in app/authz is the single source.
 func TestRefusedRouteKindMatchesTheHandlerVocabulary(t *testing.T) {

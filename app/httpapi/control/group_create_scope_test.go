@@ -18,8 +18,8 @@ import (
 
 // newGroupsHarness mounts registerKind for the real group kind — Team,
 // Group and Role default to meta.OwnerSystem on create (crud.go's
-// registerKind wiring), so a plain user's create can no longer fall back
-// to the personal-row rule the way it does for a user-owned kind.
+// registerKind wiring), so a plain user's create cannot fall back to the
+// personal-row rule the way it does for a user-owned kind.
 func newGroupsHarness(t *testing.T, authzr authz.Authorizer) http.Handler {
 	t.Helper()
 	gmeta := func(g *group.Group) *meta.Metadata { return &g.Meta }

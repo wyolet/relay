@@ -71,7 +71,7 @@ func TestMintLifecycle_ServiceAccountKeyCarriesFullAttribution(t *testing.T) {
 func TestMintLifecycle_PersonalKeyHasNoTenancy(t *testing.T) {
 	f := newPrincipalFixture()
 	k := &key.Key{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "abror-laptop",
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "alice-laptop",
 			Owner: meta.Owner{Kind: meta.OwnerUser, ID: f.user}},
 		Spec: key.Spec{
 			Principal: key.Principal{Kind: key.PrincipalUser, ID: f.user},
@@ -101,7 +101,7 @@ func TestMintLifecycle_PersonalKeyHasNoTenancy(t *testing.T) {
 }
 
 // A token presents no key, so relay_key_hash stays empty. Hashing the bearer
-// would stamp a hash that matches no key row and quietly pull token traffic
+// would record a hash that matches no key row and quietly pull token traffic
 // into a key's usage scope.
 func TestMintLifecycle_TokenCredential(t *testing.T) {
 	f := newPrincipalFixture()

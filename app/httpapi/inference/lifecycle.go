@@ -18,7 +18,7 @@ import (
 
 // mintLifecycle creates the per-request lifecycle Context at the inference
 // entry, before routing. It carries the identity known at entry — request
-// id, runner source, key hash, client IP — and a stamped timing
+// id, runner source, key hash, client IP — and a recorded timing
 // anchor. Routing fills the (policy, model, host) ids later via
 // applyPlanIdentity; the runner stamps the remaining timing marks. The
 // caller stashes the returned Context on ctx with lifecycle.ContextWith so
@@ -35,7 +35,7 @@ func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientI
 	}
 	if p := PrincipalFrom(ctx); p != nil {
 		// The hash the auth middleware matched on — empty for a token, which
-		// presents no key. Re-hashing the bearer here would stamp a hash on
+		// presents no key. Re-hashing the bearer here would record a hash on
 		// token traffic that matches no key row.
 		lc.RelayKeyHash = p.KeyHash
 		// The snapshot the credential resolved against, so the slugs named

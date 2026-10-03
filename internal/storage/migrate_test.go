@@ -2,8 +2,8 @@ package storage
 
 import "testing"
 
-// `migrate down <n>` above the current version used to run the UP migrations
-// the operator was trying to undo.
+// `migrate down <n>` above the current version must be refused, not run as
+// the up-migrations the operator is trying to undo.
 func TestMigrateDownRefusesATargetAboveTheCurrentVersion(t *testing.T) {
 	if _, err := migrateDownTarget(24, true, 30); err == nil {
 		t.Fatal("a target above the current version was accepted")

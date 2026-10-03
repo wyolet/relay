@@ -1,8 +1,6 @@
-// keys.go centralises the kv keys this package's Reserve call builds. The
-// limiter renders a rule's key as "limit:{<scope>}:<rule key>...", so the
-// scope is the hash tag every counter of one request shares: the team once
-// the caller has a project, the policy slug otherwise (a personal key has no
-// team to anchor on).
+// The scope is the hash tag every counter of one request shares: the team when
+// the caller has a project, else the policy slug, since a personal key has no
+// team to anchor on.
 package policy
 
 import "fmt"

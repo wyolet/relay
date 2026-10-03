@@ -1,10 +1,5 @@
-// Audit read endpoint: the admin-plane history of who changed what.
-//
-//	GET /audit   audit events, newest first, filterable + keyset-paginated
-//
-// Distinct from /logs: /logs is the data plane's per-request record,
-// /audit is the control plane's. Only paths are recorded for a change,
-// never values.
+// /audit is the control plane's change history, distinct from /logs (the data
+// plane's per-request record). A change records field paths, never values.
 package control
 
 import (

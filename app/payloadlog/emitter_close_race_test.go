@@ -10,13 +10,12 @@ import (
 	"testing"
 )
 
-// Audit 2026-07-04 (audit-app-services.md, P2): identical code shape to
-// app/usagelog — Emit's stopped.Load() check-then-send races Close's
+// Same code shape as app/usagelog: Emit's stopped.Load() check-then-send races Close's
 // close(e.queue); the losing goroutine panics with "send on closed channel"
 // on a detached post-flight goroutine at shutdown. Correct behavior: Emit
 // concurrent with Close must be a safe no-op/drop.
 func TestEmitterEmitConcurrentWithCloseDoesNotPanic(t *testing.T) {
-	t.Skip("audit 2026-07-04: emitter Emit/Close race panics at shutdown — known-broken, unskip with the fix")
+	t.Skip("known bug: emitter Emit/Close race panics at shutdown; unskip with the fix")
 	if runtime.GOMAXPROCS(0) < 2 {
 		t.Skip("needs GOMAXPROCS > 1 to interleave Emit and Close")
 	}

@@ -78,7 +78,7 @@ func TestGuardRoleBindingStampsOwner(t *testing.T) {
 		t.Fatalf("owner = %+v, want the team scope", b.Meta.Owner)
 	}
 	if err := b.Validate(); err != nil {
-		t.Fatalf("stamped binding does not validate: %v", err)
+		t.Fatalf("binding with its owner set does not validate: %v", err)
 	}
 }
 

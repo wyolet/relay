@@ -257,11 +257,9 @@ func TestSystemOwnedRolesAreVisibleToAScopedCaller(t *testing.T) {
 	}
 }
 
-// D65: the binder must already hold everything the bound role grants at
-// that scope, or a team-admin can bind `admin` to himself. guardRoleBinding
-// reads the bound role from a concrete store, so the rule it hands that role
-// to is asserted here; the route itself is covered end to end by the
-// integration suite.
+// The binder must already hold everything the bound role grants at that
+// scope, or a team-admin can bind `admin` to himself. guardRoleBinding reads
+// a concrete store, so the rule is asserted here and the route end to end.
 func TestGuardRoleBindingRefusesEscalation(t *testing.T) {
 	narrow := &role.Role{
 		Meta: meta.Metadata{ID: "r-narrow", Name: "team-reader", Owner: meta.Owner{Kind: meta.OwnerSystem}},
@@ -295,7 +293,7 @@ func TestGuardRoleBindingRefusesEscalation(t *testing.T) {
 	}
 }
 
-// D67: an upgraded deployment carries no bindings at all, and a list there
+// An upgraded deployment carries no bindings at all, and a list there
 // must answer 200 with the caller's own rows.
 func TestZeroBindingListAnswersWithOwnRows(t *testing.T) {
 	mine := &scopedThing{Meta: meta.Metadata{ID: meta.NewID(), Name: "mine",

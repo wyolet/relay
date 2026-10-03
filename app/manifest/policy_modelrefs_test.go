@@ -52,7 +52,7 @@ func TestToPolicy_CanonicalisesModelRefs(t *testing.T) {
 }
 
 // A row carrying both grant fields renders only Models: emitting the
-// legacy ModelIDs alongside them would widen the grant on the next apply.
+// ModelIDs alongside them would widen the grant on the next apply.
 func TestFromPolicy_RendersModelIDsOnlyWhenModelsIsEmpty(t *testing.T) {
 	p := &policy.Policy{
 		Meta: meta.Metadata{ID: "pol-1", Name: "p", Owner: meta.Owner{Kind: meta.OwnerSystem}},
@@ -63,6 +63,6 @@ func TestFromPolicy_RendersModelIDsOnlyWhenModelsIsEmpty(t *testing.T) {
 	}
 	p.Spec.Models = nil
 	if got := manifest.FromPolicy(p, polRev); len(got.Spec.Models) != 1 {
-		t.Fatalf("models = %v, want the legacy grant rendered when Models is empty", got.Spec.Models)
+		t.Fatalf("models = %v, want the ModelIDs grant rendered when Models is empty", got.Spec.Models)
 	}
 }

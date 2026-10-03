@@ -1,6 +1,5 @@
-// store.go is the data-access layer for ServiceAccount. project_id is a
-// real column (FK cascade) so deleting a Project drops its accounts
-// without parsing JSONB.
+// project_id is a real column (FK cascade) so deleting a Project drops its
+// accounts without parsing JSONB.
 package serviceaccount
 
 import (
@@ -15,15 +14,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the ServiceAccount data-access type.
 type Store struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
 func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
 
-// List returns every ServiceAccount row.
 func (s *Store) List(ctx context.Context) ([]*ServiceAccount, error) {
 	rows, err := s.q.ListServiceAccounts(ctx)
 	if err != nil {
@@ -40,7 +36,7 @@ func (s *Store) List(ctx context.Context) ([]*ServiceAccount, error) {
 	return out, nil
 }
 
-// Get returns the ServiceAccount with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*ServiceAccount, error) {
 	r, err := s.q.GetServiceAccount(ctx, id)
 	if err != nil {
@@ -52,7 +48,7 @@ func (s *Store) Get(ctx context.Context, id string) (*ServiceAccount, error) {
 	return fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
 }
 
-// Upsert writes sa. Caller stamps Meta.ID; Owner is re-derived from ProjectID.
+// Upsert expects Meta.ID set by the caller and re-derives Owner from ProjectID.
 func (s *Store) Upsert(ctx context.Context, sa *ServiceAccount) error {
 	sa.StampOwner()
 	params, err := toUpsertParams(sa)
@@ -62,7 +58,7 @@ func (s *Store) Upsert(ctx context.Context, sa *ServiceAccount) error {
 	return s.q.UpsertServiceAccount(ctx, params)
 }
 
-// Delete removes a ServiceAccount by id. Keys cascade via FK.
+// Delete relies on the FK to cascade the account's keys.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteServiceAccount(ctx, id)
 }

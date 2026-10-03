@@ -29,8 +29,8 @@ type comboKey struct{ ModelID, HostID string }
 // An id naming no enabled policy grants nothing. Answering "allowed" for one
 // is the wrong default in the direction that matters: a host key whose tier
 // policy was switched off or deleted would pass the tier gate for every
-// model, and the upstream reservation would find no rules to meter it by
-// (D79). A policy that IS enabled and carries no materialized set is the
+// model, and the upstream reservation would find no rules to meter it by.
+// A policy that IS enabled and carries no materialized set is the
 // implicit wildcard and allows everything — implicit-wildcard customer
 // policies handle deprecation separately at resolution, and tier policies
 // allow all by design.

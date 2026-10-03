@@ -26,7 +26,7 @@ func TestGovernsOwnerTiers(t *testing.T) {
 		{name: "system-owned rate limit is the relay's own row", op: OpEdit, kind: "rate-limit",
 			ownerKind: "system", wantErr: true},
 
-		// M0-11: a project's own rows ignore the catalog governance section.
+		// A project's own rows ignore the catalog governance section.
 		{name: "project deletes its policy", op: OpDelete, kind: "policy", ownerKind: "project", reader: locked},
 		{name: "project edits its policy", op: OpEdit, kind: "policy", ownerKind: "project", reader: locked},
 		{name: "project deletes itself", op: OpDelete, kind: "project", ownerKind: "project", reader: locked},

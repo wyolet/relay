@@ -10,10 +10,9 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 )
 
-// One helper clears every clearable reference to a policy — including the
-// ServiceAccount override the API cascade used to miss. A host key's tier
-// policy is NOT one of them: policyId is required, so clearing it would write
-// a row that fails its own Validate. Removal is refused instead (D76, D81).
+// One helper clears every clearable reference to a policy, including the
+// ServiceAccount override. A host key's tier policy is not cleared: policyId
+// is required, so removal is refused instead.
 func TestDetach_ClearsEveryClearableReference(t *testing.T) {
 	k := &key.Key{}
 	k.Meta.Name, k.Spec.PolicyID = "k1", "pol-1"
@@ -45,7 +44,7 @@ func TestDetach_ClearsEveryClearableReference(t *testing.T) {
 	}
 }
 
-// D76: the names a refused delete has to report.
+// The names a refused delete has to report.
 func TestHostKeysUsingPolicy_NamesTheTierKeys(t *testing.T) {
 	a := &hostkey.HostKey{}
 	a.Meta.Name, a.Spec.PolicyID = "tier-a", "pol-1"

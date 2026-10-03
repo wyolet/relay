@@ -12,7 +12,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// D72: the rule key names the RateLimit and, for a per-model binding,
+// The rule key names the RateLimit and, for a per-model binding,
 // the model, so two bindings of one policy never share a bucket.
 func TestRuleKeyFormat_CarriesRateLimitAndModel(t *testing.T) {
 	rl := &appratelimit.RateLimit{}

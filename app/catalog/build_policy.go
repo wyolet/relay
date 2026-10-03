@@ -12,10 +12,9 @@ func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls, project
 			continue
 		}
 		if !clean.IsEnabled() {
-			// Out of every routing index, but remembered so the rows that
-			// name it survive and resolution can answer policy_disabled. Its
-			// outbound refs are still registered: losing its project must
-			// evict it, or its dependents keep answering 403 forever.
+			// Kept outside the routing indices so its dependents answer
+			// policy_disabled; outbound refs stay registered so losing its
+			// project still evicts it.
 			s.disabledPoliciesByID[clean.Meta.ID] = clean
 			s.registerRefs(refKey{Kind: refPolicy, ID: clean.Meta.ID}, outboundPolicyRefs(clean))
 			continue
@@ -32,16 +31,16 @@ func (s *Snapshot) addPolicies(pols []*policy.Policy, models, keys, rls, project
 
 // policyResolvable answers "does a row naming this policy id keep working".
 // A disabled policy counts: the row survives and its requests answer
-// policy_disabled (D77); only an absent policy drops the row.
+// policy_disabled; only an absent policy drops the row.
 func (s *Snapshot) policyResolvable(id string) bool {
 	_, ok := s.policyLookup(id)
 	return ok
 }
 
 // policyLookup returns the policy behind an id whether or not it is enabled.
-// The rows that survive a disable resolve through it: the Key, ServiceAccount
-// and PolicyBinding of D77, and a host key's tier policy, which comes back
-// intact when the tier is switched on again.
+// The rows that survive a disable resolve through it: a Key, ServiceAccount
+// or PolicyBinding naming the policy, and a host key's tier policy, which
+// comes back intact when the tier is switched on again.
 func (s *Snapshot) policyLookup(id string) (*policy.Policy, bool) {
 	if p, ok := s.policiesByID[id]; ok {
 		return p, true
