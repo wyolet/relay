@@ -23,7 +23,7 @@ func Middleware(e *Emitter, trusted []*net.IPNet) func(http.Handler) http.Handle
 			}
 			sw := &statusWriter{ResponseWriter: w}
 			next.ServeHTTP(sw, r.WithContext(withInflight(r.Context(), f)))
-			if ev, ok := f.event(sw.code()); ok {
+			for _, ev := range f.events(sw.code()) {
 				e.Emit(ev)
 			}
 		})

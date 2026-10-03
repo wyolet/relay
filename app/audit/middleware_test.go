@@ -136,6 +136,41 @@ func TestMiddlewareSkipsUnauthenticatedRequests(t *testing.T) {
 	}
 }
 
+// A bulk write is many changes in one request: each is its own row, with
+// the fields it touched minus secret-bearing paths. A dry run is none.
+func TestMiddlewareWritesOneRowPerRecordedChange(t *testing.T) {
+	sink := &memSink{}
+	em := NewEmitter(sink, quietLogger())
+	authzr := Authorizer{Inner: authz.AlwaysAllowAuthenticated{}}
+	run := func(fn func(context.Context)) {
+		h := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = authzr.Authorize(r.Context(), "teams.create", authz.Resource{Kind: "team"})
+			fn(r.Context())
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodPost, "/api/apply", nil)
+		h.ServeHTTP(httptest.NewRecorder(), req.WithContext(actor.WithActor(req.Context(), &actor.Actor{UserID: "u-1"})))
+	}
+	run(func(ctx context.Context) {
+		RecordEach(ctx, []Row{
+			{Action: "teams.create", Resource: Resource{Kind: "team", Name: "a"}, Fields: []string{AnyField}},
+			{Action: "host-keys.update", Resource: Resource{Kind: "host-key", Name: "b"}, Fields: []string{"spec.value", "spec.enabled"}},
+		})
+	})
+	run(Discard)
+	em.Close()
+	evs := sink.all()
+	if len(evs) != 2 {
+		t.Fatalf("events = %d, want one per change and none for the dry run", len(evs))
+	}
+	if evs[0].Action != "teams.create" || evs[1].Action != "host-keys.update" || evs[1].Resource.Name != "b" {
+		t.Fatalf("events = %+v", evs)
+	}
+	if f := evs[1].Change; f == nil || len(f.Fields) != 1 || f.Fields[0] != "spec.enabled" {
+		t.Fatalf("change = %+v, want [spec.enabled] with the secret path dropped", f)
+	}
+}
+
 // With no trusted proxies configured, a caller-supplied forwarding header
 // must never become the audited address.
 func TestMiddlewareIgnoresForwardedFor(t *testing.T) {

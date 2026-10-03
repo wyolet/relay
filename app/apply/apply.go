@@ -366,6 +366,13 @@ func applyScope(o meta.Owner) *meta.Owner {
 	return &meta.Owner{Kind: meta.OwnerSystem}
 }
 
+// Authorized returns the RBAC action the entry was authorized under, the
+// resource kind it names, and the row's owner — what an audit row for the
+// change records.
+func (e Entry) Authorized() (action, kind string, owner meta.Owner) {
+	return e.plural + "." + string(verbOf(e.Action)), singularOf(e.plural), e.owner
+}
+
 // verbOf maps a plan action to the RBAC verb the row is authorized under.
 func verbOf(a Action) Action {
 	if a == ActionDelete {
