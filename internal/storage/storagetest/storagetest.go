@@ -68,10 +68,20 @@ func EmptyDB(t testing.TB) string {
 	return createDB(t, serverDSN(t), "")
 }
 
+// poolMaxConns is fixed rather than pgxpool's NumCPU-derived default: the
+// concurrent-boot tests hold one connection per goroutine while the lock
+// holder needs another, which deadlocks a 4-connection pool.
+const poolMaxConns = 16
+
 // Pool opens a pool on a fresh migrated database, closed on cleanup.
 func Pool(t testing.TB) *pgxpool.Pool {
 	t.Helper()
-	pool, err := pgxpool.New(context.Background(), DB(t))
+	cfg, err := pgxpool.ParseConfig(DB(t))
+	if err != nil {
+		t.Fatalf("storagetest: parse DSN: %v", err)
+	}
+	cfg.MaxConns = poolMaxConns
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("storagetest: open pool: %v", err)
 	}
