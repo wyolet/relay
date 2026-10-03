@@ -28,10 +28,18 @@ configuration details.
 
 ```bash
 make build                    # build the relay binary
-make test                     # go test ./...
+make test                     # go test ./... in every module
+make test-race                # the same under -race
 make test-integration         # tag-gated PG/e2e tests (needs Docker)
 go vet ./...
 ```
+
+`make test-integration` brings up the compose test Postgres; `make
+test-integration-run` runs the same tests against any server named by
+`RELAY_TEST_PG_DSN`. Each test creates its own database there (cloned from a
+migrated template) and drops it afterwards, so the role needs `CREATEDB`. The
+Redis tests start containers through testcontainers; on colima, set
+`TESTCONTAINERS_RYUK_DISABLED=true` and point `DOCKER_HOST` at the colima socket.
 
 The repo is a **two-module monorepo**: the server module
 (`github.com/wyolet/relay`) and the public, vendorable SDK

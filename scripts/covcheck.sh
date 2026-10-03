@@ -8,7 +8,16 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 tiers=${COVER_TIERS:-$root/scripts/coverage-tiers.txt}
 enforce=${COVER_ENFORCE:-1}
-module=$(awk '$1 == "module" { print $2; exit }' "$root/go.mod")
+
+# "<module path>/=<repo-relative dir>;" for every module in the repo, so a
+# profile from any of them maps onto repo-relative package paths.
+modules=$(for gomod in "$root"/go.mod "$root"/*/go.mod; do
+	[ -f "$gomod" ] || continue
+	dir=${gomod#"$root"}
+	dir=${dir%go.mod}
+	dir=${dir#/}
+	awk -v dir="$dir" '$1 == "module" { printf "%s/=%s;", $2, dir; exit }' "$gomod"
+done)
 
 if [ "$#" -eq 0 ]; then
 	echo "usage: $0 <coverprofile> [coverprofile...]" >&2
@@ -16,8 +25,15 @@ if [ "$#" -eq 0 ]; then
 fi
 [ -f "$tiers" ] || { echo "covcheck: missing tier table $tiers" >&2; exit 2; }
 
-awk -v tierfile="$tiers" -v module="$module/" -v enforce="$enforce" '
+awk -v tierfile="$tiers" -v modules="$modules" -v enforce="$enforce" '
 function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+# Longest module path wins: the sdk module path nests under the root one.
+function relpath(p,   i, best, n) {
+	best = 0; n = 0
+	for (i = 1; i <= nm; i++)
+		if (index(p, modPath[i]) == 1 && length(modPath[i]) > n) { best = i; n = length(modPath[i]) }
+	return best ? modDir[best] substr(p, n + 1) : p
+}
 # Glob to ERE: `*` is the only wildcard; everything else is literal.
 function globre(g,   r) {
 	r = g
@@ -26,6 +42,13 @@ function globre(g,   r) {
 	return "^" r "$"
 }
 BEGIN {
+	split(modules, entries, ";")
+	for (i in entries) {
+		if (split(entries[i], f, "=") != 2) continue
+		nm++
+		modPath[nm] = f[1]
+		modDir[nm] = f[2]
+	}
 	while ((getline line < tierfile) > 0) {
 		sub(/#.*/, "", line)
 		line = trim(line)
@@ -49,7 +72,8 @@ END {
 		sub(/:[0-9]+\.[0-9]+,[0-9]+\.[0-9]+$/, "", file)
 		pkg = file
 		sub(/\/[^\/]+$/, "", pkg)
-		sub("^" module, "", pkg)
+		pkg = relpath(pkg "/")
+		sub(/\/$/, "", pkg)
 		total[pkg] += stmts[block]
 		if (count[block] > 0) covered[pkg] += stmts[block]
 		seen[pkg] = 1
