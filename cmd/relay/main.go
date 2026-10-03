@@ -718,6 +718,7 @@ func main() {
 		// an admin; an upgrade that silently picks the wrong one is exactly
 		// what an operator needs to see in the first lines of a boot log.
 		slog.Info("relay control: authorization mode", "authz", cfg.Authz)
+		warnSingleUserOpenRegistration(cfg.Authz, settings.EffectiveAuthOIDC(cat))
 		authorizer = audit.Authorizer{Inner: authorizer, Snap: cat.Current}
 		ctrlDeps := control.Deps{
 			Identity:      idStore,
