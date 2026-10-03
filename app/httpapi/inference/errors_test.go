@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,10 @@ func TestMapPipelineErr_InboundLimitExceeded_429WithRetryAfter(t *testing.T) {
 	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
 		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
 	}
+	// One client reads the delay out of the message text and never looks at Retry-After.
+	if !strings.Contains(env.Err.Message, "try again in 3s") {
+		t.Fatalf("message must name the retry delay: %q", env.Err.Message)
+	}
 }
 
 // A zero-duration ExceededError still floors Retry-After at 1 — "0" reads
@@ -107,19 +112,128 @@ func TestErrorAttribution_OriginHeaders(t *testing.T) {
 	}
 }
 
-// A relay-minted error ABOUT an upstream failure keeps the two statuses
-// separate: envelope status is relay's verdict, the provider's status rides
-// X-WR-Upstream-Status.
-func TestMapPipelineErr_UpstreamFailure_CarriesUpstreamStatus(t *testing.T) {
+// An upstream failure that exhausted failover is forwarded, not flattened: the
+// caller gets the provider's own status, body and backoff headers, with
+// X-WR-Upstream-Status and origin "upstream" declaring who produced them.
+func TestMapPipelineErr_UpstreamFailure_ForwardsVerbatim(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapPipelineErr(rec, &pipeline.UpstreamFailureError{Status: 401, Body: "invalid x-api-key"})
-	if rec.Code != 502 {
-		t.Fatalf("status: %d", rec.Code)
+	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`)
+	mapPipelineErr(rec, &pipeline.UpstreamFailureError{
+		Status: 429,
+		Header: http.Header{
+			"Retry-After":                       {"7"},
+			"Anthropic-Ratelimit-Unified-Reset": {"1750000000"},
+			"X-Request-Id":                      {"req_abc"},
+			"Content-Type":                      {"application/json"},
+			"Set-Cookie":                        {"session=leak"},
+			"Content-Length":                    {"9999"},
+		},
+		Body: body,
+	})
+
+	if rec.Code != 429 {
+		t.Fatalf("status: %d, want the upstream's 429", rec.Code)
 	}
-	if got := rec.Header().Get(HeaderUpstreamStatus); got != "401" {
-		t.Fatalf("upstream status header: %q", got)
+	if got := rec.Body.String(); got != string(body) {
+		t.Fatalf("body must be byte-identical:\n got %q\nwant %q", got, body)
+	}
+	for k, want := range map[string]string{
+		"Retry-After":                       "7",
+		"Anthropic-Ratelimit-Unified-Reset": "1750000000",
+		"X-Request-Id":                      "req_abc",
+		"Content-Type":                      "application/json",
+		HeaderUpstreamStatus:                "429",
+		HeaderOrigin:                        "upstream",
+	} {
+		if got := rec.Header().Get(k); got != want {
+			t.Errorf("header %s: %q, want %q", k, got, want)
+		}
+	}
+	if got := rec.Header().Get("Set-Cookie"); got != "" {
+		t.Errorf("Set-Cookie must not be copied from upstream: %q", got)
+	}
+	if got := rec.Header().Get("Content-Length"); got != "" {
+		t.Errorf("upstream Content-Length must not describe relay's body: %q", got)
+	}
+}
+
+// An HTTP-date Retry-After is rewritten as integer seconds — several clients
+// parse only the integer form and silently drop a date.
+func TestMapPipelineErr_UpstreamFailure_RetryAfterDateToSeconds(t *testing.T) {
+	rec := httptest.NewRecorder()
+	when := time.Now().Add(42 * time.Second).UTC().Format(http.TimeFormat)
+	mapPipelineErr(rec, &pipeline.UpstreamFailureError{
+		Status: 429,
+		Header: http.Header{"Retry-After": {when}},
+		Body:   []byte(`{"error":"rate limited"}`),
+	})
+	secs, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+	if err != nil {
+		t.Fatalf("Retry-After not an integer: %q", rec.Header().Get("Retry-After"))
+	}
+	if secs < 35 || secs > 45 {
+		t.Fatalf("Retry-After: %ds, want ~42s from now", secs)
+	}
+}
+
+func TestMapPipelineErr_UpstreamFailure_ShouldRetry(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		upstream http.Header
+		want     string
+	}{
+		{"client error is not retryable", 400, nil, "false"},
+		{"server error is retryable", 503, nil, "true"},
+		{"upstream verdict wins", 503, http.Header{"X-Should-Retry": {"false"}}, "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mapPipelineErr(rec, &pipeline.UpstreamFailureError{
+				Status: tc.status, Header: tc.upstream, Body: []byte(`{"error":"nope"}`),
+			})
+			if rec.Code != tc.status {
+				t.Fatalf("status: %d, want %d", rec.Code, tc.status)
+			}
+			if got := rec.Header().Get("X-Should-Retry"); got != tc.want {
+				t.Fatalf("X-Should-Retry: %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// With no upstream body there is nothing to forward, but the status is still
+// the provider's verdict — the caller must not get a bodiless response.
+func TestMapPipelineErr_UpstreamFailure_EmptyBodyKeepsStatus(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mapPipelineErr(rec, &pipeline.UpstreamFailureError{Status: 503, Body: []byte("  \n")})
+	if rec.Code != 503 {
+		t.Fatalf("status: %d, want 503", rec.Code)
+	}
+	var env httpapi.OpenAIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("relay envelope expected: %v (body %q)", err, rec.Body.String())
+	}
+	if env.Err.Code != "upstream_unavailable" {
+		t.Fatalf("code: %q", env.Err.Code)
 	}
 	if got := rec.Header().Get(HeaderOrigin); got != "relay" {
-		t.Fatalf("origin: %q", got)
+		t.Fatalf("origin: %q, want relay (the envelope is relay's)", got)
+	}
+	if got := rec.Header().Get(HeaderUpstreamStatus); got != "503" {
+		t.Fatalf("upstream status header: %q", got)
+	}
+}
+
+// Relay-minted errors carry their own retry verdict so a client never has to
+// guess from the status alone.
+func TestWriteAPIError_SetsShouldRetry(t *testing.T) {
+	for status, want := range map[int]string{429: "true", 500: "true", 502: "true", 503: "true", 401: "false", 404: "false"} {
+		rec := httptest.NewRecorder()
+		writeAPIError(rec, status, "server_error", "x", "y")
+		if got := rec.Header().Get("X-Should-Retry"); got != want {
+			t.Errorf("status %d: X-Should-Retry=%q, want %q", status, got, want)
+		}
 	}
 }

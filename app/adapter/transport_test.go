@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -32,10 +33,18 @@ func baseTransport(t *testing.T, rt http.RoundTripper) *http.Transport {
 func TestBuild_TunedTransport(t *testing.T) {
 	s := (&Spec{}).Build()
 
-	if s.client.Timeout != defaultTimeout {
-		t.Fatalf("client timeout = %v, want %v (streamed responses run minutes)", s.client.Timeout, defaultTimeout)
+	// A Client.Timeout is a whole-request cap: it would kill any generation streamed for longer than it. The header wait carries the bound instead.
+	if s.client.Timeout != 0 {
+		t.Fatalf("client timeout = %v, want 0 (a total cap truncates long streams)", s.client.Timeout)
+	}
+	if s.syncTimeout != defaultTimeout || s.idleTimeout != defaultStreamIdleTimeout {
+		t.Fatalf("spec deadlines = sync %v / idle %v, want %v / %v",
+			s.syncTimeout, s.idleTimeout, defaultTimeout, defaultStreamIdleTimeout)
 	}
 	tr := baseTransport(t, s.client.Transport)
+	if tr.ResponseHeaderTimeout != defaultTimeout {
+		t.Errorf("ResponseHeaderTimeout = %v, want %v", tr.ResponseHeaderTimeout, defaultTimeout)
+	}
 	if tr.MaxIdleConnsPerHost != defaultMaxIdleConnsPerHost {
 		t.Errorf("MaxIdleConnsPerHost = %d, want %d", tr.MaxIdleConnsPerHost, defaultMaxIdleConnsPerHost)
 	}
@@ -87,6 +96,26 @@ func TestSetUpstreamMaxIdleConnsPerHost(t *testing.T) {
 	SetUpstreamMaxIdleConnsPerHost(0) // ignored
 	if maxIdleConnsPerHost != 256 {
 		t.Fatalf("maxIdleConnsPerHost = %d, want 256 (a <1 override must be ignored)", maxIdleConnsPerHost)
+	}
+}
+
+// The streamed idle deadline is operator-tunable (RELAY_STREAM_IDLE_TIMEOUT_S); 0 means "no idle deadline", a negative value is a no-op.
+func TestSetUpstreamStreamIdleTimeout(t *testing.T) {
+	t.Cleanup(func() { streamIdleTimeout = defaultStreamIdleTimeout })
+
+	SetUpstreamStreamIdleTimeout(90 * time.Second)
+	if got := (&Spec{}).Build().idleTimeout; got != 90*time.Second {
+		t.Fatalf("idleTimeout = %v, want 90s after override", got)
+	}
+
+	SetUpstreamStreamIdleTimeout(0) // explicit disable
+	if got := (&Spec{}).Build().idleTimeout; got != 0 {
+		t.Fatalf("idleTimeout = %v, want 0 (disabled)", got)
+	}
+
+	SetUpstreamStreamIdleTimeout(-1) // ignored
+	if streamIdleTimeout != 0 {
+		t.Fatalf("streamIdleTimeout = %v, want 0 (a negative override must be ignored)", streamIdleTimeout)
 	}
 }
 

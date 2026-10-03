@@ -1,0 +1,21 @@
+{{- if .Values.grafanaDashboards.enabled }}
+# App-published Grafana dashboards. The observability stack's dashboard
+# sidecar discovers ConfigMaps labeled grafana_dashboard across ALL
+# namespaces, so these live with the app that owns them — the platform
+# offers discovery, never app-specific config. JSON sources live under
+# dashboards/*.json in this chart, rendered verbatim via .Files.Glob.
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "relay.fullname" $ }}-dashboard-{{ $name }}
+  labels:
+    {{- include "relay.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  {{ $name }}.json: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

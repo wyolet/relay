@@ -37,8 +37,9 @@ func (ResponsesTranslator) SerializeResponse(resp *v1.Response, req *v1.Request)
 	rresp.Status, rresp.IncompleteDetails = canonicalResponsesStatus(resp.Status, resp.FinishReason, resp.IncompleteDetails)
 
 	// Map output items.
+	custom := newResponsesCustomLowering(req)
 	for _, item := range resp.Output {
-		ritem := responsesItemFromCanonical(item)
+		ritem := responsesItemFromCanonical(item, custom)
 		if ritem != nil {
 			rresp.Output = append(rresp.Output, ritem)
 		}
@@ -131,7 +132,11 @@ func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
 	switch resp.Status {
 	case ResponsesStatusCompleted:
 		for _, it := range resp.Output {
-			if it != nil && it.ResponsesItemType() == ResponsesItemTypeFunctionCall {
+			if it == nil {
+				continue
+			}
+			switch it.ResponsesItemType() {
+			case ResponsesItemTypeFunctionCall, ResponsesItemTypeCustomToolCall:
 				return v1.FinishReasonToolCalls
 			}
 		}

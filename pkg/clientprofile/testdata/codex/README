@@ -1,0 +1,11 @@
+requests.txt — the request codex-cli 0.153.4 made against a gateway at `base_url = "http://127.0.0.1:<port>/codex/v1"`, recorded 2026-09-21 for one `codex exec` turn with a provider block using `env_key` and `wire_api = "responses"`.
+
+One turn produces exactly one `POST /codex/v1/responses`; the client asks for no model list and probes no other endpoint (it only refreshes models for a ChatGPT-backend or command-auth provider).
+
+Headers present: originator, user-agent, session-id, thread-id, x-client-request-id, x-codex-window-id, x-codex-beta-features, x-codex-turn-metadata, plus accept / authorization / content-type. Absent on a plain turn and therefore unrecorded: x-codex-installation-id, x-codex-parent-thread-id, x-openai-subagent, x-codex-turn-state — the first rides inside the body's `client_metadata` here, the last three only ship for sub-agent and resumed turns.
+
+`instructions`, `input`, `tools` and `client_metadata` values are elided: they are the client's system prompt and the recording machine's paths, neither of which is part of the contract. Field names, ordering and the small scalar values are verbatim. The bearer token was a dummy; the installation id is redacted.
+
+The list-models projection was checked live against codex-cli 0.155.1 (`model/list` over the app-server's stdio JSON-RPC, with `model_catalog_json` pointing at the served document): all eight models came back picker-visible with every field intact, so the 0.153.4 pin in codex.go still describes what a later client accepts.
+
+Refresh this when a client release changes the contract; the profile edits follow the fixture, never the other way round.

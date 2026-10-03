@@ -284,6 +284,89 @@ func TestResponsesNewFromCanonicalStream_FunctionCall(t *testing.T) {
 	}
 }
 
+// Clients dispatch on the JSON "type", not the SSE event: line, and order
+// deltas by "sequence_number" — a frame missing either is unreadable to them.
+func TestResponsesNewFromCanonicalStream_FramesCarryTypeAndSequence(t *testing.T) {
+	fn := (ResponsesTranslator{}).NewFromCanonicalStream()
+
+	chunks := [][]byte{
+		canonicalChunk(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "resp_env", Model: "gpt-5"}),
+		canonicalChunk(v1.EventItemStarted, v1.ItemStartedEvent{
+			ItemID: "msg_0", ItemType: v1.ItemTypeMessage, Index: 0,
+		}),
+		canonicalChunk(v1.EventItemDelta, v1.ItemDeltaEvent{
+			ItemID: "msg_0", Index: 0, Kind: v1.DeltaKindText, Delta: "Hello",
+		}),
+		canonicalChunk(v1.EventItemCompleted, v1.ItemCompletedEvent{
+			ItemID: "msg_0",
+			Index:  0,
+			Item: &v1.Message{
+				ID:      "msg_0",
+				Role:    v1.RoleAssistant,
+				Status:  v1.StatusCompleted,
+				Content: []v1.Part{&v1.OutputTextPart{Text: "Hello"}},
+			},
+		}),
+		canonicalChunk(v1.EventGenerationCompleted, v1.GenerationCompletedEvent{
+			ID:           "resp_env",
+			Status:       v1.StatusCompleted,
+			FinishReason: v1.FinishReasonStop,
+			Usage:        usage.Tokens{"input": 5, "output": 3},
+		}),
+	}
+
+	seq := 0
+	for _, c := range chunks {
+		out, err := fn(c)
+		if err != nil {
+			t.Fatalf("translate: %v", err)
+		}
+		for _, frame := range splitCanonicalFrames(out) {
+			event, data, ok := ParseResponsesSSEChunk(frame)
+			if !ok {
+				continue
+			}
+			var envelope struct {
+				Type           string `json:"type"`
+				SequenceNumber *int   `json:"sequence_number"`
+			}
+			if err := json.Unmarshal(data, &envelope); err != nil {
+				t.Fatalf("frame %q data is not JSON: %v", event, err)
+			}
+			if envelope.Type != event {
+				t.Errorf("frame %q data type = %q, want the event name", event, envelope.Type)
+			}
+			if envelope.SequenceNumber == nil {
+				t.Fatalf("frame %q has no sequence_number", event)
+			}
+			if *envelope.SequenceNumber != seq {
+				t.Errorf("frame %q sequence_number = %d, want %d", event, *envelope.SequenceNumber, seq)
+			}
+			seq++
+		}
+	}
+	if seq == 0 {
+		t.Fatal("no frames emitted")
+	}
+
+	// A second stream restarts the counter: the state is per-closure, not per-translator.
+	next := (ResponsesTranslator{}).NewFromCanonicalStream()
+	out, err := next(canonicalChunk(v1.EventGenerationCreated, v1.GenerationCreatedEvent{ID: "resp_env2", Model: "gpt-5"}))
+	if err != nil {
+		t.Fatalf("translate: %v", err)
+	}
+	_, data, _ := ParseResponsesSSEChunk(splitCanonicalFrames(out)[0])
+	var first struct {
+		SequenceNumber int `json:"sequence_number"`
+	}
+	if err := json.Unmarshal(data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.SequenceNumber != 0 {
+		t.Errorf("second stream starts at sequence_number %d, want 0", first.SequenceNumber)
+	}
+}
+
 // extractResponsesEvents parses concatenated Responses SSE bytes and collects event names.
 func extractResponsesEvents(b []byte) []string {
 	var names []string

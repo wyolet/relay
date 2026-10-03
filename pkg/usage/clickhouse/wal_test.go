@@ -14,6 +14,7 @@ import (
 
 	"github.com/wyolet/relay/pkg/metrics"
 	"github.com/wyolet/relay/pkg/usage"
+	"github.com/wyolet/relay/pkg/wal"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -50,7 +51,7 @@ func countSegments(t *testing.T, dir string) int {
 }
 
 func activeExists(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, activeName))
+	_, err := os.Stat(filepath.Join(dir, wal.ActiveName))
 	return err == nil
 }
 
@@ -141,8 +142,8 @@ func TestFlushFnErrorPreservesSegment(t *testing.T) {
 		t.Fatalf("expected 1 segment after rotation, got %d", countSegments(t, dir))
 	}
 
-	// Manually trigger flushPending; it should fail and NOT delete the segment.
-	q.flushPending()
+	// Manually trigger FlushPending; it should fail and NOT delete the segment.
+	q.FlushPending()
 
 	if countSegments(t, dir) != 1 {
 		t.Fatalf("segment was deleted despite flush error — must not delete on error")
@@ -176,9 +177,7 @@ func TestRecoverDrainsLeftoverSegments(t *testing.T) {
 	q1.Write(makeEvent("crash-1"))
 	q1.Write(makeEvent("crash-2")) // triggers rotation → segment-*.jsonl
 	// Simulate crash: stop goroutine without flushing.
-	q1.ticker.Stop()
-	close(q1.stop)
-	<-q1.done
+	q1.StopBackground()
 
 	if countSegments(t, dir) < 1 {
 		t.Fatal("expected at least one leftover segment before recovery")
@@ -208,7 +207,7 @@ func TestRecoverRenamesLeftoverActive(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write an active.jsonl directly (simulating a crash mid-active).
-	activePath := filepath.Join(dir, activeName)
+	activePath := filepath.Join(dir, wal.ActiveName)
 	if err := os.WriteFile(activePath, []byte("{\"request_id\":\"orphan\",\"source\":\"pipeline\",\"ts\":\"2024-01-01T00:00:00Z\",\"status\":200,\"duration_ms\":1}\n"), 0o644); err != nil {
 		t.Fatalf("write active: %v", err)
 	}
@@ -253,13 +252,13 @@ func TestMaxSegmentsDropsOldest(t *testing.T) {
 	}
 
 	// Write 4 events → 4 rotations → 4 segments before any flush.
-	// flushPending is only called by ticker or Close; here we call it manually.
+	// FlushPending is only called by ticker or Close; here we call it manually.
 	for i := 0; i < 4; i++ {
 		q.Write(makeEvent(fmt.Sprintf("m%d", i)))
 		time.Sleep(2 * time.Millisecond) // ensure distinct timestamps
 	}
 
-	q.flushPending() // tries to flush; fails; but enforces maxSegments cap first.
+	q.FlushPending() // tries to flush; fails; but enforces maxSegments cap first.
 
 	// After enforcement, ≤ maxSegments (2) segments remain.
 	if got := countSegments(t, dir); got > 2 {
@@ -300,7 +299,7 @@ func TestCloseFlushesFinalActiveSegment(t *testing.T) {
 	if activeExists(dir) {
 		// After close the active file is rotated+flushed; it may be recreated
 		// as empty by openActive inside rotateLocked. Check it has 0 lines.
-		c, _ := countLines(filepath.Join(dir, activeName))
+		c, _ := wal.CountLines(filepath.Join(dir, wal.ActiveName))
 		if c != 0 {
 			t.Fatalf("expected empty active after Close, got %d lines", c)
 		}
@@ -318,15 +317,15 @@ func TestFlushLagRisesOnSinkFailureAndClearsOnDrain(t *testing.T) {
 
 	failing := newQueue(t, dir, 1, func([]usage.Event) error { return errors.New("sink down") })
 	failing.Write(makeEvent("lag-1")) // maxLines=1 → rotates to a segment immediately
-	failing.flushPending()            // flush fails, segment remains
+	failing.FlushPending()            // flush fails, segment remains
 	if got := lag(); got <= 0 {
 		t.Fatalf("flush lag = %v after failed flush, want > 0", got)
 	}
-	// Close would run flushPending again (still failing) — fine.
+	// Close would run FlushPending again (still failing) — fine.
 	failing.Close()
 
 	draining := newQueue(t, dir, 1, func([]usage.Event) error { return nil })
-	draining.flushPending()
+	draining.FlushPending()
 	if got := lag(); got != 0 {
 		t.Fatalf("flush lag = %v after successful drain, want 0", got)
 	}

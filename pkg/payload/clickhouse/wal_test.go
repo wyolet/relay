@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wyolet/relay/pkg/payload"
+	"github.com/wyolet/relay/pkg/wal"
 )
 
 func rec(id string, body int) payload.Record {
@@ -61,8 +62,8 @@ func TestWAL_RotateOnMaxLines(t *testing.T) {
 		}
 	}
 	// 7 writes, rotate every 3 → 2 full segments (6 records) flushed on the
-	// next flushPending; the 7th sits in active.
-	q.flushPending()
+	// next FlushPending; the 7th sits in active.
+	q.FlushPending()
 	if got := len(c.ids()); got != 6 {
 		t.Fatalf("after line-rotation flush: want 6 flushed, got %d (%v)", got, c.ids())
 	}
@@ -81,7 +82,7 @@ func TestWAL_RotateOnMaxBytes(t *testing.T) {
 			t.Fatalf("write: %v", err)
 		}
 	}
-	q.flushPending()
+	q.FlushPending()
 	if got := len(c.ids()); got < 4 {
 		t.Fatalf("byte-rotation should have flushed most records, got %d (%v)", got, c.ids())
 	}
@@ -102,7 +103,7 @@ func TestWAL_RecoverReplaysLeftoverSegments(t *testing.T) {
 	_ = q1.Close() // flush fails → segments remain on disk
 
 	// Sanity: segments are present.
-	segs, _ := filepath.Glob(filepath.Join(dir, segmentGlob))
+	segs, _ := filepath.Glob(filepath.Join(dir, wal.SegmentGlob))
 	if len(segs) == 0 {
 		t.Fatal("expected leftover segments after failed flush")
 	}

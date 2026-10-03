@@ -3,6 +3,7 @@ package inference
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,9 +14,11 @@ import (
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	apphost "github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
 	"github.com/wyolet/relay/pkg/lifecycle"
+	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
 func TestProxyUpstreamPath_DefaultsToSpecPath(t *testing.T) {
@@ -406,5 +409,32 @@ func TestBodyCapture_ConcurrentFinalize(t *testing.T) {
 	<-done
 	if !bytes.Equal(lc.RequestBody, snap) {
 		t.Fatal("published capture mutated after finalize")
+	}
+}
+
+// The proxy path's rate-limit rejection is the same condition as the pipeline
+// path's, and must not report a different error.type/code for it.
+func TestMapProxyErr_RateLimit_UsesTheSharedEnvelope(t *testing.T) {
+	rec := httptest.NewRecorder()
+	mapProxyErr(rec, &pkgratelimit.ExceededError{
+		Rule:       pkgratelimit.Rule{Name: "rpm"},
+		RetryAfter: 2300 * time.Millisecond,
+	})
+
+	if rec.Code != 429 {
+		t.Fatalf("status: %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "3" {
+		t.Fatalf("Retry-After: %q, want %q", got, "3")
+	}
+	var env httpapi.OpenAIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Err.Type != "rate_limit_error" || env.Err.Code != "rate_limit_exceeded" {
+		t.Fatalf("envelope: type=%q code=%q", env.Err.Type, env.Err.Code)
+	}
+	if !strings.Contains(env.Err.Message, "try again in 3s") {
+		t.Fatalf("message must name the retry delay: %q", env.Err.Message)
 	}
 }

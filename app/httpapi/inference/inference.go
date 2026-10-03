@@ -7,6 +7,7 @@ package inference
 
 import (
 	"context"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
@@ -19,6 +20,8 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/proxy"
 	"github.com/wyolet/relay/app/routing"
+	"github.com/wyolet/relay/app/tokencount"
+	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -73,6 +76,23 @@ type Deps struct {
 	// that satisfies RouteMounter; cmd/relay/main.go wires them in.
 	RouteMounters []RouteMounter
 
+	// Profiles are the client profiles this deployment serves, registered
+	// at the composition root. Nil means none: no /{profile}/ routes, no
+	// profile on the request context, behaviour unchanged.
+	Profiles *clientprofile.Registry
+
+	// PublicURL is the externally reachable base of this data plane
+	// (RELAY_INFERENCE_API_URL). A client document that has to print the
+	// endpoint its reader should call needs it; empty means derive it per
+	// request from the origin the caller arrived on.
+	PublicURL string
+
+	// TokenCalibrator answers the count-tokens endpoint from the ratio relay measured on completed requests, for upstreams with no counter of their own. Nil is safe: those requests fall through to a byte estimate.
+	TokenCalibrator *tokencount.Calibrator
+
+	// StreamKeepAlive is how long a streamed response may go without bytes before relay emits the inbound shape's no-op frame itself (RELAY_STREAM_KEEPALIVE_S). Upstreams stay silent through long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes of silence. 0 disables the keepalive.
+	StreamKeepAlive time.Duration
+
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
 	// tooling only; off by default.
@@ -89,6 +109,13 @@ type Pinger interface {
 // Returns the huma.API so the caller can attach test-only operations.
 func Mount(r chi.Router, d Deps) huma.API {
 	httpapi.InstallErrorRewriter()
+
+	// Ahead of every route on r (chi requires middleware before routes), so
+	// header- and User-Agent-selected profiles reach handlers that carry no
+	// /{profile}/ prefix.
+	if d.Profiles != nil {
+		r.Use(clientprofile.Middleware(d.Profiles))
+	}
 
 	cfg := huma.DefaultConfig("Wyolet Relay — Inference", httpapi.Version)
 	cfg.Info.Description = "Data plane. /v1/* endpoints accept OpenAI- and " +
@@ -130,5 +157,33 @@ func Mount(r chi.Router, d Deps) huma.API {
 		PrincipalMiddleware(d.Catalog, d.Tokens),
 	).Get("/v1/ws", wsHandler(d))
 
+	mountProfileRoutes(r, d)
+	mountTokenCountRoutes(r, d)
+
 	return api
+}
+
+// mountProfileRoutes mounts each profile's extra endpoints under its
+// /{profile} prefix. They go on the chi router rather than huma: some are
+// public probes and none carry a typed body. Non-public ones reuse the
+// identical net/http chain /v1/ws uses, so their auth matches /v1/*.
+func mountProfileRoutes(r chi.Router, d Deps) {
+	for _, p := range d.Profiles.Profiles() {
+		router, ok := p.(clientprofile.Router)
+		if !ok {
+			continue
+		}
+		for _, route := range router.Routes() {
+			path := "/" + p.Name() + route.Path
+			if route.Public {
+				r.Method(route.Method, path, route.Handler)
+				continue
+			}
+			r.With(
+				ReadinessMiddleware(d.Catalog),
+				ClassifyMiddleware(),
+				PrincipalMiddleware(d.Catalog, d.Tokens),
+			).Method(route.Method, path, route.Handler)
+		}
+	}
 }

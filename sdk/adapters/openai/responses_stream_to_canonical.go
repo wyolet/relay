@@ -84,7 +84,8 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		if itemProbe.ID == "" || itemProbe.Type == "" {
 			return nil, nil
 		}
-		if !responsesCanonicalItemType(itemProbe.Type) {
+		canonType, canonical := responsesCanonicalItemType(itemProbe.Type)
+		if !canonical {
 			// Unmodeled item type (hosted-tool call): its output_item.done drops
 			// at responsesItemToCanonical, so emitting item.started here would
 			// orphan a started-without-completed. Skip the lifecycle entirely.
@@ -92,7 +93,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		}
 		startData, _ := json.Marshal(v1.ItemStartedEvent{
 			ItemID:   itemProbe.ID,
-			ItemType: v1.ItemType(itemProbe.Type),
+			ItemType: canonType,
 			// Name rides item.started for function_call items so downstream
 			// serializers that emit the tool name at item-start (Anthropic) have it.
 			Name:  itemProbe.Name,
@@ -181,49 +182,11 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		// emitted by the response.completed/incomplete handler below.
 
 	case ResponsesEventOutputItemDone:
-		// Two-phase parse: extract output_index and the raw item bytes.
-		// ResponsesOutputItemDoneEvent.Item is a ResponsesItem interface that
-		// json.Unmarshal cannot populate — unmarshal the item bytes separately
-		// via responsesUnmarshalItem which uses the "type" discriminator.
-		var evHeader struct {
-			OutputIndex int             `json:"output_index"`
-			Item        json.RawMessage `json:"item"`
-		}
-		if err := json.Unmarshal(data, &evHeader); err != nil {
+		frame, ok := s.itemCompletedFrame(data)
+		if !ok {
 			return nil, nil
 		}
-		if len(evHeader.Item) == 0 || string(evHeader.Item) == "null" {
-			return nil, nil
-		}
-		wireItem, err := responsesUnmarshalItem(evHeader.Item)
-		if err != nil {
-			return nil, nil
-		}
-		ci, _ := responsesItemToCanonical(wireItem)
-		if ci == nil {
-			return nil, nil
-		}
-		// gpt-5.5's terminal reasoning item arrives with an empty summary (the
-		// text came over reasoning_summary_text deltas). Backfill it from what we
-		// accumulated so non-streaming consumers / logs see the thinking too.
-		if r, ok := ci.(*v1.Reasoning); ok && len(r.Summary) == 0 {
-			if acc := s.reasoningSummary[responsesItemID(wireItem)]; acc != "" {
-				r.Summary = []v1.SummaryText{{Text: acc}}
-			}
-		}
-		// A truncated (max_output_tokens) turn can close a function_call with
-		// malformed argument JSON; downgrade to incomplete so the caller never
-		// sees a runnable-looking call with broken args.
-		if fc, ok := ci.(*v1.FunctionCall); ok && fc.Status == v1.StatusCompleted &&
-			fc.Arguments != "" && !json.Valid([]byte(fc.Arguments)) {
-			fc.Status = v1.StatusIncomplete
-		}
-		completedData, _ := json.Marshal(v1.ItemCompletedEvent{
-			ItemID: responsesItemID(wireItem),
-			Index:  evHeader.OutputIndex,
-			Item:   ci,
-		})
-		frames = append(frames, v1.SSEFrame{Event: v1.EventItemCompleted, Data: completedData})
+		frames = append(frames, frame)
 
 	case ResponsesEventCompleted, ResponsesEventIncomplete:
 		// Parse the terminal response via the polymorphic-aware unmarshaler:
@@ -281,8 +244,9 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		//     canonical events don't already convey.
 		//  2. Hosted-tool / annotation / audio events (web_search_call.*,
 		//     file_search_call.*, code_interpreter_call.*, image_generation_call.*,
-		//     mcp_call.*, custom_tool_call_input.*, output_text.annotation.added,
-		//     audio.*) — no canonical representation exists yet.
+		//     mcp_call.*, output_text.annotation.added, audio.*) — no canonical
+		//     representation exists yet.
+		//  3. custom_tool_call_input.delta/.done — canonical arguments are a JSON object, so a freeform text delta cannot be re-encoded chunk by chunk; the full input arrives on the item's output_item.done instead.
 		//
 		// canonical: hosted-tool / annotation / audio stream events dropped — no
 		// canonical event. Note mcp_call.failed / mcp_list_tools.failed carry an
@@ -292,20 +256,6 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	}
 
 	return marshalCanonicalFrames(frames), nil
-}
-
-// responsesItemID extracts the ID field from a ResponsesItem via type assertion.
-func responsesItemID(item ResponsesItem) string {
-	switch v := item.(type) {
-	case *ResponsesMessage:
-		return v.ID
-	case *ResponsesFunctionCall:
-		return v.ID
-	case *ResponsesReasoning:
-		return v.ID
-	default:
-		return ""
-	}
 }
 
 // --- canonical → Responses stream ---
