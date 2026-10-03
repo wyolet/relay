@@ -105,9 +105,9 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			return nil, huma.Error400BadRequest(err.Error())
 		}
 
-		// The endpoint has no gate of its own: the plan is authorized row by
-		// row, and a dry run runs the same pass so a caller who may write
-		// nothing never gets the diff back.
+		// Every write needs system.apply at its scope plus the row's own verb;
+		// a dry run runs the same pass so a caller who may write nothing never
+		// gets the diff back.
 		if err := apply.Authorize(ctx, plan, d.Authz); err != nil {
 			var ae *apply.AuthzError
 			if errors.As(err, &ae) {

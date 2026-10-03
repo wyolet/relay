@@ -63,6 +63,38 @@ func newTenantPair(t *testing.T) tenantPair {
 	return p
 }
 
+// Writing through /apply takes system.apply at the row's scope: holding a
+// row's own verbs (or owning it personally) is not enough.
+func TestIntegration_ApplyNeedsSystemApply(t *testing.T) {
+	p := newTenantPair(t)
+	roles := seedBuiltinRoles(t, p.st)
+	devID := p.st.seedLogin(t, "dev", "pw-dev")
+	p.st.seedLogin(t, "nobody", "pw-nobody")
+	p.st.bindRole(t, "own-devs", roles["developer"].Meta.ID, devID, "project", p.ownProj)
+	if err := p.st.cat.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	personal := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: RateLimit\n" +
+		"metadata: {name: mine, owner: {kind: user}}\n" +
+		"spec: {rules: [{meter: requests, amount: 1, window: 1m, strategy: token-bucket}]}\n"
+	projectKey := "apiVersion: relay.wyolet.dev/v1alpha2\nkind: ServiceAccount\n" +
+		"metadata: {name: dev-sa}\nspec: {project: own-proj}\n"
+	for who, bundle := range map[string]string{"nobody": personal, "dev": projectKey} {
+		u := p.st.login(t, who, "pw-"+who)
+		for _, q := range []string{"?dryRun=true", ""} {
+			code, raw := u.doAs(http.MethodPost, "/api/apply"+q, bundle, "application/yaml")
+			if code != http.StatusForbidden {
+				t.Fatalf("%s apply%s = %d, want 403: %s", who, q, code, raw)
+			}
+		}
+	}
+	// The team admin holds system.apply over the team.
+	admin := p.st.login(t, "mallory", "pw-mallory")
+	if code, raw := admin.doAs(http.MethodPost, "/api/apply", projectKey, "application/yaml"); code != http.StatusOK {
+		t.Fatalf("team admin apply = %d: %s", code, raw)
+	}
+}
+
 // A bundle runs the reference rules a POST runs: another tenant's host key,
 // service account, or policy is out of reach whichever write path names it.
 func TestIntegration_ApplyRefusesForeignReferences(t *testing.T) {
