@@ -1,7 +1,5 @@
-// Bug-reproduction tests for the 2026-07-04 audit (audit-sdk-adapters.md).
-// Each test asserts the CORRECT wire behavior and is expected to FAIL until
-// the corresponding finding is fixed; once red is confirmed they are t.Skip'd
-// with an audit marker so the suite stays green.
+// Bug-reproduction tests. Each asserts the correct wire behavior and is
+// skipped until the bug it reproduces is fixed, so the suite stays green.
 package openai
 
 import (
@@ -27,7 +25,7 @@ import (
 // either folded into prompt_tokens/input_tokens or exposed as an explicit
 // field carrying "cache_creation".
 func TestCanonicalUsage_CacheCreationVisibleToClient(t *testing.T) {
-	t.Skip("audit 2026-07-04: cache_creation tokens vanish from client-visible CC/Responses usage — known-broken, unskip with the fix")
+	t.Skip("known bug: cache_creation tokens vanish from client-visible CC/Responses usage; unskip with the fix")
 	// As produced by anthropicUsageToCanonical for a cache-write turn:
 	// 300 uncached input + 100 cache read + 200 cache creation + 50 output.
 	tok := usage.Tokens{"input": 300, "cache_read": 100, "cache_creation": 200, "output": 50}

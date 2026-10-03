@@ -125,7 +125,7 @@ func TestGroupWriteReindexesMemberSubjects(t *testing.T) {
 	}
 }
 
-// Snapshot slices are shared across clones now, so a reindex must replace
+// Snapshot slices are shared across clones, so a reindex must replace
 // the slice rather than write through it.
 func TestCloneDoesNotShareMutatedSubjectSlices(t *testing.T) {
 	user := meta.NewID()

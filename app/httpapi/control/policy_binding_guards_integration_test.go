@@ -96,7 +96,7 @@ func newBindingFixture(t *testing.T) (bindingFixture, context.Context) {
 // its own project owns or a system-owned shared one. Another project's policy
 // and a host's tier policy are both refused — the first would let a project
 // spend a credential that is not its own, the second has no inbound keys at
-// all (D74).
+// all.
 func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 	w, ctx := newBindingFixture(t)
 	guard := guardPolicyBinding(w.deps)
@@ -135,7 +135,7 @@ func TestGuardPolicyBinding_CrossProject(t *testing.T) {
 					t.Errorf("owner = %+v, want the binding's own project", b.Meta.Owner)
 				}
 				if b.Spec.Priority == nil || *b.Spec.Priority != policybinding.DefaultPriority {
-					t.Errorf("priority = %v, want the default stamped in", b.Spec.Priority)
+					t.Errorf("priority = %v, want the default set", b.Spec.Priority)
 				}
 				return
 			}

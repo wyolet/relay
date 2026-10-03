@@ -1,30 +1,24 @@
 // Package license verifies relay's offline license file.
 //
-// A license is a JWT-shaped, EdDSA-signed document produced by the owner's
-// signing tool (which lives in the private release repo, never here). This
-// repo carries only the release public key and the verifier: there is no
-// activation call, no phone-home, no network of any kind. A deployment
-// behind an airgap verifies exactly as well as one on the internet.
+// A license is a JWT-shaped, EdDSA-signed document. Only the release public
+// key and the verifier live here: there is no activation call and no network
+// access, so an airgapped deployment verifies exactly like a connected one.
 //
 // The claim set:
 //
 //	{"iss":"wyolet","sub":"<customer>","iat":…,"exp":…,
-//	 "deployments":1,"features":["sso",…],"support":"business","jti":"…"}
+//	 "deployments":1,"features":["custom-roles",…],"support":"business","jti":"…"}
 //
 // An absent, malformed, wrongly-signed, or long-expired license is never
 // fatal — the process degrades to community (every gated feature off) and
 // keeps serving. An expired license stays usable for GraceWindow so a
 // renewal gap cannot take a gateway down.
 //
-// Rotating the public key: generate the new Ed25519 pair with the private
-// tooling, replace publicKey below with the base64 (std, padded) encoding
-// of the 32-byte public key, and ship it in the next major release — one
-// key per major version, and licenses signed with the previous key stop
-// verifying at that boundary. The private key never enters this repo; the
-// procedure for holding it lives in the private runbook.
+// The public key is one per major version: licenses signed with the previous
+// key stop verifying at that boundary.
 //
-// This package is composition-root side. app/ never imports it — it
-// receives the app/license.Service this package builds.
+// This package is composition-root side. app/ never imports it; it consumes
+// this package's Service through the app/license interfaces.
 package license
 
 import (
@@ -41,9 +35,9 @@ import (
 	applicense "github.com/wyolet/relay/app/license"
 )
 
-// publicKey is the release signing key, base64-encoded (std, padded).
-// PLACEHOLDER — replaced by the owner at release time; the zero-length
-// value below verifies nothing, so an unreplaced build is community-only.
+// publicKey is the release signing key, base64-encoded (std, padded). Release
+// builds set it; when it is unset no license verifies and the build runs in
+// community mode.
 var publicKey = ""
 
 // GraceWindow is how long an expired license keeps working. A renewal gap

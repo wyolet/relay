@@ -202,7 +202,7 @@ func refusedRoute(method, path string, code int) (decision, bool) {
 		}
 	}
 	// The action keeps the plural a Role rule names; the resource kind is
-	// the singular every handler stamps, so UI filters see one vocabulary.
+	// the singular every handler records, so UI filters see one vocabulary.
 	return decision{
 		Action:   plural + "." + verb,
 		Resource: Resource{Kind: authz.Singular(plural), ID: id},

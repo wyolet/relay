@@ -9,17 +9,10 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 )
 
-// TestPickRoundRobin_RotatesUnderContention guards the fix for audit
-// 2026-07-04 P1 tracker #9: pickRoundRobin used to wrap its counter Incr in
-// kv.WithLock, and on the Redis backend (then non-blocking, ErrLockBusy under
-// contention) the `if err != nil { idx = 1 }` fallback made every contended
-// Pick select healthy[0] — round-robin collapsed to "always the first key".
-//
-// The fix drops the lock entirely and derives the index from the atomic Incr
-// result, so concurrent Picks each observe a unique counter value. N
-// concurrent Picks over 3 healthy keys must therefore rotate: counter values
-// 1..N are unique and consecutive, so each key is chosen exactly N/3 times —
-// never a collapse onto one key.
+// pickRoundRobin derives the index from the atomic Incr result with no lock,
+// so concurrent Picks each observe a unique counter value. N concurrent Picks
+// over 3 healthy keys must rotate, each key chosen exactly N/3 times — a
+// contended lock falling back to idx=1 would collapse onto healthy[0].
 func TestPickRoundRobin_RotatesUnderContention(t *testing.T) {
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })

@@ -1,6 +1,5 @@
-// token.go is the data plane's half of inference tokens: hold the public
-// key, verify a bearer against it, and turn the claims into a Principal.
-// Minting lives on the control plane; nothing here reads Postgres.
+// Token verification runs on the request path, so it reads only the held
+// public key and the snapshot, never Postgres. Minting is control-plane only.
 package inference
 
 import (

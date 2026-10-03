@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE INDEX IF NOT EXISTS projects_team_idx ON projects (team_id);
 
--- The admin token used to stamp a user owner with no id on what it created.
--- Nobody owns such a row; the tenancy code reads it as personal and keeps it
+-- Rows created with the admin token carry a user owner with no id. Nobody
+-- owns such a row; the tenancy code reads it as personal and keeps it
 -- out of shared pools, so it becomes system-owned. Keys are handled in 000026.
 UPDATE secrets SET metadata = jsonb_set(metadata, '{owner}', '{"kind":"system"}'::jsonb)
  WHERE metadata->'owner'->>'kind' = 'user' AND coalesce(metadata->'owner'->>'id', '') = '';

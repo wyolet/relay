@@ -220,7 +220,7 @@ func Load() (*Config, error) {
 	// --- RELAY_AUTHZ ---
 	switch v := os.Getenv("RELAY_AUTHZ"); v {
 	case "":
-		// RELAY_MULTI_USER is what pre-IAM deployments set. Ignoring it
+		// RELAY_MULTI_USER is what older multi-user deployments set. Ignoring it
 		// would silently drop an upgraded multi-user relay to "single",
 		// where every authenticated user is an admin.
 		if multiUserOn() {

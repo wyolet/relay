@@ -69,8 +69,8 @@ type builder struct {
 	rows     *Rows
 	idx      *index
 	selector labelSelector
-	// admin relaxes the rules an operator may cross: today only re-parenting
-	// a row onto a different owner.
+	// admin relaxes the rules an operator may cross: only re-parenting a row
+	// onto a different owner.
 	admin bool
 	// lic gates the features a manifest may declare. Nil is no gate — see
 	// Options.License.
@@ -500,7 +500,7 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		}
 		m := k.Meta(obj)
 		m.ID = k.Names[name]
-		// A declared row is no longer hand-edited: apply owns it now.
+		// A declared row is owned by apply, so it is not hand-edited.
 		m.Dirty = false
 
 		e := Entry{Kind: k.Kind, Name: name, ID: m.ID, plural: route.Plural, owner: m.Owner}

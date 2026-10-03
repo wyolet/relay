@@ -106,10 +106,9 @@ func registerAuth(api huma.API, d Deps) {
 			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
-		// The YAML users are seeded into the table at boot, so the row is
-		// what the session must carry: everything downstream (owner ids,
-		// key principals, subjects) keys on the UUID, and the YAML slug is
-		// not one. Only a deployment with no user store falls back to it.
+		// The session carries the seeded row because owner ids, principals
+		// and subjects key on its UUID, not the YAML slug. Only a deployment
+		// with no user store falls back to the slug.
 		username, roles := yu.Spec.Username.Get(), yu.Spec.Roles
 		userID := yu.Metadata.Name
 		var row *user.User

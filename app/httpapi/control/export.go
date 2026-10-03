@@ -1,8 +1,6 @@
-// export.go serves GET /export: the tenant-owned rows of the deployment as
-// a manifest bundle POST /apply accepts back unchanged. Catalog template
-// rows (system-, provider-, host-owned) are never exported — they come from
-// the catalog, not from anyone's git repo — but the overlays layered on them
-// are.
+// Export emits a bundle POST /apply accepts back unchanged. Catalog template
+// rows are left out because they come from the catalog, not from a tenant's
+// repo; the overlays on them are tenant-owned and included.
 package control
 
 import (
@@ -178,10 +176,9 @@ func (e *exporter) wanted(ctx context.Context, plural, singular string, m *meta.
 	if e.kinds != nil && !e.kinds[plural] {
 		return false
 	}
-	// Team, group, role and role-binding rows are system-owned by rule (a
-	// scope or a grant is not its author's property), so provenance cannot
-	// decide their membership — the kind does. The scope filter below still
-	// applies, and a global row only survives an unscoped export.
+	// Teams, groups, roles and role bindings are system-owned by rule, so the
+	// kind, not provenance, decides membership. The scope filter still
+	// applies: a global row only survives an unscoped export.
 	switch {
 	case singular == "role" && role.IsBuiltin(m.Name):
 		return false // relay's own rows, seeded on every deployment

@@ -74,7 +74,7 @@ func TestRoundTrip_TeamAndProject(t *testing.T) {
 		t.Errorf("spec.team did not resolve: %q", p.Spec.TeamID)
 	}
 	if p.Meta.Owner.ID != teamUUID {
-		t.Errorf("owner not stamped from spec.team: %+v", p.Meta.Owner)
+		t.Errorf("owner not derived from spec.team: %+v", p.Meta.Owner)
 	}
 	if p.Meta.Annotations["wyolet.com/cost-center"] != "1042" {
 		t.Errorf("project annotations = %v", p.Meta.Annotations)

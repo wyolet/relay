@@ -1,7 +1,5 @@
-// jwt.go carries the inference token's wire format: a compact EdDSA-signed
-// JWT. The claim set lives here (not in a caller) so the minting and the
-// verifying side can never drift apart. Signing and verification are pure —
-// callers hold the key material.
+// The inference token's claim set lives here rather than in a caller so the
+// minting and verifying sides cannot drift apart.
 package crypto
 
 import (

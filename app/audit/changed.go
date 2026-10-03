@@ -16,7 +16,7 @@ var secretSegments = map[string]bool{
 	"password": true, "passwordHash": true, "token": true, "secret": true,
 }
 
-// serverOwnedPaths are stamped by the server, not sent by the caller, so
+// serverOwnedPaths are set by the server, not sent by the caller, so
 // they differ on every update and say nothing about what an operator did.
 var serverOwnedPaths = map[string]bool{
 	"metadata.createdAt": true,

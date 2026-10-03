@@ -1,17 +1,6 @@
-// Attach / detach Key ↔ Policy from the policy side. The
-// authoritative field is Key.Spec.PolicyID (1:N — one policy per
-// key, many keys per policy); these endpoints mutate it so the policy
-// form can manage its key roster without round-tripping through the
-// key form.
-//
-//	POST   /policies/by-id/{id}/keys/{keyId}   — attach
-//	DELETE /policies/by-id/{id}/keys/{keyId}   — detach
-//
-// Attach overwrites any existing PolicyID on the relay key (no
-// confirmation): moving a key from policy A to policy B is the
-// common case. Detach succeeds when the key currently points at this
-// policy; mismatched detach returns 409 to surface the drift instead
-// of silently no-op'ing.
+// Attach overwrites a key's existing PolicyID without confirmation because
+// moving a key between policies is the common case. A detach naming a policy
+// the key does not point at returns 409 rather than silently doing nothing.
 package control
 
 import (

@@ -250,7 +250,7 @@ func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
 		mustUpsert(t, stores.Key.Upsert(ctx, k), "key")
 	}
 
-	// What the data plane resolves today is what the rollback must write.
+	// What the data plane resolves before the rollback is what it must write.
 	if _, err := cat.Hydrate(ctx, stores, appcatalog.BootstrapOptions{Pool: st.Pool()}); err != nil {
 		t.Fatalf("hydrate: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
 	}
 }
 
-// The pre-tenancy admin token stamped a user owner with no id on what it
+// The pre-tenancy admin token wrote a user owner with no id on what it
 // created. Nobody owns such a row, so the upgrade hands it to the system: a
 // shared host key has to stay in the pool policy-less callers draw from.
 func TestUpgradeHandsOwnerlessUserRowsToTheSystem(t *testing.T) {

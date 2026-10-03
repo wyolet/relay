@@ -16,7 +16,7 @@ import (
 //
 // Construction/config level only — no websocket connection is made.
 func TestRelayWSHonorsRelayEnvConfig(t *testing.T) {
-	t.Skip("audit 2026-07-04: RelayWS bypasses WR_* env fallback + config validation — known-broken, unskip with the fix")
+	t.Skip("known bug: RelayWS bypasses WR_* env fallback + config validation; unskip with the fix")
 	t.Run("env fallback", func(t *testing.T) {
 		t.Setenv(EnvBaseURL, "http://relay-env.example:8080")
 		t.Setenv(EnvAPIKey, "rk-env-key")

@@ -1,7 +1,5 @@
-// apply.go serves POST /apply: a manifest bundle is diffed against the
-// stored rows and, unless dryRun, written. The loader is app/apply — the
-// same one the boot seed runs — so a CI apply and a boot seed of the same
-// tree converge on the same rows.
+// POST /apply uses the same loader as the boot seed (app/apply), so a CI
+// apply and a boot seed of the same tree converge on the same rows.
 package control
 
 import (

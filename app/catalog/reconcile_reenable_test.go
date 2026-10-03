@@ -9,9 +9,8 @@ import (
 	"github.com/wyolet/relay/app/policy"
 )
 
-// audit 2026-07-04 P1 #7: disable→enable round-trips permanently lose
-// dependents — re-enabling a model must restore the grant its policy still
-// carries in PG.
+// A disable→enable round-trip must not lose dependents: re-enabling a model
+// restores the grant its policy still carries in PG.
 func TestApply_ModelDisableEnableRestoresPolicyGrant(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
@@ -68,9 +67,8 @@ func TestApply_ModelDisableEnableRestoresPolicyGrant(t *testing.T) {
 	}
 }
 
-// audit 2026-07-04 P1 #7: disable→enable round-trips permanently lose
-// dependents — re-enabling a policy must restore the relay keys that still
-// point at it in PG.
+// A disable→enable round-trip must not lose dependents: re-enabling a policy
+// restores the relay keys that still point at it in PG.
 func TestApply_PolicyDisableEnableRestoresKeys(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)

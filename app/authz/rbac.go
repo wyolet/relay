@@ -72,7 +72,7 @@ var singulars = func() map[string]string {
 	return out
 }()
 
-// Singular maps an API plural back to the Resource.Kind handlers stamp.
+// Singular maps an API plural back to the Resource.Kind handlers set.
 // Exported for app/audit, which reconstructs a resource from the request
 // path when a handler refuses before authorizing.
 func Singular(p string) string {

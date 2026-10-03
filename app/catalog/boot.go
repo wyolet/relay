@@ -278,7 +278,7 @@ func seedCatalog(ctx context.Context, stores *Stores, opts BootstrapOptions) err
 	}); err != nil {
 		return fmt.Errorf("auto-seed: %w", err)
 	}
-	// A stamped tree (baked image) makes the seeded version known; record it
+	// A tree with a .version file (baked image) makes the seeded version known; record it
 	// so a later matching version pin no-ops.
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
 		return writeCatalogSource(ctx, stores, v)

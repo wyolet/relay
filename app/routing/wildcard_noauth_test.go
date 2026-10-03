@@ -18,10 +18,6 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
-// TestResolve_WildcardPolicyDoesNotReachUngrantedNoAuthHost documents audit
-// 2026-07-04 (audit-app-services.md, "wildcard × NoAuth authz widening",
-// routing.go:262-284 DECISION item).
-//
 // An implicit-wildcard policy (no ModelIDs, no Models) is documented as
 // granting "every model reachable through the policy's hostkeys" — the
 // hostkey-coverage check is the real authorization gate (routing.go step-3

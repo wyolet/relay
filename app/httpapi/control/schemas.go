@@ -1,7 +1,6 @@
-// schemas.go serves the JSON Schemas the exported manifests reference from
-// their `$schema` directive. Public: an editor resolving the directive has
-// no session, and a schema describes shapes, never data. Raw chi rather than
-// huma so the response keeps its `application/schema+json` content type.
+// Schemas are served without auth: an editor resolving a manifest's `$schema`
+// has no session, and a schema holds no data. Raw chi rather than huma keeps
+// the `application/schema+json` content type.
 package control
 
 import (

@@ -358,7 +358,7 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 
 // policyOrDisabled resolves a policy id, falling back to the disabled row so
 // a credential pointing at a switched-off policy is answered rather than
-// treated as pointing at nothing (D77).
+// treated as pointing at nothing.
 func policyOrDisabled(snap *appcatalog.Snapshot, id string) (*policy.Policy, bool) {
 	if pol, ok := snap.Policy(id); ok {
 		return pol, true

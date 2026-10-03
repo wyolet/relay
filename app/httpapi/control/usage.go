@@ -72,17 +72,13 @@ func scopeOf(ctx context.Context, authzr authz.Authorizer, cat *appcatalog.Catal
 			}
 		}
 	}
-	// The caller's own traffic, named by the principal every event carries.
-	// Enumerating their keys instead would list every key row per read and
-	// hand the store a hash list that grows with the deployment — and a
-	// rotated key's old hash drops out of it the moment grace ends, which
-	// the principal id never does.
+	// Scope by principal rather than key hashes: the hash list grows with the
+	// deployment, and a rotated key's old hash drops out once grace ends.
 	if a := actor.From(ctx); a != nil && a.UserID != "" {
 		sc.principalIDs = append(sc.principalIDs, a.UserID)
-		// Events written before the principal field existed name only the
-		// key hash. Reading the hashes off the caller's own key rows (the
-		// snapshot's principal index, no Postgres) keeps that history
-		// readable to the person who produced it.
+		// Events without a principal name only the key hash; the caller's
+		// own key hashes (snapshot principal index, no Postgres) keep that
+		// history readable to them.
 		if cat != nil {
 			sc.keyHashes = cat.Current().KeyHashesForUser(a.UserID)
 		}

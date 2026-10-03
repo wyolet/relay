@@ -23,10 +23,10 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
-// D74: a binder may name only its own project's policy or a
-// system-owned shared one; another project's policy and a host tier policy
-// are both refused, naming the offending row.
-func TestCheckPolicyRefVisible_D74OwnerRule(t *testing.T) {
+// A binder may name only its own project's policy or a system-owned shared
+// one; another project's policy and a host tier policy are both refused,
+// naming the offending row.
+func TestCheckPolicyRefVisible_OwnProjectOrSharedOnly(t *testing.T) {
 	pool, ctx := setupPolicyRefDB(t)
 	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
@@ -85,8 +85,8 @@ func TestCheckPolicyRefVisible_DanglingIsA400(t *testing.T) {
 	}
 }
 
-// D74: RateLimit refs on a policy follow the same owner rule.
-func TestCheckRateLimitRefVisible_D74OwnerRule(t *testing.T) {
+// RateLimit refs on a policy follow the same owner rule.
+func TestCheckRateLimitRefVisible_OwnProjectOrSharedOnly(t *testing.T) {
 	pool, ctx := setupPolicyRefDB(t)
 	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
@@ -126,8 +126,8 @@ func TestCheckRateLimitRefVisible_D74OwnerRule(t *testing.T) {
 		t.Errorf("dangling rate limit: err = %v, want a 400", err)
 	}
 
-	// D51/D70: a personal policy must not meter itself against a project's
-	// limits either — the rule the policy ref already applied.
+	// A personal policy must not meter itself against a project's limits
+	// either, matching the rule for policy refs.
 	personal := meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}
 	outsider := actor.WithActor(ctx, &actor.Actor{UserID: "u-alice", Username: "alice"})
 	err = checkRateLimitRefVisible(outsider, d, own.Meta.ID, personal)
@@ -139,7 +139,7 @@ func TestCheckRateLimitRefVisible_D74OwnerRule(t *testing.T) {
 	}
 }
 
-// D76: deleting a policy host keys mirror as their tier is refused
+// Deleting a policy host keys mirror as their tier is refused
 // with a 409 naming them: clearing the ref would leave every one invalid.
 func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
 	pool, ctx := setupPolicyRefDB(t)
@@ -182,8 +182,8 @@ func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
 	}
 }
 
-// The delete cascade clears the ServiceAccount override too —
-// it used to leave accounts pointing at a row that was about to vanish.
+// The delete cascade clears the ServiceAccount override too, so no account
+// points at the deleted row.
 func TestCascadePolicyDetach_ClearsServiceAccountOverride(t *testing.T) {
 	pool, ctx := setupPolicyRefDB(t)
 	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
@@ -286,7 +286,7 @@ func TestWriteKeyPolicy_RunsTheGuardAndMarksDirty(t *testing.T) {
 		t.Fatalf("upsert key: %v", err)
 	}
 
-	// A tier policy is not bindable — the guard the endpoint used to bypass.
+	// A tier policy is not bindable through this endpoint either.
 	k.Spec.PolicyID = tier.Meta.ID
 	if err := writeKeyPolicy(ctx, d, k); statusOf(t, err) != 400 {
 		t.Fatalf("attaching a tier policy: err = %v, want a 400", err)

@@ -1,8 +1,5 @@
-// keys.go is the control plane's kv key vocabulary. Only the token-mint
-// window lives here today; every kv key this package writes belongs in this
-// file so the hash tags stay greppable from one place.
-//
-// Expected kv ops per mint: one Reserve (a single script call).
+// Every kv key this package writes is built here so the hash tags stay
+// greppable from one place. Expected kv ops per token mint: one Reserve.
 package control
 
 import "time"

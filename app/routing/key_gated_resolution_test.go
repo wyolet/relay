@@ -134,7 +134,7 @@ type lister[T any] []*T
 
 func (l lister[T]) List(context.Context) ([]*T, error) { return l, nil }
 
-// D73: a policy-less request draws only on system- or user-owned host keys.
+// A policy-less request draws only on system- or user-owned host keys.
 // A project's credential is reachable only through that project's policy,
 // which is what holds the spend inside its limits and attribution — so the
 // key here is live and its project present, and it is still not a candidate.
@@ -171,7 +171,7 @@ func TestResolvePolicyless_SkipsProjectOwnedKeys(t *testing.T) {
 	}
 }
 
-// D73: the tier gate applies to the policy-less pool too: a key whose
+// The tier gate applies to the policy-less pool too: a key whose
 // host tier does not grant the model is not a usable candidate.
 func TestResolvePolicyless_AppliesTierGate(t *testing.T) {
 	f := newTwoHostParts()
@@ -302,7 +302,7 @@ func TestPolicyAllows_DisabledPolicyGrantsNothing(t *testing.T) {
 	}
 }
 
-// D79: a key whose tier policy is switched off is not a candidate. The key
+// A key whose tier policy is switched off is not a candidate. The key
 // itself stays in the snapshot — evicting it would strand it until a reload —
 // and the tier gate is what denies it, so Resolve answers ErrNoKeys rather
 // than spending a key it has no rules to meter by.
@@ -331,7 +331,7 @@ func TestResolve_DisabledTierPolicyDeniesTheKey(t *testing.T) {
 	}
 }
 
-// D79: re-enabling the tier restores service with no reload — the key never
+// Re-enabling the tier restores service with no reload — the key never
 // left, so the gate simply stops denying it.
 func TestResolve_ReEnabledTierServesAgain(t *testing.T) {
 	f := newTwoHostParts()
@@ -369,7 +369,7 @@ func TestResolve_ReEnabledTierServesAgain(t *testing.T) {
 	}
 }
 
-// D77: Resolve is handed a disabled policy — the middleware resolves
+// Resolve is handed a disabled policy — the middleware resolves
 // it rather than falling through — and answers ErrPolicyDisabled.
 func TestResolve_DisabledPolicyIsReachable(t *testing.T) {
 	f := newTwoHostParts()
@@ -392,7 +392,7 @@ func TestResolve_DisabledPolicyIsReachable(t *testing.T) {
 	}
 }
 
-// D73: the policy-less listing answers exactly what the policy-less flow
+// The policy-less listing answers exactly what the policy-less flow
 // would serve. A project-owned key is not in that pool, so its model is not
 // advertised; a NoAuth host is served by the anonymous key, so its model is.
 func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
@@ -510,7 +510,7 @@ func BenchmarkResolveTwoBindings(b *testing.B) {
 	}
 }
 
-// BenchmarkResolvePolicyless covers the D73 pool filter + tier gate.
+// BenchmarkResolvePolicyless covers the policy-less pool filter + tier gate.
 func BenchmarkResolvePolicyless(b *testing.B) {
 	f := newTwoHostParts()
 	snap := catalog.Build(

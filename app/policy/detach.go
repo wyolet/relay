@@ -1,8 +1,6 @@
-// detach.go scrubs the references to a Policy that live in other rows' spec
-// JSONB, and a policy's own references to a host key or rate limit being
-// removed. Postgres FKs do not cover these; both writers that remove a row —
-// the control API's delete cascade and apply's prune — must do exactly the
-// same cleanup.
+// Policy references live in spec JSONB, which Postgres FKs do not cover, so
+// both row-removing writers (the API delete cascade and apply's prune) share
+// this cleanup.
 package policy
 
 import (
@@ -46,8 +44,7 @@ type DetachStores struct {
 //
 // HostKey.spec.policyId is deliberately NOT cleared: policyId is required, so
 // clearing it writes a row that fails its own Validate. A policy host keys
-// mirror as their tier is refused deletion instead — see HostKeysUsingPolicy
-// (D76, D81).
+// mirror as their tier is refused deletion instead — see HostKeysUsingPolicy.
 func Detach(ctx context.Context, s DetachStores, id string) error {
 	if id == "" {
 		return nil
@@ -188,7 +185,7 @@ func DetachRateLimit(ctx context.Context, s Policies, id string) error {
 
 // HostKeysUsingPolicy returns the host keys that name id as their tier
 // policy. Deleting such a policy would leave every one of them invalid, so
-// the delete is refused instead (D76).
+// the delete is refused instead.
 func HostKeysUsingPolicy(ctx context.Context, s DetachStores, id string) ([]string, error) {
 	if s.HostKeys == nil || id == "" {
 		return nil, nil

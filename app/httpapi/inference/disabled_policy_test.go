@@ -24,9 +24,8 @@ func errCode(t *testing.T, body []byte) string {
 	return payload.Error.Code
 }
 
-// D77: a key whose policy an operator switched off answers 403
-// policy_disabled: the key is still valid, its policy is not. It used to be
-// dropped from the snapshot and rejected as an unknown key.
+// A key whose policy an operator switched off answers 403 policy_disabled,
+// not 401: the key is still valid, its policy is not.
 func TestPrincipal_KeyOnDisabledPolicyIsForbidden(t *testing.T) {
 	f := newPrincipalFixture()
 	off := false
@@ -44,7 +43,7 @@ func TestPrincipal_KeyOnDisabledPolicyIsForbidden(t *testing.T) {
 	}
 }
 
-// D77: a binding whose policy is disabled is an answer, not a miss:
+// A binding whose policy is disabled is an answer, not a miss:
 // resolution stops there instead of falling through to the next binding.
 func TestPrincipal_DisabledBindingDoesNotFallThrough(t *testing.T) {
 	f := newPrincipalFixture()
@@ -79,10 +78,9 @@ func TestPrincipal_DisabledBindingDoesNotFallThrough(t *testing.T) {
 	}
 }
 
-// D77 on the long-lived path: a WebSocket connection re-resolves its
-// principal per frame, so a policy switched off mid-connection has to answer
-// policy_disabled on the next frame rather than falling through to the
-// account's or the project's broader grant.
+// A WebSocket connection re-resolves its principal per frame, so a policy
+// switched off mid-connection answers policy_disabled on the next frame
+// rather than falling through to a broader grant.
 func TestFramePrincipal_KeyOnDisabledPolicyResolvesTheDisabledRow(t *testing.T) {
 	f := newPrincipalFixture()
 	off := false
@@ -114,7 +112,7 @@ func TestFramePrincipal_KeyOnDisabledPolicyResolvesTheDisabledRow(t *testing.T) 
 	}
 }
 
-// D77: a service account's own disabled policy override answers the
+// A service account's own disabled policy override answers the
 // same way rather than dropping the account from the snapshot.
 func TestPrincipal_ServiceAccountOnDisabledPolicyIsForbidden(t *testing.T) {
 	f := newPrincipalFixture()

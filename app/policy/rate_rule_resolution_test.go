@@ -89,7 +89,7 @@ func TestSelectRateLimitID_FirstMatchWins(t *testing.T) {
 	}
 }
 
-// D72: the bucket a rule counts in is named by the policy, the RateLimit it
+// The bucket a rule counts in is named by the policy, the RateLimit it
 // came from and — for a per-model binding — the model, so no two grants of
 // one policy can collide in the same counter. The key's exact rendering is
 // pinned by TestRuleKeyFormat_CarriesRateLimitAndModel; what this adds is

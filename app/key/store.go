@@ -1,9 +1,6 @@
-// store.go is the data-access layer for Key. Same shape as the other
-// entity stores; sha256(plaintext) is the caller's responsibility — the
-// plaintext never enters this package.
-//
-// The principal and the rotation hashes live in real columns (FK cascade,
-// unique index) as well as the spec JSONB; the columns win on read.
+// The plaintext never enters this package; callers hash it. The principal and
+// rotation hashes live in real columns (FK cascade, unique index) as well as
+// the spec JSONB, and the columns win on read.
 package key
 
 import (
@@ -19,15 +16,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Key data-access type.
 type Store struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
 func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
 
-// List returns every Key row.
 func (s *Store) List(ctx context.Context) ([]*Key, error) {
 	rows, err := s.q.ListRelayKeys(ctx)
 	if err != nil {
@@ -50,8 +44,7 @@ func (s *Store) List(ctx context.Context) ([]*Key, error) {
 // traffic — including a rotating key's grace window.
 var ErrHashInUse = errors.New("key: hash in use by another key")
 
-// Upsert writes k. Caller is responsible for stamping Meta.ID and for
-// computing Spec.KeyHash from the plaintext.
+// Upsert expects Meta.ID and Spec.KeyHash set by the caller.
 func (s *Store) Upsert(ctx context.Context, k *Key) error {
 	params, err := toUpsertParams(k)
 	if err != nil {
@@ -114,7 +107,7 @@ func (s *Store) Rotate(ctx context.Context, k *Key, prevHash string, seen time.T
 	return nil
 }
 
-// Get returns the Key with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
 	r, err := s.q.GetRelayKey(ctx, id)
 	if err != nil {
@@ -137,7 +130,6 @@ func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
 	return &Key{Meta: md, Spec: spec}, nil
 }
 
-// Delete removes a Key by id.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteRelayKey(ctx, id)
 }

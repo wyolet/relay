@@ -857,14 +857,9 @@ func TestMultiRule_FirstViolationShortCircuits2(t *testing.T) {
 	}
 }
 
-// TestMultiRule_MixedStrategies: requests/token-bucket/100 + requests/fixed-window/50.
-// The fixed-window cap binds at 51 requests. Verify the 51st request is rejected
-// and that the token-bucket counter was rolled back.
-// TestMultiRule_MixedStrategies: requests/token-bucket/100 + requests/fixed-window/50.
-// The fixed-window cap binds at 51 requests. Verify the 51st request is rejected.
-//
-// NOTE: the TB rollback assertion is skipped due to a known bug — see
-// TestMultiRule_MixedStrategies_TBRollback_BUGSKIP for details.
+// requests/token-bucket/100 + requests/fixed-window/50: the fixed-window cap
+// rejects the 51st request. The token-bucket rollback is pinned by
+// TestMultiRule_TBRollbackOnLaterFailure.
 func TestMultiRule_MixedStrategies(t *testing.T) {
 	start := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 	l, _ := newScopedLimiter(t, start)

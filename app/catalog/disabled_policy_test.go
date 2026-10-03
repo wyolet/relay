@@ -73,7 +73,7 @@ func (f disabledPolicyFixture) catalog(t *testing.T) *Catalog {
 	return c
 }
 
-// D77: a key, service account, and policy binding that name a
+// A key, service account, and policy binding that name a
 // disabled policy all stay in the snapshot; the policy itself is out of every
 // routing index but resolvable, so a request answers policy_disabled rather
 // than falling through to a broader grant or a 401.
@@ -98,8 +98,8 @@ func TestDisabledPolicyKeepsDependentRows(t *testing.T) {
 	}
 }
 
-// D77: disabling through the NOTIFY path reaches the same
-// state as a full reload — the incremental cascade used to evict the rows.
+// Disabling through the NOTIFY path reaches the same state as a full reload:
+// the incremental cascade must not evict the dependent rows.
 func TestDisablePolicyViaReconcileKeepsDependentRows(t *testing.T) {
 	f := newDisabledPolicyFixture(true)
 	c := f.catalog(t)

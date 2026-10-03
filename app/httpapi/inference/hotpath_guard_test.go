@@ -660,14 +660,10 @@ func TestRejectedCredentialsNeverTouchKV(t *testing.T) {
 	}
 }
 
-// TestDepsInterfaceFieldsAreReviewed guards the structural half of "no
-// Postgres on the request path". Scanning for pgx types would prove nothing:
-// Deps.Pinger is an interface that internal/storage satisfies, so the data
-// plane already holds a database handle — /healthz may call it, /v1/* may
-// not. What can be enforced is that the set of interface-typed fields (the
-// only shape such a handle can enter by) stays the reviewed one, so a new
-// seam has to be argued against the hot-path rule rather than merged quietly.
-func TestDepsInterfaceFieldsAreReviewed(t *testing.T) {
+// A database handle can only reach the request path through an
+// interface-typed Deps field (Pinger already is one, for /healthz), so a new
+// one must be justified against the no-Postgres hot-path rule.
+func TestDepsInterfaceFieldsArePingerOnly(t *testing.T) {
 	want := map[string]bool{"Pinger": true}
 
 	got := map[string]bool{}

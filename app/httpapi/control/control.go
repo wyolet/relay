@@ -1,5 +1,5 @@
 // Package control is the admin-plane HTTP API: /auth/*, CRUD across the
-// eight catalog kinds, /version, /master-key/*, /reload.
+// catalog and tenancy kinds, /version, /master-key/*, /reload.
 //
 // Mount(r, deps) wires huma+chi onto an existing chi router and returns the
 // huma.API. main.go constructs Deps and calls Mount.
@@ -69,8 +69,7 @@ type Deps struct {
 	AdminToken string
 
 	// Authz is the policy-decision interface. Handlers call
-	// d.Authz.Authorize before mutations; today's impl is permissive for
-	// any authenticated caller.
+	// d.Authz.Authorize before mutations; RELAY_AUTHZ picks the impl.
 	Authz authz.Authorizer
 
 	// License is the gate for licensed features and the backing of the
@@ -81,7 +80,7 @@ type Deps struct {
 	// reads. Writes go through Stores.
 	Catalog *appcatalog.Catalog
 
-	// Stores is the bundle of eight typed stores used by CRUD writes.
+	// Stores is the bundle of typed stores used by CRUD writes.
 	Stores *appcatalog.Stores
 
 	// CookieSecure controls the Secure attribute on the session cookie.
@@ -174,13 +173,13 @@ func Mount(r chi.Router, d Deps) huma.API {
 	// endpoints omit it.
 	protect := huma.Middlewares{httpapi.HumaAuth(RequireActor)}
 
-	registerVersion(api, d) // public (the license block is admin-only)
+	registerVersion(api, d) // public (the license block only for authenticated callers)
 	registerLicense(api, d, protect)
 	registerConfigJSON(api, d)    // public: GET /config.json for the embedded UI
 	registerAuth(api, d)          // /auth/login is public; whoami/logout don't need protect (whoami returns 401 itself)
 	registerAuthOIDC(r, d)        // raw chi (browser redirects + cookies): /auth/oidc/{start,callback}
 	registerMisc(api, d, protect) // /master-key/generate, /reload
-	registerCRUD(api, d, protect) // 8 kinds × CRUD
+	registerCRUD(api, d, protect) // generic CRUD for every registered kind
 	registerHostKeyRotate(api, d, protect)
 	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)

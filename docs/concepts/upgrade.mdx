@@ -1,6 +1,6 @@
 ---
-title: "Upgrading across the IAM release"
-description: "Restart requirements, behaviour changes, and rollback for the teams/projects release boundary"
+title: "Upgrading to teams, projects, and RBAC"
+description: "Restart requirements, behaviour changes, and rollback when upgrading to the release that adds teams and projects"
 ---
 
 The release that adds Teams, Projects, Roles, and relay-signed inference tokens changes the Postgres schema and how keys are stored. Plan a short downtime window: a fleet mixing the old and new binary is only partly functional (see [Rolling upgrades](#rolling-upgrades)).

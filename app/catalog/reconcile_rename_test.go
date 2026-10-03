@@ -10,10 +10,10 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
-// audit 2026-07-04 [P2 RESTRUCTURE]: provider rename leaves synthesized
-// snapshot aliases stale on the incremental Apply path.
+// A provider rename must reindex the synthesized snapshot aliases on the
+// incremental Apply path.
 func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
-	t.Skip("audit 2026-07-04: provider/host rename leaves snapshot aliases stale — known-broken, unskip with the fix")
+	t.Skip("known bug: provider/host rename leaves snapshot aliases stale; unskip with the fix")
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
@@ -45,10 +45,10 @@ func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
 	}
 }
 
-// audit 2026-07-04 [P2 RESTRUCTURE]: host rename leaves synthesized
-// host-pinned snapshot aliases stale on the incremental Apply path.
+// A host rename must reindex the synthesized host-pinned snapshot aliases on
+// the incremental Apply path.
 func TestApply_HostRenameReindexesSnapshotAliases(t *testing.T) {
-	t.Skip("audit 2026-07-04: provider/host rename leaves snapshot aliases stale — known-broken, unskip with the fix")
+	t.Skip("known bug: provider/host rename leaves snapshot aliases stale; unskip with the fix")
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {

@@ -1,5 +1,4 @@
-// budget.go carries the spend cap shape shared by Team and Project. It
-// lives here (rather than in a third package) because Team is the outer
+// Budget lives here rather than in a third package because Team is the outer
 // scope; app/project imports it.
 package team
 

@@ -49,12 +49,9 @@ func (f tierFixture) catalog(t *testing.T) *Catalog {
 	return c
 }
 
-// D79: a host key whose tier policy is switched off KEEPS its place in the
-// snapshot — evicting it would strand the key until the next full reload,
-// since re-enabling the policy has nothing to reinsert. What denies it is the
-// tier gate: PolicyAllowsCombo grants nothing for a policy that is not
-// enabled, so the key is never selected while the tier is off and comes back
-// the moment it returns.
+// A host key whose tier policy is switched off keeps its place in the
+// snapshot, so re-enabling restores it; meanwhile the tier gate denies it,
+// since PolicyAllowsCombo grants nothing for a disabled policy.
 func TestHostKeyOnDisabledTierStaysButIsDenied(t *testing.T) {
 	assertDenied := func(t *testing.T, s *Snapshot, f tierFixture) {
 		t.Helper()
@@ -90,10 +87,9 @@ func TestHostKeyOnDisabledTierStaysButIsDenied(t *testing.T) {
 	})
 }
 
-// D79: toggling a tier policy off and on again must leave its host keys
-// serving, with no full reload in between. Evicting the keys on disable
-// stranded them: re-enable finds the policy present, so the absent-id
-// recovery never fires and there is nothing to reinsert.
+// Toggling a tier policy off and on again must leave its host keys serving
+// with no full reload in between: re-enable finds the policy present, so
+// keys evicted on disable would never be reinserted.
 func TestTogglingATierPolicyKeepsItsHostKeysServing(t *testing.T) {
 	f := newTierFixture(true)
 	c := f.catalog(t)

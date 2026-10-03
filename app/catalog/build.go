@@ -74,11 +74,9 @@ func build(
 
 	providerIDs := setFromIDs(provs, func(p *provider.Provider) string { return p.Meta.ID })
 	hostIDs := setFromIDs(hosts, func(h *host.Host) string { return h.Meta.ID })
-	// pols carries disabled rows too — addPolicies routes them aside (D77).
-	// A host's tier menu lists only the ones still switched on. A host key
-	// keeps its tier policy either way, so its lookup reads the full map: the
-	// key stays put across a disable and comes back with it, and the tier
-	// gate is what denies it meanwhile (D79).
+	// A host's tier menu lists only enabled policies, but a host key's tier
+	// lookup reads the full map so the key survives a disable; the tier gate
+	// denies it meanwhile.
 	polByID := make(map[string]*policy.Policy, len(pols))
 	enabledPolByID := make(map[string]*policy.Policy, len(pols))
 	for _, p := range pols {

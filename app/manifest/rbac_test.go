@@ -161,11 +161,10 @@ func TestRoundTrip_RBAC(t *testing.T) {
 	}
 }
 
-// TestToPolicyBinding_OmittedPriorityStampsTheDefaultOnSpec pins the value
-// on Spec.Priority itself, not just what EffectivePriority reports:
-// re-applying the same document must produce the identical row the store
-// already stamped, or apply would see a spurious diff every run.
-func TestToPolicyBinding_OmittedPriorityStampsTheDefaultOnSpec(t *testing.T) {
+// The default lands on Spec.Priority itself, not just in EffectivePriority:
+// re-applying the same document must produce the identical stored row, or
+// apply would see a spurious diff every run.
+func TestToPolicyBinding_OmittedPrioritySetsTheDefaultOnSpec(t *testing.T) {
 	docs, err := manifest.Parse(strings.NewReader(rbacYAML))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -175,7 +174,7 @@ func TestToPolicyBinding_OmittedPriorityStampsTheDefaultOnSpec(t *testing.T) {
 		t.Fatalf("ToPolicyBinding: %v", err)
 	}
 	if pb.Spec.Priority == nil || *pb.Spec.Priority != policybinding.DefaultPriority {
-		t.Errorf("Spec.Priority = %v, want the default %d stamped directly", pb.Spec.Priority, policybinding.DefaultPriority)
+		t.Errorf("Spec.Priority = %v, want the default %d set directly", pb.Spec.Priority, policybinding.DefaultPriority)
 	}
 }
 

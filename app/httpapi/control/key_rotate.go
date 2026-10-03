@@ -1,10 +1,6 @@
-// POST /keys/by-id/{id}/rotate — mint a fresh bearer plaintext for an
-// existing key, replacing KeyHash + Prefix in place. All other fields
-// (principal, policy binding, flags, slug) survive, so customers swap the
-// secret without re-wiring anything. With graceSeconds > 0 the previous
-// plaintext keeps authenticating until the window closes; with 0 it stops
-// as soon as the snapshot picks up the NOTIFY (~1s fleet-wide). Like
-// create, the new plaintext is returned exactly once.
+// Rotation replaces KeyHash and Prefix in place so every other field survives
+// and callers swap the secret without re-wiring. graceSeconds keeps the old
+// plaintext valid for a window instead of cutting it off at the next NOTIFY.
 package control
 
 import (

@@ -189,7 +189,7 @@ func (s *Snapshot) rowExists(k refKey) bool {
 		return ok
 	case refPolicy:
 		// A disabled policy is still in the snapshot — out of the routing
-		// indices, but present for the rows that name it (D77).
+		// indices, but present for the rows that name it.
 		return s.policyResolvable(k.ID)
 	case refPricing:
 		_, ok := s.pricingsByID[k.ID]

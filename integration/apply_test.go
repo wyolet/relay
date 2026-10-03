@@ -587,7 +587,7 @@ func applyStores(st *stack) *apply.Stores {
 
 var uuidPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
-// goldenRows renders every row as "kind/name" -> JSON, with server-stamped
+// goldenRows renders every row as "kind/name" -> JSON, with server-set
 // state dropped and ids replaced by the row they point at, so two runs that
 // minted different UUIDs for the same manifest compare equal.
 func goldenRows(t *testing.T, st *stack) map[string]string {

@@ -35,7 +35,7 @@ import (
 )
 
 // probe is one (kind, verb) pair the properties evaluate. Kinds are the
-// role-rule plurals; the Resource carries the singular handlers stamp.
+// role-rule plurals; the Resource carries the singular handlers set.
 type probe struct{ kind, verb string }
 
 var probes = []probe{
@@ -441,8 +441,8 @@ func TestProperty_TeamBindingCoversCurrentAndFutureProjects(t *testing.T) {
 	})
 }
 
-// Invariant 6 over the generated tree: the two entry points can never
-// disagree, whatever the shape of the bindings.
+// Visible and Authorize(get) must never disagree, whatever the shape of the
+// bindings.
 func TestProperty_VisibleMatchesAuthorizeGet(t *testing.T) {
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()
@@ -585,8 +585,8 @@ func TestProperty_DisabledProjectCollapsesToGlobal(t *testing.T) {
 	})
 }
 
-// Invariant 2 at the evaluator: reconciling a team delete leaves exactly
-// the decisions a snapshot built without that team would give.
+// Reconciling a team delete leaves exactly the decisions a snapshot built
+// without that team would give.
 func TestProperty_TeamDeleteMatchesAFreshBuild(t *testing.T) {
 	forEachWorld(t, func(t *testing.T, w *world) {
 		gone := w.teams[0]
@@ -625,8 +625,8 @@ func TestProperty_TeamDeleteMatchesAFreshBuild(t *testing.T) {
 	})
 }
 
-// D67: an upgraded deployment has no bindings at all, and every list there
-// must answer 200 with the caller's own rows rather than 403.
+// An upgraded deployment has no bindings at all, and every list there must
+// answer 200 with the caller's own rows rather than 403.
 func TestProperty_ZeroBindingListIsAllowedAndFilteredByVisible(t *testing.T) {
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()
@@ -640,8 +640,8 @@ func TestProperty_ZeroBindingListIsAllowedAndFilteredByVisible(t *testing.T) {
 	})
 }
 
-// D69: a binding at a project must let its holder resolve the parent team
-// row, which today's strict chain refuses.
+// A binding at a project must let its holder resolve the parent team row,
+// which the strict owner chain alone would refuse.
 func TestProperty_ProjectBindingReadsTheParentTeam(t *testing.T) {
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()

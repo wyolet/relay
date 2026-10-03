@@ -32,7 +32,7 @@ type builtinDoc struct {
 }
 
 // Builtins returns the built-in system Roles, freshly parsed with no ids
-// stamped. Order follows the embedded file.
+// set. Order follows the embedded file.
 func Builtins() ([]*Role, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(builtinYAML))
 	var out []*Role

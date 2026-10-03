@@ -395,7 +395,7 @@ func (c *Catalog) ApplyPolicyDelete(id string) error {
 
 // disablePolicy takes the row out of every routing index but keeps it, and
 // every row naming it, in the snapshot: those requests answer 403
-// policy_disabled instead of falling through to a broader grant (D77).
+// policy_disabled instead of falling through to a broader grant.
 func disablePolicy(s *Snapshot, p *policy.Policy) {
 	if old, ok := s.policiesByID[p.Meta.ID]; ok {
 		s.unregisterRefs(refKey{Kind: refPolicy, ID: old.Meta.ID}, outboundPolicyRefs(old))
@@ -859,10 +859,9 @@ func deleteRole(s *Snapshot, id string) {
 
 func (c *Catalog) ApplyRoleBindingUpsert(b *rolebinding.RoleBinding) error {
 	if !b.IsEnabled() || len(b.Spec.Subjects) == 0 {
-		// A binding that names nobody grants nothing. It reaches us with an
-		// empty subject list when PG cascaded the last one away; treating it
-		// as a delete keeps the stale grant out of the snapshot, which
-		// Validate would otherwise reject and leave in place.
+		// PG cascading away the last subject leaves a binding that grants
+		// nothing and fails Validate; treat it as a delete so the stale
+		// grant leaves the snapshot.
 		return c.ApplyRoleBindingDelete(b.Meta.ID)
 	}
 	if err := b.Validate(); err != nil {

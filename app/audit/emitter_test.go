@@ -117,7 +117,7 @@ func TestEmitterRetriesThenDropsOnPersistentSinkFailure(t *testing.T) {
 	}
 }
 
-// Close no longer closes the queue channel, so a concurrent Emit is a no-op
+// Close leaves the queue channel open, so a concurrent Emit is a no-op
 // rather than a send-on-closed-channel panic — run under -race.
 func TestEmitterCloseDoesNotRaceEmit(t *testing.T) {
 	sink := &memSink{}

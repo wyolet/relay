@@ -16,9 +16,8 @@ type keyRows struct{ rows []*key.Key }
 func (k *keyRows) List(context.Context) ([]*key.Key, error) { return k.rows, nil }
 func (k *keyRows) Upsert(context.Context, *key.Key) error   { return nil }
 
-// Pruning a policy runs the same detach the control API's delete
-// cascade runs — without it, prune left keys and accounts pointing at a row
-// that no longer exists.
+// Pruning a policy runs the same detach as the control API's delete cascade,
+// so no key or account is left pointing at a deleted row.
 func TestPrunedPolicyIsDetachedBeforeDeletion(t *testing.T) {
 	k := &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "k"},
@@ -44,7 +43,7 @@ type hostKeyRows struct{ rows []*hostkey.HostKey }
 
 func (h *hostKeyRows) List(context.Context) ([]*hostkey.HostKey, error) { return h.rows, nil }
 
-// D76/D81: prune refuses a policy host keys mirror as their tier, the same
+// Prune refuses a policy host keys mirror as their tier, the same
 // way the control API's delete does. HostKey.policyId is required, so there
 // is no valid row to leave behind — the error names the keys to reattach.
 func TestPrunedPolicyRefusedWhileHostKeysUseTheTier(t *testing.T) {

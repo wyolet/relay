@@ -1,5 +1,4 @@
-// store.go is the data-access layer for Role. Rules live in the spec JSONB;
-// a Role has no relational columns of its own.
+// Rules live in the spec JSONB; a Role has no relational columns of its own.
 package role
 
 import (
@@ -14,15 +13,12 @@ import (
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Role data-access type.
 type Store struct {
 	q *gen.Queries
 }
 
-// NewStore constructs a Store from an existing sqlc Queries handle.
 func NewStore(q *gen.Queries) *Store { return &Store{q: q} }
 
-// List returns every Role row.
 func (s *Store) List(ctx context.Context) ([]*Role, error) {
 	rows, err := s.q.ListRoles(ctx)
 	if err != nil {
@@ -39,7 +35,7 @@ func (s *Store) List(ctx context.Context) ([]*Role, error) {
 	return out, nil
 }
 
-// Get returns the Role with the given id, or (nil, nil) if not found.
+// Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*Role, error) {
 	r, err := s.q.GetRole(ctx, id)
 	if err != nil {
@@ -51,7 +47,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Role, error) {
 	return fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
 }
 
-// Upsert writes r. Caller stamps Meta.ID.
+// Upsert expects Meta.ID set by the caller.
 func (s *Store) Upsert(ctx context.Context, r *Role) error {
 	params, err := toUpsertParams(r)
 	if err != nil {
@@ -60,7 +56,7 @@ func (s *Store) Upsert(ctx context.Context, r *Role) error {
 	return s.q.UpsertRole(ctx, params)
 }
 
-// Delete removes a Role by id. Its bindings cascade via FK.
+// Delete relies on the FK to cascade the role's bindings.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteRole(ctx, id)
 }

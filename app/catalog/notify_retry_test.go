@@ -35,10 +35,6 @@ func (f *flakyModelGetter) Get(_ context.Context, id string) (*model.Model, erro
 	return nil, nil
 }
 
-// TestNotify_TransientApplyFailureEventuallyApplied reproduces the audit
-// finding "NOTIFY events dropped permanently on transient applyEvent
-// failure" (audit 2026-07-04, audit-catalog.md, notify.go applyDrained).
-//
 // A NOTIFY event is drained from the debouncer and applyEvent fails once
 // with a transient store error. The listener's whole job is convergence, so
 // the event must eventually be applied (re-queued into the debouncer, or a
@@ -46,7 +42,7 @@ func (f *flakyModelGetter) Get(_ context.Context, id string) (*model.Model, erro
 // event vanishes: the snapshot diverges from PG until an unrelated event
 // for the same row or a manual /reload.
 func TestNotify_TransientApplyFailureEventuallyApplied(t *testing.T) {
-	t.Skip("audit 2026-07-04: NOTIFY events dropped on transient applyEvent failure — known-broken, unskip with the fix")
+	t.Skip("known bug: NOTIFY events dropped on transient applyEvent failure; unskip with the fix")
 	ctx := context.Background()
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 

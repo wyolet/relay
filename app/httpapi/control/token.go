@@ -1,7 +1,5 @@
-// token.go is the control plane's half of inference tokens: mint one for a
-// project the caller can see, and revoke — one token by jti or by the token
-// itself, or every token a user holds. Verification lives in the data plane;
-// nothing here is on the request path.
+// Minting and revocation of inference tokens. Verification lives in the data
+// plane, so nothing here is on the request path.
 package control
 
 import (

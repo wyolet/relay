@@ -15,11 +15,10 @@ deployment verifies exactly like a connected one.
 
 | Feature | Without a license |
 | --- | --- |
-| `custom-roles` — authoring your own `Role` (`owner: {kind: user}`) | The built-in roles only |
+| `custom-roles` — authoring your own `Role` | The built-in roles only |
 
-OIDC login (`auth:oidc`) is not gated. `sso` (SAML, SCIM), `scim`, `orgs`
-and `audit-export` are reserved names that a license may already carry; the
-features themselves arrive in later releases.
+OIDC login (`auth:oidc`) is not gated. A license may carry other feature
+names; a name this release does not gate unlocks nothing.
 
 A gated feature never fails quietly. Enabling one without a license is
 refused with a `license_required` error, and nothing else about the
@@ -43,8 +42,10 @@ rejected with a 400 and the previous license stays live.
 The license is verified at boot and re-verified on `POST /api/reload`, so
 installing or renewing one does not need a restart.
 
-Read the live license with `GET /api/license` (admins only);
-`GET /api/version` carries the same block for authenticated callers.
+Read the live license with `GET /api/license`. Under `RELAY_AUTHZ=rbac` it
+needs `read` on `license`, which among the built-in roles only `admin`
+grants; otherwise any authenticated caller may read it. `GET /api/version`
+carries the same block for authenticated callers.
 
 ```json
 {
