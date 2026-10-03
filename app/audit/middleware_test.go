@@ -92,11 +92,6 @@ func TestMiddlewareActorKinds(t *testing.T) {
 			actor:    &actor.Actor{AdminToken: true, Username: "admin-token"},
 			wantKind: ActorAdminToken, wantName: "admin-token",
 		},
-		{
-			name:     "no actor",
-			actor:    nil,
-			wantKind: ActorAnonymous,
-		},
 	}
 
 	for _, tt := range tests {
@@ -113,6 +108,31 @@ func TestMiddlewareActorKinds(t *testing.T) {
 				t.Fatalf("actor.IP = %q, want the peer address 10.0.0.7", got.IP)
 			}
 		})
+	}
+}
+
+// A request with no credential did nothing on anyone's behalf; recording each
+// one would let an unauthenticated flood fill the audit queue. Login attempts
+// record themselves and still land.
+func TestMiddlewareSkipsUnauthenticatedRequests(t *testing.T) {
+	if evs := serve(t, nil, http.MethodPut, "/api/policies/by-id/p-1", "10.0.0.7:5555", "", "policies.update", http.StatusUnauthorized); len(evs) != 0 {
+		t.Fatalf("unauthenticated write produced %d events, want 0", len(evs))
+	}
+	sink := &memSink{}
+	em := NewEmitter(sink, quietLogger())
+	h := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodDelete, "/api/keys/by-id/k-1", nil))
+	login := Middleware(em, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Record(r.Context(), "auth.login", Resource{Kind: "user", Name: "mallory"}, StatusDenied, Actor{Kind: ActorAnonymous, Name: "mallory"})
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	login.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/auth/login", nil))
+	em.Close()
+	evs := sink.all()
+	if len(evs) != 1 || evs[0].Action != "auth.login" {
+		t.Fatalf("events = %+v, want only the recorded login attempt", evs)
 	}
 }
 

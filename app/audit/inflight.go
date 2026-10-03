@@ -60,6 +60,12 @@ func (f *inflight) event(code int) (Event, bool) {
 	defer f.mu.Unlock()
 
 	d, ok := f.forced, f.forced != nil
+	// A request with no credential acted for nobody; only handlers that
+	// record themselves (login attempts) write a row for one, so an
+	// unauthenticated flood cannot fill the audit queue.
+	if !ok && f.actor.Kind == ActorAnonymous {
+		return Event{}, false
+	}
 	if !ok {
 		var found decision
 		found, ok = markDecision(f.decisions, f.readRoute)
