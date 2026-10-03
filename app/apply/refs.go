@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
 )
@@ -30,6 +31,15 @@ func (b *builder) refs() refcheck.Checker {
 			Role:           lookup(b, b.rows.Roles, func(x *role.Role) *meta.Metadata { return &x.Meta }),
 			ServiceAccount: lookup(b, b.rows.ServiceAccounts, func(x *serviceaccount.ServiceAccount) *meta.Metadata { return &x.Meta }),
 			MissingUsers:   b.missingUsers,
+			RoleBindingsFor: func(_ context.Context, roleID string) ([]*rolebinding.RoleBinding, error) {
+				var out []*rolebinding.RoleBinding
+				for _, rb := range b.rows.RoleBindings {
+					if rb.Spec.RoleID == roleID {
+						out = append(out, rb)
+					}
+				}
+				return out, nil
+			},
 		},
 	}
 }

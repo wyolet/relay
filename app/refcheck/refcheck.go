@@ -69,6 +69,8 @@ type Lookup struct {
 	Team           func(ctx context.Context, id string) *team.Team
 	Role           func(ctx context.Context, id string) *role.Role
 	ServiceAccount func(ctx context.Context, id string) *serviceaccount.ServiceAccount
+	// RoleBindingsFor returns the stored bindings naming a role.
+	RoleBindingsFor func(ctx context.Context, roleID string) ([]*rolebinding.RoleBinding, error)
 	// MissingUsers returns the ids that name no user.
 	MissingUsers func(ctx context.Context, ids []string) ([]string, error)
 }
@@ -432,6 +434,25 @@ func (c Checker) RoleBinding(ctx context.Context, rb *rolebinding.RoleBinding) e
 		}
 	}
 	return c.subjectsExist(ctx, rb.Spec.Subjects)
+}
+
+// Role re-checks an edited role against every scope it is already bound at:
+// the edit changes what each binding grants, so the editor must hold the new
+// rules there, as creating the binding would have required.
+func (c Checker) Role(ctx context.Context, r *role.Role) error {
+	if c.Rows.RoleBindingsFor == nil {
+		return nil
+	}
+	bindings, err := c.Rows.RoleBindingsFor(ctx, r.Meta.ID)
+	if err != nil {
+		return &Error{Status: http.StatusInternalServerError, Msg: err.Error(), Err: err}
+	}
+	for _, rb := range bindings {
+		if err := authz.CheckGrant(ctx, c.Authz, r, rb.Spec.Scope); err != nil {
+			return forbidden(err)
+		}
+	}
+	return nil
 }
 
 // PolicyBinding re-derives the owner from spec.projectId, fills in the

@@ -2,6 +2,7 @@ package refcheck
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/wyolet/relay/app/actor"
@@ -11,6 +12,8 @@ import (
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	"github.com/wyolet/relay/app/user"
 )
 
@@ -60,6 +63,45 @@ func TestEnvSourcedHostKeyNeedsAnAdmin(t *testing.T) {
 	}
 	if err := (Checker{Rows: c.Rows}).HostKey(member, k); err != nil {
 		t.Fatalf("unscoped authorizer (single-user): %v", err)
+	}
+}
+
+// teamGrant allows a fixed action set at one team, nothing elsewhere.
+type teamGrant struct {
+	teamID  string
+	actions map[string]bool
+}
+
+func (g teamGrant) Authorize(_ context.Context, action string, res authz.Resource) error {
+	if res.Owner != nil && res.Owner.Kind == meta.OwnerTeam && res.Owner.ID == g.teamID && g.actions[action] {
+		return nil
+	}
+	return authz.ErrForbidden
+}
+
+// Editing a role that is already bound changes what every binding grants,
+// so the editor must hold the new rules at each bound scope — exactly what
+// creating those bindings would have required.
+func TestEditingABoundRoleCannotGrantMoreThanTheEditorHolds(t *testing.T) {
+	bound := &rolebinding.RoleBinding{Spec: rolebinding.Spec{RoleID: "r-1", Scope: meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}}}
+	c := Checker{
+		Authz: teamGrant{teamID: "t-1", actions: map[string]bool{"keys.get": true}},
+		Rows: Lookup{RoleBindingsFor: func(_ context.Context, roleID string) ([]*rolebinding.RoleBinding, error) {
+			if roleID == "r-1" {
+				return []*rolebinding.RoleBinding{bound}, nil
+			}
+			return nil, nil
+		}},
+	}
+	edit := func(kinds, verbs []string) *role.Role {
+		return &role.Role{Meta: meta.Metadata{ID: "r-1", Name: "mine"}, Spec: role.Spec{Rules: []role.Rule{{Kinds: kinds, Verbs: verbs}}}}
+	}
+	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: "u-1"})
+	if err := c.Role(ctx, edit([]string{"keys"}, []string{"get"})); err != nil {
+		t.Fatalf("edit within what the editor holds: %v", err)
+	}
+	if err := c.Role(ctx, edit([]string{"*"}, []string{"*"})); !errors.Is(err, authz.ErrForbidden) {
+		t.Fatalf("widening a bound role = %v, want forbidden", err)
 	}
 }
 

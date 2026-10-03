@@ -499,6 +499,21 @@ func refs(d Deps) refcheck.Checker {
 	if s.ServiceAccount != nil {
 		c.Rows.ServiceAccount = getOrNil(s.ServiceAccount.Get)
 	}
+	if s.RoleBinding != nil {
+		c.Rows.RoleBindingsFor = func(ctx context.Context, roleID string) ([]*rolebinding.RoleBinding, error) {
+			all, err := s.RoleBinding.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			var out []*rolebinding.RoleBinding
+			for _, rb := range all {
+				if rb.Spec.RoleID == roleID {
+					out = append(out, rb)
+				}
+			}
+			return out, nil
+		}
+	}
 	return c
 }
 
@@ -888,7 +903,7 @@ func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
 // gates authoring a custom role on the license. Delete stays open so an
 // expired license never traps a row an operator wants gone.
 func guardRole(d Deps) mutationGuard[role.Role] {
-	return func(_ context.Context, action string, existing, incoming *role.Role) error {
+	return func(ctx context.Context, action string, existing, incoming *role.Role) error {
 		// Built-ins are the relay's own rows: every binding in a fresh
 		// deployment points at one, so neither edit nor delete goes through
 		// generic CRUD.
@@ -904,7 +919,7 @@ func guardRole(d Deps) mutationGuard[role.Role] {
 		if d.License == nil || !d.License.Has(license.FeatureCustomRoles) {
 			return huma.Error403Forbidden(license.ErrRequired.Error())
 		}
-		return nil
+		return refs(d).Role(ctx, incoming)
 	}
 }
 

@@ -265,6 +265,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 		Kind: "Role", Docs: roleDocs, Names: b.idx.Roles, Rows: b.rows.Roles,
 		To: manifest.ToRole, Meta: func(r *role.Role) *meta.Metadata { return &r.Meta },
 		Upsert: s.Role.Upsert, Delete: s.Role.Delete,
+		Check: refsFor(b, refcheck.Checker.Role),
 	}); err != nil {
 		return err
 	}
