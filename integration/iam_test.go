@@ -121,17 +121,36 @@ func TestIntegration_TeamProjectCRUD(t *testing.T) {
 		t.Fatalf("POST /api/projects with unknown team = %d: %s", code, raw)
 	}
 
-	// Deleting the team cascades in PG.
+	code, raw = st.adminDo(http.MethodPost, "/api/service-accounts",
+		`{"metadata":{"name":"indexer"},"spec":{"projectId":"`+proj.Metadata.ID+`"}}`)
+	if code != http.StatusCreated {
+		t.Fatalf("POST /api/service-accounts = %d: %s", code, raw)
+	}
+	var sa tenancyRow
+	if err := json.Unmarshal(raw, &sa); err != nil {
+		t.Fatalf("decode service account: %v", err)
+	}
+
+	// The foreign keys would cascade a team delete through its projects to
+	// their service accounts and keys; both deletes refuse instead, naming
+	// what is in the way.
 	code, raw = st.adminDo(http.MethodDelete, "/api/teams/by-id/"+team.Metadata.ID, "")
-	if code != http.StatusNoContent && code != http.StatusOK {
-		t.Fatalf("DELETE /api/teams = %d: %s", code, raw)
+	if code != http.StatusConflict || !strings.Contains(string(raw), "Project/ml-search") {
+		t.Fatalf("DELETE /api/teams with a project = %d: %s, want 409 naming the project", code, raw)
 	}
-	projects, err := st.stores.Project.List(context.Background())
-	if err != nil {
-		t.Fatalf("list projects: %v", err)
+	code, raw = st.adminDo(http.MethodDelete, "/api/projects/by-id/"+proj.Metadata.ID, "")
+	if code != http.StatusConflict || !strings.Contains(string(raw), "ServiceAccount/indexer") {
+		t.Fatalf("DELETE /api/projects with a service account = %d: %s, want 409 naming it", code, raw)
 	}
-	if len(projects) != 0 {
-		t.Fatalf("projects survived the team delete: %d", len(projects))
+
+	for _, path := range []string{
+		"/api/service-accounts/by-id/" + sa.Metadata.ID,
+		"/api/projects/by-id/" + proj.Metadata.ID,
+		"/api/teams/by-id/" + team.Metadata.ID,
+	} {
+		if code, raw := st.adminDo(http.MethodDelete, path, ""); code != http.StatusNoContent {
+			t.Fatalf("DELETE %s once empty = %d: %s", path, code, raw)
+		}
 	}
 }
 

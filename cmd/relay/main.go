@@ -77,6 +77,9 @@ import (
 // serializes on. Arbitrary but fixed: every pod must pick the same number.
 const builtinRoleSeedLock int64 = 0x52454C41595F5242
 
+// catalogSeedLock is the advisory-lock id the catalog seed serializes on.
+const catalogSeedLock int64 = 0x52454C41595F5345
+
 func main() {
 	loadDotEnv(".env")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel()})))
@@ -144,6 +147,9 @@ func main() {
 	bootOpts := appcatalog.BootstrapOptions{
 		Pool:      st.Pool(),
 		MasterKey: cfg.MasterKey,
+		SeedLock: func(ctx context.Context, fn func(context.Context) error) error {
+			return storagemod.WithAdvisoryLock(ctx, st.Pool(), catalogSeedLock, fn)
+		},
 	}
 	if cfg.AutoSeedIfEmpty && cfg.CatalogDir != "" {
 		bootOpts.AutoSeedDir = cfg.CatalogDir

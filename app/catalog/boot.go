@@ -61,7 +61,7 @@ type BootstrapOptions struct {
 	// AutoSeedDir when its .version stamp matches (no network), else
 	// fetched from CatalogURL — and the marker updated. The seed is
 	// layering-safe: operator-edited (dirty) rows are skipped and
-	// overlays re-merge at snapshot load. A resolve/fetch failure
+	// overlays re-merge at snapshot load. A resolve, fetch or seed failure
 	// against a non-empty catalog logs and continues with the existing
 	// rows (never blocks boot); against an empty catalog it falls back to
 	// AutoSeedDir when set, else fails hydrate (retried by the caller).
@@ -76,6 +76,11 @@ type BootstrapOptions struct {
 	// CatalogIndexURL overrides where "latest"/"auto" resolves the
 	// channel index from. Empty uses seed.DefaultCatalogIndexURL.
 	CatalogIndexURL string
+
+	// SeedLock serializes the seed decision and the seed itself across every
+	// pod sharing the database, so pods booting together against an empty
+	// catalog seed it once. Nil runs unserialized: safe for one process only.
+	SeedLock func(ctx context.Context, fn func(context.Context) error) error
 }
 
 // Stores bundles the eight entity stores constructed by Bootstrap. Exposed
@@ -199,31 +204,16 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: load key version: %w", err)
 	}
-	if opts.CatalogVersion != "" {
-		if err := seedVersioned(ctx, stores, opts); err != nil {
-			return nil, fmt.Errorf("catalog.Hydrate: %w", err)
+	if opts.CatalogVersion != "" || opts.AutoSeedDir != "" {
+		run := func(ctx context.Context) error { return seedCatalog(ctx, stores, opts) }
+		var err error
+		if opts.SeedLock != nil {
+			err = opts.SeedLock(ctx, run)
+		} else {
+			err = run(ctx)
 		}
-	} else if opts.AutoSeedDir != "" {
-		empty, err := isCatalogEmpty(ctx, stores)
 		if err != nil {
-			return nil, fmt.Errorf("catalog.Hydrate: check empty: %w", err)
-		}
-		if empty {
-			if _, err := seed.Run(ctx, seed.Options{
-				Pool:             opts.Pool,
-				YAMLDir:          opts.AutoSeedDir,
-				MasterKey:        opts.MasterKey,
-				CatalogKindsOnly: true,
-			}); err != nil {
-				return nil, fmt.Errorf("catalog.Hydrate: auto-seed: %w", err)
-			}
-			// A stamped tree (baked image) makes the seeded version known;
-			// record it so a later matching version pin no-ops.
-			if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
-				if err := writeCatalogSource(ctx, stores, v); err != nil {
-					return nil, fmt.Errorf("catalog.Hydrate: %w", err)
-				}
-			}
+			return nil, fmt.Errorf("catalog.Hydrate: %w", err)
 		}
 	}
 	if err := c.Reload(ctx); err != nil {
@@ -267,6 +257,35 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 	return cat, listener, stores, nil
 }
 
+// seedCatalog decides whether the catalog needs seeding and seeds it: to the
+// pinned version when one is set, else from AutoSeedDir into an empty one.
+func seedCatalog(ctx context.Context, stores *Stores, opts BootstrapOptions) error {
+	if opts.CatalogVersion != "" {
+		return seedVersioned(ctx, stores, opts)
+	}
+	empty, err := isCatalogEmpty(ctx, stores)
+	if err != nil {
+		return fmt.Errorf("check empty: %w", err)
+	}
+	if !empty {
+		return nil
+	}
+	if _, err := seed.Run(ctx, seed.Options{
+		Pool:             opts.Pool,
+		YAMLDir:          opts.AutoSeedDir,
+		MasterKey:        opts.MasterKey,
+		CatalogKindsOnly: true,
+	}); err != nil {
+		return fmt.Errorf("auto-seed: %w", err)
+	}
+	// A stamped tree (baked image) makes the seeded version known; record it
+	// so a later matching version pin no-ops.
+	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
+		return writeCatalogSource(ctx, stores, v)
+	}
+	return nil
+}
+
 // seedVersioned reconciles the seeded catalog with opts.CatalogVersion:
 // resolve "latest"/"auto" to a concrete release via the channel index,
 // then seed + marker update when the stored catalog-source marker
@@ -306,7 +325,8 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 	// The baked/local tree already holds this exact release — seed from
 	// disk, no network.
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" && v == version {
-		return seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local")
+		return keepServingOnSeedError(empty, version,
+			seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local"))
 	}
 
 	tmp, err := os.MkdirTemp("", "relay-catalog-*")
@@ -329,7 +349,20 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 		}
 		return fmt.Errorf("fetch catalog %s: %w", version, fetchErr)
 	}
-	return seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched")
+	return keepServingOnSeedError(empty, version,
+		seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched"))
+}
+
+// keepServingOnSeedError applies the fetch-failure policy to a release that
+// fails to seed: a non-empty catalog keeps its rows and its marker, so the
+// next boot retries; an empty one has nothing to serve and fails hydrate.
+func keepServingOnSeedError(empty bool, version string, err error) error {
+	if err == nil || empty {
+		return err
+	}
+	slog.Error("catalog: versioned seed failed; keeping existing catalog",
+		"version", version, "err", err)
+	return nil
 }
 
 // seedLocalFallback seeds AutoSeedDir after a resolve/fetch failure on an

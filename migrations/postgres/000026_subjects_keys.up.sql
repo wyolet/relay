@@ -65,10 +65,10 @@ UPDATE relay_keys k
      OR k.metadata->'owner'->>'id' = u.username);
 
 -- Backfill 2: every remaining key gets a generated ServiceAccount in a
--- system Project `legacy`. The tenancy rows are keyed by name, not by a
--- fixed id: `name` is what carries the UNIQUE constraint, so an operator
--- who already has a team named `system` keeps it and the backfill hangs
--- its rows off that id instead of failing on the duplicate name.
+-- system Project `legacy`. The team is keyed by name: an operator who
+-- already has a team named `system` keeps it and the backfill hangs its rows
+-- off that id. The project gets a fixed id (app/project.LegacyID): the data
+-- plane keeps its keys policy-less, as they were, until a policy is bound.
 INSERT INTO teams (id, name, display_name, metadata, spec)
 SELECT gen_random_uuid()::text, 'system', 'System',
        '{"owner":{"kind":"system"}}'::jsonb, '{}'::jsonb
@@ -77,14 +77,14 @@ SELECT gen_random_uuid()::text, 'system', 'System',
 ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO projects (id, name, display_name, team_id, metadata, spec)
-SELECT gen_random_uuid()::text, 'legacy', 'Legacy', t.id,
+SELECT '00000000-0000-7000-8000-000000000001', 'legacy', 'Legacy', t.id,
        jsonb_build_object('owner', jsonb_build_object('kind', 'team', 'id', t.id)),
        jsonb_build_object('teamId', t.id)
   FROM teams t
  WHERE t.name = 'system'
    AND EXISTS (SELECT 1 FROM relay_keys
                 WHERE principal_sa_id IS NULL AND principal_user_id IS NULL)
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- The account name carries the last 8 chars of the key id: two keys whose
 -- names differ only past the truncation point would otherwise collide on the
@@ -98,7 +98,7 @@ SELECT gen_random_uuid()::text,
        jsonb_build_object('projectId', p.id)
   FROM relay_keys k
  CROSS JOIN projects p
- WHERE p.name = 'legacy'
+ WHERE p.id = '00000000-0000-7000-8000-000000000001'
    AND k.principal_sa_id IS NULL AND k.principal_user_id IS NULL
 ON CONFLICT (name) DO NOTHING;
 

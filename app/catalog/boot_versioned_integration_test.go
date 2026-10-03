@@ -3,6 +3,9 @@
 package catalog
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -119,5 +122,82 @@ func TestIntegration_SeedVersioned_LatestResolvesToLocal(t *testing.T) {
 	}
 	if got := catalogSourceVersion(t, stores, ctx); got != "v8.8.8-test" {
 		t.Fatalf("marker = %q, want v8.8.8-test (resolved via index)", got)
+	}
+}
+
+// archiveServer serves one catalog archive whose data tree holds files.
+func archiveServer(t *testing.T, files map[string]string) *httptest.Server {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: "relay-catalog/data/" + name, Mode: 0o644, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(buf.Bytes())
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// A new catalog release that fails to seed must not take a running relay
+// down: the rows already seeded keep serving and the marker stays on the old
+// version, so the next boot tries again.
+func TestIntegration_SeedVersioned_InvalidReleaseKeepsServingTheExistingCatalog(t *testing.T) {
+	pool, ctx, cancel := setupDB(t)
+	defer cancel()
+
+	opts := BootstrapOptions{
+		Pool:           pool,
+		AutoSeedDir:    stampedTree(t, "v1.0.0-test"),
+		CatalogVersion: "v1.0.0-test",
+		CatalogURL:     "http://127.0.0.1:1/{version}.tar.gz",
+	}
+	cat, stores, err := BootstrapStores(ctx, opts)
+	if err != nil {
+		t.Fatalf("BootstrapStores: %v", err)
+	}
+	if _, err := cat.Hydrate(ctx, stores, opts); err != nil {
+		t.Fatalf("first Hydrate: %v", err)
+	}
+
+	srv := archiveServer(t, map[string]string{
+		"providers/broken/provider.yaml": `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Provider
+metadata:
+    name: Not A Slug
+spec:
+    homepageURL: https://broken.test
+`,
+	})
+	opts.CatalogVersion = "v2.0.0-test"
+	opts.CatalogURL = srv.URL + "/{version}.tar.gz"
+	upgraded, stores, err := BootstrapStores(ctx, opts)
+	if err != nil {
+		t.Fatalf("BootstrapStores: %v", err)
+	}
+	if _, err := upgraded.Hydrate(ctx, stores, opts); err != nil {
+		t.Fatalf("Hydrate with an unseedable release: %v", err)
+	}
+	if !upgraded.IsReady() {
+		t.Fatal("the catalog is not ready after an unseedable release")
+	}
+	if _, ok := upgraded.Current().ProviderByName("acme"); !ok {
+		t.Error("the previously seeded provider is not served")
+	}
+	if got := catalogSourceVersion(t, stores, ctx); got != "v1.0.0-test" {
+		t.Errorf("marker = %q, want it left on v1.0.0-test so the next boot retries", got)
 	}
 }

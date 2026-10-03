@@ -19,14 +19,19 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/apply"
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/provider"
+	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/seed"
 	storagemod "github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/pkg/ids"
@@ -264,6 +269,66 @@ func TestIntegration_ApplyPrune(t *testing.T) {
 	}
 	if teams, _ := st.stores.Team.List(ctx); len(teams) != 1 {
 		t.Fatalf("prune deleted a declared row")
+	}
+}
+
+// Pruning a host key or a rate limit detaches it from the policies that name
+// it first, as the control API's delete does: the host key's join row would
+// otherwise refuse the delete, and the rate limit would leave a dangling
+// binding behind.
+func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
+	st := newStack(t)
+	ctx := context.Background()
+	seedBuiltinRoles(t, st)
+	if code, _, raw := st.applyBundle(bundle, ""); code != http.StatusOK {
+		t.Fatalf("seed bundle: %d %s", code, raw)
+	}
+	projects, err := st.stores.Project.List(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("list projects: %v (%d)", err, len(projects))
+	}
+	owned := meta.Owner{Kind: meta.OwnerProject, ID: projects[0].Meta.ID}
+	managed := map[string]string{"managed": "gitops"}
+
+	h := &host.Host{Meta: meta.Metadata{ID: ids.New(), Name: "acme-api", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "https://acme.example.com"}}
+	mustUpsert(t, st.stores.Host.Upsert(ctx, h), "host")
+	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "acme-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
+	mustUpsert(t, st.stores.Policy.Upsert(ctx, tier), "tier policy")
+	t.Setenv("PRUNE_DETACH_KEY", "sk-prune")
+	hk := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned, Labels: managed},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "PRUNE_DETACH_KEY"}},
+	}
+	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "host key")
+	rl := &ratelimit.RateLimit{
+		Meta: meta.Metadata{ID: ids.New(), Name: "burst", Owner: owned, Labels: managed},
+		Spec: ratelimit.Spec{Rules: []ratelimit.Rule{{Meter: ratelimit.MeterRequests, Amount: 10, Window: ratelimit.Window(time.Minute), Strategy: "token-bucket"}}},
+	}
+	mustUpsert(t, st.stores.RateLimit.Upsert(ctx, rl), "rate limit")
+	// Outside the selector, so prune leaves the policy and only its
+	// references to the pruned rows have to go.
+	side := &policy.Policy{
+		Meta: meta.Metadata{ID: ids.New(), Name: "side-policy", Owner: owned},
+		Spec: policy.Spec{
+			HostKeyIDs: []string{hk.Meta.ID},
+			RLBindings: []policy.RLBinding{{Models: []string{"*"}, RateLimitID: rl.Meta.ID}},
+		},
+	}
+	mustUpsert(t, st.stores.Policy.Upsert(ctx, side), "policy")
+
+	code, plan, raw := st.applyBundle(bundle, "prune=true&selector=managed=gitops")
+	if code != http.StatusOK {
+		t.Fatalf("prune: %d %s", code, raw)
+	}
+	if plan.action("HostKey", "acme-key") != "delete" || plan.action("RateLimit", "burst") != "delete" {
+		t.Fatalf("prune plan = %+v", plan.Plan)
+	}
+	got, err := st.stores.Policy.Get(ctx, side.Meta.ID)
+	if err != nil || got == nil {
+		t.Fatalf("read policy: %v", err)
+	}
+	if len(got.Spec.HostKeyIDs) != 0 || len(got.Spec.RLBindings) != 0 {
+		t.Fatalf("policy still names pruned rows: hostKeyIds=%v rlBindings=%v", got.Spec.HostKeyIDs, got.Spec.RLBindings)
 	}
 }
 
