@@ -37,13 +37,14 @@ import (
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
 // preTenancyVersion is the last schema version before teams and projects.
 const preTenancyVersion = 24
 
-// upgradeDB is a scratch database migrated to the pre-tenancy schema, with
+// upgradeDB is a database of its own migrated to the pre-tenancy schema, with
 // stores bound to it.
 type upgradeDB struct {
 	dsn    string
@@ -53,10 +54,10 @@ type upgradeDB struct {
 	stores *appcatalog.Stores
 }
 
-func newUpgradeDB(t *testing.T, name string) *upgradeDB {
+func newUpgradeDB(t *testing.T) *upgradeDB {
 	t.Helper()
-	dsn := scratchDB(t, name)
-	m := scratchMigrator(t, dsn)
+	dsn := storagetest.EmptyDB(t)
+	m := migrator(t, dsn)
 	if err := m.Migrate(preTenancyVersion); err != nil {
 		t.Fatalf("migrate to %d: %v", preTenancyVersion, err)
 	}
@@ -166,7 +167,7 @@ func authenticate(t *testing.T, cat *appcatalog.Catalog, plaintext string) (int,
 // migration parks it in the legacy project, and it must keep serving exactly
 // as before: under the inference setting in single mode, refused under rbac.
 func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
-	u := newUpgradeDB(t, "relay_upg_policyless")
+	u := newUpgradeDB(t)
 	modelName := u.seedRoute(t, meta.Owner{Kind: meta.OwnerSystem})
 	u.insertPreTenancyKey(t, "rk_ci_plaintext")
 	u.upgrade(t)
@@ -192,7 +193,7 @@ func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
 // resolved its policy through its service account or a policy binding must
 // carry that same policy after a rollback, not turn policy-less.
 func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
-	dsn := scratchDB(t, "relay_rollback_policy")
+	dsn := storagetest.DB(t)
 	st, err := storagemod.Open(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -286,7 +287,7 @@ func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
 // created. Nobody owns such a row, so the upgrade hands it to the system: a
 // shared host key has to stay in the pool policy-less callers draw from.
 func TestUpgradeHandsOwnerlessUserRowsToTheSystem(t *testing.T) {
-	u := newUpgradeDB(t, "relay_upg_owner")
+	u := newUpgradeDB(t)
 	ctx := context.Background()
 	adminOwned := meta.Owner{Kind: meta.OwnerUser}
 	modelName := u.seedRoute(t, adminOwned)

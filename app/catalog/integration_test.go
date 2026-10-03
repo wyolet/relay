@@ -5,7 +5,6 @@
 // pg via deploy/compose/docker-compose.test.yml).
 //
 // What it covers:
-//   - Migrations 0001..0011 apply cleanly to a fresh DB.
 //   - Bootstrap wires every store; initial Reload over an empty DB succeeds.
 //   - Direct stores.X.Upsert writes flow through NOTIFY → Listener →
 //     debouncer → Apply* and become visible in the Snapshot within ~1.5s.
@@ -18,14 +17,10 @@ package catalog
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/host"
@@ -36,47 +31,15 @@ import (
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 const flushPad = 1500 * time.Millisecond // 1s debounce + safety margin
 
 func setupDB(t *testing.T) (*pgxpool.Pool, context.Context, context.CancelFunc) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	// Run migrations from a clean state. The compose pg uses tmpfs so this
-	// is a fresh DB on every `up`, but we still drop+create the public
-	// schema to guarantee idempotence across test runs in one session.
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	_ = m.Drop() // tolerate "no schema" on first run
-	src2, _ := iofs.New(pgmigrations.FS, ".")
-	m2, err := migrate.NewWithSourceInstance("iofs", src2, dsn)
-	if err != nil {
-		t.Fatalf("migrate re-init: %v", err)
-	}
-	if err := m2.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-
+	pool := storagetest.Pool(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		cancel()
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(func() {
-		pool.Close()
-	})
 	return pool, ctx, cancel
 }
 

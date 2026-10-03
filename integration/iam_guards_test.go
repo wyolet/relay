@@ -21,24 +21,26 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/internal/storage/gen"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
 // A key whose owner names its user by the YAML slug (the username) is that
 // user's key, not an orphan to re-parent onto a generated account.
 func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
-	st := newStack(t)
+	dsn := storagetest.DB(t)
+	p := testPool(t, dsn)
 	ctx := context.Background()
 	u := &user.User{ID: ids.New(), Username: "alice"}
-	if err := st.users.Upsert(ctx, u); err != nil {
+	if err := user.NewStore(gen.New(p)).Upsert(ctx, u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 
-	m := migrator(t)
+	m := migrator(t, dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate down to 25: %v", err)
 	}
-	p := testPool(t)
 
 	// A name long enough that "legacy-" + name overflows a 63-char slug.
 	longName := strings.Repeat("k", 70)
@@ -57,11 +59,6 @@ func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
 	if err := m.Migrate(26); err != nil {
 		t.Fatalf("migrate up to 26: %v", err)
 	}
-	t.Cleanup(func() {
-		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-			t.Fatalf("migrate back up to head: %v", err)
-		}
-	})
 
 	var userID *string
 	if err := p.QueryRow(ctx,
@@ -107,9 +104,8 @@ func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
 // Only a token_version change has to reach the snapshot; every other column
 // on users would rebuild it for nothing.
 func TestIntegration_UsersNotifyOnlyOnTokenVersion(t *testing.T) {
-	newStack(t)
 	ctx := context.Background()
-	p := testPool(t)
+	p := storagetest.Pool(t)
 
 	var triggers []string
 	rows, err := p.Query(ctx,

@@ -9,13 +9,7 @@ package policy_test
 
 import (
 	"context"
-	"os"
 	"testing"
-
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -25,7 +19,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 // storeFixture is the row graph a policy needs before it can reference
@@ -40,28 +34,8 @@ type storeFixture struct {
 
 func setupPolicyStore(t *testing.T) (storeFixture, context.Context) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
+	pool := storagetest.Pool(t)
 	q := gen.New(pool)
 	prov := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "store-prov-" + short(), Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	if err := provider.NewStore(q).Upsert(ctx, prov); err != nil {

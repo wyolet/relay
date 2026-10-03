@@ -8,122 +8,30 @@
 // up-migration, and a pod that boots with auto-migration switched off has to
 // leave the schema where the operator put it.
 //
-// Every test here runs against a database of its own: down-migrations strip
-// tables the rest of the suite shares.
+// Every test here runs against an unmigrated database of its own.
 package integration_test
 
 import (
 	"context"
-	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 	pgmigrations "github.com/wyolet/relay/migrations/postgres"
 	"github.com/wyolet/relay/pkg/ids"
 )
 
-// scratchPrefix marks every database these tests create, so a run that dies
-// before its cleanup can be dropped by the next one.
-const scratchPrefix = "relay_scratch_"
-
-// scratchDB creates a database of its own next to the one the suite runs
-// against and returns its DSN. Dropped on cleanup.
-func scratchDB(t *testing.T, name string) string {
-	t.Helper()
-	base := os.Getenv("RELAY_TEST_PG_DSN")
-	if base == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; skipping integration test")
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatalf("parse DSN: %v", err)
-	}
-	suffix := strings.ReplaceAll(ids.New(), "-", "")
-	db := scratchPrefix + name + "_" + suffix[len(suffix)-12:]
-
-	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, base)
-	if err != nil {
-		t.Fatalf("admin pool: %v", err)
-	}
-	defer admin.Close()
-	// A run killed mid-test never gets its cleanup, so drop what earlier
-	// runs left behind before adding one more.
-	rows, err := admin.Query(ctx,
-		`SELECT datname FROM pg_database WHERE datname LIKE $1`, scratchPrefix+"%")
-	if err != nil {
-		t.Fatalf("list scratch databases: %v", err)
-	}
-	var stale []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
-			t.Fatalf("scan scratch database: %v", err)
-		}
-		stale = append(stale, name)
-	}
-	rows.Close()
-	for _, name := range stale {
-		if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+pgIdent(name)+` WITH (FORCE)`); err != nil {
-			t.Logf("drop leftover database %s: %v", name, err)
-		}
-	}
-	if _, err := admin.Exec(ctx, `CREATE DATABASE `+pgIdent(db)); err != nil {
-		t.Fatalf("create database %s: %v", db, err)
-	}
-	t.Cleanup(func() {
-		ctx := context.Background()
-		pool, err := pgxpool.New(ctx, base)
-		if err != nil {
-			return
-		}
-		defer pool.Close()
-		_, _ = pool.Exec(ctx, `DROP DATABASE IF EXISTS `+pgIdent(db)+` WITH (FORCE)`)
-	})
-
-	u.Path = "/" + db
-	return u.String()
-}
-
-func pgIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
-
-// headVersion is the newest migration in the embedded set, read rather than
-// pinned so adding a migration does not need this file edited.
-func headVersion(t *testing.T) uint {
-	t.Helper()
-	entries, err := pgmigrations.FS.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read migrations: %v", err)
-	}
-	var head uint
-	for _, e := range entries {
-		n, err := strconv.ParseUint(strings.SplitN(e.Name(), "_", 2)[0], 10, 64)
-		if err != nil {
-			continue
-		}
-		if uint(n) > head {
-			head = uint(n)
-		}
-	}
-	if head == 0 {
-		t.Fatal("no numbered migrations found")
-	}
-	return head
-}
-
-// scratchMigrator drives the embedded migrations against a scratch DSN.
-// MigrateTo is the rollback entry point: it refuses any target above the
-// schema's current version, so stepping a fixture from one version to the
-// next needs the migrator itself.
-func scratchMigrator(t *testing.T, dsn string) *migrate.Migrate {
+// migrator drives the embedded migrations against dsn. MigrateTo is the
+// rollback entry point: it refuses any target above the schema's current
+// version, so stepping a fixture from one version to the next needs the
+// migrator itself.
+func migrator(t *testing.T, dsn string) *migrate.Migrate {
 	t.Helper()
 	src, err := iofs.New(pgmigrations.FS, ".")
 	if err != nil {
@@ -175,8 +83,8 @@ func insertKeyWithoutPrincipal(t *testing.T, dsn, name string) {
 // name: two keys whose names share a long prefix must not land on one
 // principal, which would let either key spend the other's grants.
 func TestMigrationGivesLongKeyNamesDistinctServiceAccounts(t *testing.T) {
-	dsn := scratchDB(t, "relay_mig_names")
-	m := scratchMigrator(t, dsn)
+	dsn := storagetest.EmptyDB(t)
+	m := migrator(t, dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
 		t.Fatalf("migrate to 25: %v", err)
 	}
@@ -226,8 +134,8 @@ func TestMigrationGivesLongKeyNamesDistinctServiceAccounts(t *testing.T) {
 // `migrate down` has to land on exactly the version asked for, and bringing
 // the schema back up has to reach head from there.
 func TestMigrateDownToATargetThenUpReachesHead(t *testing.T) {
-	dsn := scratchDB(t, "relay_mig_cycle")
-	head := headVersion(t)
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
 	if head <= 25 {
 		t.Fatalf("head is %d; this test needs migrations above 25", head)
 	}
@@ -261,8 +169,8 @@ func TestMigrateDownToATargetThenUpReachesHead(t *testing.T) {
 // A target above the current version would run the up-migrations the
 // operator is trying to undo; it is refused and the schema is left alone.
 func TestMigrateDownRefusesATargetAboveTheSchemaVersion(t *testing.T) {
-	dsn := scratchDB(t, "relay_mig_target")
-	head := headVersion(t)
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
 	if err := storagemod.MigrateTo(dsn, 25); err != nil {
 		t.Fatalf("migrate to 25: %v", err)
 	}
@@ -283,8 +191,8 @@ func TestMigrateDownRefusesATargetAboveTheSchemaVersion(t *testing.T) {
 // migrate refuses it. Forcing the version clears the flag so the next boot
 // migrates again; a version with no migration is refused.
 func TestMigrateForceClearsADirtySchema(t *testing.T) {
-	dsn := scratchDB(t, "relay_mig_force")
-	head := headVersion(t)
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
 	if err := storagemod.MigrateTo(dsn, 25); err != nil {
 		t.Fatalf("migrate to 25: %v", err)
 	}
@@ -323,8 +231,8 @@ func TestMigrateForceClearsADirtySchema(t *testing.T) {
 // A pod restarting mid-rollback must not re-apply the migrations the
 // operator just unwound.
 func TestBootWithMigrationsOffLeavesTheSchemaVersion(t *testing.T) {
-	dsn := scratchDB(t, "relay_mig_boot")
-	head := headVersion(t)
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
 	if err := storagemod.MigrateTo(dsn, 25); err != nil {
 		t.Fatalf("migrate to 25: %v", err)
 	}

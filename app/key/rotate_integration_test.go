@@ -8,63 +8,26 @@ package key_test
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
-
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
-func setupKeyDB(t *testing.T) (*key.Store, context.Context) {
+// setupKeyDB returns a key store on a fresh database and the id of the user
+// row the relay_keys principal FK needs.
+func setupKeyDB(t *testing.T) (*key.Store, context.Context, string) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return key.NewStore(gen.New(pool)), ctx
-}
-
-// seedUser writes the users row the relay_keys principal FK needs.
-func seedUser(t *testing.T, ctx context.Context) string {
-	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	q := gen.New(storagetest.Pool(t))
 	u := &user.User{ID: meta.NewID(), Username: "rotate-" + meta.NewID()[:8]}
-	store := user.NewStore(gen.New(pool))
-	if err := store.Upsert(ctx, u); err != nil {
+	if err := user.NewStore(q).Upsert(ctx, u); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Delete(ctx, u.ID) })
-	return u.ID
+	return key.NewStore(q), ctx, u.ID
 }
 
 func hash64(b byte) string {
@@ -79,9 +42,8 @@ func hash64(b byte) string {
 // refused rather than overwrite the first, which would leave the plaintext
 // handed to the first caller authenticating nothing.
 func TestRotateIsConditionalOnTheReadHash(t *testing.T) {
-	store, ctx := setupKeyDB(t)
+	store, ctx, userID := setupKeyDB(t)
 
-	userID := seedUser(t, ctx)
 	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rotate-race", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}}}
 	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: userID}
 	k.Spec.KeyHash = hash64('a')
@@ -120,9 +82,8 @@ func TestRotateIsConditionalOnTheReadHash(t *testing.T) {
 }
 
 func TestRotateSucceedsOnTheCurrentHash(t *testing.T) {
-	store, ctx := setupKeyDB(t)
+	store, ctx, userID := setupKeyDB(t)
 
-	userID := seedUser(t, ctx)
 	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rotate-ok", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}}}
 	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: userID}
 	k.Spec.KeyHash = hash64('d')
@@ -156,9 +117,8 @@ func TestRotateSucceedsOnTheCurrentHash(t *testing.T) {
 // landing in between changes fields the rotation would write back stale.
 // TestRotateLosesToAConcurrentUpdate pins that the rotation loses instead.
 func TestRotateLosesToAConcurrentUpdate(t *testing.T) {
-	store, ctx := setupKeyDB(t)
+	store, ctx, userID := setupKeyDB(t)
 
-	userID := seedUser(t, ctx)
 	k := &key.Key{Meta: meta.Metadata{ID: meta.NewID(), Name: "rotate-vs-update", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userID}}}
 	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: userID}
 	k.Spec.KeyHash = hash64('f')
