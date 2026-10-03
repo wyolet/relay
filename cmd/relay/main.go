@@ -9,7 +9,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,7 +32,6 @@ import (
 	"github.com/wyolet/relay/app/httpapi/control"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
-	applicense "github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/metricslog"
 	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pipeline"
@@ -337,11 +335,7 @@ func main() {
 
 	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
 	// the boot, not the first login attempt.
-	// An unlicensed overlay is refused, not fatal: a deployment that loses
-	// its license keeps booting and keeps serving password login.
-	if oidcEnv, err := settings.AuthOIDCEnv(); errors.Is(err, applicense.ErrRequired) {
-		slog.Warn("auth: oidc login requires a license — falling back to password login", "err", err)
-	} else if err != nil {
+	if oidcEnv, err := settings.AuthOIDCEnv(); err != nil {
 		slog.Error("auth: invalid WYOLET_* OIDC env overlay", "err", err)
 		os.Exit(1)
 	} else if oidcEnv != nil {

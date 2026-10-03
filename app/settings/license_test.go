@@ -1,10 +1,7 @@
 package settings
 
 import (
-	"errors"
 	"testing"
-
-	"github.com/wyolet/relay/app/license"
 )
 
 // fakeChecker unlocks exactly the features it lists.
@@ -28,74 +25,42 @@ func grantLicense(t *testing.T, features ...string) {
 const enabledOIDC = `{"enabled":true,"issuer":"https://idp.example.com",` +
 	`"clientId":"c1","redirectUrl":"https://relay.example.com/auth/callback"}`
 
-func TestAuthOIDCDecodeRequiresLicense(t *testing.T) {
+// OIDC login is community: an upgrade must not lock out a deployment whose
+// users only sign in through their IdP.
+func TestOIDCLoginNeedsNoLicense(t *testing.T) {
+	grantLicense(t)
 	sec, ok := Lookup(AuthOIDCSection)
 	if !ok {
 		t.Fatal("auth:oidc not registered")
 	}
+	v, err := sec.Decode([]byte(enabledOIDC))
+	if err != nil {
+		t.Fatalf("unlicensed decode: %v", err)
+	}
+	if c, _ := v.(*AuthOIDC); c == nil || !c.Enabled {
+		t.Fatalf("decode = %+v, want the enabled section", v)
+	}
 
-	t.Run("enabled without a license", func(t *testing.T) {
-		grantLicense(t)
-		v, err := sec.Decode([]byte(enabledOIDC))
-		if !errors.Is(err, license.ErrRequired) {
-			t.Fatalf("decode = %+v, err = %v, want license_required", v, err)
-		}
-	})
-
-	t.Run("enabled with an sso license", func(t *testing.T) {
-		grantLicense(t, license.FeatureSSO)
-		v, err := sec.Decode([]byte(enabledOIDC))
-		if err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if c, _ := v.(*AuthOIDC); c == nil || !c.Enabled {
-			t.Fatalf("decode = %+v, want the enabled section", v)
-		}
-	})
-
-	t.Run("disabled needs no license", func(t *testing.T) {
-		grantLicense(t)
-		if _, err := sec.Decode([]byte(`{"enabled":false}`)); err != nil {
-			t.Fatalf("a disabled section must decode unlicensed: %v", err)
-		}
-	})
-}
-
-func TestAuthOIDCEnvRefusedWithoutLicense(t *testing.T) {
-	grantLicense(t)
 	setOIDCEnvVars(t)
-
 	c, err := AuthOIDCEnv()
-	if !errors.Is(err, license.ErrRequired) {
-		t.Fatalf("overlay = %+v, err = %v, want license_required", c, err)
+	if err != nil || c == nil || !c.Enabled {
+		t.Fatalf("unlicensed overlay = %+v, %v; want it active", c, err)
 	}
-	// The refusal must not promote the overlay: password login stands.
-	if got := EffectiveAuthOIDC(nil); got.Enabled {
-		t.Fatalf("effective config = %+v, want disabled", got)
+	if got := EffectiveAuthOIDC(nil); !got.Enabled {
+		t.Fatalf("effective config = %+v, want the overlay", got)
 	}
 }
 
-// A deployment that stored an enabled section and then lost its license must
-// keep booting with SSO off, not fail every settings read.
-func TestStoredOIDCDegradesWithoutLicense(t *testing.T) {
+// A malformed stored section still fails the read; only a license gate
+// degrades.
+func TestStoredOIDCStillValidates(t *testing.T) {
 	grantLicense(t)
 	sec, _ := Lookup(AuthOIDCSection)
-
-	v, err := decodeOrDegrade(sec, []byte(enabledOIDC))
-	if err != nil {
-		t.Fatalf("an unlicensed stored section must not fail the read: %v", err)
-	}
-	if c, _ := v.(*AuthOIDC); c == nil || c.Enabled {
-		t.Fatalf("degraded value = %+v, want the disabled default", v)
-	}
-
-	// Only the license gate degrades — a malformed row is still an error.
 	if _, err := decodeOrDegrade(sec, []byte(`{"enabled":`)); err == nil {
 		t.Fatal("malformed JSON must still fail the read")
 	}
-	grantLicense(t, license.FeatureSSO)
 	if _, err := decodeOrDegrade(sec, []byte(`{"enabled":true}`)); err == nil {
-		t.Fatal("a licensed but incomplete section must still fail validation")
+		t.Fatal("an incomplete enabled section must still fail validation")
 	}
 }
 

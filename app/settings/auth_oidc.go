@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-
-	"github.com/wyolet/relay/app/license"
 )
 
 // AuthOIDC is the auth:oidc settings section: inbound OpenID Connect login
@@ -86,9 +84,6 @@ func (c *AuthOIDC) OpenRegistration() bool { return c.Registration == "open" }
 func (c *AuthOIDC) Validate() error {
 	if !c.Enabled {
 		return nil
-	}
-	if err := requireLicense(AuthOIDCSection, license.FeatureSSO); err != nil {
-		return err
 	}
 	if c.Issuer == "" {
 		return fmt.Errorf("auth:oidc: issuer is required when enabled")
