@@ -3,6 +3,7 @@ package apply
 import (
 	"context"
 
+	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
@@ -23,6 +24,7 @@ func (b *builder) refs() refcheck.Checker {
 			Policy:         lookup(b, b.rows.Policies, func(x *policy.Policy) *meta.Metadata { return &x.Meta }),
 			RateLimit:      lookup(b, b.rows.RateLimits, func(x *ratelimit.RateLimit) *meta.Metadata { return &x.Meta }),
 			HostKey:        lookup(b, b.rows.HostKeys, func(x *hostkey.HostKey) *meta.Metadata { return &x.Meta }),
+			Host:           lookup(b, b.rows.Hosts, func(x *host.Host) *meta.Metadata { return &x.Meta }),
 			Project:        lookup(b, b.rows.Projects, func(x *project.Project) *meta.Metadata { return &x.Meta }),
 			Team:           lookup(b, b.rows.Teams, func(x *team.Team) *meta.Metadata { return &x.Meta }),
 			Role:           lookup(b, b.rows.Roles, func(x *role.Role) *meta.Metadata { return &x.Meta }),

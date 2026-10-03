@@ -484,6 +484,9 @@ func refs(d Deps) refcheck.Checker {
 	if s.HostKey != nil {
 		c.Rows.HostKey = getOrNil(s.HostKey.Get)
 	}
+	if s.Host != nil {
+		c.Rows.Host = getOrNil(s.Host.Get)
+	}
 	if s.Project != nil {
 		c.Rows.Project = getOrNil(s.Project.Get)
 	}
@@ -905,6 +908,15 @@ func guardRole(d Deps) mutationGuard[role.Role] {
 	}
 }
 
+func guardHostBinding(d Deps) mutationGuard[binding.Binding] {
+	return func(ctx context.Context, action string, _, incoming *binding.Binding) error {
+		if action == "delete" || incoming == nil {
+			return nil
+		}
+		return refs(d).HostBinding(ctx, incoming)
+	}
+}
+
 func guardRoleBinding(d Deps) mutationGuard[rolebinding.RoleBinding] {
 	return func(ctx context.Context, action string, _, incoming *rolebinding.RoleBinding) error {
 		if action == "delete" || incoming == nil {
@@ -1174,7 +1186,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(b *binding.Binding) error { return b.Validate() },
 		"",
 		listScanResolver(d.Stores.Binding, bmeta),
-		nil,
+		guardHostBinding(d),
 		nil,
 		nil,
 		nil,
