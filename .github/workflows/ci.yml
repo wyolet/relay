@@ -84,6 +84,7 @@ jobs:
         with:
           name: integration-coverage
           path: .cover/*.out
+          include-hidden-files: true
           if-no-files-found: error
 
   # Merges the unit profiles of every module with the integration profiles:
