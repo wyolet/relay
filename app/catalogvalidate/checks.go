@@ -3,6 +3,7 @@ package catalogvalidate
 import (
 	"fmt"
 
+	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/manifest"
 )
 
@@ -356,6 +357,7 @@ func checkPricingRefs(g *graph) []Issue {
 //   - spec.model → Model name must exist
 //   - spec.host → Host name must exist
 //   - spec.pricing → Pricing name must exist when set
+//   - spec.adapter → must be a dispatchable upstream binding when set
 //   - spec.snapshots[] → must be a subset of the referenced model's snapshot names
 //   - no duplicate (model, host) pairs
 func checkBindingRefs(g *graph) []Issue {
@@ -399,6 +401,16 @@ func checkBindingRefs(g *graph) []Issue {
 				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.host"},
 				Target:   Ref{Kind: "Host", Name: b.Spec.Host},
 				Message:  fmt.Sprintf("host %q not found", b.Spec.Host),
+			})
+		}
+
+		// spec.adapter — empty takes the default; anything else must be dispatchable.
+		if b.Spec.Adapter != "" && !adapters.Name(b.Spec.Adapter).UpstreamBinding() {
+			out = append(out, Issue{
+				Severity: SeverityError,
+				Kind:     KindInvariant,
+				Source:   Ref{Kind: src.Kind, Name: src.Name, Field: "spec.adapter"},
+				Message:  fmt.Sprintf("adapter %q is not a valid upstream binding (want one of %v)", b.Spec.Adapter, adapters.UpstreamBindingNames()),
 			})
 		}
 

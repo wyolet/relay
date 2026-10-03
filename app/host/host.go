@@ -65,8 +65,10 @@ type Status struct {
 
 // Spec carries the routing + display fields.
 type Spec struct {
-	// BaseURL is the upstream root. Required.
-	BaseURL string `json:"baseURL" yaml:"baseURL" validate:"required,http_url"`
+	// BaseURL is the upstream root. Empty is valid but leaves the host
+	// unroutable — a catalog may ship a self-hosted host for the operator to
+	// point at their own endpoint after install.
+	BaseURL string `json:"baseURL" yaml:"baseURL" validate:"omitempty,http_url"`
 
 	// Path overrides the adapter's shape-default upstream path (Spec.DefaultPath)
 	// when this host's endpoint doesn't follow the vendor-canonical layout.
@@ -117,6 +119,9 @@ type Spec struct {
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (h *Host) IsEnabled() bool { return h.Spec.Enabled == nil || *h.Spec.Enabled }
+
+// Routable reports whether the host has an upstream to dial.
+func (h *Host) Routable() bool { return h.Spec.BaseURL != "" }
 
 // Strategies returns the host's offered billing modes, defaulting an empty
 // menu to ["api"].

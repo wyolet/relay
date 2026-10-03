@@ -292,6 +292,9 @@ candidates:
 			// reach a host the policy does hold a key for. Proxy mode
 			// (SkipKeyCheck) bypasses the gate; the caller's own upstream
 			// credentials replace the keypool.
+			if req.SkipKeyCheck && !h.Routable() {
+				continue
+			}
 			if !req.SkipKeyCheck {
 				keys := candidateKeys(snap, pol, m, h)
 				if len(keys) == 0 {
@@ -390,6 +393,9 @@ func resolveModel(snap *appcatalog.Snapshot, name string) (models []*model.Model
 // (one candidate, host-scoped breaker) with no real HostKey and no auth
 // header; it bypasses the tier gate, having no tier.
 func candidateKeys(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, h *host.Host) []*hostkey.HostKey {
+	if !h.Routable() {
+		return nil
+	}
 	if h.Spec.NoAuth {
 		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
 	}
@@ -524,6 +530,9 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 // passes the tier gate. The single definition of the D73 pool: resolution and
 // the /v1/models listing both read it, so the two cannot drift.
 func policylessKeys(snap *appcatalog.Snapshot, m *model.Model, h *host.Host, userID string) []*hostkey.HostKey {
+	if !h.Routable() {
+		return nil
+	}
 	if h.Spec.NoAuth {
 		return []*hostkey.HostKey{hostkey.Anonymous(h.Meta.ID, h.Meta.Name)}
 	}
