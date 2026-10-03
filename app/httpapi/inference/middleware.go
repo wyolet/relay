@@ -117,8 +117,20 @@ func (p *Principal) Recheck(snap *appcatalog.Snapshot, now time.Time) error {
 		return errors.New("api key expired")
 	case matchedPrevious && !k.InGrace(now):
 		return errors.New("api key rotated")
+	case !keyUserEnabled(snap, k):
+		return errors.New("api key disabled")
 	}
 	return nil
+}
+
+// keyUserEnabled reports whether a personal key's user may still act: a
+// personal key is that user's credential, so disabling the user stops it.
+// A key with no user id (issued by the admin token) has no user to check.
+func keyUserEnabled(snap *appcatalog.Snapshot, k *key.Key) bool {
+	if k.Spec.Principal.Kind != key.PrincipalUser || k.Spec.Principal.ID == "" {
+		return true
+	}
+	return snap.UserEnabled(k.Spec.Principal.ID)
 }
 
 // PolicyID returns the resolved policy's id, or "" for the policy-less
@@ -243,6 +255,9 @@ func keyPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, bearer strin
 		return nil, nil, false
 	case matchedPrevious && !k.InGrace(now):
 		writeAuthErr(w, "api key rotated")
+		return nil, nil, false
+	case !keyUserEnabled(snap, k):
+		writeAuthErr(w, "api key disabled")
 		return nil, nil, false
 	}
 	return buildPrincipal(snap, k, hash), k, true

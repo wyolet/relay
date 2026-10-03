@@ -201,6 +201,7 @@ func (c *Catalog) ReloadTokenVersions(ctx context.Context) error {
 	}
 	s := c.snap.Load().clone()
 	s.tokenVersionByUser = versions
+	s.usersLoaded = true
 	c.snap.Store(s)
 	return nil
 }
@@ -375,6 +376,7 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	}
 	if tokenVersions != nil {
 		snap.tokenVersionByUser = tokenVersions
+		snap.usersLoaded = true
 	}
 	c.snap.Store(snap)
 	c.markReady()

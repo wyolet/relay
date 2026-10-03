@@ -185,9 +185,10 @@ func updateUser(ctx context.Context, users userWriter, az authz.Authorizer, sess
 			return nil, huma.Error500InternalServerError(err.Error())
 		}
 	}
-	// The snapshot already drops a disabled account's token version, but a
-	// later re-enable would revive every token minted before the disable.
-	if u.Disabled && !wasDisabled {
+	// The snapshot drops a disabled account's token version, which stops its
+	// tokens and personal keys; only a version change reaches the snapshot,
+	// so both directions bump (re-enabling revives no pre-disable token).
+	if u.Disabled != wasDisabled {
 		if err := users.BumpTokenVersion(ctx, in.ID); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
 		}

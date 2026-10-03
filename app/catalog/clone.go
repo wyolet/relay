@@ -53,6 +53,7 @@ func (s *Snapshot) clone() *Snapshot {
 		hashesByUser: shallowMap(s.hashesByUser),
 
 		tokenVersionByUser: shallowMap(s.tokenVersionByUser),
+		usersLoaded:        s.usersLoaded,
 
 		modelsByPolicy:        copySliceMap(s.modelsByPolicy),
 		hostKeysByPolicy:      copySliceMap(s.hostKeysByPolicy),
