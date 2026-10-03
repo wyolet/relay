@@ -63,7 +63,7 @@ func (b *Binding) Serves(snapshotName string) bool {
 // Validate runs intra-row rules via the shared meta.Validator and enforces
 // the binding-specific invariants:
 //   - Adapter defaults to OpenAI when omitted, then must be a valid upstream
-//     binding (the dispatch key — openai|anthropic|gemini).
+//     binding (the dispatch key — see adapters.UpstreamBindingNames).
 //
 // Cross-entity checks (ModelID/HostID/PricingID resolve; the (model, host)
 // pair is unique; Snapshots name real model snapshots) live in the catalog

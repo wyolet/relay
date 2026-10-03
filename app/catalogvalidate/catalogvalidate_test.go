@@ -90,6 +90,20 @@ func TestValidateGraph_BindingSnapshotNotInModel(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_BindingAdapter(t *testing.T) {
+	for adapter, wantErr := range map[string]bool{
+		"": false, "openai_responses": false, "anthropic": false,
+		"canonical": true, "openai_embeddings": true, "no-such-adapter": true,
+	} {
+		docs := fixture()
+		docs[3].HostBinding.Spec.Adapter = adapter
+		issues := ValidateGraph(docs)
+		if HasErrors(issues) != wantErr {
+			t.Errorf("adapter %q: errors = %v, want %v:\n%s", adapter, HasErrors(issues), wantErr, Format(issues))
+		}
+	}
+}
+
 func TestValidateGraph_ModelNoSnapshots(t *testing.T) {
 	docs := fixture()
 	docs[2].Model.Spec.Snapshots = nil

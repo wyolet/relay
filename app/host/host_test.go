@@ -21,6 +21,17 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("ok empty baseURL", func(t *testing.T) {
+		h := fix("ollama-self")
+		h.Spec.BaseURL = ""
+		if err := h.Validate(); err != nil {
+			t.Fatalf("empty baseURL should be accepted: %v", err)
+		}
+		if h.Routable() {
+			t.Fatal("a host with no baseURL must not be routable")
+		}
+	})
+
 	t.Run("ok empty owner", func(t *testing.T) {
 		h := fix("openai-direct")
 		h.Meta.Owner = meta.Owner{}
@@ -38,11 +49,6 @@ func TestValidate(t *testing.T) {
 			name: "missing name",
 			h:    func() *Host { h := fix("x"); h.Meta.Name = ""; return h }(),
 			want: "Name",
-		},
-		{
-			name: "missing baseURL",
-			h:    func() *Host { h := fix("x"); h.Spec.BaseURL = ""; return h }(),
-			want: "BaseURL",
 		},
 		{
 			name: "bad baseURL",
