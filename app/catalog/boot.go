@@ -61,7 +61,7 @@ type BootstrapOptions struct {
 	// AutoSeedDir when its .version stamp matches (no network), else
 	// fetched from CatalogURL — and the marker updated. The seed is
 	// layering-safe: operator-edited (dirty) rows are skipped and
-	// overlays re-merge at snapshot load. A resolve/fetch failure
+	// overlays re-merge at snapshot load. A resolve, fetch or seed failure
 	// against a non-empty catalog logs and continues with the existing
 	// rows (never blocks boot); against an empty catalog it falls back to
 	// AutoSeedDir when set, else fails hydrate (retried by the caller).
@@ -306,7 +306,8 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 	// The baked/local tree already holds this exact release — seed from
 	// disk, no network.
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" && v == version {
-		return seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local")
+		return keepServingOnSeedError(empty, version,
+			seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local"))
 	}
 
 	tmp, err := os.MkdirTemp("", "relay-catalog-*")
@@ -329,7 +330,20 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 		}
 		return fmt.Errorf("fetch catalog %s: %w", version, fetchErr)
 	}
-	return seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched")
+	return keepServingOnSeedError(empty, version,
+		seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched"))
+}
+
+// keepServingOnSeedError applies the fetch-failure policy to a release that
+// fails to seed: a non-empty catalog keeps its rows and its marker, so the
+// next boot retries; an empty one has nothing to serve and fails hydrate.
+func keepServingOnSeedError(empty bool, version string, err error) error {
+	if err == nil || empty {
+		return err
+	}
+	slog.Error("catalog: versioned seed failed; keeping existing catalog",
+		"version", version, "err", err)
+	return nil
 }
 
 // seedLocalFallback seeds AutoSeedDir after a resolve/fetch failure on an
