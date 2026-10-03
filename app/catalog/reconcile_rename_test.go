@@ -13,7 +13,6 @@ import (
 // A provider rename must reindex the synthesized snapshot aliases on the
 // incremental Apply path.
 func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
-	t.Skip("known bug: provider/host rename leaves snapshot aliases stale; unskip with the fix")
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
@@ -48,7 +47,6 @@ func TestApply_ProviderRenameReindexesSnapshotAliases(t *testing.T) {
 // A host rename must reindex the synthesized host-pinned snapshot aliases on
 // the incremental Apply path.
 func TestApply_HostRenameReindexesSnapshotAliases(t *testing.T) {
-	t.Skip("known bug: provider/host rename leaves snapshot aliases stale; unskip with the fix")
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {

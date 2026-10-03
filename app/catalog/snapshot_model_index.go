@@ -81,6 +81,13 @@ func (s *Snapshot) deindexModelSnapshots(m *model.Model) {
 	s.deindexModelAliases(m)
 }
 
+// reindexModelSnapshots recomputes a model's alias keys. Provider- and
+// host-qualified keys embed the slug, so a provider/host rename must call it.
+func (s *Snapshot) reindexModelSnapshots(m *model.Model) {
+	s.deindexModelSnapshots(m)
+	s.indexModelSnapshots(m)
+}
+
 // ResolveSnapshot maps a slug-normalized model ref to its model + snapshot,
 // plus an optional pinned HostID (set when the ref named a host via "@host").
 // Bare snapshot names win over synthesized aliases. The caller normalizes the
