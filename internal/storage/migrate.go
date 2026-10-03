@@ -29,6 +29,33 @@ func runMigrations(dsn string) error {
 	return nil
 }
 
+// ForceVersion records version as the schema's current one and clears the
+// dirty flag, running no migration. A migration that failed half-way leaves
+// the schema dirty and every later migrate refuses it; the operator repairs
+// the schema by hand, then records where it now stands.
+func ForceVersion(dsn string, version uint) error {
+	src, err := iofs.New(pgmigrations.FS, ".")
+	if err != nil {
+		return fmt.Errorf("storage: open migration source: %w", err)
+	}
+	// A version with no migration would strand every later migrate on
+	// "no migration found".
+	up, _, err := src.ReadUp(version)
+	if err != nil {
+		return fmt.Errorf("storage: force %d: no migration with that version: %w", version, err)
+	}
+	_ = up.Close()
+	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	if err != nil {
+		return fmt.Errorf("storage: init migrations: %w", err)
+	}
+	defer m.Close()
+	if err := m.Force(int(version)); err != nil {
+		return fmt.Errorf("storage: force %d: %w", version, err)
+	}
+	return nil
+}
+
 // downAll is the target that means "unwind every migration".
 const downAll = 0
 

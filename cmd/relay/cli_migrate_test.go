@@ -53,6 +53,23 @@ func TestMigrateDownArguments(t *testing.T) {
 			}
 		})
 	}
+	// `force` clears a dirty schema left by a failed migration.
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"force without a version", []string{"force"}, "exactly one version"},
+		{"force version is not a number", []string{"force", "v24"}, "not a schema version"},
+		{"force without a dsn", []string{"force", "24"}, "RELAY_PG_DSN required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := runMigrate(tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("runMigrate(%v) = %v, want an error containing %q", tc.args, err, tc.want)
+			}
+		})
+	}
 	// A bare `migrate` keeps its old meaning: boot runs the up-migrations.
 	if err := runMigrate(nil); err != nil {
 		t.Fatalf("runMigrate(nil) = %v, want nil", err)

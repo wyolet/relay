@@ -76,7 +76,8 @@ type Request struct {
 
 	// Policy is the caller's resolved inbound policy (the middleware walks
 	// key → service account → policy binding). Nil selects the policy-less
-	// flow, which only a project-less personal key can reach.
+	// flow, which only a project-less personal key, or a key in the legacy
+	// project with no policy bound, can reach.
 	Policy *policy.Policy
 
 	// UserID is the calling user, from the credential's principal. It scopes

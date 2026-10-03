@@ -14,6 +14,12 @@ import (
 	"github.com/wyolet/relay/app/team"
 )
 
+// LegacyID is the id of the `legacy` project the tenancy migration creates
+// for keys that predate projects. Fixed so the data plane can tell it apart
+// from a project an operator later names `legacy`; ids are server-minted, so
+// no other row can claim it.
+const LegacyID = "00000000-0000-7000-8000-000000000001"
+
 // Project is a Team-owned grouping of request-authoring resources.
 type Project struct {
 	Meta meta.Metadata `json:"metadata" yaml:"metadata"`
