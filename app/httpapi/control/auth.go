@@ -8,6 +8,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
@@ -111,14 +112,22 @@ func registerAuth(api huma.API, d Deps) {
 		// not one. Only a deployment with no user store falls back to it.
 		username, roles := yu.Spec.Username.Get(), yu.Spec.Roles
 		userID := yu.Metadata.Name
+		var row *user.User
 		if d.Users != nil {
-			row, err := d.Users.ByUsername(ctx, username)
-			if err != nil {
+			var err error
+			if row, err = d.Users.ByUsername(ctx, username); err != nil {
 				return nil, huma.Error500InternalServerError("user lookup failed: " + err.Error())
 			}
 			if row != nil {
 				userID, roles = row.ID, row.Roles
 			}
+		}
+		// A disabled row locks out its YAML credential too. Under RBAC a
+		// session keyed on the slug would act as nobody any binding names.
+		_, scoped := d.Authz.(authz.Scoper)
+		if (row != nil && row.Disabled) || (row == nil && scoped) {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: userID, Name: username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: username})
+			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		if err := d.Sessions.Login(ctx, userID, username, roles...); err != nil {
 			return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
