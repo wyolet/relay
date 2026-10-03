@@ -218,6 +218,9 @@ func (c Checker) HostKeyRefs(ctx context.Context, keyIDs []string, refOwner meta
 		if scoped && refOwner.Kind == meta.OwnerUser && k.Meta.Owner.Kind == meta.OwnerProject {
 			return badRequest("personal rows cannot reference project resources")
 		}
+		if err := SharedOwner("host-key", k.Meta.Name, k.Meta.Owner, refOwner); err != nil {
+			return err
+		}
 	}
 	return nil
 }

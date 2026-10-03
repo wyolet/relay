@@ -6,8 +6,28 @@ import (
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
+	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 )
+
+// Reading another project's host key is not a licence to spend it: a
+// project's policy may name only its own keys or shared ones.
+func TestProjectPolicyCannotSpendAnotherProjectsHostKey(t *testing.T) {
+	keys := map[string]*hostkey.HostKey{
+		"hk-own":    {Meta: meta.Metadata{ID: "hk-own", Name: "own", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}}},
+		"hk-other":  {Meta: meta.Metadata{ID: "hk-other", Name: "other", Owner: meta.Owner{Kind: meta.OwnerProject, ID: "p-2"}}},
+		"hk-shared": {Meta: meta.Metadata{ID: "hk-shared", Name: "shared", Owner: meta.Owner{Kind: meta.OwnerSystem}}},
+	}
+	c := Checker{Rows: Lookup{HostKey: func(_ context.Context, id string) *hostkey.HostKey { return keys[id] }}}
+	ref := meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}
+	ctx := context.Background()
+	if err := c.HostKeyRefs(ctx, []string{"hk-own", "hk-shared"}, ref); err != nil {
+		t.Fatalf("own and shared keys: %v", err)
+	}
+	if err := c.HostKeyRefs(ctx, []string{"hk-other"}, ref); err == nil {
+		t.Fatal("project p-1's policy accepted project p-2's host key")
+	}
+}
 
 func hostLookup(hosts ...*host.Host) func(context.Context, string) *host.Host {
 	return func(_ context.Context, id string) *host.Host {
