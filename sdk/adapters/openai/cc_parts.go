@@ -72,9 +72,27 @@ func ccContentToParts(raw json.RawMessage) ([]v1.Part, error) {
 					})
 				}
 			}
+		default:
+			// canonical: input_audio and unknown content parts dropped — canonical
+			// has no audio part type.
 		}
 	}
 	return out, nil
+}
+
+// ccToolContentToOutput keeps a text-only tool result in the string form and
+// carries any non-text part (images) as typed Content instead of flattening it.
+func ccToolContentToOutput(callID string, raw json.RawMessage) (*v1.FunctionCallOutput, error) {
+	parts, err := ccContentToParts(raw)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range parts {
+		if _, isText := p.(*v1.TextPart); !isText {
+			return &v1.FunctionCallOutput{CallID: callID, Content: parts}, nil
+		}
+	}
+	return &v1.FunctionCallOutput{CallID: callID, Output: ccContentToText(raw)}, nil
 }
 
 // ccAssistantMessageToItem converts a CC assistant message to canonical items.
@@ -219,9 +237,14 @@ func ccSerializeFunctionCallOutput(f *v1.FunctionCallOutput) json.RawMessage {
 	if len(f.Content) > 0 {
 		var buf []byte
 		for _, p := range f.Content {
-			if tp, ok := p.(*v1.TextPart); ok {
+			switch tp := p.(type) {
+			case *v1.TextPart:
+				buf = append(buf, tp.Text...)
+			case *v1.OutputTextPart:
 				buf = append(buf, tp.Text...)
 			}
+			// canonical: non-text tool-result parts (images, files) dropped — a CC
+			// tool message accepts text content only.
 		}
 		b, _ := json.Marshal(string(buf))
 		return b

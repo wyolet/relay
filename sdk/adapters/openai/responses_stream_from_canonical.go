@@ -213,6 +213,11 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 			Output:    append([]ResponsesItem{}, s.closedItems...),
 		}
 		finalResp.Status, finalResp.IncompleteDetails = canonicalResponsesStatus(ev.Status, ev.FinishReason, nil)
+		// The refusal text already streamed as output_text deltas; the terminal
+		// response is the one place left to type it as a refusal.
+		if ev.FinishReason == v1.FinishReasonRefusal {
+			responsesMarkRefusal(finalResp.Output)
+		}
 		if ev.Usage != nil {
 			finalResp.Usage = canonicalUsageToResponses(ev.Usage)
 		}

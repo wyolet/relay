@@ -21,6 +21,14 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	}
 	opts := resolveModelOpts(req.ModelConfig, modelKey)
 
+	// canonical: User dropped — generateContent has no end-user identifier.
+	// canonical: Metadata dropped — generateContent takes no request metadata
+	// (labels exist only on Vertex, a different endpoint).
+	// canonical: Extensions dropped — no Gemini-owned extension keys exist;
+	// rule 7 has an adapter ignore keys it does not own.
+	// canonical: CacheConfig dropped — Gemini caches implicitly; it has no
+	// breakpoint, key, or retention knob on generateContent.
+
 	// systemInstruction from Instructions.
 	sysText := req.Instructions
 	if sysText != "" {
@@ -49,9 +57,18 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			if r.BudgetTokens != nil {
 				tc.ThinkingBudget = *r.BudgetTokens
 			}
+			// canonical: Reasoning.Effort dropped — thinkingLevel is rejected by
+			// pre-3 models and canonical carries no model generation to gate it;
+			// includeThoughts plus the budget carry the reasoning intent.
+			// canonical: Reasoning.Summary dropped — Gemini only toggles
+			// includeThoughts (already on), with no summary granularity.
 			gc.ThinkingConfig = tc
 			hasGC = true
 		}
+		// canonical: Output.Verbosity dropped — generateContent has no
+		// verbosity control.
+		// canonical: Format.Name/Description/Strict dropped — responseSchema
+		// takes the bare schema only.
 		if o := opts.Output; o != nil && o.Format != nil {
 			switch o.Format.Type {
 			case "json_object":
@@ -82,6 +99,10 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			if schema == nil {
 				schema = json.RawMessage(`{}`)
 			}
+			// canonical: FunctionTool.Strict dropped — function declarations
+			// take no strict-schema flag.
+			// canonical: FunctionTool.ProviderData dropped — it holds another
+			// vendor's original tool definition; Gemini gets the lowered schema.
 			decls = append(decls, functionDeclaration{
 				Name:        ft.Name,
 				Description: ft.Description,
@@ -94,6 +115,8 @@ func (GeminiTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		if tc.Choice != nil {
 			out.ToolConfig = canonicalChoiceToGemini(tc.Choice)
 		}
+		// canonical: Tools.Parallel dropped — Gemini has no switch for
+		// parallel function calls.
 	}
 
 	// Build contents from canonical Input. LEADING system/developer items and

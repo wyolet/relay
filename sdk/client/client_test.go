@@ -410,6 +410,48 @@ func TestRelay_MissingConfig_FailsOnCallNotConstruction(t *testing.T) {
 	}
 }
 
+// RelayWS is a relay target, so it resolves config exactly like Relay.
+// Construction/config level only — no websocket connection is made.
+func TestRelayWS_EnvConfig(t *testing.T) {
+	t.Run("env fallback", func(t *testing.T) {
+		t.Setenv(EnvBaseURL, "http://relay-env.example:8080")
+		t.Setenv(EnvAPIKey, "rk-env-key")
+		t.Setenv(EnvUsage, "full")
+		t.Setenv(EnvHeaders, "X-Env-Header=hello")
+		t.Setenv(EnvTimeout, "42s")
+
+		c := RelayWS("", "")
+
+		if got, want := c.baseURL, "http://relay-env.example:8080"; got != want {
+			t.Errorf("baseURL: got %q, want %q", got, want)
+		}
+		if got, want := c.apiKey, "rk-env-key"; got != want {
+			t.Errorf("apiKey: got %q, want %q", got, want)
+		}
+		if got, want := c.headers[headerUsage], "full"; got != want {
+			t.Errorf("%s header: got %q, want %q", headerUsage, got, want)
+		}
+		if got, want := c.headers["X-Env-Header"], "hello"; got != want {
+			t.Errorf("X-Env-Header: got %q, want %q", got, want)
+		}
+		if got, want := c.syncTimeout, 42*time.Second; got != want {
+			t.Errorf("syncTimeout: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("missing config fails on call", func(t *testing.T) {
+		t.Setenv(EnvBaseURL, "")
+		t.Setenv(EnvAPIKey, "")
+
+		c := RelayWS("", "")
+		defer c.Close()
+		_, err := c.Generate(context.Background(), sampleReq())
+		if err == nil || !strings.Contains(err.Error(), "missing config") {
+			t.Fatalf("want missing-config error on call, got %v", err)
+		}
+	})
+}
+
 func TestVendorClients_IgnoreRelayEnv(t *testing.T) {
 	t.Setenv(EnvBaseURL, "http://relay-env.invalid")
 	t.Setenv(EnvAPIKey, "rk-from-env")

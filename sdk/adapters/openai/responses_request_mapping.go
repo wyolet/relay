@@ -172,6 +172,17 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 	if req.CacheConfig != nil {
 		rreq.PromptCacheKey = req.CacheConfig.Key
 		rreq.PromptCacheRetention = openaiCacheRetention(req.CacheConfig)
+		// canonical: CacheConfig.Instructions/Tools dropped — OpenAI caches
+		// prefixes automatically; the breakpoint flags have no wire form.
+	}
+
+	// canonical: Extensions keys other than openai.service_tier dropped — the
+	// remaining openai.* keys are Chat Completions knobs the Responses API
+	// lacks, and rule 7 has an adapter ignore keys it does not own.
+	if raw, ok := req.Extensions[extServiceTier]; ok {
+		if err := json.Unmarshal(raw, &rreq.ServiceTier); err != nil {
+			return nil, fmt.Errorf("extensions[%q]: %w", extServiceTier, err)
+		}
 	}
 
 	if req.OutputMode == v1.OutputModeStream {
@@ -191,7 +202,7 @@ func canonicalToResponsesRequest(req *v1.Request) (*ResponsesRequest, error) {
 			// canonical: Seed has no Responses wire equivalent — dropped
 			// canonical: FrequencyPenalty has no Responses wire equivalent — dropped
 			// canonical: PresencePenalty has no Responses wire equivalent — dropped
-			// TopK not in v1 canonical sampling params — omit
+			// canonical: TopK dropped — the Responses API has no top_k parameter.
 		}
 		if opts.Reasoning != nil {
 			rc := &ResponsesReasoningConfig{Effort: opts.Reasoning.Effort}

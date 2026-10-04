@@ -111,6 +111,12 @@ func (c *Client) Close() error { return c.transport.Close() }
 // anyway and surfaces on the first Generate/GenerateStream call — never at
 // construction.
 func Relay(baseURL, relayKey string, opts ...Option) *Client {
+	return newRelayClient("/v1/generate", baseURL, relayKey, opts...)
+}
+
+// newRelayClient applies the WR_* env fallback and config validation shared
+// by every relay target (HTTP and WebSocket).
+func newRelayClient(path, baseURL, relayKey string, opts ...Option) *Client {
 	if baseURL == "" {
 		baseURL = os.Getenv(EnvBaseURL)
 	}
@@ -120,7 +126,7 @@ func Relay(baseURL, relayKey string, opts ...Option) *Client {
 
 	// env-derived opts apply first so explicit opts override them.
 	envOpts, envErr := relayEnvOptions()
-	c := New(v1.IdentityTranslator{}, baseURL, "/v1/generate", relayKey, append(envOpts, opts...)...)
+	c := New(v1.IdentityTranslator{}, baseURL, path, relayKey, append(envOpts, opts...)...)
 
 	if d := os.Getenv(EnvTimeout); d != "" {
 		dur, err := time.ParseDuration(d)
