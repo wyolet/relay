@@ -34,6 +34,7 @@ type FullChatRequest struct {
 	StreamOptions        *StreamOptions  `json:"stream_options,omitempty"`
 	ServiceTier          string          `json:"service_tier,omitempty"`
 	ReasoningEffort      string          `json:"reasoning_effort,omitempty"`
+	Verbosity            string          `json:"verbosity,omitempty"` // "low" | "medium" | "high"
 	Store                *bool           `json:"store,omitempty"`
 	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention string          `json:"prompt_cache_retention,omitempty"` // "in_memory" | "24h"

@@ -45,6 +45,10 @@ func (ResponsesTranslator) SerializeResponse(resp *v1.Response, req *v1.Request)
 		}
 	}
 
+	if resp.FinishReason == v1.FinishReasonRefusal {
+		responsesMarkRefusal(rresp.Output)
+	}
+
 	// Map usage.
 	if resp.Usage != nil {
 		rresp.Usage = canonicalUsageToResponses(resp.Usage)
@@ -131,6 +135,7 @@ func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
 	switch resp.Status {
 	case ResponsesStatusCompleted:
+		refused := false
 		for _, it := range resp.Output {
 			if it == nil {
 				continue
@@ -139,6 +144,14 @@ func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
 			case ResponsesItemTypeFunctionCall, ResponsesItemTypeCustomToolCall:
 				return v1.FinishReasonToolCalls
 			}
+			if m, ok := it.(*ResponsesMessage); ok && responsesHasRefusalPart(m) {
+				refused = true
+			}
+		}
+		// The refusal part's text maps to plain output text, so the
+		// finish_reason is the only place the refusal survives (rule 9).
+		if refused {
+			return v1.FinishReasonRefusal
 		}
 		return v1.FinishReasonStop
 	case ResponsesStatusIncomplete:
@@ -236,6 +249,31 @@ func canonicalUsageToResponses(t usage.Tokens) *ResponsesUsage {
 		r.OutputTokensDetails = ResponsesOutputDeets{ReasoningTokens: reasoning}
 	}
 	return r
+}
+
+func responsesHasRefusalPart(m *ResponsesMessage) bool {
+	for _, p := range m.Content {
+		if _, ok := p.(*ResponsesRefusalPart); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// responsesMarkRefusal turns assistant output text into refusal parts — the
+// Responses wire has no finish_reason, so the part type carries the refusal.
+func responsesMarkRefusal(items []ResponsesItem) {
+	for _, it := range items {
+		m, ok := it.(*ResponsesMessage)
+		if !ok || m.Role != ResponsesRole(v1.RoleAssistant) {
+			continue
+		}
+		for i, p := range m.Content {
+			if tp, ok := p.(*ResponsesOutputTextPart); ok {
+				m.Content[i] = &ResponsesRefusalPart{Refusal: tp.Text}
+			}
+		}
+	}
 }
 
 // --- Responses → canonical stream ---

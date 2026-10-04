@@ -84,9 +84,19 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	}
 
 	if len(gr.Candidates) == 0 {
+		if promptBlockReason(gr.PromptFeedback) != "" {
+			// The blocked-prompt frame is the whole stream; without a terminal
+			// event it would end as a silent empty success.
+			out = append(out, s.closeCurrentItem()...)
+			status, finish, _ := promptBlocked()
+			out = append(out, s.completedFrame(status, finish, gr.UsageMetadata)...)
+		}
 		return out, nil
 	}
 	cand := gr.Candidates[0]
+	// canonical: safetyRatings dropped on the stream — canonical stream events
+	// have no extensions slot; a SAFETY block still surfaces as content_filter
+	// via finishReason, and the buffered path carries the ratings.
 	if cand.Content == nil {
 		// Terminal frame with no content but finishReason/usage.
 		if cand.FinishReason != "" || gr.UsageMetadata != nil {
@@ -260,7 +270,10 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 
 func (s *geminiToCanonicalStream) emitCompletion(finishReason string, um *usageMetadata) []byte {
 	status, finish, _ := geminiFinishReasonToCanonical(finishReason, s.sawFunctionCall)
+	return s.completedFrame(status, finish, um)
+}
 
+func (s *geminiToCanonicalStream) completedFrame(status v1.Status, finish v1.FinishReason, um *usageMetadata) []byte {
 	gen := v1.GenerationCompletedEvent{
 		ID:           s.responseID,
 		Status:       status,

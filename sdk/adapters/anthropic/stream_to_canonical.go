@@ -122,6 +122,9 @@ func (s *anthropicToCanonicalStream) handleMessageDelta(data []byte) ([]byte, er
 }
 
 func (s *anthropicToCanonicalStream) handleMessageStop() ([]byte, error) {
+	// canonical: raw unknown stop_reason dropped on the stream — the completed
+	// event has no extensions slot; the incomplete status still keeps it from
+	// reading as success, and the buffered path carries it.
 	status, finish, incomplete := anthropicStopReasonToCanonical(s.stopReason)
 
 	gen := v1.GenerationCompletedEvent{

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -123,6 +124,17 @@ func TestCCParseRequest_ToolChoice(t *testing.T) {
 	}
 	if req.Tools == nil || req.Tools.Choice == nil {
 		t.Fatal("expected tool choice")
+	}
+	if c := req.Tools.Choice; c.Mode != "function" || c.FunctionName != "f" {
+		t.Errorf("choice = %+v, want function f", c)
+	}
+
+	wire, err := (CCTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"tool_choice":{"type":"function","function":{"name":"f"}}`) {
+		t.Errorf("CC tool_choice shape lost: %s", wire)
 	}
 }
 

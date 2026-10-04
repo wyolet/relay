@@ -3,6 +3,7 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -37,7 +38,26 @@ func (CCTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 
 	ch := &cc.Choices[0]
 	resp.Status, resp.FinishReason, resp.IncompleteDetails = ccFinishReasonToCanonical(ch.FinishReason)
+	// OpenAI pairs a refusal with finish_reason "stop"; the refusal field is the
+	// only signal, so it must lift the canonical finish_reason (rule 9).
+	if ch.Message.Refusal != nil && *ch.Message.Refusal != "" && resp.FinishReason == v1.FinishReasonStop {
+		resp.FinishReason = v1.FinishReasonRefusal
+	}
 	resp.Output = ccChoiceToCanonicalOutput(cc.ID, ch)
+	ext := map[string]json.RawMessage{}
+	if ch.Logprobs != nil {
+		if b, err := json.Marshal(ch.Logprobs); err == nil {
+			ext[extLogprobs] = b
+		}
+	}
+	if inc := resp.IncompleteDetails; inc != nil && strings.HasPrefix(inc.Reason, ccUnknownFinishPrefix) {
+		if b, err := json.Marshal(ch.FinishReason); err == nil {
+			ext[extFinishReason] = b
+		}
+	}
+	if len(ext) > 0 {
+		resp.Extensions = ext
+	}
 
 	return resp, nil
 }
@@ -90,6 +110,8 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 	case v1.FinishReasonContentFilter:
 		finishReason = "content_filter"
 	case v1.FinishReasonRefusal:
+		// CC has no refusal finish_reason: the wire signals it with
+		// message.refusal + "stop", set below.
 		finishReason = "stop"
 	default:
 		finishReason = "stop"
@@ -111,7 +133,7 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 			}
 			// If finish_reason was refusal, the refusal text is the message content.
 			if resp.FinishReason == v1.FinishReasonRefusal {
-				refusalText = string(textBuf)
+				refusalText += string(textBuf)
 				textBuf = nil
 			}
 		case *v1.FunctionCall:
@@ -142,39 +164,69 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 		}
 	}
 
-	if refusalText != "" {
+	switch {
+	case refusalText != "":
 		msg.Refusal = &refusalText
-	} else if len(textBuf) > 0 {
+	case len(textBuf) > 0:
 		s := string(textBuf)
 		msg.Content = &s
-	} else if len(toolCalls) == 0 {
+	case len(toolCalls) == 0:
 		s := ""
 		msg.Content = &s
 	}
+	if resp.FinishReason == v1.FinishReasonRefusal && refusalText == "" {
+		// A refusal with no text has nothing to put in message.refusal; "stop"
+		// alone would read as success, so fall back to the CC block signal.
+		finishReason = "content_filter"
+	}
 	msg.ToolCalls = toolCalls
 
-	cc.Choices = []Choice{{
+	if raw, ok := resp.Extensions[extFinishReason]; ok && resp.FinishReason == "" {
+		// An unrecognised upstream finish_reason goes back out verbatim rather
+		// than defaulting to "stop".
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil && s != "" {
+			finishReason = s
+		}
+	}
+	choice := Choice{
 		Index:        0,
 		Message:      msg,
 		FinishReason: finishReason,
-	}}
+	}
+	if raw, ok := resp.Extensions[extLogprobs]; ok {
+		var lp ChoiceLogprobs
+		if err := json.Unmarshal(raw, &lp); err == nil {
+			choice.Logprobs = &lp
+		}
+	}
+	// canonical: Response.Extensions keys other than openai.logprobs and
+	// openai.finish_reason dropped —
+	// rule 7: an adapter ignores keys it does not own.
+	cc.Choices = []Choice{choice}
 
 	return json.Marshal(cc)
 }
 
+// ccUnknownFinishPrefix marks incomplete_details.reason for a finish_reason
+// this adapter does not recognise.
+const ccUnknownFinishPrefix = "openai:"
+
 // ccFinishReasonToCanonical maps a CC finish_reason string to canonical status/finish/incomplete.
 func ccFinishReasonToCanonical(reason string) (v1.Status, v1.FinishReason, *v1.IncompleteDetails) {
 	switch reason {
-	case "stop":
+	case "stop", "":
 		return v1.StatusCompleted, v1.FinishReasonStop, nil
 	case "length":
 		return v1.StatusIncomplete, v1.FinishReasonLength, &v1.IncompleteDetails{Reason: "max_output_tokens"}
-	case "tool_calls":
+	case "tool_calls", "function_call": // function_call: legacy spelling of tool_calls
 		return v1.StatusCompleted, v1.FinishReasonToolCalls, nil
 	case "content_filter":
 		return v1.StatusCompleted, v1.FinishReasonContentFilter, nil
 	default:
-		return v1.StatusCompleted, v1.FinishReasonStop, nil
+		// Canonical has no "other" finish_reason. An incomplete status with no
+		// fabricated finish keeps an unknown reason from reading as a clean stop.
+		return v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: ccUnknownFinishPrefix + reason}
 	}
 }
 

@@ -565,6 +565,32 @@ func TestSerializeRequest_ParallelFalse_DisablesParallel(t *testing.T) {
 	}
 }
 
+// Parallel==false with no explicit choice still reaches the wire: Anthropic
+// only exposes the switch on tool_choice, so it rides an "auto" choice.
+func TestSerializeRequest_ParallelFalse_NoChoice_DisablesParallel(t *testing.T) {
+	req := &v1.Request{
+		Model: v1.ModelRefs{"claude-3-5-sonnet-20241022"},
+		Tools: &v1.ToolsConfig{
+			Definitions: v1.Tools{&v1.FunctionTool{Name: "fn", Parameters: json.RawMessage(`{}`)}},
+			Parallel:    boolPtr(false),
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "go"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc, ok := decodeMap(t, out)["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice missing: %s", out)
+	}
+	if tc["type"] != "auto" || tc["disable_parallel_tool_use"] != true {
+		t.Errorf("tool_choice = %v, want auto with disable_parallel_tool_use", tc)
+	}
+}
+
 // TestSerializeRequest_ParallelNil_NoDisable verifies that nil Parallel does NOT
 // emit disable_parallel_tool_use.
 func TestSerializeRequest_ParallelNil_NoDisable(t *testing.T) {
