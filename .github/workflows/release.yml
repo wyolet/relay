@@ -5,7 +5,7 @@ name: Release
 # chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
 # image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
 #
-# Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
+# Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. The push job attests signed provenance and the SBOM for each pushed image (`gh attestation verify`, see SECURITY.md). Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
 #
 # CI_POOL=cluster runs the jobs on the self-hosted pools, where the image build uses a shared remote BuildKit; otherwise they run GitHub-hosted with a local builder, and the push job rebuilds from scratch.
 #
@@ -211,6 +211,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -240,13 +242,72 @@ jobs:
       # Same bake as the build job, so every step but the always-refetched
       # assets stage resolves from cache and this only exports + uploads.
       - name: Push lean + standalone (both registries)
+        id: bake
         if: needs.guard.outputs.publish == 'true'
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ needs.guard.outputs.ui_version }}
           CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
-        run: docker buildx bake -f docker-bake.hcl --push --set '*.platform=linux/amd64' release
+        run: |
+          meta="$RUNNER_TEMP/bake-metadata.json"
+          docker buildx bake -f docker-bake.hcl --push --provenance=mode=max --metadata-file "$meta" \
+            --set '*.platform=linux/amd64' release
+          echo "lean=$(jq -r '.prod."containerimage.digest"' "$meta")" >> "$GITHUB_OUTPUT"
+          echo "standalone=$(jq -r '.standalone."containerimage.digest"' "$meta")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        if: needs.guard.outputs.publish == 'true'
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom
+
+      # Signed SLSA provenance and the SBOM for each image digest, stored on
+      # GitHub and pushed to ghcr; Docker Hub carries the same digests.
+      - name: Attest lean provenance
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/wyolet/relay
+          subject-digest: ${{ steps.bake.outputs.lean }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest standalone provenance
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/wyolet/relay
+          subject-digest: ${{ steps.bake.outputs.standalone }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest lean SBOM
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/wyolet/relay
+          subject-digest: ${{ steps.bake.outputs.lean }}
+          sbom-path: ${{ runner.temp }}/sbom/relay-${{ needs.guard.outputs.version }}-lean.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest standalone SBOM
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/wyolet/relay
+          subject-digest: ${{ steps.bake.outputs.standalone }}
+          sbom-path: ${{ runner.temp }}/sbom/relay-${{ needs.guard.outputs.version }}-standalone.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      # Provenance for the SBOM files attached to the GitHub release.
+      - name: Attest SBOM files
+        if: needs.guard.outputs.publish == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/sbom/*.cdx.json
 
       # Dry run: the same re-bake without --push, to show the cache resolves.
       - name: Re-bake from cache (dry run, no push)

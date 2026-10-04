@@ -124,7 +124,7 @@ A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
 images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
 Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`
 with chart version = image version. Images are pushed only after the tests and
-the image build both pass; the build fails on fixable HIGH/CRITICAL vulnerabilities in either image, and each image's CycloneDX SBOM is attached to the GitHub release. Maintainers cut releases with
+the image build both pass; the build fails on fixable HIGH/CRITICAL vulnerabilities in either image, and each image's CycloneDX SBOM is attached to the GitHub release. Pushed images get signed provenance and SBOM attestations; [`SECURITY.md`](SECURITY.md) shows how to verify them. Maintainers cut releases with
 `make release` (or `release-minor` / `release-major`), which only tags and
 pushes. To exercise the release pipeline without publishing, run it manually:
 `gh workflow run release.yml --ref <branch>` (`dry_run` defaults to true). To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at
