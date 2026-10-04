@@ -115,7 +115,6 @@ func TestTokenBucket_RefillAccuracy(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.advance.String(), func(t *testing.T) {
 			start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			l, now := newScopedLimiter(t, start)
@@ -804,7 +803,6 @@ func TestConcurrency_CancelDecrements(t *testing.T) {
 // sliding-window strategy both behave identically as a gauge counter.
 func TestConcurrency_IgnoresStrategy(t *testing.T) {
 	for _, strat := range []Strategy{StrategyTokenBucket, StrategySlidingWindow} {
-		strat := strat
 		t.Run(string(strat), func(t *testing.T) {
 			start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			l, _ := newScopedLimiter(t, start)
@@ -1088,7 +1086,6 @@ func TestSteadyState_AllStrategies(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(string(tc.strategy), func(t *testing.T) {
 			base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 			l, now := newScopedLimiter(t, base)
