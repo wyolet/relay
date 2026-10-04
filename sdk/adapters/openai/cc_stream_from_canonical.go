@@ -239,7 +239,8 @@ func ccSSEDataFrame(data []byte) []byte {
 	return frame
 }
 
-// canonicalFinishReasonToCC maps canonical FinishReason to CC finish_reason strings.
+// canonicalFinishReasonToCC maps a streamed canonical FinishReason to a CC
+// finish_reason string.
 func canonicalFinishReasonToCC(fr v1.FinishReason) string {
 	switch fr {
 	case v1.FinishReasonStop:
@@ -251,7 +252,10 @@ func canonicalFinishReasonToCC(fr v1.FinishReason) string {
 	case v1.FinishReasonContentFilter:
 		return "content_filter"
 	case v1.FinishReasonRefusal:
-		return "stop"
+		// The refusal is only known at the terminal event, after its text already
+		// went out as content deltas, so delta.refusal is no longer available.
+		// "stop" would read as success; content_filter is CC's block signal.
+		return "content_filter"
 	default:
 		return "stop"
 	}

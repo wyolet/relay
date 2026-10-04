@@ -116,12 +116,16 @@ type geminiResponse struct {
 	Candidates    []candidate    `json:"candidates"`
 	UsageMetadata *usageMetadata `json:"usageMetadata,omitempty"`
 	ModelVersion  string         `json:"modelVersion,omitempty"`
+	// PromptFeedback is set when the prompt itself was blocked (blockReason),
+	// in which case there are no candidates. Kept raw for Extensions.
+	PromptFeedback json.RawMessage `json:"promptFeedback,omitempty"`
 }
 
 type candidate struct {
-	Content      *geminiContent `json:"content,omitempty"`
-	FinishReason string         `json:"finishReason,omitempty"`
-	Index        int            `json:"index"`
+	Content       *geminiContent  `json:"content,omitempty"`
+	FinishReason  string          `json:"finishReason,omitempty"`
+	Index         int             `json:"index"`
+	SafetyRatings json.RawMessage `json:"safetyRatings,omitempty"`
 }
 
 type usageMetadata struct {

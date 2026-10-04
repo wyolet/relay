@@ -8,6 +8,7 @@ import (
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
+	"github.com/wyolet/relay/app/settings"
 )
 
 // mutModList is a ModelLister whose contents can change after the initial
@@ -129,5 +130,45 @@ func TestNotify_FailedFallbackReloadRetriedNextFlush(t *testing.T) {
 	l.applyDrained(ctx) // no new events
 	if _, ok := c.Current().Model(m3.Meta.ID); !ok {
 		t.Fatalf("model %s missing after the store recovered", m3.Meta.ID)
+	}
+}
+
+// flakySettingsStore fails the first failGets Gets, then serves the fake
+// store's rows.
+type flakySettingsStore struct {
+	fakeSettingsStore
+	failGets int
+	gets     int
+}
+
+func (f *flakySettingsStore) Get(ctx context.Context, section string) (*settings.Row, error) {
+	f.gets++
+	if f.gets <= f.failGets {
+		return nil, errors.New("transient pg error: connection reset by peer")
+	}
+	return f.fakeSettingsStore.Get(ctx, section)
+}
+
+// A full reload does not refresh the settings cache, so a settings event
+// whose apply fails must go back into the debouncer and land on a later flush.
+func TestNotify_FailedSettingsEventRequeued(t *testing.T) {
+	ctx := context.Background()
+	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
+	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
+	if err := c.Reload(ctx); err != nil {
+		t.Fatalf("initial reload: %v", err)
+	}
+	// Fails the incremental apply and the retry after the fallback reload.
+	store := &flakySettingsStore{failGets: 2, fakeSettingsStore: fakeSettingsStore{rows: map[string]*settings.Row{
+		settings.SectionParsing: {Section: settings.SectionParsing, Value: &settings.Parsing{RichParsing: false}},
+	}}}
+	c.settings.store = store
+
+	l := &Listener{cat: c, deb: newDebouncer(time.Second)}
+	l.deb.push(notifyEvent{Kind: "settings", Op: "upsert", ID: settings.SectionParsing})
+	l.applyDrained(ctx)
+	l.applyDrained(ctx)
+	if _, ok := c.settings.load()[settings.SectionParsing]; !ok {
+		t.Fatalf("settings section %q never applied after a transient failure (store.Get calls: %d)", settings.SectionParsing, store.gets)
 	}
 }

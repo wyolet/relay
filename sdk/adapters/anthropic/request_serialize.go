@@ -29,6 +29,12 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if req.User != "" {
 		out.Metadata = &anthropicCanonMetadata{UserID: req.User}
 	}
+	// canonical: Metadata dropped — Anthropic metadata accepts only user_id,
+	// which User already fills; arbitrary keys 400.
+	// canonical: Extensions dropped — no Anthropic-owned extension keys exist;
+	// rule 7 has an adapter ignore keys it does not own.
+	// canonical: CacheConfig.Key dropped — Anthropic breakpoints are
+	// deterministic and need no cache-routing key.
 
 	// max_tokens: always required by Anthropic wire.
 	maxTokens := defaultMaxTokensCanonical
@@ -49,6 +55,10 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			if schema == nil {
 				schema = json.RawMessage(`{}`)
 			}
+			// canonical: FunctionTool.Strict dropped — Anthropic tool definitions
+			// take no strict-schema flag.
+			// canonical: FunctionTool.ProviderData dropped — it holds another
+			// vendor's original tool definition; Anthropic gets the lowered schema.
 			out.Tools = append(out.Tools, anthropicCanonTool{
 				Name:                ft.Name,
 				Description:         ft.Description,
@@ -56,9 +66,13 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				EagerInputStreaming: out.Stream,
 			})
 		}
+		callerParallel = tc.Parallel
 		if tc.Choice != nil {
 			callerToolChoice = tc.Choice
-			callerParallel = tc.Parallel
+		} else if tc.Parallel != nil && !*tc.Parallel && len(tc.Definitions) > 0 {
+			// Anthropic disables parallel calls only via tool_choice, so a
+			// parallel=false with no explicit choice rides an "auto" choice.
+			callerToolChoice = &v1.ToolChoice{Mode: "auto"}
 		}
 	}
 
@@ -72,6 +86,11 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				maxTokens = *s.MaxTokens
 			}
 			out.StopSequences = s.Stop
+			// canonical: Seed dropped — the Messages API has no seed parameter.
+			// canonical: FrequencyPenalty dropped — the Messages API has no
+			// frequency penalty.
+			// canonical: PresencePenalty dropped — the Messages API has no
+			// presence penalty.
 		}
 		if opts.Reasoning != nil {
 			rc := opts.Reasoning
@@ -88,6 +107,9 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 					maxTokens = budget + 4096 // headroom for the visible answer beyond the thinking
 				}
 				out.Thinking = &anthropicCanonThinking{Type: "enabled", BudgetTokens: budget}
+				// canonical: Reasoning.Summary dropped on the budget path — display
+				// is set only for adaptive thinking, the mode whose default omits
+				// the thinking text.
 			} else {
 				// No explicit budget → adaptive thinking, the only mode the
 				// 4.7+/Sonnet 5/Fable 5 family accepts (budget_tokens 400s there).
@@ -101,17 +123,24 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				}
 				out.Thinking = t
 			}
-			// Thinking is incompatible with custom sampling — Anthropic rejects
-			// temperature/top_p/top_k alongside an enabled/adaptive thinking block.
+			// canonical: Temperature/TopP/TopK dropped when reasoning is set —
+			// Anthropic rejects custom sampling alongside a thinking block.
 			out.Temperature, out.TopP, out.TopK = nil, nil, nil
+			// canonical: Reasoning.Effort reduced to adaptive thinking — the
+			// model self-calibrates depth; the effort level itself has no field.
 		}
 
 		// Structured output via forced-tool trick. Anthropic has no native
 		// response_format/json_schema param, so we inject a synthetic tool and
 		// force the model to call it. ParseResponse/stream unwrap it back to
 		// plain text so the caller sees a normal completed text response.
+		// canonical: Output.Verbosity dropped — the Messages API has no
+		// verbosity control.
 		if opts.Output != nil && opts.Output.Format != nil {
 			f := opts.Output.Format
+			// canonical: Format.Name/Description/Strict dropped — the
+			// structured-output tool uses a fixed name and description, and
+			// Anthropic tools take no strict flag.
 			if f.Type == "json_schema" || f.Type == "json_object" {
 				// canonical: Output.Format ignored when caller forces their own
 				// tool choice — their explicit intent wins over structured output.

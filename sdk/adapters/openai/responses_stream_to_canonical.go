@@ -253,6 +253,12 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		// error that is lost here; surfacing it as a fatal canonical error would
 		// wrongly abort an otherwise-completing stream, so it waits for a
 		// non-fatal canonical warning channel (deferred).
+		//
+		// canonical: unrecognized (future) Responses stream events dropped — the
+		// six canonical events are a closed union with no extensions slot to
+		// carry them, and the terminal status (completed/incomplete/failed/error)
+		// is matched explicitly above, so a safety-relevant outcome never lands
+		// here.
 	}
 
 	return marshalCanonicalFrames(frames), nil

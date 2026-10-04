@@ -140,19 +140,34 @@ func TestResponsesNewToCanonicalStream_FunctionCallDelta(t *testing.T) {
 	}
 }
 
+// Unrecognized events are a deliberate, annotated drop (no canonical carrier);
+// they must not disturb the stream, and the terminal status that follows must
+// still surface.
 func TestResponsesNewToCanonicalStream_UnknownEventsDropped(t *testing.T) {
 	tr := ResponsesTranslator{}
 	fn := tr.NewToCanonicalStream()
 
-	// Unknown event type should produce no output without error.
 	chunk := responsesSSEChunk("response.unknown_future_event", map[string]any{"type": "unknown"})
 	out, err := fn(chunk)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	events := extractCanonicalEvents(out)
-	if len(events) != 0 {
+	if events := extractCanonicalEvents(out); len(events) != 0 {
 		t.Errorf("expected no events for unknown type, got %v", events)
+	}
+
+	out, err = fn(responsesSSEChunk(ResponsesEventIncomplete, map[string]any{
+		"type": ResponsesEventIncomplete,
+		"response": map[string]any{
+			"id": "resp_1", "object": "response", "status": "incomplete",
+			"incomplete_details": map[string]any{"reason": "content_filter"},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"finish_reason":"content_filter"`) {
+		t.Errorf("terminal content_filter lost after an unknown event: %s", out)
 	}
 }
 

@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -32,6 +33,13 @@ func (AnthropicTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 	if ar.StopSeq != nil && *ar.StopSeq != "" {
 		raw, _ := json.Marshal(*ar.StopSeq)
 		resp.Extensions = map[string]json.RawMessage{"stop_sequence": raw}
+	}
+	if inc := resp.IncompleteDetails; inc != nil && strings.HasPrefix(inc.Reason, unknownStopReasonPrefix) {
+		raw, _ := json.Marshal(ar.StopReason)
+		if resp.Extensions == nil {
+			resp.Extensions = map[string]json.RawMessage{}
+		}
+		resp.Extensions[extStopReason] = raw
 	}
 
 	// Build output items from content blocks.

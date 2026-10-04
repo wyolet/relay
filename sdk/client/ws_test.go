@@ -79,6 +79,12 @@ func (m *wsMock) connCount() int {
 	return m.conns
 }
 
+func (m *wsMock) upgradeAuth() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastAuth
+}
+
 func TestRelayWS_Sync(t *testing.T) {
 	resp := &v1.Response{
 		ID: "resp_ws", Object: "response", Status: v1.StatusCompleted, FinishReason: v1.FinishReasonStop,
@@ -99,8 +105,8 @@ func TestRelayWS_Sync(t *testing.T) {
 	if got.ID != "resp_ws" || outputText(got) != "hi over ws" {
 		t.Errorf("response: %+v", got)
 	}
-	if m.lastAuth != "Bearer rk-ws" {
-		t.Errorf("upgrade auth: %q", m.lastAuth)
+	if got := m.upgradeAuth(); got != "Bearer rk-ws" {
+		t.Errorf("upgrade auth: %q", got)
 	}
 }
 

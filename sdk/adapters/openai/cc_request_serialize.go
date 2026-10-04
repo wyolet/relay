@@ -23,6 +23,13 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 	if req.CacheConfig != nil {
 		out.PromptCacheKey = req.CacheConfig.Key
 		out.PromptCacheRetention = openaiCacheRetention(req.CacheConfig)
+		// canonical: CacheConfig.Instructions/Tools dropped — OpenAI caches
+		// prefixes automatically; the breakpoint flags have no wire form.
+	}
+	// canonical: Extensions keys outside the "openai." prefix dropped — rule 7:
+	// an adapter ignores keys it does not own.
+	if err := ccApplyExtensions(out, req.Extensions); err != nil {
+		return nil, fmt.Errorf("cc serialize_request: %w", err)
 	}
 
 	// Extract model-specific options.
@@ -43,16 +50,24 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 					out.Stop = b
 				}
 			}
+			// canonical: TopK dropped — Chat Completions has no top_k parameter.
 		}
 		if opts.Reasoning != nil {
 			out.ReasoningEffort = opts.Reasoning.Effort
+			// canonical: Reasoning.Summary dropped — Chat Completions returns no
+			// reasoning summaries and has no parameter to request one.
+			// canonical: Reasoning.BudgetTokens dropped — Chat Completions takes
+			// an effort level only, no token budget.
 		}
-		if opts.Output != nil && opts.Output.Format != nil {
-			rf, err := ccFormatToResponseFormat(opts.Output.Format)
-			if err != nil {
-				return nil, err
+		if opts.Output != nil {
+			out.Verbosity = opts.Output.Verbosity
+			if opts.Output.Format != nil {
+				rf, err := ccFormatToResponseFormat(opts.Output.Format)
+				if err != nil {
+					return nil, err
+				}
+				out.ResponseFormat = rf
 			}
-			out.ResponseFormat = rf
 		}
 	}
 
@@ -67,6 +82,8 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			if params == nil {
 				params = json.RawMessage(`{}`)
 			}
+			// canonical: FunctionTool.ProviderData dropped — it holds a
+			// Responses-only tool definition; CC gets the lowered function schema.
 			out.Tools = append(out.Tools, Tool{
 				Type: "function",
 				Function: FunctionDef{
@@ -79,9 +96,11 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		out.ParallelToolCalls = tc.Parallel
 		if tc.Choice != nil {
-			if b, err := json.Marshal(tc.Choice); err == nil {
-				out.ToolChoice = b
+			b, err := ccToolChoiceFromCanonical(tc.Choice)
+			if err != nil {
+				return nil, fmt.Errorf("cc serialize_request: %w", err)
 			}
+			out.ToolChoice = b
 		}
 	}
 
@@ -166,11 +185,46 @@ func canonicalItemsToCC(instructions string, items []v1.Item) ([]ChatMessage, er
 			})
 
 		case *v1.Reasoning:
-			// Drop reasoning items when forwarding to CC upstreams.
+			// canonical: reasoning items dropped — CC input has no reasoning
+			// message form, and reasoning_content upstreams reject it on input.
 		}
 	}
 
 	return msgs, nil
+}
+
+// ccToolChoice is the CC forced-function form; it nests the name under
+// "function", unlike the flat canonical/Responses {type, name} object.
+type ccToolChoice struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+func ccToolChoiceFromCanonical(c *v1.ToolChoice) (json.RawMessage, error) {
+	if c.Mode != "function" {
+		return json.Marshal(c)
+	}
+	w := ccToolChoice{Type: "function"}
+	w.Function.Name = c.FunctionName
+	return json.Marshal(w)
+}
+
+// ccToolChoiceToCanonical reads the CC form; the flat form is accepted too
+// since lenient clients send it.
+func ccToolChoiceToCanonical(raw json.RawMessage) (*v1.ToolChoice, error) {
+	choice := &v1.ToolChoice{}
+	if err := json.Unmarshal(raw, choice); err != nil {
+		return nil, err
+	}
+	if choice.Mode == "function" && choice.FunctionName == "" {
+		var w ccToolChoice
+		if err := json.Unmarshal(raw, &w); err == nil {
+			choice.FunctionName = w.Function.Name
+		}
+	}
+	return choice, nil
 }
 
 // ccFormatToResponseFormat converts a canonical v1.Format to a CC ResponseFormat.
@@ -184,6 +238,9 @@ func ccFormatToResponseFormat(f *v1.Format) (*ResponseFormat, error) {
 		inner := map[string]any{
 			"name":   f.Name,
 			"schema": f.Schema,
+		}
+		if f.Description != "" {
+			inner["description"] = f.Description
 		}
 		if f.Strict != nil {
 			inner["strict"] = *f.Strict

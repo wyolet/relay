@@ -9,7 +9,7 @@ Relay self-migrates Postgres on boot (advisory-locked, multi-pod safe) and
 self-seeds the catalog into an empty DB from the image's baked /catalog.
 
 Endpoints (ClusterIP):
-  inference (data plane): {{ include "relay.fullname" . }}:{{ .Values.service.inferencePort }}   -> /v1/*, /healthz
+  inference (data plane): {{ include "relay.fullname" . }}:{{ .Values.service.inferencePort }}   -> /openai/v1/*, /anthropic/v1/*, /v1/*, /healthz
   control plane:          {{ include "relay.fullname" . }}-control:{{ .Values.service.controlPort }}  -> UI, CRUD, /metrics, /version
 
 Quick checks:
