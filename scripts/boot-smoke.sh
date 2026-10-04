@@ -53,6 +53,7 @@ RELAY_PORT=$DATA_PORT \
 RELAY_CONTROL_PORT=$CONTROL_PORT \
 RELAY_MASTER_KEY=$(openssl rand -base64 32) \
 RELAY_ADMIN_TOKEN=$admin_token \
+RELAY_ADMIN_PASSWORD=$(openssl rand -hex 16) \
 RELAY_CATALOG_VERSION=$CATALOG_VERSION \
 RELAY_EVENTLOG_DIR=$work \
   "$work/relay" >"$work/relay.log" 2>&1 &
