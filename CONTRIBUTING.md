@@ -118,12 +118,13 @@ drop-on-full — never block the response.
 
 CI on pull requests and `main` runs tests, vet, gofmt, golangci-lint, the
 codebase-rule checks, and `helm lint` of the chart (`make check` runs the same gate locally).
+Security scans run alongside, and weekly on `main`: `make vulncheck` (govulncheck; fails on vulnerabilities the code calls) and a trivy scan of dependencies, the Dockerfile, the chart and committed secrets (fails on fixable HIGH/CRITICAL vulnerabilities and on secrets; everything else is reported to code scanning).
 A pull request runs only the jobs its paths need (the `changes` job in `.github/workflows/ci.yml` holds the mapping): docs and markdown run none, `chart/` runs `helm lint`, and a `versions.env` bump runs `scripts/boot-smoke.sh`, which boots relay with the pinned UI and catalog against an empty Postgres. Pushes to `main` run every job.
 A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
 images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
 Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`
 with chart version = image version. Images are pushed only after the tests and
-the image build both pass. Maintainers cut releases with
+the image build both pass; the build fails on fixable HIGH/CRITICAL vulnerabilities in either image, and each image's CycloneDX SBOM is attached to the GitHub release. Maintainers cut releases with
 `make release` (or `release-minor` / `release-major`), which only tags and
 pushes. To exercise the release pipeline without publishing, run it manually:
 `gh workflow run release.yml --ref <branch>` (`dry_run` defaults to true). To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at

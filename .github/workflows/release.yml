@@ -5,7 +5,7 @@ name: Release
 # chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
 # image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
 #
-# Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
+# Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
 #
 # CI_POOL=cluster runs the jobs on the self-hosted pools, where the image build uses a shared remote BuildKit; otherwise they run GitHub-hosted with a local builder, and the push job rebuilds from scratch.
 #
@@ -155,15 +155,50 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # cacheonly keeps the result in the builder's cache for the push job; the
-      # env must match the push job's bake exactly.
+      # Exports OCI layouts for the scan; the result also stays in the builder's
+      # cache for the push job, so the env must match the push job's bake exactly.
       - name: Build lean + standalone (no push)
         env:
           VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
           UI_VERSION: ${{ needs.guard.outputs.ui_version }}
           CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
-        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --set '*.output=type=cacheonly' release
+        run: |
+          docker buildx bake -f docker-bake.hcl --allow "fs.write=$RUNNER_TEMP" --set '*.platform=linux/amd64' \
+            --set "prod.output=type=oci,tar=false,dest=$RUNNER_TEMP/image/lean" \
+            --set "standalone.output=type=oci,tar=false,dest=$RUNNER_TEMP/image/standalone" release
+
+      - name: Install trivy
+        run: |
+          ./scripts/install-trivy.sh "$RUNNER_TEMP/trivy"
+          echo "$RUNNER_TEMP/trivy" >> "$GITHUB_PATH"
+
+      - name: Scan images and write SBOMs
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom"
+          for img in lean standalone; do
+            trivy image --input "$RUNNER_TEMP/image/$img" --scanners vuln
+            trivy image --input "$RUNNER_TEMP/image/$img" --skip-db-update --format cyclonedx \
+              --output "$RUNNER_TEMP/sbom/relay-$VERSION-$img.cdx.json"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom/*.cdx.json
+          if-no-files-found: error
+
+      # Fails the build, so nothing is pushed; the full report is in the step above.
+      - name: Fail on fixable HIGH/CRITICAL vulnerabilities
+        run: |
+          status=0
+          for img in lean standalone; do
+            trivy image --input "$RUNNER_TEMP/image/$img" --scanners vuln --severity HIGH,CRITICAL \
+              --ignore-unfixed --skip-db-update --exit-code 1 || status=1
+          done
+          exit $status
 
   push:
     needs: [guard, test, build]
@@ -241,19 +276,35 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
 
-      # Skipped when the release already exists, so a re-run is safe. The tag
-      # exists: guard only publishes from a tag ref.
-      - name: Create GitHub release
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom
+
+      # Creation and each SBOM upload are skipped when already done, so a re-run
+      # is safe. The tag exists: guard only publishes from a tag ref.
+      - name: Create GitHub release and attach SBOMs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases"
           auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json")
-          code=$(curl -sS -o /dev/null -w '%{http_code}' "${auth[@]}" "$api/tags/$TAG")
-          [ "$code" = 200 ] && exit 0
-          [ "$code" = 404 ] || { echo "::error::release lookup for $TAG returned HTTP $code"; exit 1; }
-          jq -n --arg tag "$TAG" '{tag_name: $tag, generate_release_notes: true}' \
-            | curl -fsS -X POST "${auth[@]}" "$api" --data @- >/dev/null
+          release="$RUNNER_TEMP/release.json"
+          code=$(curl -sS -o "$release" -w '%{http_code}' "${auth[@]}" "$api/tags/$TAG")
+          if [ "$code" = 404 ]; then
+            jq -n --arg tag "$TAG" '{tag_name: $tag, generate_release_notes: true}' \
+              | curl -fsS -X POST "${auth[@]}" "$api" --data @- -o "$release"
+          elif [ "$code" != 200 ]; then
+            echo "::error::release lookup for $TAG returned HTTP $code"; exit 1
+          fi
+          upload_url=$(jq -r '.upload_url | sub("\\{.*"; "")' "$release")
+          attached=$(jq -r '.assets[].name' "$release")
+          for f in "$RUNNER_TEMP"/sbom/*.cdx.json; do
+            name=$(basename "$f")
+            grep -qxF "$name" <<<"$attached" && continue
+            curl -fsS -X POST "${auth[@]}" -H 'Content-Type: application/json' \
+              --data-binary "@$f" "$upload_url?name=$name" >/dev/null
+          done
 
   # A test failure cancels the run, so cancelled() counts as a failed release.
   notify:

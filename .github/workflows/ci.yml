@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 5 * * 1'
 
 permissions:
   contents: read
@@ -11,7 +13,8 @@ permissions:
 jobs:
   # Decides which jobs a pull request needs. Gating jobs with `if:` rather than
   # workflow-level `paths` keeps every check reporting (skipped counts as
-  # success). Pushes to main run everything. Paths not named below count as Go.
+  # success). Pushes to main run everything; the weekly schedule runs only the
+  # security scans, to surface new advisories. Paths not named below count as Go.
   # `cluster` picks the self-hosted pools: only when the CI_POOL variable says
   # so, and never for pull requests from forks (or deleted head repos).
   changes:
@@ -21,9 +24,10 @@ jobs:
       pull-requests: read
     outputs:
       cluster: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_POOL == 'cluster' }}
-      go: ${{ github.event_name != 'pull_request' || steps.filter.outputs.go == 'true' }}
-      chart: ${{ github.event_name != 'pull_request' || steps.filter.outputs.chart == 'true' }}
-      boot: ${{ github.event_name != 'pull_request' || steps.filter.outputs.boot == 'true' }}
+      go: ${{ github.event_name == 'push' || steps.filter.outputs.go == 'true' }}
+      chart: ${{ github.event_name == 'push' || steps.filter.outputs.chart == 'true' }}
+      boot: ${{ github.event_name == 'push' || steps.filter.outputs.boot == 'true' }}
+      scan: ${{ github.event_name != 'pull_request' || steps.filter.outputs.go == 'true' || steps.filter.outputs.chart == 'true' }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
@@ -144,6 +148,60 @@ jobs:
 
       - name: Allocation gate
         run: make bench-gate
+
+  govulncheck:
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || github.event_name == 'schedule'
+    runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        if: runner.environment == 'github-hosted'
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: govulncheck
+        run: make vulncheck
+
+  # Dependency vulnerabilities, misconfigurations (Dockerfile, chart rendered
+  # with default values) and committed secrets. Every finding goes to code
+  # scanning; only fixable HIGH/CRITICAL vulnerabilities and secrets fail the
+  # job, since misconfiguration checks need per-finding triage.
+  trivy:
+    needs: changes
+    if: needs.changes.outputs.scan == 'true'
+    runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install trivy
+        run: |
+          ./scripts/install-trivy.sh "$RUNNER_TEMP/trivy"
+          echo "$RUNNER_TEMP/trivy" >> "$GITHUB_PATH"
+
+      - name: Scan
+        run: |
+          trivy fs --scanners vuln,misconfig,secret --helm-set secrets.existingSecret=relay \
+            --format json --output "$RUNNER_TEMP/trivy.json" .
+          trivy convert --scanners vuln,misconfig,secret --format table "$RUNNER_TEMP/trivy.json"
+          trivy convert --format sarif --output "$RUNNER_TEMP/trivy.sarif" "$RUNNER_TEMP/trivy.json"
+
+      # A fork's token cannot write security events.
+      - uses: github/codeql-action/upload-sarif@v4
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        with:
+          sarif_file: ${{ runner.temp }}/trivy.sarif
+          category: trivy-fs
+
+      - name: Fail on fixable HIGH/CRITICAL vulnerabilities and secrets
+        run: |
+          trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+            --skip-db-update --exit-code 1 .
 
   # Integration-tagged tests against Postgres and Valkey services. Each test
   # gets a database of its own on both, so packages run in parallel.
