@@ -212,7 +212,8 @@ type PolicyDTO struct {
 }
 
 type PolicySpec struct {
-	// Models holds model *names* (wire form).
+	// Models holds modelref DSL strings ("provider", "provider/model",
+	// "@host", ...), not bare model names; see app/modelref.
 	Models []string `json:"models,omitempty"    yaml:"models,omitempty"`
 	// HostKeys holds host-key *names* (wire form).
 	HostKeys []string `json:"hostKeys,omitempty"  yaml:"hostKeys,omitempty"`

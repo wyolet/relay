@@ -33,6 +33,8 @@ make test-integration         # tag-gated PG/e2e tests (needs Docker)
 go vet ./...
 ```
 
+The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test targets drop the deployment DSNs `.env` exports (`RELAY_PG_DSN`, `RELAY_CH_DSN`, `RELAY_REDIS_ADDR`, `RELAY_OTLP_ENDPOINT`), so tests never reach a deployment's databases.
+
 The repo is a **two-module monorepo**: the server module
 (`github.com/wyolet/relay`) and the public, vendorable SDK
 (`github.com/wyolet/relay/sdk`). A repo-root `go.work` wires them for

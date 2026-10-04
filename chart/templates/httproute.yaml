@@ -1,6 +1,6 @@
 {{- if .Values.gateway.enabled }}
 {{- if .Values.gateway.inference.host }}
-# Inference (data plane) → /v1/* + /healthz.
+# Inference (data plane) → every path on the inference port.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

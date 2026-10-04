@@ -133,7 +133,7 @@ if [ -n "$new_secret" ] || [ -n "$admin_pw" ]; then
     echo "  relay first-boot — generated admin credentials (saved to the data volume):"
     echo
     echo "    control plane:  http://localhost:8081  (admin UI)"
-    echo "    inference API:  http://localhost:8080  (/v1/*)"
+    echo "    inference API:  http://localhost:8080  (/openai/v1/*, /anthropic/v1/*)"
     [ -n "$admin_pw" ] && echo "    username:       admin"
     [ -n "$admin_pw" ] && echo "    password:       $admin_pw"
     echo "    admin token:    $RELAY_ADMIN_TOKEN"
