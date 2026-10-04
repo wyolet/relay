@@ -1,7 +1,7 @@
 .PHONY: help dev dev-compose dev-redis dev-down down logs migrate seed seed-wipe seed-reset restart \
         image dev-push push-all local-image run-local \
         version release release-patch release-minor release-major _release _release-preflight \
-        check chart-lint sqlc-generate test test-race test-fuzz test-cover cover-check \
+        check chart-lint sqlc-generate test test-race test-fuzz test-cover test-race-cover cover-check \
         bench-gate bench-baseline test-integration test-integration-run smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
         ui-fetch build clean schemas catalog-validate catalog-embed lint-rules lint
@@ -97,18 +97,19 @@ help: ## Show this help
 	@echo ''
 	@echo '🧰 Go:'
 	@echo '  make sqlc-generate     regenerate sqlc code'
-	@echo '  make check             CI gate: gofmt, codebase rules, golangci-lint, vet, tests, chart lint'
+	@echo '  make check             CI gate: gofmt, codebase rules, golangci-lint, tests, chart lint'
 	@echo '  make lint              golangci-lint every module'
 	@echo '  make chart-lint        helm lint chart/'
 	@echo '  make test              go test ./...'
 	@echo '  make test-race         unit tests of every module under -race'
 	@echo '  make test-fuzz         each fuzz target for $(FUZZ_TIME)'
 	@echo '  make test-cover        unit tests with a coverprofile in $(COVER_DIR)'
+	@echo '  make test-race-cover   the same under -race'
 	@echo '  make cover-check       per-package coverage vs scripts/coverage-tiers.txt'
 	@echo '  make bench-gate        allocs/op vs $(BENCH_BASELINE) (±$(BENCH_ALLOC_TOLERANCE)%)'
 	@echo '  make bench-baseline    regenerate $(BENCH_BASELINE)'
-	@echo '  make test-integration  integration tag, race, against an ephemeral compose pg'
-	@echo '  make test-integration-run  the same against $$RELAY_TEST_PG_DSN (no compose)'
+	@echo '  make test-integration  integration tag, race, against ephemeral compose pg + valkey'
+	@echo '  make test-integration-run  the same against $$RELAY_TEST_PG_DSN + $$RELAY_TEST_REDIS_ADDR (no compose)'
 	@echo '  make smoke-mock        replay recorded fixtures through relay → openai-mock.wyolet.dev'
 	@echo '  make ui-fetch          fetch relay-ui $(UI_VERSION) into $(UI_DIST_DIR)'
 	@echo '  make build             ui-fetch + go build → ./relay'
@@ -354,12 +355,12 @@ test-race: ## unit tests under -race (all modules)
 	cd sdk && $(GO_TEST) -race ./...
 	cd jobq && $(GO_TEST) -race ./...
 
-# One target at a time: `go test -fuzz` fuzzes a single function per run.
-FUZZ_TIME ?= 30s
-test-fuzz: ## fuzz the token parser and the bearer classifier ($(FUZZ_TIME) each)
+# One target at a time: `go test -fuzz` fuzzes a single function per run. Only
+# the two parsers of untrusted bearers are fuzzed; every fuzz target's seeds and
+# testdata/fuzz corpus also run as ordinary tests.
+FUZZ_TIME ?= 10s
+test-fuzz: ## fuzz the token parser and the bearer-to-principal resolver ($(FUZZ_TIME) each)
 	$(GO_TEST) -run '^$$' -fuzz '^FuzzParseToken$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
-	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenKeyID$$' -fuzztime $(FUZZ_TIME) ./pkg/crypto
-	$(GO_TEST) -run '^$$' -fuzz '^FuzzLooksLikeToken$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 	$(GO_TEST) -run '^$$' -fuzz '^FuzzTokenPrincipal$$' -fuzztime $(FUZZ_TIME) ./app/httpapi/inference
 
 # Coverage. COVER_PKGS is shared by the unit and integration profiles so the
@@ -368,12 +369,16 @@ COVER_DIR   ?= .cover
 COVER_PKGS  ?= ./app/...,./pkg/...,./internal/...,./cmd/...
 # Local runs usually lack the integration profile, so they report only; CI enforces.
 COVER_ENFORCE ?= 0
+COVER_TEST_FLAGS ?=
 
 test-cover: ## unit tests of every module with coverprofiles in $(COVER_DIR)
 	@mkdir -p $(COVER_DIR)
-	$(GO_TEST) -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/unit.out ./...
-	cd sdk && $(GO_TEST) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/sdk.out ./...
-	cd jobq && $(GO_TEST) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq.out ./...
+	$(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/unit.out ./...
+	cd sdk && $(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/sdk.out ./...
+	cd jobq && $(GO_TEST) $(COVER_TEST_FLAGS) -coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq.out ./...
+
+test-race-cover: ## test-cover under -race (CI runs the unit tests once for both)
+	@$(MAKE) --no-print-directory test-cover COVER_TEST_FLAGS=-race
 
 cover-check: ## per-package coverage vs scripts/coverage-tiers.txt
 	@profiles=$$(ls $(COVER_DIR)/*.out 2>/dev/null); \
@@ -414,14 +419,12 @@ lint: ## golangci-lint every module (config: .golangci.yml)
 	cd sdk && $(GOLANGCI_LINT) run ./...
 	cd jobq && $(GOLANGCI_LINT) run ./...
 
-check: ## the CI gate: gofmt, codebase rules, golangci-lint, vet, tests, chart lint
+# golangci-lint runs govet with the integration tag, so there is no separate vet.
+check: ## the CI gate: gofmt, codebase rules, golangci-lint, tests, chart lint
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 		[ -z "$$unformatted" ] || { echo "These files need gofmt:"; echo "$$unformatted"; exit 1; }
 	$(MAKE) --no-print-directory lint-rules
 	$(MAKE) --no-print-directory lint
-	go vet ./... && go vet -tags=integration ./...
-	cd sdk && go vet ./... && go vet -tags=integration ./...
-	cd jobq && go vet ./... && go vet -tags=integration ./...
 	$(MAKE) --no-print-directory test
 	$(MAKE) --no-print-directory chart-lint
 
@@ -437,26 +440,30 @@ catalog-validate: ## graph-lint the public catalog ($$RELAY_CATALOG_DIR or ../re
 catalog-embed: ## generate sdk/catalog/catalog.json.gz from the public catalog
 	go run ./cmd/catalog-embed -o sdk/catalog/catalog.json.gz $${RELAY_CATALOG_DIR:-../relay-catalog/data}
 
-COMPOSE_TEST := deploy/compose/docker-compose.test.yml
-TEST_PG_DSN  := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
+COMPOSE_TEST    := deploy/compose/docker-compose.test.yml
+TEST_PG_DSN     := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
+TEST_REDIS_ADDR := 127.0.0.1:6399
 
-test-integration: ## spin up ephemeral pg, run integration-tagged tests with -race, tear down
+test-integration: ## spin up ephemeral pg + valkey, run integration-tagged tests with -race, tear down
 	docker compose -f $(COMPOSE_TEST) up -d --wait
-	$(MAKE) --no-print-directory test-integration-run RELAY_TEST_PG_DSN='$(TEST_PG_DSN)'; \
+	$(MAKE) --no-print-directory test-integration-run RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' RELAY_TEST_REDIS_ADDR='$(TEST_REDIS_ADDR)'; \
 		status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status
 
 # Each test gets a database of its own on the RELAY_TEST_PG_DSN server (see
-# internal/storage/storagetest), so packages run in parallel. CI calls this
-# target directly against its Postgres service.
-test-integration-run: ## integration-tagged tests of every module against $$RELAY_TEST_PG_DSN
+# internal/storage/storagetest) and a keyspace of its own on the
+# RELAY_TEST_REDIS_ADDR server (pkg/kv/kvtest), so packages run in parallel.
+# CI calls this target directly against its service containers. -count=1: the
+# test cache cannot see database state, so a result must never come from it.
+test-integration-run: ## integration-tagged tests of every module against $$RELAY_TEST_PG_DSN / $$RELAY_TEST_REDIS_ADDR
 	@[ -n "$$RELAY_TEST_PG_DSN" ] || { echo "test-integration-run: set RELAY_TEST_PG_DSN"; exit 1; }
+	@[ -n "$$RELAY_TEST_REDIS_ADDR" ] || { echo "test-integration-run: set RELAY_TEST_REDIS_ADDR"; exit 1; }
 	@mkdir -p $(COVER_DIR)
-	$(GO_TEST) -tags=integration -race \
+	$(GO_TEST) -tags=integration -race -count=1 \
 		-coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_DIR)/integration.out ./... ; \
 		status=$$?; \
-		cd jobq && $(GO_TEST) -tags=integration -race \
+		cd jobq && $(GO_TEST) -tags=integration -race -count=1 \
 			-coverpkg=./... -coverprofile=$(CURDIR)/$(COVER_DIR)/jobq-integration.out ./... || status=$$?; \
 		exit $$status
 

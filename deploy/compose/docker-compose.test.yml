@@ -1,6 +1,6 @@
-# Throwaway Postgres for `make test-integration`. Spun up, used, torn down.
-# Single service, ephemeral storage, no port collision with dev-stack
-# (binds to 127.0.0.1:5499 to dodge the standard 5432/5100 conventions).
+# Throwaway Postgres and Valkey for `make test-integration`. Spun up, used,
+# torn down. Ephemeral storage, no port collision with dev-stack (binds to
+# 127.0.0.1:5499 / 6399 to dodge the standard 5432 / 6379 conventions).
 services:
   pg-test:
     image: postgres:16-alpine
@@ -14,6 +14,17 @@ services:
       - /var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U relay -d relay_test"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  valkey-test:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6399:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 1s
       timeout: 2s
       retries: 30
