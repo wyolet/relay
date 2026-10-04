@@ -29,6 +29,7 @@ import (
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // ── payload types ─────────────────────────────────────────────────────────────
@@ -96,6 +97,17 @@ func (d *debouncer) push(e notifyEvent) bool {
 	return len(d.pending) >= debounceCap
 }
 
+// requeue puts back an event that failed to apply, unless a newer event for
+// the same row arrived since the drain.
+func (d *debouncer) requeue(e drainedEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	k := eventKey{e.Kind, e.ID}
+	if _, newer := d.pending[k]; !newer {
+		d.pending[k] = e.Op
+	}
+}
+
 type drainedEvent struct {
 	Kind string
 	ID   string
@@ -159,6 +171,10 @@ type Listener struct {
 	pool   *pgxpool.Pool
 	stores listenerStores
 	deb    *debouncer
+
+	// reloadPending marks a failed fallback reload; every flush retries it
+	// until it succeeds. Touched only by the flush goroutine.
+	reloadPending bool
 }
 
 // NewListener constructs a Listener. Call Run to start it.
@@ -256,14 +272,55 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 // reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
+	if l.reloadPending {
+		l.reloadAndApplySettings(ctx, events)
+		return
+	}
 	sort.SliceStable(events, func(i, j int) bool {
 		return kindOrder[events[i].Kind] < kindOrder[events[j].Kind]
 	})
+	var failed []drainedEvent
 	for _, e := range events {
 		if err := l.applyEvent(ctx, e); err != nil {
-			slog.Error("catalog notify: apply error", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			slog.Error("catalog notify: apply error, falling back to reload", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			metrics.CatalogApplyFailed(e.Kind)
+			failed = append(failed, e)
 		}
 	}
+	// The drained event is gone from the debouncer, so a failed apply would
+	// leave the snapshot diverged from PG until the next write to that row.
+	if len(failed) > 0 {
+		l.reloadAndApplySettings(ctx, failed)
+	}
+}
+
+// reloadAndApplySettings rebuilds the snapshot from PG and applies the
+// settings events among events. Reload rebuilds catalog rows only — the
+// settings cache is loaded separately, so its events must be applied here or
+// they never land. Anything that still fails is retried on the next flush.
+func (l *Listener) reloadAndApplySettings(ctx context.Context, events []drainedEvent) {
+	if err := l.cat.Reload(ctx); err != nil {
+		slog.Error("catalog notify: reload failed, retrying next flush", "events", len(events), "err", err)
+		l.reloadPending = true
+		for _, e := range events {
+			if e.Kind == "settings" {
+				l.deb.requeue(e)
+			}
+		}
+		return
+	}
+	l.reloadPending = false
+	for _, e := range events {
+		if e.Kind != "settings" {
+			continue
+		}
+		if err := l.applyEvent(ctx, e); err != nil {
+			slog.Error("catalog notify: apply error, retrying next flush", "kind", e.Kind, "id", e.ID, "op", e.Op, "err", err)
+			metrics.CatalogApplyFailed(e.Kind)
+			l.deb.requeue(e)
+		}
+	}
+	slog.Info("catalog notify: catalog reloaded", "events", len(events))
 }
 
 var kindOrder = map[string]int{
