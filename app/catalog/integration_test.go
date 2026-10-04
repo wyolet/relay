@@ -80,6 +80,30 @@ func setupDB(t *testing.T) (*pgxpool.Pool, context.Context, context.CancelFunc) 
 	return pool, ctx, cancel
 }
 
+// runListener starts l and returns once LISTEN is attached, observed as the
+// snapshot swap from the reload the listener runs right after it.
+func runListener(t *testing.T, ctx context.Context, cat *Catalog, l *Listener) {
+	t.Helper()
+	before := cat.Current()
+	lctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = l.Run(lctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for cat.Current() == before {
+		if time.Now().After(deadline) {
+			t.Fatal("listener did not attach LISTEN within 5s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestIntegration_BootstrapEmptyAndAutoSeed covers Bootstrap over a
 // completely empty DB (no AutoSeedDir → snapshot stays empty).
 func TestIntegration_BootstrapEmpty(t *testing.T) {
@@ -111,10 +135,7 @@ func TestIntegration_NotifyPropagatesUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	listenerCtx, listenerCancel := context.WithCancel(ctx)
-	defer listenerCancel()
-	go func() { _ = listener.Run(listenerCtx) }()
-	time.Sleep(200 * time.Millisecond) // let LISTEN attach
+	runListener(t, ctx, cat, listener)
 
 	p := &provider.Provider{
 		Meta: meta.Metadata{
@@ -143,10 +164,7 @@ func TestIntegration_DeleteCascadesToPricing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	listenerCtx, listenerCancel := context.WithCancel(ctx)
-	defer listenerCancel()
-	go func() { _ = listener.Run(listenerCtx) }()
-	time.Sleep(200 * time.Millisecond)
+	runListener(t, ctx, cat, listener)
 
 	// Build a coherent set: provider → host → model → pricing.
 	prov := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "openai-x", Owner: meta.Owner{Kind: meta.OwnerSystem}}}

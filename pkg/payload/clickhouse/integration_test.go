@@ -1,11 +1,11 @@
 //go:build integration
 
 // Live ClickHouse round-trip smoke. Runs only with -tags=integration AND
-// RELAY_CH_DSN set (else skipped). Validates the schema DDL, insert column
+// RELAY_TEST_CH_DSN set (else skipped). Validates the schema DDL, insert column
 // mapping, body round-trip, the bloom-index Get, and ErrNotFound against a
 // real server.
 //
-//	RELAY_CH_DSN=clickhouse://default@host:9000/relay \
+//	RELAY_TEST_CH_DSN=clickhouse://default@host:9000/relay \
 //	  go test -tags=integration ./pkg/payload/clickhouse/ -run Integration -v
 package clickhouse
 
@@ -21,9 +21,9 @@ import (
 )
 
 func TestIntegration_RoundTrip(t *testing.T) {
-	dsn := os.Getenv("RELAY_CH_DSN")
+	dsn := os.Getenv("RELAY_TEST_CH_DSN")
 	if dsn == "" {
-		t.Skip("RELAY_CH_DSN unset; skipping live ClickHouse smoke")
+		t.Skip("RELAY_TEST_CH_DSN unset; skipping live ClickHouse smoke")
 	}
 
 	s, err := New(Config{
@@ -37,7 +37,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	defer s.Close()
 
 	marker := "smoke-" + time.Now().Format("20060102T150405.000000000")
-	// RELAY_CH_DSN often points at a shared dev ClickHouse; without this the
+	// The test ClickHouse may be shared; without this the
 	// marker rows leak into the live payload log.
 	t.Cleanup(func() { deleteMarkerRows(t, dsn, marker) })
 	now := time.Now().UTC().Truncate(time.Microsecond)
@@ -95,7 +95,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 }
 
 // deleteMarkerRows removes this run's synthetic rows so a shared ClickHouse
-// (the common RELAY_CH_DSN target) isn't left with phantom payload data. A
+// isn't left with phantom payload data. A
 // fresh connection is dialled because the Sink's own conn is closed by the
 // time t.Cleanup fires. Best-effort: a delete failure logs, never fails the
 // test.

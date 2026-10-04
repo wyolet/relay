@@ -26,18 +26,3 @@ func resanitizeHostsAfterPolicyChange(s *Snapshot) {
 		s.hostsByName[clean.Meta.Name] = clean
 	}
 }
-
-func resanitizeModelsAfterHostChange(s *Snapshot) {
-	providers := snapIDs(s.providersByID)
-	for id, m := range s.modelsByID {
-		clean, keep := sanitizeModel(m, providers)
-		if !keep {
-			// The model itself becomes unusable — provider is gone. Fall
-			// through; the cascade handler will evict it.
-			continue
-		}
-		s.modelsByID[id] = clean
-		s.unregisterRefs(refKey{Kind: refModel, ID: id}, outboundModelRefs(m))
-		s.registerRefs(refKey{Kind: refModel, ID: id}, outboundModelRefs(clean))
-	}
-}

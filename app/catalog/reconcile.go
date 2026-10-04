@@ -54,12 +54,21 @@ func (c *Catalog) ApplyProviderUpsert(p *provider.Provider) error {
 	s := c.snap.Load().clone()
 
 	// Remove old entry if present.
+	renamed := false
 	if old, ok := s.providersByID[p.Meta.ID]; ok {
+		renamed = old.Meta.Name != p.Meta.Name
 		delete(s.providersByName, old.Meta.Name)
 		delete(s.providersByID, old.Meta.ID)
 	}
 	s.providersByID[p.Meta.ID] = p
 	s.providersByName[p.Meta.Name] = p
+	if renamed {
+		for _, m := range s.modelsByID {
+			if m.Meta.Owner.ID == p.Meta.ID {
+				s.reindexModelSnapshots(m)
+			}
+		}
+	}
 	c.commitWithGrants(s)
 	return nil
 }
@@ -100,12 +109,21 @@ func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
 	s := c.snap.Load().clone()
 
 	clean := sanitizeHost(h, s.policiesByID)
+	renamed := false
 	if old, ok := s.hostsByID[h.Meta.ID]; ok {
+		renamed = old.Meta.Name != clean.Meta.Name
 		delete(s.hostsByName, old.Meta.Name)
 		delete(s.hostsByID, old.Meta.ID)
 	}
 	s.hostsByID[clean.Meta.ID] = clean
 	s.hostsByName[clean.Meta.Name] = clean
+	if renamed {
+		for _, b := range s.bindingsByID {
+			if m, ok := s.modelsByID[b.Spec.ModelID]; ok && b.Spec.HostID == clean.Meta.ID {
+				s.reindexModelSnapshots(m)
+			}
+		}
+	}
 	c.commitWithGrants(s)
 	return nil
 }
@@ -127,7 +145,6 @@ func deleteHost(s *Snapshot, id string) {
 	delete(s.hostsByID, id)
 	delete(s.hostsByName, h.Meta.Name)
 	cascadeDelete(s, refHost, id)
-	resanitizeModelsAfterHostChange(s)
 }
 
 // ── Model ─────────────────────────────────────────────────────────────────

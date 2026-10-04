@@ -9,6 +9,11 @@
 -include .env
 export
 
+# go test without the deployment endpoints .env exports, so a test can only
+# reach servers named by RELAY_TEST_* variables. Absolute path: a PATH-shadowing
+# `env` shell script (some installers drop one in ~/.local/bin) ignores its args.
+GO_TEST := /usr/bin/env -u RELAY_PG_DSN -u RELAY_CH_DSN -u RELAY_REDIS_ADDR -u RELAY_OTLP_ENDPOINT go test
+
 # Release BOM: pinned companion-artifact versions (UI_VERSION, CATALOG_VERSION).
 include versions.env
 
@@ -331,9 +336,9 @@ clean: ## drop UI dist + binary
 	rm -f relay
 
 test: ## go test ./... (all modules)
-	go test ./...
-	cd sdk && go test ./...
-	cd jobq && go test ./...
+	$(GO_TEST) ./...
+	cd sdk && $(GO_TEST) ./...
+	cd jobq && $(GO_TEST) ./...
 
 lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
 	./scripts/check-codebase-rules.sh
@@ -365,9 +370,9 @@ TEST_PG_DSN  := postgres://relay:relay@127.0.0.1:5499/relay_test?sslmode=disable
 
 test-integration: ## spin up ephemeral pg, run integration-tagged tests with -race, tear down
 	docker compose -f $(COMPOSE_TEST) up -d --wait
-	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race ./... ; \
+	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' $(GO_TEST) -tags=integration -race ./... ; \
 		status=$$?; \
-		RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' sh -c 'cd jobq && go test -tags=integration -race ./...' || status=$$?; \
+		RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' sh -c 'cd jobq && $(GO_TEST) -tags=integration -race ./...' || status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status
 
@@ -399,7 +404,7 @@ smoke-mock: ## replay recorded openai-mini fixtures through relay → openai-moc
 			-fixtures-dir $(MOCK_FIXTURES) >/tmp/spec-mock-openai.log 2>&1 & \
 		  sleep 2 && echo "mock started on :5180 (log: /tmp/spec-mock-openai.log)" )
 	docker compose -f $(COMPOSE_TEST) up -d --wait
-	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' go test -tags=integration -race -run TestMockReplay -v ./integration/ ; \
+	RELAY_TEST_PG_DSN='$(TEST_PG_DSN)' $(GO_TEST) -tags=integration -race -run TestMockReplay -v ./integration/ ; \
 		status=$$?; \
 		docker compose -f $(COMPOSE_TEST) down -v; \
 		exit $$status
