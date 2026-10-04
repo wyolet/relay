@@ -100,7 +100,7 @@ jobs:
       - uses: actions/setup-go@v5
         if: runner.environment == 'github-hosted'
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
 
       - uses: azure/setup-helm@v4

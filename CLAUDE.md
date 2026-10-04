@@ -687,7 +687,7 @@ use live numbers for SLO conversations.
 
 ## Code style (Go)
 
-- Go 1.25+. Module: `github.com/wyolet/relay` (sdk + jobq are separate
+- Go 1.26+. Module: `github.com/wyolet/relay` (sdk + jobq are separate
   modules under the root `go.work`).
 - Hot-path code must be allocation-conscious. Use `sync.Pool` for buffers;
   avoid string conversions; reuse header maps.
