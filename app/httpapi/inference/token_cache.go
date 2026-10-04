@@ -1,6 +1,7 @@
 // The verified-claims cache is deliberately not an LRU: every entry has the
 // same short life, so two generations bound the size without a recency list
 // on the hot path.
+
 package inference
 
 import (

@@ -1,3 +1,4 @@
+// Package transport defines the transport-agnostic Message and Channel types that carry request and response payloads between a transport and a processing pipeline.
 package transport
 
 import (

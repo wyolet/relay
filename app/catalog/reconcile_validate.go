@@ -3,14 +3,12 @@ package catalog
 import (
 	"fmt"
 
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/policybinding"
-	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/rolebinding"
@@ -26,8 +24,6 @@ import (
 // Used both at upsert time (to decide whether the upsert lands or evicts)
 // and during cascade invalidation (to decide whether a dependent row
 // survives after a parent disappears).
-
-func validateHostInSnap(_ *host.Host, _ *Snapshot) error { return nil }
 
 func validateModelInSnap(m *model.Model, s *Snapshot) error {
 	if _, ok := s.providersByID[m.Meta.Owner.ID]; !ok {
@@ -81,33 +77,6 @@ func validateOwnerProjectInSnap(kind string, m meta.Metadata, s *Snapshot) error
 	}
 	if _, ok := s.projectsByID[m.Owner.ID]; !ok {
 		return fmt.Errorf("%s %q: owner project %q does not resolve", kind, m.Name, m.Owner.ID)
-	}
-	return nil
-}
-
-func validatePricingInSnap(p *pricing.Pricing, s *Snapshot) error {
-	if _, ok := s.hostsByID[p.Meta.Owner.ID]; !ok {
-		return fmt.Errorf("pricing %q: owner.id %q does not resolve", p.Meta.Name, p.Meta.Owner.ID)
-	}
-	any := false
-	for _, modelID := range p.Spec.TargetModelIDs {
-		if _, ok := s.modelsByID[modelID]; ok {
-			any = true
-			break
-		}
-	}
-	if !any {
-		return fmt.Errorf("pricing %q: no resolvable targetModels", p.Meta.Name)
-	}
-	for _, modelID := range p.Spec.TargetModelIDs {
-		if _, ok := s.modelsByID[modelID]; !ok {
-			continue
-		}
-		key := modelID + "|" + p.Meta.Owner.ID
-		if existing, dup := s.pricingByModelHost[key]; dup && existing.Meta.ID != p.Meta.ID {
-			return fmt.Errorf("duplicate pricing: pricing %q and %q both cover model %q for the same host",
-				existing.Meta.Name, p.Meta.Name, modelID)
-		}
 	}
 	return nil
 }

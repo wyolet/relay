@@ -5,6 +5,7 @@
 // attaching a Key to a policy from the policy side. Both read through the
 // concrete stores, which have no fake seam.
 // Run with: make test-integration.
+
 package control
 
 import (

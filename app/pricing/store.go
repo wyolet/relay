@@ -2,6 +2,7 @@
 // pricing_models junction (not JSONB), so Upsert fans out across pricings +
 // pricing_models inside a single transaction. host_id is a real column,
 // hydrated alongside the rest of the row on List.
+
 package pricing
 
 import (

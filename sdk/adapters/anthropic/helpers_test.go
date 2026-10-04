@@ -18,10 +18,6 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-func floatPtr(v float64) *float64 { return &v }
-
-func intPtr(v int) *int { return &v }
-
 func decodeMap(t *testing.T, b []byte) map[string]any {
 	t.Helper()
 	var m map[string]any

@@ -678,7 +678,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 func classifyFailure(err error) (kind string, status int) {
 	var upstream *UpstreamFailureError
 	var unreachable *UpstreamUnreachableError
-	var exceeded *pkgratelimit.ExceededError
+	var exceeded *pkgratelimit.KeyQuotaExhausted
 	switch {
 	case errors.As(err, &unreachable):
 		return "upstream_unreachable", 0
@@ -715,14 +715,6 @@ func (r *postFlightReadCloser) Close() error {
 		return r.closer()
 	}
 	return nil
-}
-
-func drainAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, body)
-	_ = body.Close()
 }
 
 // RetryAfterHeader parses a Retry-After header. Exported for adapters.

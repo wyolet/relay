@@ -4,6 +4,7 @@
 // against Postgres: what can let go is written in one transaction, and every
 // other referencing row is reported and left exactly as it was.
 // Run with: make test-integration.
+
 package control
 
 import (

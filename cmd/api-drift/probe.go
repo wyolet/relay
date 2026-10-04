@@ -112,7 +112,7 @@ func probe(client *http.Client, h HostCfg, model, param string) (Verdict, int, s
 			return VInconclusive, 0, err.Error()
 		}
 		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode == 429 && attempt == 0 {
 			time.Sleep(3 * time.Second)
 			continue

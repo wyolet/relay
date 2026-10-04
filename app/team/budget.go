@@ -1,5 +1,6 @@
 // Budget lives here rather than in a third package because Team is the outer
 // scope; app/project imports it.
+
 package team
 
 // DefaultPeriod is the calendar period a Budget that names none is

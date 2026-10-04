@@ -5,6 +5,7 @@
 // again by the per-user version bump and by disabling the account it names.
 // The signing key's own lifecycle is the composition root's and is not
 // exercised from here.
+
 package integration_test
 
 import (

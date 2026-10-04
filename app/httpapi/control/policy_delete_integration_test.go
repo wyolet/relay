@@ -4,6 +4,7 @@
 // against Postgres: the referencing rows live in concrete stores, and what
 // matters is that a refused delete leaves every one of them untouched.
 // Run with: make test-integration.
+
 package control
 
 import (

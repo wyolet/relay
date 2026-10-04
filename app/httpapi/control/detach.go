@@ -3,6 +3,7 @@
 // row's DELETE can go through. It deletes nothing, edits a referencing row only
 // as that row's own update would allow, and answers with what still blocks.
 // Every edit lands in one transaction, or none does.
+
 package control
 
 import (

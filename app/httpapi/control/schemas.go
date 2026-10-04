@@ -1,6 +1,7 @@
 // Schemas are served without auth: an editor resolving a manifest's `$schema`
 // has no session, and a schema holds no data. Raw chi rather than huma keeps
 // the `application/schema+json` content type.
+
 package control
 
 import (

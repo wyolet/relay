@@ -1,3 +1,4 @@
+// Package httpheader holds the header sets applied at relay's HTTP edges: what is stripped from inbound requests before forwarding, what is removed from upstream responses, and what an upstream failure may carry onto the error relay writes.
 package httpheader
 
 import (

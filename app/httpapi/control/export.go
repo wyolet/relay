@@ -1,6 +1,7 @@
 // Export emits a bundle POST /apply accepts back unchanged. Catalog template
 // rows are left out because they come from the catalog, not from a tenant's
 // repo; the overlays on them are tenant-owned and included.
+
 package control
 
 import (

@@ -17,6 +17,7 @@
 // providers/hosts/models are already absent, and disabled bindings are
 // pruned here. The picker only offers routable targets; full-list / detail
 // views use the CRUD APIs (PG), which show disabled rows.
+
 package control
 
 import (

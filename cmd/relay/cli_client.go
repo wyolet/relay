@@ -1,5 +1,6 @@
 // The CLI subcommands use plain net/http against the endpoints an operator
 // would curl, so they need no generated client or extra module.
+
 package main
 
 import (

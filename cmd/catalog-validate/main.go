@@ -17,6 +17,8 @@
 //	0  no errors (warnings may be present unless --strict)
 //	1  at least one error
 //	2  internal failure (couldn't load, etc.)
+
+// Command catalog-validate runs the catalog graph linter over a directory of YAML manifests.
 package main
 
 import (

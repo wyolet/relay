@@ -2,6 +2,7 @@
 // tenancy trees instead of the hand-written table in rbac_test.go. The
 // generator is a seeded math/rand loop (the app/catalog/property_test.go
 // style) so a failure reproduces from its seed alone.
+
 package authz_test
 
 import (

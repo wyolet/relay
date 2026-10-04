@@ -1,4 +1,4 @@
-// Package inference's Dispatch is the shape-agnostic per-request flow.
+// Dispatch is the shape-agnostic per-request flow.
 // It owns: classification branching (proxy vs normal), routing resolution,
 // translator chaining (inbound ↔ canonical ↔ upstream), pipeline invocation,
 // and response wrapping.
@@ -8,6 +8,7 @@
 //  2. The Dispatch call with the inbound shape Name.
 //
 // This keeps shape-specific files out of app/httpapi/inference/.
+
 package inference
 
 import (

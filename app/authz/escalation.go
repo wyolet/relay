@@ -1,5 +1,6 @@
 // Binding a role grants every permission in it, so the binder must already
 // hold each one at the binding's scope.
+
 package authz
 
 import (

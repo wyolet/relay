@@ -38,23 +38,3 @@ func envInt64(key string, def int64) int64 {
 	}
 	return def
 }
-
-// envBool reads a bool env var where "on"/"1" → true, "off"/"0"/"" → false.
-// Returns (value, error). Non-empty non-matching values return an error.
-func envBool(key string, validOn []string, validOff []string) (bool, bool, error) {
-	s := os.Getenv(key)
-	if s == "" {
-		return false, true, nil
-	}
-	for _, v := range validOn {
-		if s == v {
-			return true, true, nil
-		}
-	}
-	for _, v := range validOff {
-		if s == v {
-			return false, true, nil
-		}
-	}
-	return false, false, nil
-}

@@ -31,8 +31,11 @@ make build                    # build the relay binary
 make test                     # go test ./... in every module
 make test-race                # the same under -race
 make test-integration         # tag-gated PG/e2e tests (needs Docker)
+make lint                     # golangci-lint over every module
 go vet ./...
 ```
+
+`make lint` needs [golangci-lint](https://golangci-lint.run/) v2 on `PATH` (CI pins the version in `.github/workflows/ci.yml`); the enabled linters live in `.golangci.yml`.
 
 `make test-integration` brings up the compose test Postgres; `make
 test-integration-run` runs the same tests against any server named by
@@ -103,8 +106,8 @@ drop-on-full — never block the response.
 - **Write tests.** New behavior gets unit tests; PG/e2e changes get
   integration coverage. Keep `integration/` compiling — a red build there
   silently disables the whole integration path.
-- **Run `make test` + `go vet` + `gofmt`** before pushing. CI runs
-  build/test/race/vet plus the codebase-rule grep checks.
+- **Run `make test` + `make lint` + `go vet` + `gofmt`** before pushing. CI runs
+  build/test/race/vet, golangci-lint, and the codebase-rule grep checks.
 - **Keep commits focused** with clear messages. Reference issues where
   relevant.
 - **Comments:** default to none. Write a comment only when the *why* is
@@ -112,8 +115,8 @@ drop-on-full — never block the response.
 
 ## Releases & images
 
-CI on pull requests and `main` runs tests, vet, gofmt, the codebase-rule
-checks, and `helm lint` of the chart (`make check` runs the same gate locally).
+CI on pull requests and `main` runs tests, vet, gofmt, golangci-lint, the
+codebase-rule checks, and `helm lint` of the chart (`make check` runs the same gate locally).
 A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
 images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
 Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`

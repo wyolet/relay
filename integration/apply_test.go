@@ -4,6 +4,7 @@
 // POST /api/apply reports, the prune guard rails, the all-or-nothing
 // authorization step and the partial-write report, the boot seed running the
 // same loader, and the export → apply round trip.
+
 package integration_test
 
 import (

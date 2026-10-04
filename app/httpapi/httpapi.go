@@ -180,7 +180,7 @@ var entityNameByPkg = map[string]string{
 }
 
 func schemaNamer(t reflect.Type, hint string) string {
-	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
 		t = t.Elem()
 	}
 	name := t.Name()
@@ -241,7 +241,7 @@ func nameGenericInstantiation(t reflect.Type, base string) string {
 	}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i).Type
-		for f.Kind() == reflect.Ptr || f.Kind() == reflect.Slice || f.Kind() == reflect.Array {
+		for f.Kind() == reflect.Pointer || f.Kind() == reflect.Slice || f.Kind() == reflect.Array {
 			f = f.Elem()
 		}
 		if entity, ok := entityNameByPkg[f.PkgPath()]; ok {

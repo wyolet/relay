@@ -5,6 +5,7 @@
 // serialised by a real advisory lock, so there is no fake seam: without it
 // each pod stores its own seed and the loser's tokens verify nowhere.
 // Run with: make test-integration.
+
 package main
 
 import (

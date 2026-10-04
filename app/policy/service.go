@@ -1,6 +1,7 @@
 // service.go: runtime orchestrator. Picks a key, resolves the applicable
 // RL per (provider, model, host), reserves inbound + upstream buckets,
 // and rolls them back on failure. One Service per process.
+
 package policy
 
 import (
@@ -161,7 +162,7 @@ func (s *Service) Acquire(ctx context.Context, in AcquireInput) (*Acquisition, e
 
 	res, err := s.limiter.Reserve(ctx, "hostkey:"+key.Meta.ID, rules)
 	if err != nil {
-		var exceeded *pkgratelimit.ExceededError
+		var exceeded *pkgratelimit.KeyQuotaExhausted
 		if errors.As(err, &exceeded) {
 			s.selector.RecordFailure(ctx, key.KeyHash, keypool.FailureRateLimitShort, 0)
 			return &Acquisition{Key: key}, ErrSaturated

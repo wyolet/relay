@@ -15,6 +15,8 @@
 //  1. Receive domain struct from store
 //  2. Build a ReverseResolver from your id→name index
 //  3. Call FromXxx(domain, rev) → wire DTO suitable for JSON/YAML output
+
+// Package manifest converts between the catalog's YAML/JSON wire format, which references entities by name, and the app/* domain structs, which reference them by id.
 package manifest
 
 // APIVersion is the catalog schema version every relay-aware YAML must

@@ -3,6 +3,7 @@
 // upgrade_test.go loads rows the way the pre-tenancy schema (migration 24)
 // wrote them, runs the tenancy migrations over them, and checks the upgraded
 // relay still serves them as before.
+
 package integration_test
 
 import (
