@@ -56,6 +56,7 @@ RELAY_ADMIN_TOKEN=$admin_token \
 RELAY_ADMIN_PASSWORD=$(openssl rand -hex 16) \
 RELAY_CATALOG_VERSION=$CATALOG_VERSION \
 RELAY_EVENTLOG_DIR=$work \
+RELAY_BATCH_PAYLOAD_DIR=$work/batch \
   "$work/relay" >"$work/relay.log" 2>&1 &
 pid=$!
 
@@ -74,7 +75,7 @@ done
 [ "$seeded" = "$CATALOG_VERSION" ] || fail "catalog $CATALOG_VERSION not seeded within ${BOOT_TIMEOUT_S}s (marker: '${seeded}')"
 
 curl -fsS "$data/healthz" >/dev/null || fail "GET /healthz failed"
-curl -fsS "$control/openapi.json" | jq -e '.paths | length > 0' >/dev/null || fail "GET /openapi.json has no paths"
+curl -fsS "$control/api/openapi.json" | jq -e '.paths | length > 0' >/dev/null || fail "GET /api/openapi.json has no paths"
 curl -fsS "$control/" | grep -qi '<html' || fail "control / does not serve the UI"
 models=$(curl -fsS -H "$auth" "$control/api/models" | jq '.items | length') || fail "GET /api/models failed"
 [ "$models" -gt 0 ] || fail "catalog $CATALOG_VERSION seeded no models"
