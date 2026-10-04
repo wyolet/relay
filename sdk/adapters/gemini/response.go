@@ -85,9 +85,12 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 				}
 			}
 		}
+	} else if promptBlockReason(gr.PromptFeedback) != "" {
+		resp.Status, resp.FinishReason, resp.IncompleteDetails = promptBlocked()
 	}
 
 	resp.Usage = geminiUsageToTokens(gr.UsageMetadata)
+	resp.Extensions = safetyExtensions(&gr)
 
 	return resp, nil
 }
@@ -137,10 +140,22 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 		"finishReason": finishReason,
 		"index":        0,
 	}
+	if r, ok := resp.Extensions[extSafetyRatings]; ok {
+		cand["safetyRatings"] = r
+	}
 
 	out := map[string]any{
 		"candidates": []any{cand},
 	}
+	if pf, ok := resp.Extensions[extPromptFeedback]; ok {
+		out["promptFeedback"] = pf
+		if promptBlockReason(pf) != "" && len(parts) == 0 {
+			// A blocked prompt has no candidate on the Gemini wire.
+			delete(out, "candidates")
+		}
+	}
+	// canonical: Response.Extensions keys outside the "gemini." prefix dropped
+	// — rule 7: an adapter ignores keys it does not own.
 
 	if len(resp.Usage) > 0 {
 		um := map[string]int64{}
