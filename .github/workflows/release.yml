@@ -5,19 +5,17 @@ name: Release
 # chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
 # image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
 #
-# Images build on a remote BuildKit pod in parallel with the test gate, without
-# pushing; the result stays in the pod's persistent cache. Only after both pass
-# does the push job re-run the same bake with --push, which resolves from that
-# cache. A test failure cancels the run, so nothing is pushed.
+# Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
+#
+# CI_POOL=cluster runs the jobs on the self-hosted pools, where the image build uses a shared remote BuildKit; otherwise they run GitHub-hosted with a local builder, and the push job rebuilds from scratch.
 #
 # Manual runs (workflow_dispatch) default to dry_run: tests + the no-push build
 # + the cached re-bake, with every push/publish step skipped. dry_run=false is
-# only accepted on a v*.*.* tag ref on main.
+# only accepted on a v*.*.* tag ref on main. A dry run reads no release secrets.
 #
 # Repo settings:
-#   DOCKERHUB_TOKEN (secret) + DOCKERHUB_USERNAME (variable) — required.
-#   CI_KUBECONFIG (secret) — required; may exec into the BuildKit pod and
-#   annotate the ArgoCD applications listed in ARGOCD_APPS.
+#   Environment `release` (deployments from v*.*.* tags only) holds
+#   DOCKERHUB_TOKEN (secret) + DOCKERHUB_USERNAME (variable) — required to publish.
 #   RELEASE_TELEGRAM_TOKEN (secret) + RELEASE_TELEGRAM_CHAT (variable) —
 #   optional failure notification; skipped when unset.
 #
@@ -43,13 +41,13 @@ concurrency:
 
 env:
   TAG: ${{ github.ref_name }}
-  BUILDKIT_ENDPOINT: kube-pod://buildkit-0?namespace=buildkit
-  ARGOCD_APPS: relay relay-saas
+  BUILDKIT_ENDPOINT: tcp://buildkit.buildkit.svc.cluster.local:1234
 
 jobs:
   guard:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_POOL == 'cluster' && 'relay-ci' || 'ubuntu-latest' }}
     outputs:
+      cluster: ${{ vars.CI_POOL == 'cluster' }}
       publish: ${{ steps.v.outputs.publish }}
       version: ${{ steps.v.outputs.version }}
       ui_version: ${{ steps.v.outputs.ui_version }}
@@ -89,74 +87,76 @@ jobs:
 
   test:
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     permissions:
       contents: read
       actions: write
+    # The cluster pool shares its Go cache with pull-request jobs; a release never reuses a cached test result.
+    env:
+      GOFLAGS: -count=1
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
+        if: runner.environment == 'github-hosted'
         with:
           go-version: '1.25'
           cache: true
 
       - uses: azure/setup-helm@v4
+        if: runner.environment == 'github-hosted'
 
       # make check runs golangci-lint; same pinned version as ci.yml.
       - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
           install-only: true
+          skip-cache: ${{ runner.environment == 'self-hosted' }}
 
       - run: make check
 
-      # Stops the parallel build; GitHub has no per-job cancel.
+      # Stops the parallel build; GitHub has no per-job cancel. curl, not gh: the cluster runner image has no gh.
       - name: Cancel run on test failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh run cancel "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY"
+        run: |
+          curl -fsS -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
 
+  # An empty environment name means none: dry runs never enter `release`.
   build:
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-release' || 'ubuntu-latest' }}
+    environment: ${{ needs.guard.outputs.publish == 'true' && 'release' || '' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Require secrets
+        if: needs.guard.outputs.publish == 'true'
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
         run: |
           [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets are required"; exit 1; }
-          [ -n "$CI_KUBECONFIG" ] || { echo "::error::CI_KUBECONFIG secret is required"; exit 1; }
-
-      - name: Write kubeconfig
-        env:
-          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
-        run: |
-          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
-          printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
-          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
         with:
-          driver: remote
-          endpoint: ${{ env.BUILDKIT_ENDPOINT }}
+          driver: ${{ runner.environment == 'self-hosted' && 'remote' || 'docker-container' }}
+          endpoint: ${{ runner.environment == 'self-hosted' && env.BUILDKIT_ENDPOINT || '' }}
 
       - run: docker buildx inspect --bootstrap
 
       # Authenticated base-image pulls; nothing is pushed from this job.
       - name: Log in to Docker Hub
+        if: needs.guard.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # cacheonly keeps the result in the BuildKit pod's persistent cache for
-      # the push job; the env must match the push job's bake exactly.
+      # cacheonly keeps the result in the builder's cache for the push job; the
+      # env must match the push job's bake exactly.
       - name: Build lean + standalone (no push)
         env:
           VERSION: ${{ needs.guard.outputs.version }}
@@ -167,25 +167,18 @@ jobs:
 
   push:
     needs: [guard, test, build]
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-release' || 'ubuntu-latest' }}
+    environment: ${{ needs.guard.outputs.publish == 'true' && 'release' || '' }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Write kubeconfig
-        env:
-          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
-        run: |
-          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
-          printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
-          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
-
       - uses: docker/setup-buildx-action@v3
         with:
-          driver: remote
-          endpoint: ${{ env.BUILDKIT_ENDPOINT }}
+          driver: ${{ runner.environment == 'self-hosted' && 'remote' || 'docker-container' }}
+          endpoint: ${{ runner.environment == 'self-hosted' && env.BUILDKIT_ENDPOINT || '' }}
 
       - run: docker buildx inspect --bootstrap
 
@@ -199,6 +192,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
+        if: needs.guard.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
@@ -228,7 +222,7 @@ jobs:
   publish:
     needs: [guard, push]
     if: needs.guard.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-release' || 'ubuntu-latest' }}
     permissions:
       contents: write
       packages: write
@@ -236,6 +230,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: azure/setup-helm@v4
+        if: runner.environment == 'github-hosted'
 
       # Chart version and appVersion both equal the image tag (tag without v),
       # so the chart version pins the image.
@@ -246,23 +241,19 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
 
+      # Skipped when the release already exists, so a re-run is safe. The tag
+      # exists: guard only publishes from a tag ref.
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --verify-tag --generate-notes
-
-      # Deploy now instead of waiting for ArgoCD's poll interval.
-      - name: Refresh ArgoCD applications
-        env:
-          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
-        run: |
-          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
-          printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
-          export KUBECONFIG="$RUNNER_TEMP/kubeconfig"
-          read -ra apps <<< "$ARGOCD_APPS"
-          kubectl -n argocd annotate application "${apps[@]}" argocd.argoproj.io/refresh=normal --overwrite
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/releases"
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json")
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "${auth[@]}" "$api/tags/$TAG")
+          [ "$code" = 200 ] && exit 0
+          [ "$code" = 404 ] || { echo "::error::release lookup for $TAG returned HTTP $code"; exit 1; }
+          jq -n --arg tag "$TAG" '{tag_name: $tag, generate_release_notes: true}' \
+            | curl -fsS -X POST "${auth[@]}" "$api" --data @- >/dev/null
 
   # A test failure cancels the run, so cancelled() counts as a failed release.
   notify:
