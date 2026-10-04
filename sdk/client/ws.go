@@ -11,8 +11,6 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
-
-	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // RelayWS targets a relay server's canonical WebSocket endpoint
@@ -24,8 +22,11 @@ import (
 // (relay holds no conversation state). This v1 client is sequential —
 // one request in flight at a time per Client; concurrent multiplexing
 // from a single Client is a future enhancement. Call Close when done.
+//
+// Config resolution matches Relay: WR_* env fallback, and missing/invalid
+// config surfaces on the first call rather than as a dial error.
 func RelayWS(baseURL, relayKey string, opts ...Option) *Client {
-	c := New(v1.IdentityTranslator{}, baseURL, "/v1/ws", relayKey, opts...)
+	c := newRelayClient("/v1/ws", baseURL, relayKey, opts...)
 	c.transport = &wsTransport{}
 	return c
 }
