@@ -25,7 +25,7 @@ clusterDomain: cluster.local
 # Relay application config (non-secret env -> ConfigMap; DSNs/keys -> Secret).
 # ----------------------------------------------------------------------------
 relay:
-  # -- Data plane (inference) listen port: /v1/*, /healthz.
+  # -- Data plane (inference) listen port: /openai/v1/*, /anthropic/v1/*, /v1/*, /healthz.
   port: 8080
   # -- Control plane port: /auth, CRUD, /metrics, /version, embedded UI.
   controlPort: 8081

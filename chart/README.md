@@ -24,7 +24,7 @@ single self-migrating binary serving the **inference (data) plane** and the
 ## Architecture facts the chart encodes
 
 - **One binary, two planes.** `RELAY_MODE` is `oss`/`cloud`, not a plane split.
-  Data plane on `RELAY_PORT` (8080, `/v1/*` + `/healthz`); control plane on
+  Data plane on `RELAY_PORT` (8080, `/openai/v1/*`, `/anthropic/v1/*`, canonical `/v1/*`, `/healthz`); control plane on
   `RELAY_CONTROL_PORT` (8081, UI/CRUD/`/metrics`/`/version`).
 - **Self-migrating.** Relay runs PG migrations on boot under a golang-migrate
   advisory lock, so concurrent replicas are safe — no separate migration Job.
