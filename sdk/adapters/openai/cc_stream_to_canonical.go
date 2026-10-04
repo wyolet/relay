@@ -56,6 +56,9 @@ type ccToCanonicalStream struct {
 	// refused records a refusal delta: CC terminates a refusal with "stop",
 	// so handleDone lifts the finish_reason from it (rule 9).
 	refused bool
+	// finishSeen separates "no finish_reason arrived" (defaults to stop) from
+	// an unknown one, which maps to an empty finish on an incomplete status.
+	finishSeen bool
 }
 
 func ccStreamErrorFrame(data []byte) (v1.SSEFrame, bool) {
@@ -161,7 +164,11 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	// finish_reason arrives on the terminal chunk (separate from deltas); capture
 	// it so handleDone emits the real reason instead of a hardcoded "stop".
 	if ch.FinishReason != nil && *ch.FinishReason != "" {
+		// canonical: raw unknown finish_reason dropped on the stream — the
+		// completed event has no extensions slot; the incomplete status still
+		// keeps it from reading as success, and the buffered path carries it.
 		s.status, s.finishReason, _ = ccFinishReasonToCanonical(*ch.FinishReason)
+		s.finishSeen = true
 	}
 
 	// Reasoning text (Ollama "reasoning" or o-series "reasoning_content").
@@ -252,7 +259,7 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 		u = ccUsageToCanonical(s.lastUsage)
 	}
 	status, finish := s.status, s.finishReason
-	if finish == "" {
+	if !s.finishSeen {
 		status, finish = v1.StatusCompleted, v1.FinishReasonStop
 	}
 	if s.refused && finish == v1.FinishReasonStop {

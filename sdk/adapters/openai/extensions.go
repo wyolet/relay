@@ -14,6 +14,8 @@ const (
 	extTopLogprobs = "openai.top_logprobs"
 	extServiceTier = "openai.service_tier"
 	extStore       = "openai.store"
+	// Response only: the raw finish_reason when it is not one canonical knows.
+	extFinishReason = "openai.finish_reason"
 )
 
 // ccExtensionsFromWire carries the CC request knobs canonical has no field for.

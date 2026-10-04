@@ -1,6 +1,8 @@
 package anthropic
 
 import (
+	"strings"
+
 	"github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -52,9 +54,18 @@ func anthropicStopReasonToCanonical(reason string) (v1.Status, v1.FinishReason, 
 	case "pause_turn":
 		return v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: "pause_turn"}
 	default:
-		return v1.StatusCompleted, v1.FinishReasonStop, nil
+		// Canonical has no "other" finish_reason. An incomplete status with no
+		// fabricated finish keeps an unknown reason from reading as a clean stop.
+		return v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: unknownStopReasonPrefix + reason}
 	}
 }
+
+// unknownStopReasonPrefix marks incomplete_details.reason for a stop_reason
+// this adapter does not recognise.
+const unknownStopReasonPrefix = "anthropic:"
+
+// extStopReason carries the raw stop_reason when canonical has no value for it.
+const extStopReason = "anthropic.stop_reason"
 
 // canonicalFinishReasonToAnthropic maps canonical finish_reason + incomplete_details to Anthropic stop_reason string.
 func canonicalFinishReasonToAnthropic(reason v1.FinishReason, incomplete *v1.IncompleteDetails) string {
@@ -64,6 +75,11 @@ func canonicalFinishReasonToAnthropic(reason v1.FinishReason, incomplete *v1.Inc
 			return "max_tokens"
 		case "pause_turn":
 			return "pause_turn"
+		}
+		// An unrecognised upstream stop_reason goes back out verbatim rather
+		// than defaulting to end_turn.
+		if raw, ok := strings.CutPrefix(incomplete.Reason, unknownStopReasonPrefix); ok && raw != "" {
+			return raw
 		}
 	}
 	return canonicalFinishReasonToAnthropicStr(reason)
