@@ -4,6 +4,7 @@
 // checkRoleRefVisible, …) reach concrete *X.Store values with no fake seam
 // and are exercised in policyref_integration_test.go instead; what is
 // unit-testable of those here is the visibility rule they delegate to.
+
 package control
 
 import (

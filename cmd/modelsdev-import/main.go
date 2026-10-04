@@ -12,6 +12,7 @@
 //
 //	modelsdev-import -out ../relay-catalog/data
 //	modelsdev-import -source-file /tmp/md.json -hosts anthropic,openai -out -
+
 package main
 
 import (

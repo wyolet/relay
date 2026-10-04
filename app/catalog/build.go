@@ -8,6 +8,7 @@
 // is silently dropped from the snapshot copy. The full row stays in
 // Postgres for the control plane. Reload never fails over a stale ref —
 // the snapshot is always the consistent reachable subgraph.
+
 package catalog
 
 import (

@@ -4,6 +4,7 @@
 // so a concurrent Emit cannot panic, and prune runs off the drain loop
 // behind an in-flight guard. Both only show up as failures under `-race`
 // or under real contention.
+
 package audit
 
 import (

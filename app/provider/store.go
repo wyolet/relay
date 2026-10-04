@@ -5,6 +5,7 @@
 // Store is concrete — no interface declared here. Consumers (snapshot
 // composer, admin handlers, seed) each declare their own narrow interface
 // locally if they want a test seam.
+
 package provider
 
 import (

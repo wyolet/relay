@@ -3,6 +3,7 @@
 // missing_ids_integration_test.go covers the batched membership check
 // against a real Postgres — the query has no fake seam. Run with:
 // make test-integration.
+
 package user_test
 
 import (

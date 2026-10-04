@@ -3,6 +3,7 @@
 // rotate_integration_test.go covers the conditional rotate against a real
 // Postgres: the store's UPDATE ... WHERE key_hash = $old has no fake seam.
 // Run with: make test-integration.
+
 package key_test
 
 import (

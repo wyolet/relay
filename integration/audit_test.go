@@ -3,6 +3,7 @@
 // audit_test.go covers the admin audit log against real Postgres: rows
 // written for mutations, the GET /api/audit filters and keyset pagination,
 // and the retention prune.
+
 package integration_test
 
 import (

@@ -2,6 +2,7 @@
 // RELAY_AUTHZ=single is the upgrade path every existing deployment lands
 // on, so "single behaves exactly like it did before scoping" has to be an
 // assertion, not a reading of cmd/relay's two-line wiring.
+
 package control
 
 import (

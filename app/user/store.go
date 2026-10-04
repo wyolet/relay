@@ -1,6 +1,7 @@
 // store.go is the data-access layer for User. Same conventions as the
 // entity stores: sqlc-generated typed methods, no sqlc types in exported
 // signatures, (nil, nil) on not-found.
+
 package user
 
 import (

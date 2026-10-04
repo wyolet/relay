@@ -1,4 +1,5 @@
 // Rules live in the spec JSONB; a Role has no relational columns of its own.
+
 package role
 
 import (

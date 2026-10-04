@@ -10,6 +10,7 @@
 // WORLD-READABLE — public values only. Never add secrets (keys, DSNs to private
 // services, internal hostnames). The body is rendered once at registration from
 // static process env, so it is effectively a constant for the process lifetime.
+
 package control
 
 import (

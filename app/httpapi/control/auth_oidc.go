@@ -11,6 +11,7 @@
 // cookie rather than the session: the callback arrives as a cross-site
 // top-level navigation, which a SameSite=Strict session cookie does not
 // accompany.
+
 package control
 
 import (

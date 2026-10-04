@@ -8,6 +8,7 @@
 //
 // They are Resolver methods so listings obey the same options resolution
 // does; every one is nil-safe (a nil Resolver applies the defaults).
+
 package routing
 
 import (

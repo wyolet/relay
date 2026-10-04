@@ -14,6 +14,7 @@
 // All composition lives in app/catalogview (PG-backed, full state incl.
 // disabled rows). These handlers are thin: build the Service from the stores,
 // call the projection, return its rows. {ref} is a slug or UUID id.
+
 package control
 
 import (

@@ -5,6 +5,7 @@
 // credential, but the row itself has to stay readable, exportable and
 // appliable — an operator repairing the reference is the only way out, and
 // an endpoint that 500s on the broken row takes that away.
+
 package integration_test
 
 import (

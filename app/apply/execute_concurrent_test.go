@@ -5,6 +5,7 @@
 // serialization and then check what the re-read alone must catch. Only
 // `-race` observes a Result or a store being shared unsafely; the
 // serialized single-writer cases live in execute_conflict_test.go.
+
 package apply
 
 import (

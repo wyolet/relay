@@ -5,6 +5,7 @@
 // round trip, and the in-memory store cannot falsify it: kv.Mem's emulator
 // would happily serve a rule set that a real EVAL rejects for spanning slots.
 // Run with: make test-integration.
+
 package policy
 
 import (

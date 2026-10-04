@@ -2,6 +2,7 @@
 // lookups that answer "who has access here". Same table shape as the other
 // filter tests in list_schemas_test.go; its names() helper is a closed type
 // switch that does not carry the binding kinds, so these read Meta.Name.
+
 package control
 
 import (

@@ -4,6 +4,7 @@
 // app/httpapi (inference + control) on separate listeners. Legacy wiring
 // against internal/catalog has been moved aside under _legacy/ and will be
 // deleted as routes/handlers are ported over.
+
 package main
 
 import (
