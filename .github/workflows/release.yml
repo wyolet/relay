@@ -129,6 +129,10 @@ jobs:
     needs: guard
     runs-on: ${{ needs.guard.outputs.cluster == 'true' && 'relay-release' || 'ubuntu-latest' }}
     environment: ${{ needs.guard.outputs.publish == 'true' && 'release' || '' }}
+    # Trivy fetches only its vulnerability DB; no update check or telemetry.
+    env:
+      TRIVY_SKIP_VERSION_CHECK: 'true'
+      TRIVY_DISABLE_TELEMETRY: 'true'
     steps:
       - uses: actions/checkout@v4
 

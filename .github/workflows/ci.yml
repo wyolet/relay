@@ -176,6 +176,10 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    # Only the vulnerability DB and checks bundle are fetched; no update check or telemetry.
+    env:
+      TRIVY_SKIP_VERSION_CHECK: 'true'
+      TRIVY_DISABLE_TELEMETRY: 'true'
     steps:
       - uses: actions/checkout@v4
 
