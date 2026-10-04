@@ -35,7 +35,7 @@ type blockerGroup struct {
 // resourceInUseError is the 409 a referenced row's delete returns: the
 // usual error envelope plus the blockers beside it.
 type resourceInUseError struct {
-	httpapi.OpenAIError
+	httpapi.APIError
 	Blockers []blockerGroup `json:"blockers"`
 }
 
@@ -100,8 +100,8 @@ func refuseInUse(ctx context.Context, d Deps, kind, id, name string) error {
 		total += g.Count
 	}
 	return &resourceInUseError{
-		OpenAIError: httpapi.OpenAIError{
-			Err: httpapi.OpenAIErrorInner{
+		APIError: httpapi.APIError{
+			Err: httpapi.APIErrorBody{
 				Type:    "invalid_request_error",
 				Code:    "resource_in_use",
 				Message: fmt.Sprintf("%s %q is referenced by %d row(s); see blockers", kind, name, total),
