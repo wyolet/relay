@@ -53,7 +53,7 @@ jobs:
       ui_version: ${{ steps.v.outputs.ui_version }}
       catalog_ref: ${{ steps.v.outputs.catalog_ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -95,15 +95,15 @@ jobs:
     env:
       GOFLAGS: -count=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
           cache: true
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         if: runner.environment == 'github-hosted'
 
       # make check runs golangci-lint; same pinned version as ci.yml.
@@ -134,7 +134,7 @@ jobs:
       TRIVY_SKIP_VERSION_CHECK: 'true'
       TRIVY_DISABLE_TELEMETRY: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Require secrets
         if: needs.guard.outputs.publish == 'true'
@@ -144,7 +144,7 @@ jobs:
         run: |
           [ -n "$DOCKERHUB_USERNAME" ] && [ -n "$DOCKERHUB_TOKEN" ] || { echo "::error::DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets are required"; exit 1; }
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         with:
           driver: ${{ runner.environment == 'self-hosted' && 'remote' || 'docker-container' }}
           endpoint: ${{ runner.environment == 'self-hosted' && env.BUILDKIT_ENDPOINT || '' }}
@@ -154,7 +154,7 @@ jobs:
       # Authenticated base-image pulls; nothing is pushed from this job.
       - name: Log in to Docker Hub
         if: needs.guard.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -188,7 +188,7 @@ jobs:
               --output "$RUNNER_TEMP/sbom/relay-$VERSION-$img.cdx.json"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: ${{ runner.temp }}/sbom/*.cdx.json
@@ -214,9 +214,9 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         with:
           driver: ${{ runner.environment == 'self-hosted' && 'remote' || 'docker-container' }}
           endpoint: ${{ runner.environment == 'self-hosted' && env.BUILDKIT_ENDPOINT || '' }}
@@ -226,7 +226,7 @@ jobs:
       # Registry auth stays on the runner; buildx forwards it to buildkitd per session.
       - name: Log in to GitHub Container Registry
         if: needs.guard.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -234,7 +234,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: needs.guard.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -256,7 +256,7 @@ jobs:
           echo "lean=$(jq -r '.prod."containerimage.digest"' "$meta")" >> "$GITHUB_OUTPUT"
           echo "standalone=$(jq -r '.standalone."containerimage.digest"' "$meta")" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: needs.guard.outputs.publish == 'true'
         with:
           name: sbom
@@ -327,9 +327,9 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         if: runner.environment == 'github-hosted'
 
       # Chart version and appVersion both equal the image tag (tag without v),
@@ -341,7 +341,7 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "relay-${VERSION}.tgz" oci://ghcr.io/wyolet/charts
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: sbom
           path: ${{ runner.temp }}/sbom
