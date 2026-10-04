@@ -117,6 +117,7 @@ drop-on-full — never block the response.
 
 CI on pull requests and `main` runs tests, vet, gofmt, golangci-lint, the
 codebase-rule checks, and `helm lint` of the chart (`make check` runs the same gate locally).
+A pull request runs only the jobs its paths need (the `changes` job in `.github/workflows/ci.yml` holds the mapping): docs and markdown run none, `chart/` runs `helm lint`, and a `versions.env` bump runs `scripts/boot-smoke.sh`, which boots relay with the pinned UI and catalog against an empty Postgres. Pushes to `main` run every job.
 A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
 images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
 Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`

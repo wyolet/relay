@@ -6,7 +6,42 @@ on:
   pull_request:
 
 jobs:
+  # Decides which jobs a pull request needs. Gating jobs with `if:` rather than
+  # workflow-level `paths` keeps every check reporting (skipped counts as
+  # success). Pushes to main run everything. Paths not named below count as Go.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      go: ${{ github.event_name != 'pull_request' || steps.filter.outputs.go == 'true' }}
+      chart: ${{ github.event_name != 'pull_request' || steps.filter.outputs.chart == 'true' }}
+      boot: ${{ github.event_name != 'pull_request' || steps.filter.outputs.boot == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: some-with-excludes
+          filters: |
+            go:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!chart/**'
+              - '!versions.env'
+            chart:
+              - 'chart/**'
+              - '.github/workflows/**'
+            boot:
+              - 'versions.env'
+              - 'scripts/boot-smoke.sh'
+              - '.github/workflows/**'
+
   check:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +97,8 @@ jobs:
   # database of its own from a migrated template, so packages run in parallel.
   # The Redis tests start their own containers through the runner's Docker.
   integration:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -101,7 +138,8 @@ jobs:
   # store packages only get credit from the integration run.
   coverage:
     runs-on: ubuntu-latest
-    needs: integration
+    needs: [changes, integration]
+    if: needs.changes.outputs.go == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -122,9 +160,44 @@ jobs:
         run: make cover-check COVER_ENFORCE=1
 
   chart:
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - name: helm lint
         run: helm lint chart
+
+  # Builds and boots relay with the UI and catalog versions.env pins, against
+  # an empty Postgres: a bump naming a missing or broken release fails here.
+  boot:
+    needs: changes
+    if: needs.changes.outputs.boot == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: relay
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U relay -d relay"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    env:
+      RELAY_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Boot smoke
+        run: ./scripts/boot-smoke.sh
