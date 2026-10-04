@@ -2,8 +2,6 @@ package modelref
 
 import (
 	"errors"
-	"fmt"
-	"sort"
 )
 
 // ConcreteBinding is a fully-qualified (provider, model, host) triple.
@@ -143,30 +141,9 @@ func Resolve(refs []Ref, catalog []ConcreteBinding) map[string][]ConcreteBinding
 	return out
 }
 
-// formatRef is the canonical string for a parsed Ref. Used by error
-// messages and dedup keys.
-func formatRef(r Ref) string {
-	s, err := Format(refField(r.Provider, r.ProviderWildcard),
-		refField(r.Model, r.ModelWildcard),
-		refField(r.Host, r.HostWildcard))
-	if err != nil {
-		return fmt.Sprintf("<invalid:%s>", r.Raw)
-	}
-	return s
-}
-
 func refField(v string, wildcard bool) string {
 	if wildcard {
 		return ""
 	}
 	return v
-}
-
-// sortBindings returns a copy of bindings sorted by canonical string,
-// useful for stable test output and UI display.
-func sortBindings(bs []ConcreteBinding) []ConcreteBinding {
-	out := make([]ConcreteBinding, len(bs))
-	copy(out, bs)
-	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
-	return out
 }

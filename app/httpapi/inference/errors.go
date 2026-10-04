@@ -168,7 +168,7 @@ func rateLimitMessage(err error, secs int64) string {
 func mapPipelineErr(w http.ResponseWriter, err error) {
 	var upstream *pipeline.UpstreamFailureError
 	var unreachable *pipeline.UpstreamUnreachableError
-	var exceeded *pkgratelimit.ExceededError
+	var exceeded *pkgratelimit.KeyQuotaExhausted
 	switch {
 	case errors.Is(err, pkgratelimit.ErrRevoked):
 		// The token's jti is on the team's denylist — the check rides the

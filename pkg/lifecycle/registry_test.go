@@ -320,8 +320,8 @@ func TestStreamSession_WriteReframesAcrossBoundaries(t *testing.T) {
 
 	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
 	// Two complete frames + a trailing partial, split mid-frame across Writes.
-	io.WriteString(sess, "event: a\ndata: 1\n\nev")
-	io.WriteString(sess, "ent: b\ndata: 2\n\ndata: tail-no-sep")
+	_, _ = io.WriteString(sess, "event: a\ndata: 1\n\nev")
+	_, _ = io.WriteString(sess, "ent: b\ndata: 2\n\ndata: tail-no-sep")
 	sess.Finish()
 
 	want := []string{"event: a\ndata: 1", "event: b\ndata: 2", "data: tail-no-sep"}
@@ -345,7 +345,7 @@ func TestStreamSession_FinishIdempotentStashesTokens(t *testing.T) {
 
 	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
 	lc := sess.lc
-	io.WriteString(sess, "event: a\ndata: 1\n\n")
+	_, _ = io.WriteString(sess, "event: a\ndata: 1\n\n")
 	sess.Finish()
 	sess.Finish() // no-op
 
@@ -424,7 +424,7 @@ func TestStreamSession_WriteReframesCRLF(t *testing.T) {
 	r.RegisterStreamObserver(f)
 
 	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
-	io.WriteString(sess, "event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2\r\n\r\n")
+	_, _ = io.WriteString(sess, "event: a\r\ndata: 1\r\n\r\nevent: b\r\ndata: 2\r\n\r\n")
 	sess.Finish()
 
 	want := []string{"event: a\ndata: 1", "event: b\ndata: 2"}

@@ -50,8 +50,7 @@ func TestFileStore_PutLeavesCompleteFileAndNoTemps(t *testing.T) {
 	ctx := context.Background()
 
 	old := []byte("previous-complete-payload")
-	uri, err := s.Put(ctx, "job-atomic/result", old)
-	if err != nil {
+	if _, err := s.Put(ctx, "job-atomic/result", old); err != nil {
 		t.Fatalf("initial put: %v", err)
 	}
 	finalPath := filepath.Join(dir, "job-atomic", "result")
@@ -61,7 +60,7 @@ func TestFileStore_PutLeavesCompleteFileAndNoTemps(t *testing.T) {
 	}
 
 	want := []byte(strings.Repeat("complete-payload-", 1024))
-	uri, err = s.Put(ctx, "job-atomic/result", want)
+	uri, err := s.Put(ctx, "job-atomic/result", want)
 	if err != nil {
 		t.Fatalf("put: %v", err)
 	}

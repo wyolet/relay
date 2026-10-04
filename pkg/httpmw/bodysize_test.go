@@ -43,7 +43,7 @@ func TestLimitBodyOverLimit(t *testing.T) {
 		if httpmw.IsBodyTooLargeError(err) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"error": map[string]string{
 					"message": "request body too large",
 					"type":    "invalid_request_error",

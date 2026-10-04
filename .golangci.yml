@@ -1,0 +1,56 @@
+version: "2"
+
+run:
+  timeout: 5m
+  # Integration-tagged files only add to the default set, so one run covers both.
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - errcheck
+    - govet
+    - ineffassign
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    revive:
+      rules:
+        - name: package-comments
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF*
+  exclusions:
+    generated: strict
+    paths:
+      - internal/storage/gen
+      - testdata
+    rules:
+      # Deferred cleanup: the error is unactionable once the function returns.
+      - linters: [errcheck]
+        source: '^\s*defer ([\w.]+\.(Close|Flush|Rollback)\((ctx|context\.Background\(\))?\)|os\.RemoveAll\(\w+\))$'
+      - linters: [errcheck]
+        path: _test\.go
+        text: '\.Close` is not checked'
+      # Drops the buffered response early so it is collectable during post-flight.
+      - linters: [ineffassign]
+        source: '^\s*body = nil$'
+      # Gate for license-gated settings sections; no section is gated yet.
+      - linters: [unused]
+        path: app/settings/license\.go
+        text: requireLicense

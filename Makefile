@@ -4,7 +4,7 @@
         check chart-lint sqlc-generate test test-race test-fuzz test-cover cover-check \
         bench-gate bench-baseline test-integration test-integration-run smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
-        ui-fetch build clean schemas catalog-validate catalog-embed lint-rules
+        ui-fetch build clean schemas catalog-validate catalog-embed lint-rules lint
 
 # Load .env if present.
 -include .env
@@ -97,7 +97,8 @@ help: ## Show this help
 	@echo ''
 	@echo '🧰 Go:'
 	@echo '  make sqlc-generate     regenerate sqlc code'
-	@echo '  make check             CI gate: gofmt, codebase rules, vet, tests, chart lint'
+	@echo '  make check             CI gate: gofmt, codebase rules, golangci-lint, vet, tests, chart lint'
+	@echo '  make lint              golangci-lint every module'
 	@echo '  make chart-lint        helm lint chart/'
 	@echo '  make test              go test ./...'
 	@echo '  make test-race         unit tests of every module under -race'
@@ -406,10 +407,18 @@ bench-baseline: ## regenerate $(BENCH_BASELINE) from the current tree
 lint-rules: ## enforce the canonical-protocol codebase rules (1/2/4/10) via grep
 	./scripts/check-codebase-rules.sh
 
-check: ## the CI gate: gofmt, codebase rules, vet, tests, chart lint
+GOLANGCI_LINT ?= golangci-lint
+
+lint: ## golangci-lint every module (config: .golangci.yml)
+	$(GOLANGCI_LINT) run ./...
+	cd sdk && $(GOLANGCI_LINT) run ./...
+	cd jobq && $(GOLANGCI_LINT) run ./...
+
+check: ## the CI gate: gofmt, codebase rules, golangci-lint, vet, tests, chart lint
 	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
 		[ -z "$$unformatted" ] || { echo "These files need gofmt:"; echo "$$unformatted"; exit 1; }
 	$(MAKE) --no-print-directory lint-rules
+	$(MAKE) --no-print-directory lint
 	go vet ./... && go vet -tags=integration ./...
 	cd sdk && go vet ./... && go vet -tags=integration ./...
 	cd jobq && go vet ./... && go vet -tags=integration ./...

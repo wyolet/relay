@@ -22,9 +22,6 @@ func (GeminiTranslator) NewFromCanonicalStream() func(chunk []byte) ([]byte, err
 type canonicalToGeminiStream struct {
 	responseID string
 	model      string
-	// accumulated parts for the current candidate
-	parts        []geminiPart
-	finishReason string
 	// current function-call item being assembled. Gemini does not stream
 	// partial function args (unlike canonical's arguments deltas), so we
 	// buffer them and emit one complete functionCall frame on item.completed.

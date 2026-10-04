@@ -10,6 +10,7 @@
 // Content-Type when possible, falling back to the URL path's suffix,
 // then to .ico.
 
+// Command icon-import downloads provider icons listed in an OpenRouter providers dump into a directory.
 package main
 
 import (

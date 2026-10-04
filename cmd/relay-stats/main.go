@@ -12,6 +12,7 @@
 //	relay-stats summary --by model_id --since 24h
 //	relay-stats summary --by relay_key_hash --since 7d --json | jq .
 
+// Command relay-stats prints usage events and summaries from the relay control API.
 package main
 
 import (
@@ -89,7 +90,7 @@ func runEvents(args []string) {
 
 	body := doGet(*common.url+"/usage/events?"+q.Encode(), *common.token)
 	if *common.jsonOut {
-		os.Stdout.Write(body)
+		_, _ = os.Stdout.Write(body)
 		return
 	}
 	var resp struct {
@@ -114,7 +115,7 @@ func runSummary(args []string) {
 
 	body := doGet(*common.url+"/usage/summary?"+q.Encode(), *common.token)
 	if *common.jsonOut {
-		os.Stdout.Write(body)
+		_, _ = os.Stdout.Write(body)
 		return
 	}
 	var result usagelog.SummaryResult

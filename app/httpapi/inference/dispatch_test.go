@@ -19,7 +19,6 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
-	"github.com/wyolet/relay/app/keypool"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/pipeline"
@@ -133,17 +132,6 @@ func buildDispatchCatalog(t *testing.T, hostName string, hostAdapter adapters.Na
 	return cat, pr
 }
 
-// stubAdapter is a minimal pipeline.Adapter for tests.
-type stubAdapter struct{}
-
-func (stubAdapter) Call(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
-	return nil, fmt.Errorf("stub: no upstream")
-}
-func (stubAdapter) ExtractTokens(_ []byte) pkgusage.Tokens { return nil }
-func (stubAdapter) Retryable(_ *http.Response) (bool, keypool.FailureKind, time.Duration) {
-	return false, 0, 0
-}
-
 // stubV1Translator is a no-op v1.Translator for test specs.
 type stubV1Translator struct{}
 
@@ -164,7 +152,7 @@ func (stubV1Translator) NewFromCanonicalStream() func([]byte) ([]byte, error) { 
 
 // buildTestRegistry constructs a minimal adapter.Registry for tests.
 // Registers specs for openai, openai_responses, openai_embeddings, and
-// anthropic — each with a stubAdapter so tests exercise dispatch routing
+// anthropic — each with a stub translator so tests exercise dispatch routing
 // without a live upstream.
 func buildTestRegistry() *adapter.Registry {
 	openaiSpec := (&adapter.Spec{

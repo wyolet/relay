@@ -18,9 +18,9 @@ func TestIntegration_BulkReadsAreAudited(t *testing.T) {
 			t.Fatalf("GET %s = %d: %s", path, code, raw)
 		}
 	}
-	evs := s.waitForAuditRows(2)
+	s.waitForAuditRows(2)
 	time.Sleep(1500 * time.Millisecond) // one more emitter tick: a stray counts row would land now
-	evs = s.auditList("?limit=1000").Events
+	evs := s.auditList("?limit=1000").Events
 	got := map[string]string{}
 	for _, ev := range evs {
 		got[ev.Request.Path+"?"+ev.Action] = ev.Outcome.Status

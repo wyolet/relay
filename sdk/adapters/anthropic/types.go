@@ -1,3 +1,4 @@
+// Package anthropic translates the Anthropic Messages wire shape to and from the canonical v1 protocol.
 package anthropic
 
 import "encoding/json"

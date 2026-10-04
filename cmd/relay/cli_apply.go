@@ -155,7 +155,7 @@ func printPlan(w *os.File, resp applyResponse) {
 	for _, e := range resp.Plan {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Kind, e.Name, e.Action, strings.Join(e.ChangedFields, ","))
 	}
-	tw.Flush()
+	_ = tw.Flush()
 	fmt.Fprintf(w, "\ncreate=%d update=%d unchanged=%d skip-dirty=%d delete=%d conflict=%d forbidden=%d applied=%v\n",
 		resp.Counts.Create, resp.Counts.Update, resp.Counts.Unchanged,
 		resp.Counts.SkipDirty, resp.Counts.Delete, resp.Counts.Conflict,
