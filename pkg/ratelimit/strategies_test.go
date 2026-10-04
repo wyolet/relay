@@ -133,7 +133,7 @@ func TestTokenBucket_RefillAccuracy(t *testing.T) {
 				res := mustReserve(t, l, "tb-refill", rules)
 				mustCommit(t, l, res, Observations{})
 			}
-			mustExceed(t, l, "tb-refill", rules)
+			_ = mustExceed(t, l, "tb-refill", rules)
 
 			// Advance time → tokens refill.
 			*now = start.Add(tc.advance)
@@ -197,7 +197,7 @@ func TestTokenBucket_RefundRestoresFull(t *testing.T) {
 		mustCommit(t, l, res, Observations{})
 	}
 	// 7th should fail.
-	mustExceed(t, l, "tb-refund", rules)
+	_ = mustExceed(t, l, "tb-refund", rules)
 }
 
 // TestTokenBucket_PartialRefill_NoBurstOverBurst: amount=10, exhaust, advance window/2
@@ -296,7 +296,7 @@ func TestSlidingWindow_NoBurstAcrossBoundary(t *testing.T) {
 	// At t=60s exactly (start of bucket 2): prev (bucket1) has weight=1.0.
 	// rate = 0 + 10*1.0 = 10 >= amount → blocked.
 	*now = base.Add(time.Minute)
-	mustExceed(t, l, "sw-boundary", rules)
+	_ = mustExceed(t, l, "sw-boundary", rules)
 }
 
 // TestSlidingWindow_HalfWindowAllowsHalf: fill 10 at t=0–59s.
@@ -390,7 +390,7 @@ func TestSlidingWindow_BoundaryAccuracy2(t *testing.T) {
 		res := mustReserve(t, l1, "sw-bound2", rules)
 		mustCommit(t, l1, res, Observations{})
 	}
-	mustExceed(t, l1, "sw-bound2", rules)
+	_ = mustExceed(t, l1, "sw-bound2", rules)
 
 	// In a fresh limiter at base+60s+1ms: completely new bucket, no prev data.
 	l2, now2 := newScopedLimiter(t, base.Add(60*time.Second+time.Millisecond))
@@ -422,7 +422,7 @@ func TestFixedWindow_HardResetAtBoundary(t *testing.T) {
 		res := mustReserve(t, l, "fw-reset", rules)
 		mustCommit(t, l, res, Observations{})
 	}
-	mustExceed(t, l, "fw-reset", rules)
+	_ = mustExceed(t, l, "fw-reset", rules)
 
 	// Advance to next bucket.
 	*now = base.Add(time.Minute + time.Second) // floor((61s)/60s)*60s = 60s bucket
@@ -430,7 +430,7 @@ func TestFixedWindow_HardResetAtBoundary(t *testing.T) {
 		res := mustReserve(t, l, "fw-reset", rules)
 		mustCommit(t, l, res, Observations{})
 	}
-	mustExceed(t, l, "fw-reset", rules)
+	_ = mustExceed(t, l, "fw-reset", rules)
 }
 
 // TestFixedWindow_2xBurstAtBoundary: documents the known fixed-window double-burst
@@ -464,7 +464,7 @@ func TestFixedWindow_2xBurstAtBoundary(t *testing.T) {
 		mustCommit(t, l, res, Observations{})
 	}
 	// All 10 admitted in ~2 seconds. 11th must fail.
-	mustExceed(t, l, "fw-2x", rules)
+	_ = mustExceed(t, l, "fw-2x", rules)
 	// NOTE: This is the documented downside of fixed-window vs sliding-window.
 }
 
@@ -520,7 +520,7 @@ func TestFixedWindow_RefundIsNoop(t *testing.T) {
 	// Fixed-window has no cancel refund path — the counter was incremented and
 	// there is no decrement on cancel. 4th should still fail.
 	// (token-bucket/leaky/session-window have refund; fixed-window does not.)
-	mustExceed(t, l, "fw-noop", rules)
+	_ = mustExceed(t, l, "fw-noop", rules)
 }
 
 // ── LEAKY BUCKET ─────────────────────────────────────────────────────────────
@@ -617,7 +617,7 @@ func TestLeakyBucket_RefundDecrementsLevel(t *testing.T) {
 		res := mustReserve(t, l, "lb-refund", rules)
 		mustCommit(t, l, res, Observations{})
 	}
-	mustExceed(t, l, "lb-refund", rules)
+	_ = mustExceed(t, l, "lb-refund", rules)
 }
 
 // TestLeakyBucket_RetryAfter: when full (level=amount), retry_after = 1/leak_rate.
@@ -677,7 +677,7 @@ func TestSessionWindow_NoMidWindowReset(t *testing.T) {
 	mustCommit(t, l, res3, Observations{})
 
 	// 4th exceeds (amount=3).
-	mustExceed(t, l, "sw-nomid", rules)
+	_ = mustExceed(t, l, "sw-nomid", rules)
 }
 
 // TestSessionWindow_IdleAfterExpiry_AnchorsNewWindow: amount=2, window=5h.
@@ -701,7 +701,7 @@ func TestSessionWindow_IdleAfterExpiry_AnchorsNewWindow(t *testing.T) {
 		res := mustReserve(t, l, "sw-idle", rules)
 		mustCommit(t, l, res, Observations{})
 	}
-	mustExceed(t, l, "sw-idle", rules)
+	_ = mustExceed(t, l, "sw-idle", rules)
 
 	// Advance to t=10h (anchor+5h expired, idle for 5h more).
 	*now = start.Add(10 * time.Hour)
@@ -714,7 +714,7 @@ func TestSessionWindow_IdleAfterExpiry_AnchorsNewWindow(t *testing.T) {
 	mustCommit(t, l, res2, Observations{})
 
 	// 3rd exceeds.
-	mustExceed(t, l, "sw-idle", rules)
+	_ = mustExceed(t, l, "sw-idle", rules)
 }
 
 // TestSessionWindow_RefundOnCancelWithinWindow: amount=2, window=1h.
@@ -734,7 +734,7 @@ func TestSessionWindow_RefundOnCancelWithinWindow(t *testing.T) {
 
 	res1 := mustReserve(t, l, "sw-cancel", rules)
 	res2 := mustReserve(t, l, "sw-cancel", rules)
-	mustExceed(t, l, "sw-cancel", rules)
+	_ = mustExceed(t, l, "sw-cancel", rules)
 
 	// Cancel res2 → count refunded to 1.
 	mustCommit(t, l, res2, Observations{Cancelled: true})
@@ -745,7 +745,7 @@ func TestSessionWindow_RefundOnCancelWithinWindow(t *testing.T) {
 	mustCommit(t, l, res3, Observations{})
 
 	// 4th exceeds.
-	mustExceed(t, l, "sw-cancel", rules)
+	_ = mustExceed(t, l, "sw-cancel", rules)
 }
 
 // ── CONCURRENCY METER ─────────────────────────────────────────────────────────
@@ -767,7 +767,7 @@ func TestConcurrency_CommitDecrements(t *testing.T) {
 
 	res1 := mustReserve(t, l, "con-decr", rules)
 	res2 := mustReserve(t, l, "con-decr", rules)
-	mustExceed(t, l, "con-decr", rules)
+	_ = mustExceed(t, l, "con-decr", rules)
 
 	mustCommit(t, l, res1, Observations{}) // not cancelled → still decrements concurrency
 	mustCommit(t, l, res2, Observations{})
@@ -791,7 +791,7 @@ func TestConcurrency_CancelDecrements(t *testing.T) {
 	rules := []Rule{rule}
 
 	res := mustReserve(t, l, "con-cancel", rules)
-	mustExceed(t, l, "con-cancel", rules)
+	_ = mustExceed(t, l, "con-cancel", rules)
 
 	mustCommit(t, l, res, Observations{Cancelled: true})
 
@@ -818,7 +818,7 @@ func TestConcurrency_IgnoresStrategy(t *testing.T) {
 
 			res1 := mustReserve(t, l, "con-strat", rules)
 			res2 := mustReserve(t, l, "con-strat", rules)
-			mustExceed(t, l, "con-strat", rules)
+			_ = mustExceed(t, l, "con-strat", rules)
 
 			mustCommit(t, l, res1, Observations{})
 			mustCommit(t, l, res2, Observations{})

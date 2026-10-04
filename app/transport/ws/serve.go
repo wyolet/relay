@@ -82,7 +82,7 @@ func Serve(ctx context.Context, conn *websocket.Conn, base *http.Request, handle
 	close(out)
 	writerWG.Wait()
 
-	conn.Close(websocket.StatusNormalClosure, "")
+	_ = conn.Close(websocket.StatusNormalClosure, "")
 	return readErr
 }
 

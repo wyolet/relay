@@ -39,7 +39,7 @@ linters:
     rules:
       # Deferred cleanup: the error is unactionable once the function returns.
       - linters: [errcheck]
-        source: '^\s*defer [\w.]+\.(Close|Rollback)\((ctx|context\.Background\(\))?\)$'
+        source: '^\s*defer ([\w.]+\.(Close|Flush|Rollback)\((ctx|context\.Background\(\))?\)|os\.RemoveAll\(\w+\))$'
       - linters: [errcheck]
         path: _test\.go
         text: '\.Close` is not checked'

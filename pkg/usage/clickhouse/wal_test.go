@@ -40,6 +40,13 @@ func newQueue(t *testing.T, dir string, maxLines int, flushFn func([]usage.Event
 	return q
 }
 
+func mustWrite(t *testing.T, q *segmentQueue, ev usage.Event) {
+	t.Helper()
+	if err := q.Write(ev); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+}
+
 // countSegments returns how many segment-*.jsonl files exist in dir.
 func countSegments(t *testing.T, dir string) int {
 	t.Helper()
@@ -107,8 +114,8 @@ func TestTimerBasedRotationAndFlush(t *testing.T) {
 		t.Fatalf("newSegmentQueue: %v", err)
 	}
 
-	q.Write(makeEvent("timer-1"))
-	q.Write(makeEvent("timer-2"))
+	mustWrite(t, q, makeEvent("timer-1"))
+	mustWrite(t, q, makeEvent("timer-2"))
 
 	// Wait for the ticker to fire and flush.
 	select {
@@ -134,8 +141,8 @@ func TestFlushFnErrorPreservesSegment(t *testing.T) {
 	q := newQueue(t, dir, 2, flushFn)
 
 	// Write 2 events to trigger rotation (maxLines=2).
-	q.Write(makeEvent("e1"))
-	q.Write(makeEvent("e2"))
+	mustWrite(t, q, makeEvent("e1"))
+	mustWrite(t, q, makeEvent("e2"))
 
 	// One segment should exist after rotation.
 	if countSegments(t, dir) != 1 {
@@ -174,8 +181,8 @@ func TestRecoverDrainsLeftoverSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("q1: %v", err)
 	}
-	q1.Write(makeEvent("crash-1"))
-	q1.Write(makeEvent("crash-2")) // triggers rotation → segment-*.jsonl
+	mustWrite(t, q1, makeEvent("crash-1"))
+	mustWrite(t, q1, makeEvent("crash-2")) // triggers rotation → segment-*.jsonl
 	// Simulate crash: stop goroutine without flushing.
 	q1.StopBackground()
 
@@ -254,7 +261,7 @@ func TestMaxSegmentsDropsOldest(t *testing.T) {
 	// Write 4 events → 4 rotations → 4 segments before any flush.
 	// FlushPending is only called by ticker or Close; here we call it manually.
 	for i := 0; i < 4; i++ {
-		q.Write(makeEvent(fmt.Sprintf("m%d", i)))
+		mustWrite(t, q, makeEvent(fmt.Sprintf("m%d", i)))
 		time.Sleep(2 * time.Millisecond) // ensure distinct timestamps
 	}
 
@@ -283,8 +290,8 @@ func TestCloseFlushesFinalActiveSegment(t *testing.T) {
 	}
 
 	q := newQueue(t, dir, 10000, flushFn)
-	q.Write(makeEvent("final-1"))
-	q.Write(makeEvent("final-2"))
+	mustWrite(t, q, makeEvent("final-1"))
+	mustWrite(t, q, makeEvent("final-2"))
 
 	if err := q.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -316,8 +323,8 @@ func TestFlushLagRisesOnSinkFailureAndClearsOnDrain(t *testing.T) {
 	}
 
 	failing := newQueue(t, dir, 1, func([]usage.Event) error { return errors.New("sink down") })
-	failing.Write(makeEvent("lag-1")) // maxLines=1 → rotates to a segment immediately
-	failing.FlushPending()            // flush fails, segment remains
+	mustWrite(t, failing, makeEvent("lag-1")) // maxLines=1 → rotates to a segment immediately
+	failing.FlushPending()                    // flush fails, segment remains
 	if got := lag(); got <= 0 {
 		t.Fatalf("flush lag = %v after failed flush, want > 0", got)
 	}

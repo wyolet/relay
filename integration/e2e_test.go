@@ -1205,7 +1205,7 @@ func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
 	}
 
 	resp := doAnon()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anon w/o flag: want 401, got %d", resp.StatusCode)
@@ -1217,7 +1217,7 @@ func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
 	// Flip flag → anon works.
 	st.enableProxyMode(true)
 	resp = doAnon()
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("anon w/ flag: want 200, got %d", resp.StatusCode)

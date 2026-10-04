@@ -115,12 +115,12 @@ func (q *Queue[T]) openActive() error {
 	// Count existing lines so the rotation threshold stays accurate.
 	n, err := CountLines(path)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("wal/%s: count active lines: %w", q.cfg.Kind, err)
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("wal/%s: stat active segment: %w", q.cfg.Kind, err)
 	}
 

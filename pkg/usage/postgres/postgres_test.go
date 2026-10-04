@@ -41,7 +41,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() {
-		s.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table)
+		_, _ = s.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table)
 		s.Close()
 	}()
 

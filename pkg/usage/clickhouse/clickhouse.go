@@ -245,12 +245,12 @@ func New(cfg Config) (*Sink, error) {
 	pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := conn.Ping(pingCtx); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("usage/clickhouse: ping: %w", err)
 	}
 
 	if err := ensureSchema(pingCtx, conn, cfg.RetentionDays); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 
@@ -268,7 +268,7 @@ func New(cfg Config) (*Sink, error) {
 		s.insertBatch,
 	)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	s.wal = wal

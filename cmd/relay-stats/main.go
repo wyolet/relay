@@ -88,7 +88,7 @@ func runEvents(args []string) {
 
 	body := doGet(*common.url+"/usage/events?"+q.Encode(), *common.token)
 	if *common.jsonOut {
-		os.Stdout.Write(body)
+		_, _ = os.Stdout.Write(body)
 		return
 	}
 	var resp struct {
@@ -113,7 +113,7 @@ func runSummary(args []string) {
 
 	body := doGet(*common.url+"/usage/summary?"+q.Encode(), *common.token)
 	if *common.jsonOut {
-		os.Stdout.Write(body)
+		_, _ = os.Stdout.Write(body)
 		return
 	}
 	var result usagelog.SummaryResult

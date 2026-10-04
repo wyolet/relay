@@ -70,7 +70,7 @@ func (c *client) fetchSync(ctx context.Context) (*syncResponse, error) {
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if err := c.refreshAccessToken(ctx); err != nil {
 			return nil, fmt.Errorf("bitwarden: sync auth failed: %w", err)
