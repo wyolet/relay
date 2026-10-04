@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
@@ -38,7 +39,10 @@ import (
 // policyDeleteFixture is a project with a service account, a host, and a
 // user outside the project, plus the mounted control API.
 type policyDeleteFixture struct {
+	pool    *pgxpool.Pool
+	cat     *appcatalog.Catalog
 	stores  *appcatalog.Stores
+	users   *user.Store
 	handler http.Handler
 	sink    *auditSink
 	emitter *audit.Emitter
@@ -70,11 +74,11 @@ type inUseResponse struct {
 func newPolicyDeleteFixture(t *testing.T) (policyDeleteFixture, context.Context) {
 	t.Helper()
 	pool, ctx := setupPolicyRefDB(t)
-	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
+	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
 		t.Fatalf("BootstrapStores: %v", err)
 	}
-	f := policyDeleteFixture{stores: stores, sink: &auditSink{}}
+	f := policyDeleteFixture{pool: pool, cat: cat, stores: stores, users: user.NewStore(gen.New(pool)), sink: &auditSink{}}
 
 	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "del-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
 	if err := stores.Team.Upsert(ctx, tm); err != nil {
@@ -101,12 +105,14 @@ func newPolicyDeleteFixture(t *testing.T) (policyDeleteFixture, context.Context)
 		t.Fatalf("upsert host: %v", err)
 	}
 	f.alice = &user.User{ID: meta.NewID(), Username: "del-alice-" + meta.NewID()[:8]}
-	if err := user.NewStore(gen.New(pool)).Upsert(ctx, f.alice); err != nil {
+	if err := f.users.Upsert(ctx, f.alice); err != nil {
 		t.Fatalf("upsert user: %v", err)
 	}
 
 	deps := mountDeps(t)
 	deps.Stores = stores
+	deps.Users = f.users
+	deps.Catalog = cat
 	deps.Authz = audit.Authorizer{Inner: testRBAC()}
 	f.emitter = audit.NewEmitter(f.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	deps.Audit = f.emitter
@@ -151,10 +157,15 @@ func (f policyDeleteFixture) projectKey(t *testing.T, ctx context.Context, name,
 	return k
 }
 
-// deletePolicy sends DELETE as the admin token, or as alice when asAlice.
 func (f policyDeleteFixture) deletePolicy(t *testing.T, id string, asAlice bool) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodDelete, "/policies/by-id/"+id, nil)
+	return f.deleteRow(t, "policies", id, asAlice)
+}
+
+// deleteRow sends DELETE as the admin token, or as alice when asAlice.
+func (f policyDeleteFixture) deleteRow(t *testing.T, plural, id string, asAlice bool) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/"+plural+"/by-id/"+id, nil)
 	if asAlice {
 		req.Header.Set("X-Test-User", "alice")
 	} else {

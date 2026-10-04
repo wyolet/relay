@@ -4,9 +4,9 @@ import "testing"
 
 // A Team, Group or Role is system-owned because nobody owns it personally,
 // not because the relay ships it: those follow the tenant tier and stay
-// mutable through CRUD, while the rows the router depends on are edited only
-// by an admin and never deleted. A
-// project-owned row is the tenant's whatever its governance section says.
+// mutable through CRUD, while the rows the router depends on are edited and
+// deleted only by an admin. A project-owned row is the tenant's whatever its
+// governance section says.
 func TestGovernsOwnerTiers(t *testing.T) {
 	locked := fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}}
 
@@ -19,12 +19,13 @@ func TestGovernsOwnerTiers(t *testing.T) {
 		reader    fakeReader
 		wantErr   bool
 	}{
-		// An admin may edit a system row through CRUD; nobody deletes one.
+		// An admin may edit or delete a system row through CRUD; nobody else may.
 		{name: "admin edits system policy", op: OpEdit, kind: "policy", ownerKind: "system", admin: true},
 		{name: "admin edits system host", op: OpEdit, kind: "host", ownerKind: "system", admin: true},
-		{name: "admin cannot delete system policy", op: OpDelete, kind: "policy", ownerKind: "system",
-			admin: true, wantErr: true},
+		{name: "admin deletes system policy", op: OpDelete, kind: "policy", ownerKind: "system", admin: true},
+		{name: "admin deletes system host", op: OpDelete, kind: "host", ownerKind: "system", admin: true},
 		{name: "non-admin cannot edit system host", op: OpEdit, kind: "host", ownerKind: "system", wantErr: true},
+		{name: "non-admin cannot delete system host", op: OpDelete, kind: "host", ownerKind: "system", wantErr: true},
 		// The governance section still binds an admin on catalog-managed rows.
 		{name: "admin still bound by a locked section", op: OpEdit, kind: "policy", ownerKind: "host",
 			admin: true, reader: locked, wantErr: true},

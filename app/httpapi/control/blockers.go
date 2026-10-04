@@ -94,7 +94,7 @@ func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceIte
 
 // refuseInUse returns the 409 for deleting a row that is still referenced,
 // or nil when nothing references it.
-func refuseInUse(ctx context.Context, d Deps, kind, id, name string) error {
+func (d Deps) refuseInUse(ctx context.Context, kind, id, name string) error {
 	groups, err := blockers(ctx, d, kind, id)
 	if err != nil {
 		return huma.Error500InternalServerError(err.Error())
