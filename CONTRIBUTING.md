@@ -7,7 +7,7 @@ obey.
 
 ## Prerequisites
 
-- **Go 1.25+**
+- **Go 1.26+**
 - **Docker** (for the integration tests and the local compose stack)
 - `make` (the `Makefile` is the entry point for most workflows)
 

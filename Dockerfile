@@ -43,7 +43,7 @@ RUN set -eu; \
   printf '%s\n' "${CATALOG_REF}" > /assets/catalog/.version
 
 # --- builder: compile the binary with the UI embedded ---
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 # Copy the workspace + every locally-replaced module's go.mod/go.sum before
 # download so the module-cache layer stays warm across source edits. go.mod
