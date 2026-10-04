@@ -37,6 +37,11 @@ func (CCTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 
 	ch := &cc.Choices[0]
 	resp.Status, resp.FinishReason, resp.IncompleteDetails = ccFinishReasonToCanonical(ch.FinishReason)
+	// OpenAI pairs a refusal with finish_reason "stop"; the refusal field is the
+	// only signal, so it must lift the canonical finish_reason (rule 9).
+	if ch.Message.Refusal != nil && *ch.Message.Refusal != "" && resp.FinishReason == v1.FinishReasonStop {
+		resp.FinishReason = v1.FinishReasonRefusal
+	}
 	resp.Output = ccChoiceToCanonicalOutput(cc.ID, ch)
 
 	return resp, nil
@@ -90,6 +95,8 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 	case v1.FinishReasonContentFilter:
 		finishReason = "content_filter"
 	case v1.FinishReasonRefusal:
+		// CC has no refusal finish_reason: the wire signals it with
+		// message.refusal + "stop", set below.
 		finishReason = "stop"
 	default:
 		finishReason = "stop"
@@ -111,7 +118,7 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 			}
 			// If finish_reason was refusal, the refusal text is the message content.
 			if resp.FinishReason == v1.FinishReasonRefusal {
-				refusalText = string(textBuf)
+				refusalText += string(textBuf)
 				textBuf = nil
 			}
 		case *v1.FunctionCall:
@@ -142,14 +149,20 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 		}
 	}
 
-	if refusalText != "" {
+	switch {
+	case refusalText != "":
 		msg.Refusal = &refusalText
-	} else if len(textBuf) > 0 {
+	case len(textBuf) > 0:
 		s := string(textBuf)
 		msg.Content = &s
-	} else if len(toolCalls) == 0 {
+	case len(toolCalls) == 0:
 		s := ""
 		msg.Content = &s
+	}
+	if resp.FinishReason == v1.FinishReasonRefusal && refusalText == "" {
+		// A refusal with no text has nothing to put in message.refusal; "stop"
+		// alone would read as success, so fall back to the CC block signal.
+		finishReason = "content_filter"
 	}
 	msg.ToolCalls = toolCalls
 

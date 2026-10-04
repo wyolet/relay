@@ -53,6 +53,9 @@ type ccToCanonicalStream struct {
 	status           v1.Status
 	finishReason     v1.FinishReason
 	errorEmitted     bool
+	// refused records a refusal delta: CC terminates a refusal with "stop",
+	// so handleDone lifts the finish_reason from it (rule 9).
+	refused bool
 }
 
 func ccStreamErrorFrame(data []byte) (v1.SSEFrame, bool) {
@@ -188,8 +191,9 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 
 	// Refusal content.
 	if delta.Refusal != nil && *delta.Refusal != "" {
-		// Refusal in streaming: treat as text delta with finish_reason=refusal on completion.
-		// Map to text delta here; the completed event will carry finish_reason=refusal.
+		// Refusal text streams as a normal text delta; handleDone turns the
+		// terminal finish_reason into refusal.
+		s.refused = true
 		rf, err := s.handleTextDelta(*delta.Refusal)
 		if err != nil {
 			return nil, err
@@ -248,6 +252,9 @@ func (s *ccToCanonicalStream) handleDone() ([]byte, error) {
 	status, finish := s.status, s.finishReason
 	if finish == "" {
 		status, finish = v1.StatusCompleted, v1.FinishReasonStop
+	}
+	if s.refused && finish == v1.FinishReasonStop {
+		finish = v1.FinishReasonRefusal
 	}
 	completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
 		ID:           s.responseID,
