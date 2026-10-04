@@ -11,46 +11,16 @@ package policy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	tc "github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-
 	appratelimit "github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/kv/kvtest"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
-
-func startRedis(t *testing.T) string {
-	t.Helper()
-	ctx := context.Background()
-	ctr, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
-		ContainerRequest: tc.ContainerRequest{
-			Image:        "redis:7-alpine",
-			ExposedPorts: []string{"6379/tcp"},
-			WaitingFor:   wait.ForLog("Ready to accept connections"),
-		},
-		Started: true,
-	})
-	if err != nil {
-		t.Fatalf("start redis container: %v", err)
-	}
-	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
-
-	host, err := ctr.Host(ctx)
-	if err != nil {
-		t.Fatalf("redis host: %v", err)
-	}
-	port, err := ctr.MappedPort(ctx, "6379")
-	if err != nil {
-		t.Fatalf("redis port: %v", err)
-	}
-	return fmt.Sprintf("%s:%s", host, port.Port())
-}
 
 // countingRedis wraps a real kv.Redis so a test can count the round trips one
 // reservation costs without changing what the server executes.
@@ -61,9 +31,9 @@ type countingRedis struct {
 	keys  [][]string
 }
 
-func newCountingRedis(t *testing.T, addr string) *countingRedis {
+func newCountingRedis(t *testing.T) *countingRedis {
 	t.Helper()
-	s, err := kv.NewRedis(context.Background(), kv.RedisConfig{Addr: addr})
+	s, err := kv.NewRedis(context.Background(), kvtest.Config(t))
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
@@ -85,7 +55,7 @@ func (c *countingRedis) calls() ([]string, [][]string) {
 	return append([]string(nil), c.names...), append([][]string(nil), c.keys...)
 }
 
-func redisFixture(t *testing.T, addr string, rules ...appratelimit.Rule) (*Service, *countingRedis, *Policy) {
+func redisFixture(t *testing.T, rules ...appratelimit.Rule) (*Service, *countingRedis, *Policy) {
 	t.Helper()
 	pol := fix("prod-policy")
 	pol.Meta.ID = "pol-1"
@@ -94,7 +64,7 @@ func redisFixture(t *testing.T, addr string, rules ...appratelimit.Rule) (*Servi
 		rl = testRateLimit("rl-1", rules...)
 		pol.Spec.RateLimitID = rl.Meta.ID
 	}
-	store := newCountingRedis(t, addr)
+	store := newCountingRedis(t)
 	return NewService(reserveSnap{pol: pol, rl: rl}, nil,
 		pkgratelimit.New(store, discardLogger(), nil)), store, pol
 }
@@ -106,13 +76,12 @@ func redisFixture(t *testing.T, addr string, rules ...appratelimit.Rule) (*Servi
 // a revoked token answers 401 rather than the 429 an over-limit rule ahead of
 // it would produce.
 func TestReserve_IsOneScriptOnRedis(t *testing.T) {
-	addr := startRedis(t)
 	rules := []appratelimit.Rule{
 		{Meter: appratelimit.MeterRequests, Amount: 1 << 20, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyFixedWindow},
 		{Meter: appratelimit.MeterTokens, Amount: 1 << 20, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategySlidingWindow},
 		{Meter: appratelimit.MeterTokensInput, Amount: 1 << 20, Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyTokenBucket},
 	}
-	svc, store, pol := redisFixture(t, addr, rules...)
+	svc, store, pol := redisFixture(t, rules...)
 	ctx := context.Background()
 
 	res, err := svc.ReserveInbound(ctx, InboundInput{
@@ -143,8 +112,7 @@ func TestReserve_IsOneScriptOnRedis(t *testing.T) {
 // A revoked token is refused inside that same single call — the denylist
 // entry is read by the reservation, not by a second round trip before it.
 func TestReserve_RevokedJTIOnRedis(t *testing.T) {
-	addr := startRedis(t)
-	svc, store, pol := redisFixture(t, addr,
+	svc, store, pol := redisFixture(t,
 		appratelimit.Rule{Meter: appratelimit.MeterRequests, Amount: 1 << 20,
 			Window: appratelimit.Window(time.Hour), Strategy: appratelimit.StrategyFixedWindow})
 	ctx := context.Background()
@@ -170,8 +138,7 @@ func TestReserve_RevokedJTIOnRedis(t *testing.T) {
 // Reserve and Commit together cost one call when revocation is the only rule:
 // there is no metered state for the commit-side script to return.
 func TestReserveThenCommit_IsOneScriptOnRedis(t *testing.T) {
-	addr := startRedis(t)
-	svc, store, pol := redisFixture(t, addr)
+	svc, store, pol := redisFixture(t)
 	ctx := context.Background()
 
 	res, err := svc.ReserveInbound(ctx, InboundInput{Policy: pol, TeamID: "team-1", TokenJTI: "jti-1"})

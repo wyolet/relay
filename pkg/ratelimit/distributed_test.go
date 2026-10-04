@@ -3,55 +3,24 @@
 package ratelimit
 
 // distributed_test.go — integration tests requiring a real Redis instance.
-// Run with: go test -tags integration ./pkg/ratelimit/...
+// Run with: make test-integration.
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	tc "github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-func startRedis(t *testing.T) string {
+func newRedisStore(t *testing.T, cfg kv.RedisConfig) *kv.Redis {
 	t.Helper()
-	ctx := context.Background()
-	req := tc.ContainerRequest{
-		Image:        "redis:7-alpine",
-		ExposedPorts: []string{"6379/tcp"},
-		WaitingFor:   wait.ForLog("Ready to accept connections"),
-	}
-	ctr, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start redis container: %v", err)
-	}
-	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
-
-	host, err := ctr.Host(ctx)
-	if err != nil {
-		t.Fatalf("redis host: %v", err)
-	}
-	port, err := ctr.MappedPort(ctx, "6379")
-	if err != nil {
-		t.Fatalf("redis port: %v", err)
-	}
-	return fmt.Sprintf("%s:%s", host, port.Port())
-}
-
-func newRedisStore(t *testing.T, addr string) *kv.Redis {
-	t.Helper()
-	s, err := kv.NewRedis(context.Background(), kv.RedisConfig{Addr: addr})
+	s, err := kv.NewRedis(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
@@ -63,9 +32,9 @@ func newRedisStore(t *testing.T, addr string) *kv.Redis {
 // 1000 concurrent goroutines split across 2 Limiter instances sharing one Redis.
 // Budget = 200 RPM. Asserts admitted ∈ [195,200].
 func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
-	addr := startRedis(t)
-	s1 := newRedisStore(t, addr)
-	s2 := newRedisStore(t, addr)
+	cfg := kvtest.Config(t)
+	s1 := newRedisStore(t, cfg)
+	s2 := newRedisStore(t, cfg)
 
 	now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -120,9 +89,9 @@ func TestDistributed_Reserve_TwoLimiters(t *testing.T) {
 	}
 }
 
-func redisLimiterFactory(addr string) func(t *testing.T, now *time.Time) *Limiter {
+func redisLimiterFactory(cfg kv.RedisConfig) func(t *testing.T, now *time.Time) *Limiter {
 	return func(t *testing.T, now *time.Time) *Limiter {
-		s, err := kv.NewRedis(context.Background(), kv.RedisConfig{Addr: addr})
+		s, err := kv.NewRedis(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("NewRedis: %v", err)
 		}
@@ -133,8 +102,7 @@ func redisLimiterFactory(addr string) func(t *testing.T, now *time.Time) *Limite
 }
 
 func TestContractLimit_RedisStore(t *testing.T) {
-	addr := startRedis(t)
-	factory := redisLimiterFactory(addr)
+	factory := redisLimiterFactory(kvtest.Config(t))
 	runLimiterContractSuite(t, "RedisStore", factory)
 }
 
@@ -144,7 +112,7 @@ func TestContractLimit_RedisStore(t *testing.T) {
 // carry different hash tags, so this also exercises the pipeline's per-command
 // EVALSHA routing on a live server.
 func TestDistributed_CommitBoth_Parity(t *testing.T) {
-	addr := startRedis(t)
+	cfg := kvtest.Config(t)
 	now := time.Date(2026, 1, 1, 0, 0, 30, 0, time.UTC)
 	window := time.Minute
 	inbound := []Rule{
@@ -192,7 +160,7 @@ func TestDistributed_CommitBoth_Parity(t *testing.T) {
 		return out
 	}
 
-	s1 := newRedisStore(t, addr)
+	s1 := newRedisStore(t, cfg)
 	l1 := New(s1, discardLog(), func() time.Time { return now })
 	seq := dump(t, l1, s1, "seq-policy", "hostkey:seq-key", func(l *Limiter, in, up *Reservation) {
 		if err := l.Commit(context.Background(), in, obs); err != nil {
@@ -203,7 +171,7 @@ func TestDistributed_CommitBoth_Parity(t *testing.T) {
 		}
 	})
 
-	s2 := newRedisStore(t, addr)
+	s2 := newRedisStore(t, cfg)
 	l2 := New(s2, discardLog(), func() time.Time { return now })
 	batch := dump(t, l2, s2, "batch-policy", "hostkey:batch-key", func(l *Limiter, in, up *Reservation) {
 		if err := l.CommitBoth(context.Background(), in, up, obs); err != nil {

@@ -39,7 +39,9 @@ jobs:
               - 'scripts/boot-smoke.sh'
               - '.github/workflows/**'
 
-  check:
+  # golangci-lint runs govet (integration tag included), so there is no
+  # separate vet step.
+  lint:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
@@ -71,31 +73,68 @@ jobs:
       - name: golangci-lint
         run: make lint
 
-      - name: Vet
-        run: |
-          for mod in . sdk jobq; do
-            (cd "$mod" && go vet ./... && go vet -tags=integration ./...)
-          done
-
       - name: Build
         run: |
           go build ./...
           (cd sdk && go build ./...)
           (cd jobq && go build ./...)
 
-      # Every module's unit tests, under -race.
+  # Every module's unit tests, once: under -race and writing the unit
+  # coverprofiles the coverage job merges.
+  test:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
       - name: Test
-        run: make test-race
+        run: make test-race-cover
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: .cover/*.out
+          include-hidden-files: true
+          if-no-files-found: error
+
+  fuzz:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Fuzz
-        run: make test-fuzz FUZZ_TIME=20s
+        run: make test-fuzz
+
+  bench:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
       - name: Allocation gate
         run: make bench-gate
 
-  # Integration-tagged tests against a Postgres service. Each test creates a
-  # database of its own from a migrated template, so packages run in parallel.
-  # The Redis tests start their own containers through the runner's Docker.
+  # Integration-tagged tests against Postgres and Valkey services. Each test
+  # gets a database of its own on both, so packages run in parallel.
   integration:
     needs: changes
     if: needs.changes.outputs.go == 'true'
@@ -114,8 +153,18 @@ jobs:
           --health-interval 2s
           --health-timeout 2s
           --health-retries 30
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
     env:
       RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
+      RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
     steps:
       - uses: actions/checkout@v4
 
@@ -138,22 +187,15 @@ jobs:
   # store packages only get credit from the integration run.
   coverage:
     runs-on: ubuntu-latest
-    needs: [changes, integration]
+    needs: [changes, test, integration]
     if: needs.changes.outputs.go == 'true'
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-          cache: true
-
-      - name: Unit profiles
-        run: make test-cover
-
       - uses: actions/download-artifact@v4
         with:
-          name: integration-coverage
+          pattern: '*-coverage'
+          merge-multiple: true
           path: .cover
 
       - name: Coverage tiers

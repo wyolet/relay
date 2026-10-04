@@ -37,12 +37,13 @@ go vet ./...
 
 `make lint` needs [golangci-lint](https://golangci-lint.run/) v2 on `PATH` (CI pins the version in `.github/workflows/ci.yml`); the enabled linters live in `.golangci.yml`.
 
-`make test-integration` brings up the compose test Postgres; `make
-test-integration-run` runs the same tests against any server named by
-`RELAY_TEST_PG_DSN`. Each test creates its own database there (cloned from a
-migrated template) and drops it afterwards, so the role needs `CREATEDB`. The
-Redis tests start containers through testcontainers; on colima, set
-`TESTCONTAINERS_RYUK_DISABLED=true` and point `DOCKER_HOST` at the colima socket.
+`make test-integration` brings up the compose test Postgres and Valkey; `make
+test-integration-run` runs the same tests against the servers named by
+`RELAY_TEST_PG_DSN` and `RELAY_TEST_REDIS_ADDR`. Each test creates its own
+database on Postgres (cloned from a migrated template) and drops it afterwards,
+so the role needs `CREATEDB`. Each Redis test leases one of the logical
+databases 1–15 on the Valkey server (a lease key on database 0) and flushes it
+afterwards, so that server must not hold data you want to keep.
 The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test targets drop the deployment DSNs `.env` exports (`RELAY_PG_DSN`, `RELAY_CH_DSN`, `RELAY_REDIS_ADDR`, `RELAY_OTLP_ENDPOINT`), so tests never reach a deployment's databases.
 
 The repo is a **two-module monorepo**: the server module
