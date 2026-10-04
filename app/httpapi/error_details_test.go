@@ -10,8 +10,8 @@ import (
 
 // A 422 is only actionable if it names the field that failed, so the
 // per-field errors huma passes to NewError must survive the rewrite into
-// the OpenAI envelope.
-func TestOpenAIErrorCarriesFieldErrors(t *testing.T) {
+// the relay error envelope.
+func TestAPIErrorCarriesFieldErrors(t *testing.T) {
 	Install()
 	err := huma.NewError(http.StatusUnprocessableEntity, "validation failed",
 		&huma.ErrorDetail{Message: "expected string", Location: "body.project", Value: 5})

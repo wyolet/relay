@@ -17,7 +17,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-// WriteAPIError emits an OpenAI-shape error envelope. Exported so
+// WriteAPIError emits relay's error envelope. Exported so
 // per-shape route packages (app/adapters/<name>/routes.go) can use it
 // without depending on shape-specific helpers. Extra slog attrs are
 // attached to the warning log only — never to the client envelope.
@@ -53,8 +53,8 @@ func writeAPIError(w http.ResponseWriter, status int, errType, code, msg string,
 	w.Header().Set(HeaderOrigin, "relay")
 	setShouldRetry(w, status)
 	w.WriteHeader(status)
-	env := httpapi.OpenAIError{
-		Err:        httpapi.OpenAIErrorInner{Type: errType, Code: code, Message: msg},
+	env := httpapi.APIError{
+		Err:        httpapi.APIErrorBody{Type: errType, Code: code, Message: msg},
 		HTTPStatus: status,
 	}
 	body, _ := json.Marshal(env)
