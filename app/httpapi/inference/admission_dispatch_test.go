@@ -47,9 +47,9 @@ func TestDispatchShed429(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
 
-	var env httpapi.OpenAIError
+	var env httpapi.APIError
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("body is not the OpenAI error envelope: %v (body=%s)", err, w.Body.String())
+		t.Fatalf("body is not the relay error envelope: %v (body=%s)", err, w.Body.String())
 	}
 	if env.Err.Type != "rate_limit_error" {
 		t.Errorf("error type = %q, want rate_limit_error", env.Err.Type)
