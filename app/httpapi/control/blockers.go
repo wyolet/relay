@@ -62,7 +62,7 @@ func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceIte
 		kind, field string
 		detachable  bool
 	}
-	var groups []blockerGroup
+	groups := []blockerGroup{}
 	at := map[kindField]int{}
 	for _, it := range items {
 		k := kindField{it.Kind, it.Via, it.detachable}

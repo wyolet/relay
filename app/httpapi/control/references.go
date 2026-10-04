@@ -69,12 +69,15 @@ var referenceScans = map[string]func(ctx context.Context, d Deps, id string) ([]
 	"role":            scanRoleRefs,
 }
 
+// referencedPlurals are the kinds with a references scan, in API plural form.
+var referencedPlurals = []string{
+	"providers", "hosts", "models", "pricings", "policies", "host-keys",
+	"rate-limits", "teams", "projects", "service-accounts", "groups", "roles",
+}
+
 // registerReferences installs the per-kind references endpoints.
 func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
-	for _, plural := range []string{
-		"providers", "hosts", "models", "pricings", "policies", "host-keys",
-		"rate-limits", "teams", "projects", "service-accounts", "groups", "roles",
-	} {
+	for _, plural := range referencedPlurals {
 		singular := authz.Singular(plural)
 		scan := referenceScans[singular]
 		huma.Register(api, huma.Operation{

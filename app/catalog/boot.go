@@ -30,6 +30,7 @@ import (
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
@@ -107,6 +108,13 @@ type Stores struct {
 	RoleBinding    *rolebinding.Store
 	PolicyBinding  *policybinding.Store
 
+	// Users is the account store, here so a cross-row edit (see InTx) can
+	// write account rows in the same transaction as catalog rows.
+	Users *user.Store
+
+	// pool is what InTx opens its transaction on.
+	pool *pgxpool.Pool
+
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
 	// controller resolving S3 credentials) resolve through the same seam.
@@ -133,30 +141,11 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 	}
 	q := gen.New(opts.Pool)
 	secReg, secStored := appsecret.Wire(q, opts.Pool, opts.MasterKey)
-	stores := &Stores{
-		Provider:  provider.NewStore(q),
-		Host:      host.NewStore(q),
-		Model:     model.NewStore(q),
-		HostKey:   hostkey.NewStore(q, secReg, secStored),
-		RateLimit: ratelimit.NewStore(q),
-		Policy:    policy.NewStore(opts.Pool),
-		Pricing:   pricing.NewStore(opts.Pool),
-		Binding:   binding.NewStore(opts.Pool),
-		Key:       key.NewStore(q),
-		Overlay:   overlay.NewStore(q),
-		Settings:  settings.NewStore(q),
-		Team:      team.NewStore(q),
-		Project:   project.NewStore(q),
-
-		ServiceAccount: serviceaccount.NewStore(q),
-		Group:          group.NewStore(opts.Pool),
-		Role:           role.NewStore(q),
-		RoleBinding:    rolebinding.NewStore(opts.Pool),
-		PolicyBinding:  policybinding.NewStore(opts.Pool),
-
-		Secrets: secReg,
-		Stored:  secStored,
-	}
+	stores := rowStores(opts.Pool)
+	stores.pool = opts.Pool
+	stores.HostKey = hostkey.NewStore(q, secReg, secStored)
+	stores.Secrets = secReg
+	stores.Stored = secStored
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
 		stores.HostKey, stores.RateLimit, stores.Key, stores.Pricing,

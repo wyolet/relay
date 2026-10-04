@@ -14,7 +14,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -22,15 +21,15 @@ import (
 
 // Store is the HostBinding data-access type.
 type Store struct {
-	pool *pgxpool.Pool
+	db gen.DBTX
 }
 
-// NewStore constructs a Store bound to a pool.
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+// NewStore constructs a Store bound to a pool or an open transaction.
+func NewStore(db gen.DBTX) *Store { return &Store{db: db} }
 
 // List returns every HostBinding row.
 func (s *Store) List(ctx context.Context) ([]*Binding, error) {
-	rows, err := gen.New(s.pool).ListHostBindings(ctx)
+	rows, err := gen.New(s.db).ListHostBindings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("binding.List: %w", err)
 	}
@@ -47,7 +46,7 @@ func (s *Store) List(ctx context.Context) ([]*Binding, error) {
 
 // Get returns the HostBinding with the given id, or (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*Binding, error) {
-	r, err := gen.New(s.pool).GetHostBinding(ctx, id)
+	r, err := gen.New(s.db).GetHostBinding(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -63,7 +62,7 @@ func (s *Store) Upsert(ctx context.Context, b *Binding) error {
 	if err != nil {
 		return fmt.Errorf("binding.Upsert: %w", err)
 	}
-	if err := gen.New(s.pool).UpsertHostBinding(ctx, params); err != nil {
+	if err := gen.New(s.db).UpsertHostBinding(ctx, params); err != nil {
 		return fmt.Errorf("binding.Upsert: %w", err)
 	}
 	return nil
@@ -71,7 +70,7 @@ func (s *Store) Upsert(ctx context.Context, b *Binding) error {
 
 // Delete removes a HostBinding by id.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return gen.New(s.pool).DeleteHostBinding(ctx, id)
+	return gen.New(s.db).DeleteHostBinding(ctx, id)
 }
 
 func fromRow(r gen.HostBinding) (*Binding, error) {
