@@ -427,7 +427,7 @@ func TestMapProxyErr_RateLimit_UsesTheSharedEnvelope(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != "3" {
 		t.Fatalf("Retry-After: %q, want %q", got, "3")
 	}
-	var env httpapi.OpenAIError
+	var env httpapi.APIError
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}

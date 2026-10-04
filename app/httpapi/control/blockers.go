@@ -35,7 +35,7 @@ type blockerGroup struct {
 // resourceInUseError is the 409 a referenced row's delete returns: the
 // usual error envelope plus the blockers beside it.
 type resourceInUseError struct {
-	httpapi.OpenAIError
+	httpapi.APIError
 	Blockers []blockerGroup `json:"blockers"`
 }
 
@@ -54,14 +54,18 @@ func blockers(ctx context.Context, d Deps, kind, id string) ([]blockerGroup, err
 }
 
 // groupBlockers counts every row, so a row in a scope the caller can't see
-// still blocks, but names only the rows the caller may see.
+// still blocks, but names only the rows the caller may see. Rows of one
+// field split by detachable when a list's last entry can't be let go.
 func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceItem) []blockerGroup {
 	sortReferences(items)
-	type kindField struct{ kind, field string }
+	type kindField struct {
+		kind, field string
+		detachable  bool
+	}
 	var groups []blockerGroup
 	at := map[kindField]int{}
 	for _, it := range items {
-		k := kindField{it.Kind, it.Via}
+		k := kindField{it.Kind, it.Via, it.detachable}
 		i, ok := at[k]
 		if !ok {
 			i = len(groups)
@@ -80,14 +84,17 @@ func groupBlockers(ctx context.Context, a authz.Authorizer, items []referenceIte
 		if groups[i].Kind != groups[j].Kind {
 			return groups[i].Kind < groups[j].Kind
 		}
-		return groups[i].Field < groups[j].Field
+		if groups[i].Field != groups[j].Field {
+			return groups[i].Field < groups[j].Field
+		}
+		return groups[i].Detachable && !groups[j].Detachable
 	})
 	return groups
 }
 
 // refuseInUse returns the 409 for deleting a row that is still referenced,
 // or nil when nothing references it.
-func refuseInUse(ctx context.Context, d Deps, kind, id, name string) error {
+func (d Deps) refuseInUse(ctx context.Context, kind, id, name string) error {
 	groups, err := blockers(ctx, d, kind, id)
 	if err != nil {
 		return huma.Error500InternalServerError(err.Error())
@@ -100,8 +107,8 @@ func refuseInUse(ctx context.Context, d Deps, kind, id, name string) error {
 		total += g.Count
 	}
 	return &resourceInUseError{
-		OpenAIError: httpapi.OpenAIError{
-			Err: httpapi.OpenAIErrorInner{
+		APIError: httpapi.APIError{
+			Err: httpapi.APIErrorBody{
 				Type:    "invalid_request_error",
 				Code:    "resource_in_use",
 				Message: fmt.Sprintf("%s %q is referenced by %d row(s); see blockers", kind, name, total),

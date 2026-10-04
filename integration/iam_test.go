@@ -134,11 +134,11 @@ func TestIntegration_TeamProjectCRUD(t *testing.T) {
 	// their service accounts and keys; both deletes refuse instead, naming
 	// what is in the way.
 	code, raw = st.adminDo(http.MethodDelete, "/api/teams/by-id/"+team.Metadata.ID, "")
-	if code != http.StatusConflict || !strings.Contains(string(raw), "Project/ml-search") {
+	if code != http.StatusConflict || !strings.Contains(string(raw), `"name":"ml-search"`) {
 		t.Fatalf("DELETE /api/teams with a project = %d: %s, want 409 naming the project", code, raw)
 	}
 	code, raw = st.adminDo(http.MethodDelete, "/api/projects/by-id/"+proj.Metadata.ID, "")
-	if code != http.StatusConflict || !strings.Contains(string(raw), "ServiceAccount/indexer") {
+	if code != http.StatusConflict || !strings.Contains(string(raw), `"name":"indexer"`) {
 		t.Fatalf("DELETE /api/projects with a service account = %d: %s, want 409 naming it", code, raw)
 	}
 

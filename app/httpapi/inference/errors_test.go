@@ -23,7 +23,7 @@ func TestMapRoutingErr_ModelNotInPolicy_NamesModel(t *testing.T) {
 	if rec.Code != 403 {
 		t.Fatalf("status: %d", rec.Code)
 	}
-	var env httpapi.OpenAIError
+	var env httpapi.APIError
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestMapRoutingErr_EmptyModel_FallsBackToGeneric(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mapRoutingErr(rec, routing.ErrModelNotInPolicy, "", "")
 
-	var env httpapi.OpenAIError
+	var env httpapi.APIError
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestMapPipelineErr_InboundLimitExceeded_429WithRetryAfter(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != "3" {
 		t.Fatalf("Retry-After: %q, want %q (2.3s rounds up)", got, "3")
 	}
-	var env httpapi.OpenAIError
+	var env httpapi.APIError
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestMapPipelineErr_UpstreamFailure_EmptyBodyKeepsStatus(t *testing.T) {
 	if rec.Code != 503 {
 		t.Fatalf("status: %d, want 503", rec.Code)
 	}
-	var env httpapi.OpenAIError
+	var env httpapi.APIError
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("relay envelope expected: %v (body %q)", err, rec.Body.String())
 	}

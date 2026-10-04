@@ -103,12 +103,10 @@ type enrichFn[T any] func(ctx context.Context, t *T)
 // batched read per request instead of one per row.
 type enrichListFn[T any] func(ctx context.Context, items []*T)
 
-// cascadeFn runs after the delete authz check and before store.Delete. It
-// detaches the soon-to-be-deleted row from any referencing entities so the
-// underlying FK constraints don't reject the delete. A non-nil error
-// aborts the delete with a 500 — cascade failures shouldn't be silent,
-// but the caller's request still fails closed.
-type cascadeFn[T any] func(ctx context.Context, t *T) error
+// inUseFn refuses deleting a row anything still references (see
+// Deps.refuseInUse). It runs last before store.Delete, once the caller is
+// known to be allowed to delete the row.
+type inUseFn func(ctx context.Context, kind, id, name string) error
 
 // mergeOnUpdateFn copies fields the API allows to be omitted on update from
 // the existing row onto the incoming body, before validate/upsert run.
@@ -129,7 +127,7 @@ func registerKind[T any](
 	guard mutationGuard[T],
 	enrich enrichFn[T],
 	enrichList enrichListFn[T],
-	cascade cascadeFn[T],
+	refuseInUse inUseFn,
 	mergeUpdate mergeOnUpdateFn[T],
 	gov settings.Reader,
 	skipCreate bool,
@@ -392,7 +390,8 @@ func registerKind[T any](
 	// Delete by id. The route is always registered so the OpenAPI doc
 	// advertises it for every kind (no `delete?: never` gaps in the
 	// generated client); whether a delete actually succeeds is decided at
-	// request time by settings.Governs + the Authorizer, not the spec shape.
+	// request time by the Authorizer, settings.Governs and the row's
+	// references, not the spec shape.
 	huma.Register(api, huma.Operation{
 		OperationID:   "delete_" + singular,
 		Method:        http.MethodDelete,
@@ -421,12 +420,12 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
-		audit.Changed(ctx, []string{audit.AnyField})
-		if cascade != nil {
-			if err := cascade(ctx, existing); err != nil {
-				return nil, huma.Error500InternalServerError("cascade: " + err.Error())
+		if refuseInUse != nil {
+			if err := refuseInUse(ctx, singular, in.ID, metaOf(existing).Name); err != nil {
+				return nil, err
 			}
 		}
+		audit.Changed(ctx, []string{audit.AnyField})
 		if err := store.Delete(ctx, in.ID); err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found: %s", singular, in.ID, err.Error()))
 		}

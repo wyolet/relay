@@ -29,11 +29,8 @@ import (
 )
 
 func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
-	return func(ctx context.Context, action string, existing, incoming *policy.Policy) error {
-		if action == "delete" {
-			return refuseInUse(ctx, d, "policy", existing.Meta.ID, existing.Meta.Name)
-		}
-		if incoming == nil {
+	return func(ctx context.Context, action string, _, incoming *policy.Policy) error {
+		if action == "delete" || incoming == nil {
 			return nil
 		}
 		if err := refs(d).Policy(ctx, incoming); err != nil {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/license"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
@@ -54,6 +55,35 @@ func TestGuardRole(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			guard := guardRole(Deps{License: tc.lic})
 			err := guard(context.Background(), tc.action, nil, tc.role)
+			if got := statusOf(t, err); got != tc.want {
+				t.Fatalf("guard = %v (status %d), want status %d", err, got, tc.want)
+			}
+		})
+	}
+}
+
+// A built-in role is never edited through CRUD; an admin may delete one,
+// since boot seeds it again, and nobody else may.
+func TestGuardRole_BuiltinDeleteIsAdminOnly(t *testing.T) {
+	viewer := &role.Role{Meta: meta.Metadata{ID: meta.NewID(), Name: "viewer", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
+	for _, tc := range []struct {
+		name   string
+		actor  string
+		action string
+		want   int
+	}{
+		{name: "admin deletes", actor: "root", action: "delete"},
+		{name: "admin token deletes", actor: "token", action: "delete"},
+		{name: "non-admin cannot delete", actor: "alice", action: "delete", want: 403},
+		{name: "admin cannot edit", actor: "root", action: "update", want: 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := actor.WithActor(context.Background(), scopeActors[tc.actor])
+			var incoming *role.Role
+			if tc.action == "update" {
+				incoming = viewer
+			}
+			err := guardRole(Deps{})(ctx, tc.action, viewer, incoming)
 			if got := statusOf(t, err); got != tc.want {
 				t.Fatalf("guard = %v (status %d), want status %d", err, got, tc.want)
 			}

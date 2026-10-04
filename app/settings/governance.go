@@ -85,9 +85,9 @@ func (e *MutationError) Error() string { return e.Reason }
 // governance; httpapi calls it and maps a non-nil result to 403.
 //
 // Owner tiers are hardcoded invariants (not operator-toggleable):
-//   - system  → never deleted through CRUD; edited only by an admin (the
-//     admin role or the admin token). Editing or deleting a system row can
-//     break the whole router.
+//   - system  → edited or deleted only by an admin (the admin role or the
+//     admin token). A delete is still refused while anything references the
+//     row; that check lives with the references, not here.
 //   - user / team / project → always allowed (the row belongs to a tenant,
 //     not to the catalog). RBAC will later add an owner match here.
 //   - else (provider/host-owned, i.e. catalog-managed) → consult the kind's
@@ -102,11 +102,11 @@ func Governs(r Reader, op Op, kind, ownerKind string, admin bool) error {
 		// A Team, Group or Role is system-owned because it belongs to the
 		// deployment, not because it is the relay's own row, so it follows
 		// the tenant tier and stays editable through CRUD.
-		if tenancyKinds[kind] || (op == OpEdit && admin) {
+		if tenancyKinds[kind] || admin {
 			return nil
 		}
 		return &MutationError{Op: op, Kind: kind, OwnerKind: ownerKind,
-			Reason: fmt.Sprintf("%s is system-owned: deletion is never permitted and only an admin may edit it", kind)}
+			Reason: fmt.Sprintf("%s is system-owned: only an admin may %s it", kind, op)}
 	case ownerUser, ownerTeam, ownerProject:
 		return nil
 	}

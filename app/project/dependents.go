@@ -16,8 +16,8 @@ import (
 // Rows are the rows that can live under a project. Deleting the project
 // would cascade through the foreign keys to its service accounts, their
 // keys and its policy bindings, and leave its policies, host keys and rate
-// limits owned by a project that no longer exists — so both delete paths
-// refuse while any remain.
+// limits owned by a project that no longer exists — so apply's prune
+// refuses while any remain.
 type Rows struct {
 	ServiceAccounts []*serviceaccount.ServiceAccount
 	Keys            []*key.Key
