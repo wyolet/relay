@@ -24,6 +24,7 @@
 // schemas/` so Go-type changes that affect the wire format land with
 // their corresponding schema bump.
 
+// Command catalog-schemas writes one JSON Schema per catalog kind, derived from the manifest types.
 package main
 
 import (

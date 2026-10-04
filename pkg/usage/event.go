@@ -1,3 +1,4 @@
+// Package usage defines the per-request usage Event, the Sink and Reader interfaces its storage backends implement, and the in-memory filtering and aggregation shared by scan-style backends.
 package usage
 
 import (

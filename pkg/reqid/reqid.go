@@ -1,3 +1,4 @@
+// Package reqid gives each HTTP request an id (the caller's X-Request-ID when valid, otherwise a ULID), echoes it as X-Relay-Request-ID, and carries it with a request-scoped logger in the context.
 package reqid
 
 import (

@@ -1,3 +1,4 @@
+// Package kv is the key-value store for short-lived operational state (counters, breaker state, locks, sessions), with an in-memory backend and a Redis-protocol backend behind the same Store interface. Persistent data belongs in Postgres.
 package kv
 
 import (

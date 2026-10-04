@@ -13,6 +13,7 @@ linters:
     - errcheck
     - govet
     - ineffassign
+    - revive
     - staticcheck
     - unused
   settings:
@@ -21,6 +22,9 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+    revive:
+      rules:
+        - name: package-comments
     staticcheck:
       checks:
         - all

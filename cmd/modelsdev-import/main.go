@@ -13,6 +13,7 @@
 //	modelsdev-import -out ../relay-catalog/data
 //	modelsdev-import -source-file /tmp/md.json -hosts anthropic,openai -out -
 
+// Command modelsdev-import converts the models.dev dataset into relay-catalog YAML.
 package main
 
 import (
