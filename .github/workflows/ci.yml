@@ -56,9 +56,9 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
@@ -99,9 +99,9 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
@@ -110,7 +110,7 @@ jobs:
       - name: Test
         run: make test-race-cover
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: unit-coverage
           path: .cover/*.out
@@ -122,9 +122,9 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
@@ -138,9 +138,9 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
@@ -154,9 +154,9 @@ jobs:
     if: needs.changes.outputs.go == 'true' || github.event_name == 'schedule'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
@@ -181,7 +181,7 @@ jobs:
       TRIVY_SKIP_VERSION_CHECK: 'true'
       TRIVY_DISABLE_TELEMETRY: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install trivy
         run: |
@@ -242,9 +242,9 @@ jobs:
       RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
       RELAY_TEST_REDIS_ADDR: 127.0.0.1:6379
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         if: runner.environment == 'github-hosted'
         with:
           go-version: '1.26'
@@ -253,7 +253,7 @@ jobs:
       - name: Integration tests
         run: make test-integration-run
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: integration-coverage
           path: .cover/*.out
@@ -267,9 +267,9 @@ jobs:
     needs: [changes, test, integration]
     if: needs.changes.outputs.go == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: '*-coverage'
           merge-multiple: true
@@ -283,8 +283,8 @@ jobs:
     if: needs.changes.outputs.chart == 'true'
     runs-on: ${{ needs.changes.outputs.cluster == 'true' && 'relay-ci' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
         if: runner.environment == 'github-hosted'
       - name: helm lint
         run: helm lint chart
@@ -313,9 +313,9 @@ jobs:
     env:
       RELAY_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
           cache: true
