@@ -4,8 +4,15 @@ name: Release
 # standalone) to BOTH ghcr.io/wyolet/relay and docker.io/wyolet/relay, the Helm
 # chart to oci://ghcr.io/wyolet/charts, and creates the GitHub release. The
 # image bakes in the pinned admin UI + catalog from versions.env (see Dockerfile).
-# Images build on a remote BuildKit pod in parallel with the test gate; the
-# chart is published only after both pass.
+#
+# Images build on a remote BuildKit pod in parallel with the test gate, without
+# pushing; the result stays in the pod's persistent cache. Only after both pass
+# does the push job re-run the same bake with --push, which resolves from that
+# cache. A test failure cancels the run, so nothing is pushed.
+#
+# Manual runs (workflow_dispatch) default to dry_run: tests + the no-push build
+# + the cached re-bake, with every push/publish step skipped. dry_run=false is
+# only accepted on a v*.*.* tag ref on main.
 #
 # Repo settings:
 #   DOCKERHUB_TOKEN (secret) + DOCKERHUB_USERNAME (variable) — required.
@@ -20,10 +27,15 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and test without pushing images, chart, or release
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -37,20 +49,50 @@ env:
 jobs:
   guard:
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.v.outputs.publish }}
+      version: ${{ steps.v.outputs.version }}
+      ui_version: ${{ steps.v.outputs.ui_version }}
+      catalog_ref: ${{ steps.v.outputs.catalog_ref }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       # A tag on an unmerged commit would publish unreviewed code.
-      - name: Require tag on main
+      - name: Resolve publish mode and versions
+        id: v
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || { echo "::error::$TAG ($GITHUB_SHA) is not on origin/main"; exit 1; }
+          publish=false
+          if [ "$GITHUB_EVENT_NAME" = push ] || [ "$DRY_RUN" = false ]; then publish=true; fi
+          if [ "$publish" = true ]; then
+            [[ "$GITHUB_REF_TYPE" = tag && "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] \
+              || { echo "::error::publishing requires a v*.*.* tag ref, got $TAG"; exit 1; }
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || { echo "::error::$TAG ($GITHUB_SHA) is not on origin/main"; exit 1; }
+            version="${TAG#v}"
+          else
+            version="0.0.0-dryrun.${GITHUB_SHA::7}"
+          fi
+          set -a; . ./versions.env; set +a
+          [ -n "$UI_VERSION" ]      || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
+          [ -n "$CATALOG_VERSION" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "ui_version=$UI_VERSION"
+            echo "catalog_ref=$CATALOG_VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "publish=$publish version=$version"
 
   test:
     needs: guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +104,13 @@ jobs:
       - uses: azure/setup-helm@v4
 
       - run: make check
+
+      # Stops the parallel build; GitHub has no per-job cancel.
+      - name: Cancel run on test failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY"
 
   build:
     needs: guard
@@ -93,8 +142,50 @@ jobs:
 
       - run: docker buildx inspect --bootstrap
 
+      # Authenticated base-image pulls; nothing is pushed from this job.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # cacheonly keeps the result in the BuildKit pod's persistent cache for
+      # the push job; the env must match the push job's bake exactly.
+      - name: Build lean + standalone (no push)
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          GIT_REVISION: ${{ github.sha }}
+          UI_VERSION: ${{ needs.guard.outputs.ui_version }}
+          CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
+        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --set '*.output=type=cacheonly' release
+
+  push:
+    needs: [guard, test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write kubeconfig
+        env:
+          CI_KUBECONFIG: ${{ secrets.CI_KUBECONFIG }}
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/kubeconfig"
+          printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver: remote
+          endpoint: ${{ env.BUILDKIT_ENDPOINT }}
+
+      - run: docker buildx inspect --bootstrap
+
       # Registry auth stays on the runner; buildx forwards it to buildkitd per session.
       - name: Log in to GitHub Container Registry
+        if: needs.guard.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -107,27 +198,34 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Resolve versions
-        id: v
-        run: |
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-          set -a; . ./versions.env; set +a
-          [ -n "$UI_VERSION" ]      || { echo "::error::could not resolve UI_VERSION from versions.env"; exit 1; }
-          [ -n "$CATALOG_VERSION" ] || { echo "::error::could not resolve CATALOG_VERSION from versions.env"; exit 1; }
-          echo "ui_version=$UI_VERSION"        >> "$GITHUB_OUTPUT"
-          echo "catalog_ref=$CATALOG_VERSION"  >> "$GITHUB_OUTPUT"
-
-      - name: Build and push lean + standalone (both registries)
+      # Same bake as the build job, so every step but the always-refetched
+      # assets stage resolves from cache and this only exports + uploads.
+      - name: Push lean + standalone (both registries)
+        if: needs.guard.outputs.publish == 'true'
         env:
-          VERSION: ${{ steps.v.outputs.version }}
+          VERSION: ${{ needs.guard.outputs.version }}
           GIT_REVISION: ${{ github.sha }}
-          UI_VERSION: ${{ steps.v.outputs.ui_version }}
-          CATALOG_REF: ${{ steps.v.outputs.catalog_ref }}
+          UI_VERSION: ${{ needs.guard.outputs.ui_version }}
+          CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
         run: docker buildx bake -f docker-bake.hcl --push --set '*.platform=linux/amd64' release
 
+      # Dry run: the same re-bake without --push, to show the cache resolves.
+      - name: Re-bake from cache (dry run, no push)
+        if: needs.guard.outputs.publish != 'true'
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+          GIT_REVISION: ${{ github.sha }}
+          UI_VERSION: ${{ needs.guard.outputs.ui_version }}
+          CATALOG_REF: ${{ needs.guard.outputs.catalog_ref }}
+        run: docker buildx bake -f docker-bake.hcl --set '*.platform=linux/amd64' --set '*.output=type=cacheonly' release
+
   publish:
-    needs: [test, build]
+    needs: [guard, push]
+    if: needs.guard.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -160,9 +258,10 @@ jobs:
           read -ra apps <<< "$ARGOCD_APPS"
           kubectl -n argocd annotate application "${apps[@]}" argocd.argoproj.io/refresh=normal --overwrite
 
+  # A test failure cancels the run, so cancelled() counts as a failed release.
   notify:
-    needs: [guard, test, build, publish]
-    if: failure()
+    needs: [guard, test, build, push, publish]
+    if: (failure() || cancelled()) && !inputs.dry_run
     runs-on: ubuntu-latest
     steps:
       - name: Notify failure
