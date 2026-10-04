@@ -36,9 +36,9 @@ env:
 
 jobs:
   guard:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
         with:
           fetch-depth: 0
 
@@ -50,9 +50,9 @@ jobs:
 
   test:
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - uses: actions/setup-go@v5
         with:
@@ -65,9 +65,9 @@ jobs:
 
   build:
     needs: guard
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - name: Require secrets
         env:
@@ -86,10 +86,8 @@ jobs:
           printf '%s\n' "$CI_KUBECONFIG" > "$RUNNER_TEMP/kubeconfig"
           echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
 
-      - uses: docker/setup-buildx-action@v3
-        with:
-          driver: remote
-          endpoint: ${{ env.BUILDKIT_ENDPOINT }}
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       - run: docker buildx inspect --bootstrap
 
@@ -127,9 +125,9 @@ jobs:
 
   publish:
     needs: [test, build]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - uses: azure/setup-helm@v4
 
@@ -163,7 +161,7 @@ jobs:
   notify:
     needs: [guard, test, build, publish]
     if: failure()
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Notify failure
         env:

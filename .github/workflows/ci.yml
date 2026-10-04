@@ -7,9 +7,9 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - uses: actions/setup-go@v5
         with:
@@ -62,7 +62,7 @@ jobs:
   # database of its own from a migrated template, so packages run in parallel.
   # The Redis tests start their own containers through the runner's Docker.
   integration:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     services:
       postgres:
         image: postgres:16-alpine
@@ -80,7 +80,7 @@ jobs:
     env:
       RELAY_TEST_PG_DSN: postgres://relay:relay@127.0.0.1:5432/relay_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - uses: actions/setup-go@v5
         with:
@@ -100,10 +100,10 @@ jobs:
   # Merges the unit profiles of every module with the integration profiles:
   # store packages only get credit from the integration run.
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: integration
     steps:
-      - uses: actions/checkout@v4
+      - uses: useblacksmith/checkout@v1
 
       - uses: actions/setup-go@v5
         with:
