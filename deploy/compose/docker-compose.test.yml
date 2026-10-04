@@ -1,6 +1,9 @@
 # Throwaway Postgres and Valkey for `make test-integration`. Spun up, used,
 # torn down. Ephemeral storage, no port collision with dev-stack (binds to
 # 127.0.0.1:5499 / 6399 to dodge the standard 5432 / 6379 conventions).
+# Own project name: `make test-integration` ends with `down -v`, which must
+# never reach another stack started from this directory.
+name: relay-test
 services:
   pg-test:
     image: postgres:16-alpine
