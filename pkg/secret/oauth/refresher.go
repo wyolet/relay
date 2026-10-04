@@ -13,6 +13,7 @@
 // a per-credential advisory lock (kv WithLock in production), with Renew
 // re-loading the blob inside the critical section — the loser of a lock
 // race sees the fresh blob and no-ops.
+
 package oauth
 
 import (

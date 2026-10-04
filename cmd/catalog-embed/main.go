@@ -5,6 +5,7 @@
 //	catalog-embed [-o path] [dir]
 //
 // dir defaults to $RELAY_CATALOG_DIR or ../relay-catalog/data.
+
 package main
 
 import (

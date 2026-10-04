@@ -1,5 +1,6 @@
 // The control API and apply must store the same string for the same grant,
 // or apply reports an update on every run against a row the API normalised.
+
 package policy
 
 import (

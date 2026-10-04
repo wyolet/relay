@@ -9,6 +9,7 @@
 // leave the schema where the operator put it.
 //
 // Every test here runs against an unmigrated database of its own.
+
 package integration_test
 
 import (

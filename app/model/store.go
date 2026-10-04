@@ -1,5 +1,6 @@
 // store.go is the data-access layer for Model. Mirrors app/provider/store.go;
 // metadata JSONB encoding is delegated to app/meta.
+
 package model
 
 import (

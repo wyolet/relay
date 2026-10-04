@@ -1,6 +1,7 @@
 // Rotation replaces KeyHash and Prefix in place so every other field survives
 // and callers swap the secret without re-wiring. graceSeconds keeps the old
 // plaintext valid for a window instead of cutting it off at the next NOTIFY.
+
 package control
 
 import (

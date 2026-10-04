@@ -5,6 +5,7 @@
 // promises; what is checked here is the order and the seams between the
 // steps. Upstream traffic uses the in-process mock the token fixture wires,
 // and usage is read from an in-memory collector rather than a sink.
+
 package integration_test
 
 import (

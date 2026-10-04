@@ -5,6 +5,7 @@
 // advisory lock is a real Postgres lock, so there is no fake seam: without
 // it each boot mints its own id for the same missing role and the rows
 // bindings point at stop existing. Run with: make test-integration.
+
 package role_test
 
 import (

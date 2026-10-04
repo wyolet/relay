@@ -23,6 +23,7 @@
 // Run `make schemas` to regenerate; CI ensures `git diff --exit-code
 // schemas/` so Go-type changes that affect the wire format land with
 // their corresponding schema bump.
+
 package main
 
 import (

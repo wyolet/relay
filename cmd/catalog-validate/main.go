@@ -17,6 +17,7 @@
 //	0  no errors (warnings may be present unless --strict)
 //	1  at least one error
 //	2  internal failure (couldn't load, etc.)
+
 package main
 
 import (

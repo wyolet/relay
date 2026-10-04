@@ -15,6 +15,7 @@
 //  1. Receive domain struct from store
 //  2. Build a ReverseResolver from your id→name index
 //  3. Call FromXxx(domain, rev) → wire DTO suitable for JSON/YAML output
+
 package manifest
 
 // APIVersion is the catalog schema version every relay-aware YAML must

@@ -1,5 +1,6 @@
 // External test package: app/catalog reaches app/authz through the boot
 // seed, so an in-package test importing the catalog would close a cycle.
+
 package authz_test
 
 import (

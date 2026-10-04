@@ -10,6 +10,7 @@
 // detail=full:             every entity in stable slug order, sanitized
 //
 //	spec included. Bigger; admin-only, no SLO.
+
 package control
 
 import (

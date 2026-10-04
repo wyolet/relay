@@ -8,6 +8,7 @@
 //
 // On any connection error the listener logs, waits 1 s, and reconnects —
 // it never panics. Run blocks until ctx is cancelled.
+
 package catalog
 
 import (

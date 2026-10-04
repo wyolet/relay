@@ -1,6 +1,7 @@
 // Subjects live in the role_binding_subjects junction, where a subject with an
 // id also fills the matching FK column so deleting a user or service account
 // drops it from every binding.
+
 package rolebinding
 
 import (

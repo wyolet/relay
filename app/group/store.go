@@ -1,5 +1,6 @@
 // Spec.MemberIDs lives in the group_members junction, not the spec JSONB, so
 // the FK to users drops a deleted user's memberships.
+
 package group
 
 import (
