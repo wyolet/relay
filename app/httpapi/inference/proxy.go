@@ -261,7 +261,7 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 		// Limiter exceeded → 429 with Retry-After from the limiter's
 		// bucket-refill timing, so SDK clients back off correctly instead of
 		// falling into their naked-429 hammer loop.
-		var ex *pkgratelimit.ExceededError
+		var ex *pkgratelimit.KeyQuotaExhausted
 		if errors.As(err, &ex) {
 			// Same condition as the pipeline path, so the same envelope: two error.type values for one rejection makes it unclassifiable by any client that branches on it.
 			secs := setRetryAfter(w, ex.RetryAfter)

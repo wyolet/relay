@@ -311,7 +311,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 // reaches upstream in one attempt with the caller's own credential, so
 // the failure set is narrower than the pipeline's.
 func classifyFailure(err error) (kind string, status int) {
-	var exceeded *pkgratelimit.ExceededError
+	var exceeded *pkgratelimit.KeyQuotaExhausted
 	switch {
 	case errors.Is(err, ErrNoUpstreamAuth):
 		return "no_upstream_auth", 0

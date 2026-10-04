@@ -678,7 +678,7 @@ func (p *Pipeline) fireFailure(req *Request, runErr error) {
 func classifyFailure(err error) (kind string, status int) {
 	var upstream *UpstreamFailureError
 	var unreachable *UpstreamUnreachableError
-	var exceeded *pkgratelimit.ExceededError
+	var exceeded *pkgratelimit.KeyQuotaExhausted
 	switch {
 	case errors.As(err, &unreachable):
 		return "upstream_unreachable", 0

@@ -57,7 +57,7 @@ func TestMapRoutingErr_EmptyModel_FallsBackToGeneric(t *testing.T) {
 // into (blaming an upstream that was never called, with no backoff signal).
 func TestMapPipelineErr_InboundLimitExceeded_429WithRetryAfter(t *testing.T) {
 	rec := httptest.NewRecorder()
-	mapPipelineErr(rec, fmt.Errorf("run: %w", &pkgratelimit.ExceededError{
+	mapPipelineErr(rec, fmt.Errorf("run: %w", &pkgratelimit.KeyQuotaExhausted{
 		Rule:       pkgratelimit.Rule{Name: "rpm"},
 		RetryAfter: 2300 * time.Millisecond,
 	}))
