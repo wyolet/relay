@@ -65,7 +65,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventGenerationCreated:
 		var ev v1.GenerationCreatedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses from_canonical stream: generation.created: %w", err)
 		}
 		s.responseID = ev.ID
 		s.model = ev.Model
@@ -87,7 +87,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventItemStarted:
 		var ev v1.ItemStartedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses from_canonical stream: item.started: %w", err)
 		}
 		// R-3: capture name from item.started so function call events carry it.
 		// Use itemID as provisional callID — the real callID arrives on item.completed.
@@ -145,7 +145,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventItemDelta:
 		var ev v1.ItemDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses from_canonical stream: item.delta: %w", err)
 		}
 		st, ok := s.outputItems[ev.ItemID]
 		if !ok {
@@ -192,16 +192,16 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		}
 
 	case v1.EventItemCompleted:
-		doneFrames, ok := s.itemDoneFrames(data)
-		if !ok {
-			return nil, nil
+		doneFrames, err := s.itemDoneFrames(data)
+		if err != nil {
+			return nil, err
 		}
 		frames = append(frames, doneFrames...)
 
 	case v1.EventGenerationCompleted:
 		var ev v1.GenerationCompletedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses from_canonical stream: generation.completed: %w", err)
 		}
 
 		finalResp := &ResponsesResponse{
@@ -233,7 +233,7 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventError:
 		var ev v1.ErrorEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses from_canonical stream: error event: %w", err)
 		}
 		errData, _ := json.Marshal(ResponsesErrorEvent{Code: ev.Code, Message: ev.Message})
 		frames = append(frames, ResponsesSSEFrame{Event: ResponsesEventError, Data: errData})

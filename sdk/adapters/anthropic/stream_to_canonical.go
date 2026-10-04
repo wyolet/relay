@@ -62,6 +62,9 @@ func (s *anthropicToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case "ping", "":
 		return nil, nil
 	default:
+		// canonical: unrecognized (future) stream events dropped — the six
+		// canonical events are a closed union with no slot to carry them, and
+		// message_delta/message_stop carry the terminal outcome explicitly above.
 		return nil, nil
 	}
 }

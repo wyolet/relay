@@ -56,7 +56,8 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		}
 
 	case ResponsesEventInProgress:
-		// No canonical equivalent; ignore.
+		// canonical: response.in_progress dropped — a status snapshot carrying
+		// nothing generation.created has not already conveyed.
 
 	case ResponsesEventOutputItemAdded:
 		// Two-phase parse: extract output_index and the item's id+type from
@@ -68,7 +69,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			Item        json.RawMessage `json:"item"`
 		}
 		if err := json.Unmarshal(data, &evHeader); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: output_item.added: %w", err)
 		}
 		if len(evHeader.Item) == 0 || string(evHeader.Item) == "null" {
 			return nil, nil
@@ -79,7 +80,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			Name string            `json:"name"`
 		}
 		if err := json.Unmarshal(evHeader.Item, &itemProbe); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: output_item.added item: %w", err)
 		}
 		if itemProbe.ID == "" || itemProbe.Type == "" {
 			return nil, nil
@@ -104,7 +105,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case ResponsesEventOutputTextDelta:
 		var ev ResponsesOutputTextDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: output_text.delta: %w", err)
 		}
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 			ItemID: ev.ItemID,
@@ -117,7 +118,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case ResponsesEventFunctionCallArgumentsDelta:
 		var ev ResponsesFunctionCallArgumentsDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: function_call_arguments.delta: %w", err)
 		}
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 			ItemID: ev.ItemID,
@@ -130,7 +131,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case ResponsesEventReasoningTextDelta:
 		var ev ResponsesReasoningTextDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: reasoning_text.delta: %w", err)
 		}
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 			ItemID: ev.ItemID,
@@ -147,7 +148,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case ResponsesEventReasoningSummaryTextDelta:
 		var ev ResponsesReasoningSummaryTextDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: reasoning_summary_text.delta: %w", err)
 		}
 		if s.reasoningSummary == nil {
 			s.reasoningSummary = map[string]string{}
@@ -166,7 +167,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case ResponsesEventRefusalDelta:
 		var ev ResponsesRefusalDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: refusal.delta: %w", err)
 		}
 		deltaData, _ := json.Marshal(v1.ItemDeltaEvent{
 			ItemID: ev.ItemID,
@@ -182,21 +183,19 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 		// emitted by the response.completed/incomplete handler below.
 
 	case ResponsesEventOutputItemDone:
-		frame, ok := s.itemCompletedFrame(data)
+		frame, ok, err := s.itemCompletedFrame(data)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			return nil, nil
 		}
 		frames = append(frames, frame)
 
 	case ResponsesEventCompleted, ResponsesEventIncomplete:
-		// Parse the terminal response via the polymorphic-aware unmarshaler:
-		// a plain json.Unmarshal into ResponsesResponse fails on the
-		// []ResponsesItem interface `output`, and the swallowed error dropped
-		// the whole terminal event — losing usage, finish_reason, and [DONE]
-		// from every streamed cross-shape response.
-		resp := parseStreamTerminalResponse(data)
-		if resp == nil {
-			return nil, nil
+		resp, err := parseStreamTerminalResponse(data)
+		if err != nil {
+			return nil, fmt.Errorf("responses stream: %s: %w", event, err)
 		}
 		cr := responsesResponseToCanonical(resp)
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
@@ -210,11 +209,12 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	// R-2: response.failed means the generation terminated with an error; emit
 	// generation.completed with StatusFailed so the consumer isn't left hanging.
 	case ResponsesEventFailed:
-		resp := parseStreamTerminalResponse(data)
-		if resp == nil {
+		resp, err := parseStreamTerminalResponse(data)
+		if err != nil {
+			// An unparseable failure still ends the stream as a failure, not a skipped frame.
 			errData, _ := json.Marshal(v1.ErrorEvent{Code: "response_failed", Message: "response failed"})
 			frames = append(frames, v1.SSEFrame{Event: v1.EventError, Data: errData})
-			return marshalCanonicalFrames(frames), nil
+			break
 		}
 		cr := responsesResponseToCanonical(resp)
 		completedData, _ := json.Marshal(v1.GenerationCompletedEvent{
@@ -228,7 +228,7 @@ func (s *responsesToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 	case ResponsesEventError:
 		var ev ResponsesErrorEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("responses stream: error event: %w", err)
 		}
 		errData, _ := json.Marshal(v1.ErrorEvent{
 			Code:    ev.Code,

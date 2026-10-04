@@ -79,7 +79,7 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventItemStarted:
 		var ev v1.ItemStartedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("cc from_canonical stream: item.started: %w", err)
 		}
 		if ev.ItemType == v1.ItemTypeFunctionCall {
 			idx := len(s.toolItems)
@@ -114,7 +114,7 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventItemDelta:
 		var ev v1.ItemDeltaEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("cc from_canonical stream: item.delta: %w", err)
 		}
 		switch ev.Kind {
 		case v1.DeltaKindText:
@@ -176,7 +176,7 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 			} `json:"item"`
 		}
 		if err := json.Unmarshal(data, &evHeader); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("cc from_canonical stream: item.completed: %w", err)
 		}
 		if ti, ok := s.toolItems[evHeader.ItemID]; ok {
 			if evHeader.Item.CallID != "" && ti.callID != evHeader.Item.CallID {
@@ -188,7 +188,7 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventGenerationCompleted:
 		var ev v1.GenerationCompletedEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("cc from_canonical stream: generation.completed: %w", err)
 		}
 		fr := canonicalFinishReasonToCC(ev.FinishReason)
 		finalChunk := ChatStreamChunk{
@@ -212,7 +212,7 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 	case v1.EventError:
 		var ev v1.ErrorEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("cc from_canonical stream: error event: %w", err)
 		}
 		errBody := map[string]any{
 			"error": map[string]string{

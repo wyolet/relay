@@ -2,15 +2,16 @@ package openai
 
 import (
 	"encoding/json"
+	"fmt"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // itemDoneFrames renders the Responses closing events (text/arguments done,
 // content-part done, output_item.done) for one canonical item.completed event.
-// ok is false when the event is unparseable or names an item this stream never
-// started — the caller then emits nothing.
-func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSEFrame, bool) {
+// It renders nothing for an item this stream never started: its item.started
+// was already rejected, so there is no opened item to close.
+func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSEFrame, error) {
 	// Two-phase parse: extract item_id and index from a flat struct first
 	// (the Item field is a v1.Item interface that json.Unmarshal cannot
 	// populate without a custom dispatcher — the full item is not needed
@@ -20,11 +21,11 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		Index  int    `json:"index"`
 	}
 	if err := json.Unmarshal(data, &evHeader); err != nil {
-		return nil, false
+		return nil, fmt.Errorf("responses from_canonical stream: item.completed: %w", err)
 	}
 	st, ok := s.outputItems[evHeader.ItemID]
 	if !ok {
-		return nil, false
+		return nil, nil
 	}
 	itemID := evHeader.ItemID
 
@@ -157,5 +158,5 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 		s.closedItems = append(s.closedItems, finalR)
 	}
 
-	return frames, true
+	return frames, nil
 }

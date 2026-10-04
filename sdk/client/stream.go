@@ -45,7 +45,9 @@ type Stream struct {
 	reasoningSeen  bool
 }
 
-// Recv returns the next canonical event, or io.EOF at end.
+// Recv returns the next canonical event, or io.EOF at end. An upstream frame
+// the translator cannot convert returns its error without ending the stream:
+// calling Recv again continues with the next frame.
 func (s *Stream) Recv() (*Event, error) {
 	for {
 		if len(s.pending) > 0 {
