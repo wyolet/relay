@@ -69,6 +69,9 @@ type EventQuery struct {
 	// membership). Empty slice means no filter on that dimension.
 	RelayKeyHash []string
 	PolicyID     []string
+	ProjectID    []string
+	TeamID       []string
+	PrincipalID  []string
 	ModelID      []string
 	HostID       []string
 	Source       []string // "pipeline" | "proxy" | "ws" | "batch"
@@ -126,6 +129,17 @@ type EventQuery struct {
 	// Limit caps the number of events returned. <=0 → DefaultEventLimit.
 	Limit int
 
+	// ScopeProjectID / ScopeRelayKeyHash / ScopePrincipalID narrow the
+	// stream to the slice of events the caller is authorized to read.
+	// Unlike every other filter they are a DISJUNCTION: an event matches
+	// when its project, its bearer hash or its principal is listed. All
+	// empty means no scope narrowing — a caller who may read nothing must
+	// be short-circuited by the handler, never passed through as
+	// "unfiltered".
+	ScopeProjectID    []string
+	ScopeRelayKeyHash []string
+	ScopePrincipalID  []string
+
 	// CursorTS / CursorID implement keyset pagination for Events. When
 	// CursorTS is non-zero, only events strictly older than the cursor are
 	// returned — i.e. (ts, request_id) < (CursorTS, CursorID) under the
@@ -143,7 +157,9 @@ type SummaryQuery struct {
 	// GroupBy is the dimension to group on. Valid values:
 	// "relay_key_hash", "policy_id", "model_id", "host_id",
 	// "host_key_id", "source", "finish_reason", "error_kind",
-	// "model", "host", "policy", "provider" (event-time slugs),
+	// "model", "host", "policy", "provider", "project", "team",
+	// "principal" (event-time slugs), "project_id", "team_id",
+	// "principal_id", "credential_id",
 	// or "tags.<key>" (dynamic, groups on a caller tag's value).
 	// Empty → "source".
 	GroupBy string
@@ -275,6 +291,13 @@ var ValidGroupBy = []string{
 	"host",
 	"policy",
 	"provider",
+	"project_id",
+	"team_id",
+	"principal_id",
+	"credential_id",
+	"project",
+	"team",
+	"principal",
 }
 
 // MaxTagKeyLen caps a single tag key. Enforced at write time

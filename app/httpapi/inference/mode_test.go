@@ -25,8 +25,8 @@ func TestClassify_Normal_AuthorizationBearer(t *testing.T) {
 	if c.Mode != ModeNormal {
 		t.Fatalf("mode: want Normal, got %v", c.Mode)
 	}
-	if c.RelayKey != "wr_abc" {
-		t.Fatalf("relay key: want wr_abc, got %q", c.RelayKey)
+	if c.Key != "wr_abc" {
+		t.Fatalf("relay key: want wr_abc, got %q", c.Key)
 	}
 	if c.UpstreamAuth != "" || c.UpstreamHost != "" {
 		t.Fatalf("normal mode should not carry upstream fields: %+v", c)
@@ -38,8 +38,8 @@ func TestClassify_Normal_XWRAPIKeyPrecedence(t *testing.T) {
 		"X-WR-API-Key":  "wr_via_header",
 		"Authorization": "Bearer wr_via_auth",
 	}))
-	if c.RelayKey != "wr_via_header" {
-		t.Fatalf("want X-WR-API-Key to win, got %q", c.RelayKey)
+	if c.Key != "wr_via_header" {
+		t.Fatalf("want X-WR-API-Key to win, got %q", c.Key)
 	}
 }
 
@@ -56,8 +56,8 @@ func TestClassify_ProxyAuthed(t *testing.T) {
 	if c.Mode != ModeProxyAuthed {
 		t.Fatalf("mode: want ProxyAuthed, got %v", c.Mode)
 	}
-	if c.RelayKey != "wr_relay" {
-		t.Fatalf("relay key: %q", c.RelayKey)
+	if c.Key != "wr_relay" {
+		t.Fatalf("relay key: %q", c.Key)
 	}
 	if c.UpstreamAuth != "Bearer sk-ant-oauth-token" {
 		t.Fatalf("upstream auth: %q", c.UpstreamAuth)
@@ -79,8 +79,8 @@ func TestClassify_ProxyAnonymous(t *testing.T) {
 	if c.Mode != ModeProxyAnonymous {
 		t.Fatalf("mode: want ProxyAnonymous, got %v", c.Mode)
 	}
-	if c.RelayKey != "" {
-		t.Fatalf("anon should have no relay key: %q", c.RelayKey)
+	if c.Key != "" {
+		t.Fatalf("anon should have no relay key: %q", c.Key)
 	}
 }
 

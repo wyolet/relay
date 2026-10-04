@@ -9,6 +9,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/settings"
 )
@@ -30,7 +31,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.Inference](api, d, protect, settings.Section{
 		Name:        settings.SectionInference,
-		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets RelayKeys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
+		Description: "Authenticated /v1/* behavior. AllowMissingPolicy lets Keys with no Spec.PolicyID reach any host the relay has hostkeys for, bypassing the per-policy authorization gate. Default off.",
 	})
 	registerSettingsSection[settings.PayloadLogging](api, d, protect, settings.Section{
 		Name:        settings.SectionPayloadLogging,
@@ -222,6 +223,7 @@ func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewar
 		if err != nil {
 			return nil, huma.Error400BadRequest("encode: " + err.Error())
 		}
+		audit.Changed(ctx, []string{"sections." + section})
 		row, err := d.Stores.Settings.Upsert(ctx, section, raw)
 		if err != nil {
 			return nil, huma.Error400BadRequest(err.Error())

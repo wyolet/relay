@@ -33,10 +33,10 @@ func (s *Snapshot) addBindings(bindings []*binding.Binding, models, hosts idSet)
 // clears a dangling Pricing ref. Pricing presence is checked against the
 // already-built pricingsByID (addPricings runs before addBindings).
 func (s *Snapshot) sanitizeBinding(b *binding.Binding, models, hosts idSet) (*binding.Binding, bool) {
-	if _, ok := models[b.Spec.ModelID]; !ok {
+	if !models(b.Spec.ModelID) {
 		return nil, false
 	}
-	if _, ok := hosts[b.Spec.HostID]; !ok {
+	if !hosts(b.Spec.HostID) {
 		return nil, false
 	}
 	clean := *b

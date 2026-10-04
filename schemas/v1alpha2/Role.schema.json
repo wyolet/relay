@@ -1,0 +1,188 @@
+{
+  "$defs": {
+    "RoleRuleDTO": {
+      "additionalProperties": false,
+      "properties": {
+        "kinds": {
+          "items": {
+            "enum": [
+              "*",
+              "audit",
+              "debug",
+              "groups",
+              "host-bindings",
+              "host-keys",
+              "hosts",
+              "keys",
+              "license",
+              "logs",
+              "master-key",
+              "models",
+              "policies",
+              "policy-bindings",
+              "pricings",
+              "projects",
+              "providers",
+              "rate-limits",
+              "role-bindings",
+              "roles",
+              "service-accounts",
+              "settings",
+              "system",
+              "teams",
+              "tokens",
+              "usage",
+              "users"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "verbs": {
+          "items": {
+            "enum": [
+              "*",
+              "apply",
+              "attach",
+              "create",
+              "delete",
+              "detach",
+              "generate",
+              "get",
+              "health",
+              "list",
+              "mint",
+              "read",
+              "reload",
+              "revoke",
+              "rotate",
+              "snapshot",
+              "update"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kinds",
+        "verbs"
+      ],
+      "type": "object"
+    },
+    "RoleSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/RoleRuleDTO"
+          },
+          "minItems": 1,
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    },
+    "WireMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/WireOwner"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/Role.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/WireMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/RoleSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "Role",
+  "type": "object"
+}

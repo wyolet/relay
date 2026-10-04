@@ -21,7 +21,7 @@ func TestGoverns(t *testing.T) {
 		{name: "system delete always denied", op: OpDelete, kind: "rate-limit", ownerKind: "system", wantErr: true},
 		{name: "system edit denied via generic CRUD", op: OpEdit, kind: "host", ownerKind: "system", wantErr: true},
 		{name: "user delete allowed", op: OpDelete, kind: "policy", ownerKind: "user", wantErr: false},
-		{name: "user edit allowed", op: OpEdit, kind: "relay-key", ownerKind: "user", wantErr: false},
+		{name: "user edit allowed", op: OpEdit, kind: "key", ownerKind: "user", wantErr: false},
 
 		// Catalog-managed (host/provider-owned), no section present → safe default.
 		{name: "catalog edit default allowed", op: OpEdit, kind: "model", ownerKind: "provider", wantErr: false},
@@ -38,6 +38,15 @@ func TestGoverns(t *testing.T) {
 			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
 			wantErr: true,
 		},
+
+		// Tenancy rows are the tenant's, like user rows.
+		{name: "project delete allowed", op: OpDelete, kind: "project", ownerKind: "project", wantErr: false},
+		{name: "team delete allowed", op: OpDelete, kind: "team", ownerKind: "team", wantErr: false},
+		{
+			name: "project-owned policy delete allowed", op: OpDelete, kind: "policy", ownerKind: "project",
+			reader:  fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -46,7 +55,7 @@ func TestGoverns(t *testing.T) {
 			if r == nil {
 				r = fakeReader{}
 			}
-			err := Governs(r, tt.op, tt.kind, tt.ownerKind)
+			err := Governs(r, tt.op, tt.kind, tt.ownerKind, false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Governs(%s,%s,%s) err=%v, wantErr=%v", tt.op, tt.kind, tt.ownerKind, err, tt.wantErr)
 			}

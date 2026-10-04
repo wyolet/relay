@@ -2,10 +2,14 @@ package control
 
 import (
 	"context"
+	"sort"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/internal/identity"
 )
@@ -24,7 +28,39 @@ type authResponse struct {
 		UserID   string   `json:"user_id"`
 		Username string   `json:"username"`
 		Roles    []string `json:"roles,omitempty"`
+		Subjects []string `json:"subjects,omitempty" doc:"RBAC subject strings this caller acts under."`
+		Scopes   []string `json:"scopes,omitempty"   doc:"Scopes the caller holds a role binding at, as \"team:<id>\" / \"project:<id>\"."`
 	}
+}
+
+// bindingScopes lists the non-global scopes the actor holds any RoleBinding
+// at, deduplicated and sorted. Used by the UI to decide which tenancy views
+// to offer; it is not an authorization decision.
+func bindingScopes(d Deps, a *actor.Actor) []string {
+	if d.Catalog == nil || len(a.Subjects) == 0 {
+		return nil
+	}
+	snap := d.Catalog.Current()
+	if snap == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, subj := range a.Subjects {
+		for _, b := range snap.RoleBindingsForSubject(subj) {
+			if b.Spec.Scope.Kind == meta.OwnerSystem || b.Spec.Scope.ID == "" {
+				continue
+			}
+			s := string(b.Spec.Scope.Kind) + ":" + b.Spec.Scope.ID
+			if _, dup := seen[s]; dup {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 type emptyOutput struct{}
@@ -49,6 +85,7 @@ func registerAuth(api huma.API, d Deps) {
 				if err := d.Sessions.Login(ctx, u.ID, u.Username, u.Roles...); err != nil {
 					return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 				}
+				audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: u.ID, Name: u.Username}, audit.StatusAllowed, audit.Actor{Kind: audit.ActorUser, ID: u.ID, Name: u.Username})
 				out := &authResponse{}
 				out.Body.UserID = u.ID
 				out.Body.Username = u.Username
@@ -57,22 +94,48 @@ func registerAuth(api huma.API, d Deps) {
 			}
 		}
 		if d.Identity == nil {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		yu, ok := d.Identity.ByUsername(in.Body.Username)
 		if !ok {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
 		if !identity.Verify(yu, in.Body.Password) {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
 			return nil, huma.Error401Unauthorized("invalid credentials")
 		}
-		if err := d.Sessions.Login(ctx, yu.Metadata.Name, yu.Spec.Username.Get(), yu.Spec.Roles...); err != nil {
+		// The session carries the seeded row because owner ids, principals
+		// and subjects key on its UUID, not the YAML slug. Only a deployment
+		// with no user store falls back to the slug.
+		username, roles := yu.Spec.Username.Get(), yu.Spec.Roles
+		userID := yu.Metadata.Name
+		var row *user.User
+		if d.Users != nil {
+			var err error
+			if row, err = d.Users.ByUsername(ctx, username); err != nil {
+				return nil, huma.Error500InternalServerError("user lookup failed: " + err.Error())
+			}
+			if row != nil {
+				userID, roles = row.ID, row.Roles
+			}
+		}
+		// A disabled row locks out its YAML credential too. Under RBAC a
+		// session keyed on the slug would act as nobody any binding names.
+		_, scoped := d.Authz.(authz.Scoper)
+		if (row != nil && row.Disabled) || (row == nil && scoped) {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: userID, Name: username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: username})
+			return nil, huma.Error401Unauthorized("invalid credentials")
+		}
+		if err := d.Sessions.Login(ctx, userID, username, roles...); err != nil {
 			return nil, huma.Error500InternalServerError("session create failed: " + err.Error())
 		}
+		audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", ID: userID, Name: username}, audit.StatusAllowed, audit.Actor{Kind: audit.ActorUser, ID: userID, Name: username})
 		out := &authResponse{}
-		out.Body.UserID = yu.Metadata.Name
-		out.Body.Username = yu.Spec.Username.Get()
-		out.Body.Roles = yu.Spec.Roles
+		out.Body.UserID = userID
+		out.Body.Username = username
+		out.Body.Roles = roles
 		return out, nil
 	})
 
@@ -86,6 +149,7 @@ func registerAuth(api huma.API, d Deps) {
 	}, func(ctx context.Context, _ *struct{}) (*emptyOutput, error) {
 		// Logout is intentionally idempotent: no error if no session.
 		_ = d.Sessions.Logout(ctx)
+		audit.Record(ctx, "auth.logout", audit.Resource{Kind: "user"}, audit.StatusAllowed)
 		return &emptyOutput{}, nil
 	})
 
@@ -105,6 +169,8 @@ func registerAuth(api huma.API, d Deps) {
 		out.Body.UserID = a.UserID
 		out.Body.Username = a.Username
 		out.Body.Roles = a.Roles
+		out.Body.Subjects = a.Subjects
+		out.Body.Scopes = bindingScopes(d, a)
 		return out, nil
 	})
 }

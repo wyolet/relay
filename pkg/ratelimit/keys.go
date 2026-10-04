@@ -44,6 +44,14 @@ func swStateKey(scope string, r Rule) string {
 	return fmt.Sprintf("limit:{%s}:sw:%s:%s", scope, r.Key, r.Meter)
 }
 
+// denyKey returns the existence key for a MeterRevoked rule. It carries no
+// meter or strategy segment: the caller writes it directly (on revocation)
+// and only its presence is read.
+// format: limit:{<scope>}:<rule.Key>
+func denyKey(scope string, r Rule) string {
+	return fmt.Sprintf("limit:{%s}:%s", scope, r.Key)
+}
+
 // commitGuardKey returns the idempotency guard key for a reservation.
 // format: limit:{<scope>}:committed:<reservationID>
 func commitGuardKey(scope, reservationID string) string {

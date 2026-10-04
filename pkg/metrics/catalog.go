@@ -16,5 +16,6 @@ var CatalogApplyErrors = prometheus.NewCounterVec(
 
 func init() { Register(CatalogApplyErrors) }
 
-// CatalogApplyFailed records one catalog event that failed to apply.
+// CatalogApplyFailed is the one-liner the catalog listener calls when an
+// event fails to apply.
 func CatalogApplyFailed(kind string) { CatalogApplyErrors.WithLabelValues(SafeLabel(kind)).Inc() }

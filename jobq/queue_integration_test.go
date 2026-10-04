@@ -4,13 +4,17 @@ package jobq
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/jobq/payload"
@@ -30,23 +34,58 @@ func fastOpts() Options {
 	}
 }
 
-func testQueue(t *testing.T, opts Options) (*Queue, *pgxpool.Pool) {
+// testDB creates a database of its own on the RELAY_TEST_PG_DSN server and
+// drops it on cleanup. The module stands alone, so it cannot share the
+// server module's test helper.
+func testDB(t *testing.T) string {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
+	server := os.Getenv("RELAY_TEST_PG_DSN")
+	if server == "" {
 		t.Skip("RELAY_TEST_PG_DSN not set")
 	}
+	cfg, err := pgx.ParseConfig(server)
+	if err != nil {
+		t.Fatalf("parse RELAY_TEST_PG_DSN: %v", err)
+	}
+	suffix := make([]byte, 6)
+	_, _ = rand.Read(suffix)
+	name := "relay_t_jobq_" + hex.EncodeToString(suffix)
+	exec := func(stmt string) error {
+		ctx := context.Background()
+		conn, err := pgx.ConnectConfig(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		defer conn.Close(ctx)
+		_, err = conn.Exec(ctx, stmt)
+		return err
+	}
+	if err := exec("CREATE DATABASE " + pgx.Identifier{name}.Sanitize()); err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := exec("DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"); err != nil {
+			t.Errorf("drop database: %v", err)
+		}
+	})
+	u, err := url.Parse(server)
+	if err != nil || u.Scheme == "" {
+		return server + " dbname=" + name
+	}
+	u.Path = "/" + name
+	return u.String()
+}
+
+func testQueue(t *testing.T, opts Options) (*Queue, *pgxpool.Pool) {
+	t.Helper()
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := pgxpool.New(ctx, testDB(t))
 	if err != nil {
 		t.Fatalf("open pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
 	if err := Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
-	}
-	if _, err := pool.Exec(ctx, "TRUNCATE jobq_jobs"); err != nil {
-		t.Fatalf("truncate: %v", err)
 	}
 	ps, err := payload.NewFileStore(t.TempDir())
 	if err != nil {

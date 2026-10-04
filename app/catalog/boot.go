@@ -11,18 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/binding"
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
 	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/seed"
+	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/settings"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/internal/storage/gen"
 	pkgsecret "github.com/wyolet/relay/pkg/secret"
 	pkgoauth "github.com/wyolet/relay/pkg/secret/oauth"
@@ -54,7 +61,7 @@ type BootstrapOptions struct {
 	// AutoSeedDir when its .version stamp matches (no network), else
 	// fetched from CatalogURL — and the marker updated. The seed is
 	// layering-safe: operator-edited (dirty) rows are skipped and
-	// overlays re-merge at snapshot load. A resolve/fetch failure
+	// overlays re-merge at snapshot load. A resolve, fetch or seed failure
 	// against a non-empty catalog logs and continues with the existing
 	// rows (never blocks boot); against an empty catalog it falls back to
 	// AutoSeedDir when set, else fails hydrate (retried by the caller).
@@ -69,6 +76,11 @@ type BootstrapOptions struct {
 	// CatalogIndexURL overrides where "latest"/"auto" resolves the
 	// channel index from. Empty uses seed.DefaultCatalogIndexURL.
 	CatalogIndexURL string
+
+	// SeedLock serializes the seed decision and the seed itself across every
+	// pod sharing the database, so pods booting together against an empty
+	// catalog seed it once. Nil runs unserialized: safe for one process only.
+	SeedLock func(ctx context.Context, fn func(context.Context) error) error
 }
 
 // Stores bundles the eight entity stores constructed by Bootstrap. Exposed
@@ -83,14 +95,27 @@ type Stores struct {
 	Policy    *policy.Store
 	Pricing   *pricing.Store
 	Binding   *binding.Store
-	RelayKey  *relaykey.Store
+	Key       *key.Store
 	Overlay   *overlay.Store
 	Settings  *settings.Store
+	Team      *team.Store
+	Project   *project.Store
+
+	ServiceAccount *serviceaccount.Store
+	Group          *group.Store
+	Role           *role.Store
+	RoleBinding    *rolebinding.Store
+	PolicyBinding  *policybinding.Store
 
 	// Secrets is the shared secret-resolution registry (env + stored
 	// backends). Exposed so data-plane components (e.g. the payload-logging
 	// controller resolving S3 credentials) resolve through the same seam.
 	Secrets *pkgsecret.Registry
+
+	// Stored is the AES-GCM stored-secret backend registered in Secrets,
+	// exposed so the composition root can write a secret (the generated
+	// token signing key) through the same master-key path.
+	Stored *pkgsecret.StoredResolver
 
 	// OAuthResolver is the KindOAuth resolver registered in Secrets,
 	// exposed so the composition root can drive the proactive
@@ -117,17 +142,29 @@ func BootstrapStores(ctx context.Context, opts BootstrapOptions) (*Catalog, *Sto
 		Policy:    policy.NewStore(opts.Pool),
 		Pricing:   pricing.NewStore(opts.Pool),
 		Binding:   binding.NewStore(opts.Pool),
-		RelayKey:  relaykey.NewStore(q),
+		Key:       key.NewStore(q),
 		Overlay:   overlay.NewStore(q),
 		Settings:  settings.NewStore(q),
-		Secrets:   secReg,
+		Team:      team.NewStore(q),
+		Project:   project.NewStore(q),
+
+		ServiceAccount: serviceaccount.NewStore(q),
+		Group:          group.NewStore(opts.Pool),
+		Role:           role.NewStore(q),
+		RoleBinding:    rolebinding.NewStore(opts.Pool),
+		PolicyBinding:  policybinding.NewStore(opts.Pool),
+
+		Secrets: secReg,
+		Stored:  secStored,
 	}
 	cat := New(
 		stores.Provider, stores.Host, stores.Policy, stores.Model,
-		stores.HostKey, stores.RateLimit, stores.RelayKey, stores.Pricing,
+		stores.HostKey, stores.RateLimit, stores.Key, stores.Pricing,
 		stores.Binding,
 	)
 	cat.UseOverlays(stores.Overlay)
+	cat.UseTenancy(stores.Team, stores.Project, stores.ServiceAccount, stores.Group,
+		stores.Role, stores.RoleBinding, stores.PolicyBinding)
 	cat.settings.store = stores.Settings
 
 	// OAuth credential resolver: stores its token blob via the same AES-GCM
@@ -167,30 +204,16 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: load key version: %w", err)
 	}
-	if opts.CatalogVersion != "" {
-		if err := seedVersioned(ctx, stores, opts); err != nil {
-			return nil, fmt.Errorf("catalog.Hydrate: %w", err)
+	if opts.CatalogVersion != "" || opts.AutoSeedDir != "" {
+		run := func(ctx context.Context) error { return seedCatalog(ctx, stores, opts) }
+		var err error
+		if opts.SeedLock != nil {
+			err = opts.SeedLock(ctx, run)
+		} else {
+			err = run(ctx)
 		}
-	} else if opts.AutoSeedDir != "" {
-		empty, err := isCatalogEmpty(ctx, stores)
 		if err != nil {
-			return nil, fmt.Errorf("catalog.Hydrate: check empty: %w", err)
-		}
-		if empty {
-			if _, err := seed.Run(ctx, seed.Options{
-				Pool:      opts.Pool,
-				YAMLDir:   opts.AutoSeedDir,
-				MasterKey: opts.MasterKey,
-			}); err != nil {
-				return nil, fmt.Errorf("catalog.Hydrate: auto-seed: %w", err)
-			}
-			// A stamped tree (baked image) makes the seeded version known;
-			// record it so a later matching version pin no-ops.
-			if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
-				if err := writeCatalogSource(ctx, stores, v); err != nil {
-					return nil, fmt.Errorf("catalog.Hydrate: %w", err)
-				}
-			}
+			return nil, fmt.Errorf("catalog.Hydrate: %w", err)
 		}
 	}
 	if err := c.Reload(ctx); err != nil {
@@ -204,9 +227,17 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 		ratelimit: stores.RateLimit,
 		policy:    stores.Policy,
 		pricing:   stores.Pricing,
-		relaykey:  stores.RelayKey,
+		key:       stores.Key,
 		overlay:   stores.Overlay,
 		settings:  stores.Settings,
+		team:      stores.Team,
+		project:   stores.Project,
+
+		serviceAccount: stores.ServiceAccount,
+		group:          stores.Group,
+		role:           stores.Role,
+		roleBinding:    stores.RoleBinding,
+		policyBinding:  stores.PolicyBinding,
 	})
 	return listener, nil
 }
@@ -224,6 +255,35 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		return nil, nil, nil, err
 	}
 	return cat, listener, stores, nil
+}
+
+// seedCatalog decides whether the catalog needs seeding and seeds it: to the
+// pinned version when one is set, else from AutoSeedDir into an empty one.
+func seedCatalog(ctx context.Context, stores *Stores, opts BootstrapOptions) error {
+	if opts.CatalogVersion != "" {
+		return seedVersioned(ctx, stores, opts)
+	}
+	empty, err := isCatalogEmpty(ctx, stores)
+	if err != nil {
+		return fmt.Errorf("check empty: %w", err)
+	}
+	if !empty {
+		return nil
+	}
+	if _, err := seed.Run(ctx, seed.Options{
+		Pool:             opts.Pool,
+		YAMLDir:          opts.AutoSeedDir,
+		MasterKey:        opts.MasterKey,
+		CatalogKindsOnly: true,
+	}); err != nil {
+		return fmt.Errorf("auto-seed: %w", err)
+	}
+	// A tree with a .version file (baked image) makes the seeded version known; record it
+	// so a later matching version pin no-ops.
+	if v := seed.DirVersion(opts.AutoSeedDir); v != "" {
+		return writeCatalogSource(ctx, stores, v)
+	}
+	return nil
 }
 
 // seedVersioned reconciles the seeded catalog with opts.CatalogVersion:
@@ -265,7 +325,8 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 	// The baked/local tree already holds this exact release — seed from
 	// disk, no network.
 	if v := seed.DirVersion(opts.AutoSeedDir); v != "" && v == version {
-		return seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local")
+		return keepServingOnSeedError(empty, version,
+			seedAndMark(ctx, stores, opts, opts.AutoSeedDir, version, cur, "local"))
 	}
 
 	tmp, err := os.MkdirTemp("", "relay-catalog-*")
@@ -288,7 +349,20 @@ func seedVersioned(ctx context.Context, stores *Stores, opts BootstrapOptions) e
 		}
 		return fmt.Errorf("fetch catalog %s: %w", version, fetchErr)
 	}
-	return seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched")
+	return keepServingOnSeedError(empty, version,
+		seedAndMark(ctx, stores, opts, dataDir, version, cur, "fetched"))
+}
+
+// keepServingOnSeedError applies the fetch-failure policy to a release that
+// fails to seed: a non-empty catalog keeps its rows and its marker, so the
+// next boot retries; an empty one has nothing to serve and fails hydrate.
+func keepServingOnSeedError(empty bool, version string, err error) error {
+	if err == nil || empty {
+		return err
+	}
+	slog.Error("catalog: versioned seed failed; keeping existing catalog",
+		"version", version, "err", err)
+	return nil
 }
 
 // seedLocalFallback seeds AutoSeedDir after a resolve/fetch failure on an
@@ -303,6 +377,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 		"version", opts.CatalogVersion, "dir", opts.AutoSeedDir, "err", cause)
 	if _, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: opts.AutoSeedDir, MasterKey: opts.MasterKey,
+		CatalogKindsOnly: true,
 	}); err != nil {
 		return fmt.Errorf("fallback seed: %w", err)
 	}
@@ -317,6 +392,7 @@ func seedLocalFallback(ctx context.Context, stores *Stores, opts BootstrapOption
 func seedAndMark(ctx context.Context, stores *Stores, opts BootstrapOptions, dataDir, version string, cur *settings.CatalogSource, source string) error {
 	res, err := seed.Run(ctx, seed.Options{
 		Pool: opts.Pool, YAMLDir: dataDir, MasterKey: opts.MasterKey,
+		CatalogKindsOnly: true,
 	})
 	if err != nil {
 		return fmt.Errorf("seed catalog %s: %w", version, err)
@@ -401,7 +477,7 @@ func isCatalogEmpty(ctx context.Context, s *Stores) (bool, error) {
 	if len(prs) > 0 {
 		return false, nil
 	}
-	rks, err := s.RelayKey.List(ctx)
+	rks, err := s.Key.List(ctx)
 	if err != nil {
 		return false, err
 	}

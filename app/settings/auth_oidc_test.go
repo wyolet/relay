@@ -17,6 +17,11 @@ func (f oidcReader) Setting(section string) (any, bool) {
 
 func setOIDCEnv(t *testing.T) {
 	t.Helper()
+	setOIDCEnvVars(t)
+}
+
+func setOIDCEnvVars(t *testing.T) {
+	t.Helper()
 	t.Setenv("WYOLET_AUTH_MODE", "oidc")
 	t.Setenv("WYOLET_OIDC_ISSUER", "https://idp.example.com")
 	t.Setenv("WYOLET_OIDC_CLIENT_ID", "client-1")

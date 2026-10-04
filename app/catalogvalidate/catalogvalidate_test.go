@@ -90,6 +90,34 @@ func TestValidateGraph_BindingSnapshotNotInModel(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_DuplicateModelHostBinding(t *testing.T) {
+	docs := fixture()
+	dup := *docs[3].HostBinding
+	dup.Metadata.Name = "gpt-x-openai-host-2"
+	docs = append(docs, manifest.Document{HostBinding: &dup})
+	issues := ValidateGraph(docs)
+	for _, is := range issues {
+		if is.Kind == KindInvariant && strings.Contains(is.Message, "duplicate (model=") {
+			return
+		}
+	}
+	t.Fatalf("expected duplicate (model, host) issue, got:\n%s", Format(issues))
+}
+
+func TestValidateGraph_BindingAdapter(t *testing.T) {
+	for adapter, wantErr := range map[string]bool{
+		"": false, "openai_responses": false, "anthropic": false,
+		"canonical": true, "openai_embeddings": true, "no-such-adapter": true,
+	} {
+		docs := fixture()
+		docs[3].HostBinding.Spec.Adapter = adapter
+		issues := ValidateGraph(docs)
+		if HasErrors(issues) != wantErr {
+			t.Errorf("adapter %q: errors = %v, want %v:\n%s", adapter, HasErrors(issues), wantErr, Format(issues))
+		}
+	}
+}
+
 func TestValidateGraph_ModelNoSnapshots(t *testing.T) {
 	docs := fixture()
 	docs[2].Model.Spec.Snapshots = nil
@@ -192,11 +220,11 @@ func TestValidateGraph_PricingMissingTargetModel(t *testing.T) {
 	}
 }
 
-func TestValidateGraph_RelayKeyMissingPolicy(t *testing.T) {
+func TestValidateGraph_KeyMissingPolicy(t *testing.T) {
 	docs := fixture()
-	docs = append(docs, manifest.Document{RelayKey: &manifest.RelayKeyDTO{
+	docs = append(docs, manifest.Document{Key: &manifest.KeyDTO{
 		Metadata: manifest.WireMeta{Name: "k1"},
-		Spec:     manifest.RelayKeySpec{Policy: "ghost-policy", KeyHash: "x"},
+		Spec:     manifest.KeySpec{Policy: "ghost-policy", KeyHash: "x"},
 	}})
 	issues := ValidateGraph(docs)
 	if !hasRefMissing(issues, "Policy", "ghost-policy") {

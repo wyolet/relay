@@ -742,7 +742,7 @@ func TestStreamCanonicalToGemini_TextFlow(t *testing.T) {
 	}
 }
 
-// ---- regression tests for fidelity-audit fixes ----
+// ---- translation fidelity regressions ----
 
 // Parallel calls to the same function must get distinct CallIDs, and the bare
 // function name must be recoverable for the functionResponse round-trip.

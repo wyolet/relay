@@ -29,29 +29,40 @@ import (
 // under /api. Static fields are marshalled per request because feature flags
 // (auth:oidc) are settings-driven and may flip at runtime. Mirrors
 // registerConfigJSON's body shaping.
-func ConfigJSONHandler(rc RuntimeConfig, settingsSrc settings.Reader) http.HandlerFunc {
+func ConfigJSONHandler(d Deps) http.HandlerFunc {
+	rc := d.RuntimeConfig
 	if rc.Version == "" {
 		rc.Version = httpapi.Version
 	}
 	return func(w http.ResponseWriter, _ *http.Request) {
-		buf, _ := json.Marshal(withFeatures(rc, settingsSrc))
+		buf, _ := json.Marshal(withFeatures(rc, d))
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "public, max-age=60, stale-while-revalidate=600")
 		_, _ = w.Write(buf)
 	}
 }
 
-// withFeatures overlays settings-driven feature flags onto the static
-// runtime config. The rc value is copied; its Features map is never mutated.
-func withFeatures(rc RuntimeConfig, settingsSrc settings.Reader) RuntimeConfig {
-	if !settings.EffectiveAuthOIDC(settingsSrc).Enabled {
-		return rc
-	}
-	f := make(map[string]bool, len(rc.Features)+1)
+// withFeatures overlays the feature flags onto the static runtime config: what
+// the deployment wired (a token signing key, a user store, an audit reader)
+// and what its settings enable. The rc value is copied; its Features map is
+// never mutated. `tokens`, `users` and `audit` are always present, false
+// included — the UI hides the nav on a false, and cannot tell a missing key
+// from an unknown one. `oidc` appears only when enabled.
+func withFeatures(rc RuntimeConfig, d Deps) RuntimeConfig {
+	f := make(map[string]bool, len(rc.Features)+4)
 	for k, v := range rc.Features {
 		f[k] = v
 	}
-	f["oidc"] = true
+	f["tokens"] = d.TokenSigner != nil && d.TokenSigner.PublicKey() != nil
+	f["users"] = d.Users != nil
+	f["audit"] = d.AuditReader != nil
+	var settingsSrc settings.Reader
+	if d.Catalog != nil {
+		settingsSrc = d.Catalog
+	}
+	if settings.EffectiveAuthOIDC(settingsSrc).Enabled {
+		f["oidc"] = true
+	}
 	rc.Features = f
 	return rc
 }
@@ -95,10 +106,6 @@ func registerConfigJSON(api huma.API, d Deps) {
 	if body.Version == "" {
 		body.Version = httpapi.Version
 	}
-	var settingsSrc settings.Reader
-	if d.Catalog != nil {
-		settingsSrc = d.Catalog
-	}
 	huma.Register(api, huma.Operation{
 		OperationID: "runtime_config",
 		Method:      "GET",
@@ -110,7 +117,7 @@ func registerConfigJSON(api huma.API, d Deps) {
 			// Cacheable but short — a deploy's new values land within a minute,
 			// and refreshes within a session serve from cache. Never no-store.
 			CacheControl: "public, max-age=60, stale-while-revalidate=600",
-			Body:         withFeatures(body, settingsSrc),
+			Body:         withFeatures(body, d),
 		}, nil
 	})
 }

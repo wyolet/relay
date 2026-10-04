@@ -13,7 +13,7 @@ import (
 const SectionPayloadLogging = "payload-logging"
 
 // PayloadLogging configures the payloadlog observer. Off by default; the
-// per-request opt-in (policy/relaykey) still gates capture on top of
+// per-request opt-in (policy/key) still gates capture on top of
 // Enabled. Credentials are secret.Refs resolved via pkg/secret, so they
 // can live in env, encrypted-PG, or a future external backend — never as
 // plaintext in this row.

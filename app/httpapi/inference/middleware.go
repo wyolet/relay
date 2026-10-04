@@ -2,69 +2,128 @@ package inference
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"log/slog"
 	"net/http"
 	"strings"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/key"
 )
 
-// ctxRelayKeyT is the context-value key used to stash the authenticated
-// RelayKey for handlers to read via RelayKeyFromContext.
-type ctxRelayKeyT struct{}
+// ctxKeyT is the context-value key used to stash the authenticated
+// Key for handlers to read via KeyFromContext.
+type ctxKeyT struct{}
 
-// RelayKeyFromContext returns the authenticated relay key from ctx, or
-// nil if no relay-key middleware fired.
-func RelayKeyFromContext(ctx context.Context) *relaykey.RelayKey {
-	if v, ok := ctx.Value(ctxRelayKeyT{}).(*relaykey.RelayKey); ok {
+// ctxPrincipalT is the context-value key for the resolved Principal.
+type ctxPrincipalT struct{}
+
+// ctxSnapshotT is the context-value key for the snapshot the credential was
+// resolved against.
+type ctxSnapshotT struct{}
+
+// WithSnapshot pins snap as the catalog view for everything downstream of
+// ctx. The credential middleware and the WebSocket per-frame path are the
+// only writers.
+func WithSnapshot(ctx context.Context, snap *appcatalog.Snapshot) context.Context {
+	return context.WithValue(ctx, ctxSnapshotT{}, snap)
+}
+
+// SnapshotFrom returns the catalog view this request was authenticated
+// against, or nil when no credential middleware ran (anonymous proxy).
+// Downstream phases read it rather than cat.Current() so a reload landing
+// mid-request cannot split one request across two snapshots.
+func SnapshotFrom(ctx context.Context) *appcatalog.Snapshot {
+	if v, ok := ctx.Value(ctxSnapshotT{}).(*appcatalog.Snapshot); ok {
 		return v
 	}
 	return nil
 }
 
-// RelayKeyAuthMiddleware authenticates the inbound relay key according
-// to the request's Mode classification (set by ClassifyMiddleware
-// upstream):
+// reserveIdentity returns what the inbound reservation is scoped by: the
+// caller's team (the kv hash tag) and, for a token, the jti whose denylist
+// entry rides the same script.
+func reserveIdentity(ctx context.Context) (teamID, tokenJTI string) {
+	p := PrincipalFrom(ctx)
+	if p == nil {
+		return "", ""
+	}
+	if p.CredentialKind == CredentialToken {
+		return p.TeamID, p.CredentialID
+	}
+	return p.TeamID, ""
+}
+
+// KeyFromContext returns the authenticated relay key from ctx, or
+// nil if no key middleware fired.
+func KeyFromContext(ctx context.Context) *key.Key {
+	if v, ok := ctx.Value(ctxKeyT{}).(*key.Key); ok {
+		return v
+	}
+	return nil
+}
+
+// PrincipalFrom returns the resolved principal from ctx, or nil when the
+// request carried no credential (anonymous proxy mode).
+func PrincipalFrom(ctx context.Context) *Principal {
+	if v, ok := ctx.Value(ctxPrincipalT{}).(*Principal); ok {
+		return v
+	}
+	return nil
+}
+
+// PrincipalMiddleware authenticates the inbound credential according to the
+// request's Mode classification (set by ClassifyMiddleware upstream) and
+// resolves who it acts as:
 //
-//   - ModeNormal       — relay key is required; lookup must succeed.
-//   - ModeProxyAuthed  — relay key is required; lookup must succeed.
-//   - ModeProxyAnonymous — no relay key; this middleware is a no-op and
-//     no *RelayKey is stashed on ctx.
+//   - ModeNormal       — credential is required; lookup must succeed.
+//   - ModeProxyAuthed  — credential is required; lookup must succeed and the
+//     principal must be allowed to bring its own upstream key.
+//   - ModeProxyAnonymous — no credential; this middleware is a no-op and
+//     neither a *Key nor a *Principal is stashed on ctx.
 //
-// Snapshot is read on every request so admins toggling Enabled /
-// RevokedAt take effect within the NOTIFY debounce window.
-func RelayKeyAuthMiddleware(cat *appcatalog.Catalog) func(http.Handler) http.Handler {
+// The bearer is either a key or a relay-minted token, told apart by shape
+// (looksLikeToken); both resolve to the same Principal and only the lookup
+// differs. Every read is against the in-memory snapshot, re-read per request
+// so admin edits take effect within the NOTIFY debounce window.
+func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cls := ClassificationFrom(r.Context())
 			if cls.Mode == ModeProxyAnonymous {
 				// Gate (Settings.ProxyMode.AllowUnauthenticated) is checked
 				// downstream in the handler; this middleware just doesn't
-				// require a relay key.
+				// require a key.
 				next.ServeHTTP(w, r)
 				return
 			}
-			if cls.RelayKey == "" {
+			if cls.Key == "" {
 				writeAuthErr(w, "missing relay key")
 				return
 			}
-			rk, ok := cat.Current().RelayKeyByHash(hashToken(cls.RelayKey))
-			if !ok {
-				writeAuthErr(w, "invalid api key")
+			snap := cat.Current()
+			var (
+				p  *Principal
+				k  *key.Key
+				ok bool
+			)
+			if looksLikeToken(cls.Key) {
+				if p, ok = tokenPrincipal(w, snap, tokens, cls.Key); !ok {
+					return
+				}
+			} else if p, k, ok = keyPrincipal(w, snap, cls.Key); !ok {
 				return
 			}
-			if rk.Spec.Enabled != nil && !*rk.Spec.Enabled {
-				writeAuthErr(w, "api key disabled")
+			if !resolvePolicy(w, snap, p) {
 				return
 			}
-			if rk.Spec.RevokedAt != nil {
-				writeAuthErr(w, "api key revoked")
+			if cls.Mode == ModeProxyAuthed && !p.PassthroughAllowed {
+				writeForbidden(w, "passthrough_forbidden", "this credential may not forward upstream keys")
 				return
 			}
-			ctx := context.WithValue(r.Context(), ctxRelayKeyT{}, rk)
+			ctx := WithSnapshot(r.Context(), snap)
+			if k != nil {
+				ctx = context.WithValue(ctx, ctxKeyT{}, k)
+			}
+			ctx = context.WithValue(ctx, ctxPrincipalT{}, p)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -76,16 +135,4 @@ func bearer(h string) string {
 		return ""
 	}
 	return h[len(prefix):]
-}
-
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
-
-func writeAuthErr(w http.ResponseWriter, msg string) {
-	slog.Warn("inference: auth rejected", "status", 401, "code", "unauthenticated", "msg", msg)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","code":"unauthenticated","message":"` + msg + `"}}`))
 }

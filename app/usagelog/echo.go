@@ -12,7 +12,7 @@ import (
 // This is the read side of the blackboard: the producer (UsageHook) filled
 // the Event once; echo reads that same collection here, the sink reads it
 // at Finalize — no re-parse. Deliberately drops operator-only attribution
-// (relay-key hash, policy/host/model UUIDs); the caller gets observability,
+// (key hash, policy/host/model UUIDs); the caller gets observability,
 // not internals.
 func EchoFromContext(lc *lifecycle.Context) *v1.RelayUsage {
 	v, ok := lc.Collected(Namespace)

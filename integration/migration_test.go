@@ -1,0 +1,261 @@
+//go:build integration
+
+// migration_test.go covers the schema-lifecycle promises the rollback story
+// rests on: the key backfill has to give every principal-less key its own service
+// account however long its name is, a down-migration has to land on the
+// version it was asked for and converge when the schema is brought back up,
+// a target above the current version is a mistake rather than an
+// up-migration, and a pod that boots with auto-migration switched off has to
+// leave the schema where the operator put it.
+//
+// Every test here runs against an unmigrated database of its own.
+package integration_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/golang-migrate/migrate/v4"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	storagemod "github.com/wyolet/relay/internal/storage"
+	"github.com/wyolet/relay/internal/storage/storagetest"
+	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/pkg/ids"
+)
+
+// migrator drives the embedded migrations against dsn. MigrateTo is the
+// rollback entry point: it refuses any target above the schema's current
+// version, so stepping a fixture from one version to the next needs the
+// migrator itself.
+func migrator(t *testing.T, dsn string) *migrate.Migrate {
+	t.Helper()
+	src, err := iofs.New(pgmigrations.FS, ".")
+	if err != nil {
+		t.Fatalf("migration source: %v", err)
+	}
+	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
+	if err != nil {
+		t.Fatalf("migrate init: %v", err)
+	}
+	t.Cleanup(func() { _, _ = m.Close() })
+	return m
+}
+
+// schemaVersion reads the migrate bookkeeping row.
+func schemaVersion(t *testing.T, dsn string) (version uint, dirty bool) {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	var v int64
+	if err := pool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty); err != nil {
+		t.Fatalf("read schema_migrations: %v", err)
+	}
+	return uint(v), dirty
+}
+
+// insertKeyWithoutPrincipal writes a relay_keys row from before the principal
+// columns existed: an owner naming a user that carries no id.
+func insertKeyWithoutPrincipal(t *testing.T, dsn, name string) {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO relay_keys (id, name, display_name, key_hash, metadata, spec)
+		 VALUES ($1, $2, '', $3, '{"owner":{"kind":"user"}}'::jsonb, '{}'::jsonb)`,
+		ids.New(), name, sha256Hex(name)); err != nil {
+		t.Fatalf("insert %s: %v", name, err)
+	}
+}
+
+// Every principal-less key gets a service account of its own, whatever its
+// name: two keys whose names share a long prefix must not land on one
+// principal, which would let either key spend the other's grants.
+func TestMigrationGivesLongKeyNamesDistinctServiceAccounts(t *testing.T) {
+	dsn := storagetest.EmptyDB(t)
+	m := migrator(t, dsn)
+	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate to 25: %v", err)
+	}
+
+	prefix := strings.Repeat("a", 66)
+	first, second := prefix+"one", prefix+"two"
+	insertKeyWithoutPrincipal(t, dsn, first)
+	insertKeyWithoutPrincipal(t, dsn, second)
+
+	if err := m.Migrate(26); err != nil {
+		t.Fatalf("migrate to 26: %v", err)
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+
+	var accounts int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM service_accounts`).Scan(&accounts); err != nil {
+		t.Fatalf("count accounts: %v", err)
+	}
+	if accounts != 2 {
+		t.Errorf("service accounts = %d, want one per key", accounts)
+	}
+
+	var principals int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(DISTINCT principal_sa_id) FROM relay_keys WHERE principal_sa_id IS NOT NULL`).Scan(&principals); err != nil {
+		t.Fatalf("count principals: %v", err)
+	}
+	if principals != 2 {
+		t.Errorf("distinct key principals = %d, want the two keys on separate accounts", principals)
+	}
+
+	var maxLen int
+	if err := pool.QueryRow(ctx, `SELECT coalesce(max(length(name)), 0) FROM service_accounts`).Scan(&maxLen); err != nil {
+		t.Fatalf("read account names: %v", err)
+	}
+	if maxLen > 63 {
+		t.Errorf("generated account name is %d chars, past the DNS-1123 label limit", maxLen)
+	}
+}
+
+// `migrate down` has to land on exactly the version asked for, and bringing
+// the schema back up has to reach head from there.
+func TestMigrateDownToATargetThenUpReachesHead(t *testing.T) {
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
+	if head <= 25 {
+		t.Fatalf("head is %d; this test needs migrations above 25", head)
+	}
+
+	st, err := storagemod.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	st.Close()
+	if v, dirty := schemaVersion(t, dsn); v != head || dirty {
+		t.Fatalf("after boot the schema is at %d (dirty=%v), want head %d", v, dirty, head)
+	}
+
+	if err := storagemod.MigrateTo(dsn, 25); err != nil {
+		t.Fatalf("migrate down to 25: %v", err)
+	}
+	if v, dirty := schemaVersion(t, dsn); v != 25 || dirty {
+		t.Fatalf("after the down migration the schema is at %d (dirty=%v), want 25", v, dirty)
+	}
+
+	st, err = storagemod.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	st.Close()
+	if v, dirty := schemaVersion(t, dsn); v != head || dirty {
+		t.Errorf("after coming back up the schema is at %d (dirty=%v), want head %d", v, dirty, head)
+	}
+}
+
+// A target above the current version would run the up-migrations the
+// operator is trying to undo; it is refused and the schema is left alone.
+func TestMigrateDownRefusesATargetAboveTheSchemaVersion(t *testing.T) {
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
+	if err := storagemod.MigrateTo(dsn, 25); err != nil {
+		t.Fatalf("migrate to 25: %v", err)
+	}
+
+	err := storagemod.MigrateTo(dsn, head)
+	if err == nil {
+		t.Fatal("a target above the current version was accepted")
+	}
+	if !strings.Contains(err.Error(), "the schema is at 25") {
+		t.Errorf("the error does not name the current version: %v", err)
+	}
+	if v, _ := schemaVersion(t, dsn); v != 25 {
+		t.Errorf("the refused call moved the schema to %d, want it left at 25", v)
+	}
+}
+
+// A migration that fails half-way leaves the schema dirty, and every later
+// migrate refuses it. Forcing the version clears the flag so the next boot
+// migrates again; a version with no migration is refused.
+func TestMigrateForceClearsADirtySchema(t *testing.T) {
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
+	if err := storagemod.MigrateTo(dsn, 25); err != nil {
+		t.Fatalf("migrate to 25: %v", err)
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `UPDATE schema_migrations SET dirty = true`); err != nil {
+		t.Fatalf("mark dirty: %v", err)
+	}
+	if _, err := storagemod.Open(ctx, dsn); err == nil {
+		t.Fatal("boot migrated a dirty schema")
+	}
+
+	if err := storagemod.ForceVersion(dsn, 9999); err == nil {
+		t.Fatal("forcing a version with no migration was accepted")
+	}
+	if err := storagemod.ForceVersion(dsn, 25); err != nil {
+		t.Fatalf("force 25: %v", err)
+	}
+	if v, dirty := schemaVersion(t, dsn); v != 25 || dirty {
+		t.Fatalf("after force the schema is at %d (dirty=%v), want 25 clean", v, dirty)
+	}
+	st, err := storagemod.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("boot after force: %v", err)
+	}
+	st.Close()
+	if v, _ := schemaVersion(t, dsn); v != head {
+		t.Errorf("boot after force left the schema at %d, want head %d", v, head)
+	}
+}
+
+// A pod restarting mid-rollback must not re-apply the migrations the
+// operator just unwound.
+func TestBootWithMigrationsOffLeavesTheSchemaVersion(t *testing.T) {
+	dsn := storagetest.EmptyDB(t)
+	head := storagetest.LatestVersion(t)
+	if err := storagemod.MigrateTo(dsn, 25); err != nil {
+		t.Fatalf("migrate to 25: %v", err)
+	}
+
+	st, err := storagemod.Open(context.Background(), dsn, storagemod.WithMigrateOnBoot(false))
+	if err != nil {
+		t.Fatalf("open with migrations off: %v", err)
+	}
+	if err := st.Ping(context.Background()); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	st.Close()
+	if v, _ := schemaVersion(t, dsn); v != 25 {
+		t.Errorf("a boot with migrations off moved the schema to %d, want it left at 25", v)
+	}
+
+	// The default is still to migrate, so a pod on the new image catches up.
+	st, err = storagemod.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open with the default: %v", err)
+	}
+	st.Close()
+	if v, _ := schemaVersion(t, dsn); v != head {
+		t.Errorf("the default boot left the schema at %d, want head %d", v, head)
+	}
+}

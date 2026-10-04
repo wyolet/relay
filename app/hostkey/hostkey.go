@@ -172,9 +172,9 @@ func (k *HostKey) Validate() error {
 		return err
 	}
 	switch k.Meta.Owner.Kind {
-	case meta.OwnerUser, meta.OwnerSystem:
+	case meta.OwnerUser, meta.OwnerSystem, meta.OwnerProject:
 	default:
-		return fmt.Errorf("hostkey %q: owner.kind must be user or system, got %q", k.Meta.Name, k.Meta.Owner.Kind)
+		return fmt.Errorf("hostkey %q: owner.kind must be user, system or project, got %q", k.Meta.Name, k.Meta.Owner.Kind)
 	}
 	if k.Spec.HostID == "" {
 		return fmt.Errorf("hostkey %q: spec.hostId is required", k.Meta.Name)
@@ -218,6 +218,18 @@ type Status struct {
 	// Credential reports the OAuth credential's refresh lifecycle. Nil for
 	// api-key hostkeys and for oauth keys with no observation yet.
 	Credential *CredentialStatus `json:"credential,omitempty" yaml:"-"`
+
+	// Unresolved is set at load time when the key's secret could not be
+	// read (an env-ref whose variable is unset, a stored value the master
+	// key cannot decrypt). The row still lists and edits so an operator can
+	// repair it; the snapshot drops it so no request picks a valueless key.
+	// Load-time only — never written to the status column.
+	Unresolved *UnresolvedStatus `json:"unresolved,omitempty" yaml:"-"`
+}
+
+// UnresolvedStatus explains why a key's value could not be resolved.
+type UnresolvedStatus struct {
+	Reason string `json:"reason"`
 }
 
 // CredentialState classifies an OAuth credential's refresh health.

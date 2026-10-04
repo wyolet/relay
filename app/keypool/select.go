@@ -132,9 +132,8 @@ func (s *Selector) PickWithExclude(ctx context.Context, scope string, algo KeySe
 
 // pickRoundRobin selects a candidate using a modular counter stored in Redis.
 // Incr is atomic on every backend, so the index derives directly from the
-// counter value — no distributed lock, no extra round-trip on the hot path
-// (audit 2026-07-04 P1 tracker #9: the old WithLock wrapper collapsed
-// rotation to healthy[0] under contention on the non-blocking Redis lock).
+// counter value — no distributed lock, which under contention on the
+// non-blocking Redis lock would collapse rotation to healthy[0].
 func (s *Selector) pickRoundRobin(ctx context.Context, scope string, healthy []candidate) (*hostkey.HostKey, error) {
 	idx, err := s.state.Incr(ctx, roundRobinKey(scope), 1)
 	if err != nil {

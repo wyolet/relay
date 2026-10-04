@@ -28,11 +28,18 @@ configuration details.
 
 ```bash
 make build                    # build the relay binary
-make test                     # go test ./...
+make test                     # go test ./... in every module
+make test-race                # the same under -race
 make test-integration         # tag-gated PG/e2e tests (needs Docker)
 go vet ./...
 ```
 
+`make test-integration` brings up the compose test Postgres; `make
+test-integration-run` runs the same tests against any server named by
+`RELAY_TEST_PG_DSN`. Each test creates its own database there (cloned from a
+migrated template) and drops it afterwards, so the role needs `CREATEDB`. The
+Redis tests start containers through testcontainers; on colima, set
+`TESTCONTAINERS_RYUK_DISABLED=true` and point `DOCKER_HOST` at the colima socket.
 The ClickHouse sink tests run only when `RELAY_TEST_CH_DSN` names a server; test targets drop the deployment DSNs `.env` exports (`RELAY_PG_DSN`, `RELAY_CH_DSN`, `RELAY_REDIS_ADDR`, `RELAY_OTLP_ENDPOINT`), so tests never reach a deployment's databases.
 
 The repo is a **two-module monorepo**: the server module

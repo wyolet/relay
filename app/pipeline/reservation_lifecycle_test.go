@@ -29,12 +29,12 @@ type reservationTestSnapshot struct {
 	rateLimits map[string]*appratelimit.RateLimit
 }
 
-func (s *reservationTestSnapshot) Policy(id string) (*policy.Policy, bool) {
+func (s *reservationTestSnapshot) Policy(_ context.Context, id string) (*policy.Policy, bool) {
 	p, ok := s.policies[id]
 	return p, ok
 }
 
-func (s *reservationTestSnapshot) RateLimit(id string) (*appratelimit.RateLimit, bool) {
+func (s *reservationTestSnapshot) RateLimit(_ context.Context, id string) (*appratelimit.RateLimit, bool) {
 	rl, ok := s.rateLimits[id]
 	return rl, ok
 }

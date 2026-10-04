@@ -16,7 +16,7 @@
 // read. (Migration + sqlc queries land as a follow-up; current store.go
 // keeps Spec in JSONB until then, see TODO in store.go.)
 //
-// Reverse direction: RelayKey carries a single Spec.PolicyID (m:1).
+// Reverse direction: Key carries a single Spec.PolicyID (m:1).
 // Provider names its default via Spec.DefaultPolicyID. Models and
 // ProviderKeys carry no policy reference — they are discovered via the
 // junctions / via Policy.Spec.
@@ -95,11 +95,6 @@ type Spec struct {
 	// for backward source-compatibility.
 	KeySelection keypool.KeySelection `json:"keySelection,omitempty" yaml:"keySelection,omitempty" validate:"omitempty,oneof=prioritized round-robin least-recently-used"`
 
-	// SkipDefaultLimits opts out of the implicit "every Policy targeting an
-	// auth-required Provider must enforce at least requests + tokens" rule
-	// performed by the composition layer.
-	SkipDefaultLimits bool `json:"skipDefaultLimits,omitempty" yaml:"skipDefaultLimits,omitempty"`
-
 	// IncludeDeprecated controls whether wildcard Models entries expand
 	// to models whose Spec.Deprecation.Status is "deprecated" or
 	// "sunset". Default false (deprecated models excluded). Literal
@@ -112,7 +107,7 @@ type Spec struct {
 
 	// PayloadLoggingEnabled opts every request authorized by this policy
 	// into full request/response body capture by the payloadlog observer.
-	// Off by default. A RelayKey may also opt in independently; either
+	// Off by default. A Key may also opt in independently; either
 	// being set enables capture for the request.
 	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
@@ -151,7 +146,9 @@ func (p *Policy) EffectiveKeySelection() keypool.KeySelection {
 }
 
 // SelectRateLimitID returns the id of the RateLimit that applies to one
-// request triple, or "" when the policy doesn't cap this request.
+// request triple, or "" when the policy doesn't cap this request, plus
+// whether the match came from a per-model RLBinding (which buckets per
+// model rather than once for the whole policy).
 //
 // Resolution: when Spec.RLBindings is non-empty, the first binding whose
 // Models matches the (provider, model, host) triple wins. Otherwise the
@@ -160,28 +157,29 @@ func (p *Policy) EffectiveKeySelection() keypool.KeySelection {
 //
 // Pure query — no snapshot lookup, no I/O. Caller resolves the id to a
 // *ratelimit.RateLimit via the snapshot.
-func (p *Policy) SelectRateLimitID(providerSlug, modelSlug, hostSlug string) string {
+func (p *Policy) SelectRateLimitID(providerSlug, modelSlug, hostSlug string) (id string, perModel bool) {
 	if p == nil {
-		return ""
+		return "", false
 	}
 	for _, b := range p.Spec.RLBindings {
 		if modelref.MatchAny(b.Models, providerSlug, modelSlug, hostSlug) {
-			return b.RateLimitID
+			return b.RateLimitID, true
 		}
 	}
-	return p.Spec.RateLimitID
+	return p.Spec.RateLimitID, false
 }
 
 // ResolveRules converts the given RateLimit into the limiter's Rule
-// shape, scoped by this policy's slug. Returns nil when rl is nil,
-// disabled, or has no Rules. This is the runtime equivalent of the old
+// shape, scoped by this policy's slug, the RateLimit, and — for a
+// per-model RLBinding — modelID. Returns nil when rl is nil, disabled, or
+// has no Rules. This is the runtime equivalent of the old
 // ratelimit.Resolve(pol, rl) function — moved here so app/ratelimit
 // stays free of policy imports.
-func (p *Policy) ResolveRules(rl *ratelimit.RateLimit) []pkgratelimit.Rule {
-	if p == nil {
+func (p *Policy) ResolveRules(rl *ratelimit.RateLimit, modelID string) []pkgratelimit.Rule {
+	if p == nil || rl == nil {
 		return nil
 	}
-	return ratelimit.ResolveWithScope("policy", p.Meta.Name, rl)
+	return ratelimit.ResolveWithScope("policy", ruleSubject(p.Meta.Name, rl.Meta.ID, modelID), rl)
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces:
@@ -208,8 +206,9 @@ func (p *Policy) Validate() error {
 		if len(p.Spec.HostKeyIDs) > 0 {
 			return fmt.Errorf("policy %q: host-owned policies must not list hostKeyIds", p.Meta.Name)
 		}
+	case meta.OwnerProject:
 	default:
-		return fmt.Errorf("policy %q: owner.kind required (user|system|host)", p.Meta.Name)
+		return fmt.Errorf("policy %q: owner.kind required (user|system|host|project)", p.Meta.Name)
 	}
 	// RateLimit shape: flat singular OR per-model bindings, never both.
 	if p.Spec.RateLimitID != "" && len(p.Spec.RLBindings) > 0 {

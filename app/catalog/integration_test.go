@@ -5,7 +5,6 @@
 // pg via deploy/compose/docker-compose.test.yml).
 //
 // What it covers:
-//   - Migrations 0001..0011 apply cleanly to a fresh DB.
 //   - Bootstrap wires every store; initial Reload over an empty DB succeeds.
 //   - Direct stores.X.Upsert writes flow through NOTIFY → Listener →
 //     debouncer → Apply* and become visible in the Snapshot within ~1.5s.
@@ -18,14 +17,10 @@ package catalog
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/host"
@@ -36,55 +31,23 @@ import (
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/internal/storage/gen"
-	pgmigrations "github.com/wyolet/relay/migrations/postgres"
+	"github.com/wyolet/relay/internal/storage/storagetest"
 )
 
 const flushPad = 1500 * time.Millisecond // 1s debounce + safety margin
 
 func setupDB(t *testing.T) (*pgxpool.Pool, context.Context, context.CancelFunc) {
 	t.Helper()
-	dsn := os.Getenv("RELAY_TEST_PG_DSN")
-	if dsn == "" {
-		t.Skip("RELAY_TEST_PG_DSN not set; run via `make test-integration`")
-	}
-	// Run migrations from a clean state. The compose pg uses tmpfs so this
-	// is a fresh DB on every `up`, but we still drop+create the public
-	// schema to guarantee idempotence across test runs in one session.
-	src, err := iofs.New(pgmigrations.FS, ".")
-	if err != nil {
-		t.Fatalf("migrate src: %v", err)
-	}
-	m, err := migrate.NewWithSourceInstance("iofs", src, dsn)
-	if err != nil {
-		t.Fatalf("migrate init: %v", err)
-	}
-	_ = m.Drop() // tolerate "no schema" on first run
-	src2, _ := iofs.New(pgmigrations.FS, ".")
-	m2, err := migrate.NewWithSourceInstance("iofs", src2, dsn)
-	if err != nil {
-		t.Fatalf("migrate re-init: %v", err)
-	}
-	if err := m2.Up(); err != nil && err != migrate.ErrNoChange {
-		t.Fatalf("migrate up: %v", err)
-	}
-
+	pool := storagetest.Pool(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		cancel()
-		t.Fatalf("pgxpool: %v", err)
-	}
-	t.Cleanup(func() {
-		pool.Close()
-	})
 	return pool, ctx, cancel
 }
 
 // runListener starts l and returns once LISTEN is attached, observed as the
-// snapshot swap from the reload the listener runs right after it.
+// snapshot generation bump from the reload the listener runs right after it.
 func runListener(t *testing.T, ctx context.Context, cat *Catalog, l *Listener) {
 	t.Helper()
-	before := cat.Current()
+	gen := cat.Current().Generation()
 	lctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -96,7 +59,7 @@ func runListener(t *testing.T, ctx context.Context, cat *Catalog, l *Listener) {
 		<-done
 	})
 	deadline := time.Now().Add(5 * time.Second)
-	for cat.Current() == before {
+	for cat.Current().Generation() == gen {
 		if time.Now().After(deadline) {
 			t.Fatal("listener did not attach LISTEN within 5s")
 		}
@@ -314,5 +277,81 @@ func TestIntegration_HostKeyStoredMode(t *testing.T) {
 	}
 	if rows[0].KeyVersion != 2 {
 		t.Errorf("secret_values key_version: got %d want 2", rows[0].KeyVersion)
+	}
+}
+
+// TestIntegration_UnresolvedEnvHostKey covers the control plane surviving a
+// host key whose env var is unset: the row still loads (marked unresolved),
+// the NOTIFY-driven reload succeeds, and the key is absent from the snapshot.
+func TestIntegration_UnresolvedEnvHostKey(t *testing.T) {
+	pool, ctx, cancel := setupDB(t)
+	defer cancel()
+
+	cat, listener, stores, err := Bootstrap(ctx, BootstrapOptions{Pool: pool})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	runListener(t, ctx, cat, listener)
+
+	hst := &host.Host{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "openai-unresolved", Owner: meta.Owner{Kind: meta.OwnerSystem}},
+		Spec: host.Spec{BaseURL: "https://api.openai.com"},
+	}
+	if err := stores.Host.Upsert(ctx, hst); err != nil {
+		t.Fatalf("upsert host: %v", err)
+	}
+	tier := &policy.Policy{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "openai-unresolved-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}},
+	}
+	if err := stores.Policy.Upsert(ctx, tier); err != nil {
+		t.Fatalf("upsert tier policy: %v", err)
+	}
+	k := &hostkey.HostKey{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "unset-env-k", Owner: meta.Owner{Kind: meta.OwnerUser}},
+		Spec: hostkey.Spec{
+			HostID:    hst.Meta.ID,
+			PolicyID:  tier.Meta.ID,
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "RELAY_TEST_UNSET_ENV_KEY"},
+		},
+	}
+	if err := stores.HostKey.Upsert(ctx, k); err != nil {
+		t.Fatalf("upsert hostkey: %v", err)
+	}
+
+	rows2, err := stores.HostKey.List(ctx)
+	if err != nil {
+		t.Fatalf("list host keys with an unset env ref: %v", err)
+	}
+	var got *hostkey.HostKey
+	for _, r := range rows2 {
+		if r.Meta.ID == k.Meta.ID {
+			got = r
+		}
+	}
+	if got == nil {
+		t.Fatalf("unresolved key missing from List")
+	}
+	if got.Status.Unresolved == nil {
+		t.Errorf("List: status.unresolved not set")
+	}
+	if got.Resolved != "" {
+		t.Errorf("List: unresolved key carries a value")
+	}
+	one, err := stores.HostKey.Get(ctx, k.Meta.ID)
+	if err != nil {
+		t.Fatalf("get host key with an unset env ref: %v", err)
+	}
+	if one == nil || one.Status.Unresolved == nil {
+		t.Errorf("Get: status.unresolved not set")
+	}
+
+	// The reload the write's NOTIFY triggers must succeed, and a full
+	// rebuild must too — with the key dropped from the snapshot.
+	time.Sleep(flushPad)
+	if err := cat.Reload(ctx); err != nil {
+		t.Fatalf("reload with an unresolvable key: %v", err)
+	}
+	if _, ok := cat.Current().HostKey(k.Meta.ID); ok {
+		t.Errorf("unresolved key %s reached the snapshot", k.Meta.ID)
 	}
 }

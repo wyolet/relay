@@ -38,7 +38,7 @@ func mountTokenCountRoutes(r chi.Router, d Deps) {
 		r.With(
 			ReadinessMiddleware(d.Catalog),
 			ClassifyMiddleware(),
-			RelayKeyAuthMiddleware(d.Catalog),
+			PrincipalMiddleware(d.Catalog, d.Tokens),
 		).Post("/"+p.Name()+route.TokenCountPath(), func(w http.ResponseWriter, r *http.Request) {
 			handleCountTokens(d, w, r.WithContext(clientprofile.WithProfile(r.Context(), profile)))
 		})
@@ -76,8 +76,8 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 		modelName = namer.Inbound(modelName)
 	}
 
-	rk := RelayKeyFromContext(ctx)
-	if rk == nil {
+	principal := PrincipalFrom(ctx)
+	if principal == nil {
 		writeAPIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated", "missing relay key")
 		return
 	}
@@ -89,10 +89,12 @@ func handleCountTokens(d Deps, w http.ResponseWriter, r *http.Request) {
 	plan, err := d.Resolver.Resolve(routing.Request{
 		ModelName:    modelRef,
 		RawModelName: modelName,
-		RelayKey:     rk,
+		Policy:       principal.Policy,
+		UserID:       principal.UserID,
+		Snapshot:     SnapshotFrom(ctx),
 	})
 	if err != nil {
-		mapRoutingErr(w, err, modelRef, rk.Spec.PolicyID)
+		mapRoutingErr(w, err, modelRef, principal.PolicyID())
 		return
 	}
 

@@ -1,0 +1,126 @@
+{
+  "$defs": {
+    "HostBindingSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "host": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "pricing": {
+          "type": "string"
+        },
+        "snapshots": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "upstreamName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "host",
+        "adapter"
+      ],
+      "type": "object"
+    },
+    "WireMeta": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/$defs/WireOwner"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "WireOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "system",
+            "user",
+            "team",
+            "project",
+            "provider",
+            "host"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://relay-api.wyolet.dev/schemas/v1alpha2/HostBinding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/WireMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/HostBindingSpec"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "title": "HostBinding",
+  "type": "object"
+}

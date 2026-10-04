@@ -9,13 +9,13 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 )
 
 // In-memory listers; one each implements the narrow Lister interface
@@ -45,9 +45,9 @@ type rlList []*ratelimit.RateLimit
 
 func (l rlList) List(context.Context) ([]*ratelimit.RateLimit, error) { return l, nil }
 
-type rkList []*relaykey.RelayKey
+type rkList []*key.Key
 
-func (l rkList) List(context.Context) ([]*relaykey.RelayKey, error) { return l, nil }
+func (l rkList) List(context.Context) ([]*key.Key, error) { return l, nil }
 
 type rcList []*pricing.Pricing
 
@@ -59,7 +59,7 @@ func (l bndList) List(context.Context) ([]*binding.Binding, error) { return l, n
 
 // fixture builds a coherent set: 1 provider (vendor), 1 host (serving
 // endpoint), 2 models served by that host, 2 keys for that host, 1
-// ratelimit, 1 policy referencing all of those, 1 relaykey pointing at
+// ratelimit, 1 policy referencing all of those, 1 key pointing at
 // the policy.
 func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList, bndList) {
 	provID := meta.NewID()
@@ -148,12 +148,12 @@ func fixture() (provList, hostList, polList, modList, keyList, rlList, rkList, b
 		},
 	}
 
-	rk := &relaykey.RelayKey{
+	rk := &key.Key{
 		Meta: meta.Metadata{
 			ID: meta.NewID(), Name: "cust-1",
 			Owner: meta.Owner{Kind: meta.OwnerUser},
 		},
-		Spec: relaykey.Spec{
+		Spec: key.Spec{
 			PolicyID: pol.Meta.ID,
 			KeyHash:  strings.Repeat("a", 64),
 			Prefix:   "rk_cust1",
@@ -194,8 +194,8 @@ func TestReload_HappyPath(t *testing.T) {
 	if _, _, ok := s.SnapshotByName("gpt-4o-mini-2025-01-01"); !ok {
 		t.Error("snapshot lookup failed")
 	}
-	if _, ok := s.RelayKeyByHash(strings.Repeat("a", 64)); !ok {
-		t.Error("relaykey hash lookup failed")
+	if k, _ := s.KeyByHash(strings.Repeat("a", 64)); k == nil {
+		t.Error("key hash lookup failed")
 	}
 	pol, _ := s.PolicyByName("cheap-tier")
 	if got := len(s.ModelsInPolicy(pol.Meta.ID)); got != 2 {
@@ -217,8 +217,8 @@ func TestReload_DisabledPolicyDoesNotEvictModels(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
 	fls := false
 	pols[0].Spec.Enabled = &fls
-	// Disabling the policy strands the relaykey pointing at it; disable
-	// the relaykey too so cross-entity validation passes.
+	// Disabling the policy strands the key pointing at it; disable
+	// the key too so cross-entity validation passes.
 	rks[0].Spec.Enabled = &fls
 
 	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
@@ -259,22 +259,21 @@ func TestReload_DisabledModelDropsFromPolicyRefs(t *testing.T) {
 	}
 }
 
-// Disabling a Policy still referenced by a RelayKey used to fail Reload.
-// Now Reload succeeds and the RelayKey is silently dropped from the
-// snapshot (its required ref is gone).
-func TestReload_RelayKeyToDisabledPolicyDrops(t *testing.T) {
+// A Key whose policy is merely switched off keeps its place, so resolution
+// can answer policy_disabled through the retained row — TestPrincipal_KeyOnDisabledPolicyIsForbidden
+// pins that end to end. The other half is what makes it a rule rather than a
+// leak: a Key naming a policy that is *absent* has lost a required ref and
+// must not survive.
+func TestReload_KeyOnAnAbsentPolicyDrops(t *testing.T) {
 	provs, hosts, pols, models, keys, rls, rks, bnds := fixture()
-	fls := false
-	pols[0].Spec.Enabled = &fls
-	// rks[0] points at pols[0]; disable rks[0] too so an explicit "I want
-	// this dropped" doesn't muddy the test of soft-dropping unrelated keys.
-	// Other relaykeys (if any) pointing at the disabled policy must also
-	// disappear from the snapshot.
-	rks[0].Spec.Enabled = &fls
+	hash := rks[0].Spec.KeyHash
 
-	c := New(provs, hosts, pols, models, keys, rls, rks, rcList{}, bnds)
+	c := New(provs, hosts, polList{pols[1]}, models, keys, rls, rks, rcList{}, bnds)
 	if err := c.Reload(context.Background()); err != nil {
 		t.Fatalf("reload should be tolerant, got %v", err)
+	}
+	if got, _ := c.Current().KeyByHash(hash); got != nil {
+		t.Fatal("the key survived a policy that is not in the snapshot at all")
 	}
 }
 

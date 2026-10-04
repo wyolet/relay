@@ -15,27 +15,33 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
+	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
+	"github.com/wyolet/relay/app/role"
+	"github.com/wyolet/relay/app/rolebinding"
+	"github.com/wyolet/relay/app/serviceaccount"
+	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/metrics"
 )
 
 // ── payload types ─────────────────────────────────────────────────────────────
 
 type notifyEvent struct {
-	Kind string // "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
+	Kind string // "team", "project", "serviceaccount", "group", "provider", "host", "model", "hostkey", "ratelimit", "policy", "pricing", "relaykey"
 	Op   string // "upsert" or "delete"
 	ID   string
 }
@@ -44,6 +50,10 @@ var validKinds = map[string]struct{}{
 	"provider": {}, "host": {}, "model": {}, "hostkey": {},
 	"ratelimit": {}, "policy": {}, "pricing": {}, "relaykey": {},
 	"hostbinding": {}, "settings": {}, "overlay": {},
+	"team": {}, "project": {},
+	"serviceaccount": {}, "group": {},
+	"role": {}, "rolebinding": {}, "policybinding": {},
+	"user": {},
 }
 
 // parseEvent splits "kind:op:id". The id is the remainder after the second
@@ -67,66 +77,6 @@ func parseEvent(payload string) (notifyEvent, bool) {
 		return notifyEvent{}, false
 	}
 	return notifyEvent{Kind: kind, Op: op, ID: id}, true
-}
-
-// ── debouncer ─────────────────────────────────────────────────────────────────
-
-type eventKey struct{ Kind, ID string }
-
-const debounceCap = 1000
-
-type debouncer struct {
-	mu       sync.Mutex
-	pending  map[eventKey]string // value = op; last-write-wins
-	interval time.Duration
-}
-
-func newDebouncer(interval time.Duration) *debouncer {
-	return &debouncer{
-		pending:  make(map[eventKey]string, 64),
-		interval: interval,
-	}
-}
-
-// push records an event. Returns true if the buffer hit the soft cap and
-// the caller should trigger an immediate flush.
-func (d *debouncer) push(e notifyEvent) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.pending[eventKey{e.Kind, e.ID}] = e.Op
-	return len(d.pending) >= debounceCap
-}
-
-// requeue puts back an event that failed to apply, unless a newer event for
-// the same row arrived since the drain.
-func (d *debouncer) requeue(e drainedEvent) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	k := eventKey{e.Kind, e.ID}
-	if _, newer := d.pending[k]; !newer {
-		d.pending[k] = e.Op
-	}
-}
-
-type drainedEvent struct {
-	Kind string
-	ID   string
-	Op   string
-}
-
-// drain atomically extracts all pending events and returns them as a slice.
-func (d *debouncer) drain() []drainedEvent {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.pending) == 0 {
-		return nil
-	}
-	out := make([]drainedEvent, 0, len(d.pending))
-	for k, op := range d.pending {
-		out = append(out, drainedEvent{Kind: k.Kind, ID: k.ID, Op: op})
-	}
-	d.pending = make(map[eventKey]string, 64)
-	return out
 }
 
 // ── narrow store interfaces ───────────────────────────────────────────────────
@@ -153,11 +103,32 @@ type listenerStores struct {
 	pricing interface {
 		Get(ctx context.Context, id string) (*pricing.Pricing, error)
 	}
-	relaykey interface {
-		Get(ctx context.Context, id string) (*relaykey.RelayKey, error)
+	key interface {
+		Get(ctx context.Context, id string) (*key.Key, error)
 	}
 	overlay interface {
 		Get(ctx context.Context, kind, resourceID string) (*overlay.Overlay, error)
+	}
+	team interface {
+		Get(ctx context.Context, id string) (*team.Team, error)
+	}
+	serviceAccount interface {
+		Get(ctx context.Context, id string) (*serviceaccount.ServiceAccount, error)
+	}
+	group interface {
+		Get(ctx context.Context, id string) (*group.Group, error)
+	}
+	role interface {
+		Get(ctx context.Context, id string) (*role.Role, error)
+	}
+	roleBinding interface {
+		Get(ctx context.Context, id string) (*rolebinding.RoleBinding, error)
+	}
+	policyBinding interface {
+		Get(ctx context.Context, id string) (*policybinding.PolicyBinding, error)
+	}
+	project interface {
+		Get(ctx context.Context, id string) (*project.Project, error)
 	}
 	settings SettingsLister
 }
@@ -283,12 +254,15 @@ func (l *Listener) flushLoop(ctx context.Context, flushCh <-chan struct{}) {
 // transaction commits and the debouncer flushes the whole burst together,
 // cross-ref validation against the snapshot succeeds at each step.
 //
-// Order: provider → host → ratelimit → model → hostkey → policy → pricing
-// → relaykey. Deletes propagate via reverse-ref cascade inside the
-// reconciler so they don't need a separate ordering pass.
+// Order: team → project → provider → host → ratelimit → model → hostkey →
+// policy → pricing → key. Deletes propagate via reverse-ref cascade
+// inside the reconciler so they don't need a separate ordering pass.
 func (l *Listener) applyDrained(ctx context.Context) {
 	events := l.deb.drain()
-	if l.reloadPending {
+	// Every incremental apply clones the whole snapshot, so a bulk write
+	// (an apply of a large bundle) would clone once per row. Past this size
+	// one full rebuild is cheaper and reaches the same state.
+	if l.reloadPending || len(events) > reloadBatchThreshold {
 		l.reloadAndApplySettings(ctx, events)
 		return
 	}
@@ -339,160 +313,31 @@ func (l *Listener) reloadAndApplySettings(ctx context.Context, events []drainedE
 	slog.Info("catalog notify: catalog reloaded", "events", len(events))
 }
 
+// reloadBatchThreshold is the drained-event count past which a full rebuild
+// replaces the per-event incremental applies.
+const reloadBatchThreshold = 64
+
 var kindOrder = map[string]int{
-	"provider":    0,
-	"host":        1,
-	"ratelimit":   2,
-	"model":       3,
-	"hostkey":     4,
-	"policy":      5,
-	"pricing":     6,
-	"hostbinding": 7,
-	"relaykey":    8,
-	"overlay":     9, // after model upserts so re-merges see fresh templates
-	"settings":    10,
-}
-
-// applyEvent fetches the row (for upserts) and calls the appropriate Apply* method.
-func (l *Listener) applyEvent(ctx context.Context, e drainedEvent) error {
-	switch e.Kind {
-	case "provider":
-		if e.Op == "delete" {
-			return l.cat.ApplyProviderDelete(e.ID)
-		}
-		p, err := l.stores.provider.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if p == nil {
-			return l.cat.ApplyProviderDelete(e.ID)
-		}
-		return l.cat.ApplyProviderUpsert(p)
-
-	case "host":
-		if e.Op == "delete" {
-			return l.cat.ApplyHostDelete(e.ID)
-		}
-		h, err := l.stores.host.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if h == nil {
-			return l.cat.ApplyHostDelete(e.ID)
-		}
-		return l.cat.ApplyHostUpsert(h)
-
-	case "model":
-		if e.Op == "delete" {
-			return l.cat.ApplyModelDelete(e.ID)
-		}
-		m, err := l.stores.model.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if m == nil {
-			return l.cat.ApplyModelDelete(e.ID)
-		}
-		return l.cat.ApplyModelUpsert(m)
-
-	case "hostkey":
-		if e.Op == "delete" {
-			return l.cat.ApplyHostKeyDelete(e.ID)
-		}
-		k, err := l.stores.hostkey.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if k == nil {
-			return l.cat.ApplyHostKeyDelete(e.ID)
-		}
-		return l.cat.ApplyHostKeyUpsert(k)
-
-	case "ratelimit":
-		if e.Op == "delete" {
-			return l.cat.ApplyRateLimitDelete(e.ID)
-		}
-		r, err := l.stores.ratelimit.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if r == nil {
-			return l.cat.ApplyRateLimitDelete(e.ID)
-		}
-		return l.cat.ApplyRateLimitUpsert(r)
-
-	case "policy":
-		if e.Op == "delete" {
-			return l.cat.ApplyPolicyDelete(e.ID)
-		}
-		p, err := l.stores.policy.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if p == nil {
-			return l.cat.ApplyPolicyDelete(e.ID)
-		}
-		return l.cat.ApplyPolicyUpsert(p)
-
-	case "pricing":
-		if e.Op == "delete" {
-			return l.cat.ApplyPricingDelete(e.ID)
-		}
-		p, err := l.stores.pricing.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if p == nil {
-			return l.cat.ApplyPricingDelete(e.ID)
-		}
-		return l.cat.ApplyPricingUpsert(p)
-
-	case "relaykey":
-		if e.Op == "delete" {
-			return l.cat.ApplyRelayKeyDelete(e.ID)
-		}
-		k, err := l.stores.relaykey.Get(ctx, e.ID)
-		if err != nil {
-			return err
-		}
-		if k == nil {
-			return l.cat.ApplyRelayKeyDelete(e.ID)
-		}
-		return l.cat.ApplyRelayKeyUpsert(k)
-
-	case "hostbinding":
-		// PR1: bindings aren't consumed by routing yet, and the COW
-		// incremental reconciler doesn't know this kind. Fall back to a
-		// full reload — bindings change rarely (catalog edits), so the
-		// cost is acceptable. PR2 adds incremental ApplyHostBinding* when
-		// routing reads bindings.
-		return l.cat.Reload(ctx)
-
-	case "overlay":
-		// Composite-key payload: id slot carries "kind|resource_id"
-		// (see migration 000022's overlay_notify()).
-		kind, resourceID, ok := strings.Cut(e.ID, "|")
-		if !ok || l.stores.overlay == nil {
-			return nil
-		}
-		if e.Op == "delete" {
-			return l.cat.ApplyOverlayDelete(kind, resourceID)
-		}
-		o, err := l.stores.overlay.Get(ctx, kind, resourceID)
-		if err != nil {
-			return err
-		}
-		if o == nil {
-			return l.cat.ApplyOverlayDelete(kind, resourceID)
-		}
-		return l.cat.ApplyOverlayUpsert(o)
-
-	case "settings":
-		if e.Op == "delete" {
-			l.cat.settings.applyDelete(e.ID)
-			return nil
-		}
-		return l.cat.settings.applyUpsert(ctx, e.ID)
-	}
-	return nil
+	"team":      0,
+	"project":   1,
+	"provider":  2,
+	"host":      3,
+	"ratelimit": 4,
+	"model":     5,
+	"hostkey":   6,
+	"policy":    7,
+	// service accounts sanitize against policies, keys against accounts.
+	"serviceaccount": 8,
+	"group":          9,
+	// roles before the bindings that grant them; bindings after the
+	// policies and tenancy rows they are scoped to.
+	"role":          10,
+	"rolebinding":   11,
+	"policybinding": 12,
+	"pricing":       13,
+	"hostbinding":   14,
+	"relaykey":      15,
+	"overlay":       16, // after model upserts so re-merges see fresh templates
+	"settings":      17,
+	"user":          18,
 }

@@ -56,9 +56,18 @@ app/                       — the application: domain + composition + handlers
   {provider,host,model,
    hostkey,ratelimit,
    policy,pricing,binding,
-   relaykey}/              — 9 entity packages. Each: domain types, Validate(),
-                             Store{List,Get,Upsert,Delete}. `binding` is the
-                             first-class HostBinding join (Model×Host×adapter).
+   key}/                   — catalog + credential entities. Each: domain types,
+                             Validate(), Store{List,Get,Upsert,Delete}.
+                             `binding` is the first-class HostBinding join
+                             (Model×Host×adapter); `key` is the inbound key.
+  {team,project,group,
+   serviceaccount,user,
+   role,rolebinding,
+   policybinding}/         — tenancy + RBAC entities, same shape
+  apply/                   — manifest plan/apply/prune; also drives the boot seed
+  refcheck/                — cross-row reference rules shared by CRUD and apply
+  audit/                   — control-plane audit emitter + store
+  license/                 — license-gate interfaces (verifier: internal/license)
   overlay/                 — catalog overlays: user-owned sparse spec patches
                              on pristine TEMPLATE rows, merged to EFFECTIVE
                              rows at snapshot load (survives re-seed). See
@@ -98,7 +107,8 @@ app/                       — the application: domain + composition + handlers
   manifest/                — YAML DTOs + translate ↔ domain
   seed/                    — YAML → Postgres orchestration
   session/                 — scs wrapper, kv-backed
-  authz/                   — Authorizer interface (v1: AlwaysAllowAuthenticated)
+  authz/                   — Authorizer; RELAY_AUTHZ=single (allow
+                             authenticated) | rbac (roles + bindings)
   actor/                   — Actor in context (user/admin-token)
   usagelog/                — lifecycle observer → bounded Emitter → usage Sink
   payloadlog/              — lifecycle observer → request/response payload store
@@ -367,8 +377,12 @@ Binding (first-class join: ModelID × HostID)
           └── Enabled
 
 Pricing  (owner=Host, applied to N bindings, tier-aware via AboveTokens)
-RelayKey (inbound customer API key → PolicyID)
+Key      (inbound customer API key → PolicyID)
 ```
+
+A Key is a credential OF a principal — a ServiceAccount (which lives in a
+Project) or a User — not an identity of its own, so rotating one leaves
+everything bound to that principal untouched.
 
 HostBinding is its own entity (`app/binding`), not an array embedded in
 `model.Spec`. The promotion gives pricing and routing a real addressable
@@ -377,7 +391,7 @@ re-serving another provider's model). It's a join owned by no single side
 (Owner is system-kind); `(ModelID, HostID)` is unique (DB constraint +
 catalog re-check). Routing reads `snapshot.BindingsForModel(modelID)`.
 
-**Route entity is deferred** — Policy + RelayKey cover the v1 case. When
+**Route entity is deferred** — Policy + Key cover the v1 case. When
 multi-tenancy lands the Route + Org/Project hierarchy comes back per
 `.tmp/design/roadmap.md`.
 
@@ -424,7 +438,7 @@ inbound URL paths, upstream URL path, auth strategy, translator, optional
 
 ### Admin CRUD surface
 
-Nine kinds, uniform shape. The control API is mounted under **`/api`** on
+Every kind has the same shape. The control API is mounted under **`/api`** on
 the control listener (`RELAY_CONTROL_PORT`). The prefix exists because the
 embedded SPA is served from the *same* listener (as the `NotFound`
 fallback), and its client-side routes would otherwise be shadowed by the
@@ -441,14 +455,15 @@ DELETE /api/{plural}/by-id/{id}      delete (id-routed)
 ```
 
 Plurals: `providers`, `hosts`, `models`, `host-keys`, `rate-limits`,
-`policies`, `pricings`, `host-bindings`, `relay-keys`.
+`policies`, `pricings`, `host-bindings`, `keys`, `teams`, `projects`,
+`service-accounts`, `groups`, `roles`, `role-bindings`, `policy-bindings`.
 
 Plus:
 
 - `POST /auth/login`, `POST /auth/logout`, `GET /auth/whoami`
 - `POST /master-key/generate`, `POST /reload`, `GET /version`
 - per-kind sub-resources (e.g. `host-keys/by-id/{id}/health`, `.../rotate`,
-  `policies/by-id/{id}/relay-keys/{relayKeyId}`) and read projections from
+  `policies/by-id/{id}/keys/{keyId}`) and read projections from
   `app/catalogview`.
 
 Handlers live in `app/httpapi/control/`. The generic CRUD factory
@@ -471,7 +486,8 @@ full-rebuild fallback.
 |---|---|---|
 | Browser → control API | `/auth/*`, CRUD, `/master-key/*`, `/reload`, `/version` | scs session cookie (`relay_session`, HttpOnly + SameSite=Strict + Secure-toggleable) |
 | Operator / CI → control API | same | `Authorization: Bearer ${RELAY_ADMIN_TOKEN}` (break-glass; coexists with sessions) |
-| Customer code → inference API | `/openai/v1/*`, `/anthropic/v1/*`, `/{profile}/v1/*`, canonical `/v1/*` | `Authorization: Bearer ${relay-key}`; hashed → `snapshot.RelayKeyByHash` |
+| Customer code → inference API | `/openai/v1/*`, `/anthropic/v1/*`, `/{profile}/v1/*`, canonical `/v1/*` | `Authorization: Bearer ${key}`; hashed → `snapshot.KeyByHash` |
+| Customer code → inference API | same | `Authorization: Bearer ${token}` — relay-signed Ed25519 token minted at `POST /api/auth/token` |
 
 Sessions are real, backed by `alexedwards/scs/v2` over `kv.Store`
 (`app/session`), opaque tokens rotated on login, server-side destroy on

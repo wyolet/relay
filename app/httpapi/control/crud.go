@@ -21,18 +21,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/wyolet/relay/app/actor"
+	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
-	"github.com/wyolet/relay/app/model"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/provider"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/filter"
 	"github.com/wyolet/relay/pkg/ids"
@@ -185,7 +176,7 @@ func registerKind[T any](
 		if s, ok := authzr.(authz.Scoper); ok {
 			visible := items[:0:0]
 			for _, it := range items {
-				if s.Visible(ctx, singular, metaOf(it).Owner) {
+				if s.Visible(ctx, singular, metaOf(it).ID, metaOf(it).Owner) {
 					visible = append(visible, it)
 				}
 			}
@@ -231,9 +222,6 @@ func registerKind[T any](
 		Middlewares: protect,
 		Errors:      []int{401, 404, 500},
 	}, func(ctx context.Context, in *refInput) (*itemResponse[T], error) {
-		if err := authzr.Authorize(ctx, plural+".read", authz.Resource{Kind: singular, Name: in.Ref}); err != nil {
-			return nil, mapAuthzErr(err)
-		}
 		id := in.Ref
 		if !ids.Valid(id) {
 			resolved, err := resolveSlug(id)
@@ -246,9 +234,14 @@ func registerKind[T any](
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
-		// 404, not 403 — a row the caller may not see must not confirm its
+		// Authorized on the fetched row: the decision needs its owner. 404,
+		// not 403 — a row the caller may not see must not confirm its
 		// existence.
-		if !visibleTo(ctx, authzr, singular, metaOf(v).Owner) {
+		if err := authzr.Authorize(ctx, plural+".get",
+			authz.Resource{Kind: singular, ID: id, Name: in.Ref, Owner: &metaOf(v).Owner}); err != nil {
+			if errors.Is(err, authz.ErrUnauthenticated) {
+				return nil, mapAuthzErr(err)
+			}
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s %q not found", singular, in.Ref))
 		}
 		if enrich != nil {
@@ -258,7 +251,7 @@ func registerKind[T any](
 	})
 
 	// Create — skipped for kinds whose creation requires custom logic
-	// (e.g. relay-keys, which generate plaintext server-side and return
+	// (e.g. keys, which generate plaintext server-side and return
 	// it once in the response body).
 	if !skipCreate {
 		huma.Register(api, huma.Operation{
@@ -283,24 +276,35 @@ func registerKind[T any](
 				}
 				m.Name = slug.Unique(base, slugTakenFn(store, metaOf))
 			}
-			// API never creates system-owned rows. system is reserved for
-			// seed paths (Store.Upsert directly, bypassing this handler).
-			// When defaultOwnerKind is set, an empty owner gets stamped;
-			// an explicit "system" gets rejected. Kinds without a default
-			// (Model, HostKey) require the caller to specify owner.kind
-			// because their valid owner is per-row.
-			if m.Owner.Kind == meta.OwnerSystem {
+			// system is reserved for seed paths, except where it is the kind's
+			// default (a personal Team, Group or Role would inherit whatever binds
+			// to its name) and role-bindings, whose owner mirrors spec.scope.
+			if m.Owner.Kind == meta.OwnerSystem && defaultOwnerKind != meta.OwnerSystem &&
+				singular != "role-binding" {
 				return nil, huma.Error400BadRequest("owner.kind=system is reserved for seed; omit owner.kind on create")
 			}
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
 				m.Owner.Kind = defaultOwnerKind
 			}
+			// Roles stay authorable as personal rows (license-gated); a team or
+			// group only ever names a shared scope.
+			if (singular == "team" || singular == "group") && m.Owner.Kind != meta.OwnerSystem {
+				return nil, huma.Error400BadRequest(singular + " owner.kind must be system; omit owner on create")
+			}
 			if err := stampOwnerID(ctx, &m.Owner); err != nil {
 				return nil, huma.Error400BadRequest(err.Error())
 			}
+			// The guard runs first: on kinds whose owner mirrors a spec field
+			// (Project, ServiceAccount, PolicyBinding) it is what re-derives
+			// the owner, and the owner is what the decision below turns on.
+			if guard != nil {
+				if err := guard(ctx, "create", nil, v); err != nil {
+					return nil, mapGuardErr(err)
+				}
+			}
 			// Authorize AFTER owner stamping so an owner-aware Authorizer can
 			// decide on the row's final provenance (user-owned rows are open to
-			// any authenticated caller; anything else is an admin operation).
+			// any authenticated caller; anything else needs a binding).
 			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
 				return nil, mapAuthzErr(err)
 			}
@@ -312,11 +316,7 @@ func registerKind[T any](
 					return nil, huma.Error400BadRequest(err.Error())
 				}
 			}
-			if guard != nil {
-				if err := guard(ctx, "create", nil, v); err != nil {
-					return nil, mapGuardErr(err)
-				}
-			}
+			audit.Changed(ctx, []string{audit.AnyField})
 			if err := store.Upsert(ctx, v); err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
@@ -345,7 +345,7 @@ func registerKind[T any](
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).Owner) {
+		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
 		// Authorize with the fetched row's owner so an owner-aware Authorizer
@@ -353,7 +353,7 @@ func registerKind[T any](
 		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).Owner.Kind)); err != nil {
+		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).Owner.Kind), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		v := &in.Body
@@ -374,6 +374,7 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		audit.Changed(ctx, audit.DiffFields(existing, v))
 		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
 		if err := store.Upsert(ctx, v); err != nil {
 			return nil, huma.Error500InternalServerError(err.Error())
@@ -400,26 +401,27 @@ func registerKind[T any](
 		Tags:          []string{tag},
 		Middlewares:   protect,
 		DefaultStatus: http.StatusNoContent,
-		Errors:        []int{401, 403, 404, 500},
+		Errors:        []int{401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *idInput) (*emptyResponse, error) {
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
-		if !visibleTo(ctx, authzr, singular, metaOf(existing).Owner) {
+		if !visibleTo(ctx, authzr, singular, metaOf(existing).ID, metaOf(existing).Owner) {
 			return nil, huma.Error404NotFound(fmt.Sprintf("%s with id %q not found", singular, in.ID))
 		}
 		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).Owner.Kind)); err != nil {
+		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).Owner.Kind), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		if guard != nil {
 			if err := guard(ctx, "delete", existing, nil); err != nil {
-				return nil, huma.Error403Forbidden(err.Error())
+				return nil, mapGuardErr(err)
 			}
 		}
+		audit.Changed(ctx, []string{audit.AnyField})
 		if cascade != nil {
 			if err := cascade(ctx, existing); err != nil {
 				return nil, huma.Error500InternalServerError("cascade: " + err.Error())
@@ -430,642 +432,4 @@ func registerKind[T any](
 		}
 		return &emptyResponse{}, nil
 	})
-}
-
-// stampOwnerID fills Owner.ID from the acting user on user-owned rows so
-// ownership is recorded with an identity to key on. Admin-token callers
-// carry no UserID: their rows keep an empty owner id and behave as
-// operator/shared rows. A client-supplied owner.id must be truthful — only
-// the break-glass admin token may set someone else's.
-func stampOwnerID(ctx context.Context, o *meta.Owner) error {
-	if o.Kind != meta.OwnerUser {
-		return nil
-	}
-	a := actor.From(ctx)
-	if a == nil {
-		return nil
-	}
-	switch {
-	case o.ID == "":
-		o.ID = a.UserID
-	case o.ID == a.UserID || a.AdminToken:
-	default:
-		return errors.New("owner.id must be empty or match the calling user")
-	}
-	return nil
-}
-
-// visibleTo reports whether the actor in ctx may see a row with the given
-// owner. True whenever the configured Authorizer doesn't scope reads (the
-// single-user default).
-func visibleTo(ctx context.Context, a authz.Authorizer, kind string, owner meta.Owner) bool {
-	s, ok := a.(authz.Scoper)
-	if !ok {
-		return true
-	}
-	return s.Visible(ctx, kind, owner)
-}
-
-// slugTakenFn returns the existence predicate slug.Unique needs to mint a
-// non-colliding slug. Walks the store once per create — acceptable for
-// catalogs in the hundreds; if it becomes a hotspot, the snapshot grows
-// a byName index for the kinds that don't yet have one.
-func slugTakenFn[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) func(string) bool {
-	taken := map[string]struct{}{}
-	if items, err := store.List(context.Background()); err == nil {
-		for _, it := range items {
-			taken[metaOf(it).Name] = struct{}{}
-		}
-	}
-	return func(candidate string) bool {
-		_, ok := taken[candidate]
-		return ok
-	}
-}
-
-// mapGuardErr maps a mutationGuard error to an HTTP response. Guards that
-// return a huma.StatusError (e.g. a 400 for an unresolvable ref) keep their
-// chosen status; bare errors default to 403, matching the original
-// "guard rejects = forbidden" contract.
-func mapGuardErr(err error) error {
-	var se huma.StatusError
-	if errors.As(err, &se) {
-		return err
-	}
-	return huma.Error403Forbidden(err.Error())
-}
-
-func mapAuthzErr(err error) error {
-	switch {
-	case errors.Is(err, authz.ErrUnauthenticated):
-		return huma.Error401Unauthorized("unauthenticated")
-	case errors.Is(err, authz.ErrForbidden):
-		return huma.Error403Forbidden("forbidden")
-	default:
-		return huma.Error500InternalServerError("authz: " + err.Error())
-	}
-}
-
-// listScanResolver is the slug→id resolver fallback for kinds whose
-// snapshot doesn't have a byName index. Linear scan over store.List — OK
-// for catalog sizes; revisit if the snapshot grows byName indices.
-func listScanResolver[T any](store entityStore[T], metaOf func(*T) *meta.Metadata) func(string) (string, error) {
-	return func(s string) (string, error) {
-		items, err := store.List(context.Background())
-		if err != nil {
-			return "", err
-		}
-		for _, it := range items {
-			if metaOf(it).Name == s {
-				return metaOf(it).ID, nil
-			}
-		}
-		return "", errSlugNotFound
-	}
-}
-
-// guardHostKeyPolicyOwnership rejects hostkey create/update when the
-// referenced Policy isn't host-owned by the key's HostID. Cross-entity
-// invariant the per-row hostkey.Validate() can't enforce (it has no
-// access to the policy store). Reads PG directly so disabled rows are
-// considered too — a hostkey rebound to a disabled tier policy is still
-// a structural mismatch, not just a soft drop. Delete is unaffected.
-func guardHostKey(d Deps) mutationGuard[hostkey.HostKey] {
-	return func(ctx context.Context, action string, existing, incoming *hostkey.HostKey) error {
-		if action == "delete" || incoming == nil {
-			return nil
-		}
-		rotating := incoming.Spec.Value != "" && (existing == nil || incoming.Spec.Value != existing.Resolved)
-		if action == "update" && rotating &&
-			(incoming.Spec.ValueFrom.Kind == hostkey.ValueKindStored || incoming.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth) {
-			return fmt.Errorf("value cannot be set on update — use POST /host-keys/by-id/{id}/rotate to rotate the credential")
-		}
-		// Cross-entity invariant: policy must be host-owned by the
-		// hostkey's HostID. Per-row Validate() can't see other stores.
-		if d.Stores == nil || d.Stores.Policy == nil {
-			return nil
-		}
-		pol, err := d.Stores.Policy.Get(ctx, incoming.Spec.PolicyID)
-		if err != nil || pol == nil {
-			return fmt.Errorf("policy %q does not exist", incoming.Spec.PolicyID)
-		}
-		if pol.Meta.Owner.Kind != meta.OwnerHost || pol.Meta.Owner.ID != incoming.Spec.HostID {
-			return fmt.Errorf("policy %q is not host-owned by host %q (owner=%s/%s)",
-				pol.Meta.Name, incoming.Spec.HostID, pol.Meta.Owner.Kind, pol.Meta.Owner.ID)
-		}
-		return nil
-	}
-}
-
-// guardRelayKeyPolicy rejects a relay-key mutation whose Spec.PolicyID
-// points at a policy the caller may not see — a relay-key inherits its
-// policy's host-keys, so binding to a foreign policy would route traffic
-// through someone else's credentials. Reported as "not found" to avoid
-// confirming the row exists. Existence of the policy is otherwise still
-// not checked here (the inference path handles missing policies).
-func guardRelayKeyPolicy(d Deps) mutationGuard[relaykey.RelayKey] {
-	return func(ctx context.Context, action string, _, incoming *relaykey.RelayKey) error {
-		if action == "delete" || incoming == nil {
-			return nil
-		}
-		return checkPolicyRefVisible(ctx, d, incoming.Spec.PolicyID)
-	}
-}
-
-func checkPolicyRefVisible(ctx context.Context, d Deps, policyID string) error {
-	if policyID == "" {
-		return nil
-	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok || d.Stores == nil || d.Stores.Policy == nil {
-		return nil
-	}
-	p, err := d.Stores.Policy.Get(ctx, policyID)
-	if err != nil || p == nil {
-		return nil
-	}
-	if !s.Visible(ctx, "policy", p.Meta.Owner) {
-		return huma.Error400BadRequest(fmt.Sprintf("policy %q not found", policyID))
-	}
-	return nil
-}
-
-// checkHostKeyRefsVisible rejects host-key ids the caller may not see — a
-// policy referencing a foreign host-key would spend someone else's upstream
-// credential. Missing rows pass through (host-key existence is deliberately
-// not checked at policy write time; the inference path handles it).
-func checkHostKeyRefsVisible(ctx context.Context, d Deps, keyIDs []string) error {
-	if len(keyIDs) == 0 {
-		return nil
-	}
-	s, ok := d.Authz.(authz.Scoper)
-	if !ok || d.Stores == nil || d.Stores.HostKey == nil {
-		return nil
-	}
-	for _, id := range keyIDs {
-		k, err := d.Stores.HostKey.Get(ctx, id)
-		if err != nil || k == nil {
-			continue
-		}
-		if !s.Visible(ctx, "host-key", k.Meta.Owner) {
-			return huma.Error400BadRequest(fmt.Sprintf("host-key %q not found", id))
-		}
-	}
-	return nil
-}
-
-// enrichHostStatus returns an enrichFn that overlays observed runtime health
-// (host.Status) onto a freshly-loaded Host from the host-health store. The
-// field is derived (json:"status", yaml:"-") and never persisted; nil when no
-// observation exists yet (no traffic / TTL'd out) so the UI shows "unknown".
-func enrichHostStatus(d Deps) enrichFn[host.Host] {
-	return func(ctx context.Context, h *host.Host) {
-		if h == nil || d.HostHealth == nil {
-			return
-		}
-		if st, found := d.HostHealth.Read(ctx, h.Meta.ID); found {
-			s := st
-			h.Status = &s
-		}
-	}
-}
-
-// enrichHostStatusAll is the list-path variant: one kv Range for every host's
-// health record instead of a Get per row.
-func enrichHostStatusAll(d Deps) enrichListFn[host.Host] {
-	return func(ctx context.Context, hosts []*host.Host) {
-		if len(hosts) == 0 || d.HostHealth == nil {
-			return
-		}
-		statuses := d.HostHealth.ReadAll(ctx)
-		if len(statuses) == 0 {
-			return
-		}
-		for _, h := range hosts {
-			if st, found := statuses[h.Meta.ID]; found {
-				s := st
-				h.Status = &s
-			}
-		}
-	}
-}
-
-// enrichHostKeyPolicies returns an enrichFn that fills HostKey.Policies
-// with the user Policies that reference this key via Spec.HostKeyIDs,
-// read off the current catalog snapshot. Reverse-ref summary for the
-// admin UI; never persisted (the field is yaml:"-" and skipped by the
-// store).
-func enrichHostKeyPolicies(d Deps) enrichFn[hostkey.HostKey] {
-	return func(ctx context.Context, k *hostkey.HostKey) {
-		if k == nil || d.Stores == nil || d.Stores.Policy == nil {
-			return
-		}
-		pols, err := d.Stores.Policy.List(ctx)
-		if err != nil {
-			return
-		}
-		var refs []hostkey.PolicyRef
-		for _, p := range pols {
-			for _, id := range p.Spec.HostKeyIDs {
-				if id == k.Meta.ID {
-					refs = append(refs, hostkey.PolicyRef{ID: p.Meta.ID, Name: p.Meta.Name})
-					break
-				}
-			}
-		}
-		k.Policies = refs
-	}
-}
-
-// enrichHostKeyPoliciesAll is the list-path variant: one Policy.List for the
-// whole page instead of one per key row (the former N+1 on /api/host-keys).
-func enrichHostKeyPoliciesAll(d Deps) enrichListFn[hostkey.HostKey] {
-	return func(ctx context.Context, keys []*hostkey.HostKey) {
-		if len(keys) == 0 || d.Stores == nil || d.Stores.Policy == nil {
-			return
-		}
-		pols, err := d.Stores.Policy.List(ctx)
-		if err != nil {
-			return
-		}
-		byKey := map[string][]hostkey.PolicyRef{}
-		for _, p := range pols {
-			seen := map[string]bool{}
-			for _, id := range p.Spec.HostKeyIDs {
-				if seen[id] {
-					continue
-				}
-				seen[id] = true
-				byKey[id] = append(byKey[id], hostkey.PolicyRef{ID: p.Meta.ID, Name: p.Meta.Name})
-			}
-		}
-		for _, k := range keys {
-			k.Policies = byKey[k.Meta.ID]
-		}
-	}
-}
-
-// cascadeHostKeyDetach returns a cascade that strips the deleted HostKey's
-// id from every Policy.Spec.HostKeyIDs that references it. Required because
-// the policy_host_keys join table FK-constrains a HostKey delete; without
-// detachment Postgres rejects with SQLSTATE 23503. Walks the Policy store
-// directly (not the snapshot) so disabled policies are caught too.
-func cascadeHostKeyDetach(d Deps) cascadeFn[hostkey.HostKey] {
-	return func(ctx context.Context, k *hostkey.HostKey) error {
-		if k == nil || d.Stores == nil || d.Stores.Policy == nil {
-			return nil
-		}
-		pols, err := d.Stores.Policy.List(ctx)
-		if err != nil {
-			return fmt.Errorf("list policies: %w", err)
-		}
-		for _, p := range pols {
-			before := p.Spec.HostKeyIDs
-			filtered := before[:0:0]
-			changed := false
-			for _, id := range before {
-				if id == k.Meta.ID {
-					changed = true
-					continue
-				}
-				filtered = append(filtered, id)
-			}
-			if !changed {
-				continue
-			}
-			p.Spec.HostKeyIDs = filtered
-			if err := d.Stores.Policy.Upsert(ctx, p); err != nil {
-				return fmt.Errorf("detach from policy %q: %w", p.Meta.Name, err)
-			}
-		}
-		return nil
-	}
-}
-
-// cascadePolicyDetach scrubs every JSONB reference to the deleted Policy
-// before the row is removed:
-//   - relay_keys.spec.policyId → cleared; the key becomes policy-less and
-//     follows settings.Inference.AllowMissingPolicy on the hot path.
-//   - host_keys.spec.policyId → cleared; the key is left without a tier
-//     policy and is dropped from the snapshot by sanitizeHostKey until
-//     reattached.
-//   - hosts.spec.policies[] entries equal to this id → removed.
-//   - hosts.spec.defaultPolicy equal to this id → cleared.
-//
-// PG-side FKs only cover the join tables (policy_models, policy_host_keys
-// — both CASCADE). Everything else lives in spec JSONB and needs app-
-// level cleanup.
-func cascadePolicyDetach(d Deps) cascadeFn[policy.Policy] {
-	return func(ctx context.Context, p *policy.Policy) error {
-		if p == nil || d.Stores == nil {
-			return nil
-		}
-		id := p.Meta.ID
-
-		if d.Stores.RelayKey != nil {
-			rks, err := d.Stores.RelayKey.List(ctx)
-			if err != nil {
-				return fmt.Errorf("list relay-keys: %w", err)
-			}
-			for _, k := range rks {
-				if k.Spec.PolicyID != id {
-					continue
-				}
-				k.Spec.PolicyID = ""
-				if err := d.Stores.RelayKey.Upsert(ctx, k); err != nil {
-					return fmt.Errorf("detach from relay-key %q: %w", k.Meta.Name, err)
-				}
-			}
-		}
-
-		if d.Stores.HostKey != nil {
-			keys, err := d.Stores.HostKey.List(ctx)
-			if err != nil {
-				return fmt.Errorf("list host-keys: %w", err)
-			}
-			for _, k := range keys {
-				if k.Spec.PolicyID != id {
-					continue
-				}
-				k.Spec.PolicyID = ""
-				if err := d.Stores.HostKey.Upsert(ctx, k); err != nil {
-					return fmt.Errorf("detach from host-key %q: %w", k.Meta.Name, err)
-				}
-			}
-		}
-
-		if d.Stores.Host != nil {
-			hosts, err := d.Stores.Host.List(ctx)
-			if err != nil {
-				return fmt.Errorf("list hosts: %w", err)
-			}
-			for _, h := range hosts {
-				changed := false
-				if h.Spec.DefaultPolicy == id {
-					h.Spec.DefaultPolicy = ""
-					changed = true
-				}
-				if len(h.Spec.Policies) > 0 {
-					filtered := make([]string, 0, len(h.Spec.Policies))
-					for _, pid := range h.Spec.Policies {
-						if pid == id {
-							changed = true
-							continue
-						}
-						filtered = append(filtered, pid)
-					}
-					if changed {
-						if len(filtered) == 0 {
-							h.Spec.Policies = nil
-						} else {
-							h.Spec.Policies = filtered
-						}
-					}
-				}
-				if !changed {
-					continue
-				}
-				if err := d.Stores.Host.Upsert(ctx, h); err != nil {
-					return fmt.Errorf("detach from host %q: %w", h.Meta.Name, err)
-				}
-			}
-		}
-		return nil
-	}
-}
-
-// cascadeRateLimitDetach strips the deleted RateLimit id from every
-// policy's Spec.RLBindings before the row is removed. The flat
-// policies.rate_limit_id column is already handled by PG (FK SET NULL),
-// but RLBindings lives in the spec JSONB and PG can't touch it.
-// Without this, a deleted RL would leave dangling binding ids that the
-// catalog snapshot would silently drop on reload — workable, but the
-// data plane sees a stale view until reload runs.
-func cascadeRateLimitDetach(d Deps) cascadeFn[ratelimit.RateLimit] {
-	return func(ctx context.Context, r *ratelimit.RateLimit) error {
-		if r == nil || d.Stores == nil || d.Stores.Policy == nil {
-			return nil
-		}
-		pols, err := d.Stores.Policy.List(ctx)
-		if err != nil {
-			return fmt.Errorf("list policies: %w", err)
-		}
-		for _, p := range pols {
-			if len(p.Spec.RLBindings) == 0 {
-				continue
-			}
-			filtered := make([]policy.RLBinding, 0, len(p.Spec.RLBindings))
-			changed := false
-			for _, b := range p.Spec.RLBindings {
-				if b.RateLimitID == r.Meta.ID {
-					changed = true
-					continue
-				}
-				filtered = append(filtered, b)
-			}
-			if !changed {
-				continue
-			}
-			if len(filtered) == 0 {
-				p.Spec.RLBindings = nil
-			} else {
-				p.Spec.RLBindings = filtered
-			}
-			if err := d.Stores.Policy.Upsert(ctx, p); err != nil {
-				return fmt.Errorf("detach from policy %q: %w", p.Meta.Name, err)
-			}
-		}
-		return nil
-	}
-}
-
-// mergeHostKeyPreserveValue treats an empty Spec.Value on a stored- or
-// oauth-mode update as "keep the existing credential" — the caller wants to
-// edit metadata or rebind to a different policy/host without rotating it. A
-// non-empty Value still means rotation. Env-mode keys carry no value here, so
-// this is a no-op for them.
-func mergeHostKeyPreserveValue(existing, incoming *hostkey.HostKey) {
-	if existing == nil || incoming == nil {
-		return
-	}
-	if incoming.Spec.Value != "" {
-		return // explicit new value → rotation
-	}
-	switch incoming.Spec.ValueFrom.Kind {
-	case hostkey.ValueKindStored:
-		// Re-supply the existing secret so the store re-encrypts it unchanged.
-		incoming.Spec.Value = existing.Resolved
-	case hostkey.ValueKindOAuth:
-		// existing.Resolved is the access token, NOT the stored token blob, so
-		// it can't be re-encrypted as the value. Carry Resolved so Validate
-		// passes; the store preserves the existing blob ciphertext as-is.
-		incoming.Resolved = existing.Resolved
-	}
-}
-
-// registerCRUD wires the eight kinds onto api. metaOf closures + slug
-// resolvers are supplied per kind.
-func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
-	pmeta := func(p *provider.Provider) *meta.Metadata { return &p.Meta }
-	hmeta := func(h *host.Host) *meta.Metadata { return &h.Meta }
-	mmeta := func(m *model.Model) *meta.Metadata { return &m.Meta }
-	kmeta := func(k *hostkey.HostKey) *meta.Metadata { return &k.Meta }
-	rlmeta := func(r *ratelimit.RateLimit) *meta.Metadata { return &r.Meta }
-	polmeta := func(p *policy.Policy) *meta.Metadata { return &p.Meta }
-	prmeta := func(p *pricing.Pricing) *meta.Metadata { return &p.Meta }
-	bmeta := func(b *binding.Binding) *meta.Metadata { return &b.Meta }
-	rkmeta := func(k *relaykey.RelayKey) *meta.Metadata { return &k.Meta }
-
-	registerKind[provider.Provider](
-		api, "providers", "provider", d.Stores.Provider, d.Authz, pmeta,
-		func(p *provider.Provider) error { return p.Validate() },
-		"",
-		listScanResolver(d.Stores.Provider, pmeta),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&providerFilter,
-	)
-
-	registerKind[host.Host](
-		api, "hosts", "host", d.Stores.Host, d.Authz, hmeta,
-		func(h *host.Host) error { return h.Validate() },
-		"",
-		listScanResolver(d.Stores.Host, hmeta),
-		nil,
-		enrichHostStatus(d),
-		enrichHostStatusAll(d),
-		nil,
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&hostFilter,
-	)
-
-	registerKind[model.Model](
-		api, "models", "model", d.Stores.Model, d.Authz, mmeta,
-		func(m *model.Model) error { return m.Validate() },
-		"",
-		listScanResolver(d.Stores.Model, mmeta),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&modelFilter,
-	)
-
-	registerKind[hostkey.HostKey](
-		api, "host-keys", "host-key", d.Stores.HostKey, d.Authz, kmeta,
-		func(k *hostkey.HostKey) error { return k.Validate() },
-		meta.OwnerUser,
-		listScanResolver(d.Stores.HostKey, kmeta),
-		guardHostKey(d),
-		enrichHostKeyPolicies(d),
-		enrichHostKeyPoliciesAll(d),
-		cascadeHostKeyDetach(d),
-		mergeHostKeyPreserveValue,
-		d.Catalog,
-		false,
-		protect,
-		&hostKeyFilter,
-	)
-
-	registerKind[ratelimit.RateLimit](
-		api, "rate-limits", "rate-limit", d.Stores.RateLimit, d.Authz, rlmeta,
-		func(r *ratelimit.RateLimit) error { return r.Validate() },
-		meta.OwnerUser,
-		listScanResolver(d.Stores.RateLimit, rlmeta),
-		nil,
-		nil,
-		nil,
-		cascadeRateLimitDetach(d),
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&rateLimitFilter,
-	)
-
-	registerKind[policy.Policy](
-		api, "policies", "policy", d.Stores.Policy, d.Authz, polmeta,
-		func(p *policy.Policy) error { return p.Validate() },
-		meta.OwnerUser,
-		listScanResolver(d.Stores.Policy, polmeta),
-		guardPolicyModels(d),
-		nil,
-		nil,
-		cascadePolicyDetach(d),
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&policyFilter,
-	)
-
-	registerKind[pricing.Pricing](
-		api, "pricings", "pricing", d.Stores.Pricing, d.Authz, prmeta,
-		func(p *pricing.Pricing) error { return p.Validate() },
-		"",
-		listScanResolver(d.Stores.Pricing, prmeta),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&pricingFilter,
-	)
-
-	registerKind[binding.Binding](
-		api, "host-bindings", "host-binding", d.Stores.Binding, d.Authz, bmeta,
-		func(b *binding.Binding) error { return b.Validate() },
-		"",
-		listScanResolver(d.Stores.Binding, bmeta),
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		d.Catalog,
-		false,
-		protect,
-		&bindingFilter,
-	)
-
-	// relay-keys uses a custom POST handler (registerRelayKeyCreate) that
-	// generates the bearer plaintext server-side and returns it once. The
-	// generic CRUD POST is therefore skipped here.
-	registerKind[relaykey.RelayKey](
-		api, "relay-keys", "relay-key", d.Stores.RelayKey, d.Authz, rkmeta,
-		func(k *relaykey.RelayKey) error { return k.Validate() },
-		meta.OwnerUser,
-		listScanResolver(d.Stores.RelayKey, rkmeta),
-		guardRelayKeyPolicy(d),
-		nil,
-		nil,
-		nil,
-		// Credential material is server-managed: PUT can neither wipe nor
-		// overwrite it. Rotation goes through POST /relay-keys/by-id/{id}/rotate.
-		func(existing, incoming *relaykey.RelayKey) {
-			incoming.Spec.KeyHash = existing.Spec.KeyHash
-			incoming.Spec.Prefix = existing.Spec.Prefix
-		},
-		d.Catalog,
-		true, // skipCreate
-		protect,
-		&relayKeyFilter,
-	)
-	registerRelayKeyCreate(api, d, protect)
 }

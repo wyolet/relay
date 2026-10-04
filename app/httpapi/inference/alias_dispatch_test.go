@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 	"github.com/wyolet/relay/app/pipeline"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/pkg/kv"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
@@ -25,8 +25,10 @@ import (
 // cmd/relay's catalogSnapReader, which lives in the composition root).
 type catSnapReader struct{ cat *catalog.Catalog }
 
-func (r catSnapReader) Policy(id string) (*policy.Policy, bool) { return r.cat.Current().Policy(id) }
-func (r catSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
+func (r catSnapReader) Policy(_ context.Context, id string) (*policy.Policy, bool) {
+	return r.cat.Current().Policy(id)
+}
+func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
 	return r.cat.Current().RateLimit(id)
 }
 
@@ -45,9 +47,9 @@ func buildRunnableDeps(t *testing.T, cat *catalog.Catalog) Deps {
 // aliasDispatchCatalog rebuilds the standard dispatch fixture so the host
 // points at the given upstream URL with NoAuth (anonymous key — no secret
 // resolution in tests) and the model declares an exact + wildcard alias.
-func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *relaykey.RelayKey) {
+func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *Principal) {
 	t.Helper()
-	cat, rk := buildDispatchCatalog(t, "groq", adapters.OpenAI)
+	cat, pr := buildDispatchCatalog(t, "groq", adapters.OpenAI)
 	snap := cat.Current()
 
 	hosts := snap.Hosts()
@@ -69,7 +71,7 @@ func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *
 	if err := cat.ApplyModelUpsert(&m); err != nil {
 		t.Fatalf("model upsert: %v", err)
 	}
-	return cat, rk
+	return cat, pr
 }
 
 // TestDispatch_AliasBytePass_VerbatimWireName proves the full dispatch path:
@@ -90,7 +92,7 @@ func TestDispatch_AliasBytePass_VerbatimWireName(t *testing.T) {
 	}))
 	defer up.Close()
 
-	cat, rk := aliasDispatchCatalog(t, up.URL)
+	cat, pr := aliasDispatchCatalog(t, up.URL)
 	d := buildRunnableDeps(t, cat)
 
 	cases := []struct {
@@ -106,7 +108,7 @@ func TestDispatch_AliasBytePass_VerbatimWireName(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-			r = withNormalContext(r, rk)
+			r = withNormalContext(r, pr)
 			w := httptest.NewRecorder()
 
 			Dispatch(d, w, r, DispatchInput{

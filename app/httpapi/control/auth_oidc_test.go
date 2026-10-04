@@ -5,14 +5,21 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/wyolet/relay/app/audit"
+	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/user"
+	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/sdk/oauth"
 )
 
@@ -109,13 +116,14 @@ func (f *fakeUsers) Upsert(_ context.Context, u *user.User) error {
 type fakeSessions struct {
 	userID, username string
 	subject, sid     string
+	groups           []string
 	roles            []string
 	calls            int
 }
 
-func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubject, idpSessionID string, roles ...string) error {
+func (f *fakeSessions) LoginOIDC(_ context.Context, userID, username, oidcSubject, idpSessionID string, groups []string, roles ...string) error {
 	f.userID, f.username, f.roles = userID, username, roles
-	f.subject, f.sid = oidcSubject, idpSessionID
+	f.subject, f.sid, f.groups = oidcSubject, idpSessionID, groups
 	f.calls++
 	return nil
 }
@@ -339,6 +347,94 @@ func TestOIDCFlow_DisabledUserRejected(t *testing.T) {
 	}
 	if sess.calls != 0 {
 		t.Error("session minted for disabled user")
+	}
+}
+
+// The callback records one audit row per attempt: allowed naming the
+// logged-in user on success, denied on every rejection path.
+func TestOIDCFlow_AuditsLogin(t *testing.T) {
+	t.Run("success names the logged-in user", func(t *testing.T) {
+		idp := newFakeIdP(t)
+		od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "open")
+
+		sink := &auditSink{}
+		em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		h := audit.Middleware(em, nil)(http.HandlerFunc(od.callback))
+
+		loc, flow := driveStart(t, od)
+		cb := httptest.NewRequest("GET",
+			"/api/auth/oidc/callback?code="+idp.issuedCode+"&state="+loc.Query().Get("state"), nil)
+		cb.AddCookie(flow)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, cb)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("callback: status %d, body %s", rec.Code, rec.Body.String())
+		}
+		em.Close()
+
+		evs := sink.all()
+		if len(evs) != 1 {
+			t.Fatalf("events = %d, want 1", len(evs))
+		}
+		ev := evs[0]
+		if ev.Action != "auth.login" || ev.Outcome.Status != audit.StatusAllowed {
+			t.Fatalf("event = action %q status %q, want auth.login allowed", ev.Action, ev.Outcome.Status)
+		}
+		if ev.Actor.Name != "alice" {
+			t.Fatalf("actor = %+v, want the provisioned user alice", ev.Actor)
+		}
+	})
+
+	t.Run("rejection is denied", func(t *testing.T) {
+		idp := newFakeIdP(t)
+		od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "closed")
+
+		sink := &auditSink{}
+		em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		h := audit.Middleware(em, nil)(http.HandlerFunc(od.callback))
+
+		loc, flow := driveStart(t, od)
+		cb := httptest.NewRequest("GET",
+			"/api/auth/oidc/callback?code="+idp.issuedCode+"&state="+loc.Query().Get("state"), nil)
+		cb.AddCookie(flow)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, cb)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("closed registration: status %d, want 403", rec.Code)
+		}
+		em.Close()
+
+		evs := sink.all()
+		if len(evs) != 1 {
+			t.Fatalf("events = %d, want 1", len(evs))
+		}
+		if ev := evs[0]; ev.Action != "auth.login" || ev.Outcome.Status != audit.StatusDenied {
+			t.Fatalf("event = action %q status %q, want auth.login denied", ev.Action, ev.Outcome.Status)
+		}
+	})
+}
+
+// The root callback is mounted outside the /api group, so it has to bring
+// the audit middleware itself or SSO logins through it leave no row.
+func TestOIDCRootCallbackAuditsLogin(t *testing.T) {
+	idp := newFakeIdP(t)
+	od := newTestOIDC(idp, newFakeUsers(), &fakeSessions{}, "open")
+	sink := &auditSink{}
+	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := chi.NewRouter()
+	mountOIDCCallbackRoot(r, Deps{Sessions: session.New(kv.NewMem(), false, "sess:"), Audit: em}, od)
+
+	loc, flow := driveStart(t, od)
+	cb := httptest.NewRequest("GET", "/auth/callback?code="+idp.issuedCode+"&state="+loc.Query().Get("state"), nil)
+	cb.AddCookie(flow)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, cb)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("callback: status %d, body %s", rec.Code, rec.Body.String())
+	}
+	em.Close()
+	if evs := sink.all(); len(evs) != 1 || evs[0].Action != "auth.login" || evs[0].Outcome.Status != audit.StatusAllowed {
+		t.Fatalf("events = %+v, want one allowed auth.login", evs)
 	}
 }
 

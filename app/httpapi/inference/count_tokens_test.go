@@ -13,7 +13,6 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/app/tokencount"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/httpheader"
@@ -49,7 +48,7 @@ func countingRegistry() *adapter.Registry {
 }
 
 // countCatalog points the fixture host at upstreamURL and drops its auth, so a count reaches the test server with the anonymous key routing injects.
-func countCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *relaykey.RelayKey) {
+func countCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *Principal) {
 	t.Helper()
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	h := *cat.Current().Hosts()[0]
@@ -61,7 +60,7 @@ func countCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *relaykey
 }
 
 // countRequest drives the handler the way the mounted route does: classified, authed, with the profile on the context.
-func countRequest(d Deps, rk *relaykey.RelayKey, body string, headers http.Header) *httptest.ResponseRecorder {
+func countRequest(d Deps, rk *Principal, body string, headers http.Header) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, "/counting/v1/messages/count_tokens", strings.NewReader(body))
 	for k, vs := range headers {
 		for _, v := range vs {

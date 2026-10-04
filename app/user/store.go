@@ -72,6 +72,30 @@ func (s *Store) List(ctx context.Context) ([]*User, error) {
 	return out, nil
 }
 
+// MissingIDs returns the subset of ids with no users row, in one query.
+// Callers validating a membership list would otherwise issue a Get per
+// member.
+func (s *Store) MissingIDs(ctx context.Context, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	found, err := s.q.ListUserIDsIn(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("user.MissingIDs: %w", err)
+	}
+	have := make(map[string]struct{}, len(found))
+	for _, id := range found {
+		have[id] = struct{}{}
+	}
+	var missing []string
+	for _, id := range ids {
+		if _, ok := have[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
+}
+
 // Upsert writes u. Caller is responsible for stamping ID.
 func (s *Store) Upsert(ctx context.Context, u *User) error {
 	roles := u.Roles
@@ -98,6 +122,30 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteUser(ctx, id)
 }
 
+// TokenVersions returns every enabled user's current token version, keyed
+// by id. The map is the snapshot's whole view of users — small enough to
+// rebuild on every NOTIFY. A disabled account is absent, which is what
+// makes its live tokens stop verifying.
+func (s *Store) TokenVersions(ctx context.Context) (map[string]int, error) {
+	rows, err := s.q.ListUserTokenVersions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("user.TokenVersions: %w", err)
+	}
+	out := make(map[string]int, len(rows))
+	for _, r := range rows {
+		out[r.ID] = int(r.TokenVersion)
+	}
+	return out, nil
+}
+
+// BumpTokenVersion invalidates every token the user holds.
+func (s *Store) BumpTokenVersion(ctx context.Context, id string) error {
+	if err := s.q.BumpUserTokenVersion(ctx, id); err != nil {
+		return fmt.Errorf("user.BumpTokenVersion: %w", err)
+	}
+	return nil
+}
+
 func fromRow(r gen.User) *User {
 	return &User{
 		ID:           r.ID,
@@ -107,6 +155,7 @@ func fromRow(r gen.User) *User {
 		OIDCSubject:  r.OidcSubject.String,
 		Roles:        r.Roles,
 		Disabled:     r.Disabled,
+		TokenVersion: int(r.TokenVersion),
 		CreatedAt:    r.CreatedAt.Time,
 		UpdatedAt:    r.UpdatedAt.Time,
 	}

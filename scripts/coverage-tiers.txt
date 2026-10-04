@@ -1,0 +1,46 @@
+# Per-package statement-coverage floors, checked by scripts/covcheck.sh over
+# the profiles in $(COVER_DIR). Paths are repo-relative (sdk/ and jobq/ are
+# their own modules); `*` matches any characters. The first matching line
+# wins, so list narrower paths first. Floors only move up.
+#
+# Each floor is the merged unit + integration coverage measured when it was
+# set, minus 5 points, so a run on another platform does not trip it.
+#
+# <package-path-or-glob>	<min-percent>
+
+app/apply			77
+app/audit			87
+app/authz			95
+app/catalog			83
+app/catalogvalidate		74
+app/httpapi/control		55
+app/httpapi/inference		76
+app/key				77
+app/manifest			69
+app/policy			85
+app/policybinding		77
+app/role			82
+app/rolebinding			81
+app/seed			77
+app/settings			61
+cmd/relay			23
+internal/config			63
+internal/license		83
+pkg/crypto			81
+pkg/ratelimit			81
+
+jobq				69
+jobq/payload			66
+
+sdk/adapters/anthropic		75
+sdk/adapters/gemini		71
+sdk/adapters/openai		72
+sdk/catalog			75
+sdk/client			68
+sdk/host			95
+sdk/internal/graph		83
+sdk/model			95
+sdk/oauth			87
+sdk/provider			95
+sdk/usage			61
+sdk/v1				76

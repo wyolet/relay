@@ -43,8 +43,8 @@ func viewService(ctx context.Context, d Deps) *catalogview.Service {
 		HostKeys:   d.Stores.HostKey,
 	}
 	if s, ok := d.Authz.(authz.Scoper); ok {
-		svc.Visible = func(kind string, owner meta.Owner) bool {
-			return s.Visible(ctx, kind, owner)
+		svc.Visible = func(kind, id string, owner meta.Owner) bool {
+			return s.Visible(ctx, kind, id, owner)
 		}
 	}
 	return svc

@@ -7,61 +7,24 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"strings"
-	"syscall"
-	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/batch"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/hosthealth"
 	"github.com/wyolet/relay/app/hostkey"
-	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/httpapi/control"
-	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/metricslog"
-	"github.com/wyolet/relay/app/payloadlog"
-	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/proxy"
-	"github.com/wyolet/relay/app/ratelimit"
 	"github.com/wyolet/relay/app/routing"
-	appsecret "github.com/wyolet/relay/app/secret"
 	"github.com/wyolet/relay/app/session"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/settingswatch"
-	"github.com/wyolet/relay/app/tokencount"
-	"github.com/wyolet/relay/app/usagelog"
-	"github.com/wyolet/relay/app/user"
-	relayweb "github.com/wyolet/relay/cmd/relay/web"
 	"github.com/wyolet/relay/internal/config"
-	"github.com/wyolet/relay/internal/identity"
-	storagemod "github.com/wyolet/relay/internal/storage"
-	"github.com/wyolet/relay/internal/storage/gen"
-	"github.com/wyolet/relay/jobq"
-	"github.com/wyolet/relay/jobq/payload"
-	"github.com/wyolet/relay/pkg/clientprofile"
-	"github.com/wyolet/relay/pkg/httpmw"
-	"github.com/wyolet/relay/pkg/kv"
-	"github.com/wyolet/relay/pkg/lifecycle"
-	"github.com/wyolet/relay/pkg/metrics"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
-	"github.com/wyolet/relay/pkg/reqid"
-	pkgsecret "github.com/wyolet/relay/pkg/secret"
-	secretoauth "github.com/wyolet/relay/pkg/secret/oauth"
 	pkganthropic "github.com/wyolet/relay/sdk/adapters/anthropic"
 	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
@@ -78,81 +41,21 @@ func main() {
 		}
 	}()
 
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "migrate":
-			slog.Debug("relay: 'migrate' subcommand currently runs implicitly on boot")
-			return
-		case "seed":
-			if err := runSeed(os.Args[2:]); err != nil {
-				slog.Error("seed failed", "err", err)
-				os.Exit(1)
-			}
-			return
-		}
+	if runSubcommand() {
+		return
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		slog.Error("config invalid", "err", err)
-		os.Exit(1)
-	}
-	if cfg.PGDSN == "" {
-		slog.Error("RELAY_PG_DSN required (new-arch boot is PG-only)")
-		os.Exit(1)
-	}
+	cfg := loadConfig()
 
 	bootCtx := context.Background()
 
-	st, err := storagemod.Open(bootCtx, cfg.PGDSN,
-		storagemod.WithMaxConns(cfg.PGMaxConns),
-		storagemod.WithMinConns(cfg.PGMinConns))
-	if err != nil {
-		slog.Error("storage.Open failed", "err", err)
-		os.Exit(1)
-	}
+	st := openStorage(bootCtx, cfg)
 	defer st.Close()
 
-	bootOpts := appcatalog.BootstrapOptions{
-		Pool:      st.Pool(),
-		MasterKey: cfg.MasterKey,
-	}
-	if cfg.AutoSeedIfEmpty && cfg.CatalogDir != "" {
-		bootOpts.AutoSeedDir = cfg.CatalogDir
-	}
-	if cfg.CatalogVersion != "" {
-		bootOpts.CatalogVersion = cfg.CatalogVersion
-		bootOpts.CatalogURL = cfg.CatalogURL
-		bootOpts.CatalogIndexURL = cfg.CatalogIndexURL
-		slog.Info("catalog: version pinned", "version", cfg.CatalogVersion)
-	}
-
-	// Stores-first: wire the catalog stores synchronously so the control
-	// plane can serve CRUD even if the data-plane snapshot bootstrap
-	// fails or stalls. Hydrate (seed + first Reload + NOTIFY listener)
-	// runs in the background with retry — inference middleware gates
-	// on catalog.IsReady() and returns 503 until the snapshot is built.
-	cat, stores, err := appcatalog.BootstrapStores(bootCtx, bootOpts)
-	if err != nil {
-		slog.Error("catalog stores init failed", "err", err)
-		os.Exit(1)
-	}
-
-	// First-boot / airgapped settings seed: upsert any <section>.yaml from the
-	// settings dir that has no DB row yet (seed-if-absent — never clobbers a
-	// runtime change). Managed deployments configure at runtime via the
-	// settings API instead; this just bootstraps a fresh instance. Runs before
-	// hydrate so the seeded values land in the snapshot's first reload.
-	settingsDir := os.Getenv("RELAY_SETTINGS_DIR")
-	if settingsDir == "" {
-		settingsDir = filepath.Join(cfg.ConfigDir, "settings")
-	}
-	if seeded, err := settings.SeedDir(bootCtx, stores.Settings, settingsDir); err != nil {
-		slog.Error("settings seed failed", "err", err, "dir", settingsDir)
-		os.Exit(1)
-	} else if len(seeded) > 0 {
-		slog.Info("settings: seeded from YAML", "dir", settingsDir, "sections", seeded)
-	}
+	bootOpts := catalogBootOptions(cfg, st)
+	cat, stores := bootstrapCatalogStores(bootCtx, bootOpts)
+	seedSettings(bootCtx, cfg, stores)
+	licenseSvc := loadLicense(bootCtx, stores)
 
 	listenerCtx, cancelListener := context.WithCancel(bootCtx)
 	defer cancelListener()
@@ -161,142 +64,94 @@ func main() {
 	// subscribers with the stored values. Registering after it would race
 	// that one-shot boot notification.
 
-	// Identity store — fatal if YAML is malformed (login would silently
-	// be disabled otherwise). Empty store is fine (login returns 503).
-	idStore, err := identity.LoadYAML(cfg.ConfigDir)
-	if err != nil {
-		slog.Error("identity: load YAML failed", "err", err)
-		os.Exit(1)
-	}
-	if n := len(idStore.Users()); n > 0 {
-		slog.Debug("identity: loaded users", "count", n)
-	}
+	idStore, usersStore := loadUsers(bootCtx, cfg, st)
 
-	// DB-backed users: login reads the table; YAML identity is the
-	// seed-if-absent bootstrap (and break-glass fallback at login).
-	usersStore := user.NewStore(gen.New(st.Pool()))
-	if err := user.SeedFromIdentity(bootCtx, usersStore, idStore, slog.Default()); err != nil {
-		slog.Error("user seed from identity YAML failed", "err", err)
-		os.Exit(1)
-	}
+	cat.UseTokenVersions(usersStore)
 
-	// kv backend — sessions, rate-limits, key-pool all share this.
-	var kvStore kv.Store
-	if cfg.StateBackend == "redis" {
-		if cfg.RedisAddr == "" {
-			slog.Error("RELAY_REDIS_ADDR required when RELAY_STATE_BACKEND=redis")
-			os.Exit(1)
-		}
-		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{
-			Addr:         cfg.RedisAddr,
-			PoolSize:     cfg.RedisPoolSize,
-			MinIdleConns: cfg.RedisMinIdleConns,
-		})
-		if err != nil {
-			slog.Error("state(redis) init failed", "err", err)
-			os.Exit(1)
-		}
-		kvStore = rs
-	} else {
-		kvStore = kv.NewMem()
-	}
+	tokenSigner, tokenVerifier := buildTokenSigning(bootCtx, cfg, st, stores)
+	// PUT /license writes the section; the watcher is what carries the change
+	// to the other pods (and back to this one after a NOTIFY).
+	settingswatch.New(cat, settings.SectionLicense, applyLicenseSection(licenseSvc), slog.Default()).Start()
+
+	watchAuthTokens(listenerCtx, cfg, st, stores, cat, tokenSigner, tokenVerifier)
+
+	seedBuiltinRoles(bootCtx, st, stores)
+
+	kvStore := openKV(bootCtx, cfg)
 	defer kvStore.Close()
 
-	// Proactive OAuth renewal: keeps subscription tokens fresh ahead of
-	// expiry so requests never pay refresh latency. Cluster-safe via the kv
-	// lock; outcomes persist on the hostkey status (UI-visible on the same
-	// key) and broadcast through the catalog hostkey NOTIFY so every pod
-	// reloads the credential (secret_values has no trigger of its own).
-	oauthRefs := func(ctx context.Context) ([]pkgsecret.Ref, error) {
-		keys, err := stores.HostKey.List(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var refs []pkgsecret.Ref
-		for _, k := range keys {
-			if k.Spec.ValueFrom.Kind != hostkey.ValueKindOAuth {
-				continue
-			}
-			// Revoked grants wait for operator re-auth (a value update
-			// clears the status) — the refresher contract excludes them.
-			if c := k.Status.Credential; c != nil && c.State == hostkey.CredentialRevoked {
-				continue
-			}
-			refs = append(refs, pkgsecret.Ref{
-				Kind: pkgsecret.KindOAuth, ID: k.Meta.ID, Provider: k.Spec.ValueFrom.Provider,
-			})
-		}
-		return refs, nil
-	}
-	oauthNotify := func(ctx context.Context, id string) error {
-		_, err := st.Pool().Exec(ctx, "select pg_notify('catalog_events', $1)", "hostkey:upsert:"+id)
-		return err
-	}
-	oauthHooks := secretoauth.Hooks{
-		OnRenewed: func(ctx context.Context, id string, expiresAt time.Time) error {
-			now := time.Now().UTC()
-			if err := stores.HostKey.SetCredentialStatus(ctx, id, hostkey.CredentialStatus{
-				State: hostkey.CredentialOK, ExpiresAt: expiresAt, RenewedAt: now, At: now,
-			}); err != nil {
-				return err
-			}
-			return oauthNotify(ctx, id)
-		},
-		OnRevoked: func(ctx context.Context, id string, cause error) error {
-			if err := stores.HostKey.SetCredentialStatus(ctx, id, hostkey.CredentialStatus{
-				State: hostkey.CredentialRevoked, LastError: cause.Error(), At: time.Now().UTC(),
-			}); err != nil {
-				return err
-			}
-			return oauthNotify(ctx, id)
-		},
-	}
-	go secretoauth.NewRefresher(oauthRefs, stores.OAuthResolver, kvStore, oauthHooks, slog.Default()).
-		Run(listenerCtx)
+	startOAuthRefresher(listenerCtx, st, stores, kvStore)
 
 	cookieSecure := os.Getenv("RELAY_COOKIE_SECURE") != "false"
 	sessMgr := session.New(kvStore, cookieSecure, "sess:")
+	sessMgr.UseGroups(func(userID string) []string { return cat.Current().GroupsForUser(userID) })
 
-	// WYOLET_* OIDC env overlay: validate at boot so a typo'd overlay fails
-	// the boot, not the first login attempt.
-	if oidcEnv, err := settings.AuthOIDCEnv(); err != nil {
-		slog.Error("auth: invalid WYOLET_* OIDC env overlay", "err", err)
-		os.Exit(1)
-	} else if oidcEnv != nil {
-		slog.Info("auth: oidc login enabled via WYOLET_AUTH_MODE",
-			"issuer", oidcEnv.Issuer, "registration", oidcEnv.Registration)
-	} else if mode := os.Getenv("WYOLET_AUTH_MODE"); mode != "" && mode != "oidc" {
-		slog.Warn("auth: WYOLET_AUTH_MODE not implemented by relay; password login remains the no-IdP path", "mode", mode)
-	}
+	validateOIDCEnv()
 
 	// Pipeline orchestrator: shared limiter + selector backed by kv.
 	limiter := pkgratelimit.New(kvStore, slog.Default(), nil)
 	selector := keypool.New(kvStore, slog.Default(), nil, nil)
 	hostHealth := hosthealth.New(kvStore, nil)
-	policySvc := policy.NewService(catalogSnapReader{cat: cat}, selector, limiter)
+	pl, lifecycleReg := buildPipeline(cat, stores, limiter, selector, hostHealth)
+	proxyPipeline := buildProxy(cfg, limiter, lifecycleReg)
 
-	// Lifecycle registry — the single point where observer/middleware hooks
-	// attach. Hooks register below before pipeline+proxy start serving.
-	lifecycleReg := lifecycle.New()
+	specs := buildAdapterSpecs()
+	profiles := buildClientProfiles()
+	specRegistry := buildSpecRegistry(specs)
 
-	pl := &pipeline.Pipeline{
-		Policy:    policySvc,
-		Lifecycle: lifecycleReg,
-		Logger:    slog.Default(),
-		// On an upstream auth failure the agent re-resolves the key's secret
-		// out-of-band (rotation), failing over without blocking when other
-		// candidates exist and parking only when this key is the last resort.
-		KeyAgent:   appsecret.NewAgent(keyRefresher{store: stores.HostKey, cat: cat}, 0, slog.Default()),
-		HostHealth: hostHealth,
+	usageCtl, usageReader := buildUsageLog(listenerCtx, cfg, cat, kvStore, lifecycleReg)
+	defer usageCtl.Close()
+
+	// Payload logging: the second lifecycle observer. Always wired; its
+	// runtime config lives in the "payload-logging" settings section, so it
+	// toggles and reconfigures (backend / bucket / credentials) without a
+	// restart. Per-request capture is still gated by the Policy/Key
+	// opt-in resolved at the inference entry. S3 credentials resolve through
+	// the shared secret registry.
+	payloadCHBootCfg := payloadCHBootConfig(cfg)
+	payloadCtl := buildPayloadLog(listenerCtx, cat, stores, lifecycleReg, payloadCHBootCfg)
+	defer payloadCtl.Close()
+
+	tokenCalibrator := buildTokenCalibrator(kvStore, lifecycleReg)
+	registerAdmission(cfg, lifecycleReg)
+	registerMetrics(lifecycleReg, usageCtl, payloadCtl)
+
+	// Read side of payload logging: serves the /payloads/* Logs endpoints
+	// over whatever backend the live settings name, rebuilt lazily on config
+	// change (mirrors the sink Controller).
+	payloadReader := newPayloadReaderResolver(cat, stores.Secrets, payloadCHBootCfg, slog.Default())
+
+	auditStore, auditEmitter := buildAudit(st, cat)
+	defer auditEmitter.Close()
+
+	watchParsing(cat)
+
+	// All settings-change subscribers are now registered; start background
+	// hydration. Its first Hydrate runs settings.reload → notifies them with
+	// the stored values (the data plane gates on IsReady until it completes).
+	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
+
+	routingOpts := routingOptions(cfg)
+	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts)
+
+	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
+		specRegistry, profiles, tokenCalibrator, batchSvc)
+
+	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
+	// RELAY_CONTROL_PORT. Disabled when empty or "off".
+	var ctrlSrv *http.Server
+	var ctrlErr <-chan error
+	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
+		ctrlSrv, ctrlErr = startControl(cfg, st, cat, stores, idStore, usersStore, tokenSigner, tokenVerifier,
+			kvStore, limiter, sessMgr, licenseSvc, cookieSecure, usageReader, auditEmitter, auditStore, payloadReader,
+			selector, hostHealth)
 	}
-	proxyPipeline := proxy.New(limiter, lifecycleReg, slog.Default())
 
-	// Upstream connection pooling: applies to every adapter Spec built below
-	// and to the proxy runner's client. Must run before the specs.
-	adapter.SetUpstreamMaxIdleConnsPerHost(cfg.UpstreamMaxIdlePerHost)
-	adapter.SetUpstreamStreamIdleTimeout(cfg.StreamIdleTimeout)
-	proxyPipeline.Client = &http.Client{Transport: adapter.NewUpstreamTransport(false)}
+	exitCode = waitForStop(inferErr, ctrlErr)
+	shutdown(cfg, ctrlSrv, inferSrv, cancelListener, batchQueue)
+}
 
+func buildAdapterSpecs() []*adapter.Spec {
 	// Adapter specs — one Spec per supported wire shape. The composition
 	// root is the only place vendor names appear; everything else looks
 	// up by adapters.Name via the registry.
@@ -394,114 +249,10 @@ func main() {
 			Translator: relayv1.IdentityTranslator{},
 		}).Build(),
 	}
-	profiles := clientprofile.New()
-	for _, p := range []clientprofile.Profile{clientprofile.ClaudeCode(), clientprofile.Codex(), clientprofile.OpenCode()} {
-		if err := profiles.Register(p); err != nil {
-			slog.Error("client profile registration failed", "err", err)
-			os.Exit(1)
-		}
-	}
+	return specs
+}
 
-	specRegistry := adapter.NewRegistry(specs...)
-	if err := specRegistry.AssertWired(); err != nil {
-		slog.Error("adapter registry mis-wired", "err", err)
-		os.Exit(1)
-	}
-
-	// Log (usage) emit: the constant PostFlight observer (one event per
-	// request). Backend selection lives in the "usage-logging" settings
-	// section (hot-swappable, reroute = clean break); the legacy
-	// RELAY_EVENTLOG_BACKEND is an interim fallback when the section is unset.
-	// DSNs stay bootstrap-tier (env). The Controller hot-swaps both the sink
-	// (emitter) and the reader (control plane) on a settings change.
-	usagePath := os.Getenv("RELAY_USAGE_LOG")
-	if usagePath == "" {
-		usagePath = "relay-usage.jsonl"
-	}
-	usageWALDir := cfg.EventlogDir
-	if usageWALDir == "" {
-		usageWALDir = "relay-usage-wal"
-	}
-	usageCtl := usagelog.NewController(cat, usageBackendBuilder(usageBackendBoot{
-		EnvBackend:      cfg.EventlogBackend,
-		CHDSN:           cfg.CHDSN,
-		PGDSN:           cfg.PGDSN,
-		KV:              kvStore,
-		FilePath:        usagePath,
-		WALDir:          usageWALDir,
-		CHRetentionDays: cfg.CHRetentionDays,
-	}), slog.Default())
-	defer usageCtl.Close()
-	usageReader := usageCtl.Reader()
-	// Emit-time cost: the usage producer prices each event's tokens against
-	// the pricing the plan resolved (id stamped on the lifecycle Context),
-	// read from the live snapshot — a map lookup, post-flight only.
-	usagePricer := usagelog.NewPricer(func(id string) (*pricing.Pricing, bool) {
-		return cat.Current().Pricing(id)
-	})
-	lifecycleReg.RegisterHook(usagelog.NewUsageHook(usagePricer, cfg.InstanceID))
-	lifecycleReg.RegisterCollector(usagelog.NewSinkCollector(usageCtl.Emitter()))
-	lifecycleReg.RegisterStreamObserver(usagelog.NewStreamUsageFactory(usagePricer, cfg.InstanceID))
-	usageCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
-	go usageCtl.Run(listenerCtx)
-	slog.Debug("usagelog: observer wired (backend via settings: usage-logging)")
-
-	// Payload logging: the second lifecycle observer. Always wired; its
-	// runtime config lives in the "payload-logging" settings section, so it
-	// toggles and reconfigures (backend / bucket / credentials) without a
-	// restart. Per-request capture is still gated by the Policy/RelayKey
-	// opt-in resolved at the inference entry. S3 credentials resolve through
-	// the shared secret registry.
-	payloadCHBootCfg := payloadCHBoot{
-		DSN:           cfg.CHDSN,
-		RetentionDays: 30, // payload bodies are bulkier + shorter-lived than usage rows
-		WALDir:        "relay-payload-wal",
-	}
-	payloadCtl := payloadlog.NewController(cat, payloadSinkBuilder(stores.Secrets, payloadCHBootCfg), slog.Default())
-	defer payloadCtl.Close()
-	lifecycleReg.RegisterHook(payloadlog.NewPayloadHook(payloadCtl))
-	lifecycleReg.RegisterCollector(payloadlog.NewSinkCollector(payloadCtl.Emitter()))
-	lifecycleReg.RegisterStreamObserver(payloadlog.NewStreamPayloadFactory(payloadCtl))
-	payloadCtl.Subscribe() // synchronous: register before Hydrate so the boot reload reaches it
-	go payloadCtl.Run(listenerCtx)
-	slog.Debug("payloadlog: observer wired (config via settings: payload-logging)")
-
-	// Token-count calibration: every completed request teaches relay the bytes-to-tokens ratio of this session and this model, which is how the count-tokens endpoint answers for upstreams that expose no counter. A collector, so it reads the input-token count the usage producer already parsed; one kv write per completed request, post-flight only.
-	tokenCalibrator := tokencount.NewCalibrator(kvStore)
-	lifecycleReg.RegisterCollector(tokencount.NewObserver(tokenCalibrator))
-
-	// Admission control: a per-pod in-flight cap on inference requests. Rides
-	// the lifecycle spine — PreFlight (acquire) registered BEFORE the metrics
-	// pre-flight so a shed request is never counted as in-flight, Collect
-	// (release) fires from Finalize at response-body close so a streamed request
-	// holds its slot for the whole stream. Scope is Dispatch only (inference +
-	// each WS frame), never /healthz or the control plane. RELAY_MAX_INFLIGHT
-	// tunes the cap; 0 = httpapi.DefaultMaxInflight.
-	admission := httpapi.NewAdmission(cfg.MaxInflight)
-	lifecycleReg.RegisterPreFlight(admission.PreFlight)
-	lifecycleReg.RegisterCollector(admission)
-	slog.Debug("admission: in-flight cap wired", "max_inflight", admission.Cap())
-
-	// Metrics: the Prometheus observer. Reads request outcome + timing in
-	// post-flight and emits the request-flow metrics via pkg/metrics. Pure
-	// boot wiring — no runner changes. The data-loss
-	// and provider-key metrics emit at their sources (emitters, keypool).
-	metricsObs := metricslog.New()
-	lifecycleReg.RegisterPreFlight(metricsObs.PreFlight)
-	lifecycleReg.RegisterHook(metricsObs)
-	lifecycleReg.RegisterStreamObserver(metricsObs) // streamed requests skip Fill; emit here
-	lifecycleReg.RegisterCollector(metricsObs)
-	// post_flight_seconds is emitted by the runners themselves (whole detached
-	// goroutine incl. commit RTTs) — no finalize observer needed.
-	metrics.RegisterQueueDepth("usage", func() float64 { return float64(usageCtl.Emitter().QueueDepth()) })
-	metrics.RegisterQueueDepth("payload", func() float64 { return float64(payloadCtl.Emitter().QueueDepth()) })
-	slog.Debug("metricslog: observer wired (/metrics on control plane)")
-
-	// Read side of payload logging: serves the /payloads/* Logs endpoints
-	// over whatever backend the live settings name, rebuilt lazily on config
-	// change (mirrors the sink Controller).
-	payloadReader := newPayloadReaderResolver(cat, stores.Secrets, payloadCHBootCfg, slog.Default())
-
+func watchParsing(cat *appcatalog.Catalog) {
 	// Request-parsing depth lives in the "parsing" settings section and
 	// hot-swaps the openai adapter's rich-parse toggle. The vendor setter
 	// is confined here (composition root) so app/ stays vendor-neutral.
@@ -509,278 +260,6 @@ func main() {
 		pkgopenai.SetRichParsing(p.RichParsing)
 		slog.Debug("parsing: applied", "rich_parsing", p.RichParsing)
 	}, slog.Default()).Start()
-
-	// All settings-change subscribers are now registered; start background
-	// hydration. Its first Hydrate runs settings.reload → notifies them with
-	// the stored values (the data plane gates on IsReady until it completes).
-	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
-
-	// Batch subsystem: jobq-backed background execution of bulk inference
-	// submissions. jobq owns durable per-item execution + payload storage;
-	// app/batch owns the batch record and the customer API. The per-item
-	// handler reuses the same routing + pipeline as the realtime path.
-	if err := jobq.Migrate(bootCtx, st.Pool()); err != nil {
-		slog.Error("jobq migrate failed", "err", err)
-		os.Exit(1)
-	}
-	batchPayloadDir := os.Getenv("RELAY_BATCH_PAYLOAD_DIR")
-	if batchPayloadDir == "" {
-		batchPayloadDir = "relay-batch-payloads"
-	}
-	batchPayloads, err := payload.NewFileStore(batchPayloadDir)
-	if err != nil {
-		slog.Error("batch payload store init failed", "err", err)
-		os.Exit(1)
-	}
-	batchQueue := jobq.New(st.Pool(), batchPayloads, jobq.Options{})
-	batchSvc := batch.NewService(
-		batch.NewStore(st.Pool()),
-		batchQueue,
-		&batch.Runner{Resolver: routing.New(cat), Pipeline: pl, Specs: specRegistry, Catalog: cat},
-	)
-	batchQueue.Register(batch.Queue, batchSvc.Handler())
-	if err := batchQueue.Start(listenerCtx); err != nil {
-		slog.Error("batch queue start failed", "err", err)
-		os.Exit(1)
-	}
-	slog.Info("batch: subsystem started", "payload_dir", batchPayloadDir)
-
-	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
-	inferRouter := chi.NewRouter()
-	inferRouter.Use(reqid.Middleware(slog.Default()))
-	maxBody := cfg.MaxRequestBytes
-	if maxBody <= 0 {
-		maxBody = httpmw.DefaultMaxRequestBytes
-	}
-	inferRouter.Use(httpmw.LimitBody(maxBody))
-	inference.Mount(inferRouter, inference.Deps{
-		Pinger:          st,
-		Catalog:         cat,
-		Resolver:        routing.New(cat),
-		Pipeline:        pl,
-		Proxy:           proxyPipeline,
-		Lifecycle:       lifecycleReg,
-		Adapters:        specRegistry.AdapterMap(),
-		Specs:           specRegistry,
-		Profiles:        profiles,
-		RouteMounters:   []inference.RouteMounter{inference.MountRegistry(specRegistry)},
-		PublicURL:       cfg.Runtime.InferenceAPIURL,
-		TokenCalibrator: tokenCalibrator,
-		StreamKeepAlive: cfg.StreamKeepAlive,
-		TrustEventTime:  cfg.DevTrustEventTime,
-	})
-
-	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →
-	// relay-key auth), mounted directly on chi like /v1/ws since it isn't a
-	// huma operation.
-	inferRouter.With(
-		inference.ReadinessMiddleware(cat),
-		inference.ClassifyMiddleware(),
-		inference.RelayKeyAuthMiddleware(cat),
-	).Mount("/v1/batches", batchSvc.Routes())
-
-	inferAddr := ":8080"
-	if p := os.Getenv("RELAY_PORT"); p != "" {
-		inferAddr = ":" + p
-	}
-	inferSrv := &http.Server{
-		Addr:              inferAddr,
-		Handler:           inferRouter,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20, // 1 MiB
-		// WriteTimeout stays 0 (unbounded): SSE responses are long-lived streams,
-		// and a write deadline is absolute — it would truncate a generation
-		// mid-flight. Header/idle limits plus the in-flight admission cap bound
-		// resource use instead of a response-duration cap.
-	}
-	slog.Info("relay inference listening", "addr", inferAddr)
-	inferErr := make(chan error, 1)
-	go func() { inferErr <- inferSrv.ListenAndServe() }()
-
-	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
-	// RELAY_CONTROL_PORT. Disabled when empty or "off".
-	var ctrlSrv *http.Server
-	var ctrlErr <-chan error
-	if cfg.ControlPort != "" && cfg.ControlPort != "off" {
-		ctrlRouter := chi.NewRouter()
-		if len(cfg.ControlAllowOrigins) > 0 {
-			ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
-		}
-		// /config.json stays at the listener ROOT — the UI fetches it at boot,
-		// before it knows the /api prefix. It advertises controlApiUrl=/api so
-		// the SPA's API client targets /api/* while the SPA's own routes
-		// (/models, /policies, …) fall through to the embedded UI below.
-		ctrlRouter.Get("/config.json", control.ConfigJSONHandler(runtimeConfig(cfg), cat))
-		// Control API under /api so its CRUD paths (/models, /policies, …) don't
-		// shadow the SPA's identically-named client-side routes on the shared
-		// control origin (a hard-reload of /models must serve the UI, not JSON).
-		var authorizer authz.Authorizer = authz.AlwaysAllowAuthenticated{}
-		if cfg.MultiUser {
-			authorizer = authz.OwnerScoped{}
-		}
-		ctrlDeps := control.Deps{
-			Identity:      idStore,
-			Users:         usersStore,
-			Sessions:      sessMgr,
-			AdminToken:    cfg.AdminToken,
-			Authz:         authorizer,
-			Catalog:       cat,
-			Stores:        stores,
-			CookieSecure:  cookieSecure,
-			UsageReader:   usageReader,
-			PayloadReader: payloadReader,
-			Selector:      selector,
-			HostHealth:    hostHealth,
-			RuntimeConfig: runtimeConfig(cfg),
-		}
-		ctrlRouter.Route("/api", func(r chi.Router) {
-			control.Mount(r, ctrlDeps)
-		})
-		// OIDC callback at the listener ROOT: redirect URIs are registered
-		// as <origin>/auth/callback, and a registered URI must match
-		// byte-exactly — it can't carry the /api prefix the rest of the
-		// control API mounts under.
-		control.MountOIDCCallbackRoot(ctrlRouter, ctrlDeps)
-		ctrlRouter.Handle("/metrics", metrics.Handler())
-		// Embedded admin UI: same-origin SPA served as the fallback after all
-		// API operations. Only mounted when a real dist was baked in (image
-		// build) and not explicitly disabled.
-		if !cfg.UIDisable && relayweb.Present() {
-			ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
-			slog.Debug("relay control: serving embedded UI")
-		}
-		ctrlSrv = &http.Server{
-			Addr:              ":" + cfg.ControlPort,
-			Handler:           ctrlRouter,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       120 * time.Second,
-			MaxHeaderBytes:    1 << 20, // 1 MiB
-			// WriteTimeout stays 0: the control plane serves /metrics scrapes and
-			// admin CRUD, but shares the process with the data plane's SSE
-			// constraint and gains nothing from a response-duration cap here.
-		}
-		slog.Info("relay control listening", "addr", ctrlSrv.Addr, "users", len(idStore.Users()))
-		ch := make(chan error, 1)
-		ctrlErr = ch
-		go func() { ch <- ctrlSrv.ListenAndServe() }()
-	}
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
-	select {
-	case sig := <-quit:
-		slog.Info("relay: received signal, shutting down", "signal", sig.String())
-	case err := <-inferErr:
-		if err != nil && err != http.ErrServerClosed {
-			exitCode = 1
-			slog.Error("relay inference: server error", "err", err)
-		}
-	case err := <-ctrlErr:
-		if err != nil && err != http.ErrServerClosed {
-			exitCode = 1
-			slog.Error("relay control: server error", "err", err)
-		}
-	}
-
-	deadline := time.Duration(cfg.ShutdownDeadlineS) * time.Second
-	if deadline == 0 {
-		deadline = 15 * time.Second
-	}
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), deadline)
-	defer shutCancel()
-	if ctrlSrv != nil {
-		_ = ctrlSrv.Shutdown(shutCtx)
-	}
-	_ = inferSrv.Shutdown(shutCtx)
-	cancelListener()
-	// Drain in-flight batch jobs so the graceful-requeue path can run;
-	// without this the process exits mid-handler and interrupted jobs sit
-	// `running` until the rescuer discards them (MaxAttempts=1).
-	batchQueue.Wait()
-}
-
-// hydrateLoop runs Catalog.Hydrate with exponential backoff until it
-// succeeds, then starts the NOTIFY listener. Survives transient PG /
-// seed errors without taking the process down; the data plane returns
-// 503 until the first Hydrate completes. Once successful, the function
-// blocks on Listener.Run until the parent context is cancelled.
-func hydrateLoop(ctx context.Context, cat *appcatalog.Catalog, stores *appcatalog.Stores, opts appcatalog.BootstrapOptions) {
-	delay := time.Second
-	const maxDelay = 30 * time.Second
-	for {
-		listener, err := cat.Hydrate(ctx, stores, opts)
-		if err == nil {
-			slog.Info("catalog hydrated", "auto_seed_dir", opts.AutoSeedDir)
-			if err := listener.Run(ctx); err != nil && err != context.Canceled {
-				slog.Error("catalog listener exited", "err", err)
-			}
-			return
-		}
-		slog.Error("catalog hydrate failed; retrying", "err", err, "delay", delay)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-		}
-		delay *= 2
-		if delay > maxDelay {
-			delay = maxDelay
-		}
-	}
-}
-
-// loadDotEnv reads a .env file and sets any KEY=VALUE pair whose key is not
-// already present in the environment. Comment lines and empty lines are skipped.
-// logLevel reads RELAY_LOG_LEVEL (debug|info|warn|error, default info). Parsed
-// here rather than via config.Load because the logger is set up before config.
-func logLevel() slog.Level {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_LOG_LEVEL"))) {
-	case "debug":
-		return slog.LevelDebug
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
-}
-
-func loadDotEnv(path string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		if os.Getenv(k) == "" {
-			_ = os.Setenv(k, v)
-		}
-	}
-}
-
-// catalogSnapReader adapts *appcatalog.Catalog to policy.SnapshotReader by
-// reading the current snapshot per lookup, so each call sees the latest
-// post-NOTIFY state.
-type catalogSnapReader struct{ cat *appcatalog.Catalog }
-
-func (r catalogSnapReader) Policy(id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
-}
-
-func (r catalogSnapReader) RateLimit(id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
 }
 
 // keyRefresher implements appsecret.Refresher. It re-resolves a host key's

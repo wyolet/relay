@@ -1,0 +1,78 @@
+---
+title: "Audit Log"
+description: "Who changed what on the control plane, and what is deliberately never recorded"
+---
+
+Relay keeps an append-only record of administrative activity: every change
+made through the control API, every request that was refused, and every
+login. It answers "who changed this, when, and from where" without you
+wiring up an external tool.
+
+The data plane is not audited here — `/v1/*` traffic is already covered by
+[usage and logging](/concepts/observability).
+
+## What is recorded
+
+One row per HTTP request against the control API, and only when the request
+is worth a row:
+
+| Situation | Recorded |
+| --- | --- |
+| A mutating action (create, update, delete, rotate, generate, reload, …) | Yes, allowed or refused |
+| A request refused by authorization | Yes, with `status: denied` |
+| Login (successful or failed) and logout | Yes |
+| A read that succeeded | No |
+
+Each row carries the actor (user id and name, session id, client IP — or
+`anonymous` with the attempted username for a failed login), the action, the
+target resource with its owner and project/team scope, the outcome
+(allow/deny plus the HTTP status), and the request's method, path and id.
+
+## What is never recorded
+
+Values. A write records only the **JSON paths** it touched — for example
+`metadata.displayName` and `spec.enabled` — never the before or after
+content of those fields. Creates and deletes record `*` rather than
+enumerate a whole row.
+
+Paths that name a credential are dropped entirely, not just emptied:
+`value`, `keyHash`, `previousKeyHash`, `password`, `passwordHash`, `token`
+and `secret`. A rotation is therefore visible as an event, but the audit log
+never becomes a map of where credentials live.
+
+## Reading it back
+
+```bash
+curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  "http://localhost:8081/api/audit?resource_kind=policy&status=denied&limit=50"
+```
+
+Filter by `actor_id`, `actor_name`, `action`, `resource_kind`,
+`resource_id`, `scope` (`project:<id>` or `team:<id>`), `status`, and a
+`from`/`to` time window. Results are newest-first; page with the
+`next_cursor` a response returns, passed back as `cursor`.
+
+Reading the audit log needs a grant on `audit`: an administrator has it,
+and so does the built-in `auditor` role.
+
+## Retention
+
+The `audit` settings section holds `retentionDays` (default `365`). Rows
+older than the window are removed by an hourly pass; changing the setting
+takes effect on the next pass, without a restart. Set it to `0` to keep rows
+forever — appropriate when you archive the `audit_events` table yourself.
+
+```bash
+curl -X PUT -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"retentionDays": 90}' \
+  http://localhost:8081/api/settings/audit
+```
+
+## Delivery guarantees
+
+Audit writes are asynchronous and bounded, like every other background
+emit: an admin request never waits on the audit store, and a sustained
+write stall drops events rather than blocking the control plane. Drops are
+counted at `relay_audit_dropped_total` — alert on it if the audit trail has
+to be complete for you.

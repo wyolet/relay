@@ -13,7 +13,6 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/relaykey"
 	"github.com/wyolet/relay/sdk/adapters/anthropic"
 	"github.com/wyolet/relay/sdk/adapters/openai"
 	v1 "github.com/wyolet/relay/sdk/v1"
@@ -42,7 +41,7 @@ func keepAliveRegistry() *adapter.Registry {
 	return adapter.NewRegistry(anth, cc, canonical)
 }
 
-func keepAliveCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *relaykey.RelayKey) {
+func keepAliveCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *Principal) {
 	t.Helper()
 	cat, rk := buildDispatchCatalog(t, "anthropic", adapters.Anthropic)
 	h := *cat.Current().Hosts()[0]

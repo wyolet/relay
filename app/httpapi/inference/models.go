@@ -17,7 +17,6 @@ import (
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/routing"
-	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/pkg/clientprofile"
 	"github.com/wyolet/relay/pkg/ids"
 )
@@ -47,9 +46,9 @@ type modelsOutput struct {
 // routing.PolicyAllows. Covers literal ModelIDs grants, modelref
 // Spec.Models grants, and the implicit-wildcard case (both fields empty).
 //
-// Policy-less key (Spec.PolicyID empty + settings.Inference.
-// AllowMissingPolicy on): returns every enabled model that has at least
-// one enabled host binding to a host the relay has hostkeys for.
+// Policy-less key (Spec.PolicyID empty): refused unless the resolver's own
+// gate opens the flow, then asks routing.PolicylessAllows — so the listing
+// and the flow that would serve the request read one definition of the pool.
 func registerModels(api huma.API, d Deps, mw huma.Middlewares) {
 	registerModelsAt(api, d, mw, "/v1/models", "")
 	registerModelsAt(api, d, mw, "/openai/v1/models", adapters.OpenAI)
@@ -79,11 +78,11 @@ func registerProfileModels(api huma.API, d Deps, mw huma.Middlewares) {
 			Hidden:      true,
 			Errors:      []int{401, 403, 500},
 		}, func(ctx context.Context, _ *struct{}) (*huma.StreamResponse, error) {
-			snap, pol, models, err := visibleModels(ctx, d, "")
+			snap, principal, models, err := visibleModels(ctx, d, "")
 			if err != nil {
 				return nil, err
 			}
-			entries := modelEntries(snap, pol, models)
+			entries := modelEntries(d.Resolver, snap, principal.Policy, principal.UserID, models)
 			return &huma.StreamResponse{Body: func(hctx huma.Context) {
 				r, w := humachi.Unwrap(hctx)
 				body, contentType, err := render(clientprofile.ListContext{PublicURL: publicInferenceURL(d, r)}, entries)
@@ -137,12 +136,12 @@ func publicInferenceURL(d Deps, r *http.Request) string {
 // modelEntries projects visible models into the neutral view a profile
 // renders. One entry per addressable snapshot name; a model's aliases ride
 // its pointer snapshot, which is what an alias resolves to. pol is nil on
-// the policy-less path.
-func modelEntries(snap *catalog.Snapshot, pol *policy.Policy, models []*model.Model) []clientprofile.ModelEntry {
+// the policy-less path, where userID scopes the shared key pool.
+func modelEntries(r *routing.Resolver, snap *catalog.Snapshot, pol *policy.Policy, userID string, models []*model.Model) []clientprofile.ModelEntry {
 	entries := make([]clientprofile.ModelEntry, 0, len(models))
 	seen := map[string]struct{}{}
 	for _, m := range models {
-		granted := grantedBindings(snap, pol, m, "")
+		granted := grantedBindings(r, snap, pol, userID, m, "")
 		for i := range m.Spec.Snapshots {
 			s := &m.Spec.Snapshots[i]
 			if _, dup := seen[s.Name]; dup {
@@ -201,8 +200,8 @@ func temperatureSupported(m *model.Model) bool {
 	return true
 }
 
-// grantedBindings keeps the model's enabled bindings the caller may actually route to. A binding outside the caller's grant must never reach a listing — the row would advertise a route the key cannot take. adapterFilter, when set, additionally keeps only bindings declaring it.
-func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, m *model.Model, adapterFilter adapters.Name) []*binding.Binding {
+// grantedBindings keeps the model's enabled bindings the caller may actually route to. A binding outside the caller's grant must never reach a listing — the row would advertise a route the key cannot take. With no policy, userID scopes the shared key pool exactly as resolution does. adapterFilter, when set, additionally keeps only bindings declaring it.
+func grantedBindings(r *routing.Resolver, snap *catalog.Snapshot, pol *policy.Policy, userID string, m *model.Model, adapterFilter adapters.Name) []*binding.Binding {
 	var out []*binding.Binding
 	for _, b := range snap.BindingsForModel(m.Meta.ID) {
 		if !b.IsEnabled() {
@@ -211,16 +210,12 @@ func grantedBindings(snap *catalog.Snapshot, pol *policy.Policy, m *model.Model,
 		if adapterFilter != "" && b.Spec.Adapter != adapterFilter {
 			continue
 		}
-		switch {
-		case pol != nil:
-			if !routing.PolicyAllowsBinding(snap, pol, m, b) {
+		if pol != nil {
+			if !r.PolicyAllowsBinding(snap, pol, m, b, userID) {
 				continue
 			}
-		// Policy-less keys have no grant to consult, so the listing keeps its own reachability rule: a host the relay holds credentials for, or one that needs none (routing injects the anonymous key there).
-		case len(snap.HostKeysForHost(b.Spec.HostID)) == 0:
-			if h, ok := snap.Host(b.Spec.HostID); !ok || !h.Spec.NoAuth {
-				continue
-			}
+		} else if !r.PolicylessAllowsBinding(snap, m, b, userID) {
+			continue
 		}
 		out = append(out, b)
 	}
@@ -359,7 +354,7 @@ func registerModelsAt(api huma.API, d Deps, mw huma.Middlewares, path string, ad
 }
 
 func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*modelsOutput, error) {
-	snap, pol, models, err := visibleModels(ctx, d, adapterFilter)
+	snap, principal, models, err := visibleModels(ctx, d, adapterFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -367,45 +362,43 @@ func listModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*mode
 	out.Body.Object = "list"
 	seen := map[string]struct{}{}
 	for _, m := range models {
-		appendModelRows(&out.Body.Data, snap, m, grantedBindings(snap, pol, m, adapterFilter), seen)
+		appendModelRows(&out.Body.Data, snap, m, grantedBindings(d.Resolver, snap, principal.Policy, principal.UserID, m, adapterFilter), seen)
 	}
 	return out, nil
 }
 
-// visibleModels returns the models the authenticated relay key may list,
-// along with the snapshot they were read from (so a caller projects off one
-// consistent view) and the key's policy, nil for a policy-less key.
-// adapterFilter, when set, keeps only models with an enabled binding
-// declaring it.
-func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*catalog.Snapshot, *policy.Policy, []*model.Model, error) {
-	rk := RelayKeyFromContext(ctx)
-	if rk == nil {
+// visibleModels returns the models the authenticated caller may list, along
+// with the snapshot they were read from (so a caller projects off one
+// consistent view) and the caller's principal, whose Policy is nil on the
+// policy-less path. adapterFilter, when set, keeps only models with an
+// enabled binding declaring it.
+func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*catalog.Snapshot, *Principal, []*model.Model, error) {
+	principal := PrincipalFrom(ctx)
+	if principal == nil {
 		return nil, nil, nil, huma.Error401Unauthorized("missing relay key")
 	}
-	snap := d.Catalog.Current()
+	snap := SnapshotFrom(ctx)
+	if snap == nil {
+		snap = d.Catalog.Current()
+	}
 
-	if rk.Spec.PolicyID == "" {
-		v, _ := d.Catalog.Setting(settings.SectionInference)
-		cfg, _ := v.(*settings.Inference)
-		if cfg == nil || !cfg.AllowMissingPolicy {
+	if principal.Policy == nil {
+		if !d.Resolver.PolicylessTrafficAllowed() {
 			return nil, nil, nil, huma.Error403Forbidden("policy-less traffic is disabled on this relay")
 		}
 		var out []*model.Model
 		for _, m := range snap.AllModels() {
-			if modelHasReachableBinding(snap, m, adapterFilter) {
+			if d.Resolver.PolicylessAllows(snap, m, adapterFilter, principal.UserID) {
 				out = append(out, m)
 			}
 		}
-		return snap, nil, out, nil
+		return snap, principal, out, nil
 	}
 
-	pol, ok := snap.Policy(rk.Spec.PolicyID)
-	if !ok {
-		return nil, nil, nil, huma.Error500InternalServerError("policy not found for relay key")
-	}
+	pol := principal.Policy
 	var out []*model.Model
 	for _, m := range snap.AllModels() {
-		if !routing.PolicyAllows(snap, pol, m) {
+		if !d.Resolver.PolicyAllows(snap, pol, m, principal.UserID) {
 			continue
 		}
 		if adapterFilter != "" && !modelHasAdapter(snap, m, adapterFilter) {
@@ -413,7 +406,7 @@ func visibleModels(ctx context.Context, d Deps, adapterFilter adapters.Name) (*c
 		}
 		out = append(out, m)
 	}
-	return snap, pol, out, nil
+	return snap, principal, out, nil
 }
 
 // appendModelRows emits one row per Snapshot that at least one granted
@@ -456,11 +449,6 @@ func snapshotCreated(s *model.Snapshot, fallback int64) int64 {
 		return fallback
 	}
 	return t.UTC().Unix()
-}
-
-// modelHasReachableBinding reports whether a policy-less caller can route m at all: the same reachability rule grantedBindings applies with no policy, optionally restricted to one adapter kind.
-func modelHasReachableBinding(snap *catalog.Snapshot, m *model.Model, adapterFilter adapters.Name) bool {
-	return len(grantedBindings(snap, nil, m, adapterFilter)) > 0
 }
 
 // modelHasAdapter returns true iff the model has at least one enabled
