@@ -33,3 +33,22 @@ func TestGroupBlockers_GroupsByKindAndFieldAndHidesUnseenRows(t *testing.T) {
 		t.Errorf("key group = %+v, want alice's key listed and one hidden", keys)
 	}
 }
+
+// A list field whose last entry is the target can't let go, so the rows of
+// one field split into a detachable group and one that isn't.
+func TestGroupBlockers_SplitsAFieldByDetachable(t *testing.T) {
+	ctx := actor.WithActor(t.Context(), scopeActors["root"])
+	system := meta.Owner{Kind: meta.OwnerSystem}
+	items := []referenceItem{
+		{Kind: "role-binding", ID: "rb-1", Name: "sole", Via: "spec.subjects", owner: system},
+		{Kind: "role-binding", ID: "rb-2", Name: "shared", Via: "spec.subjects", owner: system, detachable: true},
+	}
+
+	groups := groupBlockers(ctx, testRBAC(), items)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %+v, want a detachable and a non-detachable group", groups)
+	}
+	if !groups[0].Detachable || groups[0].Items[0].ID != "rb-2" || groups[1].Detachable || groups[1].Items[0].ID != "rb-1" {
+		t.Fatalf("groups = %+v, want rb-2 detachable first, then rb-1", groups)
+	}
+}
