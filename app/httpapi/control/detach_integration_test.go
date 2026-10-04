@@ -301,6 +301,32 @@ func TestDetach_FailedWriteRollsEverythingBack(t *testing.T) {
 	}
 }
 
+// A concurrent change answers 409 conflict and rolls back like any failure.
+// The trigger raises the serialization failure a racing writer would cause.
+func TestDetach_ConcurrentChangeIsConflict(t *testing.T) {
+	f, ctx := newPolicyDeleteFixture(t)
+	pol := f.policy(t, ctx, "conflict-policy", f.projectOwner())
+	k := f.projectKey(t, ctx, "key-a", pol.Meta.ID)
+	f.account.Spec.PolicyID = pol.Meta.ID
+	must(t, "upsert service account", f.stores.ServiceAccount.Upsert(ctx, f.account))
+	_, err := f.pool.Exec(ctx, `
+		CREATE FUNCTION fail_serialization() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'concurrent update' USING ERRCODE = 'serialization_failure'; END $$;
+		CREATE TRIGGER fail_serialization BEFORE UPDATE ON service_accounts
+		FOR EACH ROW EXECUTE FUNCTION fail_serialization();`)
+	must(t, "install conflicting trigger", err)
+
+	w := f.detachRow(t, "policies", pol.Meta.ID, false)
+	wantStatus(t, w, http.StatusConflict)
+	var body inUseResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error.Code != "conflict" {
+		t.Fatalf("409 body = %s, want error.code conflict", w.Body.String())
+	}
+	if got := f.keyPolicy(t, ctx, k.Meta.ID); got.Spec.PolicyID != pol.Meta.ID || got.Meta.Dirty {
+		t.Fatalf("key after conflicting detach = %+v, want untouched", got)
+	}
+}
+
 func TestDetach_AuditsEachModifiedRow(t *testing.T) {
 	f, ctx := newPolicyDeleteFixture(t)
 	pol := f.policy(t, ctx, "audited-policy", f.projectOwner())

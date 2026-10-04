@@ -20,6 +20,7 @@ import (
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
@@ -30,6 +31,7 @@ import (
 	"github.com/wyolet/relay/app/role"
 	"github.com/wyolet/relay/app/serviceaccount"
 	"github.com/wyolet/relay/app/team"
+	"github.com/wyolet/relay/internal/storage"
 )
 
 type detachOutput struct {
@@ -65,7 +67,7 @@ func registerDetach(api huma.API, d Deps, protect huma.Middlewares) {
 				"on the referencing rows the caller may update. Deletes nothing; returns what still references the row.",
 			Tags:        []string{plural},
 			Middlewares: protect,
-			Errors:      []int{401, 404, 500},
+			Errors:      []int{401, 404, 409, 500},
 		}, func(ctx context.Context, in *idInput) (*detachOutput, error) {
 			return d.detach(ctx, singular, plural, in.ID)
 		})
@@ -86,6 +88,16 @@ func (d Deps) detach(ctx context.Context, kind, plural, id string) (*detachOutpu
 	})
 	if err != nil {
 		audit.Record(ctx, plural+".detach", d.auditResource(t.kind, t.id, t.name, t.owner), audit.StatusError)
+		if storage.IsConflict(err) {
+			return nil, &httpapi.APIError{
+				Err: httpapi.APIErrorBody{
+					Type:    "invalid_request_error",
+					Code:    "conflict",
+					Message: "another change touched these rows at the same time; nothing was detached, retry the request",
+				},
+				HTTPStatus: http.StatusConflict,
+			}
+		}
 		return nil, huma.Error500InternalServerError("detach rolled back: " + err.Error())
 	}
 	if err := d.endSessions(ctx, released); err != nil {

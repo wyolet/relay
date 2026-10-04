@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/internal/storage/gen"
@@ -35,4 +37,19 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(ctx context.Context, 
 		return fmt.Errorf("storage: commit: %w", err)
 	}
 	return nil
+}
+
+// SQLSTATE codes for a transaction a concurrent one got in the way of.
+const (
+	sqlstateSerializationFailure = "40001"
+	sqlstateDeadlockDetected     = "40P01"
+)
+
+// IsConflict reports whether err is Postgres refusing a transaction because a
+// concurrent one changed what it read (serialization failure) or locked what
+// it needed (deadlock). Nothing was written; the same request may be retried.
+func IsConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		(pgErr.Code == sqlstateSerializationFailure || pgErr.Code == sqlstateDeadlockDetected)
 }
