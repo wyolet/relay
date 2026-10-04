@@ -244,7 +244,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		guardPolicyModels(d),
 		nil,
 		nil,
-		cascadePolicyDetach(d),
+		nil,
 		nil,
 		d.Catalog,
 		false,

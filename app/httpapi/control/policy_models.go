@@ -21,7 +21,6 @@ package control
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -32,7 +31,7 @@ import (
 func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 	return func(ctx context.Context, action string, existing, incoming *policy.Policy) error {
 		if action == "delete" {
-			return guardPolicyDeleteTier(ctx, d, existing)
+			return refuseInUse(ctx, d, "policy", existing.Meta.ID, existing.Meta.Name)
 		}
 		if incoming == nil {
 			return nil
@@ -65,26 +64,6 @@ func guardPolicyModels(d Deps) mutationGuard[policy.Policy] {
 		}
 		return nil
 	}
-}
-
-// guardPolicyDeleteTier refuses to delete a policy that host keys use as
-// their tier policy: the delete cascade would clear their spec.policyId and
-// leave every one of them invalid, failing its next write and vanishing from
-// the snapshot. Refusing names the rows the operator has to reattach first.
-func guardPolicyDeleteTier(ctx context.Context, d Deps, existing *policy.Policy) error {
-	if existing == nil || d.Stores == nil || d.Stores.HostKey == nil {
-		return nil
-	}
-	names, err := policy.HostKeysUsingPolicy(ctx, detachStores(d), existing.Meta.ID)
-	if err != nil {
-		return huma.Error500InternalServerError(err.Error())
-	}
-	if len(names) > 0 {
-		return huma.Error409Conflict(fmt.Sprintf(
-			"policy %q is the tier policy of host key(s) %s: reattach them before deleting it",
-			existing.Meta.Name, strings.Join(names, ", ")))
-	}
-	return nil
 }
 
 // normalizePolicyRefs canonicalises each ref exactly as apply does (one
