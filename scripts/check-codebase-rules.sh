@@ -51,6 +51,39 @@ echo "catalogview isolation — the hot path never imports the UX read-model:"
 hits=$(grep -rn 'wyolet/relay/app/catalogview' app/routing/ app/pipeline/ app/keypool/ --include='*.go' || true)
 if [ -n "$hits" ]; then note "routing/pipeline/keypool imports app/catalogview (UX views must stay off the hot path):"; echo "$hits"; else ok "clean"; fi
 
+echo "Rule 4b — no vendor names in Go identifier declarations (app/, pkg/, internal/):"
+# Vendor names (openai/anthropic/gemini, case-insensitive) must not appear in
+# declared Go identifiers: types, functions, methods, variables, constants.
+# They may appear in string literals, comments, json/yaml struct tags, URL paths,
+# and error messages.
+#
+# Test files are excluded: integration test helpers, fixture constants, and test
+# function names legitimately reference specific vendors (e.g. TestGeminiIntegration_*,
+# anthropicStreamHead) — these are about vendor wire formats, not shared infrastructure.
+#
+# Allowlist (explicit, justified):
+#   app/adapters/name.go           — OpenAI/Anthropic/Gemini/OpenAIResponses/OpenAIEmbeddings
+#                                    are the adapter-vocabulary Name constants; vendor names
+#                                    here are the deliberate public identity of each wire protocol.
+#   pkg/clientprofile/claudecode.go — anthropicModel/anthropicModelList implement the Anthropic
+#                                    model-list wire shape for the Claude Code client profile;
+#                                    vendor-specific by design.
+vendor_id_hits=$(
+  grep -rniE \
+    '^\s*(type\s+\w*(openai|anthropic|gemini)|func\s+(\([^)]*\)\s*)?\w*(openai|anthropic|gemini)|(var|const)\s+\w*(openai|anthropic|gemini))\w*' \
+    app/ pkg/ internal/ --include='*.go' \
+  | grep -v '_test\.go:' \
+  | grep -v 'app/adapters/name\.go:' \
+  | grep -v 'pkg/clientprofile/claudecode\.go:' \
+  || true
+)
+if [ -n "$vendor_id_hits" ]; then
+  note "vendor name in Go identifier declaration (see allowlist in this script):"
+  echo "$vendor_id_hits"
+else
+  ok "clean"
+fi
+
 if [ $fail -ne 0 ]; then
   echo
   echo "Codebase-rule check FAILED — see CLAUDE.md \"Codebase rules\"."
