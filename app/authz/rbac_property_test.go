@@ -506,16 +506,14 @@ func TestProperty_PersonalRowsAreOwnerOnly(t *testing.T) {
 	})
 }
 
-// Catalog rows read for everyone and mutate only through a binding. The
-// ownerless user-owned row (a catalog row shipped before owners carried an
-// id) reads the same way.
+// Catalog rows read for everyone and mutate only through a binding. A
+// system-owned row of a catalog kind reads the same way.
 func TestProperty_CatalogRowsReadForAllAndMutateOnlyViaBinding(t *testing.T) {
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()
 		actors := w.actors()
 		actors["admin-token"] = &actor.Actor{AdminToken: true}
 
-		ownerless := meta.Owner{Kind: meta.OwnerUser}
 		for _, a := range actors {
 			ctx := ctxOf(a)
 			if err := rbac.Authorize(ctx, "models.get",
@@ -523,8 +521,8 @@ func TestProperty_CatalogRowsReadForAllAndMutateOnlyViaBinding(t *testing.T) {
 				t.Fatalf("catalog read denied: %v", err)
 			}
 			if err := rbac.Authorize(ctx, "rate-limits.get",
-				authz.Resource{Kind: "rate-limit", Owner: &ownerless}); err != nil {
-				t.Fatalf("ownerless user-owned catalog row not readable: %v", err)
+				authz.Resource{Kind: "rate-limit", Owner: &globalScope}); err != nil {
+				t.Fatalf("system-owned catalog row not readable: %v", err)
 			}
 			if err := rbac.Authorize(ctx, "roles.get",
 				authz.Resource{Kind: "role", Owner: &globalScope}); err != nil {

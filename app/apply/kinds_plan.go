@@ -7,6 +7,7 @@ import (
 
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/app/refcheck"
 	"github.com/wyolet/relay/app/settings"
 )
 
@@ -54,6 +55,11 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		m.ID = k.Names[name]
 		// A declared row is owned by apply, so it is not hand-edited.
 		m.Dirty = false
+		// A user owner with no id names nobody; resolve it the way CRUD
+		// create does. Cannot fail: only a supplied id is checked.
+		if m.Owner.Kind == meta.OwnerUser && m.Owner.ID == "" {
+			_ = refcheck.StampOwnerID(ctx, &m.Owner)
+		}
 
 		e := Entry{Kind: k.Kind, Name: name, ID: m.ID, plural: route.Plural, owner: m.Owner}
 		if wm.ID != "" && wm.ID != m.ID {
@@ -158,5 +164,5 @@ func (b *builder) governs(op settings.Op, kind string, owner meta.Owner) error {
 	if b.opts.Gov == nil || owner.Kind == meta.OwnerSystem {
 		return nil
 	}
-	return settings.Governs(b.opts.Gov, op, kind, string(owner.Kind))
+	return settings.Governs(b.opts.Gov, op, kind, string(owner.Kind), b.admin)
 }

@@ -428,9 +428,8 @@ func tierAllowedKeys(snap *appcatalog.Snapshot, keys []*hostkey.HostKey, modelID
 
 // personalRowsVisible reports whether the binding and its host exist for
 // userID. Owner-only, a personal row serves only its owner: otherwise any
-// user could slot their own endpoint under every grant of a shared model. A
-// user owner with no id (what an admin-token create writes) is an operator
-// row and stays shared. Nil-safe: a nil Resolver shares personal rows.
+// user could slot their own endpoint under every grant of a shared model.
+// Nil-safe: a nil Resolver shares personal rows.
 func (r *Resolver) personalRowsVisible(hb *binding.Binding, h *host.Host, userID string) bool {
 	if r == nil || !r.personalOwnerOnly {
 		return true
@@ -439,7 +438,7 @@ func (r *Resolver) personalRowsVisible(hb *binding.Binding, h *host.Host, userID
 }
 
 func ownerSees(o meta.Owner, userID string) bool {
-	return o.Kind != meta.OwnerUser || o.ID == "" || o.ID == userID
+	return o.Kind != meta.OwnerUser || (o.ID != "" && o.ID == userID)
 }
 
 // isDeprecated reports whether m's lifecycle status excludes it from

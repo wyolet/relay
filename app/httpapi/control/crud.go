@@ -353,7 +353,7 @@ func registerKind[T any](
 		if err := authzr.Authorize(ctx, plural+".update", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).Owner.Kind)); err != nil {
+		if err := settings.Governs(gov, settings.OpEdit, singular, string(metaOf(existing).Owner.Kind), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		v := &in.Body
@@ -413,7 +413,7 @@ func registerKind[T any](
 		if err := authzr.Authorize(ctx, plural+".delete", authz.Resource{Kind: singular, ID: in.ID, Owner: &metaOf(existing).Owner}); err != nil {
 			return nil, mapAuthzErr(err)
 		}
-		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).Owner.Kind)); err != nil {
+		if err := settings.Governs(gov, settings.OpDelete, singular, string(metaOf(existing).Owner.Kind), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		if guard != nil {

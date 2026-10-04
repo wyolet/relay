@@ -55,7 +55,7 @@ func TestGoverns(t *testing.T) {
 			if r == nil {
 				r = fakeReader{}
 			}
-			err := Governs(r, tt.op, tt.kind, tt.ownerKind)
+			err := Governs(r, tt.op, tt.kind, tt.ownerKind, false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Governs(%s,%s,%s) err=%v, wantErr=%v", tt.op, tt.kind, tt.ownerKind, err, tt.wantErr)
 			}

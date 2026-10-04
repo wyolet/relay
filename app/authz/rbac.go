@@ -234,11 +234,6 @@ func isCatalogOwner(o meta.Owner) bool {
 	switch o.Kind {
 	case meta.OwnerSystem, meta.OwnerProvider, meta.OwnerHost:
 		return true
-	case meta.OwnerUser:
-		// A user owner with no id names nobody: catalog rows shipped before
-		// owners carried one read like the catalog rows they are, not as a
-		// personal row hidden from everyone.
-		return o.ID == ""
 	}
 	return false
 }

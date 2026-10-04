@@ -18,13 +18,19 @@ import (
 // personalHostFixture is the system model m1 served by system host-a, plus
 // user B's own keyless host bound to m1 under a binding that sorts first.
 func personalHostFixture(userB string) (twoHostFixture, *host.Host, *catalog.Snapshot) {
+	return ownedHostFixture(meta.Owner{Kind: meta.OwnerUser, ID: userB})
+}
+
+// ownedHostFixture is personalHostFixture with the extra host and its
+// binding owned by owner.
+func ownedHostFixture(owner meta.Owner) (twoHostFixture, *host.Host, *catalog.Snapshot) {
 	f := newTwoHostParts()
 	personal := &host.Host{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "b-box", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userB}},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "b-box", Owner: owner},
 		Spec: host.Spec{BaseURL: "http://b.attacker.example", NoAuth: true},
 	}
 	personalBnd := &binding.Binding{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "0000", Owner: meta.Owner{Kind: meta.OwnerUser, ID: userB}},
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "0000", Owner: owner},
 		Spec: binding.Spec{ModelID: f.model.Meta.ID, HostID: personal.Meta.ID, Adapter: adapters.OpenAI},
 	}
 	snap := catalog.Build(
@@ -107,6 +113,37 @@ func TestPersonalHostRoutableByItsOwnerUnderRBAC(t *testing.T) {
 	}
 	if !r.PolicylessAllows(snap, f.model, "", userB) {
 		t.Fatal("owner's model not listed")
+	}
+}
+
+// Under RBAC a system-owned host and binding serve every caller, while a
+// user owner with no id names nobody and serves no one.
+func TestOwnerOnlyRoutingSharesSystemRowsOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		owner  meta.Owner
+		shared bool
+	}{
+		{"system", meta.Owner{Kind: meta.OwnerSystem}, true},
+		{"user without id", meta.Owner{Kind: meta.OwnerUser}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, extra, snap := ownedHostFixture(tc.owner)
+			r := &Resolver{cfg: policylessOn{}}
+			PersonalRowsOwnerOnly()(r)
+			for _, caller := range []string{meta.NewID(), ""} {
+				plan, err := r.Resolve(Request{ModelName: "m1", UserID: caller, Snapshot: snap})
+				if err != nil {
+					t.Fatalf("caller %q: Resolve: %v", caller, err)
+				}
+				if got := plan.Host.Meta.ID == extra.Meta.ID; got != tc.shared {
+					t.Fatalf("caller %q routed to the %s host = %v, want %v", caller, tc.name, got, tc.shared)
+				}
+				if got := r.PolicylessAllowsBinding(snap, f.model, snap.AllBindings()[0], caller); got != tc.shared {
+					t.Fatalf("caller %q: %s binding listed = %v, want %v", caller, tc.name, got, tc.shared)
+				}
+			}
+		})
 	}
 }
 
