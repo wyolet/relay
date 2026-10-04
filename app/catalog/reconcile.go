@@ -145,7 +145,6 @@ func deleteHost(s *Snapshot, id string) {
 	delete(s.hostsByID, id)
 	delete(s.hostsByName, h.Meta.Name)
 	cascadeDelete(s, refHost, id)
-	resanitizeModelsAfterHostChange(s)
 }
 
 // ── Model ─────────────────────────────────────────────────────────────────
