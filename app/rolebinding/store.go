@@ -12,21 +12,21 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store holds a pool rather than Queries so Upsert can run a multi-table
+// Store holds a DB rather than Queries so Upsert can run a multi-table
 // transaction.
 type Store struct {
-	pool *pgxpool.Pool
+	db storage.DB
 }
 
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+func NewStore(db storage.DB) *Store { return &Store{db: db} }
 
 func (s *Store) List(ctx context.Context) ([]*RoleBinding, error) {
-	q := gen.New(s.pool)
+	q := gen.New(s.db)
 	rows, err := q.ListRoleBindings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("rolebinding.List: %w", err)
@@ -53,7 +53,7 @@ func (s *Store) List(ctx context.Context) ([]*RoleBinding, error) {
 
 // Get returns (nil, nil) when no row has id.
 func (s *Store) Get(ctx context.Context, id string) (*RoleBinding, error) {
-	q := gen.New(s.pool)
+	q := gen.New(s.db)
 	r, err := q.GetRoleBinding(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -82,7 +82,7 @@ func (s *Store) Upsert(ctx context.Context, b *RoleBinding) error {
 	if err != nil {
 		return fmt.Errorf("rolebinding.Upsert: %w", err)
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("rolebinding.Upsert: begin: %w", err)
 	}
@@ -117,7 +117,7 @@ func (s *Store) Upsert(ctx context.Context, b *RoleBinding) error {
 
 // Delete relies on the FK to cascade the junction rows.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return gen.New(s.pool).DeleteRoleBinding(ctx, id)
+	return gen.New(s.db).DeleteRoleBinding(ctx, id)
 }
 
 // subjectFK returns the subject id when the subject is of kind want, so the

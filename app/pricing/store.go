@@ -12,25 +12,25 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Pricing data-access type. Holds a pool so Upsert can run a
-// multi-table transaction.
+// Store is the Pricing data-access type. Holds a DB rather than Queries so
+// Upsert can run a multi-table transaction.
 type Store struct {
-	pool *pgxpool.Pool
+	db storage.DB
 }
 
-// NewStore constructs a Store bound to a pool.
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+// NewStore constructs a Store bound to a pool or an open transaction.
+func NewStore(db storage.DB) *Store { return &Store{db: db} }
 
 // List returns every Pricing row with Spec.TargetModelIDs hydrated from the
 // pricing_models junction in declaration order.
 func (s *Store) List(ctx context.Context) ([]*Pricing, error) {
-	q := gen.New(s.pool)
+	q := gen.New(s.db)
 	rows, err := q.ListPricings(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("pricing.List: %w", err)
@@ -58,7 +58,7 @@ func (s *Store) List(ctx context.Context) ([]*Pricing, error) {
 // Get returns the Pricing with the given id, hydrating TargetModelIDs.
 // Returns (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
-	q := gen.New(s.pool)
+	q := gen.New(s.db)
 	r, err := q.GetPricing(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -94,7 +94,7 @@ func (s *Store) Upsert(ctx context.Context, p *Pricing) error {
 	if err != nil {
 		return fmt.Errorf("pricing.Upsert: %w", err)
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("pricing.Upsert: begin: %w", err)
 	}
@@ -124,7 +124,7 @@ func (s *Store) Upsert(ctx context.Context, p *Pricing) error {
 
 // Delete removes a Pricing by id. Junction rows cascade via FK.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return gen.New(s.pool).DeletePricing(ctx, id)
+	return gen.New(s.db).DeletePricing(ctx, id)
 }
 
 func fromRow(r gen.Pricing) (*Pricing, error) {

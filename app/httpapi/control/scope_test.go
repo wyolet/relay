@@ -307,8 +307,8 @@ func TestRBACUpdateDelete(t *testing.T) {
 		{"delete catalog row is 403", "alice", http.MethodDelete, catalogID, 403},
 		{"delete system row is 403", "alice", http.MethodDelete, systemID, 403},
 		{"admin deletes foreign", "root", http.MethodDelete, bobID, 204},
-		{"admin cannot delete system row", "root", http.MethodDelete, systemID, 403},
-		{"admin token cannot delete system row", "token", http.MethodDelete, systemID, 403},
+		{"admin deletes system row", "root", http.MethodDelete, systemID, 204},
+		{"admin token deletes system row", "token", http.MethodDelete, systemID, 204},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

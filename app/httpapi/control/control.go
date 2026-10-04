@@ -184,6 +184,7 @@ func Mount(r chi.Router, d Deps) huma.API {
 	registerKeyRotate(api, d, protect)
 	registerHostKeyHealth(api, d, protect)
 	registerReferences(api, d, protect)
+	registerDetach(api, d, protect)
 	registerPolicyKeys(api, d, protect)
 	registerSettings(api, d, protect)
 	registerResolve(api, d, protect)
