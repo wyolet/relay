@@ -64,6 +64,59 @@ func TestSerializeResponse_BlockedPromptRoundTrip(t *testing.T) {
 	}
 }
 
+// Gemini has no refusal finishReason; SAFETY is the closest one a client
+// treats as a blocked completion. The refusal text stays the candidate
+// content. Re-parsed it reads as content_filter — still not a clean stop.
+func TestSerializeResponse_RefusalIsNotStop(t *testing.T) {
+	resp := &v1.Response{
+		Status:       v1.StatusCompleted,
+		FinishReason: v1.FinishReasonRefusal,
+		Output: []v1.Item{&v1.Message{
+			Role:    v1.RoleAssistant,
+			Content: []v1.Part{&v1.OutputTextPart{Text: "I can't help with that."}},
+		}},
+	}
+	out, err := tr.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !strings.Contains(s, `"finishReason":"SAFETY"`) {
+		t.Errorf("refusal must not serialize as STOP: %s", s)
+	}
+	if !strings.Contains(s, "I can't help with that.") {
+		t.Errorf("refusal text must stay the candidate content: %s", s)
+	}
+
+	back, err := tr.ParseResponse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.FinishReason != v1.FinishReasonContentFilter {
+		t.Errorf("round-trip finish_reason = %q, want content_filter", back.FinishReason)
+	}
+}
+
+func TestStreamCanonicalToGemini_RefusalIsNotStop(t *testing.T) {
+	fn := tr.NewFromCanonicalStream()
+	var out []byte
+	for _, f := range []v1.SSEFrame{
+		{Event: v1.EventGenerationCreated, Data: []byte(`{"id":"r1","model":"m"}`)},
+		{Event: v1.EventItemStarted, Data: []byte(`{"item_id":"msg_0","item_type":"message"}`)},
+		{Event: v1.EventItemDelta, Data: []byte(`{"item_id":"msg_0","kind":"text","delta":"no."}`)},
+		{Event: v1.EventGenerationCompleted, Data: []byte(`{"id":"r1","status":"completed","finish_reason":"refusal"}`)},
+	} {
+		b, err := fn(f.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, b...)
+	}
+	if !strings.Contains(string(out), `"finishReason":"SAFETY"`) {
+		t.Errorf("streamed refusal must not end as STOP: %s", out)
+	}
+}
+
 func TestStreamGeminiToCanonical_BlockedPromptTerminates(t *testing.T) {
 	fn := tr.NewToCanonicalStream()
 	out, err := fn([]byte("data: " + blockedPromptBody + "\n\n"))

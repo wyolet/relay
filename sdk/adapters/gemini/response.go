@@ -224,6 +224,10 @@ func canonicalFinishReasonToGemini(reason v1.FinishReason, incomplete *v1.Incomp
 		return "SAFETY"
 	case v1.FinishReasonToolCalls:
 		return "STOP" // Gemini uses STOP even when the last action was a function call
+	case v1.FinishReasonRefusal:
+		// Gemini has no refusal finishReason; SAFETY is the one clients treat
+		// as a blocked completion. The refusal text stays the candidate content.
+		return "SAFETY"
 	default:
 		return "STOP"
 	}
