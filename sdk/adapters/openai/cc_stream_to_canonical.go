@@ -155,6 +155,8 @@ func (s *ccToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 
 	ch := ccChunk.Choices[0]
 	delta := ch.Delta
+	// canonical: per-chunk logprobs dropped — canonical stream events have no
+	// extensions slot; the buffered path carries them in Response.Extensions.
 
 	// finish_reason arrives on the terminal chunk (separate from deltas); capture
 	// it so handleDone emits the real reason instead of a hardcoded "stop".

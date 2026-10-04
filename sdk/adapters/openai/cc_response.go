@@ -43,6 +43,11 @@ func (CCTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 		resp.FinishReason = v1.FinishReasonRefusal
 	}
 	resp.Output = ccChoiceToCanonicalOutput(cc.ID, ch)
+	if ch.Logprobs != nil {
+		if b, err := json.Marshal(ch.Logprobs); err == nil {
+			resp.Extensions = map[string]json.RawMessage{extLogprobs: b}
+		}
+	}
 
 	return resp, nil
 }
@@ -166,11 +171,20 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 	}
 	msg.ToolCalls = toolCalls
 
-	cc.Choices = []Choice{{
+	choice := Choice{
 		Index:        0,
 		Message:      msg,
 		FinishReason: finishReason,
-	}}
+	}
+	if raw, ok := resp.Extensions[extLogprobs]; ok {
+		var lp ChoiceLogprobs
+		if err := json.Unmarshal(raw, &lp); err == nil {
+			choice.Logprobs = &lp
+		}
+	}
+	// canonical: Response.Extensions keys other than openai.logprobs dropped —
+	// rule 7: an adapter ignores keys it does not own.
+	cc.Choices = []Choice{choice}
 
 	return json.Marshal(cc)
 }

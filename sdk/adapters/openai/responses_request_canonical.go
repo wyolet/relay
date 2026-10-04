@@ -77,6 +77,7 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		Include              []string          `json:"include,omitempty"`
 		PromptCacheKey       string            `json:"prompt_cache_key,omitempty"`
 		PromptCacheRetention string            `json:"prompt_cache_retention,omitempty"`
+		ServiceTier          string            `json:"service_tier,omitempty"`
 	}
 	// Stateless reasoning round-trip: relay's canonical protocol is stateless
 	// (it rejects previous_response_id / store / conversation), so the ONLY way
@@ -106,6 +107,7 @@ func (ResponsesTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		Include:              []string{includeEncryptedReasoning},
 		PromptCacheKey:       rreq.PromptCacheKey,
 		PromptCacheRetention: rreq.PromptCacheRetention,
+		ServiceTier:          rreq.ServiceTier,
 	})
 }
 

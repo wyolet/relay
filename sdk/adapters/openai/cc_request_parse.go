@@ -29,6 +29,9 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		req.Metadata = wire.Metadata
 	}
 	req.CacheConfig = openaiCacheConfigFromWire(wire.PromptCacheKey, wire.PromptCacheRetention)
+	req.Extensions = ccExtensionsFromWire(&wire)
+	// canonical: n dropped — a canonical Response holds one generation, so the
+	// extra choices n>1 asks for would be discarded on the way back anyway.
 
 	// Build model_config for this model.
 	opts := &v1.ModelOpts{}
@@ -112,25 +115,28 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		opts.Reasoning = &v1.ReasoningConfig{Effort: wire.ReasoningEffort}
 	}
 
-	// ResponseFormat → OutputConfig
+	// ResponseFormat + verbosity → OutputConfig
+	if wire.ResponseFormat != nil || wire.Verbosity != "" {
+		opts.Output = &v1.OutputConfig{Verbosity: wire.Verbosity}
+	}
 	if wire.ResponseFormat != nil {
-		oc := &v1.OutputConfig{}
 		f := &v1.Format{Type: wire.ResponseFormat.Type}
 		if wire.ResponseFormat.JSONSchema != nil {
 			// Extract name and schema from the json_schema wrapper object.
 			var inner struct {
-				Name   string          `json:"name"`
-				Schema json.RawMessage `json:"schema"`
-				Strict *bool           `json:"strict"`
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Schema      json.RawMessage `json:"schema"`
+				Strict      *bool           `json:"strict"`
 			}
 			if err := json.Unmarshal(wire.ResponseFormat.JSONSchema, &inner); err == nil {
 				f.Name = inner.Name
+				f.Description = inner.Description
 				f.Schema = inner.Schema
 				f.Strict = inner.Strict
 			}
 		}
-		oc.Format = f
-		opts.Output = oc
+		opts.Output.Format = f
 	}
 
 	// Stream mode
@@ -180,11 +186,14 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 			}
 			input = append(input, item...)
 		case "tool":
-			input = append(input, &v1.FunctionCallOutput{
-				CallID: msg.ToolCallID,
-				Output: ccContentToText(msg.Content),
-			})
+			out, err := ccToolContentToOutput(msg.ToolCallID, msg.Content)
+			if err != nil {
+				return nil, fmt.Errorf("cc parse_request: tool message content: %w", err)
+			}
+			input = append(input, out)
 		}
+		// canonical: ChatMessage.Name dropped — canonical messages carry no
+		// participant name and no other vendor has one to map it onto.
 	}
 	req.Instructions = instructions
 	req.Input = input
