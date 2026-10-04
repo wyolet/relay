@@ -87,7 +87,9 @@ app/                       — the application: domain + composition + handlers
   ratelimit/               — RateLimit entity + Resolve(policy, rl) → Rules
   secret/                  — secret Store + KeyAgent (out-of-band heal/failover)
   httpapi/                 — the HTTP layer
-    inference/             — data plane: /v1/* + /healthz; shape-agnostic
+    inference/             — data plane: Spec-registry routes (/openai/v1/*,
+                             /anthropic/v1/*, /{profile}/v1/*), canonical
+                             /v1/*, /healthz; shape-agnostic
                              Dispatch with NO per-vendor branching
     control/               — admin plane: /auth/* + CRUD + /version + ...
   transport/ws/            — customer-facing WebSocket inference transport
@@ -187,10 +189,10 @@ integration/               — make test-integration + make smoke-mock
 
 The provider/host/model/pricing/policy YAMLs are NOT in this repo. They
 live in `wyolet/relay-catalog` (sourced from models.dev via
-`cmd/modelsdev-import`, then curated). A flattened, generated default is
-`go:embed`'d into the relay binary (`sdk/catalog/catalog.json`, via
-`cmd/catalog-embed`) for airgapped / first-boot scenarios. Tarball-by-tag
-distribution is the planned upgrade path.
+`cmd/modelsdev-import`, then curated). The Docker images bundle a release's
+`data/` tree at `/catalog` for first boot. `sdk/catalog/catalog.json.gz` (via
+`cmd/catalog-embed`) is a flattened SDK lookup file, not a seed source.
+Catalog upgrades go through `RELAY_CATALOG_VERSION` (tarball by tag).
 
 What this repo owns:
 
@@ -226,8 +228,9 @@ When you need a sample YAML to reason about, check `wyolet/relay-catalog`'s
 - `RELAY_CONFIG_DIR` (default `config`) — relay-internal yamls only.
 - `RELAY_CATALOG_DIR` — local clone of `wyolet/relay-catalog`'s `data/`
   tree. When set + `RELAY_AUTO_SEED_IF_EMPTY=1` + PG is empty, Bootstrap
-  walks it recursively and seeds. Unset disables auto-seed (falls back to
-  the embedded default).
+  walks it recursively and seeds. The Docker images bundle the catalog tree
+  at `/catalog` and set it; a bare binary with it unset seeds nothing (the
+  embedded `sdk/catalog` JSON is an SDK lookup file, not a seed source).
 - `RELAY_CATALOG_VERSION` — pins the seeded catalog to a relay-catalog
   release tag. At hydrate the stored `catalog-source` settings marker is
   compared; on mismatch (or empty PG) the archive is fetched
@@ -468,7 +471,7 @@ full-rebuild fallback.
 |---|---|---|
 | Browser → control API | `/auth/*`, CRUD, `/master-key/*`, `/reload`, `/version` | scs session cookie (`relay_session`, HttpOnly + SameSite=Strict + Secure-toggleable) |
 | Operator / CI → control API | same | `Authorization: Bearer ${RELAY_ADMIN_TOKEN}` (break-glass; coexists with sessions) |
-| Customer code → inference API | `/v1/*` | `Authorization: Bearer ${relay-key}`; hashed → `snapshot.RelayKeyByHash` |
+| Customer code → inference API | `/openai/v1/*`, `/anthropic/v1/*`, `/{profile}/v1/*`, canonical `/v1/*` | `Authorization: Bearer ${relay-key}`; hashed → `snapshot.RelayKeyByHash` |
 
 Sessions are real, backed by `alexedwards/scs/v2` over `kv.Store`
 (`app/session`), opaque tokens rotated on login, server-side destroy on

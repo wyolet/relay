@@ -26,12 +26,21 @@ func validateModelRef(raw, policyName string, index int, g *graph) []Issue {
 	// Explicit provider slug must resolve.
 	if ref.Provider != "" && !ref.ProviderWildcard {
 		if _, ok := g.Providers[ref.Provider]; !ok {
+			msg := fmt.Sprintf("modelref %q: provider %q not found", raw, ref.Provider)
+			// The grammar reads a lone segment as a provider, so a bare model
+			// name matches nothing at routing time; name the actual mistake.
+			if owner, isModel := modelOwner(g, ref.Provider); ref.ModelWildcard && isModel {
+				msg = fmt.Sprintf("modelref %q is a bare model name; entries need a provider segment", raw)
+				if owner != "" {
+					msg += fmt.Sprintf(" (%q)", owner+"/"+raw)
+				}
+			}
 			out = append(out, Issue{
 				Severity: SeverityError,
 				Kind:     KindRefMissing,
 				Source:   src,
 				Target:   Ref{Kind: "Provider", Name: ref.Provider},
-				Message:  fmt.Sprintf("modelref %q: provider %q not found", raw, ref.Provider),
+				Message:  msg,
 			})
 		}
 	}
@@ -60,4 +69,23 @@ func validateModelRef(raw, policyName string, index int, g *graph) []Issue {
 		}
 	}
 	return out
+}
+
+// modelOwner reports whether slug names a Model or one of its snapshots,
+// and that model's owning provider name ("" when the owner isn't a provider).
+func modelOwner(g *graph, slug string) (string, bool) {
+	for name, m := range g.Models {
+		match := name == slug
+		for i := 0; !match && i < len(m.Spec.Snapshots); i++ {
+			match = m.Spec.Snapshots[i].Name == slug
+		}
+		if !match {
+			continue
+		}
+		if m.Metadata.Owner.Kind == "provider" {
+			return m.Metadata.Owner.Name, true
+		}
+		return "", true
+	}
+	return "", false
 }
