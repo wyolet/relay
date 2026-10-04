@@ -9,6 +9,7 @@
 // One Upsert routes to the env or stored path based on Spec.ValueFrom.Kind.
 // List/Get reconstruct Spec from JSONB and populate the runtime-only
 // Resolved/KeyHash fields by resolving the secret Ref.
+
 package hostkey
 
 import (
@@ -150,22 +151,7 @@ func (s *Store) Get(ctx context.Context, id string) (*HostKey, error) {
 		}
 		return nil, fmt.Errorf("hostkey.Get: %w", err)
 	}
-	row := gen.ListSecretsRow{
-		ID:              r.ID,
-		Name:            r.Name,
-		DisplayName:     r.DisplayName,
-		Metadata:        r.Metadata,
-		Status:          r.Status,
-		Spec:            r.Spec,
-		ValueKind:       r.ValueKind,
-		ValueFromEnv:    r.ValueFromEnv,
-		ValueCiphertext: r.ValueCiphertext,
-		ValueNonce:      r.ValueNonce,
-		ValueKeyVersion: r.ValueKeyVersion,
-		CreatedAt:       r.CreatedAt,
-		UpdatedAt:       r.UpdatedAt,
-	}
-	k, err := s.fromRow(ctx, row)
+	k, err := s.fromRow(ctx, gen.ListSecretsRow(r))
 	if err != nil {
 		return nil, fmt.Errorf("hostkey.Get: %w", err)
 	}

@@ -3,6 +3,7 @@
 // merge happens here at snapshot build/reconcile time, never in storage,
 // so re-seeding templates is overlay-unaware and user customizations
 // survive catalog upgrades.
+
 package catalog
 
 import (

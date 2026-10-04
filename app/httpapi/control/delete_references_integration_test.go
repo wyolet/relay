@@ -4,6 +4,7 @@
 // the real handler against Postgres: a referenced row is refused with its
 // blockers and left in place, an unreferenced one is deleted.
 // Run with: make test-integration.
+
 package control
 
 import (

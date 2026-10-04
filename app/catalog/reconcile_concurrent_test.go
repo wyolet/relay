@@ -4,6 +4,7 @@
 // consistent snapshot while writers churn. Only `-race` can observe a
 // violation of that (a torn read is a benign-looking wrong answer without
 // it), so these live behind `make test-race`.
+
 package catalog
 
 import (

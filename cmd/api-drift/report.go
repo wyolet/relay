@@ -49,7 +49,9 @@ func writeFindings(path string, results []Result, now string) {
 			ProbeBody:  json.RawMessage(body),
 		})
 	}
-	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fatal(err)
+	}
 	raw, _ := json.MarshalIndent(report, "", "  ")
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		fatal(err)

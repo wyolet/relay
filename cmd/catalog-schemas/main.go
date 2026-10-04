@@ -23,6 +23,8 @@
 // Run `make schemas` to regenerate; CI ensures `git diff --exit-code
 // schemas/` so Go-type changes that affect the wire format land with
 // their corresponding schema bump.
+
+// Command catalog-schemas writes one JSON Schema per catalog kind, derived from the manifest types.
 package main
 
 import (
@@ -146,10 +148,13 @@ func dumpOne(out string, k kind) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	enc := json.NewEncoder(f)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(doc); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s\n", path)

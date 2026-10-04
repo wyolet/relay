@@ -1,5 +1,6 @@
 // Bug-reproduction tests. Each asserts the correct wire behavior and is
 // skipped until the bug it reproduces is fixed, so the suite stays green.
+
 package openai
 
 import (

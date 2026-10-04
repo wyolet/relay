@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/project"
@@ -35,15 +34,13 @@ func (l grpList) List(context.Context) ([]*group.Group, error) { return l, nil }
 // order and sorted order differ) plus one project-owned row of every kind
 // that can live in a project.
 type tenancyFixture struct {
-	team     *team.Team
-	other    *team.Team
-	zeta     *project.Project
-	alpha    *project.Project
-	orphan   *project.Project
-	pol      *policy.Policy
-	hostTier *policy.Policy
-	key      *hostkey.HostKey
-	rl       *ratelimit.RateLimit
+	team   *team.Team
+	other  *team.Team
+	zeta   *project.Project
+	alpha  *project.Project
+	orphan *project.Project
+	pol    *policy.Policy
+	rl     *ratelimit.RateLimit
 }
 
 func newTenancyFixture() tenancyFixture {

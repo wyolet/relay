@@ -1,6 +1,7 @@
 // Keys skip the generic CRUD create (skipCreate=true) so a caller cannot
 // supply a precomputed keyHash: the plaintext is generated here, only its
 // hash is stored, and it is returned exactly once.
+
 package control
 
 import (

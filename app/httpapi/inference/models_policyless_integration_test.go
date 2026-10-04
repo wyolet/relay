@@ -6,6 +6,7 @@
 // seam for it, so this is the only place the "switched on" half of the flag
 // can be exercised.
 // Run with: make test-integration.
+
 package inference
 
 import (

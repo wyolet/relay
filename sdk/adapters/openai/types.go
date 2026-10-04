@@ -1,3 +1,4 @@
+// Package openai translates the OpenAI Chat Completions and Responses wire shapes to and from the canonical v1 protocol.
 package openai
 
 import (

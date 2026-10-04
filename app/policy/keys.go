@@ -1,6 +1,7 @@
 // The scope is the hash tag every counter of one request shares: the team when
 // the caller has a project, else the policy slug, since a personal key has no
 // team to anchor on.
+
 package policy
 
 import "fmt"

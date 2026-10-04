@@ -51,7 +51,7 @@ func TestRunRules_SkipSuppresses(t *testing.T) {
 func TestRunRules_NilCheckIgnored(t *testing.T) {
 	rules := []Rule{{Name: "alpha", Check: nil}}
 	got := RunRules(rules, nil, nil)
-	if got != nil && len(got) != 0 {
+	if len(got) != 0 {
 		t.Fatalf("nil Check must not panic or emit; got %d issues", len(got))
 	}
 }

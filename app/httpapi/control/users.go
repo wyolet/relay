@@ -2,6 +2,7 @@
 // the two fields an operator owns. Users are identity, not a catalog kind, so
 // they get no CRUD factory — the list is a projection that deliberately omits
 // every credential field (password hash, IdP subject).
+
 package control
 
 import (

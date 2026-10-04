@@ -3,6 +3,7 @@
 // policy_guards_integration_test.go covers the policy-reference guards
 // against a real Postgres: they read through concrete *policy.Store /
 // *hostkey.Store / *ratelimit.Store, which have no fake seam.
+
 package control
 
 import (

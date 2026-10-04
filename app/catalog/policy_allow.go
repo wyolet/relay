@@ -12,6 +12,7 @@
 // Built off the hot path: once in Build, and recomputed on any reconcile that
 // can change a grant (provider/host/model/policy writes). It reads policies +
 // models + hosts + providers, so it must run after those are indexed.
+
 package catalog
 
 import (

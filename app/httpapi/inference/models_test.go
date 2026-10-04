@@ -1,7 +1,6 @@
 package inference
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -14,24 +13,6 @@ import (
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/provider"
 )
-
-// helpers for building minimal catalog snapshots in tests.
-
-type mProvList []*provider.Provider
-
-func (l mProvList) List(context.Context) ([]*provider.Provider, error) { return l, nil }
-
-type mHostList []*host.Host
-
-func (l mHostList) List(context.Context) ([]*host.Host, error) { return l, nil }
-
-type mModList []*model.Model
-
-func (l mModList) List(context.Context) ([]*model.Model, error) { return l, nil }
-
-type mBndList []*binding.Binding
-
-func (l mBndList) List(context.Context) ([]*binding.Binding, error) { return l, nil }
 
 // snapWithBindings builds a catalog snapshot containing one model with the
 // given adapter bindings. enabled flags map to binding.Spec.Enabled.

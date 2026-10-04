@@ -24,13 +24,18 @@ func stateKey(host, model, param string) string {
 func loadState(path string) map[string]StateEntry {
 	state := map[string]StateEntry{}
 	if raw, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(raw, &state)
+		if err := json.Unmarshal(raw, &state); err != nil {
+			fmt.Fprintln(os.Stderr, "warn: state load:", err)
+		}
 	}
 	return state
 }
 
 func saveState(path string, state map[string]StateEntry) {
-	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, "warn: state save:", err)
+		return
+	}
 	raw, _ := json.MarshalIndent(state, "", "  ")
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "warn: state save:", err)

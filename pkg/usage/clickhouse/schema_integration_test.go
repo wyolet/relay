@@ -5,6 +5,7 @@
 //
 //	RELAY_TEST_CH_DSN=clickhouse://default@host:9000/relay \
 //	  go test -tags=integration ./pkg/usage/clickhouse/ -run Integration -v
+
 package clickhouse
 
 import (

@@ -1,6 +1,7 @@
 // A row is not deleted while anything references it. blockers groups the
 // references scan's rows by kind and field so a refused delete can say what
 // to detach and what to reassign or remove first.
+
 package control
 
 import (

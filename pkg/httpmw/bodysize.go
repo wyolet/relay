@@ -1,3 +1,4 @@
+// Package httpmw holds net/http middleware and helpers shared by relay's listeners: request body size limits and client IP resolution behind trusted proxies.
 package httpmw
 
 import (

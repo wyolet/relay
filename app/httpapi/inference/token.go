@@ -1,5 +1,6 @@
 // Token verification runs on the request path, so it reads only the held
 // public key and the snapshot, never Postgres. Minting is control-plane only.
+
 package inference
 
 import (

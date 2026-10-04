@@ -1,4 +1,4 @@
-// Package anthropic — AnthropicTranslator implements v1.Translator for the
+// AnthropicTranslator implements v1.Translator for the
 // Anthropic Messages wire shape. Converts between Anthropic /v1/messages
 // bodies and the canonical v1.Request/v1.Response types.
 //

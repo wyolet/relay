@@ -1,6 +1,7 @@
 // The plaintext never enters this package; callers hash it. The principal and
 // rotation hashes live in real columns (FK cascade, unique index) as well as
 // the spec JSONB, and the columns win on read.
+
 package key
 
 import (

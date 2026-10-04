@@ -1,5 +1,6 @@
 // /audit is the control plane's change history, distinct from /logs (the data
 // plane's per-request record). A change records field paths, never values.
+
 package control
 
 import (

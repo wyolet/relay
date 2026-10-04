@@ -5,6 +5,8 @@
 //	catalog-embed [-o path] [dir]
 //
 // dir defaults to $RELAY_CATALOG_DIR or ../relay-catalog/data.
+
+// Command catalog-embed generates the SDK's embedded default catalog from the public catalog tree.
 package main
 
 import (

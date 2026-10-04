@@ -6,6 +6,7 @@
 //
 //	RELAY_TEST_PG_DSN=postgres://user:pass@host/db \
 //	  go test -tags=integration ./pkg/usage/postgres/ -run Integration -v
+
 package postgres
 
 import (
@@ -41,7 +42,7 @@ func TestIntegration_RoundTrip(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() {
-		s.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table)
+		_, _ = s.pool.Exec(ctx, "DROP TABLE IF EXISTS "+table)
 		s.Close()
 	}()
 

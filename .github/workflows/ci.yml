@@ -26,6 +26,16 @@ jobs:
       - name: Codebase rules (canonical-protocol 1/2/4/10)
         run: make lint-rules
 
+      # Installs the pinned binary and restores its analysis cache; make lint
+      # runs it over every module.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
+
+      - name: golangci-lint
+        run: make lint
+
       - name: Vet
         run: |
           for mod in . sdk jobq; do

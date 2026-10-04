@@ -14,6 +14,8 @@
 // flush on a byte budget as well as a row count.
 //
 //	go run ./cmd/payload-migrate -file relay-payloads.jsonl   # DSN from $RELAY_CH_DSN
+
+// Command payload-migrate copies a JSONL payload-log dump into the ClickHouse payload store, skipping rows already present.
 package main
 
 import (

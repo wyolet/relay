@@ -4,6 +4,7 @@
 // the JSONB spec on write and rebuilt from the columns on read, mirroring
 // how pricing treats host_id. The rest of the spec (adapter, upstreamName,
 // enabled, the snapshots subset) lives in the JSONB.
+
 package binding
 
 import (

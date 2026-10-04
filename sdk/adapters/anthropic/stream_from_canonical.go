@@ -29,7 +29,6 @@ type canonicalToAnthropicStream struct {
 	model                 string
 	blockIndex            int
 	blockIndexByCanonical map[int]int
-	startEmitted          bool
 }
 
 func (s *canonicalToAnthropicStream) translate(chunk []byte) ([]byte, error) {

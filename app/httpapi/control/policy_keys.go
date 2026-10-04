@@ -1,6 +1,7 @@
 // Attach overwrites a key's existing PolicyID without confirmation because
 // moving a key between policies is the common case. A detach naming a policy
 // the key does not point at returns 409 rather than silently doing nothing.
+
 package control
 
 import (

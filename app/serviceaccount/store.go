@@ -1,5 +1,6 @@
 // project_id is a real column (FK cascade) so deleting a Project drops its
 // accounts without parsing JSONB.
+
 package serviceaccount
 
 import (

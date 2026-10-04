@@ -9,6 +9,7 @@
 // Indices come later if scan time matters. Reading PG (not the catalog snapshot) so
 // disabled / soft-dropped refs are still visible — they exist in PG even
 // when the data plane has filtered them out.
+
 package control
 
 import (

@@ -1,3 +1,4 @@
+// Package usage holds the pure wire shapes for usage reporting, token counts and upstream timing, shared by the public client and the server's usage records.
 package usage
 
 // Tokens is the universal token-count shape across providers.

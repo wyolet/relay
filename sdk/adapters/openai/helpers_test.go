@@ -19,10 +19,6 @@ func mustJSON(v any) []byte {
 
 func floatPtr(v float64) *float64 { return &v }
 
-func intPtr(v int) *int { return &v }
-
-func boolPtr(v bool) *bool { return &v }
-
 // decodeMap decodes JSON bytes to a map for assertion without field coupling.
 func decodeMap(t *testing.T, b []byte) map[string]any {
 	t.Helper()

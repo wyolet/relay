@@ -1,6 +1,7 @@
 // Policy references live in spec JSONB, which Postgres FKs do not cover, so
 // apply's prune clears them before removing a policy. The API delete refuses
 // a referenced policy instead.
+
 package policy
 
 import (

@@ -52,19 +52,19 @@ func TestResolver_EndToEnd_PersonalItem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/identity/accounts/prelogin":
-			json.NewEncoder(w).Encode(preloginResponse{
+			_ = json.NewEncoder(w).Encode(preloginResponse{
 				KDF:           kdfPBKDF2,
 				KDFIterations: iterations,
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/identity/connect/token":
-			json.NewEncoder(w).Encode(tokenResponse{
+			_ = json.NewEncoder(w).Encode(tokenResponse{
 				AccessToken:  "access-token",
 				ExpiresIn:    3600,
 				RefreshToken: "refresh-token",
 				Key:          encryptedUserKey,
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/sync":
-			json.NewEncoder(w).Encode(syncResponse{
+			_ = json.NewEncoder(w).Encode(syncResponse{
 				Profile: syncProfile{Email: email},
 				Ciphers: []syncCipher{{
 					ID:   "cipher-personal",
@@ -184,16 +184,16 @@ func TestResolver_EndToEnd_OrgItem(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/identity/accounts/prelogin":
-			json.NewEncoder(w).Encode(preloginResponse{KDF: kdfPBKDF2, KDFIterations: iterations})
+			_ = json.NewEncoder(w).Encode(preloginResponse{KDF: kdfPBKDF2, KDFIterations: iterations})
 		case r.Method == http.MethodPost && r.URL.Path == "/identity/connect/token":
-			json.NewEncoder(w).Encode(tokenResponse{
+			_ = json.NewEncoder(w).Encode(tokenResponse{
 				AccessToken:  "access-token",
 				ExpiresIn:    3600,
 				RefreshToken: "refresh-token",
 				Key:          encryptedUserKey,
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/sync":
-			json.NewEncoder(w).Encode(syncResponse{
+			_ = json.NewEncoder(w).Encode(syncResponse{
 				Profile: syncProfile{
 					Email:      email,
 					PrivateKey: encryptedPrivateKey,
@@ -255,11 +255,11 @@ func TestResolver_AmbiguousName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/identity/accounts/prelogin":
-			json.NewEncoder(w).Encode(preloginResponse{KDF: kdfPBKDF2, KDFIterations: iterations})
+			_ = json.NewEncoder(w).Encode(preloginResponse{KDF: kdfPBKDF2, KDFIterations: iterations})
 		case "/identity/connect/token":
-			json.NewEncoder(w).Encode(tokenResponse{AccessToken: "t", ExpiresIn: 3600, RefreshToken: "r", Key: encryptedUserKey})
+			_ = json.NewEncoder(w).Encode(tokenResponse{AccessToken: "t", ExpiresIn: 3600, RefreshToken: "r", Key: encryptedUserKey})
 		case "/api/sync":
-			json.NewEncoder(w).Encode(syncResponse{
+			_ = json.NewEncoder(w).Encode(syncResponse{
 				Ciphers: []syncCipher{
 					{ID: "1", Type: cipherTypeLogin, Name: dupName, Login: &syncLogin{Password: strPtr(pass1)}},
 					{ID: "2", Type: cipherTypeLogin, Name: dupName, Login: &syncLogin{Password: strPtr(pass2)}},

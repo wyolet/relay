@@ -4,6 +4,7 @@
 // surface end to end: the built-in role seed, the CRUD routes and their
 // guards, the list filters, the PG cascades that drop a deleted principal
 // from every binding, and the seed loader's ordering.
+
 package integration_test
 
 import (
