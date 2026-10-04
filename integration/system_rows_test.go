@@ -55,8 +55,8 @@ spec: {}
 }
 
 // An admin may edit a system row through CRUD, and the edit is marked dirty
-// so a catalog reseed keeps it. Nobody deletes one, and a non-admin cannot
-// edit one.
+// so a catalog reseed keeps it. A non-admin can neither edit nor delete one;
+// an admin may delete one nothing references.
 func TestIntegration_SystemRowEditsAreAdminOnly(t *testing.T) {
 	st := newStack(t)
 	ctx := context.Background()
@@ -95,7 +95,7 @@ func TestIntegration_SystemRowEditsAreAdminOnly(t *testing.T) {
 		t.Fatalf("owner after edit = %+v, want system", got.Meta.Owner)
 	}
 
-	if code, raw := st.adminDo(http.MethodDelete, path, ""); code != http.StatusForbidden {
-		t.Fatalf("admin DELETE = %d, want 403: %s", code, raw)
+	if code, raw := st.adminDo(http.MethodDelete, path, ""); code != http.StatusNoContent {
+		t.Fatalf("admin DELETE = %d, want 204: %s", code, raw)
 	}
 }

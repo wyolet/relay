@@ -6,6 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
@@ -71,14 +72,9 @@ func guardGroupMembers(d Deps) mutationGuard[group.Group] {
 	}
 }
 
-// guardProject refuses deleting a project with rows under it; writes run
-// the shared reference rules.
 func guardProject(d Deps) mutationGuard[project.Project] {
-	return func(ctx context.Context, action string, existing, incoming *project.Project) error {
-		if action == "delete" {
-			return refuseProjectWithRows(ctx, d, existing)
-		}
-		if incoming == nil {
+	return func(ctx context.Context, action string, _, incoming *project.Project) error {
+		if action == "delete" || incoming == nil {
 			return nil
 		}
 		return refErr(refs(d).Project(ctx, incoming))
@@ -90,10 +86,9 @@ func guardProject(d Deps) mutationGuard[project.Project] {
 // expired license never traps a row an operator wants gone.
 func guardRole(d Deps) mutationGuard[role.Role] {
 	return func(ctx context.Context, action string, existing, incoming *role.Role) error {
-		// Built-ins are the relay's own rows: every binding in a fresh
-		// deployment points at one, so neither edit nor delete goes through
-		// generic CRUD.
-		if existing != nil && role.IsBuiltin(existing.Meta.Name) {
+		// Built-ins are the relay's own rows: edits go through the seed. An
+		// admin may delete one nothing references, since boot seeds it again.
+		if existing != nil && role.IsBuiltin(existing.Meta.Name) && (action != "delete" || !authz.IsAdmin(ctx)) {
 			return huma.Error403Forbidden(fmt.Sprintf("role %q is built in: %s goes through the seed, not generic CRUD", existing.Meta.Name, action))
 		}
 		if action == "delete" || incoming == nil {

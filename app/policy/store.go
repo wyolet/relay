@@ -15,24 +15,24 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/wyolet/relay/app/meta"
+	"github.com/wyolet/relay/internal/storage"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
 
-// Store is the Policy data-access type. Holds a pool so Upsert can run a
-// multi-table transaction; List uses the pool directly without one.
+// Store is the Policy data-access type. Holds a DB rather than Queries so
+// Upsert can run a multi-table transaction; List reads without one.
 type Store struct {
-	pool *pgxpool.Pool
+	db storage.DB
 }
 
-// NewStore constructs a Store bound to a pool.
-func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
+// NewStore constructs a Store bound to a pool or an open transaction.
+func NewStore(db storage.DB) *Store { return &Store{db: db} }
 
 // List returns every Policy row, hydrating ModelIDs/HostKeyIDs/RateLimitID
 // from their relational sources.
 func (s *Store) List(ctx context.Context) ([]*Policy, error) {
-	q := gen.New(s.pool)
+	q := gen.New(s.db)
 	rows, err := q.ListPoliciesWithRateLimit(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("policy.List: %w", err)
@@ -71,7 +71,7 @@ func (s *Store) List(ctx context.Context) ([]*Policy, error) {
 // Get returns the Policy with the given id, hydrating ModelIDs/HostKeyIDs/RateLimitID.
 // Returns (nil, nil) if not found.
 func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
-	q := gen.New(s.pool)
+	q := gen.New(s.db)
 	r, err := q.GetPolicy(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -120,7 +120,7 @@ func (s *Store) Upsert(ctx context.Context, p *Policy) error {
 	if err != nil {
 		return fmt.Errorf("policy.Upsert: %w", err)
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("policy.Upsert: begin: %w", err)
 	}
@@ -172,7 +172,7 @@ func (s *Store) Upsert(ctx context.Context, p *Policy) error {
 
 // Delete removes a Policy by id. Junction rows cascade via FK.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return gen.New(s.pool).DeletePolicy(ctx, id)
+	return gen.New(s.db).DeletePolicy(ctx, id)
 }
 
 func fromRow(r gen.ListPoliciesWithRateLimitRow) (*Policy, error) {

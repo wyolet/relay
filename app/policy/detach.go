@@ -1,6 +1,6 @@
 // Policy references live in spec JSONB, which Postgres FKs do not cover, so
-// both row-removing writers (the API delete cascade and apply's prune) share
-// this cleanup.
+// apply's prune clears them before removing a policy. The API delete refuses
+// a referenced policy instead.
 
 package policy
 
