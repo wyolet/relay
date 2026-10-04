@@ -6,6 +6,7 @@
 package control
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -139,8 +140,9 @@ func TestCheckRateLimitRefVisible_OwnProjectOrSharedOnly(t *testing.T) {
 	}
 }
 
-// Deleting a policy host keys mirror as their tier is refused
-// with a 409 naming them: clearing the ref would leave every one invalid.
+// Deleting a policy host keys mirror as their tier is refused with a 409
+// listing them as not detachable: clearing the ref would leave every one
+// invalid.
 func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
 	pool, ctx := setupPolicyRefDB(t)
 	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
@@ -174,59 +176,16 @@ func TestGuardPolicyDelete_RefusedWhileHostKeysUseTheTier(t *testing.T) {
 	}
 
 	err = guardPolicyModels(d)(ctx, "delete", tier, nil)
-	if statusOf(t, err) != 409 || !strings.Contains(err.Error(), hk.Meta.Name) {
-		t.Fatalf("err = %v, want a 409 naming host key %q", err, hk.Meta.Name)
+	var inUse *resourceInUseError
+	if !errors.As(err, &inUse) || statusOf(t, err) != 409 {
+		t.Fatalf("err = %v, want a 409 resource_in_use", err)
+	}
+	if len(inUse.Blockers) != 1 || inUse.Blockers[0].Kind != "host-key" || inUse.Blockers[0].Detachable ||
+		len(inUse.Blockers[0].Items) != 1 || inUse.Blockers[0].Items[0].Name != hk.Meta.Name {
+		t.Fatalf("blockers = %+v, want host key %q, not detachable", inUse.Blockers, hk.Meta.Name)
 	}
 	if err := guardPolicyModels(d)(ctx, "delete", unused, nil); err != nil {
 		t.Fatalf("deleting a policy no host key mirrors was refused: %v", err)
-	}
-}
-
-// The delete cascade clears the ServiceAccount override too, so no account
-// points at the deleted row.
-func TestCascadePolicyDetach_ClearsServiceAccountOverride(t *testing.T) {
-	pool, ctx := setupPolicyRefDB(t)
-	_, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
-	if err != nil {
-		t.Fatalf("BootstrapStores: %v", err)
-	}
-	d := Deps{Authz: testRBAC(), Stores: stores}
-	ctx = visibleCtx(ctx)
-
-	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "detach-team", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	if err := stores.Team.Upsert(ctx, tm); err != nil {
-		t.Fatalf("upsert team: %v", err)
-	}
-	proj := &project.Project{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "detach-project"},
-		Spec: project.Spec{TeamID: tm.Meta.ID},
-	}
-	proj.StampOwner()
-	if err := stores.Project.Upsert(ctx, proj); err != nil {
-		t.Fatalf("upsert project: %v", err)
-	}
-	pol := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "detach-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}}}
-	if err := stores.Policy.Upsert(ctx, pol); err != nil {
-		t.Fatalf("upsert policy: %v", err)
-	}
-	sa := &serviceaccount.ServiceAccount{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "detach-account"},
-		Spec: serviceaccount.Spec{ProjectID: proj.Meta.ID, PolicyID: pol.Meta.ID},
-	}
-	sa.StampOwner()
-	if err := stores.ServiceAccount.Upsert(ctx, sa); err != nil {
-		t.Fatalf("upsert service account: %v", err)
-	}
-
-	if err := cascadePolicyDetach(d)(ctx, pol); err != nil {
-		t.Fatalf("cascadePolicyDetach: %v", err)
-	}
-	got, err := stores.ServiceAccount.Get(ctx, sa.Meta.ID)
-	if err != nil || got == nil {
-		t.Fatalf("read back service account: %v", err)
-	}
-	if got.Spec.PolicyID != "" {
-		t.Fatalf("service account still points at the deleted policy %q", got.Spec.PolicyID)
 	}
 }
 

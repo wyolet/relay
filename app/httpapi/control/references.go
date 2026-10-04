@@ -34,6 +34,9 @@ type referenceItem struct {
 	// owner is the referencing row's provenance, carried for scoping only
 	// (never serialized).
 	owner meta.Owner
+	// detachable marks an optional field or a list entry: the referencing row
+	// stays valid without the target, so it can let go instead of blocking.
+	detachable bool
 }
 
 type referencesOutput struct {
@@ -46,9 +49,29 @@ type referencesInput struct {
 	ID string `path:"id" doc:"Target resource id."`
 }
 
+// referenceScans maps a kind (API singular) to the scan listing the rows
+// that reference one of its rows.
+var referenceScans = map[string]func(ctx context.Context, d Deps, id string) ([]referenceItem, error){
+	"provider":        scanProviderRefs,
+	"host":            scanHostRefs,
+	"model":           scanModelRefs,
+	"policy":          scanPolicyRefs,
+	"host-key":        scanHostKeyRefs,
+	"rate-limit":      scanRateLimitRefs,
+	"team":            scanTeamRefs,
+	"project":         scanProjectRefs,
+	"service-account": scanServiceAccountRefs,
+	"role":            scanRoleRefs,
+}
+
 // registerReferences installs the per-kind references endpoints.
 func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
-	register := func(plural, singular string, scan func(ctx context.Context, id string) ([]referenceItem, error)) {
+	for _, plural := range []string{
+		"providers", "hosts", "models", "policies", "host-keys",
+		"rate-limits", "teams", "projects", "service-accounts", "roles",
+	} {
+		singular := authz.Singular(plural)
+		scan := referenceScans[singular]
 		huma.Register(api, huma.Operation{
 			OperationID: "list_" + singular + "_references",
 			Method:      http.MethodGet,
@@ -58,7 +81,7 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			Middlewares: protect,
 			Errors:      []int{401, 500},
 		}, func(ctx context.Context, in *referencesInput) (*referencesOutput, error) {
-			items, err := scan(ctx, in.ID)
+			items, err := scan(ctx, d, in.ID)
 			if err != nil {
 				return nil, huma.Error500InternalServerError(err.Error())
 			}
@@ -79,37 +102,6 @@ func registerReferences(api huma.API, d Deps, protect huma.Middlewares) {
 			return out, nil
 		})
 	}
-
-	register("providers", "provider", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanProviderRefs(ctx, d, id)
-	})
-	register("hosts", "host", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanHostRefs(ctx, d, id)
-	})
-	register("models", "model", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanModelRefs(ctx, d, id)
-	})
-	register("policies", "policy", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanPolicyRefs(ctx, d, id)
-	})
-	register("host-keys", "host-key", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanHostKeyRefs(ctx, d, id)
-	})
-	register("rate-limits", "rate-limit", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanRateLimitRefs(ctx, d, id)
-	})
-	register("teams", "team", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanTeamRefs(ctx, d, id)
-	})
-	register("projects", "project", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanProjectRefs(ctx, d, id)
-	})
-	register("service-accounts", "service-account", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanServiceAccountRefs(ctx, d, id)
-	})
-	register("roles", "role", func(ctx context.Context, id string) ([]referenceItem, error) {
-		return scanRoleRefs(ctx, d, id)
-	})
 }
 
 func sortReferences(items []referenceItem) {
@@ -204,7 +196,16 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 	}
 	for _, k := range rks {
 		if k.Spec.PolicyID == id {
-			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner})
+			out = append(out, referenceItem{Kind: "key", ID: k.Meta.ID, Name: k.Meta.Name, Via: "spec.policyId", owner: k.Meta.Owner, detachable: true})
+		}
+	}
+	sas, err := d.Stores.ServiceAccount.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list service-accounts: %w", err)
+	}
+	for _, sa := range sas {
+		if sa.Spec.PolicyID == id {
+			out = append(out, referenceItem{Kind: "service-account", ID: sa.Meta.ID, Name: sa.Meta.Name, Via: "spec.policyId", owner: sa.Meta.Owner, detachable: true})
 		}
 	}
 	keys, err := d.Stores.HostKey.List(ctx)
@@ -233,13 +234,13 @@ func scanPolicyRefs(ctx context.Context, d Deps, id string) ([]referenceItem, er
 		matched := false
 		for _, pid := range h.Spec.Policies {
 			if pid == id {
-				out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.policies", owner: h.Meta.Owner})
+				out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.policies", owner: h.Meta.Owner, detachable: true})
 				matched = true
 				break
 			}
 		}
 		if !matched && h.Spec.DefaultPolicy == id {
-			out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.defaultPolicy", owner: h.Meta.Owner})
+			out = append(out, referenceItem{Kind: "host", ID: h.Meta.ID, Name: h.Meta.Name, Via: "spec.defaultPolicy", owner: h.Meta.Owner, detachable: true})
 		}
 	}
 	return out, nil
