@@ -568,7 +568,7 @@ func TestStreamCanonical_StampsReasoningSpan(t *testing.T) {
 		"event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"completed\"}\n\n"
 
 	identity := func(b []byte) ([]byte, error) { return b, nil }
-	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false /*echo*/, true /*trackReasoning*/, identity, identity)
+	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false /*echo*/, true /*trackReasoning*/, streamShapes{}, identity, identity)
 
 	rz := lc.Timing.Reasoning
 	if rz.Start <= 0 {
@@ -597,7 +597,7 @@ func TestStreamCanonical_NoReasoning_NoSpan(t *testing.T) {
 		"event: generation.completed\ndata: {\"id\":\"g1\",\"status\":\"completed\"}\n\n"
 
 	identity := func(b []byte) ([]byte, error) { return b, nil }
-	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false, true, identity, identity)
+	streamCanonical(d, w, r, io.NopCloser(strings.NewReader(stream)), false, true, streamShapes{}, identity, identity)
 
 	if rz := lc.Timing.Reasoning; rz.Start != 0 || rz.End != 0 {
 		t.Fatalf("expected zero reasoning span, got %+v", rz)
