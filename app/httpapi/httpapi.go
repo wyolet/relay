@@ -4,8 +4,8 @@
 //   - app/httpapi/control    — admin plane: /auth/*, CRUD, /version, etc.
 //
 // Each subpackage exposes a typed Deps and a Mount(chi.Router, Deps) huma.API
-// entrypoint. The top-level package owns shared concerns: the OpenAI-shape
-// error envelope used by both planes, the huma↔chi middleware adapter, and
+// entrypoint. The top-level package owns shared concerns: the relay error
+// envelope used by both planes, the huma↔chi middleware adapter, and
 // the build/version string.
 package httpapi
 
@@ -32,8 +32,8 @@ var Version = "dev"
 // namer) so both planes' Mount() can call Install without doubling up.
 var installOnce sync.Once
 
-// Install installs the process-global huma overrides: OpenAI-compatible
-// error envelope, and a schema namer that prefixes type names with their
+// Install installs the process-global huma overrides: relay's error
+// envelope, and a schema namer that prefixes type names with their
 // package's last segment (e.g. provider_Spec vs host_Spec) so the catalog
 // kinds' uniform Spec sub-structs don't collide in the OpenAPI schema
 // registry.
@@ -75,17 +75,21 @@ func installErrorRewriter() {
 			errType = "server_error"
 			code = "internal_error"
 		}
-		return &OpenAIError{
+		return &APIError{
 			// huma reports which field failed validation in errs; without
 			// carrying them a 422 says only "unprocessable entity".
-			Err:        OpenAIErrorInner{Type: errType, Code: code, Message: msg, Details: errorDetails(errs)},
+			Err:        APIErrorBody{Type: errType, Code: code, Message: msg, Details: errorDetails(errs)},
 			HTTPStatus: status,
 		}
 	}
 }
 
-// OpenAIErrorInner is the inner object of the OpenAI error envelope.
-type OpenAIErrorInner struct {
+// APIErrorBody is the inner object of relay's error envelope:
+//
+//	{ "error": { "type": "...", "code": "...", "message": "..." } }
+//
+// LLM client libraries already parse this shape.
+type APIErrorBody struct {
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
@@ -111,17 +115,19 @@ func errorDetails(errs []error) []*huma.ErrorDetail {
 	return out
 }
 
-// OpenAIError implements huma.StatusError with the OpenAI-compatible shape:
+// APIError implements huma.StatusError with relay's error envelope:
 //
 //	{ "error": { "type": "...", "code": "...", "message": "..." } }
-type OpenAIError struct {
-	Err        OpenAIErrorInner `json:"error"`
-	HTTPStatus int              `json:"-"`
+//
+// The shape is compatible with what LLM client libraries already parse.
+type APIError struct {
+	Err        APIErrorBody `json:"error"`
+	HTTPStatus int          `json:"-"`
 }
 
-func (e *OpenAIError) GetStatus() int              { return e.HTTPStatus }
-func (e *OpenAIError) Error() string               { return e.Err.Message }
-func (e *OpenAIError) ContentType(_ string) string { return "application/json" }
+func (e *APIError) GetStatus() int              { return e.HTTPStatus }
+func (e *APIError) Error() string               { return e.Err.Message }
+func (e *APIError) ContentType(_ string) string { return "application/json" }
 
 // installSchemaNamer is a no-op kept for symmetry; per-plane registries
 // are wired via NewRegistry() below because huma.DefaultSchemaNamer is a

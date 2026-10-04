@@ -221,8 +221,8 @@ func Mount(r chi.Router, d Deps) huma.API {
 func writeNotFoundJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
-	_ = json.NewEncoder(w).Encode(httpapi.OpenAIError{
-		Err: httpapi.OpenAIErrorInner{
+	_ = json.NewEncoder(w).Encode(httpapi.APIError{
+		Err: httpapi.APIErrorBody{
 			Type:    "invalid_request_error",
 			Code:    "not_found",
 			Message: "no such endpoint: " + r.Method + " " + r.URL.Path,
