@@ -4,7 +4,7 @@
 # Regenerate with 'make bench-baseline' after an intentional change.
 app/catalog/BenchmarkGroupUpsert10kKeys 14050 1
 app/catalog/BenchmarkHostKeysForHost 0
-app/catalog/BenchmarkProjectUpsert10kKeys 10298
+app/catalog/BenchmarkProjectUpsert10kKeys 10298 1
 app/catalog/BenchmarkSnapshotClone10kKeys 10274
 app/httpapi/inference/BenchmarkBindingMatch 0
 app/httpapi/inference/BenchmarkKeyPrincipal 28
