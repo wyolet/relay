@@ -35,9 +35,8 @@ import (
 	applicense "github.com/wyolet/relay/app/license"
 )
 
-// publicKey is the release signing key, base64-encoded (std, padded). Release
-// builds set it; when it is unset no license verifies and the build runs in
-// community mode.
+// publicKey is the license-signing key, base64 (std, padded). Unset by default, so no license
+// verifies and the build runs in community mode; a release that ships licensed features sets it.
 var publicKey = ""
 
 // GraceWindow is how long an expired license keeps working. A renewal gap

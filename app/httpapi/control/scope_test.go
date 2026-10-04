@@ -163,15 +163,15 @@ func seedThings() []*scopedThing {
 		{Meta: meta.Metadata{ID: catalogID, Name: "catalog-row", Owner: meta.Owner{Kind: meta.OwnerHost, ID: "h-1"}}},
 		{Meta: meta.Metadata{ID: aliceID, Name: "alice-row", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}},
 		{Meta: meta.Metadata{ID: bobID, Name: "bob-row", Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-bob"}}},
-		{Meta: meta.Metadata{ID: operatorID, Name: "operator-row", Owner: meta.Owner{Kind: meta.OwnerUser}}},
+		{Meta: meta.Metadata{ID: systemID, Name: "system-row", Owner: meta.Owner{Kind: meta.OwnerSystem}}},
 	}
 }
 
 const (
-	catalogID  = "01950000-0000-7000-8000-0000000000c1"
-	aliceID    = "01950000-0000-7000-8000-0000000000a1"
-	bobID      = "01950000-0000-7000-8000-0000000000b1"
-	operatorID = "01950000-0000-7000-8000-0000000000e1"
+	catalogID = "01950000-0000-7000-8000-0000000000c1"
+	aliceID   = "01950000-0000-7000-8000-0000000000a1"
+	bobID     = "01950000-0000-7000-8000-0000000000b1"
+	systemID  = "01950000-0000-7000-8000-0000000000e1"
 )
 
 func TestRBACList(t *testing.T) {
@@ -181,12 +181,10 @@ func TestRBACList(t *testing.T) {
 		who       string
 		wantNames []string
 	}{
-		// operator-row's owner names no user, so it reads like the catalog
-		// row it is rather than hiding from everyone.
-		{"alice", []string{"catalog-row", "alice-row", "operator-row"}},
-		{"bob", []string{"catalog-row", "bob-row", "operator-row"}},
-		{"root", []string{"catalog-row", "alice-row", "bob-row", "operator-row"}},
-		{"token", []string{"catalog-row", "alice-row", "bob-row", "operator-row"}},
+		{"alice", []string{"catalog-row", "alice-row", "system-row"}},
+		{"bob", []string{"catalog-row", "bob-row", "system-row"}},
+		{"root", []string{"catalog-row", "alice-row", "bob-row", "system-row"}},
+		{"token", []string{"catalog-row", "alice-row", "bob-row", "system-row"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.who, func(t *testing.T) {
@@ -232,9 +230,9 @@ func TestRBACGet(t *testing.T) {
 		{"catalog row", "alice", catalogID, 200},
 		{"foreign row hidden as 404", "alice", bobID, 404},
 		{"foreign row by slug hidden as 404", "alice", "bob-row", 404},
-		{"operator row reads like a catalog row", "alice", operatorID, 200},
+		{"system row reads like a catalog row", "alice", systemID, 200},
 		{"admin sees foreign row", "root", bobID, 200},
-		{"admin token sees operator row", "token", operatorID, 200},
+		{"admin token sees system row", "token", systemID, 200},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,6 +272,19 @@ func TestRBACCreate(t *testing.T) {
 	if len(store.items) != 2 {
 		t.Fatalf("store has %d rows, want 2", len(store.items))
 	}
+
+	// The admin token names no user: what it creates is shared, not personal.
+	w = scopeReq(t, h, "token", http.MethodPost, "/rate-limits", `{"metadata":{"name":"ci-row"}}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create by admin token = %d, want 201: %s", w.Code, w.Body)
+	}
+	created = scopedThing{}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Meta.Owner != (meta.Owner{Kind: meta.OwnerSystem}) {
+		t.Fatalf("admin-token create owner = %+v, want system", created.Meta.Owner)
+	}
 }
 
 func TestRBACUpdateDelete(t *testing.T) {
@@ -286,18 +297,22 @@ func TestRBACUpdateDelete(t *testing.T) {
 	}{
 		{"update own", "alice", http.MethodPut, aliceID, 200},
 		{"update foreign is 404", "alice", http.MethodPut, bobID, 404},
-		{"update operator row is 403", "alice", http.MethodPut, operatorID, 403},
+		{"update system row is 403", "alice", http.MethodPut, systemID, 403},
 		{"update catalog row is 403", "alice", http.MethodPut, catalogID, 403},
 		{"admin updates foreign", "root", http.MethodPut, bobID, 200},
-		{"admin token updates operator row", "token", http.MethodPut, operatorID, 200},
+		{"admin updates system row", "root", http.MethodPut, systemID, 200},
+		{"admin token updates system row", "token", http.MethodPut, systemID, 200},
 		{"delete own", "alice", http.MethodDelete, aliceID, 204},
 		{"delete foreign is 404", "alice", http.MethodDelete, bobID, 404},
 		{"delete catalog row is 403", "alice", http.MethodDelete, catalogID, 403},
+		{"delete system row is 403", "alice", http.MethodDelete, systemID, 403},
 		{"admin deletes foreign", "root", http.MethodDelete, bobID, 204},
+		{"admin cannot delete system row", "root", http.MethodDelete, systemID, 403},
+		{"admin token cannot delete system row", "token", http.MethodDelete, systemID, 403},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, _ := newScopeHarness(t, testRBAC(), seedThings()...)
+			h, store := newScopeHarness(t, testRBAC(), seedThings()...)
 			body := ""
 			if tt.method == http.MethodPut {
 				body = `{"metadata":{"name":"renamed"}}`
@@ -305,6 +320,10 @@ func TestRBACUpdateDelete(t *testing.T) {
 			w := scopeReq(t, h, tt.who, tt.method, "/rate-limits/by-id/"+tt.id, body)
 			if w.Code != tt.want {
 				t.Fatalf("%s %s = %d, want %d: %s", tt.method, tt.id, w.Code, tt.want, w.Body)
+			}
+			// An API edit is what a catalog reseed must not overwrite.
+			if tt.method == http.MethodPut && w.Code == http.StatusOK && !store.items[tt.id].Meta.Dirty {
+				t.Fatalf("%s %s left the row clean", tt.method, tt.id)
 			}
 		})
 	}

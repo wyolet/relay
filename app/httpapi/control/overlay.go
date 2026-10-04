@@ -131,7 +131,7 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		// Overlays change the model's effective state — gate on the same
 		// governance rule as a direct edit.
-		if err := settings.Governs(d.Catalog, settings.OpEdit, "model", string(tmpl.Meta.Owner.Kind)); err != nil {
+		if err := settings.Governs(d.Catalog, settings.OpEdit, "model", string(tmpl.Meta.Owner.Kind), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		o := &overlay.Overlay{Kind: overlay.KindModel, ResourceID: in.ID, Patch: in.Body.Patch}
@@ -166,7 +166,7 @@ func registerOverlayRoutes(api huma.API, d Deps, protect huma.Middlewares) {
 		if err != nil {
 			return nil, err
 		}
-		if err := settings.Governs(d.Catalog, settings.OpEdit, "model", string(tmpl.Meta.Owner.Kind)); err != nil {
+		if err := settings.Governs(d.Catalog, settings.OpEdit, "model", string(tmpl.Meta.Owner.Kind), authz.IsAdmin(ctx)); err != nil {
 			return nil, huma.Error403Forbidden(err.Error())
 		}
 		if err := d.Stores.Overlay.Delete(ctx, overlay.KindModel, in.ID); err != nil {

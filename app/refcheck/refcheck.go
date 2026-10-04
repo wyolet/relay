@@ -101,22 +101,21 @@ func RequireAdmin(ctx context.Context, a authz.Authorizer, what string) error {
 	return forbidden(fmt.Errorf("%w: %s requires an admin", authz.ErrForbidden, what))
 }
 
-// StampOwnerID fills Owner.ID from the acting user on a user-owned row.
-// Admin-token callers carry no UserID, so their rows keep an empty owner id
-// and behave as operator rows. A supplied owner.id must be the caller's own;
-// only the break-glass token may name someone else.
+// StampOwnerID fills Owner.ID from the acting user on a user-owned row. A
+// caller that is no user (the admin token, a loader with no actor) creates
+// shared infrastructure, so an id-less user owner becomes system. A supplied
+// owner.id must be the caller's own; only the admin token may name someone else.
 func StampOwnerID(ctx context.Context, o *meta.Owner) error {
 	if o.Kind != meta.OwnerUser {
 		return nil
 	}
 	a := actor.From(ctx)
-	if a == nil {
-		return nil
-	}
 	switch {
+	case o.ID == "" && (a == nil || a.AdminToken):
+		*o = meta.Owner{Kind: meta.OwnerSystem}
 	case o.ID == "":
 		o.ID = a.UserID
-	case o.ID == a.UserID || a.AdminToken:
+	case a == nil || o.ID == a.UserID || a.AdminToken:
 	default:
 		return errors.New("owner.id must be empty or match the calling user")
 	}
@@ -134,11 +133,6 @@ func SharedOwner(kind, name string, owner, refOwner meta.Owner) error {
 	switch owner.Kind {
 	case meta.OwnerSystem:
 		return nil
-	case meta.OwnerUser:
-		// A user owner with no id is an operator row every scope may use.
-		if owner.ID == "" {
-			return nil
-		}
 	case meta.OwnerProject:
 		if owner.ID == refOwner.ID {
 			return nil
@@ -194,10 +188,8 @@ func (c Checker) RateLimitRef(ctx context.Context, rateLimitID string, refOwner 
 	if !Visible(ctx, c.Authz, "rate-limit", rl.Meta.ID, rl.Meta.Owner) {
 		return notVisible("rate-limit", rateLimitID)
 	}
-	if refOwner.ID != "" {
-		if err := c.personalToProject(ctx, rl.Meta.Owner, refOwner); err != nil {
-			return err
-		}
+	if err := c.personalToProject(ctx, rl.Meta.Owner, refOwner); err != nil {
+		return err
 	}
 	return SharedOwner("rate-limit", rl.Meta.Name, rl.Meta.Owner, refOwner)
 }
@@ -480,7 +472,7 @@ func (c Checker) HostBinding(ctx context.Context, b *binding.Binding) error {
 		return nil
 	}
 	h := c.Rows.Host(ctx, b.Spec.HostID)
-	if h == nil || h.Meta.Owner.Kind != meta.OwnerUser || h.Meta.Owner.ID == "" {
+	if h == nil || h.Meta.Owner.Kind != meta.OwnerUser {
 		return nil
 	}
 	if b.Meta.Owner != h.Meta.Owner {

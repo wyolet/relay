@@ -69,11 +69,7 @@ func prunable(kind, name string, o meta.Owner) bool {
 		return true
 	}
 	switch o.Kind {
-	case meta.OwnerUser:
-		// An empty id names no user: rows shipped by a catalog before owners
-		// carried ids are the operator's, and no manifest declares them.
-		return o.ID != ""
-	case meta.OwnerTeam, meta.OwnerProject:
+	case meta.OwnerUser, meta.OwnerTeam, meta.OwnerProject:
 		return true
 	default:
 		return false

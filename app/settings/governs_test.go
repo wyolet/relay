@@ -4,7 +4,8 @@ import "testing"
 
 // A Team, Group or Role is system-owned because nobody owns it personally,
 // not because the relay ships it: those follow the tenant tier and stay
-// mutable through CRUD, while the rows the router depends on do not. A
+// mutable through CRUD, while the rows the router depends on are edited only
+// by an admin and never deleted. A
 // project-owned row is the tenant's whatever its governance section says.
 func TestGovernsOwnerTiers(t *testing.T) {
 	locked := fakeReader{SectionGovernancePolicy: &Governance{AllowEdit: false, AllowDelete: false}}
@@ -14,9 +15,20 @@ func TestGovernsOwnerTiers(t *testing.T) {
 		op        Op
 		kind      string
 		ownerKind string
+		admin     bool
 		reader    fakeReader
 		wantErr   bool
 	}{
+		// An admin may edit a system row through CRUD; nobody deletes one.
+		{name: "admin edits system policy", op: OpEdit, kind: "policy", ownerKind: "system", admin: true},
+		{name: "admin edits system host", op: OpEdit, kind: "host", ownerKind: "system", admin: true},
+		{name: "admin cannot delete system policy", op: OpDelete, kind: "policy", ownerKind: "system",
+			admin: true, wantErr: true},
+		{name: "non-admin cannot edit system host", op: OpEdit, kind: "host", ownerKind: "system", wantErr: true},
+		// The governance section still binds an admin on catalog-managed rows.
+		{name: "admin still bound by a locked section", op: OpEdit, kind: "policy", ownerKind: "host",
+			admin: true, reader: locked, wantErr: true},
+
 		{name: "system-owned team edits", op: OpEdit, kind: "team", ownerKind: "system"},
 		{name: "system-owned team deletes", op: OpDelete, kind: "team", ownerKind: "system"},
 		{name: "system-owned group deletes", op: OpDelete, kind: "group", ownerKind: "system"},
@@ -41,9 +53,9 @@ func TestGovernsOwnerTiers(t *testing.T) {
 			if r == nil {
 				r = fakeReader{}
 			}
-			err := Governs(r, tc.op, tc.kind, tc.ownerKind)
+			err := Governs(r, tc.op, tc.kind, tc.ownerKind, tc.admin)
 			if (err != nil) != tc.wantErr {
-				t.Fatalf("Governs(%s, %s, %s) = %v, wantErr %v", tc.op, tc.kind, tc.ownerKind, err, tc.wantErr)
+				t.Fatalf("Governs(%s, %s, %s, admin=%v) = %v, wantErr %v", tc.op, tc.kind, tc.ownerKind, tc.admin, err, tc.wantErr)
 			}
 		})
 	}

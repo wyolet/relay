@@ -10,9 +10,9 @@ import (
 )
 
 // planOverlays diffs the model overlays. Overlays carry no metadata of their
-// own — they are keyed by (kind, target row) and owned by the user who wrote
-// them — so they have no dirty flag, are never pruned, and authorize under
-// the model verbs the overlay endpoints already use.
+// own — they are keyed by (kind, target row) and patch a shared catalog row,
+// so their entries carry a system owner — they have no dirty flag, are never
+// pruned, and authorize under the model verbs the overlay endpoints already use.
 func (b *builder) planOverlays(docs []*manifest.OverlayDTO) error {
 	if len(docs) == 0 {
 		return nil
@@ -32,7 +32,7 @@ func (b *builder) planOverlays(docs []*manifest.OverlayDTO) error {
 		}
 		e := Entry{
 			Kind: "Overlay", Name: d.Metadata.Name, ID: o.ResourceID,
-			plural: route.Plural, owner: meta.Owner{Kind: meta.OwnerUser},
+			plural: route.Plural, owner: meta.Owner{Kind: meta.OwnerSystem},
 		}
 		prev, found := existing[o.Key()]
 		switch {
