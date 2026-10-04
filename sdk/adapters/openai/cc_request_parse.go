@@ -102,10 +102,11 @@ func (CCTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		}
 		tc.Parallel = wire.ParallelToolCalls
 		if len(wire.ToolChoice) > 0 && string(wire.ToolChoice) != "null" {
-			choice := &v1.ToolChoice{}
-			if err := json.Unmarshal(wire.ToolChoice, choice); err == nil {
-				tc.Choice = choice
+			choice, err := ccToolChoiceToCanonical(wire.ToolChoice)
+			if err != nil {
+				return nil, fmt.Errorf("cc parse_request: %w", err)
 			}
+			tc.Choice = choice
 		}
 		req.Tools = tc
 	}

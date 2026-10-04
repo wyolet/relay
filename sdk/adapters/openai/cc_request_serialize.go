@@ -96,9 +96,11 @@ func (CCTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		out.ParallelToolCalls = tc.Parallel
 		if tc.Choice != nil {
-			if b, err := json.Marshal(tc.Choice); err == nil {
-				out.ToolChoice = b
+			b, err := ccToolChoiceFromCanonical(tc.Choice)
+			if err != nil {
+				return nil, fmt.Errorf("cc serialize_request: %w", err)
 			}
+			out.ToolChoice = b
 		}
 	}
 
@@ -189,6 +191,40 @@ func canonicalItemsToCC(instructions string, items []v1.Item) ([]ChatMessage, er
 	}
 
 	return msgs, nil
+}
+
+// ccToolChoice is the CC forced-function form; it nests the name under
+// "function", unlike the flat canonical/Responses {type, name} object.
+type ccToolChoice struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+func ccToolChoiceFromCanonical(c *v1.ToolChoice) (json.RawMessage, error) {
+	if c.Mode != "function" {
+		return json.Marshal(c)
+	}
+	w := ccToolChoice{Type: "function"}
+	w.Function.Name = c.FunctionName
+	return json.Marshal(w)
+}
+
+// ccToolChoiceToCanonical reads the CC form; the flat form is accepted too
+// since lenient clients send it.
+func ccToolChoiceToCanonical(raw json.RawMessage) (*v1.ToolChoice, error) {
+	choice := &v1.ToolChoice{}
+	if err := json.Unmarshal(raw, choice); err != nil {
+		return nil, err
+	}
+	if choice.Mode == "function" && choice.FunctionName == "" {
+		var w ccToolChoice
+		if err := json.Unmarshal(raw, &w); err == nil {
+			choice.FunctionName = w.Function.Name
+		}
+	}
+	return choice, nil
 }
 
 // ccFormatToResponseFormat converts a canonical v1.Format to a CC ResponseFormat.
