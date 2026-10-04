@@ -121,9 +121,11 @@ A pull request runs only the jobs its paths need (the `changes` job in `.github/
 A `vX.Y.Z` tag on `main` is a release: the release workflow publishes the
 images (`wyolet/relay:<version>`, `:latest` lean, `:standalone` all-in-one) to
 Docker Hub and GHCR, and the Helm chart to `oci://ghcr.io/wyolet/charts/relay`
-with chart version = image version. Maintainers cut releases with
+with chart version = image version. Images are pushed only after the tests and
+the image build both pass. Maintainers cut releases with
 `make release` (or `release-minor` / `release-major`), which only tags and
-pushes. To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at
+pushes. To exercise the release pipeline without publishing, run it manually:
+`gh workflow run release.yml --ref <branch>` (`dry_run` defaults to true). To build an image yourself, use the `Dockerfile` / `docker-bake.hcl` at
 the repo root (`docker buildx bake`), or `docker compose up --build`.
 
 ## Reporting bugs / requesting features
