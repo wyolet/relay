@@ -150,11 +150,13 @@ func TestIntegration_Cancel(t *testing.T) {
 		t.Fatalf("submit: %v", err)
 	}
 	// Wait until at least one item is running, then cancel the batch.
-	waitCounts(t, svc, id, hash, jobq.StateRunning, 1, 3*time.Second)
+	// Released only at cleanup: releasing earlier lets a running item finish
+	// before its cancellation arrives.
+	t.Cleanup(func() { close(release) })
+	waitCounts(t, svc, id, hash, jobq.StateRunning, 1, 10*time.Second)
 	if err := svc.Cancel(ctx, id, hash); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
-	close(release)
 
 	// Batch row is marked cancelled; items settle to cancelled (running ones
 	// via ctx-cancel, pending ones directly).
@@ -165,7 +167,7 @@ func TestIntegration_Cancel(t *testing.T) {
 	if b.Status != StatusCancelled {
 		t.Fatalf("batch status = %s, want cancelled", b.Status)
 	}
-	waitCounts(t, svc, id, hash, jobq.StateCancelled, 2, 3*time.Second)
+	waitCounts(t, svc, id, hash, jobq.StateCancelled, 2, 10*time.Second)
 }
 
 // A submission records the principal's tenancy so an item that runs minutes

@@ -5,51 +5,20 @@ package kv_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	tc "github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/wyolet/relay/pkg/kv"
+	"github.com/wyolet/relay/pkg/kv/kvtest"
 )
 
-// startRedis launches a redis:7-alpine container and returns (addr, cleanup).
-func startRedis(t *testing.T) string {
+func newRedisStore(t *testing.T, cfg kv.RedisConfig) *kv.Redis {
 	t.Helper()
 	ctx := context.Background()
-	req := tc.ContainerRequest{
-		Image:        "redis:7-alpine",
-		ExposedPorts: []string{"6379/tcp"},
-		WaitingFor:   wait.ForLog("Ready to accept connections"),
-	}
-	ctr, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Fatalf("start redis container: %v", err)
-	}
-	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
-
-	host, err := ctr.Host(ctx)
-	if err != nil {
-		t.Fatalf("redis host: %v", err)
-	}
-	port, err := ctr.MappedPort(ctx, "6379")
-	if err != nil {
-		t.Fatalf("redis port: %v", err)
-	}
-	return fmt.Sprintf("%s:%s", host, port.Port())
-}
-
-func newRedisStore(t *testing.T, addr string) *kv.Redis {
-	t.Helper()
-	ctx := context.Background()
-	s, err := kv.NewRedis(ctx, kv.RedisConfig{Addr: addr})
+	s, err := kv.NewRedis(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewRedis: %v", err)
 	}
@@ -221,18 +190,17 @@ func TestContractMem(t *testing.T) {
 }
 
 func TestContractRedis(t *testing.T) {
-	addr := startRedis(t)
+	cfg := kvtest.Config(t)
 	// Each sub-test needs its own store to avoid key collisions.
 	runContractSuite(t, "RedisStore", func(t *testing.T) kv.Store {
-		return newRedisStore(t, addr)
+		return newRedisStore(t, cfg)
 	})
 }
 
 // ---- RunScript tests ----
 
 func TestRunScriptCacheHit(t *testing.T) {
-	addr := startRedis(t)
-	s := newRedisStore(t, addr)
+	s := newRedisStore(t, kvtest.Config(t))
 	ctx := context.Background()
 
 	// simple script: returns "ok"
@@ -255,8 +223,8 @@ func TestRunScriptCacheHit(t *testing.T) {
 }
 
 func TestRunScriptNOSCRIPTFallback(t *testing.T) {
-	addr := startRedis(t)
-	s := newRedisStore(t, addr)
+	cfg := kvtest.Config(t)
+	s := newRedisStore(t, cfg)
 	ctx := context.Background()
 
 	const script = `return "hello"`
@@ -266,7 +234,7 @@ func TestRunScriptNOSCRIPTFallback(t *testing.T) {
 	}
 
 	// flush all scripts from Redis so EVALSHA will get NOSCRIPT
-	rawClient := redis.NewClient(&redis.Options{Addr: addr})
+	rawClient := redis.NewClient(&redis.Options{Addr: cfg.Addr, DB: cfg.DB})
 	t.Cleanup(func() { _ = rawClient.Close() })
 	if err := rawClient.ScriptFlush(ctx).Err(); err != nil {
 		t.Fatalf("SCRIPT FLUSH: %v", err)
@@ -285,7 +253,7 @@ func TestRunScriptNOSCRIPTFallback(t *testing.T) {
 // TestWithLockContention spawns goroutines that fight over [A,B] and [B,A].
 // Sorted keys prevent deadlock; only one may hold the lock at a time.
 func TestWithLockContention(t *testing.T) {
-	addr := startRedis(t)
+	cfg := kvtest.Config(t)
 	ctx := context.Background()
 
 	var (
@@ -303,7 +271,7 @@ func TestWithLockContention(t *testing.T) {
 			if i%2 == 0 {
 				keys = []string{"lockB", "lockA"}
 			}
-			s := newRedisStore(t, addr)
+			s := newRedisStore(t, cfg)
 			_ = s.WithLock(ctx, keys, func(ctx context.Context) error {
 				mu.Lock()
 				if held {
