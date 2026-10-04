@@ -34,6 +34,27 @@ Until a stable release line is established, security fixes are applied to
 the `main` branch. Pin to a tagged release and watch the repository for
 advisories.
 
+## Verifying releases
+
+Each release image carries a signed SLSA build provenance attestation and a CycloneDX SBOM attestation, made by the release workflow and stored on GitHub (and alongside the image on ghcr.io). Docker Hub serves the same digests, so the commands work for `docker.io/wyolet/relay` too. They need the GitHub CLI.
+
+```bash
+# Provenance: built by wyolet/relay's release workflow from the tagged commit.
+gh attestation verify oci://ghcr.io/wyolet/relay:<version> --repo wyolet/relay \
+  --signer-workflow wyolet/relay/.github/workflows/release.yml \
+  --source-ref refs/tags/v<version>
+
+# SBOM attestation, and the SBOM itself.
+gh attestation verify oci://ghcr.io/wyolet/relay:<version> --repo wyolet/relay \
+  --predicate-type https://cyclonedx.org/bom \
+  --format json --jq '.[0].verificationResult.statement.predicate'
+
+# An SBOM file downloaded from the GitHub release.
+gh attestation verify relay-<version>-lean.cdx.json --repo wyolet/relay
+```
+
+The standalone image is `ghcr.io/wyolet/relay:<version>-standalone`. Releases are built on self-hosted runners: an attestation proves which workflow and commit produced an image, not that the build ran isolated from other workloads on that infrastructure.
+
 ## Disclosure
 
 We follow coordinated disclosure: we'll work with you on a fix and a

@@ -4,7 +4,7 @@
         check chart-lint sqlc-generate test test-race test-fuzz test-cover test-race-cover cover-check \
         bench-gate bench-baseline test-integration test-integration-run smoke-mock breakers-reset \
         control-rebuild control-logs control-login control-whoami control-openapi \
-        ui-fetch build clean schemas catalog-validate catalog-embed lint-rules lint
+        ui-fetch build clean schemas catalog-validate catalog-embed lint-rules lint vulncheck
 
 # Load .env if present.
 -include .env
@@ -418,6 +418,14 @@ lint: ## golangci-lint every module (config: .golangci.yml)
 	$(GOLANGCI_LINT) run ./...
 	cd sdk && $(GOLANGCI_LINT) run ./...
 	cd jobq && $(GOLANGCI_LINT) run ./...
+
+GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+# Scans every module before failing, so one report lists them all.
+vulncheck: ## govulncheck every module; fails on vulnerabilities the code calls
+	@status=0; for m in . sdk jobq; do \
+		echo "== $$m"; (cd $$m && $(GOVULNCHECK) ./...) || status=1; \
+	done; exit $$status
 
 # golangci-lint runs govet with the integration tag, so there is no separate vet.
 check: ## the CI gate: gofmt, codebase rules, golangci-lint, tests, chart lint
