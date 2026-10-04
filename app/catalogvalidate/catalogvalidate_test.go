@@ -178,6 +178,33 @@ func TestValidateGraph_PolicyMissingRateLimit(t *testing.T) {
 	}
 }
 
+func TestValidateGraph_PolicyBareModelName(t *testing.T) {
+	cases := []struct{ entry, want string }{
+		{"gpt-x", `"openai/gpt-x"`},
+		{"gpt-x@openai-host", `"openai/gpt-x@openai-host"`},
+	}
+	for _, tc := range cases {
+		docs := append(fixture(), manifest.Document{Policy: &manifest.PolicyDTO{
+			Metadata: manifest.WireMeta{Name: "bare-pol", Owner: manifest.WireOwner{Kind: "user"}},
+			Spec:     manifest.PolicySpec{Models: []string{"openai", tc.entry}},
+		}})
+		issues := ValidateGraph(docs)
+		var found bool
+		for _, is := range issues {
+			if is.Severity == SeverityError && is.Source.String() == "Policy/bare-pol.spec.models[1]" &&
+				strings.Contains(is.Message, "bare model name") && strings.Contains(is.Message, tc.want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s: expected bare-model-name error suggesting %s, got:\n%s", tc.entry, tc.want, Format(issues))
+		}
+		if len(issues) != 1 {
+			t.Fatalf("%s: expected exactly one issue, got:\n%s", tc.entry, Format(issues))
+		}
+	}
+}
+
 func TestValidateGraph_PricingMissingTargetModel(t *testing.T) {
 	docs := fixture()
 	docs = append(docs, manifest.Document{Pricing: &manifest.PricingDTO{

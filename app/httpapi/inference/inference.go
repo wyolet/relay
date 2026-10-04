@@ -118,9 +118,9 @@ func Mount(r chi.Router, d Deps) huma.API {
 	}
 
 	cfg := huma.DefaultConfig("Wyolet Relay — Inference", httpapi.Version)
-	cfg.Info.Description = "Data plane. /v1/* endpoints accept OpenAI- and " +
-		"Anthropic-shape requests; bytes are forwarded to the upstream " +
-		"provider with usage extracted from the response."
+	cfg.Info.Description = "Data plane. /openai/v1/* and /anthropic/v1/* accept " +
+		"OpenAI- and Anthropic-shape requests, /v1/* the relay canonical shape; " +
+		"bytes are forwarded to the upstream provider with usage extracted from the response."
 	cfg.OpenAPI.Components.Schemas = httpapi.NewRegistry()
 	cfg.DocsPath = ""
 	r.Get("/docs", httpapi.ScalarHandler("Wyolet Relay — Inference", "/openapi.json"))

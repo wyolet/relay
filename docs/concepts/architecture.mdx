@@ -17,8 +17,9 @@ from a snapshot that's kept fresh in the background.
 
 <CardGroup cols={2}>
   <Card title="Inference plane" icon="bolt">
-    Listens on `RELAY_PORT`. Stateless and hot-path-optimized. Serves
-    `/v1/*` and `/healthz`, authenticates with relay keys, and routes each
+    Listens on `RELAY_PORT`. Stateless and hot-path-optimized. Serves the
+    shape-prefixed inference routes (`/openai/v1/*`, `/anthropic/v1/*`), the
+    canonical `/v1/*`, and `/healthz`, authenticates with relay keys, and routes each
     request to a healthy upstream. No vendor branching — dispatch is uniform.
   </Card>
   <Card title="Control plane" icon="sliders">

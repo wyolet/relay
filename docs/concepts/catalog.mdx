@@ -25,12 +25,13 @@ data/
 
 Ownership drives placement: providers own their models; hosts own their
 pricing and tier policies. Each release is published as a versioned tarball,
-and a default snapshot is baked into the relay binary — so a fresh container
-boots with a populated catalog and **no external fetch required**.
+and the Docker images bundle a default release at `/catalog` — so a fresh
+container boots with a populated catalog and **no external fetch required**.
 
 <Info>
-Pin a specific catalog release with `RELAY_CATALOG_VERSION`. Unset, Relay
-uses the version embedded in the binary.
+Pin a specific catalog release with `RELAY_CATALOG_VERSION`. Unset, the image
+seeds from its bundled `/catalog`. A bare binary needs `RELAY_CATALOG_DIR` or
+`RELAY_CATALOG_VERSION` to seed a catalog.
 </Info>
 
 Keeping the catalog in its own repo means provider, model, and pricing

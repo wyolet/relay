@@ -8,7 +8,7 @@ them straight is the key to understanding the whole security model.
 
 | Caller | Reaches | Credential |
 | --- | --- | --- |
-| Your app | Inference plane (`/v1/*`) | **Relay key** — `Authorization: Bearer <relay-key>` |
+| Your app | Inference plane (`/openai/v1/*`, `/anthropic/v1/*`, `/v1/*`) | **Relay key** — `Authorization: Bearer <relay-key>` |
 | A browser / the dashboard | Control plane | **Session cookie** (`relay_session`) |
 | An operator or CI | Control plane | **Admin bearer** — `Authorization: Bearer $RELAY_ADMIN_TOKEN` |
 | The `relay` CLI | Control plane | The admin bearer for `relay apply` / `relay export`; a password login for `relay token mint`, which needs a user session |
