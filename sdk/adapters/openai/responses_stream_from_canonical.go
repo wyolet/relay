@@ -28,15 +28,14 @@ func (ResponsesTranslator) NewFromCanonicalStreamFor(req *v1.Request) func(chunk
 // This is the "from canonical" direction: used when serving Responses inbound callers
 // whose upstream was translated through canonical.
 type canonicalToResponsesStream struct {
-	responseID    string
-	model         string
-	created       int64
-	outputItems   map[string]responsesStreamItem // itemID → state
-	outputIndex   map[string]int                 // itemID → outputIndex
-	closedItems   []ResponsesItem
-	lifecycleDone bool
-	seq           int // next sequence_number; per-stream state, never on the Translator (rule 6)
-	custom        *responsesCustomLowering
+	responseID  string
+	model       string
+	created     int64
+	outputItems map[string]responsesStreamItem // itemID → state
+	outputIndex map[string]int                 // itemID → outputIndex
+	closedItems []ResponsesItem
+	seq         int // next sequence_number; per-stream state, never on the Translator (rule 6)
+	custom      *responsesCustomLowering
 }
 
 type responsesStreamItem struct {

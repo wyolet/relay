@@ -717,14 +717,6 @@ func (r *postFlightReadCloser) Close() error {
 	return nil
 }
 
-func drainAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, body)
-	_ = body.Close()
-}
-
 // RetryAfterHeader parses a Retry-After header. Exported for adapters.
 func RetryAfterHeader(h http.Header) time.Duration {
 	v := h.Get("Retry-After")
