@@ -2,14 +2,15 @@ package openai
 
 import (
 	"encoding/json"
+	"fmt"
 
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // itemCompletedFrame converts a Responses output_item.done event into the
-// canonical item.completed frame. ok is false when the event carries no item,
-// the item fails to decode, or it has no canonical representation.
-func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFrame, bool) {
+// canonical item.completed frame. ok is false when the event carries no item
+// or the item has no canonical representation; err is set when it fails to decode.
+func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFrame, bool, error) {
 	// Two-phase parse: extract output_index and the raw item bytes.
 	// ResponsesOutputItemDoneEvent.Item is a ResponsesItem interface that
 	// json.Unmarshal cannot populate — unmarshal the item bytes separately
@@ -19,18 +20,22 @@ func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFram
 		Item        json.RawMessage `json:"item"`
 	}
 	if err := json.Unmarshal(data, &evHeader); err != nil {
-		return v1.SSEFrame{}, false
+		return v1.SSEFrame{}, false, fmt.Errorf("responses stream: output_item.done: %w", err)
 	}
 	if len(evHeader.Item) == 0 || string(evHeader.Item) == "null" {
-		return v1.SSEFrame{}, false
+		return v1.SSEFrame{}, false, nil
 	}
 	wireItem, err := responsesUnmarshalItem(evHeader.Item)
 	if err != nil {
-		return v1.SSEFrame{}, false
+		return v1.SSEFrame{}, false, fmt.Errorf("responses stream: output_item.done: %w", err)
 	}
-	ci, _ := responsesItemToCanonical(wireItem)
+	ci, err := responsesItemToCanonical(wireItem)
+	if err != nil {
+		return v1.SSEFrame{}, false, fmt.Errorf("responses stream: output_item.done: %w", err)
+	}
 	if ci == nil {
-		return v1.SSEFrame{}, false
+		// Hosted-tool item; the drop is annotated in responsesItemToCanonical.
+		return v1.SSEFrame{}, false, nil
 	}
 	// gpt-5.5's terminal reasoning item arrives with an empty summary (the
 	// text came over reasoning_summary_text deltas). Backfill it from what we
@@ -52,7 +57,7 @@ func (s *responsesToCanonicalStream) itemCompletedFrame(data []byte) (v1.SSEFram
 		Index:  evHeader.OutputIndex,
 		Item:   ci,
 	})
-	return v1.SSEFrame{Event: v1.EventItemCompleted, Data: completedData}, true
+	return v1.SSEFrame{Event: v1.EventItemCompleted, Data: completedData}, true, nil
 }
 
 // responsesItemID extracts the ID field from a ResponsesItem via type assertion.

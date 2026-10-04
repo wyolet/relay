@@ -45,7 +45,9 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 		return nil, nil
 	}
 
-	// Drop server_tool_use and redacted_thinking.
+	// canonical: server_tool_use and redacted_thinking blocks dropped on the
+	// stream — no canonical item for a hosted tool call, and redacted thinking
+	// has no plaintext; the buffered path (ParseResponse) drops both as well.
 	if blockType == "server_tool_use" || blockType == "redacted_thinking" {
 		return nil, nil
 	}
@@ -84,6 +86,8 @@ func (s *anthropicToCanonicalStream) handleContentBlockStart(data []byte) ([]byt
 	case "thinking":
 		itemType = v1.ItemTypeReasoning
 	default:
+		// canonical: unmodeled content blocks (tool results of hosted tools,
+		// future types) dropped — no canonical item type to start.
 		s.currentBlock = nil
 		return nil, nil
 	}
@@ -144,6 +148,8 @@ func (s *anthropicToCanonicalStream) handleContentBlockDelta(data []byte) ([]byt
 		b.sigBuf.WriteString(cbd.Delta.Signature)
 		return nil, nil
 	default:
+		// canonical: unmodeled delta types (citations_delta, future types)
+		// dropped — canonical deltas are text, arguments, or reasoning only.
 		return nil, nil
 	}
 

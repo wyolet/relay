@@ -467,7 +467,8 @@ func dispatchCanonical(d Deps, w http.ResponseWriter, r *http.Request, in Dispat
 		w.WriteHeader(result.Status)
 		dst, stop := keepAliveWriter(d, w, r, in)
 		defer stop()
-		streamCanonical(d, dst, r, result.Body, echo, trackReasoning, upstreamV1.NewToCanonicalStream(), fromCanonicalStream(inboundV1, canonReq))
+		shapes := streamShapes{upstream: plan.HostBinding.Spec.Adapter, inbound: in.Inbound}
+		streamCanonical(d, dst, r, result.Body, echo, trackReasoning, shapes, upstreamV1.NewToCanonicalStream(), fromCanonicalStream(inboundV1, canonReq))
 		return
 	}
 	bufferCanonical(d, w, r, result.Body, result.Status, echo, canonReq, upstreamV1, inboundV1)
@@ -492,7 +493,9 @@ func fromCanonicalStream(inboundV1 v1.Translator, canonReq *v1.Request) func([]b
 // client reads it off the event it already parses. One-frame lookahead lets
 // us reach "the last frame" before flushing it.
 // w is an io.Writer (not the ResponseWriter) so the keepalive wrapper can sit in between; the status line is already written by the caller.
-func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, echo, trackReasoning bool, toCanon, fromCanon func([]byte) ([]byte, error)) {
+//
+// A frame either translator rejects is skipped and counted (streamDrops); if the stream then ends without a terminal event, a canonical error closes it.
+func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, echo, trackReasoning bool, shapes streamShapes, toCanon, fromCanon func([]byte) ([]byte, error)) {
 	flusher, _ := w.(http.Flusher)
 	scanner := bufio.NewScanner(body)
 	sbufp := scannerBufPool.Get().(*[]byte)
@@ -523,6 +526,20 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 	}
 
 	var held []byte // one-frame lookahead so the terminal frame can carry relay_usage
+	emit := func(out []byte) {
+		out = bytes.TrimRight(out, "\n")
+		if sess != nil {
+			if held != nil {
+				writeFrame(held)
+			}
+			held = out
+			return
+		}
+		writeFrame(out)
+	}
+
+	drops := streamDrops{ctx: r.Context(), shapes: shapes}
+	var lastCanon []byte // last canonical bytes passed on; read only when frames were dropped
 	for scanner.Scan() {
 		// The raw upstream frame is observed via the pipeline tee (into the
 		// session), not here — see above. We only translate + forward it.
@@ -533,7 +550,8 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 		if toCanon != nil {
 			translated, err := toCanon(chunk)
 			if err != nil {
-				return
+				drops.record(directionToCanonical, err)
+				continue
 			}
 			out = translated
 		} else {
@@ -558,24 +576,37 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 			for _, f := range frames {
 				translated, err := fromCanon(f)
 				if err != nil {
-					return
+					drops.record(directionFromCanonical, err)
+					continue
 				}
+				lastCanon = f
 				out = append(out, translated...)
 			}
+		} else if len(out) > 0 {
+			lastCanon = out
 		}
 
 		if len(out) == 0 {
 			continue
 		}
-		out = bytes.TrimRight(out, "\n")
-		if sess != nil {
-			if held != nil {
-				writeFrame(held)
+		emit(out)
+	}
+
+	if drops.count > 0 {
+		drops.logTotal()
+		if !endsWithTerminalEvent(lastCanon) {
+			closing := incompleteStreamFrame()
+			if fromCanon != nil {
+				translated, err := fromCanon(closing)
+				if err != nil {
+					drops.record(directionFromCanonical, err)
+				}
+				closing = translated
 			}
-			held = out
-			continue
+			if len(closing) > 0 {
+				emit(closing)
+			}
 		}
-		writeFrame(out)
 	}
 
 	if sess == nil {

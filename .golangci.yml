@@ -13,6 +13,7 @@ linters:
     - errcheck
     - govet
     - ineffassign
+    - nilerr
     - revive
     - staticcheck
     - unused
@@ -50,6 +51,14 @@ linters:
       # Drops the buffered response early so it is collectable during post-flight.
       - linters: [ineffassign]
         source: '^\s*body = nil$'
+      # An unresolvable secret loads the key valueless and marked, so one bad secret cannot fail the catalog load.
+      - linters: [nilerr]
+        path: app/hostkey/store\.go
+        source: '^\s*return k, nil$'
+      # A body that is not a completion (e.g. an upstream error envelope) carries no usage; that is a zero summary, not a failure.
+      - linters: [nilerr]
+        path: v1/extract_usage\.go
+        source: '^\s*return Summary\{\}, nil$'
       # Gate for license-gated settings sections; no section is gated yet.
       - linters: [unused]
         path: app/settings/license\.go

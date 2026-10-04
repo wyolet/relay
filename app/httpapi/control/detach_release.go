@@ -107,6 +107,16 @@ type rowEdit[T any] struct {
 	drop func(*T) bool
 }
 
+// editAllowed reports whether governance permits an edit of kind under ownerKind.
+func editAllowed(snap settings.Reader, kind string, ownerKind meta.OwnerKind, isAdmin bool) bool {
+	return settings.Governs(snap, settings.OpEdit, kind, string(ownerKind), isAdmin) == nil
+}
+
+// valid reports whether v passes the row's validate check.
+func (e rowEdit[T]) valid(v *T) bool {
+	return e.validate(v) == nil
+}
+
 func (e rowEdit[T]) apply(ctx context.Context, d Deps, it referenceItem) (*releasedRow, error) {
 	existing, err := e.store.Get(ctx, it.ID)
 	if err != nil || existing == nil {
@@ -119,16 +129,16 @@ func (e rowEdit[T]) apply(ctx context.Context, d Deps, it referenceItem) (*relea
 	if err := d.Authz.Authorize(ctx, e.plural+".update", authz.Resource{Kind: it.Kind, ID: it.ID, Owner: &m.Owner}); err != nil {
 		return nil, failOrKeep(mapAuthzErr(err))
 	}
-	if settings.Governs(d.Catalog, settings.OpEdit, it.Kind, string(m.Owner.Kind), authz.IsAdmin(ctx)) != nil {
-		return nil, nil
+	if !editAllowed(d.Catalog, it.Kind, m.Owner.Kind, authz.IsAdmin(ctx)) {
+		return nil, nil // left in place: reported as a remaining blocker
 	}
 	// A second copy to edit, so existing stays the before-image for the audit diff.
 	next, err := e.store.Get(ctx, it.ID)
 	if err != nil || next == nil {
 		return nil, err
 	}
-	if !e.drop(next) || e.validate(next) != nil {
-		return nil, nil
+	if !e.drop(next) || !e.valid(next) {
+		return nil, nil // left in place: reported as a remaining blocker
 	}
 	if e.guard != nil {
 		if err := e.guard(ctx, "update", existing, next); err != nil {

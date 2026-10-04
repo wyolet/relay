@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -77,23 +78,20 @@ func (ResponsesTranslator) SerializeResponse(resp *v1.Response, req *v1.Request)
 // streaming event (response.completed / .incomplete / .failed) using the
 // polymorphic-aware UnmarshalResponsesResponse. The event's response.output is
 // a []ResponsesItem interface slice that plain json.Unmarshal cannot build, so
-// the terminal event MUST go through the custom unmarshaler — otherwise the
-// error is swallowed and usage/finish_reason never reach the caller.
-func parseStreamTerminalResponse(data []byte) *ResponsesResponse {
+// the terminal event MUST go through the custom unmarshaler. A terminal event
+// without a response object is an error too: it carries the usage and finish
+// reason, so there is nothing to emit without it.
+func parseStreamTerminalResponse(data []byte) (*ResponsesResponse, error) {
 	var ev struct {
 		Response json.RawMessage `json:"response"`
 	}
 	if err := json.Unmarshal(data, &ev); err != nil {
-		return nil
+		return nil, err
 	}
 	if len(ev.Response) == 0 || string(ev.Response) == "null" {
-		return nil
+		return nil, errors.New("no response object")
 	}
-	resp, err := UnmarshalResponsesResponse(ev.Response)
-	if err != nil {
-		return nil
-	}
-	return resp
+	return UnmarshalResponsesResponse(ev.Response)
 }
 
 // responsesResponseToCanonical converts a *ResponsesResponse to canonical *v1.Response.
