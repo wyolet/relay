@@ -4,6 +4,7 @@
 // checkHostKeyRefsVisible against a real Postgres: both read through
 // concrete *policy.Store / *hostkey.Store, which have no fake seam. Run
 // with: make test-integration (or RELAY_TEST_PG_DSN + `go test -tags=integration`).
+
 package control
 
 import (

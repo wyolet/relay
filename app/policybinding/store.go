@@ -1,5 +1,6 @@
 // Subjects live in the policy_binding_subjects junction, where a subject with
 // an id also fills the matching FK column so a deleted principal drops out.
+
 package policybinding
 
 import (

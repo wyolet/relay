@@ -11,6 +11,7 @@
 //	relay-stats events --since 1h
 //	relay-stats summary --by model_id --since 24h
 //	relay-stats summary --by relay_key_hash --since 7d --json | jq .
+
 package main
 
 import (

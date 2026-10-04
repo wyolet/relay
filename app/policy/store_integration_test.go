@@ -5,6 +5,7 @@
 // `policy_host_keys` in one transaction, and the read path reassembles it.
 // There is no fake seam for that — the relational split is the behaviour.
 // Run with: make test-integration.
+
 package policy_test
 
 import (

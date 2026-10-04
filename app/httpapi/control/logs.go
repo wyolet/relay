@@ -10,6 +10,7 @@
 // Distinction from /usage: /usage is the narrow metrics projection (billing);
 // /logs is the full record + optional body. Both read the same log event
 // stream via usagelog.Reader; the body joins by request_id via payload.Reader.
+
 package control
 
 import (

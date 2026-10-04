@@ -3,6 +3,7 @@
 // the secret-shaped concerns — re-resolution, single-flight de-duplication,
 // park-and-wait, healing the snapshot, alerting — live here, off the request's
 // import graph. The pipeline imports only the KeyAgent interface, never this.
+
 package secret
 
 import (

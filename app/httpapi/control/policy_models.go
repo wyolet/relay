@@ -16,6 +16,7 @@
 // cross-entity check the per-row policy.Validate() (grammar only, no catalog
 // access) can't perform. Host-key / key existence is deliberately NOT
 // checked here — the inference path handles those at request time.
+
 package control
 
 import (

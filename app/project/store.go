@@ -1,5 +1,6 @@
 // team_id is a real column (FK cascade) so deleting a Team drops its Projects
 // without parsing JSONB.
+
 package project
 
 import (

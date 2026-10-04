@@ -1,5 +1,6 @@
 // The inference token's claim set lives here rather than in a caller so the
 // minting and verifying sides cannot drift apart.
+
 package crypto
 
 import (

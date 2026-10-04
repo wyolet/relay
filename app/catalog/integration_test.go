@@ -13,6 +13,7 @@
 // This is the single test that catches regressions across boot, listener,
 // debouncer, reconciler, and reverse-ref cascade — all the PG-touching
 // paths the unit tests can't exercise.
+
 package catalog
 
 import (

@@ -4,6 +4,7 @@
 // build_<kind>.go owns its sanitizer (cross-ref filtering) and its
 // "register into the Snapshot" step. build.go orchestrates the order;
 // it never reads or writes Snapshot maps directly.
+
 package catalog
 
 import "github.com/wyolet/relay/app/policy"

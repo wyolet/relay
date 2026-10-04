@@ -5,6 +5,7 @@
 // hold — a team admin owning their team, a developer in the other team seeing
 // nothing of it, a viewer who reads but cannot write, and an apply that
 // stops at the team boundary.
+
 package integration_test
 
 import (

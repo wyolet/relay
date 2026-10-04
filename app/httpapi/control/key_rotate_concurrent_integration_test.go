@@ -5,6 +5,7 @@
 // UPDATE that decides the winner lives in Postgres and *key.Store is a
 // concrete type, so there is no fake seam for this at the unit layer.
 // Run with: make test-integration.
+
 package control
 
 import (

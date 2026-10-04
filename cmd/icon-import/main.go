@@ -9,6 +9,7 @@
 // File naming: <slug>.<ext>. Extension is inferred from the upstream
 // Content-Type when possible, falling back to the URL path's suffix,
 // then to .ico.
+
 package main
 
 import (
