@@ -419,7 +419,7 @@ lint: ## golangci-lint every module (config: .golangci.yml)
 	cd sdk && $(GOLANGCI_LINT) run ./...
 	cd jobq && $(GOLANGCI_LINT) run ./...
 
-GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.7.0
+GOVULNCHECK ?= go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
 # Scans every module before failing, so one report lists them all.
 vulncheck: ## govulncheck every module; fails on vulnerabilities the code calls
