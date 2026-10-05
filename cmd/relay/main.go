@@ -182,6 +182,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
+			StreamUsage:   &adapter.StreamUsageOptIn{Request: pkgopenai.RequestStreamUsage, IsUsageFrame: pkgopenai.IsUsageOnlyChunk},
 			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p"},
 		}).Build(),
 		(&adapter.Spec{

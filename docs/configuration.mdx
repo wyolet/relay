@@ -50,6 +50,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RELAY_STREAM_KEEPALIVE_S` | `15` | Seconds of upstream silence after which Relay emits the inbound wire shape's own no-op stream frame, so clients that abort on silence keep waiting. `0` disables it. |
+| `RELAY_STREAM_USAGE` | `on` | On a same-shape streamed request whose wire shape reports token usage only when asked (OpenAI Chat Completions `stream_options.include_usage`), Relay asks for it so token budgets and usage records see the tokens. If the caller did not ask, the extra usage-only chunk is removed from its stream; the other chunks carry `"usage": null`, as they do when a caller asks itself. `off` forwards the request unchanged. |
 | `RELAY_STREAM_IDLE_TIMEOUT_S` | `600` | Seconds of upstream silence after which Relay gives up on a streamed call. Streams have no total deadline — this is their only bound. Keep it above your client's own stream watchdog; `0` disables it. |
 
 ### Storage backends

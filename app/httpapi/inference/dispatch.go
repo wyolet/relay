@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
@@ -204,7 +205,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 					" (adapter="+string(plan.HostBinding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec.ParamPaths)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -219,7 +220,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec.ParamPaths)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -244,7 +245,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	sameShape := in.Inbound == plan.HostBinding.Spec.Adapter
 
 	if sameShape {
-		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator, inboundSpec.ParamPaths)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -266,13 +267,17 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 // and stream or buffer the response back. paramPaths is the inbound spec's
 // param→JSON-path map (the body stays inbound-shaped on every byte-pass
 // variant), used to strip params the routed model declares unsupported.
-func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, paramPaths map[string]string) {
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
 	ctx := r.Context()
 
-	wireBody := rewriteModelField(in.Body, plan.UpstreamModel())
+	var usageOptIn func(map[string]json.RawMessage) bool
+	if d.RequestStreamUsage && in.Stream && inboundSpec.StreamUsage != nil {
+		usageOptIn = inboundSpec.StreamUsage.Request
+	}
+	wireBody, usageRequested := rewriteTopLevel(in.Body, plan.UpstreamModel(), usageOptIn)
 	if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
 		var dropped []string
-		wireBody, dropped = stripWireParams(wireBody, u, paramPaths)
+		wireBody, dropped = stripWireParams(wireBody, u, inboundSpec.ParamPaths)
 		surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
 	}
 
@@ -313,7 +318,16 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	// so nothing is injected here; the upstream body streams through verbatim.
 	dst, stop := keepAliveWriter(d, w, r, in)
 	defer stop()
-	_, _ = streamCopy(dst, result.Body)
+	if !usageRequested {
+		_, _ = streamCopy(dst, result.Body)
+		return
+	}
+	// Relay asked for the usage frame, not the caller: keep it out of the
+	// caller's stream (the pipeline tee has already counted it).
+	filter := &frameDropWriter{w: dst, drop: inboundSpec.StreamUsage.IsUsageFrame}
+	if _, err := streamCopy(filter, result.Body); err == nil {
+		_ = filter.writeHeld()
+	}
 }
 
 // keepAliveWriter wraps w so relay emits the inbound shape's no-op frame while the upstream is silent, returning the writer to stream through and the stop func the caller must defer.
