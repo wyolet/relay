@@ -31,7 +31,7 @@ func ToOverlay(d OverlayDTO, idx Resolver) (*overlay.Overlay, error) {
 	}
 	id, ok := idx.ModelID(d.Metadata.Name)
 	if !ok {
-		return nil, fmt.Errorf("overlay: model %q not found", d.Metadata.Name)
+		return nil, refNotFound("overlay: model %q not found", d.Metadata.Name)
 	}
 	patch, err := json.Marshal(d.Spec.Patch)
 	if err != nil {

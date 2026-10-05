@@ -96,7 +96,7 @@ func ToKey(d KeyDTO, idx Resolver) (*key.Key, error) {
 	if d.Spec.Policy != "" {
 		id, ok := idx.PolicyID(d.Spec.Policy)
 		if !ok {
-			return nil, fmt.Errorf("key %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+			return nil, refNotFound("key %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
 		}
 		policyID = id
 	}
@@ -140,13 +140,13 @@ func toPrincipal(keyName string, p PrincipalDTO, idx Resolver) (key.Principal, e
 	case key.PrincipalServiceAccount:
 		id, ok := idx.ServiceAccountID(p.Name)
 		if !ok {
-			return key.Principal{}, fmt.Errorf("key %q: service account %q not found", keyName, p.Name)
+			return key.Principal{}, refNotFound("key %q: service account %q not found", keyName, p.Name)
 		}
 		return key.Principal{Kind: key.PrincipalServiceAccount, ID: id}, nil
 	case key.PrincipalUser:
 		id, ok := idx.UserID(p.Name)
 		if !ok {
-			return key.Principal{}, fmt.Errorf("key %q: user %q not found", keyName, p.Name)
+			return key.Principal{}, refNotFound("key %q: user %q not found", keyName, p.Name)
 		}
 		return key.Principal{Kind: key.PrincipalUser, ID: id}, nil
 	default:

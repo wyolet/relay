@@ -1,8 +1,6 @@
 package manifest
 
 import (
-	"fmt"
-
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/project"
@@ -84,7 +82,7 @@ func FromTeam(t *team.Team, _ ReverseResolver) TeamDTO {
 func ToProject(d ProjectDTO, idx Resolver) (*project.Project, error) {
 	teamID, ok := idx.TeamID(d.Spec.Team)
 	if !ok {
-		return nil, fmt.Errorf("project %q: team %q not found", d.Metadata.Name, d.Spec.Team)
+		return nil, refNotFound("project %q: team %q not found", d.Metadata.Name, d.Spec.Team)
 	}
 	p := &project.Project{
 		Meta: d.Metadata.toMeta(),
@@ -127,13 +125,13 @@ func FromProject(p *project.Project, rev ReverseResolver) ProjectDTO {
 func ToServiceAccount(d ServiceAccountDTO, idx Resolver) (*serviceaccount.ServiceAccount, error) {
 	projectID, ok := idx.ProjectID(d.Spec.Project)
 	if !ok {
-		return nil, fmt.Errorf("serviceaccount %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+		return nil, refNotFound("serviceaccount %q: project %q not found", d.Metadata.Name, d.Spec.Project)
 	}
 	var policyID string
 	if d.Spec.Policy != "" {
 		policyID, ok = idx.PolicyID(d.Spec.Policy)
 		if !ok {
-			return nil, fmt.Errorf("serviceaccount %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+			return nil, refNotFound("serviceaccount %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
 		}
 	}
 	sa := &serviceaccount.ServiceAccount{
@@ -184,7 +182,7 @@ func ToGroup(d GroupDTO, idx Resolver) (*group.Group, error) {
 	for _, username := range d.Spec.Members {
 		id, ok := idx.UserID(username)
 		if !ok {
-			return nil, fmt.Errorf("group %q: user %q not found", d.Metadata.Name, username)
+			return nil, refNotFound("group %q: user %q not found", d.Metadata.Name, username)
 		}
 		memberIDs = append(memberIDs, id)
 	}

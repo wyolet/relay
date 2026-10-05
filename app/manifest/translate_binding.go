@@ -1,8 +1,6 @@
 package manifest
 
 import (
-	"fmt"
-
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/meta"
@@ -26,7 +24,7 @@ func ToPricing(d PricingDTO, idx Resolver) (*pricing.Pricing, error) {
 	for _, name := range d.Spec.TargetModels {
 		id, ok := idx.ModelID(name)
 		if !ok {
-			return nil, fmt.Errorf("pricing %q: targetModels: model %q not found", d.Metadata.Name, name)
+			return nil, refNotFound("pricing %q: targetModels: model %q not found", d.Metadata.Name, name)
 		}
 		modelIDs = append(modelIDs, id)
 	}
@@ -100,17 +98,17 @@ func FromPricing(p *pricing.Pricing, rev ReverseResolver) PricingDTO {
 func ToHostBinding(d HostBindingDTO, idx Resolver) (*binding.Binding, error) {
 	modelID, ok := idx.ModelID(d.Spec.Model)
 	if !ok {
-		return nil, fmt.Errorf("hostbinding %q: model %q not found", d.Metadata.Name, d.Spec.Model)
+		return nil, refNotFound("hostbinding %q: model %q not found", d.Metadata.Name, d.Spec.Model)
 	}
 	hostID, ok := idx.HostID(d.Spec.Host)
 	if !ok {
-		return nil, fmt.Errorf("hostbinding %q: host %q not found", d.Metadata.Name, d.Spec.Host)
+		return nil, refNotFound("hostbinding %q: host %q not found", d.Metadata.Name, d.Spec.Host)
 	}
 	var pricingID string
 	if d.Spec.Pricing != "" {
 		pid, ok := idx.PricingID(d.Spec.Pricing)
 		if !ok {
-			return nil, fmt.Errorf("hostbinding %q: pricing %q not found", d.Metadata.Name, d.Spec.Pricing)
+			return nil, refNotFound("hostbinding %q: pricing %q not found", d.Metadata.Name, d.Spec.Pricing)
 		}
 		pricingID = pid
 	}
