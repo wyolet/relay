@@ -372,6 +372,14 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		// Kinds whose owner mirrors a spec field re-derive it in validate or
+		// the guard. A row moved that way lands in a new scope, which takes
+		// the create grant there, as POST of the same body would.
+		if m.Owner != metaOf(existing).Owner {
+			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
+				return nil, mapAuthzErr(err)
+			}
+		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
 		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
 		if err := store.Upsert(ctx, v); err != nil {
