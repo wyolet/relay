@@ -34,17 +34,16 @@
       "groupName": "go non-major"
     },
     {
-      "description": "The Go version moves with go.mod on purpose, not with the builder image",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["golang"],
-      "matchUpdateTypes": ["major", "minor"],
-      "enabled": false
-    },
-    {
       "description": "One weekly PR for container image updates",
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["minor", "patch", "digest"],
       "groupName": "container images"
+    },
+    {
+      "description": "The Go toolchain and the builder image move together",
+      "matchPackageNames": ["go", "golang"],
+      "matchDatasources": ["golang-version", "docker"],
+      "groupName": "go"
     },
     {
       "description": "One weekly PR for workflow action updates",
