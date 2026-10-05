@@ -36,6 +36,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	usageReader usagelog.Reader, auditEmitter *audit.Emitter, auditStore *audit.Store, payloadReader *payloadReaderResolver,
 	selector *keypool.Selector, hostHealth *hosthealth.Recorder) (*http.Server, <-chan error) {
 	ctrlRouter := chi.NewRouter()
+	ctrlRouter.Use(httpmw.SecurityHeaders)
 	if len(cfg.ControlAllowOrigins) > 0 {
 		ctrlRouter.Use(control.CORS(cfg.ControlAllowOrigins...))
 	}
@@ -95,7 +96,7 @@ func startControl(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Ca
 	// under /api: a UI calling a renamed endpoint must get a JSON 404 it
 	// can parse. Mounted only when a dist was baked in and not disabled.
 	if !cfg.UIDisable && relayweb.Present() {
-		ctrlRouter.NotFound(relayweb.Handler().ServeHTTP)
+		ctrlRouter.NotFound(relayweb.Handler(cfg.Runtime.ControlAPIURL, cfg.Runtime.InferenceAPIURL, cfg.Runtime.SentryDSN).ServeHTTP)
 		slog.Debug("relay control: serving embedded UI")
 	}
 	ctrlSrv := &http.Server{

@@ -89,6 +89,15 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CONTROL_ALLOW_ORIGINS` | _(empty)_ | Comma-separated CORS allowlist for the control API. |
 | `RELAY_UI_DISABLE` | _(empty)_ | Set `1` to suppress the embedded admin UI on the control listener. |
 
+The control listener refuses to be framed (`frame-ancestors 'none'`,
+`X-Frame-Options: DENY`) and sends `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: same-origin` on every response. The embedded UI's
+Content-Security-Policy allows network calls to its own origin plus the origins
+of `RELAY_CONTROL_API_URL` and `RELAY_INFERENCE_API_URL`; if the UI must reach
+another host, point one of those variables at it. Images load from the control
+origin and `data:` URLs only, so a provider or host icon set to an external URL
+shows its initial instead.
+
 <Info>
 On the standalone image, the master key, admin password, and admin token are
 generated on first boot, printed to the container logs, and persisted on the

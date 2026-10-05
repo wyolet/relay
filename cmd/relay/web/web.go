@@ -14,9 +14,15 @@
 package web
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"io/fs"
 	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -45,14 +51,22 @@ func dist() fs.FS {
 // Handler serves the embedded SPA: real files (assets, favicon, ...) are served
 // directly; everything else falls back to index.html so client-side routes
 // resolve. Intended to be registered as the control router's NotFound handler,
-// after all API operations — matched API paths never reach it.
-func Handler() http.Handler {
-	return handlerFor(dist())
+// after all API operations — matched API paths never reach it. apiURLs are the
+// control/inference URLs the UI is configured to call; their origins join the
+// CSP's connect-src.
+func Handler(apiURLs ...string) http.Handler {
+	return handlerFor(dist(), apiURLs...)
 }
 
-func handlerFor(root fs.FS) http.Handler {
+func handlerFor(root fs.FS, apiURLs ...string) http.Handler {
 	files := http.FileServer(http.FS(root))
+	csp := contentSecurityPolicy(root, apiURLs)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "same-origin")
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			serveIndex(w, r, root)
@@ -80,6 +94,48 @@ func handlerFor(root fs.FS) http.Handler {
 		}
 		serveIndex(w, r, root)
 	})
+}
+
+var inlineScript = regexp.MustCompile(`(?is)<script\b([^>]*)>(.*?)</script>`)
+
+// contentSecurityPolicy builds the SPA policy from the dist it serves: inline
+// scripts in index.html (the theme bootstrap) are allowed by hash, so a new UI
+// release needs no relay change. style-src keeps 'unsafe-inline' because the
+// UI's component library injects <style> elements and style attributes.
+func contentSecurityPolicy(root fs.FS, apiURLs []string) string {
+	scriptSrc := []string{"'self'"}
+	if index, err := fs.ReadFile(root, "index.html"); err == nil {
+		for _, m := range inlineScript.FindAllSubmatch(index, -1) {
+			if bytes.Contains(bytes.ToLower(m[1]), []byte("src=")) {
+				continue
+			}
+			sum := sha256.Sum256(m[2])
+			scriptSrc = append(scriptSrc, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
+		}
+	}
+	connectSrc := []string{"'self'"}
+	for _, raw := range apiURLs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			continue // relative URLs are same-origin
+		}
+		origin := u.Scheme + "://" + u.Host
+		if !slices.Contains(connectSrc, origin) {
+			connectSrc = append(connectSrc, origin)
+		}
+	}
+	return strings.Join([]string{
+		"default-src 'self'",
+		"script-src " + strings.Join(scriptSrc, " "),
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data:",
+		"font-src 'self'",
+		"connect-src " + strings.Join(connectSrc, " "),
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'none'",
+	}, "; ")
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request, root fs.FS) {
