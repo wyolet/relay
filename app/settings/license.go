@@ -74,18 +74,18 @@ func requireLicense(section, feature string) error {
 var degraded sync.Map
 
 // decodeOrDegrade decodes a stored row, falling back to the section's
-// defaults when the only problem is a missing license. A deployment that
-// stored an enabled gated section and then lost its license must keep
+// defaults when the problem is a missing license or a secret reference the
+// section may no longer resolve. A deployment holding such a row must keep
 // booting with that feature off — never refuse to start (the section's
 // zero value is the community behaviour). Any other decode error still
 // propagates.
 func decodeOrDegrade(sec Section, raw []byte) (any, error) {
 	v, err := sec.Decode(raw)
-	if err == nil || !errors.Is(err, license.ErrRequired) {
+	if err == nil || (!errors.Is(err, license.ErrRequired) && !errors.Is(err, ErrSecretRefNotAllowed)) {
 		return v, err
 	}
 	if _, logged := degraded.LoadOrStore(sec.Name, struct{}{}); !logged {
-		slog.Warn("settings: section disabled — no license", "section", sec.Name, "err", err)
+		slog.Warn("settings: section disabled", "section", sec.Name, "err", err)
 	}
 	return sec.Defaults(), nil
 }

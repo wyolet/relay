@@ -28,10 +28,10 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
 | `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML (rate limits, identity). |
-| `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. |
+| `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. Like a fetched release, it seeds catalog kinds only: host keys, relay keys, teams, projects, service accounts, groups, roles and bindings in it are skipped with a warning — load those with `relay seed --apply` or `relay apply`. |
 | `RELAY_CATALOG_VERSION` | _(empty)_ | Pin the seeded catalog to a published [relay-catalog](https://github.com/wyolet/relay-catalog) release tag (e.g. `v0.1.0`). On boot, if the stored catalog version differs, the release archive is fetched and re-seeded — no image rebuild needed. Re-seeds never overwrite your changes: operator-edited resources are skipped and overlays re-apply. |
 | `RELAY_CATALOG_URL` | _(GitHub archive)_ | Override the archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point at a mirror for airgapped deployments. |
-| `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). |
+| `RELAY_COOKIE_SECURE` | `true` | Set `false` for HTTP-only local dev (standalone defaults it to `false`). It also lets the `auth:oidc` issuer and the payload-logging S3 endpoint use plain HTTP; otherwise both must use TLS. |
 | `RELAY_MIGRATE_ON_BOOT` | `on` | Run pending schema migrations at startup. Set `off` while [rolling the schema back](/concepts/upgrade#rolling-back) so a restarting pod doesn't re-apply them. |
 | `RELAY_SHUTDOWN_DEADLINE_S` | `15` | Graceful shutdown budget in seconds. |
 | `RELAY_LOG_LEVEL` | `info` | Log verbosity: `debug` \| `info` \| `warn` \| `error`. |
@@ -79,6 +79,8 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `WYOLET_OIDC_REDIRECT_URL` | _(empty)_ | Callback URL registered with the provider — conventionally `https://<ui-origin>/auth/callback`. |
 | `WYOLET_OIDC_REGISTRATION` | `open` | `open` auto-provisions a user on first login; `closed` rejects unknown subjects. |
 | `WYOLET_OIDC_POST_LOGIN_URL` | `/` | Where the browser lands after a successful SSO login. Set it to the UI origin when the UI is served elsewhere. |
+
+The DB-backed `auth:oidc` section names its client secret by env var (`clientSecretEnv`). The name must start with `RELAY_OIDC_` (for example `RELAY_OIDC_CLIENT_SECRET`) or `WYOLET_OIDC_`, the issuer must be `https://` (unless `RELAY_COOKIE_SECURE=false`), and only an admin may change the section. A stored section that breaks these rules is read as disabled and logged at startup; rename the variable and write the section again.
 
 ### Admin UI & CORS
 
