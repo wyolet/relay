@@ -134,6 +134,8 @@ type fixtureOptions struct {
 	rateLimitDisabled bool
 	// markerStore replaces the in-memory store behind the duplicate markers.
 	markerStore kv.Scripter
+	// reasoningRate above zero adds a reasoning meter at that rate (USD per million) to the model's own rate sheet.
+	reasoningRate float64
 }
 
 func system() meta.Owner { return meta.Owner{Kind: meta.OwnerSystem} }
@@ -191,6 +193,9 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 			perMillion(pricing.MeterTokensCacheRead, 0.3),
 			perMillion(pricing.MeterTokensCacheCreation, 3.75),
 		}},
+	}
+	if o.reasoningRate > 0 {
+		fx.ownPrice.Spec.Rates = append(fx.ownPrice.Spec.Rates, perMillion(pricing.MeterTokensReasoning, o.reasoningRate))
 	}
 	resellerPrice := &pricing.Pricing{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "reseller-markup", Owner: meta.Owner{Kind: meta.OwnerHost, ID: reseller.Meta.ID}},
@@ -988,6 +993,59 @@ func TestProviderHints(t *testing.T) {
 			t.Errorf("unknown provider: model = %q pricing = %q, want the bare name at the provider's own host", ev.Model, ev.Pricing)
 		}
 	})
+}
+
+func TestReasoningTokensAreChargedOnce(t *testing.T) {
+	// The usage of a reasoning call as an exporter reports it: output_tokens (214) includes the reasoning tokens (64), input_tokens (800) the cached ones (600).
+	reasoningCall := pbSpan(1,
+		str("gen_ai.operation.name", "generate_content"),
+		str("gen_ai.provider.name", "acme"),
+		str("gen_ai.request.model", "acme-large"),
+		num("gen_ai.usage.input_tokens", 800),
+		num("gen_ai.usage.cache_read.input_tokens", 600),
+		num("gen_ai.usage.output_tokens", 214),
+		num("gen_ai.usage.reasoning.output_tokens", 64),
+	)
+	// 200×$3 + 600×$0.30 + 214×$15 per million either way: reasoning tokens cost the output rate once.
+	const wantCost = 3_990_000
+	for _, tc := range []struct {
+		name          string
+		reasoningRate float64
+		wantOutput    int64
+	}{
+		{name: "rate sheet without a reasoning meter", wantOutput: 214},
+		{name: "rate sheet with a reasoning meter", reasoningRate: 15, wantOutput: 150},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixtureWith(t, fixtureOptions{reasoningRate: tc.reasoningRate})
+			if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, reasoningCall)); rec.Code != http.StatusOK || len(fx.events) != 1 {
+				t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
+			}
+			ev := fx.events[0]
+			if ev.Tokens["output"] != tc.wantOutput || ev.Tokens["reasoning"] != 64 || ev.Tokens["input"] != 200 || ev.Tokens["cache_read"] != 600 {
+				t.Errorf("tokens = %v, want output %d reasoning 64 input 200 cache_read 600", ev.Tokens, tc.wantOutput)
+			}
+			if ev.CostNanos == nil || *ev.CostNanos != wantCost {
+				t.Errorf("cost = %v (%v), want %d", ev.CostNanos, ev.CostBreakdown, wantCost)
+			}
+		})
+	}
+}
+
+func TestErrorTypeCarryingTheHTTPStatusIsTheEventStatus(t *testing.T) {
+	fx := newFixture(t)
+	failed := pbSpan(1,
+		str("gen_ai.operation.name", "generate_content"),
+		str("gen_ai.request.model", "acme-large"),
+		str("error.type", "429"),
+	)
+	failed.Status = &tracepb.Status{Code: tracepb.Status_STATUS_CODE_ERROR, Message: "429 RESOURCE_EXHAUSTED."}
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, failed)); rec.Code != http.StatusOK || len(fx.events) != 1 {
+		t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
+	}
+	if ev := fx.events[0]; ev.Status != 429 || ev.ErrorKind != "429" || ev.LogOnly() {
+		t.Errorf("event = status %d kind %q log-only %v, want a 429 row", ev.Status, ev.ErrorKind, ev.LogOnly())
+	}
 }
 
 func TestAudioTokensAreRecorded(t *testing.T) {

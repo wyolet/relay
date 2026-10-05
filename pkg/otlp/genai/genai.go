@@ -165,6 +165,9 @@ func inference(a, resource otlp.Attrs) (otlp.Inference, bool) {
 	}
 	if status, ok := a.Int(attrHTTPStatus...); ok && status >= 100 && status <= 599 {
 		inf.HTTPStatus = int(status)
+	} else if status, ok := a.Int(attrErrorType...); ok && status >= 400 && status <= 599 {
+		// Some instrumentations report the provider's HTTP status as the error type and carry no status attribute.
+		inf.HTTPStatus = int(status)
 	}
 	return inf, true
 }

@@ -1,6 +1,7 @@
 package genai
 
 import (
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -179,6 +180,46 @@ func TestMapSpanErrors(t *testing.T) {
 	}
 }
 
+func TestMapSpanErrorTypeCarryingTheHTTPStatus(t *testing.T) {
+	// A failed generate_content call as opentelemetry-instrumentation-google-genai 1.2b0 exports it: the status code is the error type, and there is no http.response.status_code.
+	s := span(otlp.Attrs{
+		"gen_ai.operation.name":      "generate_content",
+		"gen_ai.provider.name":       "gemini",
+		"gen_ai.request.model":       "gemini-2.5-flash",
+		"gen_ai.request.temperature": 0.2,
+		"error.type":                 "429",
+		"server.address":             "generativelanguage.googleapis.com",
+	})
+	s.Failed = true
+	s.StatusMessage = "429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'slow down', 'status': 'RESOURCE_EXHAUSTED'}}"
+	inf, ok := Mapper{}.MapSpan(s)
+	if !ok || inf.HTTPStatus != 429 || inf.ErrorType != "429" {
+		t.Errorf("got ok=%v status %d error type %q, want 429 / \"429\"", ok, inf.HTTPStatus, inf.ErrorType)
+	}
+
+	// An exception class name, as opentelemetry-instrumentation-openai-v2 2.4b0 exports it, says nothing about the status.
+	s = span(otlp.Attrs{
+		"gen_ai.operation.name": "chat",
+		"gen_ai.provider.name":  "openai",
+		"gen_ai.request.model":  "gpt-4o",
+		"error.type":            "<class 'openai.RateLimitError'>",
+	})
+	s.Failed = true
+	if inf, _ := (Mapper{}).MapSpan(s); inf.HTTPStatus != 0 || inf.ErrorType != "<class 'openai.RateLimitError'>" {
+		t.Errorf("class-name error type: status %d error type %q, want 0 and the name as reported", inf.HTTPStatus, inf.ErrorType)
+	}
+
+	// A status attribute wins over the error type, and a number outside the error range is not a status.
+	s = span(otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model", "error.type": "500", "http.response.status_code": int64(503)})
+	if inf, _ := (Mapper{}).MapSpan(s); inf.HTTPStatus != 503 {
+		t.Errorf("status attribute beside a numeric error type: status %d, want 503", inf.HTTPStatus)
+	}
+	s = span(otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model", "error.type": "7"})
+	if inf, _ := (Mapper{}).MapSpan(s); inf.HTTPStatus != 0 {
+		t.Errorf("error type 7: status %d, want 0", inf.HTTPStatus)
+	}
+}
+
 func TestMapSpanMissingTimes(t *testing.T) {
 	s := span(otlp.Attrs{"gen_ai.operation.name": "embeddings", "gen_ai.request.model": "example-embedder", "gen_ai.usage.input_tokens": int64(9)})
 	s.End = time.Time{}
@@ -302,5 +343,47 @@ func TestContentIsPassedThroughAsReported(t *testing.T) {
 	bare, _ := Mapper{}.MapSpan(span(otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model"}))
 	if !bare.Content.Empty() || bare.Content.Input != nil || bare.Content.Output != nil {
 		t.Errorf("content of a call that reported none = %+v", bare.Content)
+	}
+}
+
+// testdata/inference_event.json is one event as opentelemetry-instrumentation-openai-v2 2.4b0 emits it and the OTLP/JSON exporter writes it: fields as attributes, an empty body, no time of its own, and the ids of the span it was emitted in.
+func TestMapLogFromAnExportedEvent(t *testing.T) {
+	body, err := os.ReadFile("testdata/inference_event.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := otlp.DecodeLogs(otlp.MediaTypeJSON, body)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("DecodeLogs: %d records, err %v", len(records), err)
+	}
+	if records[0].Body != nil || !records[0].Time.IsZero() {
+		t.Errorf("record body = %v time = %v, want neither", records[0].Body, records[0].Time)
+	}
+	inf, ok := Mapper{}.MapLog(records[0])
+	if !ok {
+		t.Fatal("exported inference event not mapped")
+	}
+	if inf.TraceID != "e341ea3037ef01458dac3a234b34066d" || inf.SpanID != "bc1a8e3e79ac7dbe" {
+		t.Errorf("ids = %q %q, want those of the enclosing span", inf.TraceID, inf.SpanID)
+	}
+	if !inf.Start.Equal(time.Unix(0, 1791240648241006000)) {
+		t.Errorf("start = %v, want the observed time", inf.Start)
+	}
+	if inf.Provider != "openai" || inf.RequestModel != "gpt-4o-mini" || inf.ResponseModel != "gpt-4o-mini-2024-07-18" || inf.ResponseID != "chatcmpl-fake0001" || inf.FinishReason != "stop" || inf.Service != "billing-agent" {
+		t.Errorf("call = %+v", inf)
+	}
+	if want := (otlp.TokenCounts{Input: 1200, Output: 300}); inf.Tokens != want {
+		t.Errorf("tokens = %+v, want %+v", inf.Tokens, want)
+	}
+	wantOutput := map[string]any{"gen_ai.output.messages": []any{map[string]any{
+		"role":          "assistant",
+		"parts":         []any{map[string]any{"content": "Hello.", "type": "text"}},
+		"finish_reason": "stop",
+	}}}
+	if !reflect.DeepEqual(inf.Content.Output, wantOutput) {
+		t.Errorf("output content = %#v", inf.Content.Output)
+	}
+	if messages, _ := inf.Content.Input["gen_ai.input.messages"].([]any); len(messages) != 2 {
+		t.Errorf("input content = %#v, want two structured messages", inf.Content.Input)
 	}
 }

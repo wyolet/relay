@@ -133,6 +133,40 @@ func TestLogsExportRecordsAUsageEvent(t *testing.T) {
 	}
 }
 
+func TestEventOfAStreamedCallAsAnSDKExportsIt(t *testing.T) {
+	fx := newFixture(t)
+	// The shape SDK exporters give the event: no time_unix_nano, only the observed time; no body; the first-chunk delay but, being a log record, no duration.
+	observed := spanStart.Add(120 * time.Millisecond)
+	event := &logspb.LogRecord{
+		TraceId:              bytes.Repeat([]byte{0xab}, 16),
+		SpanId:               bytes.Repeat([]byte{1}, 8),
+		EventName:            inferenceEvent,
+		ObservedTimeUnixNano: uint64(observed.UnixNano()),
+		Attributes: []*commonpb.KeyValue{
+			str("gen_ai.operation.name", "generate_content"),
+			str("gen_ai.provider.name", "acme"),
+			str("gen_ai.request.model", "acme-large"),
+			str("gen_ai.response.model", "acme-large"),
+			str("gen_ai.response.id", "resp_stream_1"),
+			{Key: "gen_ai.request.stream", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: true}}},
+			{Key: "gen_ai.response.time_to_first_chunk", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: 0.0010174999479204416}}},
+			{Key: "gen_ai.response.finish_reasons", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_ArrayValue{ArrayValue: &commonpb.ArrayValue{Values: []*commonpb.AnyValue{{Value: &commonpb.AnyValue_StringValue{StringValue: "stop"}}}}}}},
+			num("gen_ai.usage.input_tokens", 800),
+			num("gen_ai.usage.output_tokens", 214),
+		},
+	}
+	if rec := fx.postLogs(t, otlp.MediaTypeProtobuf, logsExport(t, event)); rec.Code != http.StatusOK || len(fx.events) != 1 {
+		t.Fatalf("status = %d events = %d body = %s", rec.Code, len(fx.events), rec.Body)
+	}
+	ev := fx.events[0]
+	if !ev.Timestamp.Equal(observed) || !ev.Streamed || ev.FinishReason != "stop" || ev.DurationMs != 0 {
+		t.Errorf("event = ts %v streamed %v finish %q duration %d, want the observed time, streamed, stop, 0", ev.Timestamp, ev.Streamed, ev.FinishReason, ev.DurationMs)
+	}
+	if ev.Upstream == nil || ev.Upstream.ResponseStart != 1017 || ev.Upstream.ResponseEnd < ev.Upstream.ResponseStart {
+		t.Errorf("upstream timing = %+v, want the first chunk at 1017µs and no end before it", ev.Upstream)
+	}
+}
+
 func TestLogsExportKeepsOnlyTheModelCallEvent(t *testing.T) {
 	fx := newFixture(t)
 	plain := pbEvent(2, str("message", "cache warmed"))

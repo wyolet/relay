@@ -53,7 +53,6 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c report
 		Principal:      reporter.PrincipalName,
 		CredentialKind: reporter.CredentialKind,
 		CredentialID:   reporter.CredentialID,
-		Tokens:         tokens(inf.Tokens),
 		Extras:         extras(inf, from),
 	}
 	if ev.Timestamp.IsZero() {
@@ -65,12 +64,19 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c report
 	if inf.TimeToFirstChunk > 0 {
 		ev.Upstream = &usagelog.UpstreamTiming{
 			ResponseStart: inf.TimeToFirstChunk.Microseconds(),
-			ResponseEnd:   inf.Duration.Microseconds(),
+			// A call reported as an event has no duration; its response cannot end before the first chunk.
+			ResponseEnd: max(inf.Duration, inf.TimeToFirstChunk).Microseconds(),
 		}
 	}
 
 	m := resolveModel(snap, inf, hint)
 	ev.ModelID, ev.Model, ev.Provider, ev.Pricing = m.id, m.name, m.provider, m.pricingName
+	counts := inf.Tokens
+	// Telemetry counts reasoning tokens inside the output total. A rate sheet with a reasoning meter charges them there, so they leave the output count, as on a proxied call priced by that sheet; otherwise they would be charged twice.
+	if m.reasoningMetered && counts.Output >= counts.Reasoning {
+		counts.Output -= counts.Reasoning
+	}
+	ev.Tokens = tokens(counts)
 	if nanos, breakdown, ok := pricer.Price(m.pricingID, ev.Tokens); ok {
 		ev.CostNanos = &nanos
 		ev.CostBreakdown = breakdown
