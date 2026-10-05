@@ -17,7 +17,7 @@ recognize is left alone.
 | `X-WR-Proxy-Mode` | Set to `Proxy` to enable [proxy mode](/concepts/proxy-mode). Omit (or `No-Proxy`) for normal routing. |
 | `X-WR-Upstream-Host` | Pin a specific upstream host by its catalog slug. Required for anonymous proxy requests. |
 | `X-WR-Usage` | Set to `full` to receive an inline `relay_usage` block in the response. Honored only for canonical-shape requests. |
-| `X-Request-ID` | A request ID you supply. If valid (printable ASCII, 1–128 chars) Relay uses it as-is; otherwise it generates one. |
+| `X-Request-ID` | Your own correlation ID (printable ASCII, 1–128 chars; otherwise ignored). Relay echoes it back and records it on the log record as `extras.client_request_id`. It never replaces the request ID Relay generates. |
 
 ### How Relay finds your relay key
 
@@ -35,7 +35,8 @@ Anthropic SDK at Relay, just set its API key — it lands in `Authorization` or
 
 | Header | Meaning |
 | --- | --- |
-| `X-Relay-Request-ID` | Set on every response. Echoes your `X-Request-ID` if you sent a valid one, otherwise a generated ID. Use it to correlate a call with your logs. |
+| `X-Relay-Request-ID` | Set on every response: the ID Relay generated for this request. It is the `request_id` for `GET /logs/{request_id}`. |
+| `X-Request-ID` | Your `X-Request-ID`, echoed when you sent a valid one. |
 
 Relay forwards the upstream provider's response headers through to you, minus
 hop-by-hop headers. On cross-shape translated responses, `Content-Length` and

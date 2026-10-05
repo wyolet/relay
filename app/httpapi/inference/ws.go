@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	transportws "github.com/wyolet/relay/app/transport/ws"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 // wsHandler upgrades a /v1/ws request to a WebSocket and serves the
@@ -67,7 +68,9 @@ func wsHandler(d Deps) http.HandlerFunc {
 		}
 
 		_ = transportws.Serve(r.Context(), conn, r, perFrame, transportws.Options{
-			Logger: slog.Default(),
+			// Each frame is its own request and must not share the upgrade's id.
+			PerRequest: func(ctx context.Context) context.Context { return reqid.WithNewID(ctx, slog.Default()) },
+			Logger:     slog.Default(),
 		})
 	}
 }
