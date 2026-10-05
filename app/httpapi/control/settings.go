@@ -51,7 +51,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.OTLPReceiver](api, d, protect, settings.Section{
 		Name:        settings.SectionOTLPReceiver,
-		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP trace exports at /otlp/v1/traces and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy or rate limit applies. Default off. Hot-reloaded.",
+		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy and none of the rate limits of inference apply; export requests are capped per credential. captureContent also stores the message content clients report, in the payload store, while payload logging is enabled. Both default off. Hot-reloaded.",
 	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{

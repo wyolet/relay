@@ -3,10 +3,12 @@ package settings
 // SectionOTLPReceiver is the section key for the OpenTelemetry receiver on the inference listener.
 const SectionOTLPReceiver = "otlp-receiver"
 
-// OTLPReceiver configures the endpoint that accepts telemetry clients report about model calls relay did not carry.
+// OTLPReceiver configures the endpoints that accept telemetry clients report about model calls relay did not carry.
 type OTLPReceiver struct {
-	// Enabled accepts trace exports at POST /otlp/v1/traces. Off by default: reported usage is self-declared by the client and is recorded, never enforced.
+	// Enabled accepts exports at POST /otlp/v1/traces and /otlp/v1/logs. Off by default: reported usage is self-declared by the client and is recorded, never enforced.
 	Enabled bool `json:"enabled"`
+	// CaptureContent stores the message content a client reports with a call (instructions, input and output messages, tool definitions) in the payload store. It takes effect only while payload logging is enabled. Off by default: content is the client's data and the largest part of an export.
+	CaptureContent bool `json:"captureContent"`
 }
 
 // Validate is enforced before any write.
@@ -15,7 +17,7 @@ func (o *OTLPReceiver) Validate() error { return nil }
 func init() {
 	Register(Section{
 		Name:        SectionOTLPReceiver,
-		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP trace exports at /otlp/v1/traces from callers holding a relay key or token, and records the model calls they describe as usage events with source \"otlp\". Reported usage is not subject to policies or to the rate limits of inference; export requests are capped per credential by the otlp-export system rate limit. Default off. Hot-reloaded.",
+		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs from callers holding a relay key or token, and records the model calls they describe as usage events with source \"otlp\". Reported usage is not subject to policies or to the rate limits of inference; export requests are capped per credential (1,200 per minute unless a rate limit named otlp-export says otherwise). captureContent also stores the message content clients report, in the payload store, while payload logging is enabled. Both default off. Hot-reloaded.",
 		Defaults:    func() any { return &OTLPReceiver{} },
 		Decode:      decodeAndValidate[OTLPReceiver, *OTLPReceiver],
 	})

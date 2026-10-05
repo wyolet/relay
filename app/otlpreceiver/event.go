@@ -30,11 +30,11 @@ type origin struct {
 	clientIP string
 }
 
-// buildEvent turns one reported model call into a usage event attributed to reporter. received stands in for a missing span start time.
-func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, inf otlp.Inference, hint ProviderHint, pricer *usagelog.Pricer, from origin, received time.Time) usagelog.Event {
+// buildEvent turns one reported model call into a usage event attributed to reporter. received stands in for a missing start time.
+func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c reported, hint ProviderHint, pricer *usagelog.Pricer, from origin, received time.Time) usagelog.Event {
+	inf := c.inf
 	ev := usagelog.Event{
-		// Derived from the span's ids so a span the client sends twice keeps one id.
-		RequestID:      "otlp-" + inf.TraceID + "-" + inf.SpanID,
+		RequestID:      c.id.RequestID(),
 		Source:         Source,
 		Timestamp:      inf.Start,
 		Status:         status(inf),
@@ -111,12 +111,10 @@ func tokens(t otlp.TokenCounts) sdkusage.Tokens {
 }
 
 func extras(inf otlp.Inference, from origin) map[string]string {
-	out := map[string]string{
-		ExtrasKeyConvention: inf.Convention,
-		ExtrasKeyTraceID:    inf.TraceID,
-		ExtrasKeySpanID:     inf.SpanID,
-	}
+	out := map[string]string{ExtrasKeyConvention: inf.Convention}
 	for key, v := range map[string]string{
+		ExtrasKeyTraceID:              inf.TraceID,
+		ExtrasKeySpanID:               inf.SpanID,
 		ExtrasKeyResponseID:           inf.ResponseID,
 		ExtrasKeyService:              inf.Service,
 		ExtrasKeyOperation:            inf.Operation,

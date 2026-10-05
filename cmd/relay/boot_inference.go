@@ -28,7 +28,7 @@ import (
 func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.Catalog, tokenVerifier *inference.TokenVerifier,
 	routingOpts []routing.Option, pl *pipeline.Pipeline, proxyPipeline *proxy.Pipeline, lifecycleReg *lifecycle.Registry,
 	specRegistry *adapter.Registry, profiles *clientprofile.Registry, tokenCalibrator *tokencount.Calibrator,
-	batchSvc *batch.Service, otlpReceiver http.Handler) (*http.Server, <-chan error) {
+	batchSvc *batch.Service, otlpReceiver *otlpreceiver.Handler) (*http.Server, <-chan error) {
 	// Inference plane (data plane): /v1/*, /healthz on RELAY_PORT.
 	inferRouter := chi.NewRouter()
 	inferRouter.Use(reqid.Middleware(slog.Default()))
@@ -66,11 +66,13 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 	).Mount("/v1/batches", batchSvc.Routes())
 
 	// OpenTelemetry exports authenticate like /v1/* but resolve no policy: a reporter needs a credential, not a route.
-	inferRouter.With(
+	otlpRoutes := inferRouter.With(
 		inference.ReadinessMiddleware(cat),
 		inference.ClassifyMiddleware(),
 		inference.AuthenticateMiddleware(cat, tokenVerifier),
-	).Method(http.MethodPost, otlpreceiver.TracesPath, otlpReceiver)
+	)
+	otlpRoutes.Method(http.MethodPost, otlpreceiver.TracesPath, otlpReceiver.Traces())
+	otlpRoutes.Method(http.MethodPost, otlpreceiver.LogsPath, otlpReceiver.Logs())
 
 	inferAddr := ":8080"
 	if p := os.Getenv("RELAY_PORT"); p != "" {

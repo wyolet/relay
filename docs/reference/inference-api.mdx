@@ -51,6 +51,7 @@ namespace belongs to Relay's canonical shape.
 | `POST` | `/v1/generate` | Relay canonical request/response |
 | `GET` | `/v1/models` | Models accessible to the relay key |
 | `POST` | `/otlp/v1/traces` | OpenTelemetry trace export (OTLP/HTTP); see [Reported usage](/concepts/observability#reported-usage-opentelemetry). 404 unless the `otlp-receiver` setting is enabled |
+| `POST` | `/otlp/v1/logs` | OpenTelemetry logs export (OTLP/HTTP) for model calls reported as events; same rules as the trace export |
 | `GET` | `/healthz` | Liveness + Postgres ping (public) |
 | `GET` | `/openapi.json` | Generated typed OpenAPI spec |
 

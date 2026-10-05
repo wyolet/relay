@@ -15,23 +15,39 @@ const (
 	StatusUnavailable       int32 = 14
 )
 
-// TraceResponse encodes an ExportTraceServiceResponse in mediaType. rejected > 0 makes it a partial success naming how many spans were refused and why; otherwise the response is the empty success message.
-func TraceResponse(mediaType string, rejected int64, message string) []byte {
+// Signal is an OTLP signal with an export endpoint of its own.
+type Signal string
+
+const (
+	SignalTraces Signal = "traces"
+	SignalLogs   Signal = "logs"
+)
+
+// rejectedField is the OTLP/JSON name of a signal's count of refused records. It is the only part of the export response the signals do not share: in protobuf the count is field 1 for every signal.
+func (s Signal) rejectedField() string {
+	if s == SignalLogs {
+		return "rejectedLogRecords"
+	}
+	return "rejectedSpans"
+}
+
+// ExportResponse encodes the export response of signal (ExportTraceServiceResponse, ExportLogsServiceResponse) in mediaType. rejected > 0 makes it a partial success naming how many records were refused and why; otherwise the response is the empty success message.
+func ExportResponse(mediaType string, signal Signal, rejected int64, message string) []byte {
 	if mediaType == MediaTypeJSON {
 		if rejected <= 0 {
 			return []byte("{}")
 		}
 		// OTLP/JSON writes 64-bit integers as decimal strings.
 		b, _ := json.Marshal(map[string]any{"partialSuccess": map[string]any{
-			"rejectedSpans": strconv.FormatInt(rejected, 10),
-			"errorMessage":  message,
+			signal.rejectedField(): strconv.FormatInt(rejected, 10),
+			"errorMessage":         message,
 		}})
 		return b
 	}
 	if rejected <= 0 {
 		return nil
 	}
-	// ExportTracePartialSuccess{rejected_spans = 1, error_message = 2} inside ExportTraceServiceResponse{partial_success = 1}.
+	// Export<Signal>PartialSuccess{rejected = 1, error_message = 2} inside Export<Signal>ServiceResponse{partial_success = 1}.
 	var partial []byte
 	partial = protowire.AppendTag(partial, 1, protowire.VarintType)
 	partial = protowire.AppendVarint(partial, uint64(rejected))

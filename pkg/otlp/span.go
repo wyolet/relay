@@ -25,9 +25,10 @@ type Span struct {
 
 // Inference is one model call as a client's telemetry reported it. Fields the telemetry did not carry stay zero.
 type Inference struct {
-	// Convention is the Name of the SpanMapper that produced the record.
+	// Convention is the Name of the mapper that produced the record.
 	Convention string
 
+	// TraceID and SpanID are those of the span the call ran in. A log record emitted outside a span has neither.
 	TraceID string
 	SpanID  string
 	// Service is the reporting application's service.name resource attribute.
@@ -53,7 +54,20 @@ type Inference struct {
 	HTTPStatus int
 
 	Tokens TokenCounts
+
+	Content Content
 }
+
+// Content is the message content a client chose to report with a model call. Each side maps the convention's attribute names to their values as sent: structured values, or the JSON text some exporters put on spans instead. A side the telemetry did not carry is nil.
+type Content struct {
+	// Input holds what was sent to the model: instructions, messages, tool definitions.
+	Input map[string]any
+	// Output holds what the model returned.
+	Output map[string]any
+}
+
+// Empty reports whether the call carried no content.
+func (c Content) Empty() bool { return len(c.Input) == 0 && len(c.Output) == 0 }
 
 // TokenCounts are the token counts of one model call. Input excludes cached tokens, which CacheRead and CacheWrite count. Reasoning and AudioOutput are parts of Output, and AudioInput is a part of the input, not additions to them.
 type TokenCounts struct {

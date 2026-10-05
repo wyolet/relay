@@ -21,6 +21,10 @@ const (
 	outcomeRejected  = "rejected"
 	outcomeDuplicate = "duplicate"
 
+	contentStored    = "stored"
+	contentDuplicate = "duplicate"
+	contentDropped   = "dropped"
+
 	opMark   = "mark"
 	opUnmark = "unmark"
 )
@@ -30,23 +34,39 @@ var exportsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "exports_total",
-	Help:      "OTLP trace export requests received, by result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
-}, []string{"result"})
+	Help:      "OTLP export requests received, by signal (traces, logs) and result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
+}, []string{"signal", "result"})
 
 // spansTotal answers how much of what clients export becomes usage: spans that are not model calls are ignored by design, so a high ignored share is normal for clients that export whole traces.
 var spansTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "spans_total",
-	Help:      "Spans in OTLP exports, by outcome: recorded as a usage event, duplicate (a model call already recorded), ignored (not a model call), or rejected (a model call without span identity or starting in the future).",
+	Help:      "Spans in OTLP trace exports, by outcome: recorded as a usage event, duplicate (a model call already recorded), ignored (not a model call), or rejected (a model call without span identity or starting in the future).",
 }, []string{"outcome"})
 
-// markerErrors counts kv failures of the duplicate check. A failed mark records the calls anyway, so they may be recorded again on a resend; a failed unmark leaves calls marked that were never queued, so a resend skips them.
+// logRecordsTotal is spansTotal for the logs signal, where every record that is not the model-call event is ignored.
+var logRecordsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: metrics.Namespace,
+	Subsystem: "otlp",
+	Name:      "log_records_total",
+	Help:      "Log records in OTLP logs exports, by outcome: recorded as a usage event, duplicate (a model call already recorded, by this signal or as a span), ignored (not a model-call event), or rejected (a model call with neither span ids nor a response id, or starting in the future).",
+}, []string{"outcome"})
+
+// contentTotal counts reported calls that carried message content while content capture was on.
+var contentTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: metrics.Namespace,
+	Subsystem: "otlp",
+	Name:      "content_total",
+	Help:      "Reported model calls carrying message content while content capture is on, by outcome: stored (queued for the payload store), duplicate (content already stored for the call), or dropped (the payload queue was half full or lacked room).",
+}, []string{"outcome"})
+
+// markerErrors counts kv failures of the duplicate check. A failed mark stores the calls anyway, so they may be stored again on a resend; a failed unmark leaves calls marked that were never queued, so a resend skips them.
 var markerErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "marker_errors_total",
-	Help:      "Failed kv operations of the OTLP receiver's duplicate check, by op: mark (calls recorded without the check) or unmark (calls left marked that were not queued).",
+	Help:      "Failed kv operations of the OTLP receiver's duplicate check, by op: mark (calls stored without the check) or unmark (calls left marked that were not queued).",
 }, []string{"op"})
 
-func init() { metrics.Register(exportsTotal, spansTotal, markerErrors) }
+func init() { metrics.Register(exportsTotal, spansTotal, logRecordsTotal, contentTotal, markerErrors) }

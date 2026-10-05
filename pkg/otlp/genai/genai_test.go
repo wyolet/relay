@@ -1,6 +1,7 @@
 package genai
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -184,5 +185,122 @@ func TestMapSpanMissingTimes(t *testing.T) {
 	inf, ok := Mapper{}.MapSpan(s)
 	if !ok || inf.Duration != 0 || inf.Tokens.Input != 9 {
 		t.Errorf("got ok=%v %+v", ok, inf)
+	}
+}
+
+func event(attrs otlp.Attrs) otlp.LogRecord {
+	return otlp.LogRecord{
+		TraceID:   "5b8efff798038103d269b633813fc60c",
+		SpanID:    "eee19b7ec3c1b174",
+		EventName: "gen_ai.client.inference.operation.details",
+		Time:      spanStart,
+		Observed:  spanStart.Add(time.Second),
+		Attrs:     attrs,
+		Resource:  otlp.Attrs{"service.name": "billing-agent"},
+	}
+}
+
+func TestMapLogReadsTheSameAttributesAsMapSpan(t *testing.T) {
+	attrs := otlp.Attrs{
+		"gen_ai.operation.name":                "chat",
+		"gen_ai.provider.name":                 "example-provider",
+		"gen_ai.request.model":                 "example-model",
+		"gen_ai.response.id":                   "resp_123",
+		"gen_ai.response.finish_reasons":       []any{"stop"},
+		"gen_ai.usage.input_tokens":            int64(1000),
+		"gen_ai.usage.cache_read.input_tokens": int64(700),
+		"gen_ai.usage.output_tokens":           int64(300),
+		"error.type":                           "timeout",
+		"http.response.status_code":            int64(504),
+	}
+	fromEvent, ok := Mapper{}.MapLog(event(attrs))
+	if !ok {
+		t.Fatal("inference details event not mapped")
+	}
+	fromSpan, ok := Mapper{}.MapSpan(span(attrs))
+	if !ok {
+		t.Fatal("chat span not mapped")
+	}
+	// A log record has no end time; everything else about the call is the same record.
+	if fromEvent.Duration != 0 {
+		t.Errorf("event duration = %v, want 0", fromEvent.Duration)
+	}
+	fromSpan.Duration = 0
+	if !reflect.DeepEqual(fromEvent, fromSpan) {
+		t.Errorf("event maps to\n%+v\nspan maps to\n%+v", fromEvent, fromSpan)
+	}
+}
+
+func TestMapLogEventName(t *testing.T) {
+	attrs := otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model"}
+
+	// Exporters older than the event_name field carry the name as an attribute.
+	older := event(otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model", "event.name": "gen_ai.client.inference.operation.details"})
+	older.EventName = ""
+	if _, ok := (Mapper{}).MapLog(older); !ok {
+		t.Error("event named by the event.name attribute not mapped")
+	}
+
+	for _, name := range []string{"", "gen_ai.evaluation.result", "gen_ai.user.message", "exception"} {
+		r := event(attrs)
+		r.EventName = name
+		if _, ok := (Mapper{}).MapLog(r); ok {
+			t.Errorf("log record with event name %q mapped as a model call", name)
+		}
+	}
+
+	agent := event(otlp.Attrs{"gen_ai.operation.name": "invoke_agent", "gen_ai.usage.input_tokens": int64(10)})
+	if _, ok := (Mapper{}).MapLog(agent); ok {
+		t.Error("an event for an agent operation mapped as a model call")
+	}
+}
+
+func TestMapLogTimeAndIdentity(t *testing.T) {
+	attrs := otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model", "gen_ai.response.id": "resp_123"}
+
+	unstamped := event(attrs)
+	unstamped.Time = time.Time{}
+	if inf, _ := (Mapper{}).MapLog(unstamped); !inf.Start.Equal(spanStart.Add(time.Second)) {
+		t.Errorf("start = %v, want the observed time when the event carries no time of its own", inf.Start)
+	}
+
+	outside := event(attrs)
+	outside.TraceID, outside.SpanID = "", ""
+	inf, ok := Mapper{}.MapLog(outside)
+	if !ok || inf.TraceID != "" || inf.SpanID != "" || inf.ResponseID != "resp_123" {
+		t.Errorf("event outside a span = %+v (%v), want no span ids and the response id", inf, ok)
+	}
+}
+
+func TestContentIsPassedThroughAsReported(t *testing.T) {
+	structured := []any{map[string]any{"role": "user", "parts": []any{map[string]any{"type": "text", "content": "hello"}}}}
+	attrs := otlp.Attrs{
+		"gen_ai.operation.name":      "chat",
+		"gen_ai.request.model":       "example-model",
+		"gen_ai.system_instructions": `[{"type":"text","content":"be brief"}]`,
+		"gen_ai.input.messages":      structured,
+		"gen_ai.tool.definitions":    "",
+		"gen_ai.output.messages":     `[{"role":"assistant"}]`,
+		// The earlier content forms are not read.
+		"gen_ai.prompt":     "hello",
+		"gen_ai.completion": "hi",
+	}
+	wantInput := map[string]any{
+		"gen_ai.system_instructions": `[{"type":"text","content":"be brief"}]`,
+		"gen_ai.input.messages":      structured,
+	}
+	wantOutput := map[string]any{"gen_ai.output.messages": `[{"role":"assistant"}]`}
+
+	fromSpan, _ := Mapper{}.MapSpan(span(attrs))
+	fromEvent, _ := Mapper{}.MapLog(event(attrs))
+	for name, inf := range map[string]otlp.Inference{"span": fromSpan, "event": fromEvent} {
+		if !reflect.DeepEqual(inf.Content.Input, wantInput) || !reflect.DeepEqual(inf.Content.Output, wantOutput) {
+			t.Errorf("%s content = %+v", name, inf.Content)
+		}
+	}
+
+	bare, _ := Mapper{}.MapSpan(span(otlp.Attrs{"gen_ai.operation.name": "chat", "gen_ai.request.model": "example-model"}))
+	if !bare.Content.Empty() || bare.Content.Input != nil || bare.Content.Output != nil {
+		t.Errorf("content of a call that reported none = %+v", bare.Content)
 	}
 }

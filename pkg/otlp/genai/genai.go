@@ -1,6 +1,6 @@
-// Package genai maps spans that follow the OpenTelemetry GenAI semantic conventions to otlp.Inference records.
+// Package genai maps spans and events that follow the OpenTelemetry GenAI semantic conventions to otlp.Inference records.
 //
-// The conventions are still in development status and have renamed attributes between releases, so each field is read from its current name first and then from the names earlier releases used. Only spans for a model call are mapped: agent, workflow, tool, retrieval and memory spans are left alone, because an agent span repeats the token usage of the model calls beneath it. Message content, the log and metric signals, and provider-specific attributes are out of scope.
+// The conventions are still in development status and have renamed attributes between releases, so each field is read from its current name first and then from the names earlier releases used. Only records for a model call are mapped: the inference span and the inference details event. Agent, workflow, tool, retrieval and memory spans are left alone, because an agent span repeats the token usage of the model calls beneath it. Message content is passed through as reported. The metrics signal, the per-message events of earlier releases, and provider-specific attributes are out of scope.
 package genai
 
 import (
@@ -35,7 +35,17 @@ var (
 	attrErrorType  = []string{"error.type"}
 	attrHTTPStatus = []string{"http.response.status_code"}
 	attrService    = []string{"service.name"}
+	attrEventName  = []string{"event.name"}
 )
+
+// Content attributes, present only when the client opted in to capturing content. The forms earlier releases used (gen_ai.prompt, gen_ai.completion, one event per message) are not read.
+var (
+	contentInput  = []string{"gen_ai.system_instructions", "gen_ai.input.messages", "gen_ai.tool.definitions"}
+	contentOutput = []string{"gen_ai.output.messages"}
+)
+
+// eventInferenceDetails is the event that carries what the inference span carries, for clients that report model calls as events.
+const eventInferenceDetails = "gen_ai.client.inference.operation.details"
 
 // errorTypeOther is the conventions' value for an error with no more specific type.
 const errorTypeOther = "_OTHER"
@@ -48,15 +58,50 @@ var modelCallOperations = map[string]bool{
 	"embeddings":       true,
 }
 
-// Mapper implements otlp.SpanMapper for the GenAI semantic conventions.
+// Mapper implements otlp.SpanMapper and otlp.LogMapper for the GenAI semantic conventions.
 type Mapper struct{}
 
-// Name implements otlp.SpanMapper.
+// Name identifies the convention.
 func (Mapper) Name() string { return Name }
 
 // MapSpan implements otlp.SpanMapper.
 func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
-	a := s.Attrs
+	inf, ok := inference(s.Attrs, s.Resource)
+	if !ok {
+		return otlp.Inference{}, false
+	}
+	inf.TraceID, inf.SpanID, inf.Start = s.TraceID, s.SpanID, s.Start
+	if !s.Start.IsZero() && s.End.After(s.Start) {
+		inf.Duration = s.End.Sub(s.Start)
+	}
+	if inf.ErrorType == "" && s.Failed {
+		inf.ErrorType = errorTypeOther
+	}
+	return inf, true
+}
+
+// MapLog implements otlp.LogMapper. Only the inference details event is a model call; a log record has no duration, so the call's stays zero.
+func (Mapper) MapLog(r otlp.LogRecord) (otlp.Inference, bool) {
+	name := r.EventName
+	if name == "" {
+		name = r.Attrs.Str(attrEventName...)
+	}
+	if name != eventInferenceDetails {
+		return otlp.Inference{}, false
+	}
+	inf, ok := inference(r.Attrs, r.Resource)
+	if !ok {
+		return otlp.Inference{}, false
+	}
+	inf.TraceID, inf.SpanID, inf.Start = r.TraceID, r.SpanID, r.Time
+	if inf.Start.IsZero() {
+		inf.Start = r.Observed
+	}
+	return inf, true
+}
+
+// inference reads the attributes the inference span and the inference details event share. It reports false when they do not describe one request to a model.
+func inference(a, resource otlp.Attrs) (otlp.Inference, bool) {
 	op := a.Str(attrOperation...)
 	requestModel := a.Str(attrRequestModel...)
 	responseModel := a.Str(attrResponseModel...)
@@ -69,7 +114,7 @@ func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
 			return otlp.Inference{}, false
 		}
 	case (requestModel == "" && responseModel == "") || (!hasInput && !hasOutput):
-		// Without an operation name (instrumentations older than the attribute), only a span that names a model and carries token usage is taken as a model call.
+		// Without an operation name (instrumentations older than the attribute), only a record that names a model and carries token usage is taken as a model call.
 		return otlp.Inference{}, false
 	}
 
@@ -86,10 +131,7 @@ func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
 
 	inf := otlp.Inference{
 		Convention:     Name,
-		TraceID:        s.TraceID,
-		SpanID:         s.SpanID,
-		Service:        s.Resource.Str(attrService...),
-		Start:          s.Start,
+		Service:        resource.Str(attrService...),
 		Operation:      op,
 		Provider:       a.Str(attrProvider...),
 		RequestModel:   requestModel,
@@ -106,9 +148,10 @@ func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
 			AudioInput:  nonNegative(audioInput),
 			AudioOutput: nonNegative(audioOutput),
 		},
-	}
-	if !s.Start.IsZero() && s.End.After(s.Start) {
-		inf.Duration = s.End.Sub(s.Start)
+		Content: otlp.Content{
+			Input:  present(a, contentInput),
+			Output: present(a, contentOutput),
+		},
 	}
 	if reasons := a.Strings(attrFinishReasons...); len(reasons) > 0 {
 		inf.FinishReason = reasons[0]
@@ -123,10 +166,23 @@ func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
 	if status, ok := a.Int(attrHTTPStatus...); ok && status >= 100 && status <= 599 {
 		inf.HTTPStatus = int(status)
 	}
-	if inf.ErrorType == "" && s.Failed {
-		inf.ErrorType = errorTypeOther
-	}
 	return inf, true
+}
+
+// present returns the attributes among names that carry a value, by name, or nil when none does.
+func present(a otlp.Attrs, names []string) map[string]any {
+	var out map[string]any
+	for _, name := range names {
+		v, ok := a[name]
+		if !ok || v == nil || v == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]any, len(names))
+		}
+		out[name] = v
+	}
+	return out
 }
 
 func nonNegative(n int64) int64 {

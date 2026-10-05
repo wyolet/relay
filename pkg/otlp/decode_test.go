@@ -12,6 +12,7 @@ import (
 	"time"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -159,6 +160,127 @@ func TestDecodeTracesRejectsGarbage(t *testing.T) {
 	}
 }
 
+func TestDecodeLogsProtobuf(t *testing.T) {
+	at := time.Date(2026, 8, 4, 10, 52, 22, 30_000_000, time.UTC)
+	text := func(s string) *commonpb.AnyValue {
+		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: s}}
+	}
+	// One message as the conventions structure it: a map holding a role and an array of parts.
+	messages := &commonpb.AnyValue{Value: &commonpb.AnyValue_ArrayValue{ArrayValue: &commonpb.ArrayValue{Values: []*commonpb.AnyValue{
+		{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{Values: []*commonpb.KeyValue{
+			{Key: "role", Value: text("user")},
+			{Key: "parts", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_ArrayValue{ArrayValue: &commonpb.ArrayValue{Values: []*commonpb.AnyValue{
+				{Value: &commonpb.AnyValue_KvlistValue{KvlistValue: &commonpb.KeyValueList{Values: []*commonpb.KeyValue{
+					{Key: "type", Value: text("text")},
+					{Key: "content", Value: text("hello")},
+				}}}},
+			}}}}},
+		}}}},
+	}}}}
+	data := &logspb.LogsData{ResourceLogs: []*logspb.ResourceLogs{{
+		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{strAttr("service.name", "billing-agent")}},
+		ScopeLogs: []*logspb.ScopeLogs{{
+			Scope: &commonpb.InstrumentationScope{Name: "example.instrumentation"},
+			LogRecords: []*logspb.LogRecord{
+				{
+					TraceId:              mustHex(t, traceHex),
+					SpanId:               mustHex(t, spanHex),
+					EventName:            "example.event",
+					TimeUnixNano:         uint64(at.UnixNano()),
+					ObservedTimeUnixNano: uint64(at.Add(time.Millisecond).UnixNano()),
+					Body:                 text("a body"),
+					Attributes: []*commonpb.KeyValue{
+						intAttr("gen_ai.usage.input_tokens", 120),
+						{Key: "gen_ai.input.messages", Value: messages},
+					},
+				},
+				{ObservedTimeUnixNano: uint64(at.UnixNano())},
+			},
+		}},
+	}}}
+	body, err := proto.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := DecodeLogs(MediaTypeProtobuf, body)
+	if err != nil {
+		t.Fatalf("DecodeLogs: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	r := records[0]
+	if r.TraceID != traceHex || r.SpanID != spanHex || r.EventName != "example.event" {
+		t.Errorf("identity = %q %q %q", r.TraceID, r.SpanID, r.EventName)
+	}
+	if !r.Time.Equal(at) || !r.Observed.Equal(at.Add(time.Millisecond)) {
+		t.Errorf("times = %v observed %v", r.Time, r.Observed)
+	}
+	if r.Body != "a body" || r.Scope != "example.instrumentation" || r.Resource.Str("service.name") != "billing-agent" {
+		t.Errorf("body/scope/resource = %v %q %v", r.Body, r.Scope, r.Resource)
+	}
+	if n, ok := r.Attrs.Int("gen_ai.usage.input_tokens"); !ok || n != 120 {
+		t.Errorf("input tokens = %d %v", n, ok)
+	}
+	wantMessages := []any{map[string]any{"role": "user", "parts": []any{map[string]any{"type": "text", "content": "hello"}}}}
+	if got := r.Attrs["gen_ai.input.messages"]; !reflect.DeepEqual(got, wantMessages) {
+		t.Errorf("structured attribute = %#v, want %#v", got, wantMessages)
+	}
+	// A record emitted outside a span has no ids, name, body or event time.
+	if bare := records[1]; bare.TraceID != "" || bare.SpanID != "" || bare.EventName != "" || bare.Body != nil || !bare.Time.IsZero() || !bare.Observed.Equal(at) {
+		t.Errorf("bare record = %+v", bare)
+	}
+}
+
+func TestDecodeLogsJSON(t *testing.T) {
+	body := `{"resourceLogs":[{
+	  "resource":{"attributes":[{"key":"service.name","value":{"stringValue":"billing-agent"}}]},
+	  "scopeLogs":[{"scope":{"name":"example.instrumentation"},"logRecords":[{
+	    "traceId":"5B8EFFF798038103D269B633813FC60C",
+	    "spanId":"eee19b7ec3c1b174",
+	    "eventName":"example.event",
+	    "timeUnixNano":"1785840742030000000",
+	    "severityNumber":9,
+	    "unknownField":{"ignored":true},
+	    "attributes":[
+	      {"key":"gen_ai.usage.input_tokens","value":{"intValue":"120"}},
+	      {"key":"gen_ai.output.messages","value":{"arrayValue":{"values":[{"kvlistValue":{"values":[
+	        {"key":"role","value":{"stringValue":"assistant"}}
+	      ]}}]}}}
+	    ]}]}]}]}`
+
+	records, err := DecodeLogs(MediaTypeJSON, []byte(body))
+	if err != nil {
+		t.Fatalf("DecodeLogs: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	r := records[0]
+	if r.TraceID != traceHex || r.SpanID != spanHex || r.EventName != "example.event" {
+		t.Errorf("identity = %q %q %q", r.TraceID, r.SpanID, r.EventName)
+	}
+	if want := time.Unix(0, 1785840742030000000).UTC(); !r.Time.Equal(want) {
+		t.Errorf("time = %v, want %v", r.Time, want)
+	}
+	if got, want := r.Attrs["gen_ai.output.messages"], []any{map[string]any{"role": "assistant"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("structured attribute = %#v, want %#v", got, want)
+	}
+}
+
+func TestDecodeLogsRejectsGarbage(t *testing.T) {
+	if _, err := DecodeLogs(MediaTypeJSON, []byte(`{"resourceLogs":`)); err == nil {
+		t.Error("truncated json: want error")
+	}
+	if _, err := DecodeLogs(MediaTypeProtobuf, []byte{0xff, 0xff, 0xff}); err == nil {
+		t.Error("bad protobuf: want error")
+	}
+	if _, err := DecodeLogs("text/plain", nil); !errors.Is(err, ErrUnsupportedMediaType) {
+		t.Errorf("text/plain: err = %v", err)
+	}
+}
+
 func TestMediaType(t *testing.T) {
 	for header, want := range map[string]string{
 		"application/x-protobuf":          MediaTypeProtobuf,
@@ -229,28 +351,33 @@ func TestReadBody(t *testing.T) {
 	}
 }
 
-func TestTraceResponse(t *testing.T) {
-	if b := TraceResponse(MediaTypeProtobuf, 0, ""); len(b) != 0 {
-		t.Errorf("protobuf success = %x, want empty message", b)
-	}
-	if b := TraceResponse(MediaTypeJSON, 0, ""); string(b) != "{}" {
-		t.Errorf("json success = %s", b)
-	}
-
-	var got struct {
-		PartialSuccess struct {
-			RejectedSpans string `json:"rejectedSpans"`
-			ErrorMessage  string `json:"errorMessage"`
-		} `json:"partialSuccess"`
-	}
-	if err := json.Unmarshal(TraceResponse(MediaTypeJSON, 3, "no ids"), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.PartialSuccess.RejectedSpans != "3" || got.PartialSuccess.ErrorMessage != "no ids" {
-		t.Errorf("json partial = %+v", got)
+func TestExportResponse(t *testing.T) {
+	for _, signal := range []Signal{SignalTraces, SignalLogs} {
+		if b := ExportResponse(MediaTypeProtobuf, signal, 0, ""); len(b) != 0 {
+			t.Errorf("%s protobuf success = %x, want empty message", signal, b)
+		}
+		if b := ExportResponse(MediaTypeJSON, signal, 0, ""); string(b) != "{}" {
+			t.Errorf("%s json success = %s", signal, b)
+		}
 	}
 
-	b := TraceResponse(MediaTypeProtobuf, 3, "no ids")
+	// The count of refused records is the one field the signals name differently.
+	for signal, field := range map[Signal]string{SignalTraces: "rejectedSpans", SignalLogs: "rejectedLogRecords"} {
+		var got struct {
+			PartialSuccess map[string]string `json:"partialSuccess"`
+		}
+		if err := json.Unmarshal(ExportResponse(MediaTypeJSON, signal, 3, "no ids"), &got); err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{field: "3", "errorMessage": "no ids"}; !reflect.DeepEqual(got.PartialSuccess, want) {
+			t.Errorf("%s json partial = %v, want %v", signal, got.PartialSuccess, want)
+		}
+	}
+
+	b := ExportResponse(MediaTypeProtobuf, SignalLogs, 3, "no ids")
+	if !bytes.Equal(b, ExportResponse(MediaTypeProtobuf, SignalTraces, 3, "no ids")) {
+		t.Error("protobuf partial success differs between signals; both number the count field 1")
+	}
 	num, typ, n := protowire.ConsumeTag(b)
 	if num != 1 || typ != protowire.BytesType {
 		t.Fatalf("outer tag = %d/%d", num, typ)

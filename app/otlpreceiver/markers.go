@@ -38,11 +38,14 @@ end
 return 1
 `
 
-// Call identifies one reported model call. Every signal that reports the same call uses the same identity.
+// Call identifies one reported model call within a tenant. Every signal that reports the same call uses the same identity: the ids of the span the call ran in. A call reported without them is identified by a digest of its response id in TraceID.
 type Call struct {
 	TraceID string
 	SpanID  string
 }
+
+// RequestID is the request id of the call's usage event and of its stored content. Derived from the identity, so a call the client sends twice keeps one id.
+func (c Call) RequestID() string { return "otlp-" + c.TraceID + "-" + c.SpanID }
 
 // Markers remembers which reported calls were already stored, so a call an exporter sends again is stored once. Every method takes the tenant the calls were reported for: the same ids reported by two tenants are two calls. Safe for concurrent use.
 type Markers struct {

@@ -5,6 +5,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/otlpreceiver"
+	"github.com/wyolet/relay/app/payloadlog"
 	"github.com/wyolet/relay/app/pricing"
 	"github.com/wyolet/relay/app/settings"
 	"github.com/wyolet/relay/app/usagelog"
@@ -28,8 +29,8 @@ var otlpProviderHints = map[string]otlpreceiver.ProviderHint{
 	"ibm.watsonx.ai":  {Provider: "ibm"},
 }
 
-// buildOTLPReceiver wires the OpenTelemetry receiver onto the usage emitter proxied traffic uses, so reported model calls land in the same store. The telemetry conventions it understands are registered here; a span is offered to each in order.
-func buildOTLPReceiver(cfg *config.Config, cat *appcatalog.Catalog, usageCtl *usagelog.Controller, kvStore kv.Store, limiter *pkgratelimit.Limiter) *otlpreceiver.Handler {
+// buildOTLPReceiver wires the OpenTelemetry receiver onto the usage and payload emitters proxied traffic uses, so reported model calls and their content land in the same stores. The telemetry conventions it understands are registered here; a span or log record is offered to each in order.
+func buildOTLPReceiver(cfg *config.Config, cat *appcatalog.Catalog, usageCtl *usagelog.Controller, payloadCtl *payloadlog.Controller, kvStore kv.Store, limiter *pkgratelimit.Limiter) *otlpreceiver.Handler {
 	var markers *otlpreceiver.Markers
 	if scripter, ok := kvStore.(kv.Scripter); ok {
 		markers = otlpreceiver.NewMarkers(scripter)
@@ -45,9 +46,13 @@ func buildOTLPReceiver(cfg *config.Config, cat *appcatalog.Catalog, usageCtl *us
 		Pricer: usagelog.NewPricer(func(id string) (*pricing.Pricing, bool) {
 			return cat.Current().Pricing(id)
 		}),
-		Mappers:       []otlp.SpanMapper{genai.Mapper{}},
-		ProviderHints: otlpProviderHints,
-		InstanceID:    cfg.InstanceID,
-		MaxBodyBytes:  cfg.MaxRequestBytes,
+		SpanMappers:    []otlp.SpanMapper{genai.Mapper{}},
+		LogMappers:     []otlp.LogMapper{genai.Mapper{}},
+		ProviderHints:  otlpProviderHints,
+		CaptureContent: func() bool { return settings.OTLPReceiverFrom(cat).CaptureContent },
+		PayloadLog:     payloadCtl,
+		Payloads:       payloadCtl.Emitter(),
+		InstanceID:     cfg.InstanceID,
+		MaxBodyBytes:   cfg.MaxRequestBytes,
 	})
 }

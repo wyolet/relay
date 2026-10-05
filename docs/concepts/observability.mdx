@@ -87,7 +87,7 @@ curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
   -d '{"enabled": true}'
 ```
 
-Then point the application's OTLP/HTTP trace exporter at `/otlp/v1/traces` on the inference port, authenticated with a relay key or token. Use the trace-specific variables: the generic `OTEL_EXPORTER_OTLP_ENDPOINT` would also send metrics and logs, which Relay does not accept.
+Then point the application's OTLP/HTTP trace exporter at `/otlp/v1/traces` on the inference port, authenticated with a relay key or token. Use the signal-specific variables: the generic `OTEL_EXPORTER_OTLP_ENDPOINT` would also send metrics, which Relay does not accept.
 
 ```bash
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8080/otlp/v1/traces
@@ -107,7 +107,26 @@ How a reported event differs from a proxied one:
 - Cost is computed from the catalog when the reported model resolves to a catalog model. `gen_ai.provider.name` values that differ from catalog names (`gcp.gemini`, `x_ai`, `mistral_ai`, …) are mapped to the catalog provider and, where the name stands for a serving host, to that host's pricing; otherwise the provider's own host pricing is used when it has one. An unknown model is stored unpriced.
 - `gen_ai.usage.input_tokens` includes cached tokens under the conventions; Relay stores the uncached part as `input` and the cached parts as `cache_read` / `cache_creation`, the same split proxied events use. `gen_ai.usage.audio.input_tokens` / `audio.output_tokens` are stored as `audio_input` / `audio_output`, which stay counted inside `input` / `output`.
 - `extras` carries `trace_id`, `span_id`, `response_id` (the provider's response id), `session_id` (from `gen_ai.conversation.id`), `service` (the exporter's `service.name`) and `reported_provider`.
-- Message content is not stored, even if the span carries it.
+- Message content is not stored unless content capture is turned on (below).
+
+### Events (logs signal)
+
+Instrumentations that report a model call as the `gen_ai.client.inference.operation.details` event can send their logs to `/otlp/v1/logs` (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, same protocol and headers as traces). The event carries the same attributes as the span and is recorded the same way, except that a log record has no duration, so `duration_ms` is 0. Every other log record is ignored.
+
+An event emitted inside a span carries that span's trace id and span id, so the span and the event of one call are one usage event: whichever arrives first is recorded and the other is skipped. An event without span ids is identified by `gen_ai.response.id` instead (its `request_id` is `otlp-<digest of the response id>-response`); with neither, it is rejected in `partialSuccess.rejectedLogRecords`.
+
+### Message content
+
+A client that opts in to content capture in its instrumentation sends `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.definitions` and `gen_ai.output.messages` on the span or the event. Relay stores them only when both switches are on: [payload logging](#payload-logging) globally, and `captureContent` on the receiver.
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "captureContent": true}'
+```
+
+The content becomes the payload of the call's log record, shown by `GET /api/logs/{request_id}` like a proxied request's bodies: the request body is one JSON object holding the input-side attributes under their attribute names, the response body one JSON object holding `gen_ai.output.messages`. The payload `maxBytes` cap and truncation flags apply. The per-policy and per-key `payloadLoggingEnabled` flags do not: they gate proxied requests. Content is stored once per call, also when it arrives after the usage event (a span first, its event with content later). When the payload queue is busy, content is dropped rather than delaying the export; `relay_otlp_content_total{outcome="dropped"}` counts it.
 
 A model call is identified by its trace id and span id (its `request_id` is `otlp-<trace id>-<span id>`), and a span sent again within 24 hours is skipped, so exporter retries do not double count. The export still succeeds; skipped spans are not reported as rejected. Calls are recognised per project (per principal for a credential outside any project): the same service reporting through two keys of one project is recorded once, and two projects reporting the same ids are recorded separately.
 

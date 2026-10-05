@@ -46,6 +46,7 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 	"github.com/wyolet/relay/pkg/otlp"
 	"github.com/wyolet/relay/pkg/otlp/genai"
+	"github.com/wyolet/relay/pkg/payload"
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 	"github.com/wyolet/relay/pkg/slug"
 )
@@ -74,7 +75,10 @@ type fixture struct {
 	capacity int
 	// phantomRoom is added to the room the queue reports, like emits from other requests landing between the receiver's check and its own.
 	phantomRoom int
-	project     *project.Project
+	// captureContent is the receiver's own content switch; payloads is the payload store behind it.
+	captureContent bool
+	payloads       *payloadStore
+	project        *project.Project
 	// otherProject is the project of outsiderKey.
 	otherProject *project.Project
 	team         *team.Team
@@ -99,6 +103,30 @@ func (fx *fixture) Free() int { return fx.capacity - len(fx.events) + fx.phantom
 
 func (fx *fixture) Capacity() int { return fx.capacity }
 
+// payloadStore stands in for the payload controller and its queue: records holds what was queued.
+type payloadStore struct {
+	enabled  bool
+	maxBytes int
+	records  []payload.Record
+	capacity int
+}
+
+func (p *payloadStore) Enabled() bool { return p.enabled }
+
+func (p *payloadStore) MaxBytes() int { return p.maxBytes }
+
+func (p *payloadStore) TryEmit(r payload.Record) bool {
+	if len(p.records) >= p.capacity {
+		return false
+	}
+	p.records = append(p.records, r)
+	return true
+}
+
+func (p *payloadStore) Free() int { return p.capacity - len(p.records) }
+
+func (p *payloadStore) Capacity() int { return p.capacity }
+
 type fixtureOptions struct {
 	// exportsPerMinute above zero adds the system rate limit on exports with that budget.
 	exportsPerMinute int64
@@ -121,7 +149,7 @@ func newFixture(t *testing.T) *fixture {
 
 func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	t.Helper()
-	fx := &fixture{enabled: true, capacity: usagelog.DefaultQueueSize}
+	fx := &fixture{enabled: true, capacity: usagelog.DefaultQueueSize, payloads: &payloadStore{capacity: 256}}
 
 	fx.team = &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: system()}}
 	fx.project = &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-search"}, Spec: project.Spec{TeamID: fx.team.Meta.ID}}
@@ -231,26 +259,48 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		markers = otlpreceiver.NewMarkers(o.markerStore)
 	}
 	h := otlpreceiver.New(otlpreceiver.Options{
-		Enabled:  func() bool { return fx.enabled },
-		Snapshot: cat.Current,
-		Usage:    fx,
-		Markers:  markers,
-		Limiter:  pkgratelimit.New(state, slog.New(slog.DiscardHandler), nil),
-		Pricer:   usagelog.NewPricer(func(id string) (*pricing.Pricing, bool) { return cat.Current().Pricing(id) }),
-		Mappers:  []otlp.SpanMapper{genai.Mapper{}},
+		Enabled:     func() bool { return fx.enabled },
+		Snapshot:    cat.Current,
+		Usage:       fx,
+		Markers:     markers,
+		Limiter:     pkgratelimit.New(state, slog.New(slog.DiscardHandler), nil),
+		Pricer:      usagelog.NewPricer(func(id string) (*pricing.Pricing, bool) { return cat.Current().Pricing(id) }),
+		SpanMappers: []otlp.SpanMapper{genai.Mapper{}},
+		LogMappers:  []otlp.LogMapper{genai.Mapper{}},
 		ProviderHints: map[string]otlpreceiver.ProviderHint{
 			"acme.cloud": {Provider: "acme", Host: "a-reseller"},
 			"zeta_ai":    {Provider: "zeta"},
 		},
-		InstanceID: "pod-a",
+		CaptureContent: func() bool { return fx.captureContent },
+		PayloadLog:     fx.payloads,
+		Payloads:       fx.payloads,
+		InstanceID:     "pod-a",
 	})
-	fx.handler = inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(cat, nil)(h))
+	authenticated := func(next http.Handler) http.Handler {
+		return inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(cat, nil)(next))
+	}
+	mux := http.NewServeMux()
+	mux.Handle(otlpreceiver.TracesPath, authenticated(h.Traces()))
+	mux.Handle(otlpreceiver.LogsPath, authenticated(h.Logs()))
+	fx.handler = mux
 	return fx
 }
 
+// post sends a trace export.
 func (fx *fixture) post(t *testing.T, contentType string, body []byte, header ...string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, otlpreceiver.TracesPath, bytes.NewReader(body))
+	return fx.postTo(t, otlpreceiver.TracesPath, contentType, body, header...)
+}
+
+// postLogs sends a logs export.
+func (fx *fixture) postLogs(t *testing.T, contentType string, body []byte, header ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	return fx.postTo(t, otlpreceiver.LogsPath, contentType, body, header...)
+}
+
+func (fx *fixture) postTo(t *testing.T, path, contentType string, body []byte, header ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Authorization", "Bearer "+relayKey)
 	for i := 0; i+1 < len(header); i += 2 {
@@ -298,8 +348,9 @@ func export(t *testing.T, spans ...*tracepb.Span) []byte {
 	return b
 }
 
-func chatSpan(spanID byte, modelName string) *tracepb.Span {
-	return pbSpan(spanID,
+// chatAttrs are the attributes of one chat call, which its span and its event both carry.
+func chatAttrs(modelName string) []*commonpb.KeyValue {
+	return []*commonpb.KeyValue{
 		str("gen_ai.operation.name", "chat"),
 		str("gen_ai.provider.name", "acme"),
 		str("gen_ai.request.model", modelName),
@@ -309,7 +360,11 @@ func chatSpan(spanID byte, modelName string) *tracepb.Span {
 		num("gen_ai.usage.cache_read.input_tokens", 700),
 		num("gen_ai.usage.cache_write.input_tokens", 200),
 		num("gen_ai.usage.output_tokens", 300),
-	)
+	}
+}
+
+func chatSpan(spanID byte, modelName string) *tracepb.Span {
+	return pbSpan(spanID, chatAttrs(modelName)...)
 }
 
 func TestExportRecordsAPricedUsageEvent(t *testing.T) {
