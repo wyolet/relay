@@ -28,7 +28,7 @@ func routingOptions(cfg *config.Config) []routing.Option {
 }
 
 func buildBatch(bootCtx, listenerCtx context.Context, st *storagemod.Storage, cat *appcatalog.Catalog, pl *pipeline.Pipeline,
-	specRegistry *adapter.Registry, routingOpts []routing.Option) (*jobq.Queue, *batch.Service) {
+	specRegistry *adapter.Registry, routingOpts []routing.Option, maxItems int) (*jobq.Queue, *batch.Service) {
 	// Batch subsystem: jobq-backed background execution of bulk inference
 	// submissions. jobq owns durable per-item execution + payload storage;
 	// app/batch owns the batch record and the customer API. The per-item
@@ -52,6 +52,7 @@ func buildBatch(bootCtx, listenerCtx context.Context, st *storagemod.Storage, ca
 		batchQueue,
 		&batch.Runner{Resolver: routing.New(cat, routingOpts...), Pipeline: pl, Specs: specRegistry, Catalog: cat},
 		batchCaller,
+		maxItems,
 	)
 	batchQueue.Register(batch.Queue, batchSvc.Handler())
 	if err := batchQueue.Start(listenerCtx); err != nil {

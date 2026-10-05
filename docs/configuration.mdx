@@ -43,6 +43,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CLUSTER_MODE` | `off` | `on` enables the Postgres `LISTEN` consumer so every pod's snapshot stays in sync. Turn `on` for any multi-pod deployment. |
 | `RELAY_INSTANCE_ID` | _(empty)_ | Stable pod/instance identity, surfaced in logs, metrics, and usage events (`extras.instance`). |
 | `RELAY_MAX_REQUEST_BYTES` | _(unlimited)_ | Reject inbound request bodies larger than this many bytes. |
+| `RELAY_BATCH_MAX_ITEMS` | `50000` | Most items one `POST /v1/batches` submission may carry; larger submissions get `400`. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Timeout for the `/healthz` dependency checks. |
 
 ### Streaming

@@ -54,6 +54,10 @@ func (s *Service) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		items[i] = raw
 	}
 	id, err := s.Submit(r.Context(), c, req.Shape, items)
+	if errors.Is(err, ErrTooManyItems) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

@@ -45,7 +45,7 @@ func testService(t *testing.T, handler jobq.Handler) (*Service, *jobq.Queue, con
 	}
 	t.Cleanup(func() { cancel(); q.Wait() })
 	// runner is nil: these tests drive a stub handler, never Service.Handler().
-	return NewService(NewStore(pool), q, nil, nil), q, cancel
+	return NewService(NewStore(pool), q, nil, nil, 0), q, cancel
 }
 
 // keyCaller is a submission by a service-account key: the owner token is the
