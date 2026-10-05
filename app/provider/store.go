@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -51,7 +52,7 @@ func (s *Store) Upsert(ctx context.Context, p *Provider) error {
 	if err != nil {
 		return fmt.Errorf("provider.Upsert: %w", err)
 	}
-	return s.q.UpsertProvider(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertProvider(ctx, params))
 }
 
 // Get returns the Provider with the given id, or (nil, nil) if not found.
@@ -69,6 +70,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Provider, error) {
 	}
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
+	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -89,6 +91,7 @@ func fromRow(r gen.ListProvidersRow) (*Provider, error) {
 	}
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
+	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -105,11 +108,16 @@ func toUpsertParams(p *Provider) (gen.UpsertProviderParams, error) {
 	if err != nil {
 		return gen.UpsertProviderParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := p.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertProviderParams{}, err
+	}
 	return gen.UpsertProviderParams{
-		ID:          p.Meta.ID,
-		Name:        p.Meta.Name,
-		DisplayName: p.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              p.Meta.ID,
+		Name:            p.Meta.Name,
+		DisplayName:     p.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

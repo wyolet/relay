@@ -28,7 +28,7 @@ func (s *Store) List(ctx context.Context) ([]*ServiceAccount, error) {
 	}
 	out := make([]*ServiceAccount, 0, len(rows))
 	for _, r := range rows {
-		sa, err := fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+		sa, err := fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 		if err != nil {
 			return nil, fmt.Errorf("serviceaccount %s: %w", r.Name, err)
 		}
@@ -46,7 +46,7 @@ func (s *Store) Get(ctx context.Context, id string) (*ServiceAccount, error) {
 		}
 		return nil, fmt.Errorf("serviceaccount.Get: %w", err)
 	}
-	return fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+	return fromRow(r.ID, r.Name, r.DisplayName, r.ProjectID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 }
 
 // Upsert expects Meta.ID set by the caller and re-derives Owner from ProjectID.
@@ -56,7 +56,7 @@ func (s *Store) Upsert(ctx context.Context, sa *ServiceAccount) error {
 	if err != nil {
 		return fmt.Errorf("serviceaccount.Upsert: %w", err)
 	}
-	return s.q.UpsertServiceAccount(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertServiceAccount(ctx, params))
 }
 
 // Delete relies on the FK to cascade the account's keys.
@@ -64,13 +64,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteServiceAccount(ctx, id)
 }
 
-func fromRow(id, name, displayName, projectID string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz) (*ServiceAccount, error) {
+func fromRow(id, name, displayName, projectID string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz, version int64) (*ServiceAccount, error) {
 	md, err := meta.UnmarshalJSONB(id, name, displayName, metadata)
 	if err != nil {
 		return nil, err
 	}
 	md.CreatedAt = createdAt.Time
 	md.UpdatedAt = updatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(version)
 	var sp Spec
 	if err := json.Unmarshal(spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -90,12 +91,17 @@ func toUpsertParams(sa *ServiceAccount) (gen.UpsertServiceAccountParams, error) 
 	if err != nil {
 		return gen.UpsertServiceAccountParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := sa.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertServiceAccountParams{}, err
+	}
 	return gen.UpsertServiceAccountParams{
-		ID:          sa.Meta.ID,
-		Name:        sa.Meta.Name,
-		DisplayName: sa.Meta.DisplayName,
-		ProjectID:   sa.Spec.ProjectID,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
+		ID:              sa.Meta.ID,
+		Name:            sa.Meta.Name,
+		DisplayName:     sa.Meta.DisplayName,
+		ProjectID:       sa.Spec.ProjectID,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
 	}, nil
 }

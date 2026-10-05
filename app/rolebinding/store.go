@@ -89,7 +89,7 @@ func (s *Store) Upsert(ctx context.Context, b *RoleBinding) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
-	if err := q.UpsertRoleBinding(ctx, params); err != nil {
+	if err := meta.StaleIfNoRows(q.UpsertRoleBinding(ctx, params)); err != nil {
 		return fmt.Errorf("rolebinding.Upsert: role_bindings: %w", err)
 	}
 	if err := q.DeleteRoleBindingSubjects(ctx, b.Meta.ID); err != nil {
@@ -147,6 +147,7 @@ func fromRow(r gen.RoleBinding) (*RoleBinding, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var sp Spec
 	if err := json.Unmarshal(r.Spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -174,14 +175,19 @@ func toUpsertParams(b *RoleBinding) (gen.UpsertRoleBindingParams, error) {
 	if err != nil {
 		return gen.UpsertRoleBindingParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := b.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertRoleBindingParams{}, err
+	}
 	return gen.UpsertRoleBindingParams{
-		ID:          b.Meta.ID,
-		Name:        b.Meta.Name,
-		DisplayName: b.Meta.DisplayName,
-		RoleID:      b.Spec.RoleID,
-		ScopeKind:   string(b.Spec.Scope.Kind),
-		ScopeID:     text(b.Spec.Scope.ID),
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              b.Meta.ID,
+		Name:            b.Meta.Name,
+		DisplayName:     b.Meta.DisplayName,
+		RoleID:          b.Spec.RoleID,
+		ScopeKind:       string(b.Spec.Scope.Kind),
+		ScopeID:         text(b.Spec.Scope.ID),
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

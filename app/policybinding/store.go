@@ -89,7 +89,7 @@ func (s *Store) Upsert(ctx context.Context, b *PolicyBinding) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
-	if err := q.UpsertPolicyBinding(ctx, params); err != nil {
+	if err := meta.StaleIfNoRows(q.UpsertPolicyBinding(ctx, params)); err != nil {
 		return fmt.Errorf("policybinding.Upsert: policy_bindings: %w", err)
 	}
 	if err := q.DeletePolicyBindingSubjects(ctx, b.Meta.ID); err != nil {
@@ -147,6 +147,7 @@ func fromRow(r gen.PolicyBinding) (*PolicyBinding, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var sp Spec
 	if err := json.Unmarshal(r.Spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -177,14 +178,19 @@ func toUpsertParams(b *PolicyBinding) (gen.UpsertPolicyBindingParams, error) {
 	if err != nil {
 		return gen.UpsertPolicyBindingParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := b.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertPolicyBindingParams{}, err
+	}
 	return gen.UpsertPolicyBindingParams{
-		ID:          b.Meta.ID,
-		Name:        b.Meta.Name,
-		DisplayName: b.Meta.DisplayName,
-		ProjectID:   b.Spec.ProjectID,
-		PolicyID:    b.Spec.PolicyID,
-		Priority:    int32(b.EffectivePriority()),
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              b.Meta.ID,
+		Name:            b.Meta.Name,
+		DisplayName:     b.Meta.DisplayName,
+		ProjectID:       b.Spec.ProjectID,
+		PolicyID:        b.Spec.PolicyID,
+		Priority:        int32(b.EffectivePriority()),
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

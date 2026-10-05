@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -51,7 +52,7 @@ func (s *Store) Upsert(ctx context.Context, h *Host) error {
 	if err != nil {
 		return fmt.Errorf("host.Upsert: %w", err)
 	}
-	return s.q.UpsertHost(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertHost(ctx, params))
 }
 
 // Get returns the Host with the given id, or (nil, nil) if not found.
@@ -69,6 +70,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Host, error) {
 	}
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
+	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -89,6 +91,7 @@ func fromRow(r gen.Host) (*Host, error) {
 	}
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
+	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -105,11 +108,16 @@ func toUpsertParams(h *Host) (gen.UpsertHostParams, error) {
 	if err != nil {
 		return gen.UpsertHostParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := h.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertHostParams{}, err
+	}
 	return gen.UpsertHostParams{
-		ID:          h.Meta.ID,
-		Name:        h.Meta.Name,
-		DisplayName: h.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              h.Meta.ID,
+		Name:            h.Meta.Name,
+		DisplayName:     h.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

@@ -63,7 +63,7 @@ func (s *Store) Upsert(ctx context.Context, b *Binding) error {
 	if err != nil {
 		return fmt.Errorf("binding.Upsert: %w", err)
 	}
-	if err := gen.New(s.db).UpsertHostBinding(ctx, params); err != nil {
+	if err := meta.StaleIfNoRows(gen.New(s.db).UpsertHostBinding(ctx, params)); err != nil {
 		return fmt.Errorf("binding.Upsert: %w", err)
 	}
 	return nil
@@ -81,6 +81,7 @@ func fromRow(r gen.HostBinding) (*Binding, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -110,14 +111,19 @@ func toUpsertParams(b *Binding) (gen.UpsertHostBindingParams, error) {
 	if b.Spec.PricingID != "" {
 		pricing = pgtype.Text{String: b.Spec.PricingID, Valid: true}
 	}
+	ver, ok, err := b.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertHostBindingParams{}, err
+	}
 	return gen.UpsertHostBindingParams{
-		ID:          b.Meta.ID,
-		Name:        b.Meta.Name,
-		DisplayName: b.Meta.DisplayName,
-		ModelID:     b.Spec.ModelID,
-		HostID:      b.Spec.HostID,
-		PricingID:   pricing,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              b.Meta.ID,
+		Name:            b.Meta.Name,
+		DisplayName:     b.Meta.DisplayName,
+		ModelID:         b.Spec.ModelID,
+		HostID:          b.Spec.HostID,
+		PricingID:       pricing,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

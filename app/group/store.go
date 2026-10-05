@@ -40,7 +40,7 @@ func (s *Store) List(ctx context.Context) ([]*Group, error) {
 	}
 	out := make([]*Group, 0, len(rows))
 	for _, r := range rows {
-		g, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+		g, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 		if err != nil {
 			return nil, fmt.Errorf("group %s: %w", r.Name, err)
 		}
@@ -60,7 +60,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Group, error) {
 		}
 		return nil, fmt.Errorf("group.Get: %w", err)
 	}
-	g, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+	g, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func (s *Store) Upsert(ctx context.Context, g *Group) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
-	if err := q.UpsertGroup(ctx, params); err != nil {
+	if err := meta.StaleIfNoRows(q.UpsertGroup(ctx, params)); err != nil {
 		return fmt.Errorf("group.Upsert: groups: %w", err)
 	}
 	if err := q.DeleteGroupMembers(ctx, g.Meta.ID); err != nil {
@@ -112,13 +112,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return gen.New(s.db).DeleteGroup(ctx, id)
 }
 
-func fromRow(id, name, displayName string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz) (*Group, error) {
+func fromRow(id, name, displayName string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz, version int64) (*Group, error) {
 	md, err := meta.UnmarshalJSONB(id, name, displayName, metadata)
 	if err != nil {
 		return nil, err
 	}
 	md.CreatedAt = createdAt.Time
 	md.UpdatedAt = updatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(version)
 	var sp Spec
 	if err := json.Unmarshal(spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -140,11 +141,16 @@ func toUpsertParams(g *Group) (gen.UpsertGroupParams, error) {
 	if err != nil {
 		return gen.UpsertGroupParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := g.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertGroupParams{}, err
+	}
 	return gen.UpsertGroupParams{
-		ID:          g.Meta.ID,
-		Name:        g.Meta.Name,
-		DisplayName: g.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
+		ID:              g.Meta.ID,
+		Name:            g.Meta.Name,
+		DisplayName:     g.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
 	}, nil
 }
