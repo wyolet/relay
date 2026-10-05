@@ -8,7 +8,7 @@ type OTLPReceiver struct {
 	// Enabled accepts exports at POST /otlp/v1/traces and /otlp/v1/logs. Off by default: reported usage is self-declared by the client and is recorded, never enforced.
 	Enabled bool `json:"enabled"`
 	// CaptureContent stores the message content a client reports with a call (instructions, input and output messages, tool definitions) in the payload store. It takes effect only while payload logging is enabled. Off by default: content is the client's data and the largest part of an export.
-	CaptureContent bool `json:"captureContent"`
+	CaptureContent bool `json:"captureContent,omitempty"`
 }
 
 // Validate is enforced before any write.

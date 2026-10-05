@@ -80,14 +80,16 @@ Model calls that never pass through Relay can still be recorded. An application 
 
 ### Enable the receiver
 
-The receiver is off by default and returns `404` until the `otlp-receiver` setting is enabled. The write replaces the whole section, so send both fields. It applies without a restart.
+The receiver is off by default and returns `404` until the `otlp-receiver` setting is enabled. It applies without a restart.
 
 ```bash
 curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"enabled": true, "captureContent": false}'
+  -d '{"enabled": true}'
 ```
+
+The write replaces the whole section: a field left out takes its default, so this body also turns [content capture](#message-content) off.
 
 ### Configure the exporter
 
@@ -150,7 +152,7 @@ A row is as complete as the instrumentation makes it. Three examples from curren
 - `request_id` is `otlp-<trace id>-<span id>`.
 - It is attributed to the credential that sent the export, not to anything the telemetry claims.
 - `policy`, `host` and `host_key` are empty: Relay routed nothing. No policy, budget or inference rate limit is applied or consumed.
-- Token counts use the same split as proxied events. `gen_ai.usage.input_tokens` includes cached tokens under the conventions, so Relay stores the uncached part as `input` and the rest as `cache_read` and `cache_creation`. `audio_input` and `audio_output` stay counted inside `input` and `output`. `gen_ai.usage.output_tokens` includes reasoning tokens; when the model's rate sheet prices reasoning as its own meter they are taken out of `output`, so they are charged once.
+- Token counts use the same split as proxied events. `gen_ai.usage.input_tokens` includes cached tokens under the conventions, so Relay stores the uncached part as `input` and the rest as `cache_read` and `cache_creation`. `audio_input` and `audio_output` stay counted inside `input` and `output`. `reasoning` likewise stays counted inside `output`. When the model's rate sheet prices reasoning as its own meter, the cost charges those tokens on that meter only, not on output as well; the stored counts are the same either way.
 - Timing has no relay overhead or attempt count; it is the client's own measurement.
 
 ### Duplicates

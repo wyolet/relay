@@ -38,4 +38,13 @@ func TestOTLPReceiverDecodesContentCapture(t *testing.T) {
 	if !got.Enabled || !got.CaptureContent {
 		t.Errorf("decoded = %+v, want both switches on", got)
 	}
+
+	// The body that enabled the receiver before content capture existed still does, and leaves capture off.
+	v, err = sec.Decode([]byte(`{"enabled":true}`))
+	if err != nil {
+		t.Fatalf("Decode without captureContent: %v", err)
+	}
+	if got := OTLPReceiverFrom(oneSection{SectionOTLPReceiver: v}); !got.Enabled || got.CaptureContent {
+		t.Errorf("decoded = %+v, want the receiver on and content capture off", got)
+	}
 }
