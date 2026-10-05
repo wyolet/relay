@@ -50,7 +50,17 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
-const relayKey = "sk-wr-reporter"
+// relayKey is the reporter every export uses unless a test names another. siblingKey belongs to a second service account of the same project, outsiderKey to another project.
+const (
+	relayKey    = "sk-wr-reporter"
+	siblingKey  = "sk-wr-sibling"
+	outsiderKey = "sk-wr-outsider"
+)
+
+func keyHash(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
 
 type rows[T any] []*T
 
@@ -65,11 +75,13 @@ type fixture struct {
 	// phantomRoom is added to the room the queue reports, like emits from other requests landing between the receiver's check and its own.
 	phantomRoom int
 	project     *project.Project
-	team        *team.Team
-	sa          *serviceaccount.ServiceAccount
-	keyRow      *key.Key
-	model       *model.Model
-	ownPrice    *pricing.Pricing
+	// otherProject is the project of outsiderKey.
+	otherProject *project.Project
+	team         *team.Team
+	sa           *serviceaccount.ServiceAccount
+	keyRow       *key.Key
+	model        *model.Model
+	ownPrice     *pricing.Pricing
 	// sharedAcme and sharedZeta are two providers' models with the same snapshot name.
 	sharedAcme *model.Model
 	sharedZeta *model.Model
@@ -90,6 +102,8 @@ func (fx *fixture) Capacity() int { return fx.capacity }
 type fixtureOptions struct {
 	// exportsPerMinute above zero adds the system rate limit on exports with that budget.
 	exportsPerMinute int64
+	// rateLimitDisabled switches that rate limit row off.
+	rateLimitDisabled bool
 	// markerStore replaces the in-memory store behind the duplicate markers.
 	markerStore kv.Scripter
 }
@@ -115,10 +129,23 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	// No policy anywhere on this principal: reporting needs a credential, not a route.
 	fx.sa = &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer"}, Spec: serviceaccount.Spec{ProjectID: fx.project.Meta.ID}}
 	fx.sa.StampOwner()
-	sum := sha256.Sum256([]byte(relayKey))
 	fx.keyRow = &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-prod", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
-		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: fx.sa.Meta.ID}, KeyHash: hex.EncodeToString(sum[:])},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: fx.sa.Meta.ID}, KeyHash: keyHash(relayKey)},
+	}
+	sibling := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "crawler"}, Spec: serviceaccount.Spec{ProjectID: fx.project.Meta.ID}}
+	sibling.StampOwner()
+	siblingRow := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "crawler-prod", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: sibling.Meta.ID}, KeyHash: keyHash(siblingKey)},
+	}
+	fx.otherProject = &project.Project{Meta: meta.Metadata{ID: meta.NewID(), Name: "ml-ads"}, Spec: project.Spec{TeamID: fx.team.Meta.ID}}
+	fx.otherProject.StampOwner()
+	outsider := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "bidder"}, Spec: serviceaccount.Spec{ProjectID: fx.otherProject.Meta.ID}}
+	outsider.StampOwner()
+	outsiderRow := &key.Key{
+		Meta: meta.Metadata{ID: meta.NewID(), Name: "bidder-prod", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.otherProject.Meta.ID}},
+		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: outsider.Meta.ID}, KeyHash: keyHash(outsiderKey)},
 	}
 
 	prov := &provider.Provider{Meta: meta.Metadata{ID: meta.NewID(), Name: "acme", Owner: system()}}
@@ -162,9 +189,10 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 
 	var limits rows[ratelimit.RateLimit]
 	if o.exportsPerMinute > 0 {
+		enabled := !o.rateLimitDisabled
 		limits = append(limits, &ratelimit.RateLimit{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: otlpreceiver.RateLimitName, Owner: system()},
-			Spec: ratelimit.Spec{Rules: []ratelimit.Rule{
+			Spec: ratelimit.Spec{Enabled: &enabled, Rules: []ratelimit.Rule{
 				{Meter: ratelimit.MeterRequests, Amount: o.exportsPerMinute, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategySlidingWindow},
 				// Not a requests rule, so it must not apply: nothing would ever release the slot.
 				{Meter: ratelimit.MeterConcurrency, Amount: 1, Window: ratelimit.Window(time.Minute), Strategy: ratelimit.StrategySlidingWindow},
@@ -179,14 +207,14 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		rows[model.Model]{fx.model, fx.sharedAcme, fx.sharedZeta},
 		rows[hostkey.HostKey]{},
 		limits,
-		rows[key.Key]{fx.keyRow},
+		rows[key.Key]{fx.keyRow, siblingRow, outsiderRow},
 		rows[pricing.Pricing]{fx.ownPrice, resellerPrice},
 		bindings,
 	)
 	cat.UseTenancy(
 		rows[team.Team]{fx.team},
-		rows[project.Project]{fx.project},
-		rows[serviceaccount.ServiceAccount]{fx.sa},
+		rows[project.Project]{fx.project, fx.otherProject},
+		rows[serviceaccount.ServiceAccount]{fx.sa, sibling, outsider},
 		rows[group.Group]{},
 		rows[role.Role]{},
 		rows[rolebinding.RoleBinding]{},
@@ -584,6 +612,28 @@ func TestResentExportIsRecordedOnce(t *testing.T) {
 	}
 }
 
+func TestDuplicatesAreRecognisedPerProject(t *testing.T) {
+	fx := newFixture(t)
+	body := export(t, chatSpan(1, "acme-large"))
+	as := func(secret string) int {
+		return fx.post(t, otlp.MediaTypeProtobuf, body, "Authorization", "Bearer "+secret).Code
+	}
+	if code := as(relayKey); code != http.StatusOK || len(fx.events) != 1 {
+		t.Fatalf("first report: status = %d events = %d", code, len(fx.events))
+	}
+	// One service reporting through two keys of its project is still one call.
+	if code := as(siblingKey); code != http.StatusOK || len(fx.events) != 1 {
+		t.Fatalf("same project, another key: status = %d events = %d, want the call skipped", code, len(fx.events))
+	}
+	// Another project reporting the same ids must not find its call already taken.
+	if code := as(outsiderKey); code != http.StatusOK || len(fx.events) != 2 {
+		t.Fatalf("another project: status = %d events = %d, want its call recorded", code, len(fx.events))
+	}
+	if got := fx.events[1].ProjectID; got != fx.otherProject.Meta.ID {
+		t.Errorf("second event project = %q, want the other project", got)
+	}
+}
+
 type brokenStore struct{}
 
 func (brokenStore) RunScript(context.Context, string, string, []string, ...any) ([]byte, error) {
@@ -606,8 +656,9 @@ func TestDuplicateCheckFailureStillRecords(t *testing.T) {
 
 func TestFullUsageQueueRefusesTheExport(t *testing.T) {
 	fx := newFixture(t)
-	fx.capacity = 3
-	fx.events = make([]usagelog.Event, 2)
+	// Half the queue is the receiver's to use; three of those four places are taken.
+	fx.capacity = 8
+	fx.events = make([]usagelog.Event, 3)
 	body := mustJSON(t, chatSpan(1, "acme-large"), chatSpan(2, "acme-large"))
 
 	rec := fx.post(t, otlp.MediaTypeJSON, body)
@@ -617,8 +668,8 @@ func TestFullUsageQueueRefusesTheExport(t *testing.T) {
 	if code, _ := statusOf(t, rec); code != int(otlp.StatusUnavailable) {
 		t.Errorf("status code = %d, want UNAVAILABLE", code)
 	}
-	if len(fx.events) != 2 {
-		t.Fatalf("a refused export queued %d events", len(fx.events)-2)
+	if len(fx.events) != 3 {
+		t.Fatalf("a refused export queued %d events", len(fx.events)-3)
 	}
 
 	fx.events = nil
@@ -628,6 +679,29 @@ func TestFullUsageQueueRefusesTheExport(t *testing.T) {
 	// Refusing must not have marked the calls as recorded.
 	if got, want := fx.spanIDs(), spanIDsOf(1, 2); !slices.Equal(got, want) {
 		t.Errorf("recorded spans = %v, want %v", got, want)
+	}
+}
+
+func TestReportedCallsLeaveHalfTheQueueToOtherTraffic(t *testing.T) {
+	fx := newFixture(t)
+	fx.capacity = 8
+	for id := byte(1); id <= 4; id++ {
+		if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(id, "acme-large"))); rec.Code != http.StatusOK {
+			t.Fatalf("export %d: status = %d, want 200 while the queue is under half full", id, rec.Code)
+		}
+	}
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(5, "acme-large"))); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 once the queue is half full", rec.Code)
+	}
+	if len(fx.events) != 4 {
+		t.Fatalf("queue holds %d of %d, want the receiver to stop at half", len(fx.events), fx.capacity)
+	}
+
+	// An export larger than the receiver's half is taken in parts, and each part stops at half too.
+	fx.events = nil
+	big := export(t, chatSpan(6, "acme-large"), chatSpan(7, "acme-large"), chatSpan(8, "acme-large"), chatSpan(9, "acme-large"), chatSpan(10, "acme-large"))
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, big); rec.Code != http.StatusServiceUnavailable || len(fx.events) != 4 {
+		t.Fatalf("status = %d queued = %d, want 503 with 4 queued", rec.Code, len(fx.events))
 	}
 }
 
@@ -657,7 +731,7 @@ func TestQueueFillingDuringAnExportLosesNothing(t *testing.T) {
 
 func TestExportLargerThanTheQueueIsTakenInParts(t *testing.T) {
 	fx := newFixture(t)
-	fx.capacity = 2
+	fx.capacity = 4
 	body := export(t, chatSpan(1, "acme-large"), chatSpan(2, "acme-large"), chatSpan(3, "acme-large"), chatSpan(4, "acme-large"), chatSpan(5, "acme-large"))
 
 	var recorded []string
@@ -779,6 +853,33 @@ func TestExportRateLimit(t *testing.T) {
 	}
 	if len(fx.events) != 2 {
 		t.Errorf("events = %d, want only the two exports inside the limit", len(fx.events))
+	}
+}
+
+func TestExportRateLimitWithoutACatalogRow(t *testing.T) {
+	fx := newFixture(t)
+	// Not a model call, so nothing is recorded: only the request count matters here.
+	body := export(t, pbSpan(1, str("http.request.method", "POST")))
+	for i := range otlpreceiver.DefaultExportsPerMinute {
+		if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK {
+			t.Fatalf("export %d: status = %d, want 200 inside the built-in limit", i+1, rec.Code)
+		}
+	}
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 past the built-in limit", rec.Code)
+	}
+	// The limit is per credential.
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK {
+		t.Fatalf("another credential: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestDisabledExportRateLimitRowAppliesNoLimit(t *testing.T) {
+	fx := newFixtureWith(t, fixtureOptions{exportsPerMinute: 1, rateLimitDisabled: true})
+	for i := range 3 {
+		if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, str("http.request.method", "POST")))); rec.Code != http.StatusOK {
+			t.Fatalf("export %d: status = %d, want 200 with the limit switched off", i+1, rec.Code)
+		}
 	}
 }
 

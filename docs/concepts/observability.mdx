@@ -109,7 +109,7 @@ How a reported event differs from a proxied one:
 - `extras` carries `trace_id`, `span_id`, `response_id` (the provider's response id), `session_id` (from `gen_ai.conversation.id`), `service` (the exporter's `service.name`) and `reported_provider`.
 - Message content is not stored, even if the span carries it.
 
-A model call is identified by its trace id and span id (its `request_id` is `otlp-<trace id>-<span id>`), and a span sent again within 24 hours is skipped, so exporter retries do not double count. The export still succeeds; skipped spans are not reported as rejected.
+A model call is identified by its trace id and span id (its `request_id` is `otlp-<trace id>-<span id>`), and a span sent again within 24 hours is skipped, so exporter retries do not double count. The export still succeeds; skipped spans are not reported as rejected. Calls are recognised per project (per principal for a credential outside any project): the same service reporting through two keys of one project is recorded once, and two projects reporting the same ids are recorded separately.
 
 What an exporter can be told instead of success:
 
@@ -117,8 +117,8 @@ What an exporter can be told instead of success:
 |---|---|
 | `200` with `partialSuccess.rejectedSpans` | Some model-call spans were refused: no trace id or span id, or a start time more than 5 minutes in the future. The rest were recorded. |
 | `400` | The export reports more than 10,000 model calls. Not retried by exporters; send smaller batches. |
-| `429` + `Retry-After` | The credential is over the `otlp-export` system rate limit (1,200 export requests per minute as shipped in `config/ratelimits/system.yaml`; editable like any rate limit, and not enforced when the row is absent or disabled). |
-| `503` + `Retry-After` | The usage queue has no room for the export. Exporters retry, and whatever was already recorded is skipped on the resend. |
+| `429` + `Retry-After` | The credential is over the export rate limit: 1,200 export requests per minute, built in. A rate limit named `otlp-export` replaces it (`config/ratelimits/system.yaml` holds one to seed with `relay seed --from config --apply`); disable that rate limit to apply none. |
+| `503` + `Retry-After` | The usage queue has no room for the export. Reported calls use the queue only while it is under half full, so they never crowd out the records of proxied traffic. Exporters retry, and whatever was already recorded is skipped on the resend. |
 
 ## Payload logging
 

@@ -30,7 +30,7 @@ var exportsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "exports_total",
-	Help:      "OTLP trace export requests received, by result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, rate_limited, or backpressure (usage queue full; the client is asked to resend).",
+	Help:      "OTLP trace export requests received, by result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
 }, []string{"result"})
 
 // spansTotal answers how much of what clients export becomes usage: spans that are not model calls are ignored by design, so a high ignored share is normal for clients that export whole traces.

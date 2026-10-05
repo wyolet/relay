@@ -44,7 +44,7 @@ type Call struct {
 	SpanID  string
 }
 
-// Markers remembers which reported calls were already stored, so a call an exporter sends again is stored once. Safe for concurrent use.
+// Markers remembers which reported calls were already stored, so a call an exporter sends again is stored once. Every method takes the tenant the calls were reported for: the same ids reported by two tenants are two calls. Safe for concurrent use.
 type Markers struct {
 	runner kv.Scripter
 	batch  kv.BatchScripter
@@ -62,10 +62,10 @@ func NewMarkers(s kv.Scripter) *Markers {
 }
 
 // Mark marks kind as stored for each call and reports, per call, whether this was the first time. calls must not repeat a call. When the store fails, the calls it could not answer for are reported as first-time and the error is returned, so a failing store never loses a record.
-func (m *Markers) Mark(ctx context.Context, kind MarkerKind, calls []Call) ([]bool, error) {
+func (m *Markers) Mark(ctx context.Context, tenant string, kind MarkerKind, calls []Call) ([]bool, error) {
 	fresh := make([]bool, len(calls))
 	groups := groupByTrace(calls)
-	results := m.run(ctx, scriptMark, markScript, kind, calls, groups, markerTTL.Milliseconds())
+	results := m.run(ctx, scriptMark, markScript, tenant, kind, calls, groups, markerTTL.Milliseconds())
 	var errs []error
 	for g, members := range groups {
 		res := results[g]
@@ -83,9 +83,9 @@ func (m *Markers) Mark(ctx context.Context, kind MarkerKind, calls []Call) ([]bo
 }
 
 // Unmark removes the kind marker of each call, for calls that were marked and then could not be stored.
-func (m *Markers) Unmark(ctx context.Context, kind MarkerKind, calls []Call) error {
+func (m *Markers) Unmark(ctx context.Context, tenant string, kind MarkerKind, calls []Call) error {
 	var errs []error
-	for _, res := range m.run(ctx, scriptUnmark, unmarkScript, kind, calls, groupByTrace(calls)) {
+	for _, res := range m.run(ctx, scriptUnmark, unmarkScript, tenant, kind, calls, groupByTrace(calls)) {
 		if res.Err != nil {
 			errs = append(errs, res.Err)
 		}
@@ -109,12 +109,12 @@ func groupByTrace(calls []Call) [][]int {
 	return groups
 }
 
-func (m *Markers) run(ctx context.Context, name, script string, kind MarkerKind, calls []Call, groups [][]int, args ...any) []kv.ScriptResult {
+func (m *Markers) run(ctx context.Context, name, script, tenant string, kind MarkerKind, calls []Call, groups [][]int, args ...any) []kv.ScriptResult {
 	scriptCalls := make([]kv.ScriptCall, len(groups))
 	for g, members := range groups {
 		keys := make([]string, len(members))
 		for i, idx := range members {
-			keys[i] = markerKey(kind, calls[idx])
+			keys[i] = markerKey(tenant, kind, calls[idx])
 		}
 		scriptCalls[g] = kv.ScriptCall{Name: name, Script: script, Keys: keys, Args: args}
 	}

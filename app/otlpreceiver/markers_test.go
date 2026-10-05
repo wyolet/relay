@@ -12,6 +12,9 @@ import (
 	"github.com/wyolet/relay/pkg/kv"
 )
 
+// tenant is the reporter of every marker test that does not name another.
+const tenant = "project-a"
+
 func call(trace, span int) otlpreceiver.Call {
 	return otlpreceiver.Call{TraceID: fmt.Sprintf("%032x", trace), SpanID: fmt.Sprintf("%016x", span)}
 }
@@ -20,13 +23,17 @@ func call(trace, span int) otlpreceiver.Call {
 func runMarkersSuite(t *testing.T, s kv.Scripter) {
 	t.Helper()
 	m := otlpreceiver.NewMarkers(s)
-	mark := func(t *testing.T, kind otlpreceiver.MarkerKind, calls ...otlpreceiver.Call) []bool {
+	markFor := func(t *testing.T, who string, kind otlpreceiver.MarkerKind, calls ...otlpreceiver.Call) []bool {
 		t.Helper()
-		fresh, err := m.Mark(t.Context(), kind, calls)
+		fresh, err := m.Mark(t.Context(), who, kind, calls)
 		if err != nil {
 			t.Fatalf("Mark: %v", err)
 		}
 		return fresh
+	}
+	mark := func(t *testing.T, kind otlpreceiver.MarkerKind, calls ...otlpreceiver.Call) []bool {
+		t.Helper()
+		return markFor(t, tenant, kind, calls...)
 	}
 
 	t.Run("a call is fresh once", func(t *testing.T) {
@@ -68,7 +75,7 @@ func runMarkersSuite(t *testing.T, s kv.Scripter) {
 
 	t.Run("unmark makes a call fresh again", func(t *testing.T) {
 		mark(t, otlpreceiver.MarkerUsage, call(8, 1), call(8, 2), call(9, 1))
-		if err := m.Unmark(t.Context(), otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(8, 2), call(9, 1)}); err != nil {
+		if err := m.Unmark(t.Context(), tenant, otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(8, 2), call(9, 1)}); err != nil {
 			t.Fatalf("Unmark: %v", err)
 		}
 		if got := mark(t, otlpreceiver.MarkerUsage, call(8, 1), call(8, 2), call(9, 1)); !slices.Equal(got, []bool{false, true, true}) {
@@ -87,7 +94,7 @@ func runMarkersSuite(t *testing.T, s kv.Scripter) {
 		if got := mark(t, otlpreceiver.MarkerUsage, calls...); slices.Contains(got, true) {
 			t.Fatal("a call of a resent export reported as fresh")
 		}
-		if err := m.Unmark(t.Context(), otlpreceiver.MarkerUsage, calls); err != nil {
+		if err := m.Unmark(t.Context(), tenant, otlpreceiver.MarkerUsage, calls); err != nil {
 			t.Fatalf("Unmark: %v", err)
 		}
 	})
@@ -95,6 +102,19 @@ func runMarkersSuite(t *testing.T, s kv.Scripter) {
 	t.Run("nothing to mark", func(t *testing.T) {
 		if got := mark(t, otlpreceiver.MarkerUsage); len(got) != 0 {
 			t.Fatalf("mark of no calls = %v", got)
+		}
+	})
+
+	t.Run("tenants do not see each other's markers", func(t *testing.T) {
+		mark(t, otlpreceiver.MarkerUsage, call(12, 1))
+		if got := markFor(t, "project-b", otlpreceiver.MarkerUsage, call(12, 1)); !got[0] {
+			t.Fatal("a call reported by one tenant is taken as recorded for another")
+		}
+		if err := m.Unmark(t.Context(), "project-b", otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(12, 1)}); err != nil {
+			t.Fatalf("Unmark: %v", err)
+		}
+		if got := mark(t, otlpreceiver.MarkerUsage, call(12, 1)); got[0] {
+			t.Fatal("one tenant's unmark removed another's marker")
 		}
 	})
 }
@@ -141,12 +161,12 @@ func TestMarkers_FailingStoreReportsCallsAsFresh(t *testing.T) {
 	s := kv.NewMem()
 	t.Cleanup(func() { _ = s.Close() })
 	healthy := otlpreceiver.NewMarkers(s)
-	if _, err := healthy.Mark(t.Context(), otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(1, 1), call(2, 1)}); err != nil {
+	if _, err := healthy.Mark(t.Context(), tenant, otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(1, 1), call(2, 1)}); err != nil {
 		t.Fatal(err)
 	}
 
 	m := otlpreceiver.NewMarkers(failingTrace{inner: s, trace: call(1, 1).TraceID})
-	fresh, err := m.Mark(t.Context(), otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(1, 1), call(2, 1), call(1, 2)})
+	fresh, err := m.Mark(t.Context(), tenant, otlpreceiver.MarkerUsage, []otlpreceiver.Call{call(1, 1), call(2, 1), call(1, 2)})
 	if !errors.Is(err, errStoreDown) {
 		t.Fatalf("err = %v, want the store's error", err)
 	}

@@ -71,7 +71,7 @@ kind: RateLimit
 metadata:
   name: otlp-export
   displayName: OpenTelemetry export rate limits
-  description: "Per-credential runtime cap on export requests to the OpenTelemetry receiver (/otlp/v1/*). Only requests rules apply. Sized for about a hundred processes sharing one credential, each exporting a batch every few seconds."
+  description: "Per-credential runtime cap on export requests to the OpenTelemetry receiver (/otlp/v1/*). Only requests rules apply. Without this row the receiver applies the same cap built in; disable the row to apply none. Sized for about a hundred processes sharing one credential, each exporting a batch every few seconds."
   owner:
     kind: system
 spec:

@@ -39,8 +39,27 @@ const queueRetryAfter = time.Second
 // UsageQueue is the usage pipeline as the receiver needs it: a bounded queue that reports a full queue instead of dropping, so the export can be refused and sent again.
 type UsageQueue interface {
 	TryEmit(usagelog.Event) bool
+	boundedQueue
+}
+
+// boundedQueue is a queue the receiver shares with proxied traffic.
+type boundedQueue interface {
 	Free() int
 	Capacity() int
+}
+
+// share is how much of a queue reported telemetry may occupy: half, rounded up so a queue of one still takes a record. The other half stays free for proxied traffic, whose records are dropped, not refused, when the queue is full.
+func share(q boundedQueue) int { return (q.Capacity() + 1) / 2 }
+
+// sharedRoom is how many more records the receiver may queue before the queue is half full. Other traffic may have filled it past that, which makes it negative.
+func sharedRoom(q boundedQueue) int { return share(q) - (q.Capacity() - q.Free()) }
+
+// tenantOf names whose calls a reporter's exports describe: its project, so one service reporting through two keys of a project is recognised as one, or the principal itself when the credential belongs to no project.
+func tenantOf(reporter *lifecycle.Context) string {
+	if reporter.ProjectID != "" {
+		return reporter.ProjectID
+	}
+	return reporter.PrincipalID
 }
 
 // Limiter is the rate limiter the receiver reserves one request on per export.
@@ -234,16 +253,17 @@ func admit(calls []otlp.Inference, now time.Time) ([]otlp.Inference, refusals) {
 // record queues one usage event per call not recorded before. It reports false when the usage queue could not take them all: the client must then send the export again, and whatever was queued this time is skipped as a duplicate.
 func (h *Handler) record(ctx context.Context, snap *appcatalog.Snapshot, reporter *lifecycle.Context, from origin, calls []otlp.Inference, now time.Time) bool {
 	queue := h.opts.Usage
-	// Refused before anything is marked when the export cannot fit. An export larger than the whole queue never fits, so it is taken in parts across resends instead.
-	if room := queue.Free(); room == 0 || (room < len(calls) && len(calls) <= queue.Capacity()) {
+	// Refused before anything is marked when the export cannot fit. An export larger than the receiver's whole share never fits, so it is taken in parts across resends instead.
+	if room := sharedRoom(queue); room <= 0 || (room < len(calls) && len(calls) <= share(queue)) {
 		return false
 	}
 
+	tenant := tenantOf(reporter)
 	ids := make([]Call, len(calls))
 	for i, inf := range calls {
 		ids[i] = Call{TraceID: inf.TraceID, SpanID: inf.SpanID}
 	}
-	fresh := h.markUsage(ctx, ids)
+	fresh := h.markUsage(ctx, tenant, ids)
 
 	var unqueued []Call
 	for i, inf := range calls {
@@ -252,7 +272,7 @@ func (h *Handler) record(ctx context.Context, snap *appcatalog.Snapshot, reporte
 			continue
 		}
 		hint := h.opts.ProviderHints[strings.ToLower(strings.TrimSpace(inf.Provider))]
-		if len(unqueued) > 0 || !queue.TryEmit(buildEvent(snap, reporter, inf, hint, h.opts.Pricer, from, now)) {
+		if len(unqueued) > 0 || sharedRoom(queue) <= 0 || !queue.TryEmit(buildEvent(snap, reporter, inf, hint, h.opts.Pricer, from, now)) {
 			unqueued = append(unqueued, ids[i])
 			continue
 		}
@@ -263,7 +283,7 @@ func (h *Handler) record(ctx context.Context, snap *appcatalog.Snapshot, reporte
 	}
 	if h.opts.Markers != nil {
 		// Detached from the request: a client that hangs up must not leave calls marked as recorded that were never queued.
-		if err := h.opts.Markers.Unmark(context.WithoutCancel(ctx), MarkerUsage, unqueued); err != nil {
+		if err := h.opts.Markers.Unmark(context.WithoutCancel(ctx), tenant, MarkerUsage, unqueued); err != nil {
 			markerErrors.WithLabelValues(opUnmark).Inc()
 			slog.Default().Warn("otlp receiver: calls stay marked as recorded but were not queued", "calls", len(unqueued), "err", err)
 		}
@@ -272,9 +292,9 @@ func (h *Handler) record(ctx context.Context, snap *appcatalog.Snapshot, reporte
 }
 
 // markUsage reports which calls have not been recorded before. A failing store answers "none were": recording a call twice is the smaller harm than losing it.
-func (h *Handler) markUsage(ctx context.Context, ids []Call) []bool {
+func (h *Handler) markUsage(ctx context.Context, tenant string, ids []Call) []bool {
 	if h.opts.Markers != nil {
-		fresh, err := h.opts.Markers.Mark(ctx, MarkerUsage, ids)
+		fresh, err := h.opts.Markers.Mark(ctx, tenant, MarkerUsage, ids)
 		if err != nil {
 			markerErrors.WithLabelValues(opMark).Inc()
 			slog.Default().Warn("otlp receiver: duplicate check failed; recording without it", "err", err)

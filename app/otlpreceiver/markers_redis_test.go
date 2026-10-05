@@ -25,12 +25,12 @@ func TestMarkers_Redis(t *testing.T) {
 
 	t.Run("markers expire within a day", func(t *testing.T) {
 		c := call(11, 1)
-		if _, err := otlpreceiver.NewMarkers(s).Mark(t.Context(), otlpreceiver.MarkerUsage, []otlpreceiver.Call{c}); err != nil {
+		if _, err := otlpreceiver.NewMarkers(s).Mark(t.Context(), tenant, otlpreceiver.MarkerUsage, []otlpreceiver.Call{c}); err != nil {
 			t.Fatalf("Mark: %v", err)
 		}
 		raw := redis.NewClient(&redis.Options{Addr: cfg.Addr, DB: cfg.DB})
 		t.Cleanup(func() { _ = raw.Close() })
-		ttl, err := raw.PTTL(t.Context(), "{otlp:"+c.TraceID+"}:usage:"+c.SpanID).Result()
+		ttl, err := raw.PTTL(t.Context(), "{otlp:"+tenant+":"+c.TraceID+"}:usage:"+c.SpanID).Result()
 		if err != nil {
 			t.Fatalf("PTTL: %v", err)
 		}

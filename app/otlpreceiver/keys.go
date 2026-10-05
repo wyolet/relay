@@ -11,7 +11,7 @@ const (
 // memMarkLock is the lock the in-memory emulation of the mark script holds. It is never stored.
 const memMarkLock = "{otlp}:mark-lock"
 
-// markerKey returns the kv key that marks one kind as stored for a call. The hash tag is the trace id: one script call marks every span of a trace, and the markers of one call share a slot whichever signal reported it.
-func markerKey(kind MarkerKind, c Call) string {
-	return "{otlp:" + c.TraceID + "}:" + string(kind) + ":" + c.SpanID
+// markerKey returns the kv key that marks one kind as stored for a call reported by tenant. The hash tag is the tenant and the trace id: one script call marks every span of a trace, the markers of one call share a slot whichever signal reported it, and no tenant can mark a call for another.
+func markerKey(tenant string, kind MarkerKind, c Call) string {
+	return "{otlp:" + tenant + ":" + c.TraceID + "}:" + string(kind) + ":" + c.SpanID
 }
