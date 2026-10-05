@@ -197,9 +197,9 @@ func TestMintToken_Claims(t *testing.T) {
 	if d := time.Until(out.Body.ExpiresAt); d > 30*time.Minute || d < 29*time.Minute {
 		t.Errorf("expiry in %v, want the requested 30m", d)
 	}
-	// The IdP's groups and the local membership both ride the claim.
-	if len(claims.Grp) != 2 || claims.Grp[0] != "platform-eng" || claims.Grp[1] != "data-science" {
-		t.Errorf("grp = %v, want the IdP groups plus local membership", claims.Grp)
+	// Only the IdP's groups ride the claim: local membership (data-science) is read from the snapshot at every verification, so a removal is not held until expiry.
+	if len(claims.Grp) != 1 || claims.Grp[0] != "platform-eng" {
+		t.Errorf("grp = %v, want only the IdP groups", claims.Grp)
 	}
 
 	if len(events) != 1 {

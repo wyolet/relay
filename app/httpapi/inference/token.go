@@ -177,8 +177,8 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 		return nil, false
 	}
 	return &Principal{
-		// A token is stateless: its groups come from the claims it was
-		// minted with, unioned with the membership the snapshot holds now.
+		// A token is stateless: its IdP groups come from the claims it was
+		// minted with, unioned with the local membership the snapshot holds now.
 		Subjects:       tokens.subjects(ent, snap, userID, claims.Grp),
 		UserID:         userID,
 		ProjectID:      proj.Meta.ID,
