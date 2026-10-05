@@ -74,7 +74,7 @@ type EventQuery struct {
 	PrincipalID  []string
 	ModelID      []string
 	HostID       []string
-	Source       []string // "pipeline" | "proxy" | "ws" | "batch" | "count"
+	Source       []string // "pipeline" | "proxy" | "ws" | "batch" | "count" | "otlp"
 	FinishReason []string
 	ErrorKind    []string
 

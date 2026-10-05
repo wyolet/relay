@@ -30,7 +30,7 @@ All three endpoints share the same filter parameters: `since` (default
 `policy_id`, `project_id`, `team_id`, `principal_id`, `host_key_id`
 (repeatable, match-any); `model`, `host`, `policy`, `provider`,
 `requested_model` (slug/string match-any); `source` (`pipeline` / `proxy`
-/ `ws` / `batch`); `finish_reason`, `error_kind`; `streamed` and `error`
+/ `ws` / `batch` / `otlp`); `finish_reason`, `error_kind`; `streamed` and `error`
 (`true`/`false`); `attempts_min`, `duration_ms_min`/`max`,
 `ttft_ms_min`/`max`; `tag` (`key:value`, repeatable); `q` (free-text
 substring); and `request_id` / `relay_key_hash` for a single event.
@@ -73,6 +73,43 @@ curl -X PUT http://localhost:8081/api/settings/usage-logging \
 | `clickhouse` | Analytical store for high-volume, queryable history. |
 | `postgres` | Reuse your existing database. |
 | `valkey` | Redis-compatible, for short-lived recent history. |
+
+## Reported usage (OpenTelemetry)
+
+Model calls that never pass through Relay can still be recorded: an application that already exports OpenTelemetry traces can send them to Relay, and each span describing a model call becomes a usage event next to the proxied ones. The receiver is off by default.
+
+Turn it on:
+
+```bash
+curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+Then point the application's OTLP/HTTP trace exporter at `/otlp/v1/traces` on the inference port, authenticated with a relay key or token. Use the trace-specific variables: the generic `OTEL_EXPORTER_OTLP_ENDPOINT` would also send metrics and logs, which Relay does not accept.
+
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8080/otlp/v1/traces
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer $RELAY_KEY"
+```
+
+Both OTLP/HTTP encodings (`http/protobuf` and `http/json`) and gzip compression are accepted; OTLP over gRPC is not.
+
+Relay reads spans that follow the [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), including the attribute names earlier releases used. A span is recorded when its `gen_ai.operation.name` is `chat`, `generate_content`, `text_completion` or `embeddings`. Agent, workflow, tool and retrieval spans are skipped, because an agent span repeats the token usage of the model calls beneath it. Other spans in the export are ignored, so exporting whole traces is fine.
+
+How a reported event differs from a proxied one:
+
+- `source` is `otlp`, so `source=otlp` selects reported usage and any other value excludes it.
+- It is attributed to the credential that sent the export (project, team, principal, key), not to anything the telemetry claims.
+- No policy, rate limit or key pool applies. The numbers are what the client declared.
+- Cost is computed from the catalog when the reported model resolves to a catalog model, using the provider's own host pricing when it has one. An unknown model is stored unpriced.
+- `gen_ai.usage.input_tokens` includes cached tokens under the conventions; Relay stores the uncached part as `input` and the cached parts as `cache_read` / `cache_creation`, the same split proxied events use.
+- `extras` carries `trace_id`, `span_id`, `response_id` (the provider's response id), `session_id` (from `gen_ai.conversation.id`), `service` (the exporter's `service.name`) and `reported_provider`.
+- Message content is not stored, even if the span carries it.
+
+A span sent twice is recorded twice; its `request_id` (`otlp-<trace id>-<span id>`) is the same both times, which is how duplicates can be found.
 
 ## Payload logging
 

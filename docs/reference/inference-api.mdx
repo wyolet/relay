@@ -50,6 +50,7 @@ namespace belongs to Relay's canonical shape.
 | `POST` | `/anthropic/v1/messages` | Anthropic Messages |
 | `POST` | `/v1/generate` | Relay canonical request/response |
 | `GET` | `/v1/models` | Models accessible to the relay key |
+| `POST` | `/otlp/v1/traces` | OpenTelemetry trace export (OTLP/HTTP); see [Reported usage](/concepts/observability#reported-usage-opentelemetry). 404 unless the `otlp-receiver` setting is enabled |
 | `GET` | `/healthz` | Liveness + Postgres ping (public) |
 | `GET` | `/openapi.json` | Generated typed OpenAPI spec |
 

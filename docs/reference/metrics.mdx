@@ -72,6 +72,8 @@ records, and provider keys dying off.
 | `relay_stream_events_dropped_total` | counter | `adapter`, `direction`, `reason` | Streamed events skipped on a cross-shape stream because a translator could not convert them. `direction` is `to_canonical` (an upstream event `adapter` sent) or `from_canonical` (rendering into the caller's `adapter` shape); `reason` is `syntax`, `type`, or `invalid`. The rest of the stream still flows; if the dropped event was the terminal one, the stream ends with an error event instead. |
 | `relay_audit_dropped_total` | counter | _(none)_ | Admin audit events dropped because the emitter queue was full. A drop here is a gap in the audit trail — alert on it if completeness matters for your deployment. |
 | `relay_catalog_apply_errors_total` | counter | `kind` | Catalog change events that failed to apply incrementally. Each failure falls back to a full catalog reload, so a sustained rate means a flaky Postgres and repeated rebuilds. |
+| `relay_otlp_exports_total` | counter | `result` | OpenTelemetry trace exports received by the [receiver](/concepts/observability#reported-usage-opentelemetry): `accepted`, `disabled`, `bad_request`, `too_large`, `unsupported_media`. Exports refused for a missing or invalid credential are counted in `relay_inference_auth_rejected_total`. |
+| `relay_otlp_spans_total` | counter | `outcome` | Spans in accepted exports: `recorded` as a usage event, `ignored` (not a model call), or `rejected` (a model call without a trace id or span id). A high `ignored` share is normal for clients that export whole traces. |
 
 <Note>
 `relay_provider_keys_down_total` is a counter of cooldown **transitions**, not a
