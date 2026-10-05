@@ -52,7 +52,14 @@ COPY go.work go.work.sum ./
 COPY go.mod go.sum ./
 COPY sdk/go.mod sdk/go.sum ./sdk/
 COPY jobq/go.mod jobq/go.sum ./jobq/
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# GO_CACHE_MOUNTS=0 (published images, see docker-bake.hcl) skips the cache
+# mounts: on a shared BuildKit any client can write them, and Go trusts cached
+# modules and build objects without re-checking go.sum. Modules are then
+# downloaded fresh (verified against go.sum) into a path no mount covers.
+ARG GO_CACHE_MOUNTS=1
+RUN --mount=type=cache,target=/go/pkg/mod \
+    if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private; fi; \
+    go mod download
 COPY . .
 # Land the fetched UI (may be empty if no token + private repo). The .gitkeep
 # guarantees dist/ is non-empty so `//go:embed all:dist` always compiles; an
@@ -66,6 +73,7 @@ RUN touch cmd/relay/web/dist/.gitkeep
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    if [ "$GO_CACHE_MOUNTS" = 0 ]; then export GOMODCACHE=/gomod-private GOCACHE=/tmp/go-build-private; fi; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/wyolet/relay/app/httpapi.Version=${VERSION}" \
     -o /relay ./cmd/relay
