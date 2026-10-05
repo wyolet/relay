@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/keypool"
@@ -39,7 +41,7 @@ var _ pipeline.Adapter = (*specAdapter)(nil)
 func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
 	path := a.spec.DefaultPath
 	if a.spec.UpstreamPathFn != nil {
-		path = a.spec.UpstreamPathFn(upstreamModel, stream)
+		path = a.spec.UpstreamPathFn(pathSegment(upstreamModel), stream)
 	}
 	if hostPath != nil {
 		path = *hostPath
@@ -58,6 +60,14 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 	}
 	resp.Body = a.bindBody(resp.Body, cancel, stream)
 	return resp, nil
+}
+
+// pathSegment escapes the upstream model so it stays one URL path segment. A wildcard alias forwards the caller's raw model string, so without this it could add segments or start a query on the operator's credential. A bare dot segment is escaped too, since servers resolve it.
+func pathSegment(model string) string {
+	if model == "." || model == ".." {
+		return strings.ReplaceAll(model, ".", "%2E")
+	}
+	return url.PathEscape(model)
 }
 
 // newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type.

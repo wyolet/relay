@@ -65,6 +65,7 @@ type Spec struct {
 	// the model and/or stream selection in the URL rather than the body —
 	// Gemini's "/v1beta/models/{model}:generateContent" vs
 	// ":streamGenerateContent". When nil, DefaultPath is used verbatim.
+	// upstreamModel arrives escaped as a single path segment.
 	UpstreamPathFn func(upstreamModel string, stream bool) string
 
 	// CountPath is the upstream path that counts a request's input tokens without generating, e.g. "/v1/messages/count_tokens". Set only for vendors that expose one: it is what makes this spec's pipeline.Adapter a TokenCounter, and an empty value means relay must estimate instead.
