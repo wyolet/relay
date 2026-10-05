@@ -4,12 +4,11 @@
 // observer that produces Records lives in app/payloadlog (which re-exports
 // these types).
 //
-// A Record is body-only: the request/response bytes keyed by RequestID, and
-// nothing else. All per-request metadata (identity, status, routing, tokens,
-// timing) lives on the log event (usage.Event) and is read via the log API —
-// the body store carries no duplicate of it. The body joins its log record
-// by RequestID. The only non-body fields are the timestamp (for partitioning
-// / TTL / keying) and the truncation flags.
+// A Record is the request/response bytes keyed by RequestID. Per-request
+// metadata (status, routing, tokens, timing) lives on the log event
+// (usage.Event) and is read via the log API. The body joins its log record
+// by RequestID; the owner fields (project, principal, key hash) repeat the
+// event's so the join can refuse a body that belongs to someone else.
 //
 // Zero app/ or internal/ imports — this package is part of the vendorable
 // surface.
@@ -28,11 +27,13 @@ var ErrNotFound = errors.New("payload: record not found")
 
 // Record is one captured request/response pair, keyed by RequestID. Bodies
 // are stored raw; []byte marshals to base64 in JSON so file/object backends
-// are lossless for non-UTF8 content. No metadata beyond the join key, the
-// timestamp, and the truncation flags — that all lives on the log event.
+// are lossless for non-UTF8 content.
 type Record struct {
 	RequestID         string    `json:"request_id"`
 	Timestamp         time.Time `json:"ts"` // partitioning / TTL / keying only
+	ProjectID         string    `json:"project_id,omitempty"`
+	PrincipalID       string    `json:"principal_id,omitempty"`
+	RelayKeyHash      string    `json:"relay_key_hash,omitempty"`
 	RequestBody       []byte    `json:"request_body,omitempty"`
 	ResponseBody      []byte    `json:"response_body,omitempty"`
 	RequestTruncated  bool      `json:"request_truncated,omitempty"`

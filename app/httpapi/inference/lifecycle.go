@@ -33,6 +33,9 @@ func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientI
 	if clientIP != "" {
 		lc.Metadata["client_ip"] = clientIP
 	}
+	if cid := reqid.ClientID(ctx); cid != "" {
+		lc.Metadata[usagelog.ExtrasKeyClientRequestID] = cid
+	}
 	if p := PrincipalFrom(ctx); p != nil {
 		// The hash the auth middleware matched on — empty for a token, which
 		// presents no key. Re-hashing the bearer here would record a hash on

@@ -155,6 +155,8 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		if d.PayloadReader != nil {
 			rec, perr := d.PayloadReader.Get(ctx, in.RequestID)
 			switch {
+			case perr == nil && !payloadBelongsTo(rec, events[0], sc):
+				// a body under this id from another request — leave Payload nil
 			case perr == nil:
 				out.Body.Payload = &logPayload{
 					RequestBody:       string(rec.RequestBody),
@@ -170,4 +172,14 @@ func registerLogs(api huma.API, d Deps, protect huma.Middlewares) {
 		}
 		return out, nil
 	})
+}
+
+// payloadBelongsTo reports whether rec was captured for the same owner as
+// ev, the event that passed the caller's scope check. A record carrying no
+// owner predates owner capture and joins only for an unrestricted reader.
+func payloadBelongsTo(rec payloadlog.Record, ev usagelog.Event, sc readScope) bool {
+	if rec.ProjectID == "" && rec.PrincipalID == "" && rec.RelayKeyHash == "" {
+		return sc.unrestricted || (ev.ProjectID == "" && ev.PrincipalID == "" && ev.RelayKeyHash == "")
+	}
+	return rec.ProjectID == ev.ProjectID && rec.PrincipalID == ev.PrincipalID && rec.RelayKeyHash == ev.RelayKeyHash
 }

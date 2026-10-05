@@ -48,6 +48,10 @@ func (h *UsageHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent) (
 // the caller-owned Tags.
 const ExtrasKeyInstance = "instance"
 
+// ExtrasKeyClientRequestID carries the caller's own X-Request-ID. It is
+// correlation only; RequestID is always relay-minted.
+const ExtrasKeyClientRequestID = "client_request_id"
+
 // stampInstance records which relay instance emitted the event. Stamped
 // here rather than per runner so every source (pipeline/proxy/ws/batch)
 // carries it without each runner knowing the config.

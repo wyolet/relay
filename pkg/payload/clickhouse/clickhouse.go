@@ -191,24 +191,32 @@ func (s *Sink) insertBatch(records []payload.Record) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	batch, err := s.conn.PrepareBatch(ctx, "INSERT INTO "+chTable)
+	batch, err := s.conn.PrepareBatch(ctx, InsertSQL)
 	if err != nil {
 		return fmt.Errorf("prepare batch: %w", err)
 	}
 
 	for _, r := range records {
-		if err := batch.Append(
-			r.RequestID,
-			r.Timestamp,
-			string(r.RequestBody),
-			string(r.ResponseBody),
-			b2u8(r.RequestTruncated),
-			b2u8(r.ResponseTruncated),
-		); err != nil {
+		if err := batch.Append(InsertValues(r)...); err != nil {
 			return fmt.Errorf("append row: %w", err)
 		}
 	}
 	return batch.Send()
+}
+
+// InsertValues returns r's column values in InsertSQL order.
+func InsertValues(r payload.Record) []any {
+	return []any{
+		r.RequestID,
+		r.Timestamp,
+		string(r.RequestBody),
+		string(r.ResponseBody),
+		b2u8(r.RequestTruncated),
+		b2u8(r.ResponseTruncated),
+		r.ProjectID,
+		r.PrincipalID,
+		r.RelayKeyHash,
+	}
 }
 
 func b2u8(b bool) uint8 {
