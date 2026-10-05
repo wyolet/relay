@@ -24,9 +24,7 @@ type Config struct {
 	// DSN is the ClickHouse connection string (clickhouse://host:port/db).
 	DSN string
 
-	// RetentionDays controls the MergeTree TTL. Default 30 — payload bodies
-	// are bulky and short-lived debug/audit artifacts, so a shorter default
-	// than the usage sink's 90.
+	// RetentionDays is the row TTL in days; 0 keeps rows forever.
 	RetentionDays int
 
 	// WALDir is the directory for WAL segment files.
@@ -51,9 +49,6 @@ type Config struct {
 }
 
 func (c *Config) applyDefaults() {
-	if c.RetentionDays <= 0 {
-		c.RetentionDays = 30
-	}
 	if c.MaxLines <= 0 {
 		c.MaxLines = 2000
 	}

@@ -26,7 +26,7 @@ func payloadSinkBuilder(resolver *secret.Registry, chBoot payloadCHBoot) payload
 			if chBoot.DSN == "" {
 				return nil, fmt.Errorf("payloadlog: clickhouse backend selected but no CH DSN configured (set RELAY_CH_DSN)")
 			}
-			return chpayload.New(chBoot.config(cfg.CH))
+			return chpayload.New(chBoot.config(cfg))
 		default: // "file"
 			path := cfg.File.Path
 			if path == "" {

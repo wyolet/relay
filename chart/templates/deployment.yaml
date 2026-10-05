@@ -161,6 +161,10 @@ spec:
               mountPath: {{ .Values.relay.settingsDir }}/payload-logging.yaml
               subPath: payload-logging.yaml
               readOnly: true
+            - name: settings
+              mountPath: {{ .Values.relay.settingsDir }}/usage-logging.yaml
+              subPath: usage-logging.yaml
+              readOnly: true
       volumes:
         # readOnlyRootFilesystem -> writable scratch for the CH WAL + temp.
         - name: state
