@@ -68,6 +68,13 @@ func newUpgradeDB(t *testing.T) *upgradeDB {
 		t.Fatalf("pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
+	// The stores seeding the old rows are today's, and every catalog upsert
+	// names resource_version; the later migration adds it IF NOT EXISTS.
+	for _, table := range []string{"providers", "hosts", "models", "secrets", "rate_limits", "policies", "pricings", "host_bindings", "relay_keys"} {
+		if _, err := pool.Exec(ctx, "ALTER TABLE "+table+" ADD COLUMN resource_version BIGINT NOT NULL DEFAULT 1"); err != nil {
+			t.Fatalf("add resource_version to %s: %v", table, err)
+		}
+	}
 	cat, stores, err := appcatalog.BootstrapStores(ctx, appcatalog.BootstrapOptions{Pool: pool})
 	if err != nil {
 		t.Fatalf("stores: %v", err)

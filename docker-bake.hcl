@@ -28,6 +28,8 @@ target "_common" {
     // Binary version stamp (/api/version). "latest" is a tag alias, not a
     // version — unversioned builds stamp "dev".
     VERSION = notequal("latest", VERSION) ? "${VERSION}" : "dev"
+    // Published images never read the shared Go cache mounts (see Dockerfile).
+    GO_CACHE_MOUNTS = "0"
   }
   // Always rebuild the asset-fetch stage so the pinned UI/catalog are
   // re-pulled each build rather than served from a stale cached layer.

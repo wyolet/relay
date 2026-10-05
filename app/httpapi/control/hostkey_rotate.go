@@ -34,7 +34,7 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		Summary:     "Rotate a stored-mode HostKey credential",
 		Tags:        []string{"host-keys"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 403, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *rotateHostKeyInput) (*itemResponse[hostkey.HostKey], error) {
 		if in.Body.Value == "" {
 			return nil, huma.Error400BadRequest("value is required")
@@ -52,7 +52,7 @@ func registerHostKeyRotate(api huma.API, d Deps, protect huma.Middlewares) {
 		existing.Spec.Value = in.Body.Value
 		audit.Changed(ctx, []string{"spec.value", "spec.valueKeyVersion"})
 		if err := d.Stores.HostKey.Upsert(ctx, existing); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, mapWriteErr("host-key", in.ID, err)
 		}
 		rotated, err := d.Stores.HostKey.Get(ctx, in.ID)
 		if err != nil {

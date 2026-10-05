@@ -14,6 +14,7 @@ package inference
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/pipeline"
@@ -91,13 +93,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	lc := mintLifecycle(ctx, d.Catalog, sourceForMode(cls.Mode), cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
-	// The resolved client profile is a usage dimension; observers read it
-	// off the Context. Empty name = no profile, nothing recorded.
-	if profile.Name() != "" {
-		lc.Metadata["client"] = profile.Name()
-		applyAttributionHeaders(lc, profile, r.Header)
-		applySessionKey(lc, profile, r.Header)
-	}
+	applyProfile(lc, profile, r.Header)
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture
 	// gate (lc.PayloadLog) is set once routing resolves the opt-in.
@@ -105,27 +101,8 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
-	// Run the pre-flight phase (today: the inflight-gauge observer). Every
-	// path past this point must end in a Finalize — success and runner
-	// failures fire it themselves; pre-runner rejections go through
-	// fireUsageFailure — so pre-flight and post-flight stay paired.
-	if d.Lifecycle != nil {
-		if err := d.Lifecycle.RunPreFlight(ctx, lc, &lifecycle.PreFlightEvent{}); err != nil {
-			// In-flight cap reached → shed with a retriable 429 + Retry-After so
-			// OpenAI-shape clients back off instead of hammering a saturated pod.
-			// The slot was never acquired, so no release is owed. Any other
-			// pre-flight abort stays a 500.
-			if errors.Is(err, httpapi.ErrShed) {
-				d.fireUsageFailure(ctx, "shed", err.Error())
-				w.Header().Set("Retry-After", httpapi.RetryAfterShed)
-				writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
-					"relay is at capacity; retry shortly")
-				return
-			}
-			d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
-			writeAPIError(w, http.StatusInternalServerError, "server_error", "pre_flight_aborted", err.Error())
-			return
-		}
+	if !d.runPreFlight(ctx, w, lc) {
+		return
 	}
 
 	slog.Debug("inference: dispatch entry",
@@ -204,7 +181,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 					" (adapter="+string(plan.HostBinding.Spec.Adapter)+") which does not support OpenAI-compatible embeddings")
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec.ParamPaths)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -219,7 +196,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 				"no adapter registered for "+string(in.Inbound))
 			return
 		}
-		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec.ParamPaths)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, inboundSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -244,7 +221,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	sameShape := in.Inbound == plan.HostBinding.Spec.Adapter
 
 	if sameShape {
-		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator, inboundSpec.ParamPaths)
+		runBytePass(d, w, r, in, plan, upstreamAdapter, upstreamSpec.Translator, inboundSpec)
 		return
 	}
 
@@ -261,18 +238,46 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
 }
 
+// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. On false the response is written.
+func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifecycle.Context) bool {
+	if d.Lifecycle == nil {
+		return true
+	}
+	err := d.Lifecycle.RunPreFlight(ctx, lc, &lifecycle.PreFlightEvent{})
+	if err == nil {
+		return true
+	}
+	// In-flight cap reached → shed with a retriable 429 + Retry-After so
+	// clients back off instead of hammering a saturated pod. The slot was
+	// never acquired, so no release is owed. Any other abort stays a 500.
+	if errors.Is(err, httpapi.ErrShed) {
+		d.fireUsageFailure(ctx, "shed", err.Error())
+		w.Header().Set("Retry-After", httpapi.RetryAfterShed)
+		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
+			"relay is at capacity; retry shortly")
+		return false
+	}
+	d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
+	writeAPIError(w, http.StatusInternalServerError, "server_error", "pre_flight_aborted", err.Error())
+	return false
+}
+
 // runBytePass handles same-shape or byte-pass dispatch: forward the body
 // (with model field rewritten to the upstream model name) to the upstream
 // and stream or buffer the response back. paramPaths is the inbound spec's
 // param→JSON-path map (the body stays inbound-shaped on every byte-pass
 // variant), used to strip params the routed model declares unsupported.
-func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, paramPaths map[string]string) {
+func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput, plan *routing.Plan, upstreamAdapter pipeline.Adapter, upstreamV1 v1.Translator, inboundSpec *adapter.Spec) {
 	ctx := r.Context()
 
-	wireBody := rewriteModelField(in.Body, plan.UpstreamModel())
+	var usageOptIn func(map[string]json.RawMessage) bool
+	if d.RequestStreamUsage && in.Stream && inboundSpec.StreamUsage != nil {
+		usageOptIn = inboundSpec.StreamUsage.Request
+	}
+	wireBody, usageRequested := rewriteTopLevel(in.Body, plan.UpstreamModel(), usageOptIn)
 	if u := plan.Model.Spec.Capabilities.UnsupportedParams; len(u) > 0 {
 		var dropped []string
-		wireBody, dropped = stripWireParams(wireBody, u, paramPaths)
+		wireBody, dropped = stripWireParams(wireBody, u, inboundSpec.ParamPaths)
 		surfaceDroppedParams(w, plan.Model.Meta.Name, dropped)
 	}
 
@@ -313,7 +318,16 @@ func runBytePass(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInpu
 	// so nothing is injected here; the upstream body streams through verbatim.
 	dst, stop := keepAliveWriter(d, w, r, in)
 	defer stop()
-	_, _ = streamCopy(dst, result.Body)
+	if !usageRequested {
+		_, _ = streamCopy(dst, result.Body)
+		return
+	}
+	// Relay asked for the usage frame, not the caller: keep it out of the
+	// caller's stream (the pipeline tee has already counted it).
+	filter := &frameDropWriter{w: dst, drop: inboundSpec.StreamUsage.IsUsageFrame}
+	if _, err := streamCopy(filter, result.Body); err == nil {
+		_ = filter.writeHeld()
+	}
 }
 
 // keepAliveWriter wraps w so relay emits the inbound shape's no-op frame while the upstream is silent, returning the writer to stream through and the stop func the caller must defer.

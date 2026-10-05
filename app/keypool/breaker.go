@@ -13,7 +13,7 @@ import (
 type FailureKind int
 
 const (
-	FailureAuth           FailureKind = iota // 401/403 → open indefinitely
+	FailureAuth           FailureKind = iota // 401 → open on the auth cooldown ladder
 	FailureRateLimitShort                    // 429 with Retry-After ≤ 5s → stay closed
 	FailureRateLimitLong                     // 429 with Retry-After > 5s → open for that duration
 	FailureServerError                       // 5xx → exponential backoff
@@ -24,6 +24,10 @@ const (
 	// breaker — the pipeline retries the same host with backoff and reports an
 	// unreachable status. Distinguishes a misconfigured baseURL from a bad key.
 	FailureUpstreamUnreachable
+	// FailureForbidden is a 403: the credential authenticated but the request
+	// was refused, often for what it asked (a model or feature the account
+	// lacks), so it backs off like a 5xx rather than condemning the key.
+	FailureForbidden
 )
 
 // CircuitState describes the current health of a key.
@@ -37,6 +41,11 @@ const (
 
 // backoffSchedule is seconds per step, capped at 60.
 var backoffSchedule = [7]int{1, 2, 4, 8, 16, 32, 60}
+
+// authCooldowns is the open time per step after a rejected credential. It is
+// bounded so a rejection the caller provoked cannot take a shared key out for
+// good; a key that is really revoked is probed at most once per final step.
+var authCooldowns = [5]time.Duration{30 * time.Second, time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
 
 func (s *Selector) readRecord(ctx context.Context, keyHash string) CircuitRecord {
 	b, err := s.state.Get(ctx, circuitKey(keyHash))
@@ -159,9 +168,12 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 		return
 
 	case FailureAuth:
+		step := min(rec.BackoffStep+1, len(authCooldowns)-1)
+		dur := authCooldowns[step]
+		rec.BackoffStep = step
 		rec.State = CircuitOpen
-		rec.Indefinite = true
-		rec.OpenUntil = time.Time{}
+		rec.Indefinite = false
+		rec.OpenUntil = now.Add(dur)
 		rec.LastTransition = now
 		rec.Reason = ReasonUpstreamAuthFailed
 		s.writeRecord(ctx, keyHash, rec)
@@ -174,7 +186,7 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 			"reason", "401",
 			"cooldown_reason", rec.Reason,
 			"backoff_step", rec.BackoffStep,
-			"open_for_seconds", 0,
+			"open_for_seconds", int(dur.Seconds()),
 		)
 
 	case FailureRateLimitShort:
@@ -209,12 +221,16 @@ func (s *Selector) RecordFailure(ctx context.Context, keyHash string, kind Failu
 			"open_for_seconds", int(retryAfter.Seconds()),
 		)
 
-	case FailureServerError, FailureNetwork:
+	case FailureServerError, FailureNetwork, FailureForbidden:
 		logReason := "5xx"
 		cooldownReason := ReasonUpstreamServerError
-		if kind == FailureNetwork {
+		switch kind {
+		case FailureNetwork:
 			logReason = "network"
 			cooldownReason = ReasonUpstreamNetworkError
+		case FailureForbidden:
+			logReason = "403"
+			cooldownReason = ReasonUpstreamForbidden
 		}
 		step := rec.BackoffStep + 1
 		if step >= len(backoffSchedule) {

@@ -32,6 +32,8 @@ type Spec struct {
 
 // Rule is one cap. A RateLimit with N rules produces N concurrent buckets at
 // request time. Strategy is per-rule — there is no spec-level default fallback.
+// Token meters are counted after the response, so they are always enforced as
+// a sliding window whatever Strategy names.
 //
 // Window is the measurement period, expressed on the wire (control-API JSON and
 // stored JSONB) as an integer number of seconds — see the Window type.

@@ -37,6 +37,10 @@ type Principal struct {
 	// bearer. Zero for a key.
 	TokenExp int64
 	TokenVer int
+
+	// token is the verified claims a token credential was admitted with, so
+	// a WebSocket frame can re-derive the subjects without the bearer.
+	token *cacheEntry
 }
 
 // Recheck re-validates an already-admitted principal against the current

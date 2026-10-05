@@ -7,7 +7,9 @@
 package meta
 
 import (
+	"errors"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/go-playground/validator/v10"
@@ -81,6 +83,45 @@ type Metadata struct {
 	// is told to clear them). Server-authoritative: stamped on edit, never read
 	// from manifest YAML.
 	Dirty bool `json:"dirty,omitempty" yaml:"-"`
+
+	// ResourceVersion is an opaque token that changes on every write to the
+	// row. An update carrying it only applies while the stored row still has
+	// it; an empty value updates unconditionally.
+	ResourceVersion string `json:"resourceVersion,omitempty" yaml:"-" doc:"Opaque version of the stored row; changes on every write. Send the value you read on update: a mismatch fails with 409 stale_resource_version. Omit to update unconditionally."`
+}
+
+// ErrStaleResourceVersion reports a conditional update whose
+// ResourceVersion no longer matches the stored row.
+var ErrStaleResourceVersion = errors.New("resource changed since it was read")
+
+// FormatResourceVersion renders a stored version counter as the opaque
+// ResourceVersion string.
+func FormatResourceVersion(v int64) string { return strconv.FormatInt(v, 10) }
+
+// ExpectedVersion returns the version a conditional update must match; ok is
+// false when ResourceVersion is unset. A value no stored row can carry is
+// reported as ErrStaleResourceVersion.
+func (m Metadata) ExpectedVersion() (v int64, ok bool, err error) {
+	if m.ResourceVersion == "" {
+		return 0, false, nil
+	}
+	v, err = strconv.ParseInt(m.ResourceVersion, 10, 64)
+	if err != nil {
+		return 0, false, ErrStaleResourceVersion
+	}
+	return v, true, nil
+}
+
+// StaleIfNoRows maps a conditional upsert's affected-row count: zero rows
+// means the stored version no longer matched.
+func StaleIfNoRows(n int64, err error) error {
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrStaleResourceVersion
+	}
+	return nil
 }
 
 // NewID returns a fresh UUIDv7 string. Centralized so every entity store

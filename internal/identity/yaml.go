@@ -187,6 +187,9 @@ func validate(store *Store) error {
 		if len(u.Spec.Password.Get()) < 8 {
 			return fmt.Errorf("User %q: password must be at least 8 characters", name)
 		}
+		if IsPlaceholderPassword(u.Spec.Password.Get()) {
+			return fmt.Errorf("User %q: password is a published placeholder (%s); set a real one", name, u.Spec.Password.Source())
+		}
 	}
 	return nil
 }

@@ -101,7 +101,7 @@ func (GeminiTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 // req is unused — Gemini does not require request echo.
 func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte, error) {
 	var parts []geminiPart
-	finishReason := canonicalFinishReasonToGemini(resp.FinishReason, resp.IncompleteDetails)
+	finishReason := canonicalFinishReasonToGemini(resp.Status, resp.FinishReason, resp.IncompleteDetails)
 
 	for _, item := range resp.Output {
 		switch v := item.(type) {
@@ -183,7 +183,10 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 
 // geminiFinishReasonToCanonical maps a Gemini finishReason string to canonical status/finish/incomplete.
 func geminiFinishReasonToCanonical(reason string, hasFunctionCall bool) (v1.Status, v1.FinishReason, *v1.IncompleteDetails) {
-	if hasFunctionCall {
+	// hasFunctionCall promotes a neutral stop to tool_calls. Safety-relevant and
+	// truncation reasons must not be overridden: a function call emitted before a
+	// SAFETY block does not make the blocked output safe (rule 11).
+	if hasFunctionCall && (reason == "STOP" || reason == "") {
 		return v1.StatusCompleted, v1.FinishReasonToolCalls, nil
 	}
 	switch reason {
@@ -210,8 +213,15 @@ func geminiFinishReasonToCanonical(reason string, hasFunctionCall bool) (v1.Stat
 	}
 }
 
-// canonicalFinishReasonToGemini maps canonical finish_reason + incomplete_details back to a Gemini finishReason string.
-func canonicalFinishReasonToGemini(reason v1.FinishReason, incomplete *v1.IncompleteDetails) string {
+// canonicalFinishReasonToGemini maps canonical status + finish_reason + incomplete_details
+// back to a Gemini finishReason string.
+func canonicalFinishReasonToGemini(status v1.Status, reason v1.FinishReason, incomplete *v1.IncompleteDetails) string {
+	// A non-success status with no specific finish_reason must not look like a
+	// clean generation stop (rule 11). Gemini's OTHER is the nearest non-STOP value.
+	if reason == "" && status != v1.StatusCompleted && status != "" {
+		// canonical: status=failed/incomplete empty finish_reason → OTHER, not STOP
+		return "OTHER"
+	}
 	if incomplete != nil && incomplete.Reason == "max_tokens" {
 		return "MAX_TOKENS"
 	}

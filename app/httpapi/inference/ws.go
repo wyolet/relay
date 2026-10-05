@@ -11,6 +11,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	transportws "github.com/wyolet/relay/app/transport/ws"
+	"github.com/wyolet/relay/pkg/reqid"
 )
 
 // wsHandler upgrades a /v1/ws request to a WebSocket and serves the
@@ -58,7 +59,7 @@ func wsHandler(d Deps) http.HandlerFunc {
 					return
 				}
 				frame := framePrincipal(p, snap)
-				if !resolvePolicy(fw, snap, frame) {
+				if !authorizePrincipal(fw, snap, frame, ClassificationFrom(fr.Context()).Mode) {
 					return
 				}
 				fr = fr.WithContext(context.WithValue(fr.Context(), ctxPrincipalT{}, frame))
@@ -67,30 +68,30 @@ func wsHandler(d Deps) http.HandlerFunc {
 		}
 
 		_ = transportws.Serve(r.Context(), conn, r, perFrame, transportws.Options{
-			Logger: slog.Default(),
+			// Each frame is its own request and must not share the upgrade's id.
+			PerRequest: func(ctx context.Context) context.Context { return reqid.WithNewID(ctx, slog.Default()) },
+			Logger:     slog.Default(),
 		})
 	}
 }
 
-// framePrincipal copies the connection's principal and re-reads what the
-// credential resolves to in snap: the key row (and with it the policy it
-// names) may have been rebound since the upgrade. The copy is what keeps
-// concurrent frames from writing the connection's shared principal.
+// framePrincipal re-resolves the connection's credential against the frame's
+// snapshot the way the HTTP edge does, so every change the snapshot reflects
+// (key flags and policy, service account, project, group membership) reaches
+// the next frame. Each frame gets its own value: frames run concurrently.
 func framePrincipal(p *Principal, snap *appcatalog.Snapshot) *Principal {
-	frame := *p
-	frame.Policy = nil
-	if frame.CredentialKind == CredentialKey {
-		if k, _ := snap.KeyByHash(frame.KeyHash); k != nil {
-			frame.Key = k
+	if p.CredentialKind == CredentialKey {
+		if k, _ := snap.KeyByHash(p.KeyHash); k != nil {
+			return buildPrincipal(snap, k, p.KeyHash)
 		}
 	}
-	if frame.Key != nil && frame.Key.Spec.PolicyID != "" {
-		// Disabled included, so a policy switched off mid-connection answers
-		// policy_disabled instead of falling through to the account's or the
-		// project's broader grant.
-		if pol, ok := policyOrDisabled(snap, frame.Key.Spec.PolicyID); ok {
-			frame.Policy = pol
-		}
+	frame := *p
+	frame.Policy = nil
+	if p.token != nil {
+		frame.Subjects = p.token.subjectsIn(snap, p.UserID)
+	}
+	if proj, ok := snap.Project(p.ProjectID); ok {
+		frame.TeamID = proj.Spec.TeamID
 	}
 	return &frame
 }

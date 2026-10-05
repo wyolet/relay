@@ -97,8 +97,8 @@ func TestReadCircuit(t *testing.T) {
 	if !found {
 		t.Fatal("want found=true after a failure wrote a record")
 	}
-	if rec.State != CircuitOpen || !rec.Indefinite {
-		t.Fatalf("want open+indefinite, got state=%v indefinite=%v", rec.State, rec.Indefinite)
+	if rec.State != CircuitOpen || rec.Indefinite {
+		t.Fatalf("want open with an expiry, got state=%v indefinite=%v", rec.State, rec.Indefinite)
 	}
 	if rec.State.String() != "open" {
 		t.Fatalf("want state string \"open\", got %q", rec.State.String())
@@ -108,20 +108,80 @@ func TestReadCircuit(t *testing.T) {
 	}
 }
 
-// TestAuthFailureIsIndefinite — auth failure → open+indefinite; Pick returns ErrNoHealthyKeys.
-func TestAuthFailureIsIndefinite(t *testing.T) {
+// An auth failure opens the key for a bounded, escalating cooldown, then a
+// half-open probe: one rejected request never takes a shared key out for good.
+func TestAuthFailureOpensForBoundedCooldown(t *testing.T) {
 	sel, _ := newSel(t, frozenClock(t0))
 	ctx := context.Background()
 	k := "hash-auth"
+	keys := []*hostkey.HostKey{key("s", k)}
+	p := pool("p")
+
 	sel.RecordFailure(ctx, k, FailureAuth, 0)
 	rec := sel.readRecord(ctx, k)
-	if rec.State != CircuitOpen || !rec.Indefinite {
-		t.Fatal("want open+indefinite")
+	if rec.State != CircuitOpen || rec.Indefinite {
+		t.Fatalf("want open with an expiry, got state=%v indefinite=%v", rec.State, rec.Indefinite)
 	}
+	first := authCooldowns[1]
+	if want := t0.Add(first); !rec.OpenUntil.Equal(want) {
+		t.Fatalf("OpenUntil = %v, want %v", rec.OpenUntil, want)
+	}
+	if _, err := sel.Pick(ctx, p.scope, p.algo, keys); err != ErrNoHealthyKeys {
+		t.Fatalf("inside the cooldown: want ErrNoHealthyKeys, got %v", err)
+	}
+
+	sel.clock = frozenClock(t0.Add(first + time.Second))
+	if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
+		t.Fatalf("after the cooldown: want the key as a half-open probe, got %v, %v", got, err)
+	}
+
+	// A failed probe escalates, capped at the last step.
+	for range len(authCooldowns) + 2 {
+		sel.RecordFailure(ctx, k, FailureAuth, 0)
+	}
+	rec = sel.readRecord(ctx, k)
+	if want := sel.clock().Add(authCooldowns[len(authCooldowns)-1]); !rec.OpenUntil.Equal(want) {
+		t.Fatalf("capped OpenUntil = %v, want %v", rec.OpenUntil, want)
+	}
+}
+
+// A 403 means the credential authenticated but the request was not allowed,
+// often because of what the request asked for. It cools the key down on the
+// short server-error ladder, not the auth one.
+func TestForbiddenUsesShortBackoff(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	k := "hash-403"
+	sel.RecordFailure(ctx, k, FailureForbidden, 0)
+	rec := sel.readRecord(ctx, k)
+	if rec.State != CircuitOpen || rec.Indefinite || rec.Reason != ReasonUpstreamForbidden {
+		t.Fatalf("want open/bounded/%q, got %v/%v/%q", ReasonUpstreamForbidden, rec.State, rec.Indefinite, rec.Reason)
+	}
+	if want := t0.Add(time.Duration(backoffSchedule[1]) * time.Second); !rec.OpenUntil.Equal(want) {
+		t.Fatalf("OpenUntil = %v, want %v", rec.OpenUntil, want)
+	}
+}
+
+// Records written as indefinite before cooldowns were bounded expire after
+// the longest auth cooldown instead of staying open forever.
+func TestLegacyIndefiniteRecordExpires(t *testing.T) {
+	sel, _ := newSel(t, frozenClock(t0))
+	ctx := context.Background()
+	k := "hash-legacy"
+	sel.writeRecord(ctx, k, CircuitRecord{State: CircuitOpen, Indefinite: true, LastTransition: t0, Reason: ReasonUpstreamAuthFailed})
+	keys := []*hostkey.HostKey{key("s", k)}
 	p := pool("p")
-	_, err := sel.Pick(ctx, p.scope, p.algo, []*hostkey.HostKey{key("s", k)})
-	if err != ErrNoHealthyKeys {
-		t.Fatalf("want ErrNoHealthyKeys, got %v", err)
+
+	sel.clock = frozenClock(t0.Add(time.Minute))
+	if _, err := sel.Pick(ctx, p.scope, p.algo, keys); err != ErrNoHealthyKeys {
+		t.Fatalf("shortly after: want ErrNoHealthyKeys, got %v", err)
+	}
+	sel.clock = frozenClock(t0.Add(authCooldowns[len(authCooldowns)-1] + time.Second))
+	if got, err := sel.Pick(ctx, p.scope, p.algo, keys); err != nil || got.KeyHash != k {
+		t.Fatalf("after the longest auth cooldown: want the key, got %v, %v", got, err)
+	}
+	if rec := sel.readRecord(ctx, k); rec.Indefinite || rec.State != CircuitHalfOpen {
+		t.Fatalf("want half-open without the indefinite flag, got %+v", rec)
 	}
 }
 

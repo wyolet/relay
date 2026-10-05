@@ -39,6 +39,15 @@ const (
 // ErrForbidden is returned when a caller asks about a batch they don't own.
 var ErrForbidden = errors.New("batch: not owner")
 
+// ErrTooManyItems is returned when a submission carries more items than the
+// Service accepts in one batch.
+var ErrTooManyItems = errors.New("batch: too many items")
+
+// DefaultMaxItems is the per-submission item cap when none is configured. Every
+// item costs a payload file and two rows at submit, on one queue shared by all
+// callers, so a single request must not be able to enqueue without bound.
+const DefaultMaxItems = 50000
+
 // Service is the batch subsystem's application layer: it accepts submissions,
 // enqueues each item as a jobq job, and answers status/results/cancel. It is a
 // pure consumer of jobq (execution) + Store (the batch record).
@@ -49,12 +58,17 @@ type Service struct {
 	// resolveCaller is supplied by the transport; nil means every request is
 	// unauthenticated.
 	resolveCaller CallerFunc
+	maxItems      int
 }
 
 // NewService wires the store, queue, and runner together. resolveCaller is
-// how the HTTP surface learns who is asking.
-func NewService(store *Store, queue *jobq.Queue, runner *Runner, resolveCaller CallerFunc) *Service {
-	return &Service{store: store, queue: queue, runner: runner, resolveCaller: resolveCaller}
+// how the HTTP surface learns who is asking; maxItems caps one submission
+// (<= 0 means DefaultMaxItems).
+func NewService(store *Store, queue *jobq.Queue, runner *Runner, resolveCaller CallerFunc, maxItems int) *Service {
+	if maxItems <= 0 {
+		maxItems = DefaultMaxItems
+	}
+	return &Service{store: store, queue: queue, runner: runner, resolveCaller: resolveCaller, maxItems: maxItems}
 }
 
 func (s *Service) caller(ctx context.Context) *Caller {
@@ -109,6 +123,9 @@ func (s *Service) Handler() jobq.Handler {
 func (s *Service) Submit(ctx context.Context, c *Caller, inbound string, items [][]byte) (string, error) {
 	if len(items) == 0 {
 		return "", errors.New("batch: no items")
+	}
+	if len(items) > s.maxItems {
+		return "", fmt.Errorf("%w: %d items, at most %d per batch", ErrTooManyItems, len(items), s.maxItems)
 	}
 	if c == nil {
 		return "", errors.New("batch: no caller")

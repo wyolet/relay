@@ -191,6 +191,11 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 			return nil, fmt.Errorf("cc from_canonical stream: generation.completed: %w", err)
 		}
 		fr := canonicalFinishReasonToCC(ev.FinishReason)
+		if ev.FinishReason == "" && (ev.Status == v1.StatusFailed || ev.Status == v1.StatusIncomplete) {
+			// canonical: status=failed/incomplete with no finish_reason must not surface
+			// as a clean stop (rule 11); content_filter is CC's nearest non-success signal.
+			fr = "content_filter"
+		}
 		finalChunk := ChatStreamChunk{
 			ID:      s.responseID,
 			Object:  "chat.completion.chunk",

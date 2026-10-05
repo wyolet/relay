@@ -90,20 +90,7 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 			Authz:    d.Authz,
 		})
 		if err != nil {
-			var ge *apply.GovernanceError
-			if errors.As(err, &ge) {
-				return nil, huma.Error403Forbidden(ge.Error())
-			}
-			if errors.Is(err, license.ErrRequired) || errors.Is(err, authz.ErrForbidden) {
-				return nil, huma.Error403Forbidden(err.Error())
-			}
-			// A reference the caller may not see answers like any refused row:
-			// generic, so the plan step cannot probe another scope's names.
-			var re *refcheck.Error
-			if errors.As(err, &re) && re.Status == http.StatusNotFound {
-				return nil, &applyFailure{status: http.StatusForbidden, Message: "forbidden"}
-			}
-			return nil, huma.Error400BadRequest(err.Error())
+			return nil, planFailure(ctx, d.Authz, err)
 		}
 
 		// Every write needs system.apply at its scope plus the row's own verb;
@@ -151,6 +138,31 @@ func registerApply(api huma.API, d Deps, protect huma.Middlewares) {
 		out.Body.Applied = true
 		return out, nil
 	})
+}
+
+// planFailure maps a Plan error to the response. A row or reference the
+// caller may not see, and a name that resolves to nothing, answer alike and
+// generically, so the plan step cannot probe another scope's names. A caller
+// who sees everything gets the unresolved name back.
+func planFailure(ctx context.Context, a authz.Authorizer, err error) error {
+	var ae *apply.AuthzError
+	var re *refcheck.Error
+	var nf *manifest.RefNotFoundError
+	_, scoped := a.(authz.Scoper)
+	switch {
+	case errors.As(err, &ae),
+		errors.As(err, &re) && re.Status == http.StatusNotFound,
+		errors.As(err, &nf) && scoped && !authz.IsAdmin(ctx):
+		return &applyFailure{status: http.StatusForbidden, Message: "forbidden"}
+	}
+	var ge *apply.GovernanceError
+	if errors.As(err, &ge) {
+		return huma.Error403Forbidden(ge.Error())
+	}
+	if errors.Is(err, license.ErrRequired) || errors.Is(err, authz.ErrForbidden) {
+		return huma.Error403Forbidden(err.Error())
+	}
+	return huma.Error400BadRequest(err.Error())
 }
 
 // recordApplied audits each change that landed as its own row, plus the

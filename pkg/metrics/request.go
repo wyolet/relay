@@ -116,6 +116,7 @@ var (
 	inflightProxy    = InflightRequests.WithLabelValues("proxy")
 	inflightWS       = InflightRequests.WithLabelValues("ws")
 	inflightBatch    = InflightRequests.WithLabelValues("batch")
+	inflightCount    = InflightRequests.WithLabelValues("count")
 	inflightUnknown  = InflightRequests.WithLabelValues("unknown")
 )
 
@@ -137,6 +138,8 @@ func inflightGauge(source string) prometheus.Gauge {
 		return inflightWS
 	case "batch":
 		return inflightBatch
+	case "count":
+		return inflightCount
 	default:
 		return inflightUnknown
 	}

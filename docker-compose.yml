@@ -3,16 +3,17 @@
 # The lean relay image wired to its own Postgres + Valkey, with volumes and
 # all environment configured. One command:
 #
+#   echo "RELAY_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> .env
 #   docker compose up -d
 #   docker compose logs -f relay      # watch startup
 #
 # The catalog is baked into the image and seeded into Postgres on first boot.
 # Admin UI → http://localhost:8081 · inference API → http://localhost:8080.
-# Log in as `admin` / RELAY_ADMIN_PASSWORD.
+# Log in as `admin` / RELAY_ADMIN_PASSWORD. Ports bind to 127.0.0.1 unless
+# RELAY_BIND_ADDR says otherwise.
 #
 # Before a real deployment: set a stable RELAY_MASTER_KEY (it encrypts your
-# stored provider keys) and change RELAY_ADMIN_PASSWORD — put them in a `.env`
-# file next to this one, or edit the values below.
+# stored provider keys) — put it in the same `.env` file next to this one.
 #
 # Contributors building from source / running the multi-pod dev stack: see
 # deploy/compose/ and `make dev`.
@@ -85,13 +86,14 @@ services:
       RELAY_CONTROL_PORT: "8081"
       RELAY_INFERENCE_API_URL: http://localhost:8080
       RELAY_COOKIE_SECURE: "false"
-      # Admin UI login: user `admin` + this password.
-      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:-change-me-please}
+      # Admin UI login: user `admin` + this password. No default on purpose.
+      RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:?set RELAY_ADMIN_PASSWORD (8+ chars) in .env or the shell before starting relay}
       # Master key encrypts stored provider keys — set a stable value for
       # production (empty is fine to boot; required only for stored secrets).
       RELAY_MASTER_KEY: ${RELAY_MASTER_KEY:-}
       # Break-glass control-plane bearer (CI / scripts).
       RELAY_ADMIN_TOKEN: ${RELAY_ADMIN_TOKEN:-}
+    # Loopback by default; set RELAY_BIND_ADDR=0.0.0.0 to expose on the network.
     ports:
-      - "8080:8080"   # inference API (OpenAI/Anthropic shapes)
-      - "8081:8081"   # admin UI + control API
+      - "${RELAY_BIND_ADDR:-127.0.0.1}:8080:8080"   # inference API (OpenAI/Anthropic shapes)
+      - "${RELAY_BIND_ADDR:-127.0.0.1}:8081:8081"   # admin UI + control API

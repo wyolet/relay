@@ -186,7 +186,7 @@ func waitForCommits(t *testing.T, store *observedKV, n int) []observedCommit {
 	return commits
 }
 
-func TestRunErrorCancelsInboundAndHeldKeyReservations(t *testing.T) {
+func TestRunCancelAfterCallKeepsInboundAndHeldKeyCharge(t *testing.T) {
 	t.Parallel()
 
 	h := newReservationHarness()
@@ -203,11 +203,11 @@ func TestRunErrorCancelsInboundAndHeldKeyReservations(t *testing.T) {
 
 	commits := h.store.snapshotCommits()
 	if len(commits) != 2 {
-		t.Fatalf("commit count = %d, want 2 (inbound + held key rollback)", len(commits))
+		t.Fatalf("commit count = %d, want 2 (inbound + held key)", len(commits))
 	}
 	for _, commit := range commits {
-		if !commit.cancelled {
-			t.Fatalf("commit %q used Cancelled=false, want Cancelled=true rollback", commit.guardKey)
+		if commit.cancelled {
+			t.Fatalf("commit %q used Cancelled=true, want the charge kept once the call was made", commit.guardKey)
 		}
 	}
 	if rec, found := h.selector.ReadCircuit(context.Background(), h.key.KeyHash); found {

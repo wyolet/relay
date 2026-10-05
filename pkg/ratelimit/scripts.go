@@ -83,6 +83,7 @@ for i, r in ipairs(rules) do
     table.insert(pending, {kind="con", key=con_key, ttl_ms=ttl_ms})
 
   -- ── tokens / tokens.X: peek only at Reserve; Commit increments ───────────
+  -- buildReserveArgs always sends sliding-window for token meters.
   elseif meter == "tokens" or meter:sub(1,7) == "tokens." then
     if strategy == "sliding-window" then
       local cur_key  = KEYS[r.cur_key_idx]
@@ -99,7 +100,6 @@ for i, r in ipairs(rules) do
       end
       -- no pending entry — tokens incremented at Commit
     end
-    -- other strategies for tokens meter: always pass at Reserve
 
   -- ── requests meter: strategy-specific ────────────────────────────────────
   elseif strategy == "sliding-window" then
@@ -415,6 +415,12 @@ func buildReserveArgs(scope string, rules []Rule, now time.Time) (keys []string,
 		if strategy == "" {
 			strategy = string(StrategyTokenBucket)
 		}
+		// Token usage is only known after the response, so token meters are
+		// committed into sliding-window buckets; the check must read those
+		// same buckets whatever strategy the rule names.
+		if isTokenMeter(rule.Meter) {
+			strategy = string(StrategySlidingWindow)
+		}
 
 		ra := ruleArg{
 			Meter:    rule.Meter,
@@ -430,39 +436,31 @@ func buildReserveArgs(scope string, rules []Rule, now time.Time) (keys []string,
 			ra.DenyKeyIdx = addKey(denyKey(scope, rule))
 		case "concurrency":
 			ra.ConKeyIdx = addKey(concurrencyKey(scope, rule))
-		case "tokens":
-			// tokens meter is always post-hoc (peek at Reserve); sliding-window keys
-			// needed for peek; other strategies just peek without key read.
-			cur, prev := windowBuckets(now, w)
-			ra.CurKeyIdx = addKey(bucketKey(scope, rule, cur))
-			ra.PrevKeyIdx = addKey(bucketKey(scope, rule, prev))
 		default:
-			// requests or tokens.X
-			if strings.HasPrefix(rule.Meter, "tokens.") {
+			switch Strategy(strategy) {
+			case StrategyFixedWindow:
+				bucketStartMs := (now.UnixMilli() / w.Milliseconds()) * w.Milliseconds()
+				ra.FwKeyIdx = addKey(fixedWindowKey(scope, rule, bucketStartMs))
+			case StrategyTokenBucket:
+				ra.TbKeyIdx = addKey(tbStateKey(scope, rule))
+			case StrategyLeakyBucket:
+				ra.LbKeyIdx = addKey(lbStateKey(scope, rule))
+			case StrategySessionWindow:
+				ra.SwKeyIdx = addKey(swStateKey(scope, rule))
+			default: // sliding-window, and every token meter
 				cur, prev := windowBuckets(now, w)
 				ra.CurKeyIdx = addKey(bucketKey(scope, rule, cur))
 				ra.PrevKeyIdx = addKey(bucketKey(scope, rule, prev))
-			} else {
-				switch Strategy(strategy) {
-				case StrategyFixedWindow:
-					bucketStartMs := (now.UnixMilli() / w.Milliseconds()) * w.Milliseconds()
-					ra.FwKeyIdx = addKey(fixedWindowKey(scope, rule, bucketStartMs))
-				case StrategyTokenBucket:
-					ra.TbKeyIdx = addKey(tbStateKey(scope, rule))
-				case StrategyLeakyBucket:
-					ra.LbKeyIdx = addKey(lbStateKey(scope, rule))
-				case StrategySessionWindow:
-					ra.SwKeyIdx = addKey(swStateKey(scope, rule))
-				default: // sliding-window
-					cur, prev := windowBuckets(now, w)
-					ra.CurKeyIdx = addKey(bucketKey(scope, rule, cur))
-					ra.PrevKeyIdx = addKey(bucketKey(scope, rule, prev))
-				}
 			}
 		}
 		ruleArgs = append(ruleArgs, ra)
 	}
 	return keys, ruleArgs, nil
+}
+
+// isTokenMeter reports whether meter counts tokens (bare "tokens" or "tokens.<key>").
+func isTokenMeter(meter string) bool {
+	return meter == "tokens" || strings.HasPrefix(meter, "tokens.")
 }
 
 // RegisterScripts registers the Go emulators for limit.reserve and limit.commit
@@ -557,8 +555,9 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 				pending = append(pending, pendingEntry{kind: "con", key: conKey, ttl: conTTL})
 
 			default:
-				// tokens / tokens.X — always post-hoc; for sliding-window peek:
-				if r.Meter == "tokens" || (len(r.Meter) > 7 && r.Meter[:7] == "tokens.") {
+				// tokens / tokens.X — post-hoc; peek the sliding-window buckets
+				// (buildReserveArgs always sends that strategy for token meters).
+				if isTokenMeter(r.Meter) {
 					if strategy == string(StrategySlidingWindow) {
 						curKey := keys[r.CurKeyIdx-1]
 						prevKey := keys[r.PrevKeyIdx-1]
@@ -579,7 +578,6 @@ func memReserveImpl(ctx context.Context, store *kv.Mem, keys []string, args []an
 							return nil
 						}
 					}
-					// other strategies: peek always passes for tokens meter
 					continue
 				}
 

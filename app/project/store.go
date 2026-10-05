@@ -28,7 +28,7 @@ func (s *Store) List(ctx context.Context) ([]*Project, error) {
 	}
 	out := make([]*Project, 0, len(rows))
 	for _, r := range rows {
-		p, err := fromRow(r.ID, r.Name, r.DisplayName, r.TeamID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+		p, err := fromRow(r.ID, r.Name, r.DisplayName, r.TeamID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 		if err != nil {
 			return nil, fmt.Errorf("project %s: %w", r.Name, err)
 		}
@@ -46,7 +46,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Project, error) {
 		}
 		return nil, fmt.Errorf("project.Get: %w", err)
 	}
-	return fromRow(r.ID, r.Name, r.DisplayName, r.TeamID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+	return fromRow(r.ID, r.Name, r.DisplayName, r.TeamID, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 }
 
 // Upsert expects Meta.ID set by the caller and re-derives Owner from TeamID.
@@ -56,20 +56,21 @@ func (s *Store) Upsert(ctx context.Context, p *Project) error {
 	if err != nil {
 		return fmt.Errorf("project.Upsert: %w", err)
 	}
-	return s.q.UpsertProject(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertProject(ctx, params))
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteProject(ctx, id)
 }
 
-func fromRow(id, name, displayName, teamID string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz) (*Project, error) {
+func fromRow(id, name, displayName, teamID string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz, version int64) (*Project, error) {
 	md, err := meta.UnmarshalJSONB(id, name, displayName, metadata)
 	if err != nil {
 		return nil, err
 	}
 	md.CreatedAt = createdAt.Time
 	md.UpdatedAt = updatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(version)
 	var sp Spec
 	if err := json.Unmarshal(spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -89,12 +90,17 @@ func toUpsertParams(p *Project) (gen.UpsertProjectParams, error) {
 	if err != nil {
 		return gen.UpsertProjectParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := p.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertProjectParams{}, err
+	}
 	return gen.UpsertProjectParams{
-		ID:          p.Meta.ID,
-		Name:        p.Meta.Name,
-		DisplayName: p.Meta.DisplayName,
-		TeamID:      p.Spec.TeamID,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
+		ID:              p.Meta.ID,
+		Name:            p.Meta.Name,
+		DisplayName:     p.Meta.DisplayName,
+		TeamID:          p.Spec.TeamID,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
 	}, nil
 }

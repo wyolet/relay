@@ -23,6 +23,10 @@ const DefaultCatalogURLTemplate = "https://github.com/wyolet/relay-catalog/archi
 // hostile mirror) can't fill the disk.
 const maxCatalogBytes = 512 << 20
 
+// maxCatalogEntries caps the archive's entry count; the real catalog has a
+// few thousand files at most.
+const maxCatalogEntries = 50_000
+
 // FetchCatalog downloads the catalog source archive for version from
 // urlTemplate ("{version}" substituted; empty = DefaultCatalogURLTemplate),
 // extracts it under destDir, and returns the directory holding the
@@ -56,13 +60,15 @@ func FetchCatalog(ctx context.Context, urlTemplate, version, destDir string) (st
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("seed: fetch catalog %s: HTTP %d", url, resp.StatusCode)
 	}
-	if err := extractTarGz(resp.Body, destDir); err != nil {
+	if err := extractTarGz(resp.Body, destDir, maxCatalogBytes, maxCatalogEntries); err != nil {
 		return "", fmt.Errorf("seed: extract catalog %s: %w", url, err)
 	}
 	return findDataRoot(destDir)
 }
 
-func extractTarGz(r io.Reader, destDir string) error {
+// extractTarGz writes at most maxBytes of file content (sparse holes count
+// at their logical size) and at most maxEntries entries under destDir.
+func extractTarGz(r io.Reader, destDir string, maxBytes int64, maxEntries int) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return err
@@ -70,6 +76,7 @@ func extractTarGz(r io.Reader, destDir string) error {
 	defer gz.Close()
 
 	var written int64
+	var entries int
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -78,6 +85,9 @@ func extractTarGz(r io.Reader, destDir string) error {
 		}
 		if err != nil {
 			return err
+		}
+		if entries++; entries > maxEntries {
+			return fmt.Errorf("archive exceeds %d entries", maxEntries)
 		}
 		target, err := securePath(destDir, hdr.Name)
 		if err != nil {
@@ -89,8 +99,11 @@ func extractTarGz(r io.Reader, destDir string) error {
 				return err
 			}
 		case tar.TypeReg:
-			if written += hdr.Size; written > maxCatalogBytes {
-				return fmt.Errorf("archive exceeds %d bytes", int64(maxCatalogBytes))
+			// Compared against the remaining budget, never summed first:
+			// a declared size near MaxInt64 would wrap the running total.
+			remaining := maxBytes - written
+			if hdr.Size < 0 || hdr.Size > remaining {
+				return fmt.Errorf("archive exceeds %d bytes", maxBytes)
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
@@ -99,7 +112,8 @@ func extractTarGz(r io.Reader, destDir string) error {
 			if err != nil {
 				return err
 			}
-			_, err = io.Copy(f, io.LimitReader(tr, maxCatalogBytes))
+			n, err := io.Copy(f, io.LimitReader(tr, remaining))
+			written += n
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}

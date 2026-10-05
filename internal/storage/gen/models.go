@@ -55,13 +55,14 @@ type BatchItem struct {
 }
 
 type Group struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type GroupMember struct {
@@ -71,36 +72,39 @@ type GroupMember struct {
 }
 
 type Host struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type HostBinding struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	ModelID     string             `db:"model_id" json:"model_id"`
-	HostID      string             `db:"host_id" json:"host_id"`
-	PricingID   pgtype.Text        `db:"pricing_id" json:"pricing_id"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	ModelID         string             `db:"model_id" json:"model_id"`
+	HostID          string             `db:"host_id" json:"host_id"`
+	PricingID       pgtype.Text        `db:"pricing_id" json:"pricing_id"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type Model struct {
-	Name        string             `db:"name" json:"name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ID          string             `db:"id" json:"id"`
-	DisplayName string             `db:"display_name" json:"display_name"`
+	Name            string             `db:"name" json:"name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type Overlay struct {
@@ -111,28 +115,30 @@ type Overlay struct {
 }
 
 type Policy struct {
-	Name        string             `db:"name" json:"name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ID          string             `db:"id" json:"id"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
-	Models      []byte             `db:"models" json:"models"`
+	Name            string             `db:"name" json:"name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+	Models          []byte             `db:"models" json:"models"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type PolicyBinding struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	ProjectID   string             `db:"project_id" json:"project_id"`
-	PolicyID    string             `db:"policy_id" json:"policy_id"`
-	Priority    int32              `db:"priority" json:"priority"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	ProjectID       string             `db:"project_id" json:"project_id"`
+	PolicyID        string             `db:"policy_id" json:"policy_id"`
+	Priority        int32              `db:"priority" json:"priority"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type PolicyBindingSubject struct {
@@ -158,14 +164,15 @@ type PolicyModel struct {
 }
 
 type Pricing struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	HostID      string             `db:"host_id" json:"host_id"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	HostID          string             `db:"host_id" json:"host_id"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type PricingModel struct {
@@ -175,34 +182,37 @@ type PricingModel struct {
 }
 
 type Project struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	TeamID      string             `db:"team_id" json:"team_id"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	TeamID          string             `db:"team_id" json:"team_id"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type Provider struct {
-	Name        string             `db:"name" json:"name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ID          string             `db:"id" json:"id"`
-	DisplayName string             `db:"display_name" json:"display_name"`
+	Name            string             `db:"name" json:"name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type RateLimit struct {
-	Name        string             `db:"name" json:"name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
-	ID          string             `db:"id" json:"id"`
-	DisplayName string             `db:"display_name" json:"display_name"`
+	Name            string             `db:"name" json:"name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type RelayKey struct {
@@ -217,29 +227,32 @@ type RelayKey struct {
 	PrincipalSaID   pgtype.Text        `db:"principal_sa_id" json:"principal_sa_id"`
 	PrincipalUserID pgtype.Text        `db:"principal_user_id" json:"principal_user_id"`
 	PreviousKeyHash pgtype.Text        `db:"previous_key_hash" json:"previous_key_hash"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type Role struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type RoleBinding struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	RoleID      string             `db:"role_id" json:"role_id"`
-	ScopeKind   string             `db:"scope_kind" json:"scope_kind"`
-	ScopeID     pgtype.Text        `db:"scope_id" json:"scope_id"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	RoleID          string             `db:"role_id" json:"role_id"`
+	ScopeKind       string             `db:"scope_kind" json:"scope_kind"`
+	ScopeID         pgtype.Text        `db:"scope_id" json:"scope_id"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type RoleBindingSubject struct {
@@ -266,6 +279,7 @@ type Secret struct {
 	DisplayName     string             `db:"display_name" json:"display_name"`
 	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
 	Status          []byte             `db:"status" json:"status"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type SecretValue struct {
@@ -278,14 +292,15 @@ type SecretValue struct {
 }
 
 type ServiceAccount struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	ProjectID   string             `db:"project_id" json:"project_id"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	ProjectID       string             `db:"project_id" json:"project_id"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type Setting struct {
@@ -295,13 +310,14 @@ type Setting struct {
 }
 
 type Team struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 type User struct {

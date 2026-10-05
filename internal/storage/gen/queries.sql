@@ -1,11 +1,11 @@
 -- name: ListProviders :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers ORDER BY name;
 
 -- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name;
 
 -- name: ListStoredSecretsForRotation :many
 SELECT id, value_ciphertext, value_nonce, value_key_version FROM secrets WHERE value_kind = 'stored' ORDER BY id;
@@ -19,12 +19,15 @@ SET value_ciphertext  = $2,
 WHERE id = $1 AND value_kind = 'stored';
 
 -- name: ListModels :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM models ORDER BY name;
 
 -- name: ListRateLimits :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits ORDER BY name;
 
--- name: UpsertProvider :exec
+-- Every catalog upsert takes an optional expected_version: when set, an
+-- existing row is only updated while its resource_version still matches,
+-- and zero affected rows means the caller's copy is stale.
+-- name: UpsertProvider :execrows
 INSERT INTO providers (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -32,9 +35,10 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR providers.resource_version = sqlc.narg('expected_version')::bigint;
 
--- name: UpsertPolicy :exec
+-- name: UpsertPolicy :execrows
 INSERT INTO policies (id, name, display_name, metadata, spec, models, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -43,7 +47,8 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     models = EXCLUDED.models,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR policies.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- UpsertSecret is kept for the seed CLI (YAML-import path). Deprecated for new code; use InsertSecretEnv / InsertSecretStored.
 -- name: UpsertSecret :exec
@@ -70,6 +75,7 @@ ON CONFLICT (id) DO UPDATE
         metadata          = EXCLUDED.metadata,
         spec              = EXCLUDED.spec,
         updated_at        = NOW()
+    WHERE sqlc.narg('expected_version')::bigint IS NULL OR secrets.resource_version = sqlc.narg('expected_version')::bigint
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
 -- name: InsertSecretStored :one
@@ -131,6 +137,7 @@ ON CONFLICT (id) DO UPDATE
         metadata          = EXCLUDED.metadata,
         spec              = EXCLUDED.spec,
         updated_at        = NOW()
+    WHERE sqlc.narg('expected_version')::bigint IS NULL OR secrets.resource_version = sqlc.narg('expected_version')::bigint
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec;
 
 -- secret_values: generic stored-secret value store (pkg/secret "stored").
@@ -156,7 +163,7 @@ DELETE FROM secret_values WHERE id = $1;
 -- name: MaxSecretValueKeyVersion :one
 SELECT COALESCE(MAX(key_version), 0)::int FROM secret_values;
 
--- name: UpsertModel :exec
+-- name: UpsertModel :execrows
 INSERT INTO models (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -164,9 +171,10 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR models.resource_version = sqlc.narg('expected_version')::bigint;
 
--- name: UpsertRateLimit :exec
+-- name: UpsertRateLimit :execrows
 INSERT INTO rate_limits (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -174,7 +182,8 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR rate_limits.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteProvider :exec
 DELETE FROM providers WHERE id = $1;
@@ -189,9 +198,9 @@ DELETE FROM models WHERE id = $1;
 DELETE FROM rate_limits WHERE id = $1;
 
 -- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys ORDER BY name;
 
--- name: UpsertRelayKey :exec
+-- name: UpsertRelayKey :execrows
 INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -203,7 +212,8 @@ ON CONFLICT (id) DO UPDATE SET
     principal_user_id = EXCLUDED.principal_user_id,
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR relay_keys.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: RelayKeyHashTaken :one
 -- Either hash of another row shadows this one on the hash index, so both
@@ -233,9 +243,9 @@ DELETE FROM relay_keys WHERE id = $1;
 -- ── app/ arch (migration 0009) ───────────────────────────────────────────────
 
 -- name: ListHosts :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM hosts ORDER BY name;
 
--- name: UpsertHost :exec
+-- name: UpsertHost :execrows
 INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -243,7 +253,8 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR hosts.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteHost :exec
 DELETE FROM hosts WHERE id = $1;
@@ -270,14 +281,14 @@ DELETE FROM policy_host_keys WHERE policy_id = $1;
 INSERT INTO policy_host_keys (policy_id, host_key_id, position) VALUES ($1, $2, $3);
 
 -- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies ORDER BY name;
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies ORDER BY name;
 
 -- ── pricing (migration 0010) ─────────────────────────────────────────────────
 
 -- name: ListPricings :many
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings ORDER BY name;
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings ORDER BY name;
 
--- name: UpsertPricing :exec
+-- name: UpsertPricing :execrows
 INSERT INTO pricings (id, name, display_name, host_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -286,7 +297,8 @@ ON CONFLICT (id) DO UPDATE SET
     host_id = EXCLUDED.host_id,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR pricings.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeletePricing :exec
 DELETE FROM pricings WHERE id = $1;
@@ -303,12 +315,12 @@ INSERT INTO pricing_models (pricing_id, model_id, position) VALUES ($1, $2, $3);
 -- ── host_bindings (migration 0020) ───────────────────────────────────────────
 
 -- name: ListHostBindings :many
-SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings ORDER BY name;
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at, resource_version FROM host_bindings ORDER BY name;
 
 -- name: GetHostBinding :one
-SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings WHERE id = $1;
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at, resource_version FROM host_bindings WHERE id = $1;
 
--- name: UpsertHostBinding :exec
+-- name: UpsertHostBinding :execrows
 INSERT INTO host_bindings (id, name, display_name, model_id, host_id, pricing_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -319,37 +331,38 @@ ON CONFLICT (id) DO UPDATE SET
     pricing_id = EXCLUDED.pricing_id,
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
-    updated_at = NOW();
+    updated_at = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR host_bindings.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteHostBinding :exec
 DELETE FROM host_bindings WHERE id = $1;
 
 -- name: GetProvider :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1;
 
 -- name: GetHost :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM hosts WHERE id = $1;
 
 -- name: GetModel :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM models WHERE id = $1;
 
 -- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets WHERE id = $1;
 
 -- name: GetRateLimit :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits WHERE id = $1;
 
 -- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies WHERE id = $1;
 
 -- name: SetPolicyModels :exec
 UPDATE policies SET models = $2, updated_at = NOW() WHERE id = $1;
 
 -- name: GetPricing :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings WHERE id = $1;
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings WHERE id = $1;
 
 -- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1;
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys WHERE id = $1;
 
 -- name: GetPolicyModels :many
 SELECT policy_id, model_id, position FROM policy_models WHERE policy_id = $1 ORDER BY position;
@@ -467,12 +480,12 @@ UPDATE secrets SET status = $2 WHERE id = $1;
 -- ── teams + projects (migration 0025) ────────────────────────────────────────
 
 -- name: ListTeams :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams ORDER BY name;
 
 -- name: GetTeam :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams WHERE id = $1;
 
--- name: UpsertTeam :exec
+-- name: UpsertTeam :execrows
 INSERT INTO teams (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -480,18 +493,19 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR teams.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteTeam :exec
 DELETE FROM teams WHERE id = $1;
 
 -- name: ListProjects :many
-SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects ORDER BY name;
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects ORDER BY name;
 
 -- name: GetProject :one
-SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects WHERE id = $1;
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects WHERE id = $1;
 
--- name: UpsertProject :exec
+-- name: UpsertProject :execrows
 INSERT INTO projects (id, name, display_name, team_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -500,7 +514,8 @@ ON CONFLICT (id) DO UPDATE SET
     team_id      = EXCLUDED.team_id,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR projects.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteProject :exec
 DELETE FROM projects WHERE id = $1;
@@ -540,12 +555,12 @@ DELETE FROM audit_events WHERE ts < $1;
 -- ── service accounts + groups (migration 0026) ───────────────────────────────
 
 -- name: ListServiceAccounts :many
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts ORDER BY name;
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name;
 
 -- name: GetServiceAccount :one
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts WHERE id = $1;
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts WHERE id = $1;
 
--- name: UpsertServiceAccount :exec
+-- name: UpsertServiceAccount :execrows
 INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -554,18 +569,19 @@ ON CONFLICT (id) DO UPDATE SET
     project_id   = EXCLUDED.project_id,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR service_accounts.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteServiceAccount :exec
 DELETE FROM service_accounts WHERE id = $1;
 
 -- name: ListGroups :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups ORDER BY name;
 
 -- name: GetGroup :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups WHERE id = $1;
 
--- name: UpsertGroup :exec
+-- name: UpsertGroup :execrows
 INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -573,7 +589,8 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR groups.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteGroup :exec
 DELETE FROM groups WHERE id = $1;
@@ -594,12 +611,12 @@ ON CONFLICT (group_id, user_id) DO UPDATE SET position = EXCLUDED.position;
 -- ── roles + bindings (migration 0027) ────────────────────────────────────────
 
 -- name: ListRoles :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles ORDER BY name;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM roles ORDER BY name;
 
 -- name: GetRole :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles WHERE id = $1;
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM roles WHERE id = $1;
 
--- name: UpsertRole :exec
+-- name: UpsertRole :execrows
 INSERT INTO roles (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -607,20 +624,21 @@ ON CONFLICT (id) DO UPDATE SET
     display_name = EXCLUDED.display_name,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR roles.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteRole :exec
 DELETE FROM roles WHERE id = $1;
 
 -- name: ListRoleBindings :many
-SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at, resource_version
 FROM role_bindings ORDER BY name;
 
 -- name: GetRoleBinding :one
-SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at, resource_version
 FROM role_bindings WHERE id = $1;
 
--- name: UpsertRoleBinding :exec
+-- name: UpsertRoleBinding :execrows
 INSERT INTO role_bindings (id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -631,7 +649,8 @@ ON CONFLICT (id) DO UPDATE SET
     scope_id     = EXCLUDED.scope_id,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR role_bindings.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeleteRoleBinding :exec
 DELETE FROM role_bindings WHERE id = $1;
@@ -653,14 +672,14 @@ INSERT INTO role_binding_subjects
 VALUES ($1, $2, $3, $4, $5, $6, $7);
 
 -- name: ListPolicyBindings :many
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
 FROM policy_bindings ORDER BY name;
 
 -- name: GetPolicyBinding :one
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
 FROM policy_bindings WHERE id = $1;
 
--- name: UpsertPolicyBinding :exec
+-- name: UpsertPolicyBinding :execrows
 INSERT INTO policy_bindings (id, name, display_name, project_id, policy_id, priority, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -671,7 +690,8 @@ ON CONFLICT (id) DO UPDATE SET
     priority     = EXCLUDED.priority,
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
-    updated_at   = NOW();
+    updated_at   = NOW()
+WHERE sqlc.narg('expected_version')::bigint IS NULL OR policy_bindings.resource_version = sqlc.narg('expected_version')::bigint;
 
 -- name: DeletePolicyBinding :exec
 DELETE FROM policy_bindings WHERE id = $1;

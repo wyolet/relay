@@ -84,6 +84,18 @@ app.kubernetes.io/component: relay
 {{- end -}}
 {{- end -}}
 
+{{/* RELAY_REDIS_PASSWORD for the chart-managed Secret. Derived from the
+     master key when unset so helm template / GitOps renders stay stable. */}}
+{{- define "relay.redisPassword" -}}
+{{- if .Values.valkey.enabled -}}
+{{- if .Values.valkey.auth.enabled -}}
+{{- .Values.valkey.auth.password | default (printf "relay-valkey:%s" .Values.secrets.masterKey | sha256sum) -}}
+{{- end -}}
+{{- else -}}
+{{- .Values.external.redisPassword -}}
+{{- end -}}
+{{- end -}}
+
 {{/* RELAY_REDIS_ADDR (bundled Valkey or external) */}}
 {{- define "relay.redisAddr" -}}
 {{- if .Values.valkey.enabled -}}

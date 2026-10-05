@@ -47,6 +47,19 @@ func (s *Snapshot) PolicyAllowsCombo(policyID, modelID, hostID string) bool {
 	return allowed
 }
 
+// PolicyGrantsHost reports whether the policy's explicit grant set holds any model on hostID. An implicit-wildcard policy has no set and answers false: its only authorization is the host-key gate, which a keyless host skips.
+func (s *Snapshot) PolicyGrantsHost(policyID, hostID string) bool {
+	if _, live := s.policiesByID[policyID]; !live {
+		return false
+	}
+	for c := range s.allowedCombosByPolicy[policyID] {
+		if c.HostID == hostID {
+			return true
+		}
+	}
+	return false
+}
+
 // rebuildPolicyAllowSets recomputes every explicit policy's allowed-combo set
 // from scratch. Behaviour-equivalent to routing's old per-request check:
 // legacy ModelIDs grant a model on all its hosts (no deprecation hiding);

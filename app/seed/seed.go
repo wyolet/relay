@@ -29,19 +29,21 @@ type Options struct {
 	// dirty rows are skipped so re-seeding never clobbers operator changes.
 	ClearDirty bool
 
-	// CatalogKindsOnly refuses the tenancy kinds. The boot paths set it: a
+	// CatalogKindsOnly refuses the non-catalog kinds. The boot paths set it: a
 	// catalog tree is fetched by tag from a public repository and must not be
-	// able to mint a Key, a ServiceAccount or a RoleBinding on the way in.
-	// Those kinds reach Postgres through `relay seed --apply`, `relay apply`
-	// or the control API, all of which have an actor to authorize.
+	// able to mint a Key, a HostKey, a ServiceAccount or a RoleBinding on the
+	// way in. Those kinds reach Postgres through `relay seed --apply`,
+	// `relay apply` or the control API, all of which have an actor to authorize.
 	CatalogKindsOnly bool
 }
 
-// tenancyKinds are the kinds a catalog tree may not carry: they name
-// principals, credentials or grants rather than shared catalog templates.
-var tenancyKinds = map[string]bool{
+// nonCatalogKinds are the kinds a catalog tree may not carry: they name
+// principals, credentials or grants rather than shared catalog templates. A
+// HostKey is a credential: an env-sourced one would resolve any relay
+// variable and send it to a host the same tree defines.
+var nonCatalogKinds = map[string]bool{
 	"Team": true, "Project": true, "Group": true, "ServiceAccount": true,
-	"Key": true, "Role": true, "RoleBinding": true, "PolicyBinding": true,
+	"Key": true, "HostKey": true, "Role": true, "RoleBinding": true, "PolicyBinding": true,
 }
 
 // Result summarises a seed run. Per-kind counts are the rows the run
@@ -88,7 +90,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			"dir", opts.YAMLDir, "document", name)
 	}
 	if len(refused) > 0 {
-		slog.Warn("seed: refusing tenancy documents from a catalog tree",
+		slog.Warn("seed: refusing non-catalog documents from a catalog tree",
 			"dir", opts.YAMLDir, "count", len(refused), "documents", refused)
 	}
 
@@ -115,22 +117,22 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 // splitSeedDocs separates what apply takes from what this path leaves out:
 // Settings, which have their own loader (settings.SeedDir), and — for a
-// catalog tree — the tenancy kinds. Both are returned as "Kind/name" for the
-// caller to log.
-func splitSeedDocs(docs []manifest.Document, catalogKindsOnly bool) (keep []manifest.Document, settings, tenancy []string) {
+// catalog tree — the non-catalog kinds. Both are returned as "Kind/name" for
+// the caller to log.
+func splitSeedDocs(docs []manifest.Document, catalogKindsOnly bool) (keep []manifest.Document, settings, refused []string) {
 	keep = docs[:0]
 	for _, d := range docs {
 		switch {
 		case d.Setting != nil:
 			// A Setting carries no Payload, so its name isn't in docName.
 			settings = append(settings, d.Kind()+"/"+d.Setting.Metadata.Name)
-		case catalogKindsOnly && tenancyKinds[d.Kind()]:
-			tenancy = append(tenancy, d.Kind()+"/"+docName(d))
+		case catalogKindsOnly && nonCatalogKinds[d.Kind()]:
+			refused = append(refused, d.Kind()+"/"+docName(d))
 		default:
 			keep = append(keep, d)
 		}
 	}
-	return keep, settings, tenancy
+	return keep, settings, refused
 }
 
 // docName is the metadata name of a document, for logs.

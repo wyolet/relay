@@ -134,7 +134,7 @@ func main() {
 	go hydrateLoop(listenerCtx, cat, stores, bootOpts)
 
 	routingOpts := routingOptions(cfg)
-	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts)
+	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
 		specRegistry, profiles, tokenCalibrator, batchSvc)
@@ -182,6 +182,7 @@ func buildAdapterSpecs() []*adapter.Spec {
 			Auth:          openaiAuth,
 			Translator:    pkgopenai.CCTranslator{},
 			ExtractTokens: pkgopenai.ExtractTokens,
+			StreamUsage:   &adapter.StreamUsageOptIn{Request: pkgopenai.RequestStreamUsage, IsUsageFrame: pkgopenai.IsUsageOnlyChunk},
 			ParamPaths:    map[string]string{"temperature": "temperature", "top_p": "top_p"},
 		}).Build(),
 		(&adapter.Spec{

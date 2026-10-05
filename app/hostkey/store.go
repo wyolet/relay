@@ -92,17 +92,23 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 	if err != nil {
 		return fmt.Errorf("hostkey.Upsert spec: %w", err)
 	}
+	ver, ok, err := k.Meta.ExpectedVersion()
+	if err != nil {
+		return err
+	}
+	expected := pgtype.Int8{Int64: ver, Valid: ok}
 	switch k.Spec.ValueFrom.Kind {
 	case ValueKindEnv:
 		_, err := s.q.InsertSecretEnv(ctx, gen.InsertSecretEnvParams{
-			ID:           k.Meta.ID,
-			Name:         k.Meta.Name,
-			DisplayName:  k.Meta.DisplayName,
-			ValueFromEnv: pgtype.Text{String: k.Spec.ValueFrom.Env, Valid: true},
-			Metadata:     metaJSON,
-			Spec:         specJSON,
+			ID:              k.Meta.ID,
+			Name:            k.Meta.Name,
+			DisplayName:     k.Meta.DisplayName,
+			ValueFromEnv:    pgtype.Text{String: k.Spec.ValueFrom.Env, Valid: true},
+			Metadata:        metaJSON,
+			Spec:            specJSON,
+			ExpectedVersion: expected,
 		})
-		return err
+		return staleIfNoRow(err)
 	case ValueKindStored, ValueKindOAuth:
 		// OAuth credentials share stored's at-rest path: the value (an OAuth
 		// token blob for oauth mode) is AES-GCM-encrypted into secret_values and
@@ -111,29 +117,41 @@ func (s *Store) Upsert(ctx context.Context, k *HostKey) error {
 		if s.stored == nil {
 			return errors.New("hostkey.Upsert: stored/oauth mode requires a secret backend (master key)")
 		}
-		switch {
-		case k.Spec.Value != "":
-			// Create or rotate: encrypt the supplied value into secret_values.
+		// Without a new value this is a metadata-only update: the
+		// secret_values ciphertext stays untouched. It is the only way to edit
+		// an oauth key without re-supplying its token blob (its Resolved is the
+		// access token, not the stored blob).
+		if k.Spec.Value == "" && k.Resolved == "" {
+			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
+		}
+		writeRow := func() error {
+			_, err := s.q.InsertSecretStoredRef(ctx, gen.InsertSecretStoredRefParams{
+				ID:              k.Meta.ID,
+				Name:            k.Meta.Name,
+				DisplayName:     k.Meta.DisplayName,
+				Metadata:        metaJSON,
+				Spec:            specJSON,
+				ExpectedVersion: expected,
+			})
+			return staleIfNoRow(err)
+		}
+		// A conditional write passes the version check before the value is
+		// replaced, so a stale caller cannot rotate it. An unconditional one
+		// keeps writing the value first: a failed create leaves no valueless row.
+		if expected.Valid {
+			if err := writeRow(); err != nil {
+				return err
+			}
+		}
+		if k.Spec.Value != "" {
 			if _, err := s.stored.Create(ctx, k.Meta.ID, []byte(k.Spec.Value)); err != nil {
 				return fmt.Errorf("hostkey.Upsert store secret: %w", err)
 			}
-		case k.Resolved != "":
-			// Metadata-only update: no new value supplied but one already
-			// exists. Leave the secret_values ciphertext untouched (the row
-			// upsert below preserves it); only metadata/spec change. This is
-			// the only way to edit an oauth key without re-supplying its token
-			// blob (its Resolved is the access token, not the stored blob).
-		default:
-			return errors.New("hostkey.Upsert: cleartext value required for stored/oauth mode")
 		}
-		if _, err := s.q.InsertSecretStoredRef(ctx, gen.InsertSecretStoredRefParams{
-			ID:          k.Meta.ID,
-			Name:        k.Meta.Name,
-			DisplayName: k.Meta.DisplayName,
-			Metadata:    metaJSON,
-			Spec:        specJSON,
-		}); err != nil {
-			return err
+		if !expected.Valid {
+			if err := writeRow(); err != nil {
+				return err
+			}
 		}
 		k.Spec.Value = ""
 		return nil
@@ -200,6 +218,7 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -251,6 +270,15 @@ func (s *Store) fromRow(ctx context.Context, r gen.ListSecretsRow) (*HostKey, er
 		k.KeyHash = hex.EncodeToString(sum[:6])
 	}
 	return k, nil
+}
+
+// staleIfNoRow maps a conditional upsert that returned no row to
+// meta.ErrStaleResourceVersion.
+func staleIfNoRow(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return meta.ErrStaleResourceVersion
+	}
+	return err
 }
 
 // marshalSpec strips Value before serialising (defence in depth — the

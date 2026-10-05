@@ -39,6 +39,21 @@ func Verify(user *User, password string) bool {
 	return subtle.ConstantTimeCompare([]byte(stored), []byte(password)) == 1
 }
 
+// placeholderPasswords are values published as example or default admin
+// passwords; anyone can guess them, so they never authenticate.
+var placeholderPasswords = map[string]struct{}{
+	"change-me-please": {},
+	"change-me":        {},
+	"changeme":         {},
+	"password":         {},
+}
+
+// IsPlaceholderPassword reports whether password is a published placeholder.
+func IsPlaceholderPassword(password string) bool {
+	_, ok := placeholderPasswords[strings.ToLower(password)]
+	return ok
+}
+
 func isBcryptHash(s string) bool {
 	return strings.HasPrefix(s, "$2a$") ||
 		strings.HasPrefix(s, "$2b$") ||

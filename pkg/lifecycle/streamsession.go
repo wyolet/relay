@@ -45,6 +45,7 @@ type StreamSession struct {
 	// tee buffer.
 	buf      []byte
 	finished bool
+	frames   int
 }
 
 // maxPartialFrameBytes bounds the tee reframing buffer. A well-formed SSE
@@ -94,6 +95,7 @@ func (s *StreamSession) Write(p []byte) (int, error) {
 // feed hands one raw upstream SSE frame (separator stripped) to every
 // observer and the summarizer.
 func (s *StreamSession) feed(frame []byte) {
+	s.frames++
 	s.summ.Observe(frame)
 	for _, no := range s.obs {
 		func() {
@@ -117,6 +119,14 @@ func (s *StreamSession) Observe(frame []byte) {
 		return
 	}
 	s.feed(frame)
+}
+
+// Frames reports how many frames the session has been fed. Nil-safe.
+func (s *StreamSession) Frames() int {
+	if s == nil {
+		return 0
+	}
+	return s.frames
 }
 
 // Finish closes the session: any buffered partial frame is flushed, each

@@ -24,21 +24,41 @@ func applyMiddleware(base *slog.Logger, h http.Handler, r *http.Request) *httpte
 	return w
 }
 
-func TestValidInboundIDPassthrough(t *testing.T) {
+func TestInboundIDKeptAsClientIDOnly(t *testing.T) {
 	inbound := "0123456789abcdefABCDEF"
-	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r.Header.Set(HeaderInbound, inbound)
-
-	var gotID string
-	w := applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
-		gotID = From(ctx)
-	}), r)
-
-	if w.Header().Get(HeaderOutbound) != inbound {
-		t.Errorf("outbound header = %q, want %q", w.Header().Get(HeaderOutbound), inbound)
+	var ids []string
+	for range 2 {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set(HeaderInbound, inbound)
+		var gotID, gotClient string
+		w := applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
+			gotID, gotClient = From(ctx), ClientID(ctx)
+		}), r)
+		if gotID == inbound || len(gotID) != 26 {
+			t.Fatalf("From(ctx) = %q, want a relay-minted ULID", gotID)
+		}
+		if w.Header().Get(HeaderOutbound) != gotID {
+			t.Errorf("outbound header = %q, want %q", w.Header().Get(HeaderOutbound), gotID)
+		}
+		if gotClient != inbound || w.Header().Get(HeaderInbound) != inbound {
+			t.Errorf("client id = %q, echoed %q, want %q", gotClient, w.Header().Get(HeaderInbound), inbound)
+		}
+		ids = append(ids, gotID)
 	}
-	if gotID != inbound {
-		t.Errorf("From(ctx) = %q, want %q", gotID, inbound)
+	if ids[0] == ids[1] {
+		t.Fatalf("two requests with the same %s share request id %q", HeaderInbound, ids[0])
+	}
+}
+
+func TestWithNewIDReplacesID(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	var parent, child string
+	applyMiddleware(slog.Default(), newHandler(func(ctx context.Context) {
+		parent = From(ctx)
+		child = From(WithNewID(ctx, slog.Default()))
+	}), r)
+	if child == "" || child == parent {
+		t.Fatalf("WithNewID id = %q, parent %q: want a fresh id", child, parent)
 	}
 }
 
@@ -126,8 +146,11 @@ func TestLoggerIncludesRequestID(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
 		t.Fatalf("json decode: %v; buf=%q", err, buf.String())
 	}
-	if record["request_id"] != "test-req-id-123" {
-		t.Errorf("request_id attr = %v, want %q", record["request_id"], "test-req-id-123")
+	if id, _ := record["request_id"].(string); len(id) != 26 {
+		t.Errorf("request_id attr = %v, want a ULID", record["request_id"])
+	}
+	if record["client_request_id"] != "test-req-id-123" {
+		t.Errorf("client_request_id attr = %v, want %q", record["client_request_id"], "test-req-id-123")
 	}
 }
 

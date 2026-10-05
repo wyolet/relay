@@ -53,6 +53,8 @@ the bindings naming the caller, at the scope of the row being touched.
 Authoring a role of your own is a licensed feature; the built-in roles
 ship with every deployment and are reserved by name.
 
+Every read returns `metadata.resourceVersion`, an opaque string that changes on every write to the row. Send it back unchanged in the PUT body to make the update conditional: if the row changed since you read it, the PUT fails with `409` and error code `stale_resource_version`, and nothing is written. Read the row again and reapply your change. A PUT without `resourceVersion` replaces the row unconditionally.
+
 <Info>
 Every write triggers a Postgres `NOTIFY`; the change propagates to every
 pod's in-memory snapshot within ~1 second. No manual reload needed for

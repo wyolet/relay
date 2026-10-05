@@ -1,5 +1,18 @@
 package manifest
 
+import "fmt"
+
+// RefNotFoundError is a name a document references that the Resolver does
+// not know. Typed so a caller scoped to part of the deployment can be
+// answered as for a row it may not see.
+type RefNotFoundError struct{ msg string }
+
+func (e *RefNotFoundError) Error() string { return e.msg }
+
+func refNotFound(format string, args ...any) error {
+	return &RefNotFoundError{msg: fmt.Sprintf(format, args...)}
+}
+
 // Resolver resolves entity names to ids. The caller builds one from their
 // name→id index (a snapshot, a seed index built against live PG state, etc.).
 // Wire needs only this narrow interface — it never touches a full catalog or

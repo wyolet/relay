@@ -93,6 +93,9 @@ type Deps struct {
 	// StreamKeepAlive is how long a streamed response may go without bytes before relay emits the inbound shape's no-op frame itself (RELAY_STREAM_KEEPALIVE_S). Upstreams stay silent through long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes of silence. 0 disables the keepalive.
 	StreamKeepAlive time.Duration
 
+	// RequestStreamUsage makes byte-pass ask a streamed upstream for its token usage when the wire shape reports it only on request and the caller did not ask (RELAY_STREAM_USAGE). The extra usage frame is removed before the caller sees it. Without it such streams leave token budgets and usage records at zero.
+	RequestStreamUsage bool
+
 	// TrustEventTime makes Dispatch honor the X-WR-Event-Time header as
 	// the usage Event timestamp (RELAY_DEV_TRUST_EVENT_TIME). Dev/replay
 	// tooling only; off by default.

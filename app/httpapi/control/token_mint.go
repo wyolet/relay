@@ -10,7 +10,6 @@ import (
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
 	"github.com/wyolet/relay/app/authz"
-	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/pkg/crypto"
 	"github.com/wyolet/relay/pkg/ids"
@@ -87,7 +86,7 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 		Iss: crypto.TokenIssuer,
 		Sub: "user:" + a.UserID,
 		Prj: proj.Meta.ID,
-		Grp: mintGroups(snap, a),
+		Grp: mintGroups(a),
 		Ver: version,
 		Jti: ids.New(),
 		Iat: now.Unix(),
@@ -117,12 +116,13 @@ func mintToken(ctx context.Context, d tokenDeps, in *mintTokenInput) (*mintToken
 	return out, nil
 }
 
-// mintGroups is the group set the token carries: what the IdP asserted at
-// login plus the local groups holding this user.
-func mintGroups(snap *appcatalog.Snapshot, a *actor.Actor) []string {
+// mintGroups is the group set the token carries: only what the IdP asserted
+// at login, which relay cannot re-check later. Local membership is read from
+// the snapshot at every verification, so a removal applies at once.
+func mintGroups(a *actor.Actor) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(a.IdPGroups))
-	for _, g := range append(append([]string(nil), a.IdPGroups...), snap.GroupsForUser(a.UserID)...) {
+	for _, g := range a.IdPGroups {
 		if _, dup := seen[g]; dup || g == "" {
 			continue
 		}

@@ -15,6 +15,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -37,6 +38,19 @@ type AuthStrategy struct {
 	// (e.g. {"anthropic-version": "2023-06-01"}). Only applied when the
 	// header is not already present in the forwarded request headers.
 	ExtraHeaders map[string]string
+}
+
+// StreamUsageOptIn is how byte-pass asks a stream for its usage on the
+// caller's behalf and hides the answer from a caller that did not ask.
+type StreamUsageOptIn struct {
+	// Request sets the opt-in on a request's top-level fields and reports
+	// whether it changed them (false when the caller already asked or the
+	// request is not streamed).
+	Request func(fields map[string]json.RawMessage) bool
+
+	// IsUsageFrame reports whether an SSE frame (separator stripped) is the
+	// extra usage-only frame the opt-in adds.
+	IsUsageFrame func(frame []byte) bool
 }
 
 // Spec describes one inbound wire shape and its upstream call semantics.
@@ -65,6 +79,7 @@ type Spec struct {
 	// the model and/or stream selection in the URL rather than the body —
 	// Gemini's "/v1beta/models/{model}:generateContent" vs
 	// ":streamGenerateContent". When nil, DefaultPath is used verbatim.
+	// upstreamModel arrives escaped as a single path segment.
 	UpstreamPathFn func(upstreamModel string, stream bool) string
 
 	// CountPath is the upstream path that counts a request's input tokens without generating, e.g. "/v1/messages/count_tokens". Set only for vendors that expose one: it is what makes this spec's pipeline.Adapter a TokenCounter, and an empty value means relay must estimate instead.
@@ -101,6 +116,10 @@ type Spec struct {
 	// ExtractTokens extracts usage tokens from the upstream response body.
 	// If nil, the adapter returns nil tokens (no usage tracking).
 	ExtractTokens func(body []byte) pkgusage.Tokens
+
+	// StreamUsage is set for shapes whose streams report token usage only
+	// when the request asks for it. Nil when the stream always carries usage.
+	StreamUsage *StreamUsageOptIn
 
 	// UseHTTP1 disables HTTP/2 negotiation on the upstream transport.
 	// Necessary for endpoints that trigger Go's HTTP/2 client bugs (e.g.

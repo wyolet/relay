@@ -49,6 +49,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 		RequestBody:      []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
 		ResponseBody:     []byte(`{"choices":[{"message":{"content":"hello"}}]}`),
 		RequestTruncated: true,
+		ProjectID:        "p-1",
+		PrincipalID:      "u-1",
+		RelayKeyHash:     "h-1",
 	}
 	if err := s.Write(rec); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -78,6 +81,9 @@ func TestIntegration_RoundTrip(t *testing.T) {
 	}
 	if !got.RequestTruncated || got.ResponseTruncated {
 		t.Fatalf("truncation flags mismatch: %+v", got)
+	}
+	if got.ProjectID != "p-1" || got.PrincipalID != "u-1" || got.RelayKeyHash != "h-1" {
+		t.Fatalf("owner round-trip mismatch: %+v", got)
 	}
 
 	if _, err := s.Get(ctx, marker+"-missing"); !errors.Is(err, payload.ErrNotFound) {

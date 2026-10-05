@@ -89,7 +89,7 @@ func (d Deps) detach(ctx context.Context, kind, plural, id string) (*detachOutpu
 	})
 	if err != nil {
 		audit.Record(ctx, plural+".detach", d.auditResource(t.kind, t.id, t.name, t.owner), audit.StatusError)
-		if storage.IsConflict(err) {
+		if storage.IsConflict(err) || errors.Is(err, meta.ErrStaleResourceVersion) {
 			return nil, &httpapi.APIError{
 				Err: httpapi.APIErrorBody{
 					Type:    "invalid_request_error",

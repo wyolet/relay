@@ -187,8 +187,9 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 	case errors.As(err, &unreachable):
 		// Dial failure against the host — likely a misconfigured baseURL or a
 		// down upstream, not a key problem. Surface it distinctly so operators
-		// don't chase key/pool config.
-		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unreachable", unreachable.Error())
+		// don't chase key/pool config; the dial target stays in the log.
+		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_unreachable",
+			fmt.Sprintf("upstream host %q unreachable after %d attempt(s)", unreachable.Host, unreachable.Attempts), "err", err)
 	case errors.Is(err, pipeline.ErrNoKeys):
 		writeAPIError(w, http.StatusServiceUnavailable, "server_error", "no_keys", "no host keys")
 	case errors.As(err, &upstream) && upstream.Status > 0:
@@ -201,7 +202,8 @@ func mapPipelineErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, pipeline.ErrAdapterMissing):
 		writeAPIError(w, http.StatusInternalServerError, "server_error", "no_adapter", "adapter missing")
 	default:
-		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", err.Error())
+		// Transport errors embed the request URL; callers know hosts by slug only.
+		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", httpheader.SafeUpstreamError("upstream", err), "err", err)
 	}
 }
 

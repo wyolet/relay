@@ -37,21 +37,22 @@ func startInference(cfg *config.Config, st *storagemod.Storage, cat *appcatalog.
 	}
 	inferRouter.Use(httpmw.LimitBody(maxBody))
 	inference.Mount(inferRouter, inference.Deps{
-		Pinger:          st,
-		Catalog:         cat,
-		Tokens:          tokenVerifier,
-		Resolver:        routing.New(cat, routingOpts...),
-		Pipeline:        pl,
-		Proxy:           proxyPipeline,
-		Lifecycle:       lifecycleReg,
-		Adapters:        specRegistry.AdapterMap(),
-		Specs:           specRegistry,
-		Profiles:        profiles,
-		RouteMounters:   []inference.RouteMounter{inference.MountRegistry(specRegistry)},
-		PublicURL:       cfg.Runtime.InferenceAPIURL,
-		TokenCalibrator: tokenCalibrator,
-		StreamKeepAlive: cfg.StreamKeepAlive,
-		TrustEventTime:  cfg.DevTrustEventTime,
+		Pinger:             st,
+		Catalog:            cat,
+		Tokens:             tokenVerifier,
+		Resolver:           routing.New(cat, routingOpts...),
+		Pipeline:           pl,
+		Proxy:              proxyPipeline,
+		Lifecycle:          lifecycleReg,
+		Adapters:           specRegistry.AdapterMap(),
+		Specs:              specRegistry,
+		Profiles:           profiles,
+		RouteMounters:      []inference.RouteMounter{inference.MountRegistry(specRegistry)},
+		PublicURL:          cfg.Runtime.InferenceAPIURL,
+		TokenCalibrator:    tokenCalibrator,
+		StreamKeepAlive:    cfg.StreamKeepAlive,
+		RequestStreamUsage: cfg.StreamUsage,
+		TrustEventTime:     cfg.DevTrustEventTime,
 	})
 
 	// /v1/batches rides the same auth chain as /v1/* (readiness → classify →

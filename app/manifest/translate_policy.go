@@ -26,7 +26,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	for _, name := range d.Spec.HostKeys {
 		id, ok := idx.HostKeyID(name)
 		if !ok {
-			return nil, fmt.Errorf("policy %q: hostKey %q not found", d.Metadata.Name, name)
+			return nil, refNotFound("policy %q: hostKey %q not found", d.Metadata.Name, name)
 		}
 		hostKeyIDs = append(hostKeyIDs, id)
 	}
@@ -35,7 +35,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 	if d.Spec.RateLimit != "" {
 		id, ok := idx.RateLimitID(d.Spec.RateLimit)
 		if !ok {
-			return nil, fmt.Errorf("policy %q: rateLimit %q not found", d.Metadata.Name, d.Spec.RateLimit)
+			return nil, refNotFound("policy %q: rateLimit %q not found", d.Metadata.Name, d.Spec.RateLimit)
 		}
 		rateLimitID = id
 	}
@@ -47,7 +47,7 @@ func ToPolicy(d PolicyDTO, idx Resolver) (*policy.Policy, error) {
 		}
 		id, ok := idx.RateLimitID(b.RateLimit)
 		if !ok {
-			return nil, fmt.Errorf("policy %q: rlBindings[%d] rateLimit %q not found",
+			return nil, refNotFound("policy %q: rlBindings[%d] rateLimit %q not found",
 				d.Metadata.Name, i, b.RateLimit)
 		}
 		bModels, err := policy.CanonicalizeModelRefs(append([]string{}, b.Models...))

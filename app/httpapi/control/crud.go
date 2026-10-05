@@ -267,6 +267,7 @@ func registerKind[T any](
 			// Server stamps id+slug. Client-supplied id is discarded so id
 			// provenance is auditable.
 			m.ID = ids.New()
+			m.ResourceVersion = ""
 			if m.Name == "" {
 				base := slug.From(m.DisplayName)
 				if base == "" {
@@ -335,9 +336,10 @@ func registerKind[T any](
 		Method:      http.MethodPut,
 		Path:        base + "/by-id/{id}",
 		Summary:     "Update " + singular + " by id",
+		Description: "Replaces the " + singular + ". When metadata.resourceVersion is set, the update applies only while the stored row still has that version; otherwise it fails with 409 and error code stale_resource_version. Without it the update is unconditional.",
 		Tags:        []string{tag},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 403, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *updateRequest[T]) (*itemResponse[T], error) {
 		existing, err := store.Get(ctx, in.ID)
 		if err != nil || existing == nil {
@@ -357,6 +359,10 @@ func registerKind[T any](
 		v := &in.Body
 		m := metaOf(v)
 		m.ID = in.ID // path id wins over body id
+		// Early answer for a stale body; the store re-checks atomically.
+		if m.ResourceVersion != "" && m.ResourceVersion != metaOf(existing).ResourceVersion {
+			return nil, staleVersionError(singular, in.ID)
+		}
 		if mergeUpdate != nil {
 			mergeUpdate(existing, v)
 		}
@@ -372,10 +378,18 @@ func registerKind[T any](
 				return nil, mapGuardErr(err)
 			}
 		}
+		// Kinds whose owner mirrors a spec field re-derive it in validate or
+		// the guard. A row moved that way lands in a new scope, which takes
+		// the create grant there, as POST of the same body would.
+		if m.Owner != metaOf(existing).Owner {
+			if err := authzr.Authorize(ctx, plural+".create", authz.Resource{Kind: singular, Owner: &m.Owner}); err != nil {
+				return nil, mapAuthzErr(err)
+			}
+		}
 		audit.Changed(ctx, audit.DiffFields(existing, v))
 		m.Dirty = true // operator-edited; seed must not clobber it on re-seed
 		if err := store.Upsert(ctx, v); err != nil {
-			return nil, huma.Error500InternalServerError(err.Error())
+			return nil, mapWriteErr(singular, in.ID, err)
 		}
 		updated, err := store.Get(ctx, in.ID)
 		if err != nil {

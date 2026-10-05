@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage"
@@ -72,6 +73,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Pricing, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -101,7 +103,7 @@ func (s *Store) Upsert(ctx context.Context, p *Pricing) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
-	if err := q.UpsertPricing(ctx, params); err != nil {
+	if err := meta.StaleIfNoRows(q.UpsertPricing(ctx, params)); err != nil {
 		return fmt.Errorf("pricing.Upsert: pricings: %w", err)
 	}
 	if err := q.DeletePricingModels(ctx, p.Meta.ID); err != nil {
@@ -134,6 +136,7 @@ func fromRow(r gen.Pricing) (*Pricing, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -155,12 +158,17 @@ func toUpsertParams(p *Pricing) (gen.UpsertPricingParams, error) {
 	if err != nil {
 		return gen.UpsertPricingParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := p.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertPricingParams{}, err
+	}
 	return gen.UpsertPricingParams{
-		ID:          p.Meta.ID,
-		Name:        p.Meta.Name,
-		DisplayName: p.Meta.DisplayName,
-		HostID:      p.Meta.Owner.ID,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              p.Meta.ID,
+		Name:            p.Meta.Name,
+		DisplayName:     p.Meta.DisplayName,
+		HostID:          p.Meta.Owner.ID,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

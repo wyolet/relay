@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/wyolet/relay/app/keypool"
@@ -39,7 +41,7 @@ var _ pipeline.Adapter = (*specAdapter)(nil)
 func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string, apiKey string, body []byte, hdr http.Header, upstreamModel string, stream, oauth bool) (*http.Response, error) {
 	path := a.spec.DefaultPath
 	if a.spec.UpstreamPathFn != nil {
-		path = a.spec.UpstreamPathFn(upstreamModel, stream)
+		path = a.spec.UpstreamPathFn(pathSegment(upstreamModel), stream)
 	}
 	if hostPath != nil {
 		path = *hostPath
@@ -58,6 +60,14 @@ func (a *specAdapter) Call(ctx context.Context, baseURL string, hostPath *string
 	}
 	resp.Body = a.bindBody(resp.Body, cancel, stream)
 	return resp, nil
+}
+
+// pathSegment escapes the upstream model so it stays one URL path segment. A wildcard alias forwards the caller's raw model string, so without this it could add segments or start a query on the operator's credential. A bare dot segment is escaped too, since servers resolve it.
+func pathSegment(model string) string {
+	if model == "." || model == ".." {
+		return strings.ReplaceAll(model, ".", "%2E")
+	}
+	return url.PathEscape(model)
 }
 
 // newRequest builds one POST to url carrying body: the caller's forwarded headers first, then relay's own, so a caller can never override the upstream credential or the content type.
@@ -105,16 +115,18 @@ func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {
 }
 
 // Retryable classifies upstream HTTP responses for the pipeline retry loop.
-// Classification is uniform across specs: 401/403→auth, 429→rate-limit,
-// 500-599→server error. Any spec that needs different classification can
-// override by wrapping the returned pipeline.Adapter.
+// Classification is uniform across specs: 401→auth, 403→forbidden,
+// 429→rate-limit, 500-599→server error. Any spec that needs different
+// classification can override by wrapping the returned pipeline.Adapter.
 func (a *specAdapter) Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration) {
 	if resp == nil {
 		return false, 0, 0
 	}
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized:
 		return true, keypool.FailureAuth, 0
+	case resp.StatusCode == http.StatusForbidden:
+		return true, keypool.FailureForbidden, 0
 	case resp.StatusCode == http.StatusTooManyRequests:
 		ra := pipeline.RetryAfterHeader(resp.Header)
 		k := keypool.FailureRateLimitShort
