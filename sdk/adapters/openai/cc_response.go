@@ -189,6 +189,11 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 			finishReason = s
 		}
 	}
+	if resp.FinishReason == "" && (resp.Status == v1.StatusFailed || resp.Status == v1.StatusIncomplete) && finishReason == "stop" {
+		// canonical: status=failed/incomplete with no finish_reason must not surface as
+		// a clean stop (rule 11); content_filter is CC's nearest non-success signal.
+		finishReason = "content_filter"
+	}
 	choice := Choice{
 		Index:        0,
 		Message:      msg,
