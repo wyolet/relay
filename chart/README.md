@@ -58,7 +58,29 @@ Required values (template fails fast otherwise): `secrets.masterKey`,
 `secrets.adminToken`, and `postgresql.auth.password` /
 `clickhouse.auth.password` for the bundled stores — **or** `secrets.existingSecret`
 holding `RELAY_MASTER_KEY`, `RELAY_ADMIN_TOKEN`, `RELAY_PG_DSN`, `RELAY_CH_DSN`
-(+ `postgres-password` / `clickhouse-password` if bundling those stores).
+(+ `postgres-password` / `clickhouse-password` if bundling those stores, and
+`RELAY_REDIS_PASSWORD` to give the bundled Valkey a password).
+
+## Data store access
+
+- **Valkey requires a password** (`valkey.auth.enabled`, default on). Set
+  `valkey.auth.password`, or leave it empty to derive a stable one from
+  `secrets.masterKey`. With `secrets.existingSecret`, add `RELAY_REDIS_PASSWORD`
+  to that Secret; while the key is missing, Valkey keeps running without a
+  password. External Valkey/Redis: `external.redisPassword`.
+- **NetworkPolicy is on by default** (`networkPolicy.enabled`): the bundled
+  PostgreSQL, ClickHouse, and Valkey accept connections from relay pods only.
+  Anything else that reads them (Grafana on ClickHouse, backup jobs) needs a
+  `networkPolicy.extraIngress` entry. It has no effect on a CNI that does not
+  enforce NetworkPolicy.
+
+Upgrading an install from a chart without these defaults: the upgrade restarts
+Valkey with the password and rolls the relay pods; relay pods still on the old
+spec lose Valkey access until they are replaced, so expect rate-limit and
+session errors for the length of the rollout. With `valkey.persistence`
+enabled, sessions and counters survive the Valkey restart. Add `extraIngress` entries for other readers before upgrading, or set
+`networkPolicy.enabled: false` / `valkey.auth.enabled: false` to keep the
+previous behaviour.
 
 ## Image
 
@@ -78,8 +100,6 @@ helm template relay chart -f values-prod.yaml | kubectl apply --dry-run=client -
 - **PG/CH are single-node** with a PVC. Fine for a first/dogfood prod; for HA,
   point `external.pgDsn`/`external.chDsn` at managed/replicated stores and set
   the bundled toggles to `false`.
-- **Valkey is passwordless** (relay reads only `RELAY_REDIS_ADDR`). Enable
-  `networkPolicy` to restrict it to relay pods.
 - **OTel traces** aren't wired in relay yet (`RELAY_OTLP_ENDPOINT` is reserved);
   Prometheus metrics + structured logs + `/logs` cover observability today.
 - The relay container runs read-only-rootfs; the ClickHouse WAL and temp live on

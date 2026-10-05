@@ -7,7 +7,7 @@ name: Release
 #
 # Images build in parallel with the test gate, without pushing; the result stays in the builder's cache. The build job scans each image with trivy and fails on fixable HIGH/CRITICAL vulnerabilities; its CycloneDX SBOMs are attached to the GitHub release. The push job attests signed provenance and the SBOM for each pushed image (`gh attestation verify`, see SECURITY.md). Only after both pass does the push job re-run the same bake with --push, which resolves from that cache. A test failure cancels the run, so nothing is pushed.
 #
-# CI_POOL=cluster runs the jobs on the self-hosted pools, where the image build uses a shared remote BuildKit; otherwise they run GitHub-hosted with a local builder, and the push job rebuilds from scratch.
+# CI_POOL=cluster runs the jobs on the self-hosted pools, where the image build uses a shared remote BuildKit; otherwise they run GitHub-hosted with a local builder, and the push job rebuilds from scratch. Published bake targets skip the Dockerfile's Go cache mounts (GO_CACHE_MOUNTS=0), since other clients of a shared BuildKit can write them; the layer cache is still shared, so the BuildKit endpoint should accept only trusted clients.
 #
 # Manual runs (workflow_dispatch) default to dry_run: tests + the no-push build
 # + the cached re-bake, with every push/publish step skipped. dry_run=false is

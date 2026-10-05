@@ -74,6 +74,12 @@ func registerAuth(api huma.API, d Deps) {
 		Tags:        []string{"auth"},
 		Errors:      []int{401, 503},
 	}, func(ctx context.Context, in *loginInput) (*authResponse, error) {
+		// A row seeded before the loader refused placeholders still holds
+		// their hash, so the submitted value is checked too.
+		if identity.IsPlaceholderPassword(in.Body.Password) {
+			audit.Record(ctx, "auth.login", audit.Resource{Kind: "user", Name: in.Body.Username}, audit.StatusDenied, audit.Actor{Kind: audit.ActorAnonymous, Name: in.Body.Username})
+			return nil, huma.Error401Unauthorized("invalid credentials")
+		}
 		// DB-backed users first; YAML identity remains the bootstrap /
 		// break-glass fallback. Both mint the same session shape.
 		if d.Users != nil {

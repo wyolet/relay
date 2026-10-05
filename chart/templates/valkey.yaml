@@ -36,6 +36,10 @@ spec:
       labels:
         {{- include "relay.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: valkey
+      {{- if and .Values.valkey.auth.enabled (not .Values.secrets.existingSecret) }}
+      annotations:
+        checksum/password: {{ include "relay.redisPassword" . | sha256sum }}
+      {{- end }}
     spec:
       securityContext:
         runAsNonRoot: true
@@ -46,6 +50,26 @@ spec:
       containers:
         - name: valkey
           image: {{ .Values.valkey.image | quote }}
+          {{- if .Values.valkey.auth.enabled }}
+          env:
+            # Optional: an existingSecret without the key keeps Valkey passwordless.
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "relay.secretName" . }}
+                  key: RELAY_REDIS_PASSWORD
+                  optional: true
+          # valkey-server rewrites its process title, so the password does not
+          # stay visible in the process list.
+          command:
+            - sh
+            - -c
+            - >-
+              exec valkey-server --dir /data
+              {{- if .Values.valkey.persistence.enabled }} --appendonly yes{{ end }}
+              --maxmemory-policy noeviction
+              ${VALKEY_PASSWORD:+--requirepass "$VALKEY_PASSWORD"}
+          {{- else }}
           command:
             - valkey-server
             - --dir
@@ -56,17 +80,19 @@ spec:
             {{- end }}
             - --maxmemory-policy
             - noeviction
+          {{- end }}
           ports:
             - name: valkey
               containerPort: 6379
+          # valkey-cli exits 0 on NOAUTH, so the probe compares the reply.
           readinessProbe:
             exec:
-              command: ["valkey-cli", "ping"]
+              command: ["sh", "-c", '[ -z "$VALKEY_PASSWORD" ] || export REDISCLI_AUTH="$VALKEY_PASSWORD"; [ "$(valkey-cli ping)" = PONG ]']
             periodSeconds: 10
             timeoutSeconds: 3
           livenessProbe:
             exec:
-              command: ["valkey-cli", "ping"]
+              command: ["sh", "-c", '[ -z "$VALKEY_PASSWORD" ] || export REDISCLI_AUTH="$VALKEY_PASSWORD"; [ "$(valkey-cli ping)" = PONG ]']
             initialDelaySeconds: 15
             periodSeconds: 20
           resources:

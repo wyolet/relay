@@ -4,6 +4,9 @@
 # pointed at these local services (see .env.example "self-sufficient" section).
 #
 # When using `make dev` (which passes -f explicitly), this file is ignored.
+#
+# The stores use fixed dev credentials, so their host ports bind to loopback
+# unless RELAY_STORE_BIND_ADDR widens them.
 
 volumes:
   pg-data:
@@ -20,7 +23,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     ports:
-      - "5115:5432"
+      - "${RELAY_STORE_BIND_ADDR:-127.0.0.1}:5115:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U relay"]
       interval: 3s
@@ -37,7 +40,7 @@ services:
     volumes:
       - ch-data:/var/lib/clickhouse
     ports:
-      - "5119:9000"
+      - "${RELAY_STORE_BIND_ADDR:-127.0.0.1}:5119:9000"
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --user relay --password relay --query 'SELECT 1'"]
       interval: 5s
@@ -50,8 +53,8 @@ services:
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
     ports:
-      - "5117:16686"
-      - "5118:4317"
+      - "${RELAY_STORE_BIND_ADDR:-127.0.0.1}:5117:16686"
+      - "${RELAY_STORE_BIND_ADDR:-127.0.0.1}:5118:4317"
 
   # Build from source: no public image is published yet, so the standalone
   # stack builds the relay binary locally (tagged relay:local) instead of
