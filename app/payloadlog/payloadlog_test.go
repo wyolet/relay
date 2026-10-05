@@ -156,6 +156,17 @@ func TestHook_RequestBodyTruncatedFlag(t *testing.T) {
 	}
 }
 
+func TestHook_RecordsOwner(t *testing.T) {
+	c, _ := enabledCtrl(0)
+	lc := ctx(true, "in")
+	lc.ProjectID, lc.PrincipalID, lc.RelayKeyHash = "p-1", "u-1", "h-1"
+	v, _ := NewPayloadHook(c).Fill(lc, &lifecycle.PostFlightEvent{Status: 200})
+	r := v.(*Record)
+	if r.ProjectID != "p-1" || r.PrincipalID != "u-1" || r.RelayKeyHash != "h-1" {
+		t.Fatalf("owner fields = %+v, want the request's project, principal and key hash", r)
+	}
+}
+
 func TestStreamObserver_Gating(t *testing.T) {
 	if _, ok := NewStreamPayloadFactory(disabledCtrl()).NewObserver(ctx(true, "")).(noopObserver); !ok {
 		t.Fatal("disabled: want noopObserver")

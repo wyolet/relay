@@ -30,9 +30,8 @@ func (h *PayloadHook) Fill(lc *lifecycle.Context, ev *lifecycle.PostFlightEvent)
 	return buildRecord(lc, ev.ResponseBody, h.c.MaxBytes()), nil
 }
 
-// buildRecord assembles the body-only Record (request_id + ts + bodies +
-// truncation flags) — all per-request metadata lives on the log event, not
-// here. Shared by the buffered hook and the streaming observer (which passes
+// buildRecord assembles the Record: bodies, truncation flags, and the owner
+// fields the log read path matches against the event. Shared by the buffered hook and the streaming observer (which passes
 // the accumulated stream bytes as body). Callers must have checked
 // lc.PayloadLog.
 func buildRecord(lc *lifecycle.Context, respBody []byte, maxBytes int) *Record {
@@ -48,6 +47,9 @@ func buildRecord(lc *lifecycle.Context, respBody []byte, maxBytes int) *Record {
 	return &Record{
 		RequestID:         lc.RequestID,
 		Timestamp:         ts,
+		ProjectID:         lc.ProjectID,
+		PrincipalID:       lc.PrincipalID,
+		RelayKeyHash:      lc.RelayKeyHash,
 		RequestBody:       reqBody,
 		ResponseBody:      respBody,
 		RequestTruncated:  reqTrunc,

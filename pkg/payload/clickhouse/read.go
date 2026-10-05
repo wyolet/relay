@@ -12,7 +12,7 @@ import (
 // when absent.
 func (s *Reader) Get(ctx context.Context, requestID string) (payload.Record, error) {
 	sql := fmt.Sprintf(
-		"SELECT request_id, ts, request_body, response_body, request_truncated, response_truncated FROM %s WHERE request_id = ? ORDER BY ts DESC LIMIT 1",
+		"SELECT request_id, ts, request_body, response_body, request_truncated, response_truncated, project_id, principal_id, relay_key_hash FROM %s WHERE request_id = ? ORDER BY ts DESC LIMIT 1",
 		chTable)
 
 	rows, err := s.conn.Query(ctx, sql, requestID)
@@ -35,6 +35,7 @@ func (s *Reader) Get(ctx context.Context, requestID string) (payload.Record, err
 	)
 	if err := rows.Scan(
 		&r.RequestID, &r.Timestamp, &reqBody, &respBody, &reqTrunc, &respTrunc,
+		&r.ProjectID, &r.PrincipalID, &r.RelayKeyHash,
 	); err != nil {
 		return payload.Record{}, fmt.Errorf("payload/clickhouse: scan get row: %w", err)
 	}

@@ -10,9 +10,9 @@ import (
 
 const chTable = "payload_logs"
 
-// Body-only: the request/response bytes keyed by request_id, nothing else.
-// All per-request metadata lives on the log event (usage_events) and is
-// joined by request_id at the API layer. Bodies are large and highly
+// The request/response bytes keyed by request_id, plus the owner columns
+// the API layer matches against the joined log event (usage_events). Bodies
+// are large and highly
 // compressible — ZSTD(3) trades a little CPU for a much better ratio. The
 // bloom_filter skip index on request_id makes Get (a point lookup with no
 // time bound, so no partition pruning) skip most granules.
@@ -23,26 +23,42 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS payload_logs (
     response_body       String                 CODEC(ZSTD(3)),
     request_truncated   UInt8,
     response_truncated  UInt8,
+    project_id          String                 CODEC(ZSTD),
+    principal_id        String                 CODEC(ZSTD),
+    relay_key_hash      String                 CODEC(ZSTD),
     INDEX idx_request_id request_id TYPE bloom_filter GRANULARITY 4
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, request_id)
 TTL toDateTime(ts) + INTERVAL %d DAY`
 
-// expectedColumns is the column set insertBatch writes. Used by ensureSchema
-// to detect a pre-existing incompatible table.
-var expectedColumns = []string{
+const addOwnerColumnsSQL = `ALTER TABLE payload_logs
+    ADD COLUMN IF NOT EXISTS project_id     String CODEC(ZSTD),
+    ADD COLUMN IF NOT EXISTS principal_id   String CODEC(ZSTD),
+    ADD COLUMN IF NOT EXISTS relay_key_hash String CODEC(ZSTD)`
+
+// insertColumns is the column list insertBatch writes, in Append order.
+// Used by ensureSchema to detect a pre-existing incompatible table.
+var insertColumns = []string{
 	"request_id", "ts",
 	"request_body", "response_body", "request_truncated", "response_truncated",
+	"project_id", "principal_id", "relay_key_hash",
 }
 
-// ensureSchema creates the table if absent, then verifies its columns match
-// what insertBatch writes. CREATE TABLE IF NOT EXISTS silently no-ops against
-// a pre-existing (possibly older) table, which would make every insert fail
-// forever — so fail fast with an actionable error instead of auto-dropping.
+// InsertSQL is the INSERT statement matching insertColumns, shared with
+// tools that write the table directly.
+var InsertSQL = "INSERT INTO " + chTable + " (" + strings.Join(insertColumns, ", ") + ")"
+
+// ensureSchema creates the table if absent, adds the owner columns to an
+// older table, then verifies its columns match what insertBatch writes.
+// Anything else missing fails fast with an actionable error instead of
+// auto-dropping.
 func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
 	if err := conn.Exec(ctx, fmt.Sprintf(createTableSQL, retentionDays)); err != nil {
 		return fmt.Errorf("payload/clickhouse: create table: %w", err)
+	}
+	if err := conn.Exec(ctx, addOwnerColumnsSQL); err != nil {
+		return fmt.Errorf("payload/clickhouse: add owner columns: %w", err)
 	}
 
 	rows, err := conn.Query(ctx,
@@ -65,7 +81,7 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	}
 
 	var missing []string
-	for _, c := range expectedColumns {
+	for _, c := range insertColumns {
 		if !have[c] {
 			missing = append(missing, c)
 		}
