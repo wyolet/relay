@@ -148,21 +148,25 @@ var (
 // Result.Body to release the connection and trigger post-flight.
 func (p *Pipeline) Run(ctx context.Context, req *Request) (res *Result, err error) {
 	// Reservations are committed by post-flight on success; on any error
-	// return they're rolled back here so a failed request never leaks a
-	// concurrency slot or bucket cost. The failure also fires a post-flight
-	// observer event (success fires it on Body.Close instead).
+	// return they're settled here so a failed request never leaks a
+	// concurrency slot. The bucket cost is refunded only when no attempt
+	// reached the upstream: once one may have (the caller cancelling
+	// mid-call included), the request charge stands. The failure also fires
+	// a post-flight observer event (success fires it on Body.Close instead).
 	var (
-		inbound *pkgratelimit.Reservation
-		acq     *policy.Acquisition
+		inbound    *pkgratelimit.Reservation
+		acq        *policy.Acquisition
+		dispatched bool
 	)
 	defer func() {
 		if err != nil {
 			detached := context.WithoutCancel(ctx)
+			obs := pkgratelimit.Observations{Cancelled: !dispatched}
 			if inbound != nil {
-				_ = p.Policy.CommitInbound(detached, inbound, pkgratelimit.Observations{Cancelled: true})
+				_ = p.Policy.CommitInbound(detached, inbound, obs)
 			}
 			if acq != nil {
-				_ = p.Policy.Commit(detached, acq, pkgratelimit.Observations{Cancelled: true})
+				_ = p.Policy.Commit(detached, acq, obs)
 			}
 			go p.fireFailure(req, err)
 		}
@@ -257,17 +261,23 @@ loop:
 		// to an api key (or vice versa) authenticates each correctly.
 		oauth := acq != nil && acq.Key != nil && acq.Key.Spec.ValueFrom.Kind == hostkey.ValueKindOAuth
 		req.Lifecycle.MarkUpstreamStart()
-		resp, err = req.Adapter.Call(ctx, req.HostBaseURL, hostPath(req), keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
+		call := newUpstreamCall(ctx)
+		resp, err = req.Adapter.Call(call.ctx, req.HostBaseURL, hostPath(req), keyValue, req.Body, req.Headers, req.UpstreamModel, req.Stream, oauth)
 		if err == nil && resp != nil && !shouldRetry(req.Adapter, resp) {
-			return p.makeResult(req, inbound, acq, resp), nil
+			call.accepted.Store(true)
+			return p.makeResult(req, inbound, acq, resp, call), nil
 		}
 
 		retry, kind, retryAfter := classify(req.Adapter, resp, err)
+		if kind != keypool.FailureUpstreamUnreachable {
+			dispatched = true
+		}
 		if resp != nil {
 			lastStatus = resp.StatusCode
 			lastHeader = resp.Header.Clone()
 			lastBody = readBodyCapped(resp, maxUpstreamErrorBody)
 		}
+		call.release()
 
 		// Dial failure: the host is unreachable, not the key bad. Don't trip
 		// the breaker and don't fail over keys (they share the baseURL) —
@@ -507,6 +517,7 @@ func (p *Pipeline) makeResult(
 	inbound *pkgratelimit.Reservation,
 	acq *policy.Acquisition,
 	resp *http.Response,
+	call *upstreamCall,
 ) *Result {
 	status := resp.StatusCode
 	if req.Lifecycle != nil {
@@ -541,36 +552,48 @@ func (p *Pipeline) makeResult(
 		collected = &bytes.Buffer{}
 		teeDst = collected
 	}
-	tee := io.TeeReader(resp.Body, teeDst)
+	read := &readState{r: io.TeeReader(resp.Body, teeDst)}
 
-	pfTriggered := &sync.Once{}
-	postFlight := func() {
-		pfTriggered.Do(func() {
-			// End = response closed. Stamped here, not in the post-flight
-			// goroutine: bookkeeping time (rate-limit commits, observer
-			// fan-out) is relay_post_flight_seconds, never duration_ms /
-			// relay_overhead_seconds.
-			req.Lifecycle.MarkEnd()
-			// Finish attaches usage/payload and stashes rate-limit tokens on
-			// the Context. Idempotent: the echo response-writer finishes it
-			// early (to splice usage into the terminal frame); this is a no-op
-			// then.
-			if sess != nil {
-				sess.Finish()
-			}
-			var body []byte
-			if collected != nil {
-				body = collected.Bytes()
-			}
-			go p.runPostFlight(req, inbound, acq, body, status)
-		})
+	// Finish attaches usage/payload and stashes rate-limit tokens on the
+	// Context. Idempotent: the echo response-writer finishes it early (to
+	// splice usage into the terminal frame); this is a no-op then.
+	finish := func() (body []byte, sessFrames int) {
+		if sess != nil {
+			sess.Finish()
+			return nil, sess.Frames()
+		}
+		return collected.Bytes(), 0
 	}
 
+	pfTriggered := &sync.Once{}
 	body := &postFlightReadCloser{
-		Reader: req.Lifecycle.FirstByteReader(tee),
+		Reader: req.Lifecycle.FirstByteReader(read),
 		closer: func() error {
-			postFlight()
-			return resp.Body.Close()
+			var err error
+			pfTriggered.Do(func() {
+				// End = response closed. Stamped here, not in the post-flight
+				// goroutine: bookkeeping time (rate-limit commits, observer
+				// fan-out) is relay_post_flight_seconds, never duration_ms /
+				// relay_overhead_seconds.
+				req.Lifecycle.MarkEnd()
+				if read.done {
+					body, frames := finish()
+					go p.runPostFlight(req, inbound, acq, body, frames, status, read.eof)
+					err = resp.Body.Close()
+					call.release()
+					return
+				}
+				// The caller stopped early; the usage frame is usually still
+				// ahead in the response, so read the rest off the response path.
+				go func() {
+					complete := drainTail(read, call)
+					body, frames := finish()
+					_ = resp.Body.Close()
+					call.release()
+					p.runPostFlight(req, inbound, acq, body, frames, status, complete)
+				}()
+			})
+			return err
 		},
 	}
 
@@ -587,7 +610,9 @@ func (p *Pipeline) runPostFlight(
 	inbound *pkgratelimit.Reservation,
 	acq *policy.Acquisition,
 	body []byte,
+	sessFrames int,
 	status int,
+	complete bool,
 ) {
 	// post_flight_seconds spans this whole goroutine — extraction, observer
 	// fan-out, and the commit RTTs below — not just the Finalize fan-out.
@@ -607,6 +632,17 @@ func (p *Pipeline) runPostFlight(
 	} else {
 		tokens = req.Adapter.ExtractTokens(body)
 	}
+	// A response cut short before its end may never have reported usage;
+	// the upstream still did the work, so the budgets are charged a floor
+	// rather than nothing. Usage records keep only what was reported.
+	limitTokens := tokens
+	if !complete {
+		frames := sessFrames
+		if body != nil {
+			frames = bytes.Count(body, []byte("\n\n"))
+		}
+		limitTokens = withUnreportedFloor(tokens, len(req.Body), frames)
+	}
 
 	// Finalize before the commits: usage/payload hooks need the response body.
 	// lc carries persistent identity; the event carries this-request's outcome.
@@ -624,7 +660,7 @@ func (p *Pipeline) runPostFlight(
 	// client path, so ordering them last is safe.
 	body = nil
 
-	obs := pkgratelimit.Observations{Tokens: map[string]int64(tokens)}
+	obs := pkgratelimit.Observations{Tokens: map[string]int64(limitTokens)}
 	// Both reservations commit in one batched round trip (they live under
 	// different hash tags, so this is a pipeline, not one script — see
 	// Limiter.CommitBoth).
