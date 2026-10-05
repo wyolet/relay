@@ -55,6 +55,24 @@ func TestAgent_NonAuth(t *testing.T) {
 	}
 }
 
+// A 403 says nothing about the secret having rotated, so it never triggers a
+// re-resolve.
+func TestAgent_ForbiddenDoesNotRefresh(t *testing.T) {
+	f := &fakeRefresher{value: "new", changed: true}
+	a := NewAgent(f, time.Second, discard())
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureForbidden, true); v != pipeline.VerdictNext {
+		t.Fatalf("forbidden + more candidates: want Next, got %v", v)
+	}
+	if v, _ := a.OnFailure(context.Background(), "k", keypool.FailureForbidden, false); v != pipeline.VerdictFail {
+		t.Fatalf("forbidden + last: want Fail, got %v", v)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.calls != 0 {
+		t.Fatalf("refresh calls = %d, want 0", f.calls)
+	}
+}
+
 func TestAgent_AuthMoreCandidates_NextAndHealsAsync(t *testing.T) {
 	f := &fakeRefresher{value: "new", changed: true, called: make(chan struct{}, 1)}
 	a := NewAgent(f, time.Second, discard())

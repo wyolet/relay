@@ -11,6 +11,7 @@ type CooldownReason string
 
 const (
 	ReasonUpstreamAuthFailed   CooldownReason = "upstream_auth_failed"
+	ReasonUpstreamForbidden    CooldownReason = "upstream_forbidden"
 	ReasonUpstreamRateLimited  CooldownReason = "upstream_rate_limited"
 	ReasonUpstreamServerError  CooldownReason = "upstream_server_error"
 	ReasonUpstreamNetworkError CooldownReason = "upstream_network_error"

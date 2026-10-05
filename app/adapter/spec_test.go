@@ -212,7 +212,7 @@ func TestSpecAdapter_Retryable(t *testing.T) {
 		{200, false, 0},
 		{400, false, 0},
 		{401, true, keypool.FailureAuth},
-		{403, true, keypool.FailureAuth},
+		{403, true, keypool.FailureForbidden},
 		{429, true, keypool.FailureRateLimitShort},
 		{500, true, keypool.FailureServerError},
 		{529, true, keypool.FailureServerError},

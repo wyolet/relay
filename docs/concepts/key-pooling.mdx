@@ -45,14 +45,19 @@ thing:
 
 | Class | Trigger |
 | --- | --- |
-| `FailureAuth` | Key rejected — wrong, revoked, or disabled. |
+| `FailureAuth` | Upstream `401` — key wrong, revoked, or disabled. |
+| `FailureForbidden` | Upstream `403` — key accepted, request refused (e.g. a model or feature the account lacks). |
 | `FailureRateLimitShort` | Short-window upstream throttle. |
 | `FailureRateLimitLong` | Sustained upstream throttle. |
 | `FailureServerError` | Upstream `5xx`. |
 | `FailureNetwork` | Connection failed / timed out. |
 
 When a key's breaker is open, it's skipped during selection and heals
-automatically after its cooldown.
+automatically after its cooldown: the next request after the cooldown probes
+the key, and a success closes the breaker. Repeated failures lengthen the
+cooldown — up to 60 seconds for `5xx`, network and `403` failures, and from 1
+minute up to 1 hour for `401`. No failure takes a key out indefinitely, since
+the request that provoked it may have been the caller's doing.
 
 <Info>
 Breakers are keyed by the key's **value hash**, not its id. Rotate a key to a
@@ -77,7 +82,8 @@ Relay re-resolves the key out of band:
   background so it rejoins the pool.
 - **It's the last key** → park briefly on a single re-resolve and retry with
   the fresh value.
-- **Genuinely revoked** (value unchanged) → return a clean error.
+- **Genuinely revoked** (value unchanged) → return a clean error; the key is
+  probed again after each cooldown.
 
 This is why pairing Relay with an external secret backend (AWS / Azure / GCP
 Secret Manager, Bitwarden, 1Password) makes rotation invisible to your
