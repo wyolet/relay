@@ -14,6 +14,8 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -163,7 +165,7 @@ func (m *Manager) loadAndSave(h http.Handler) http.Handler {
 			a := &actor.Actor{
 				UserID:    uid,
 				Username:  m.sm.GetString(ctx, keyUsername),
-				SessionID: m.sm.Token(ctx),
+				SessionID: sessionID(m.sm.Token(ctx)),
 			}
 			if raw := m.sm.GetString(ctx, keyRoles); raw != "" {
 				_ = json.Unmarshal([]byte(raw), &a.Roles)
@@ -180,6 +182,14 @@ func (m *Manager) loadAndSave(h http.Handler) http.Handler {
 		}
 		h.ServeHTTP(w, r.WithContext(ctx))
 	}))
+}
+
+// sessionID derives the non-secret id an actor carries from the session's
+// bearer token. The token holds 256 random bits, so an unkeyed hash cannot be
+// reversed, and SQL can recompute the same id for rows that stored the token.
+func sessionID(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:16])
 }
 
 // Login records userID/username (and any roles) into the current session,
