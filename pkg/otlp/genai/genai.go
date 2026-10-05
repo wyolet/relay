@@ -29,6 +29,8 @@ var (
 	attrCacheRead       = []string{"gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens"}
 	attrCacheWrite      = []string{"gen_ai.usage.cache_write.input_tokens", "gen_ai.usage.cache_creation.input_tokens", "gen_ai.usage.cache_creation_input_tokens"}
 	attrReasoningTokens = []string{"gen_ai.usage.reasoning.output_tokens"}
+	attrAudioInput      = []string{"gen_ai.usage.audio.input_tokens"}
+	attrAudioOutput     = []string{"gen_ai.usage.audio.output_tokens"}
 
 	attrErrorType  = []string{"error.type"}
 	attrHTTPStatus = []string{"http.response.status_code"}
@@ -74,6 +76,9 @@ func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
 	cacheRead, _ := a.Int(attrCacheRead...)
 	cacheWrite, _ := a.Int(attrCacheWrite...)
 	reasoning, _ := a.Int(attrReasoningTokens...)
+	// Audio counts are a breakdown of input_tokens and output_tokens, so neither total is reduced by them. The image and text breakdowns have no counterpart on the record and stay inside the totals.
+	audioInput, _ := a.Int(attrAudioInput...)
+	audioOutput, _ := a.Int(attrAudioOutput...)
 	// The conventions count cached tokens inside input_tokens; some instrumentations report them beside it instead. A cached total above the input can only be the second form, and is left as reported.
 	if cached := cacheRead + cacheWrite; input >= cached {
 		input -= cached
@@ -93,11 +98,13 @@ func (Mapper) MapSpan(s otlp.Span) (otlp.Inference, bool) {
 		ConversationID: a.Str(attrConversation...),
 		ErrorType:      a.Str(attrErrorType...),
 		Tokens: otlp.TokenCounts{
-			Input:      nonNegative(input),
-			Output:     nonNegative(output),
-			CacheRead:  nonNegative(cacheRead),
-			CacheWrite: nonNegative(cacheWrite),
-			Reasoning:  nonNegative(reasoning),
+			Input:       nonNegative(input),
+			Output:      nonNegative(output),
+			CacheRead:   nonNegative(cacheRead),
+			CacheWrite:  nonNegative(cacheWrite),
+			Reasoning:   nonNegative(reasoning),
+			AudioInput:  nonNegative(audioInput),
+			AudioOutput: nonNegative(audioOutput),
 		},
 	}
 	if !s.Start.IsZero() && s.End.After(s.Start) {

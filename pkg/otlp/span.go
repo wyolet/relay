@@ -55,13 +55,15 @@ type Inference struct {
 	Tokens TokenCounts
 }
 
-// TokenCounts are the token counts of one model call. Input excludes cached tokens, which CacheRead and CacheWrite count; Reasoning is a part of Output, not an addition to it.
+// TokenCounts are the token counts of one model call. Input excludes cached tokens, which CacheRead and CacheWrite count. Reasoning and AudioOutput are parts of Output, and AudioInput is a part of the input, not additions to them.
 type TokenCounts struct {
-	Input      int64
-	Output     int64
-	CacheRead  int64
-	CacheWrite int64
-	Reasoning  int64
+	Input       int64
+	Output      int64
+	CacheRead   int64
+	CacheWrite  int64
+	Reasoning   int64
+	AudioInput  int64
+	AudioOutput int64
 }
 
 // SpanMapper recognises the spans of one telemetry convention that describe a model call.

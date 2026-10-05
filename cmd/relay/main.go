@@ -137,7 +137,7 @@ func main() {
 	batchQueue, batchSvc := buildBatch(bootCtx, listenerCtx, st, cat, pl, specRegistry, routingOpts, cfg.BatchMaxItems)
 
 	inferSrv, inferErr := startInference(cfg, st, cat, tokenVerifier, routingOpts, pl, proxyPipeline, lifecycleReg,
-		specRegistry, profiles, tokenCalibrator, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl))
+		specRegistry, profiles, tokenCalibrator, batchSvc, buildOTLPReceiver(cfg, cat, usageCtl, kvStore, limiter))
 
 	// Control plane (admin plane): /auth/*, CRUD, /version, /reload on
 	// RELAY_CONTROL_PORT. Disabled when empty or "off".

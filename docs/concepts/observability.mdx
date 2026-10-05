@@ -103,13 +103,22 @@ How a reported event differs from a proxied one:
 
 - `source` is `otlp`, so `source=otlp` selects reported usage and any other value excludes it.
 - It is attributed to the credential that sent the export (project, team, principal, key), not to anything the telemetry claims.
-- No policy, rate limit or key pool applies. The numbers are what the client declared.
-- Cost is computed from the catalog when the reported model resolves to a catalog model, using the provider's own host pricing when it has one. An unknown model is stored unpriced.
-- `gen_ai.usage.input_tokens` includes cached tokens under the conventions; Relay stores the uncached part as `input` and the cached parts as `cache_read` / `cache_creation`, the same split proxied events use.
+- No policy or key pool applies, and nothing is counted against the rate limits of inference. The numbers are what the client declared.
+- Cost is computed from the catalog when the reported model resolves to a catalog model. `gen_ai.provider.name` values that differ from catalog names (`gcp.gemini`, `x_ai`, `mistral_ai`, …) are mapped to the catalog provider and, where the name stands for a serving host, to that host's pricing; otherwise the provider's own host pricing is used when it has one. An unknown model is stored unpriced.
+- `gen_ai.usage.input_tokens` includes cached tokens under the conventions; Relay stores the uncached part as `input` and the cached parts as `cache_read` / `cache_creation`, the same split proxied events use. `gen_ai.usage.audio.input_tokens` / `audio.output_tokens` are stored as `audio_input` / `audio_output`, which stay counted inside `input` / `output`.
 - `extras` carries `trace_id`, `span_id`, `response_id` (the provider's response id), `session_id` (from `gen_ai.conversation.id`), `service` (the exporter's `service.name`) and `reported_provider`.
 - Message content is not stored, even if the span carries it.
 
-A span sent twice is recorded twice; its `request_id` (`otlp-<trace id>-<span id>`) is the same both times, which is how duplicates can be found.
+A model call is identified by its trace id and span id (its `request_id` is `otlp-<trace id>-<span id>`), and a span sent again within 24 hours is skipped, so exporter retries do not double count. The export still succeeds; skipped spans are not reported as rejected.
+
+What an exporter can be told instead of success:
+
+| Response | When |
+|---|---|
+| `200` with `partialSuccess.rejectedSpans` | Some model-call spans were refused: no trace id or span id, or a start time more than 5 minutes in the future. The rest were recorded. |
+| `400` | The export reports more than 10,000 model calls. Not retried by exporters; send smaller batches. |
+| `429` + `Retry-After` | The credential is over the `otlp-export` system rate limit (1,200 export requests per minute as shipped in `config/ratelimits/system.yaml`; editable like any rate limit, and not enforced when the row is absent or disabled). |
+| `503` + `Retry-After` | The usage queue has no room for the export. Exporters retry, and whatever was already recorded is skipped on the resend. |
 
 ## Payload logging
 

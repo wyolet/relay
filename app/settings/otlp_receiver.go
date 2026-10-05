@@ -15,7 +15,7 @@ func (o *OTLPReceiver) Validate() error { return nil }
 func init() {
 	Register(Section{
 		Name:        SectionOTLPReceiver,
-		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP trace exports at /otlp/v1/traces from callers holding a relay key or token, and records the model calls they describe as usage events with source \"otlp\". Reported usage is not subject to policies or rate limits. Default off. Hot-reloaded.",
+		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP trace exports at /otlp/v1/traces from callers holding a relay key or token, and records the model calls they describe as usage events with source \"otlp\". Reported usage is not subject to policies or to the rate limits of inference; export requests are capped per credential by the otlp-export system rate limit. Default off. Hot-reloaded.",
 		Defaults:    func() any { return &OTLPReceiver{} },
 		Decode:      decodeAndValidate[OTLPReceiver, *OTLPReceiver],
 	})

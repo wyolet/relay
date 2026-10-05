@@ -31,7 +31,7 @@ type origin struct {
 }
 
 // buildEvent turns one reported model call into a usage event attributed to reporter. received stands in for a missing span start time.
-func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, inf otlp.Inference, pricer *usagelog.Pricer, from origin, received time.Time) usagelog.Event {
+func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, inf otlp.Inference, hint ProviderHint, pricer *usagelog.Pricer, from origin, received time.Time) usagelog.Event {
 	ev := usagelog.Event{
 		// Derived from the span's ids so a span the client sends twice keeps one id.
 		RequestID:      "otlp-" + inf.TraceID + "-" + inf.SpanID,
@@ -69,7 +69,7 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, inf otlp
 		}
 	}
 
-	m := resolveModel(snap, inf)
+	m := resolveModel(snap, inf, hint)
 	ev.ModelID, ev.Model, ev.Provider, ev.Pricing = m.id, m.name, m.provider, m.pricingName
 	if nanos, breakdown, ok := pricer.Price(m.pricingID, ev.Tokens); ok {
 		ev.CostNanos = &nanos
@@ -97,6 +97,8 @@ func tokens(t otlp.TokenCounts) sdkusage.Tokens {
 		"cache_read":     t.CacheRead,
 		"cache_creation": t.CacheWrite,
 		"reasoning":      t.Reasoning,
+		"audio_input":    t.AudioInput,
+		"audio_output":   t.AudioOutput,
 	} {
 		if n > 0 {
 			out[key] = n

@@ -9,9 +9,10 @@ import (
 
 // gRPC status codes carried in the Status body of an OTLP/HTTP error response.
 const (
-	StatusInvalidArgument int32 = 3
-	StatusNotFound        int32 = 5
-	StatusUnavailable     int32 = 14
+	StatusInvalidArgument   int32 = 3
+	StatusNotFound          int32 = 5
+	StatusResourceExhausted int32 = 8
+	StatusUnavailable       int32 = 14
 )
 
 // TraceResponse encodes an ExportTraceServiceResponse in mediaType. rejected > 0 makes it a partial success naming how many spans were refused and why; otherwise the response is the empty success message.

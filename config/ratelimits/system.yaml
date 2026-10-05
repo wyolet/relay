@@ -65,3 +65,19 @@ spec:
       amount: 10
       window: 1m
       strategy: sliding-window
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: RateLimit
+metadata:
+  name: otlp-export
+  displayName: OpenTelemetry export rate limits
+  description: "Per-credential runtime cap on export requests to the OpenTelemetry receiver (/otlp/v1/*). Only requests rules apply. Sized for about a hundred processes sharing one credential, each exporting a batch every few seconds."
+  owner:
+    kind: system
+spec:
+  enabled: true
+  rules:
+    - meter: requests
+      amount: 1200
+      window: 1m
+      strategy: sliding-window

@@ -101,6 +101,29 @@ func TestMapSpanCachedTokensBesideInput(t *testing.T) {
 	}
 }
 
+// Audio tokens are a breakdown of the input and output totals, so the totals keep them; the image and text breakdowns are not carried.
+func TestMapSpanAudioTokens(t *testing.T) {
+	inf, ok := Mapper{}.MapSpan(span(otlp.Attrs{
+		"gen_ai.operation.name":                "chat",
+		"gen_ai.request.model":                 "example-model",
+		"gen_ai.usage.input_tokens":            int64(1000),
+		"gen_ai.usage.cache_read.input_tokens": int64(400),
+		"gen_ai.usage.audio.input_tokens":      int64(250),
+		"gen_ai.usage.image.input_tokens":      int64(90),
+		"gen_ai.usage.text.input_tokens":       int64(660),
+		"gen_ai.usage.output_tokens":           int64(300),
+		"gen_ai.usage.audio.output_tokens":     int64(120),
+		"gen_ai.usage.text.output_tokens":      int64(180),
+	}))
+	if !ok {
+		t.Fatal("not mapped")
+	}
+	want := otlp.TokenCounts{Input: 600, Output: 300, CacheRead: 400, AudioInput: 250, AudioOutput: 120}
+	if inf.Tokens != want {
+		t.Errorf("tokens = %+v, want %+v", inf.Tokens, want)
+	}
+}
+
 func TestMapSpanSkipsSpansThatAreNotModelCalls(t *testing.T) {
 	usage := otlp.Attrs{"gen_ai.usage.input_tokens": int64(10), "gen_ai.usage.output_tokens": int64(5)}
 	for _, op := range []string{"invoke_agent", "invoke_workflow", "execute_tool", "retrieval", "fetch_response", "create_agent", "plan"} {
