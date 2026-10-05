@@ -40,7 +40,8 @@ type PayloadFile struct {
 }
 
 // PayloadS3 configures the object-store backend. AccessKey/SecretKey are
-// secret.Refs (kind env or stored), resolved at sink-build time.
+// secret.Refs resolved at sink-build time: env names under RELAY_PAYLOAD_S3_
+// or stored ids under "payload-logging:".
 type PayloadS3 struct {
 	Endpoint  string     `json:"endpoint"`
 	Bucket    string     `json:"bucket"`
@@ -66,8 +67,19 @@ type PayloadClickHouse struct {
 
 // Validate is enforced before any write. Only meaningful when Enabled —
 // a disabled section can hold partial config (e.g. while an operator
-// fills in S3 details before flipping it on).
+// fills in S3 details before flipping it on). The S3 credentials and
+// transport are checked regardless: the log reader builds from this
+// section whatever the toggle says.
 func (p *PayloadLogging) Validate() error {
+	if err := validateOptionalRef("s3.accessKey", p.S3.AccessKey); err != nil {
+		return err
+	}
+	if err := validateOptionalRef("s3.secretKey", p.S3.SecretKey); err != nil {
+		return err
+	}
+	if p.Backend == "s3" && !p.S3.UseSSL && !plainHTTPAllowed() {
+		return fmt.Errorf("payload-logging: s3.useSSL: %w: must be true (false needs RELAY_COOKIE_SECURE=false)", ErrSecretRefNotAllowed)
+	}
 	if !p.Enabled {
 		return nil
 	}
@@ -77,12 +89,6 @@ func (p *PayloadLogging) Validate() error {
 	case "s3":
 		if p.S3.Bucket == "" {
 			return fmt.Errorf("payload-logging: s3 backend requires s3.bucket")
-		}
-		if err := validateOptionalRef("s3.accessKey", p.S3.AccessKey); err != nil {
-			return err
-		}
-		if err := validateOptionalRef("s3.secretKey", p.S3.SecretKey); err != nil {
-			return err
 		}
 	case "clickhouse":
 		// DSN comes from the boot CH config (RELAY_CH_DSN), validated there;
@@ -110,7 +116,7 @@ func validateOptionalRef(field string, r secret.Ref) error {
 	if err := r.Validate(); err != nil {
 		return fmt.Errorf("payload-logging: %s: %w", field, err)
 	}
-	return nil
+	return checkSecretRef(SectionPayloadLogging, field, r)
 }
 
 func init() {

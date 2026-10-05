@@ -2,8 +2,9 @@ package settings
 
 import (
 	"fmt"
-	"net/url"
 	"os"
+
+	"github.com/wyolet/relay/pkg/secret"
 )
 
 // AuthOIDC is the auth:oidc settings section: inbound OpenID Connect login
@@ -23,9 +24,9 @@ type AuthOIDC struct {
 	Issuer   string `json:"issuer,omitempty"`
 	ClientID string `json:"clientId,omitempty"`
 
-	// ClientSecretEnv names the env var holding the client secret.
-	// Indirection keeps the secret out of the settings row (world-readable
-	// to any authenticated operator).
+	// ClientSecretEnv names the env var holding the client secret; it must
+	// start with RELAY_OIDC_ (or WYOLET_OIDC_). Indirection keeps the secret
+	// out of the settings row (world-readable to any authenticated operator).
 	ClientSecretEnv string `json:"clientSecretEnv,omitempty"`
 
 	// RedirectURL is this relay's public callback,
@@ -80,16 +81,24 @@ func (c *AuthOIDC) EffectiveGroupsClaim() string {
 func (c *AuthOIDC) OpenRegistration() bool { return c.Registration == "open" }
 
 // Validate enforces shape only when enabled — a disabled section may be
-// sparse or empty.
+// sparse or empty. The secret reference and issuer are checked whenever
+// present.
 func (c *AuthOIDC) Validate() error {
+	if c.ClientSecretEnv != "" {
+		if err := checkSecretRef(AuthOIDCSection, "clientSecretEnv", secret.Ref{Kind: secret.KindEnv, Env: c.ClientSecretEnv}); err != nil {
+			return err
+		}
+	}
+	if c.Issuer != "" {
+		if err := checkSecretURL(AuthOIDCSection, "issuer", c.Issuer); err != nil {
+			return err
+		}
+	}
 	if !c.Enabled {
 		return nil
 	}
 	if c.Issuer == "" {
 		return fmt.Errorf("auth:oidc: issuer is required when enabled")
-	}
-	if _, err := url.Parse(c.Issuer); err != nil {
-		return fmt.Errorf("auth:oidc: issuer: %w", err)
 	}
 	if c.ClientID == "" {
 		return fmt.Errorf("auth:oidc: clientId is required when enabled")

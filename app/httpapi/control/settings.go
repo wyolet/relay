@@ -35,7 +35,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.PayloadLogging](api, d, protect, settings.Section{
 		Name:        settings.SectionPayloadLogging,
-		Description: "Request/response body capture sink config. Hot-reloaded — toggle, backend (file|s3), size cap, and S3 settings (with secret-ref credentials) take effect without a restart.",
+		Description: "Request/response body capture sink config. Hot-reloaded — toggle, backend (file|s3), size cap, and S3 settings (with secret-ref credentials: env RELAY_PAYLOAD_S3_* or stored payload-logging:*; useSSL required) take effect without a restart. Admin only.",
 	})
 	registerSettingsSection[settings.Parsing](api, d, protect, settings.Section{
 		Name:        settings.SectionParsing,
@@ -47,7 +47,7 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.AuthOIDC](api, d, protect, settings.Section{
 		Name:        settings.AuthOIDCSection,
-		Description: "Inbound OpenID Connect login for the control plane. Generic OIDC (issuer discovery + authorization-code flow); disabled by default. registration=open auto-provisions a user on first login. The client secret is referenced by env var name, never stored here.",
+		Description: "Inbound OpenID Connect login for the control plane. Generic OIDC (issuer discovery + authorization-code flow); disabled by default. registration=open auto-provisions a user on first login. The client secret is referenced by env var name (RELAY_OIDC_* or WYOLET_OIDC_*), never stored here; the issuer must be https. Admin only.",
 	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
@@ -214,10 +214,15 @@ func registerSettingsSection[T any](api huma.API, d Deps, protect huma.Middlewar
 		Description: sec.Description,
 		Tags:        []string{"settings"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 500},
+		Errors:      []int{400, 401, 403, 500},
 	}, func(ctx context.Context, in *sectionUpdateRequest[T]) (*sectionResponse[T], error) {
 		if err := d.Authz.Authorize(ctx, "settings.update", authz.Resource{Kind: "settings", Name: section}); err != nil {
 			return nil, mapAuthzErr(err)
+		}
+		// The section resolves a secret toward a destination it names; under
+		// single mode every signed-in user holds settings.update.
+		if settings.AdminOnly(section) && !authz.IsAdmin(ctx) {
+			return nil, huma.Error403Forbidden(section + " may only be changed by an admin")
 		}
 		raw, err := json.Marshal(in.Body)
 		if err != nil {
