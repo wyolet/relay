@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -50,7 +51,7 @@ func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snaps
 	return false
 }
 
-// storeContent queues the reported message content of calls for the payload store, once per call. Content is secondary to the usage row: when the payload queue lacks room it is dropped and counted rather than holding up the export, and left unmarked so a later report of the same call can still store it.
+// storeContent queues the reported message content of calls for the payload store, once per call, when the operator's switches are on and the reporter's policy allows it. Content is secondary to the usage row: when the payload queue lacks room it is dropped and counted rather than holding up the export, and left unmarked so a later report of the same call can still store it.
 func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lifecycle.Context, calls []reported, received time.Time) {
 	if !h.capturesContent() {
 		return
@@ -62,6 +63,11 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 		}
 	}
 	if len(with) == 0 {
+		return
+	}
+	// A policy that governs the reporter decides, over the client's choice to send content and over the key's own flag. A disabled policy stores nothing. With no policy, what the client sent is kept.
+	if pol := inference.GoverningPolicy(ctx); pol != nil && (!pol.IsEnabled() || !pol.Spec.PayloadLoggingEnabled) {
+		contentTotal.WithLabelValues(contentPolicy).Add(float64(len(with)))
 		return
 	}
 	queue := h.opts.Payloads

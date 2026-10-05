@@ -136,6 +136,12 @@ type fixtureOptions struct {
 	markerStore kv.Scripter
 	// reasoningRate above zero adds a reasoning meter at that rate (USD per million) to the model's own rate sheet.
 	reasoningRate float64
+	// policyCaptures, when set, puts the reporting key under a policy whose payload logging flag has that value. Nil leaves the key with no policy.
+	policyCaptures *bool
+	// policyDisabled switches that policy off.
+	policyDisabled bool
+	// keyCaptures sets the reporting key's own payload logging flag.
+	keyCaptures bool
 }
 
 func system() meta.Owner { return meta.Owner{Kind: meta.OwnerSystem} }
@@ -162,6 +168,17 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	fx.keyRow = &key.Key{
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-prod", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
 		Spec: key.Spec{Principal: key.Principal{Kind: key.PrincipalServiceAccount, ID: fx.sa.Meta.ID}, KeyHash: keyHash(relayKey)},
+	}
+	fx.keyRow.Spec.PayloadLoggingEnabled = o.keyCaptures
+	var policies rows[policy.Policy]
+	if o.policyCaptures != nil {
+		enabled := !o.policyDisabled
+		governing := &policy.Policy{
+			Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
+			Spec: policy.Spec{PayloadLoggingEnabled: *o.policyCaptures, Enabled: &enabled},
+		}
+		policies = append(policies, governing)
+		fx.keyRow.Spec.PolicyID = governing.Meta.ID
 	}
 	sibling := &serviceaccount.ServiceAccount{Meta: meta.Metadata{ID: meta.NewID(), Name: "crawler"}, Spec: serviceaccount.Spec{ProjectID: fx.project.Meta.ID}}
 	sibling.StampOwner()
@@ -236,7 +253,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 	cat := appcatalog.New(
 		rows[provider.Provider]{prov, zeta},
 		rows[host.Host]{ownHost, reseller},
-		rows[policy.Policy]{},
+		policies,
 		rows[model.Model]{fx.model, fx.sharedAcme, fx.sharedZeta},
 		rows[hostkey.HostKey]{},
 		limits,
@@ -1051,6 +1068,64 @@ func TestErrorTypeCarryingTheHTTPStatusIsTheEventStatus(t *testing.T) {
 	}
 	if ev := fx.events[0]; ev.Status != 429 || ev.ErrorKind != "429" || ev.LogOnly() {
 		t.Errorf("event = status %d kind %q log-only %v, want a 429 row", ev.Status, ev.ErrorKind, ev.LogOnly())
+	}
+}
+
+func TestThePolicyOfTheReporterDecidesWhetherContentIsStored(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name string
+		opts fixtureOptions
+		// receiverOff and payloadLoggingOff turn one of the operator's switches off.
+		receiverOff, payloadLoggingOff bool
+		wantStored                     bool
+		// wantByPolicy is whether the content is counted as refused by the policy.
+		wantByPolicy bool
+	}{
+		{name: "policy captures", opts: fixtureOptions{policyCaptures: &yes}, wantStored: true},
+		{name: "policy does not capture", opts: fixtureOptions{policyCaptures: &no}, wantByPolicy: true},
+		{name: "no policy: what the client sent is kept", opts: fixtureOptions{}, wantStored: true},
+		{name: "key flag set, policy does not capture", opts: fixtureOptions{policyCaptures: &no, keyCaptures: true}, wantByPolicy: true},
+		{name: "disabled policy that would capture", opts: fixtureOptions{policyCaptures: &yes, policyDisabled: true}, wantByPolicy: true},
+		{name: "policy captures, receiver switch off", opts: fixtureOptions{policyCaptures: &yes}, receiverOff: true},
+		{name: "policy captures, payload logging off", opts: fixtureOptions{policyCaptures: &yes}, payloadLoggingOff: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newFixtureWith(t, tc.opts)
+			fx.captureContent = !tc.receiverOff
+			fx.payloads.enabled = !tc.payloadLoggingOff
+			byPolicy := otlpreceiver.ContentCount("policy")
+
+			rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...)))
+			// The usage row is recorded whatever happens to the content, and the export succeeds.
+			if rec.Code != http.StatusOK || rec.Body.Len() != 0 || len(fx.events) != 1 {
+				t.Fatalf("status = %d body = %q events = %d, want an accepted export and one usage row", rec.Code, rec.Body, len(fx.events))
+			}
+			if stored := len(fx.payloads.records) == 1; stored != tc.wantStored {
+				t.Errorf("payload records = %d, want stored = %v", len(fx.payloads.records), tc.wantStored)
+			}
+			if counted := otlpreceiver.ContentCount("policy")-byPolicy == 1; counted != tc.wantByPolicy {
+				t.Errorf("counted as refused by policy = %v, want %v", counted, tc.wantByPolicy)
+			}
+			// A reported row names no policy even when one decided its content.
+			if fx.events[0].PolicyID != "" {
+				t.Errorf("usage row carries policy %q", fx.events[0].PolicyID)
+			}
+		})
+	}
+}
+
+func TestContentRefusedByPolicyCanBeStoredOnceThePolicyAllowsIt(t *testing.T) {
+	no := false
+	fx := newFixtureWith(t, fixtureOptions{policyCaptures: &no})
+	fx.captureContent, fx.payloads.enabled = true, true
+	body := export(t, pbSpan(1, contentAttrs(t, asText)...))
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK || len(fx.payloads.records) != 0 {
+		t.Fatalf("status = %d payload records = %d, want none under a policy that does not capture", rec.Code, len(fx.payloads.records))
+	}
+	// Refused content was never marked as stored, so the same call reported through a key with no policy still lands.
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK || len(fx.events) != 1 || len(fx.payloads.records) != 1 {
+		t.Errorf("status = %d events = %d payload records = %d, want the one usage row and the content", rec.Code, len(fx.events), len(fx.payloads.records))
 	}
 }
 

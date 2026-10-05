@@ -24,6 +24,7 @@ const (
 	contentStored    = "stored"
 	contentDuplicate = "duplicate"
 	contentDropped   = "dropped"
+	contentPolicy    = "policy"
 
 	opMark   = "mark"
 	opUnmark = "unmark"
@@ -58,7 +59,7 @@ var contentTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "content_total",
-	Help:      "Reported model calls carrying message content while content capture is on, by outcome: stored (queued for the payload store), duplicate (content already stored for the call), or dropped (the payload queue was half full or lacked room).",
+	Help:      "Reported model calls carrying message content while content capture is on, by outcome: stored (queued for the payload store), duplicate (content already stored for the call), dropped (the payload queue was half full or lacked room), or policy (the reporter's policy does not capture payloads, or is disabled).",
 }, []string{"outcome"})
 
 // markerErrors counts kv failures of the duplicate check. A failed mark stores the calls anyway, so they may be stored again on a resend; a failed unmark leaves calls marked that were never queued, so a resend skips them.

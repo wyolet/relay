@@ -7,7 +7,7 @@ const SectionOTLPReceiver = "otlp-receiver"
 type OTLPReceiver struct {
 	// Enabled accepts exports at POST /otlp/v1/traces and /otlp/v1/logs. Off by default: reported usage is self-declared by the client and is recorded, never enforced.
 	Enabled bool `json:"enabled"`
-	// CaptureContent stores the message content a client reports with a call (instructions, input and output messages, tool definitions) in the payload store. It takes effect only while payload logging is enabled. Off by default: content is the client's data and the largest part of an export.
+	// CaptureContent stores the message content a client reports with a call (instructions, input and output messages, tool definitions) in the payload store. It takes effect only while payload logging is enabled, and a policy governing the reporting credential must allow payload logging. Off by default: content is the client's data and the largest part of an export.
 	CaptureContent bool `json:"captureContent,omitempty"`
 }
 
@@ -17,7 +17,7 @@ func (o *OTLPReceiver) Validate() error { return nil }
 func init() {
 	Register(Section{
 		Name:        SectionOTLPReceiver,
-		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs from callers holding a relay key or token, and records the model calls they describe as usage events with source \"otlp\". Reported usage is not subject to policies or to the rate limits of inference; export requests are capped per credential (1,200 per minute unless a rate limit named otlp-export says otherwise). captureContent also stores the message content clients report, in the payload store, while payload logging is enabled. Both default off. Hot-reloaded.",
+		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs from callers holding a relay key or token, and records the model calls they describe as usage events with source \"otlp\". Reported usage is not subject to policies or to the rate limits of inference; export requests are capped per credential (1,200 per minute unless a rate limit named otlp-export says otherwise). captureContent also stores the message content clients report, in the payload store, while payload logging is enabled; for a credential governed by a policy, only when that policy has payloadLoggingEnabled. Both default off. Hot-reloaded.",
 		Defaults:    func() any { return &OTLPReceiver{} },
 		Decode:      decodeAndValidate[OTLPReceiver, *OTLPReceiver],
 	})

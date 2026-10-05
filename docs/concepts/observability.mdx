@@ -185,7 +185,7 @@ Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the
 
 ### Message content
 
-Content is stored only when the client sends it and Relay is set to keep it.
+Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches below must be on, and then the policy that governs the reporting credential decides: content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
 
 On the client, turn on content capture in the instrumentation. For the Python instrumentations:
 
@@ -214,7 +214,7 @@ Relay reads `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.
 
 - Each body is cut at the payload `maxBytes` and flagged `request_truncated` / `response_truncated`; a cut body is no longer valid JSON.
 - Content is stored once per call, also when it arrives after the usage event (`event_only` with spans exported first). `span_and_event` sends every message to Relay twice and stores it once, so prefer one of the other two.
-- The per-policy and per-key `payloadLoggingEnabled` flags do not apply: they gate proxied requests. `captureContent` is the switch for reported content.
+- The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings. Unlike a proxied request, where the policy or the key can opt in, the key's `payloadLoggingEnabled` has no effect on reported content, and a disabled policy stores nothing.
 - When the payload queue is over half full, content is dropped and the usage event is kept; `relay_otlp_content_total{outcome="dropped"}` counts it.
 - The content forms of earlier conventions (`gen_ai.prompt` / `gen_ai.completion` attributes, one event per message) are not stored. `@opentelemetry/instrumentation-openai` 0.20.0 emits the per-message events, so its content is not captured.
 
