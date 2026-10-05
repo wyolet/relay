@@ -79,10 +79,15 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 	)
 	if cls.UpstreamHost != "" {
 		h, ok := snap.HostByName(cls.UpstreamHost)
+		kind := "unknown_upstream_host"
+		if ok && !proxyPinAllowed(snap, PrincipalFrom(ctx), h) {
+			// Answered as unknown, matching its absence from /v1/proxy/hosts.
+			ok, kind = false, "upstream_host_not_granted"
+		}
 		if !ok {
-			d.fireUsageFailure(ctx, "unknown_upstream_host", "unknown upstream host "+cls.UpstreamHost)
+			d.fireUsageFailure(ctx, kind, "unknown upstream host "+cls.UpstreamHost)
 			writeAPIError(w, http.StatusBadRequest, "invalid_request_error", "unknown_upstream_host",
-				"unknown upstream host "+strconvQuote(cls.UpstreamHost)+"; see GET /v1/proxy/hosts")
+				"unknown upstream host "+strconvQuote(cls.UpstreamHost)+"; see GET /v1/proxy/hosts", "reason", kind)
 			return
 		}
 		host = h
@@ -186,6 +191,14 @@ func handleProxy(d Deps, w http.ResponseWriter, r *http.Request, adapterKind ada
 		"bytes", n,
 		"copy_err", copyErr,
 	)
+}
+
+// proxyPinAllowed reports whether p may name h in the upstream-host header. A keyless host ignores the forwarded credential, so the caller's own key authorizes nothing there; as in normal routing, reaching one takes an explicit policy grant on that host.
+func proxyPinAllowed(snap *appcatalog.Snapshot, p *Principal, h *apphost.Host) bool {
+	if !h.Spec.NoAuth {
+		return true
+	}
+	return p != nil && p.Policy != nil && p.Policy.IsEnabled() && snap.PolicyGrantsHost(p.Policy.Meta.ID, h.Meta.ID)
 }
 
 func proxyUpstreamPath(inboundPath string, spec *adapter.Spec, host *apphost.Host) string {

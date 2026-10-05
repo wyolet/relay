@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	appcatalog "github.com/wyolet/relay/app/catalog"
 )
 
 // proxyHostEntry is one row in the GET /v1/proxy/hosts response.
@@ -43,16 +45,26 @@ func registerProxyHosts(api huma.API, d Deps, mw huma.Middlewares) {
 			return nil, huma.Error401Unauthorized("anonymous access disabled")
 		}
 
-		hosts := d.Catalog.Current().Hosts()
+		snap := SnapshotFrom(ctx)
+		if snap == nil {
+			snap = d.Catalog.Current()
+		}
 		out := &proxyHostsOutput{}
 		out.Body.Object = "list"
-		out.Body.Data = make([]proxyHostEntry, 0, len(hosts))
-		for _, h := range hosts {
-			out.Body.Data = append(out.Body.Data, proxyHostEntry{
-				Slug:        h.Meta.Name,
-				DisplayName: h.Meta.DisplayName,
-			})
-		}
+		out.Body.Data = proxyHostsFor(snap, PrincipalFrom(ctx))
 		return out, nil
 	})
+}
+
+// proxyHostsFor lists the hosts p may pin, by the same rule the proxy handler applies.
+func proxyHostsFor(snap *appcatalog.Snapshot, p *Principal) []proxyHostEntry {
+	hosts := snap.Hosts()
+	out := make([]proxyHostEntry, 0, len(hosts))
+	for _, h := range hosts {
+		if !proxyPinAllowed(snap, p, h) {
+			continue
+		}
+		out = append(out, proxyHostEntry{Slug: h.Meta.Name, DisplayName: h.Meta.DisplayName})
+	}
+	return out
 }
