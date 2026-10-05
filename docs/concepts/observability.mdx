@@ -76,48 +76,123 @@ curl -X PUT http://localhost:8081/api/settings/usage-logging \
 
 ## Reported usage (OpenTelemetry)
 
-Model calls that never pass through Relay can still be recorded: an application that already exports OpenTelemetry traces can send them to Relay, and each span describing a model call becomes a usage event next to the proxied ones. The receiver is off by default.
+Model calls that never pass through Relay can still be recorded. An application instrumented with OpenTelemetry exports its traces or logs to Relay over OTLP/HTTP, and each span or event that describes a model call becomes a usage event next to the proxied ones, attributed to the relay key that sent it and priced from the catalog. Reported usage is what the client declares: it is recorded, never enforced.
 
-Turn it on:
+### Enable the receiver
+
+The receiver is off by default and returns `404` until the `otlp-receiver` setting is enabled. The write replaces the whole section, so send both fields. It applies without a restart.
 
 ```bash
 curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"enabled": true}'
+  -d '{"enabled": true, "captureContent": false}'
 ```
 
-Then point the application's OTLP/HTTP trace exporter at `/otlp/v1/traces` on the inference port, authenticated with a relay key or token. Use the signal-specific variables: the generic `OTEL_EXPORTER_OTLP_ENDPOINT` would also send metrics, which Relay does not accept.
+### Configure the exporter
+
+The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or token in the `Authorization` header; the key needs no policy. Calls are attributed to that key's project, team and principal, so give each reporting service a key of its own.
 
 ```bash
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:8080/otlp/v1/traces
-export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
-export OTEL_EXPORTER_OTLP_TRACES_HEADERS="Authorization=Bearer $RELAY_KEY"
+export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://localhost:8080/otlp/v1/logs
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer $RELAY_KEY"
+export OTEL_EXPORTER_OTLP_COMPRESSION=gzip
 ```
 
-Both OTLP/HTTP encodings (`http/protobuf` and `http/json`) and gzip compression are accepted; OTLP over gRPC is not.
+- The protocol must be OTLP over HTTP: `http/protobuf` or `http/json`. Relay does not serve gRPC, and an SDK whose default is `grpc` fails to connect until the protocol is set.
+- `gzip` compression is accepted and optional. Chunked request bodies are accepted.
+- `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8080/otlp` works in place of the two signal variables: the SDK appends `/v1/traces` and `/v1/logs`. It also appends `/v1/metrics` when a metrics exporter is configured, which Relay answers with `404`; set `OTEL_METRICS_EXPORTER=none` or use the signal variables.
 
-Relay reads spans that follow the [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), including the attribute names earlier releases used. A span is recorded when its `gen_ai.operation.name` is `chat`, `generate_content`, `text_completion` or `embeddings`. Agent, workflow, tool and retrieval spans are skipped, because an agent span repeats the token usage of the model calls beneath it. Other spans in the export are ignored, so exporting whole traces is fine.
+In Python, with `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` and a GenAI instrumentation such as `opentelemetry-instrumentation-openai-v2` or `opentelemetry-instrumentation-google-genai`, the exporters read those variables:
 
-How a reported event differs from a proxied one:
+```python
+from opentelemetry import trace
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-- `source` is `otlp`, so `source=otlp` selects reported usage and any other value excludes it.
-- It is attributed to the credential that sent the export (project, team, principal, key), not to anything the telemetry claims.
-- No policy or key pool applies, and nothing is counted against the rate limits of inference. The numbers are what the client declared.
-- Cost is computed from the catalog when the reported model resolves to a catalog model. `gen_ai.provider.name` values that differ from catalog names (`gcp.gemini`, `x_ai`, `mistral_ai`, …) are mapped to the catalog provider and, where the name stands for a serving host, to that host's pricing; otherwise the provider's own host pricing is used when it has one. An unknown model is stored unpriced.
-- `gen_ai.usage.input_tokens` includes cached tokens under the conventions; Relay stores the uncached part as `input` and the cached parts as `cache_read` / `cache_creation`, the same split proxied events use. `gen_ai.usage.audio.input_tokens` / `audio.output_tokens` are stored as `audio_input` / `audio_output`, which stay counted inside `input` / `output`.
-- `extras` carries `trace_id`, `span_id`, `response_id` (the provider's response id), `session_id` (from `gen_ai.conversation.id`), `service` (the exporter's `service.name`) and `reported_provider`.
-- Message content is not stored unless content capture is turned on (below).
+provider = TracerProvider()
+provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(provider)
+OpenAIInstrumentor().instrument()
+```
 
-### Events (logs signal)
+Traces are enough for usage. Export logs as well only when the instrumentation reports model calls as events (`OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true` in the Python instrumentations) and you want [message content](#message-content) from them. The JSON exporters (`opentelemetry-exporter-otlp-json-http` in Python, `@opentelemetry/exporter-trace-otlp-http` and `@opentelemetry/exporter-logs-otlp-http` in Node.js) work the same way.
 
-Instrumentations that report a model call as the `gen_ai.client.inference.operation.details` event can send their logs to `/otlp/v1/logs` (`OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, same protocol and headers as traces). The event carries the same attributes as the span and is recorded the same way, except that a log record has no duration, so `duration_ms` is 0. Every other log record is ignored.
+### What is recorded
 
-An event emitted inside a span carries that span's trace id and span id, so the span and the event of one call are one usage event: whichever arrives first is recorded and the other is skipped. An event without span ids is identified by `gen_ai.response.id` instead (its `request_id` is `otlp-<digest of the response id>-response`); with neither, it is rejected in `partialSuccess.rejectedLogRecords`.
+Relay reads the [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), including the attribute names earlier releases used. Exporting whole traces and all logs is fine: everything that is not a model call is ignored and counted in `relay_otlp_spans_total{outcome="ignored"}` or `relay_otlp_log_records_total{outcome="ignored"}`.
+
+| Record | Recorded | Ignored |
+| --- | --- | --- |
+| Span | `gen_ai.operation.name` is `chat`, `generate_content`, `text_completion` or `embeddings`. A span without an operation name counts when it names a model and carries token usage. | Agent, workflow, tool, retrieval and all other spans. An agent span repeats the token usage of the model calls beneath it, so recording it would count them twice. |
+| Log record | The event `gen_ai.client.inference.operation.details` for one of the operations above, with its fields as log record attributes. | Every other log record, including the per-message events of earlier conventions (`gen_ai.user.message`, `gen_ai.choice`, …). |
+
+| Event field | Read from |
+| --- | --- |
+| `requested_model`, `model` | `gen_ai.request.model`, `gen_ai.response.model`; the response model is tried first against the catalog |
+| `provider`, `pricing` | `gen_ai.provider.name` (earlier: `gen_ai.system`) and the catalog; see [Pricing](#pricing-and-provider-names) |
+| `tokens` | `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_creation.input_tokens` (or `cache_write.input_tokens`), `reasoning.output_tokens`, `audio.input_tokens`, `audio.output_tokens` (earlier: `prompt_tokens`, `completion_tokens`) |
+| `status`, `error_kind` | `http.response.status_code` and `error.type`. An `error.type` that is an HTTP error status (`"429"`) is used as the status. A failed call with no status is stored with status `0` and its `error_kind`: it is listed in the logs and left out of summaries, like a request Relay rejected before reaching a provider. |
+| `finish_reason` | first value of `gen_ai.response.finish_reasons` |
+| `streamed`, time to first token | `gen_ai.request.stream`, `gen_ai.response.time_to_first_chunk` |
+| `ts`, `duration_ms` | the span's start and end. An event has no duration: `duration_ms` is `0` and `ts` is the record's time, or the time the SDK observed it. |
+| `extras` | `trace_id`, `span_id`, `response_id` (`gen_ai.response.id`), `session_id` (`gen_ai.conversation.id`), `service` (the resource's `service.name`), `operation`, `reported_provider` |
+
+A row is as complete as the instrumentation makes it. Three examples from current releases: `opentelemetry-instrumentation-openai-v2` 2.4b0 and `@opentelemetry/instrumentation-openai` 0.20.0 report neither cached nor reasoning tokens and do not mark a streamed call, so such a call is stored with all input at the uncached rate and `streamed: false`; `opentelemetry-instrumentation-google-genai` 1.2b0 reports all of them. Report one call and read it back with `GET /api/usage/events?source=otlp` before relying on the numbers.
+
+### How a reported event differs from a proxied one
+
+- `source` is `otlp`. Summaries and time series include reported events by default; filter with `source=otlp`, or name the other sources to leave them out.
+- `request_id` is `otlp-<trace id>-<span id>`.
+- It is attributed to the credential that sent the export, not to anything the telemetry claims.
+- `policy`, `host` and `host_key` are empty: Relay routed nothing. No policy, budget or inference rate limit is applied or consumed.
+- Token counts use the same split as proxied events. `gen_ai.usage.input_tokens` includes cached tokens under the conventions, so Relay stores the uncached part as `input` and the rest as `cache_read` and `cache_creation`. `audio_input` and `audio_output` stay counted inside `input` and `output`. `gen_ai.usage.output_tokens` includes reasoning tokens; when the model's rate sheet prices reasoning as its own meter they are taken out of `output`, so they are charged once.
+- Timing has no relay overhead or attempt count; it is the client's own measurement.
+
+### Duplicates
+
+Exporters resend a batch when they get no answer, and a client may report one call as a span and as an event. A call is identified by its trace id and span id, and the first report of it within 24 hours is recorded; later ones are skipped, still answered with success, and counted as `outcome="duplicate"`. The span and the event of one call share those ids, so they are one usage event. Whichever arrives first sets the row, which leaves `duration_ms` at `0` when the event wins.
+
+An event emitted outside any span is identified by `gen_ai.response.id` instead (its `request_id` is `otlp-<digest of the response id>-response`). Calls are told apart per project, or per principal for a credential outside any project: one service reporting through two keys of a project is recorded once, and two projects reporting the same ids are recorded separately.
+
+### Pricing and provider names
+
+Cost is computed when the reported model resolves to a catalog model, at the time the event is recorded. The model name is looked up qualified by the reported provider, then on its own; names and aliases match as they do for inference. A model the catalog does not know is stored unpriced, which is not a cost of zero: `unpriced` in a summary counts such events.
+
+Telemetry names providers its own way, and often names the service that served the call. Relay maps the names that differ from the catalog's: `gcp.gemini` and `gemini` to provider `google`, `azure.ai.openai` to `openai`, `x_ai` to `xai`, `mistral_ai` to `mistral`, `moonshot_ai` to `moonshot`. Because Relay did not route the call, it picks the rate sheet in this order: the host the mapped name stands for, the provider's own host, then the first host that has pricing for the model. `aws.bedrock` and `gcp.vertex_ai` have no catalog host, so their calls are priced at the model provider's own rates. The chosen rate sheet is in the event's `pricing` field.
+
+### Limits and responses
+
+| Response | When | Exporter |
+| --- | --- | --- |
+| `200` | The export was accepted. An empty body means every model call in it was recorded or was a duplicate. | done |
+| `200` with `partialSuccess` | Some model calls were refused and the rest recorded: `rejectedSpans` / `rejectedLogRecords` counts those with no trace id and span id (for an event: nor a response id) or starting more than 5 minutes in the future; `errorMessage` says which. | logs it, does not resend |
+| `400` | The body does not decode, or the export reports more than 10,000 model calls. | drops the batch |
+| `401` | Missing or invalid relay key. | drops the batch |
+| `404` | The receiver is disabled, or the path is not served (`/otlp/v1/metrics`). | drops the batch |
+| `413` | The body is over 16 MiB after decompression (`RELAY_MAX_REQUEST_BYTES` when set). | drops the batch |
+| `415` | The `Content-Type` is neither `application/x-protobuf` nor `application/json`, or the `Content-Encoding` is not `gzip`. | drops the batch |
+| `429` + `Retry-After` | The credential is over the export rate limit: 1,200 export requests per minute, traces and logs together. A rate limit named `otlp-export` replaces the built-in value (`config/ratelimits/system.yaml` holds one, loaded with `relay seed --from config --apply`); disable it to apply none. | retries |
+| `503` + `Retry-After` | The usage queue lacks room. Reported calls use the queue only while it is under half full, so they never crowd out the records of proxied traffic. | retries |
+
+Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the first attempt recorded is skipped as a duplicate. An exporter that exhausts its retries drops the batch, and that usage is lost.
 
 ### Message content
 
-A client that opts in to content capture in its instrumentation sends `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.definitions` and `gen_ai.output.messages` on the span or the event. Relay stores them only when both switches are on: [payload logging](#payload-logging) globally, and `captureContent` on the receiver.
+Content is stored only when the client sends it and Relay is set to keep it.
+
+On the client, turn on content capture in the instrumentation. For the Python instrumentations:
+
+```bash
+export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=span_only   # or event_only, span_and_event
+```
+
+On Relay, enable [payload logging](#payload-logging) and set `captureContent` on the receiver:
 
 ```bash
 curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
@@ -126,18 +201,29 @@ curl -X PUT http://localhost:8081/api/settings/otlp-receiver \
   -d '{"enabled": true, "captureContent": true}'
 ```
 
-The content becomes the payload of the call's log record, shown by `GET /api/logs/{request_id}` like a proxied request's bodies: the request body is one JSON object holding the input-side attributes under their attribute names, the response body one JSON object holding `gen_ai.output.messages`. The payload `maxBytes` cap and truncation flags apply. The per-policy and per-key `payloadLoggingEnabled` flags do not: they gate proxied requests. Content is stored once per call, also when it arrives after the usage event (a span first, its event with content later). When the payload queue is busy, content is dropped rather than delaying the export; `relay_otlp_content_total{outcome="dropped"}` counts it.
+Relay reads `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.definitions` and `gen_ai.output.messages`, as structured values or as the JSON text instrumentations put on spans. They become the payload of the call's log record, returned by `GET /api/logs/{request_id}` like a proxied request's bodies: `request_body` is one JSON object holding the input-side attributes under their names, `response_body` one holding `gen_ai.output.messages`.
 
-A model call is identified by its trace id and span id (its `request_id` is `otlp-<trace id>-<span id>`), and a span sent again within 24 hours is skipped, so exporter retries do not double count. The export still succeeds; skipped spans are not reported as rejected. Calls are recognised per project (per principal for a credential outside any project): the same service reporting through two keys of one project is recorded once, and two projects reporting the same ids are recorded separately.
+```json
+{
+  "gen_ai.input.messages": [{"role": "user", "parts": [{"type": "text", "content": "Say hello."}]}],
+  "gen_ai.system_instructions": [{"type": "text", "content": "You are a terse assistant."}]
+}
+```
 
-What an exporter can be told instead of success:
+- Each body is cut at the payload `maxBytes` and flagged `request_truncated` / `response_truncated`; a cut body is no longer valid JSON.
+- Content is stored once per call, also when it arrives after the usage event (`event_only` with spans exported first). `span_and_event` sends every message to Relay twice and stores it once, so prefer one of the other two.
+- The per-policy and per-key `payloadLoggingEnabled` flags do not apply: they gate proxied requests. `captureContent` is the switch for reported content.
+- When the payload queue is over half full, content is dropped and the usage event is kept; `relay_otlp_content_total{outcome="dropped"}` counts it.
+- The content forms of earlier conventions (`gen_ai.prompt` / `gen_ai.completion` attributes, one event per message) are not stored. `@opentelemetry/instrumentation-openai` 0.20.0 emits the per-message events, so its content is not captured.
 
-| Response | When |
-|---|---|
-| `200` with `partialSuccess.rejectedSpans` | Some model-call spans were refused: no trace id or span id, or a start time more than 5 minutes in the future. The rest were recorded. |
-| `400` | The export reports more than 10,000 model calls. Not retried by exporters; send smaller batches. |
-| `429` + `Retry-After` | The credential is over the export rate limit: 1,200 export requests per minute, built in. A rate limit named `otlp-export` replaces it (`config/ratelimits/system.yaml` holds one to seed with `relay seed --from config --apply`); disable that rate limit to apply none. |
-| `503` + `Retry-After` | The usage queue has no room for the export. Reported calls use the queue only while it is under half full, so they never crowd out the records of proxied traffic. Exporters retry, and whatever was already recorded is skipped on the resend. |
+Capturing content roughly doubles what the application uploads for each call: the messages it sends to the provider are sent again to Relay, along with the response. Budget the egress and the store before turning it on for a busy service.
+
+### Not supported
+
+- The metrics signal. GenAI metrics are pre-aggregated histograms with no per-request rows, and a client sending both would be counted twice.
+- OTLP over gRPC.
+- Agent, tool and retrieval spans as usage events.
+- Enforcement. A reported call has already happened; policies, budgets and rate limits of inference do not see it.
 
 ## Payload logging
 
@@ -169,7 +255,12 @@ kill switch.
 curl -X PUT http://localhost:8081/api/settings/payload-logging \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"enabled": true, "backend": "file", "maxBytes": 1048576}'
+  -d '{
+    "enabled": true, "backend": "file", "maxBytes": 1048576,
+    "file": {"path": "relay-payloads.jsonl"},
+    "s3": {"endpoint": "", "bucket": "", "useSSL": false, "accessKey": {"kind": ""}, "secretKey": {"kind": ""}},
+    "clickhouse": {}
+  }'
 
 # 2. Opt a single key into capture.
 curl -X PUT http://localhost:8081/api/keys/by-id/<id> \
@@ -177,6 +268,8 @@ curl -X PUT http://localhost:8081/api/keys/by-id/<id> \
   -H "Content-Type: application/json" \
   -d '{"spec": {"payloadLoggingEnabled": true}}'
 ```
+
+The write replaces the whole section and every backend block is required, also the ones not in use. To change one field, read the section with `GET /api/settings/payload-logging` and send its `value` back with the change.
 
 ### Reading captured payloads
 
