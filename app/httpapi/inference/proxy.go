@@ -282,7 +282,7 @@ func mapProxyErr(w http.ResponseWriter, err error) {
 				rateLimitMessage(ex, secs))
 			return
 		}
-		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", err.Error())
+		writeAPIError(w, http.StatusBadGateway, "server_error", "upstream_error", httpheader.SafeUpstreamError("upstream", err), "err", err)
 	}
 }
 
