@@ -700,6 +700,65 @@ func TestIntegration_BootSeedRefusesTenancyKinds(t *testing.T) {
 	}
 }
 
+// envHostKeyTree is a catalog tree that declares a host, its tier policy and
+// an env-sourced key for it naming a relay credential.
+const envHostKeyTree = `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Host
+metadata:
+  name: tree-host
+spec:
+  baseURL: https://upstream.invalid
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: Policy
+metadata:
+  name: tree-tier
+  owner: {kind: host, name: tree-host}
+spec: {}
+---
+apiVersion: relay.wyolet.dev/v1alpha2
+kind: HostKey
+metadata:
+  name: tree-key
+spec:
+  hostId: tree-host
+  policyId: tree-tier
+  valueFrom: {kind: env, env: RELAY_ADMIN_TOKEN}
+`
+
+// A boot seed must not take credentials from a catalog tree: an env-sourced
+// key would carry a relay variable to the host the same tree defines. The
+// operator's own `relay seed --apply` still writes it.
+func TestIntegration_BootSeedRefusesHostKeys(t *testing.T) {
+	t.Setenv("RELAY_ADMIN_TOKEN", "dummy-admin-token")
+	st := newStack(t)
+	ctx := context.Background()
+	pool := testPool(t, st.dsn)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tree.yaml"), []byte(envHostKeyTree), 0o600); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	res, err := seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir, CatalogKindsOnly: true})
+	if err != nil {
+		t.Fatalf("boot seed: %v", err)
+	}
+	if res.Hosts != 1 || res.HostKeys != 0 {
+		t.Fatalf("boot seed reconciled %+v, want the host and no host key", res)
+	}
+	if keys, _ := st.stores.HostKey.List(ctx); len(keys) != 0 {
+		t.Fatalf("a catalog tree created %d host key(s)", len(keys))
+	}
+
+	res, err = seed.Run(ctx, seed.Options{Pool: pool, YAMLDir: dir})
+	if err != nil {
+		t.Fatalf("seed --apply: %v", err)
+	}
+	if res.HostKeys != 1 {
+		t.Fatalf("seed --apply reconciled %+v, want the host key too", res)
+	}
+}
+
 // ownedPolicy renders a Policy owned by the named host.
 func ownedPolicy(hostName string) string {
 	return `apiVersion: relay.wyolet.dev/v1alpha2
