@@ -179,7 +179,7 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 	return &Principal{
 		// A token is stateless: its IdP groups come from the claims it was
 		// minted with, unioned with the local membership the snapshot holds now.
-		Subjects:       tokens.subjects(ent, snap, userID, claims.Grp),
+		Subjects:       ent.subjectsIn(snap, userID),
 		UserID:         userID,
 		ProjectID:      proj.Meta.ID,
 		TeamID:         proj.Spec.TeamID,
@@ -187,6 +187,7 @@ func tokenPrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *To
 		CredentialID:   claims.Jti,
 		TokenExp:       claims.Exp,
 		TokenVer:       claims.Ver,
+		token:          ent,
 	}, true
 }
 
@@ -210,15 +211,15 @@ func (v *TokenVerifier) verified(bearer string, now time.Time) (*cacheEntry, boo
 	return ent, true
 }
 
-// subjects returns the subject list the claims resolve to, reusing the
-// cached one while the snapshot it was derived from is still live. A
+// subjectsIn returns the subject list the claims resolve to in snap, reusing
+// the cached one while the snapshot it was derived from is still live. A
 // membership change publishes a new snapshot, so it is picked up at once
 // rather than at token expiry.
-func (v *TokenVerifier) subjects(ent *cacheEntry, snap *appcatalog.Snapshot, userID string, idpGroups []string) []string {
-	if got, ok := ent.subjectsFor(snap); ok {
+func (e *cacheEntry) subjectsIn(snap *appcatalog.Snapshot, userID string) []string {
+	if got, ok := e.subjectsFor(snap); ok {
 		return got
 	}
-	subs := appcatalog.UserSubjects(userID, snap.GroupsForUser(userID), idpGroups)
-	ent.setSubjects(snap, subs)
+	subs := appcatalog.UserSubjects(userID, snap.GroupsForUser(userID), e.claims.Grp)
+	e.setSubjects(snap, subs)
 	return subs
 }

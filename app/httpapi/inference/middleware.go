@@ -112,11 +112,7 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 			} else if p, k, ok = keyPrincipal(w, snap, cls.Key); !ok {
 				return
 			}
-			if !resolvePolicy(w, snap, p) {
-				return
-			}
-			if cls.Mode == ModeProxyAuthed && !p.PassthroughAllowed {
-				writeForbidden(w, "passthrough_forbidden", "this credential may not forward upstream keys")
+			if !authorizePrincipal(w, snap, p, cls.Mode) {
 				return
 			}
 			ctx := WithSnapshot(r.Context(), snap)
@@ -127,6 +123,18 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// authorizePrincipal resolves p's policy and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.
+func authorizePrincipal(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principal, mode Mode) bool {
+	if !resolvePolicy(w, snap, p) {
+		return false
+	}
+	if mode == ModeProxyAuthed && !p.PassthroughAllowed {
+		writeForbidden(w, "passthrough_forbidden", "this credential may not forward upstream keys")
+		return false
+	}
+	return true
 }
 
 func bearer(h string) string {
