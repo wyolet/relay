@@ -62,7 +62,7 @@ func (s *Store) Upsert(ctx context.Context, k *Key) error {
 	if taken {
 		return ErrHashInUse
 	}
-	return s.q.UpsertRelayKey(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertRelayKey(ctx, params))
 }
 
 // ErrRotationRaced reports a rotate whose stored hash no longer matches the
@@ -123,6 +123,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Key, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -142,6 +143,7 @@ func fromRow(r gen.ListRelayKeysRow) (*Key, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -177,13 +179,18 @@ func toUpsertParams(k *Key) (gen.UpsertRelayKeyParams, error) {
 	if err != nil {
 		return gen.UpsertRelayKeyParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := k.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertRelayKeyParams{}, err
+	}
 	params := gen.UpsertRelayKeyParams{
-		ID:          k.Meta.ID,
-		Name:        k.Meta.Name,
-		DisplayName: k.Meta.DisplayName,
-		KeyHash:     k.Spec.KeyHash,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              k.Meta.ID,
+		Name:            k.Meta.Name,
+		DisplayName:     k.Meta.DisplayName,
+		KeyHash:         k.Spec.KeyHash,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}
 	if k.Spec.PreviousKeyHash != "" {
 		params.PreviousKeyHash = pgtype.Text{String: k.Spec.PreviousKeyHash, Valid: true}

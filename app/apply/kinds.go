@@ -169,7 +169,7 @@ func (b *builder) run(ctx context.Context, docs []manifest.Document) error {
 	if err := b.planOverlays(ovDocs); err != nil {
 		return err
 	}
-	if err := b.checkPrunedTenancy(); err != nil {
+	if err := b.checkPrunedTenancy(ctx); err != nil {
 		return err
 	}
 

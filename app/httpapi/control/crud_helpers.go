@@ -3,10 +3,13 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
+	"github.com/wyolet/relay/app/httpapi"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
 )
@@ -55,6 +58,29 @@ func mapAuthzErr(err error) error {
 	default:
 		return huma.Error500InternalServerError("authz: " + err.Error())
 	}
+}
+
+// staleVersionError is the 409 for an update whose metadata.resourceVersion
+// no longer matches the stored row. The client refetches; it never retries
+// the same body.
+func staleVersionError(kind, id string) error {
+	return &httpapi.APIError{
+		Err: httpapi.APIErrorBody{
+			Type:    "invalid_request_error",
+			Code:    "stale_resource_version",
+			Message: fmt.Sprintf("%s %q changed since you opened it; reload it and apply your change again", kind, id),
+		},
+		HTTPStatus: http.StatusConflict,
+	}
+}
+
+// mapWriteErr maps a store write error: a stale resourceVersion is the
+// caller's 409, anything else is a 500.
+func mapWriteErr(kind, id string, err error) error {
+	if errors.Is(err, meta.ErrStaleResourceVersion) {
+		return staleVersionError(kind, id)
+	}
+	return huma.Error500InternalServerError(err.Error())
 }
 
 // listScanResolver is the slug→id resolver fallback for kinds whose

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -45,7 +46,7 @@ func (s *Store) Upsert(ctx context.Context, m *Model) error {
 	if err != nil {
 		return fmt.Errorf("model.Upsert: %w", err)
 	}
-	return s.q.UpsertModel(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertModel(ctx, params))
 }
 
 // Get returns the Model with the given id, or (nil, nil) if not found.
@@ -63,6 +64,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Model, error) {
 	}
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
+	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -82,6 +84,7 @@ func fromRow(r gen.ListModelsRow) (*Model, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -98,11 +101,16 @@ func toUpsertParams(m *Model) (gen.UpsertModelParams, error) {
 	if err != nil {
 		return gen.UpsertModelParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := m.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertModelParams{}, err
+	}
 	return gen.UpsertModelParams{
-		ID:          m.Meta.ID,
-		Name:        m.Meta.Name,
-		DisplayName: m.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              m.Meta.ID,
+		Name:            m.Meta.Name,
+		DisplayName:     m.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

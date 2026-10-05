@@ -344,7 +344,7 @@ func (q *Queries) GetBatch(ctx context.Context, id string) (Batch, error) {
 }
 
 const getGroup = `-- name: GetGroup :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups WHERE id = $1
 `
 
 func (q *Queries) GetGroup(ctx context.Context, id string) (Group, error) {
@@ -358,6 +358,7 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (Group, error) {
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -387,7 +388,7 @@ func (q *Queries) GetGroupMembers(ctx context.Context, groupID string) ([]GroupM
 }
 
 const getHost = `-- name: GetHost :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM hosts WHERE id = $1
 `
 
 func (q *Queries) GetHost(ctx context.Context, id string) (Host, error) {
@@ -401,12 +402,13 @@ func (q *Queries) GetHost(ctx context.Context, id string) (Host, error) {
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getHostBinding = `-- name: GetHostBinding :one
-SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings WHERE id = $1
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at, resource_version FROM host_bindings WHERE id = $1
 `
 
 func (q *Queries) GetHostBinding(ctx context.Context, id string) (HostBinding, error) {
@@ -423,22 +425,24 @@ func (q *Queries) GetHostBinding(ctx context.Context, id string) (HostBinding, e
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getModel = `-- name: GetModel :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM models WHERE id = $1
 `
 
 type GetModelRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) {
@@ -452,6 +456,7 @@ func (q *Queries) GetModel(ctx context.Context, id string) (GetModelRow, error) 
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -478,19 +483,20 @@ func (q *Queries) GetOverlay(ctx context.Context, arg GetOverlayParams) (Overlay
 }
 
 const getPolicy = `-- name: GetPolicy :one
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies WHERE id = $1
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies WHERE id = $1
 `
 
 type GetPolicyRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
-	Models      []byte             `db:"models" json:"models"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+	Models          []byte             `db:"models" json:"models"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error) {
@@ -506,12 +512,13 @@ func (q *Queries) GetPolicy(ctx context.Context, id string) (GetPolicyRow, error
 		&i.Models,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getPolicyBinding = `-- name: GetPolicyBinding :one
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
 FROM policy_bindings WHERE id = $1
 `
 
@@ -529,6 +536,7 @@ func (q *Queries) GetPolicyBinding(ctx context.Context, id string) (PolicyBindin
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -621,7 +629,7 @@ func (q *Queries) GetPolicyModels(ctx context.Context, policyID string) ([]Polic
 }
 
 const getPricing = `-- name: GetPricing :one
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings WHERE id = $1
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings WHERE id = $1
 `
 
 func (q *Queries) GetPricing(ctx context.Context, id string) (Pricing, error) {
@@ -636,6 +644,7 @@ func (q *Queries) GetPricing(ctx context.Context, id string) (Pricing, error) {
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -665,7 +674,7 @@ func (q *Queries) GetPricingModels(ctx context.Context, pricingID string) ([]Pri
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects WHERE id = $1
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
@@ -680,22 +689,24 @@ func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getProvider = `-- name: GetProvider :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers WHERE id = $1
 `
 
 type GetProviderRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) GetProvider(ctx context.Context, id string) (GetProviderRow, error) {
@@ -709,22 +720,24 @@ func (q *Queries) GetProvider(ctx context.Context, id string) (GetProviderRow, e
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getRateLimit = `-- name: GetRateLimit :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits WHERE id = $1
 `
 
 type GetRateLimitRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow, error) {
@@ -738,12 +751,13 @@ func (q *Queries) GetRateLimit(ctx context.Context, id string) (GetRateLimitRow,
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getRelayKey = `-- name: GetRelayKey :one
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys WHERE id = $1
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys WHERE id = $1
 `
 
 type GetRelayKeyRow struct {
@@ -758,6 +772,7 @@ type GetRelayKeyRow struct {
 	Spec            []byte             `db:"spec" json:"spec"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, error) {
@@ -775,12 +790,13 @@ func (q *Queries) GetRelayKey(ctx context.Context, id string) (GetRelayKeyRow, e
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getRole = `-- name: GetRole :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM roles WHERE id = $1
 `
 
 func (q *Queries) GetRole(ctx context.Context, id string) (Role, error) {
@@ -794,12 +810,13 @@ func (q *Queries) GetRole(ctx context.Context, id string) (Role, error) {
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
 
 const getRoleBinding = `-- name: GetRoleBinding :one
-SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at, resource_version
 FROM role_bindings WHERE id = $1
 `
 
@@ -817,6 +834,7 @@ func (q *Queries) GetRoleBinding(ctx context.Context, id string) (RoleBinding, e
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -861,7 +879,7 @@ func (q *Queries) GetRoleBindingSubjects(ctx context.Context, bindingID string) 
 }
 
 const getSecret = `-- name: GetSecret :one
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets WHERE id = $1
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets WHERE id = $1
 `
 
 type GetSecretRow struct {
@@ -878,6 +896,7 @@ type GetSecretRow struct {
 	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error) {
@@ -897,6 +916,7 @@ func (q *Queries) GetSecret(ctx context.Context, id string) (GetSecretRow, error
 		&i.ValueKeyVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -921,7 +941,7 @@ func (q *Queries) GetSecretValue(ctx context.Context, id string) (GetSecretValue
 }
 
 const getServiceAccount = `-- name: GetServiceAccount :one
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts WHERE id = $1
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts WHERE id = $1
 `
 
 func (q *Queries) GetServiceAccount(ctx context.Context, id string) (ServiceAccount, error) {
@@ -936,6 +956,7 @@ func (q *Queries) GetServiceAccount(ctx context.Context, id string) (ServiceAcco
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -952,7 +973,7 @@ func (q *Queries) GetSetting(ctx context.Context, section string) (Setting, erro
 }
 
 const getTeam = `-- name: GetTeam :one
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams WHERE id = $1
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams WHERE id = $1
 `
 
 func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
@@ -966,6 +987,7 @@ func (q *Queries) GetTeam(ctx context.Context, id string) (Team, error) {
 		&i.Spec,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceVersion,
 	)
 	return i, err
 }
@@ -1192,16 +1214,18 @@ ON CONFLICT (id) DO UPDATE
         metadata          = EXCLUDED.metadata,
         spec              = EXCLUDED.spec,
         updated_at        = NOW()
+    WHERE $7::bigint IS NULL OR secrets.resource_version = $7::bigint
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
 `
 
 type InsertSecretEnvParams struct {
-	ID           string      `db:"id" json:"id"`
-	Name         string      `db:"name" json:"name"`
-	DisplayName  string      `db:"display_name" json:"display_name"`
-	ValueFromEnv pgtype.Text `db:"value_from_env" json:"value_from_env"`
-	Metadata     []byte      `db:"metadata" json:"metadata"`
-	Spec         []byte      `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	ValueFromEnv    pgtype.Text `db:"value_from_env" json:"value_from_env"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
 type InsertSecretEnvRow struct {
@@ -1225,6 +1249,7 @@ func (q *Queries) InsertSecretEnv(ctx context.Context, arg InsertSecretEnvParams
 		arg.ValueFromEnv,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
 	var i InsertSecretEnvRow
 	err := row.Scan(
@@ -1324,15 +1349,17 @@ ON CONFLICT (id) DO UPDATE
         metadata          = EXCLUDED.metadata,
         spec              = EXCLUDED.spec,
         updated_at        = NOW()
+    WHERE $6::bigint IS NULL OR secrets.resource_version = $6::bigint
 RETURNING id, name, display_name, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, metadata, spec
 `
 
 type InsertSecretStoredRefParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
 type InsertSecretStoredRefRow struct {
@@ -1358,6 +1385,7 @@ func (q *Queries) InsertSecretStoredRef(ctx context.Context, arg InsertSecretSto
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
 	var i InsertSecretStoredRefRow
 	err := row.Scan(
@@ -1554,7 +1582,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context) ([]GroupMember, error) {
 }
 
 const listGroups = `-- name: ListGroups :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM groups ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM groups ORDER BY name
 `
 
 func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
@@ -1574,6 +1602,7 @@ func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1587,7 +1616,7 @@ func (q *Queries) ListGroups(ctx context.Context) ([]Group, error) {
 
 const listHostBindings = `-- name: ListHostBindings :many
 
-SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at FROM host_bindings ORDER BY name
+SELECT id, name, display_name, model_id, host_id, pricing_id, metadata, spec, created_at, updated_at, resource_version FROM host_bindings ORDER BY name
 `
 
 // ── host_bindings (migration 0020) ───────────────────────────────────────────
@@ -1611,6 +1640,7 @@ func (q *Queries) ListHostBindings(ctx context.Context) ([]HostBinding, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1624,7 +1654,7 @@ func (q *Queries) ListHostBindings(ctx context.Context) ([]HostBinding, error) {
 
 const listHosts = `-- name: ListHosts :many
 
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM hosts ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM hosts ORDER BY name
 `
 
 // ── app/ arch (migration 0009) ───────────────────────────────────────────────
@@ -1645,6 +1675,7 @@ func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1657,17 +1688,18 @@ func (q *Queries) ListHosts(ctx context.Context) ([]Host, error) {
 }
 
 const listModels = `-- name: ListModels :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM models ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM models ORDER BY name
 `
 
 type ListModelsRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
@@ -1687,6 +1719,7 @@ func (q *Queries) ListModels(ctx context.Context) ([]ListModelsRow, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1728,17 +1761,18 @@ func (q *Queries) ListOverlays(ctx context.Context) ([]Overlay, error) {
 }
 
 const listPolicies = `-- name: ListPolicies :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM policies ORDER BY name
 `
 
 type ListPoliciesRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
@@ -1758,6 +1792,7 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1770,19 +1805,20 @@ func (q *Queries) ListPolicies(ctx context.Context) ([]ListPoliciesRow, error) {
 }
 
 const listPoliciesWithRateLimit = `-- name: ListPoliciesWithRateLimit :many
-SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at FROM policies ORDER BY name
+SELECT id, name, display_name, metadata, spec, rate_limit_id, models, created_at, updated_at, resource_version FROM policies ORDER BY name
 `
 
 type ListPoliciesWithRateLimitRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	RateLimitID pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
-	Models      []byte             `db:"models" json:"models"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	RateLimitID     pgtype.Text        `db:"rate_limit_id" json:"rate_limit_id"`
+	Models          []byte             `db:"models" json:"models"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPoliciesWithRateLimitRow, error) {
@@ -1804,6 +1840,7 @@ func (q *Queries) ListPoliciesWithRateLimit(ctx context.Context) ([]ListPolicies
 			&i.Models,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1855,7 +1892,7 @@ func (q *Queries) ListPolicyBindingSubjects(ctx context.Context) ([]ListPolicyBi
 }
 
 const listPolicyBindings = `-- name: ListPolicyBindings :many
-SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, project_id, policy_id, priority, metadata, spec, created_at, updated_at, resource_version
 FROM policy_bindings ORDER BY name
 `
 
@@ -1879,6 +1916,7 @@ func (q *Queries) ListPolicyBindings(ctx context.Context) ([]PolicyBinding, erro
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1964,7 +2002,7 @@ func (q *Queries) ListPricingModels(ctx context.Context) ([]PricingModel, error)
 
 const listPricings = `-- name: ListPricings :many
 
-SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at FROM pricings ORDER BY name
+SELECT id, name, display_name, host_id, metadata, spec, created_at, updated_at, resource_version FROM pricings ORDER BY name
 `
 
 // ── pricing (migration 0010) ─────────────────────────────────────────────────
@@ -1986,6 +2024,7 @@ func (q *Queries) ListPricings(ctx context.Context) ([]Pricing, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -1998,7 +2037,7 @@ func (q *Queries) ListPricings(ctx context.Context) ([]Pricing, error) {
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at FROM projects ORDER BY name
+SELECT id, name, display_name, team_id, metadata, spec, created_at, updated_at, resource_version FROM projects ORDER BY name
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -2019,6 +2058,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2031,17 +2071,18 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 }
 
 const listProviders = `-- name: ListProviders :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM providers ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM providers ORDER BY name
 `
 
 type ListProvidersRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error) {
@@ -2061,6 +2102,7 @@ func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error)
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2073,17 +2115,18 @@ func (q *Queries) ListProviders(ctx context.Context) ([]ListProvidersRow, error)
 }
 
 const listRateLimits = `-- name: ListRateLimits :many
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM rate_limits ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM rate_limits ORDER BY name
 `
 
 type ListRateLimitsRow struct {
-	ID          string             `db:"id" json:"id"`
-	Name        string             `db:"name" json:"name"`
-	DisplayName string             `db:"display_name" json:"display_name"`
-	Metadata    []byte             `db:"metadata" json:"metadata"`
-	Spec        []byte             `db:"spec" json:"spec"`
-	CreatedAt   pgtype.Timestamptz `db:"created_at" json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ID              string             `db:"id" json:"id"`
+	Name            string             `db:"name" json:"name"`
+	DisplayName     string             `db:"display_name" json:"display_name"`
+	Metadata        []byte             `db:"metadata" json:"metadata"`
+	Spec            []byte             `db:"spec" json:"spec"`
+	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, error) {
@@ -2103,6 +2146,7 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2115,7 +2159,7 @@ func (q *Queries) ListRateLimits(ctx context.Context) ([]ListRateLimitsRow, erro
 }
 
 const listRelayKeys = `-- name: ListRelayKeys :many
-SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at FROM relay_keys ORDER BY name
+SELECT id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, created_at, updated_at, resource_version FROM relay_keys ORDER BY name
 `
 
 type ListRelayKeysRow struct {
@@ -2130,6 +2174,7 @@ type ListRelayKeysRow struct {
 	Spec            []byte             `db:"spec" json:"spec"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error) {
@@ -2153,6 +2198,7 @@ func (q *Queries) ListRelayKeys(ctx context.Context) ([]ListRelayKeysRow, error)
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2204,7 +2250,7 @@ func (q *Queries) ListRoleBindingSubjects(ctx context.Context) ([]ListRoleBindin
 }
 
 const listRoleBindings = `-- name: ListRoleBindings :many
-SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at
+SELECT id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, created_at, updated_at, resource_version
 FROM role_bindings ORDER BY name
 `
 
@@ -2228,6 +2274,7 @@ func (q *Queries) ListRoleBindings(ctx context.Context) ([]RoleBinding, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2241,7 +2288,7 @@ func (q *Queries) ListRoleBindings(ctx context.Context) ([]RoleBinding, error) {
 
 const listRoles = `-- name: ListRoles :many
 
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM roles ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM roles ORDER BY name
 `
 
 // ── roles + bindings (migration 0027) ────────────────────────────────────────
@@ -2262,6 +2309,7 @@ func (q *Queries) ListRoles(ctx context.Context) ([]Role, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2310,7 +2358,7 @@ func (q *Queries) ListSecretValuesForRotation(ctx context.Context) ([]ListSecret
 }
 
 const listSecrets = `-- name: ListSecrets :many
-SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at FROM secrets ORDER BY name
+SELECT id, name, display_name, metadata, spec, status, value_kind, value_from_env, value_ciphertext, value_nonce, value_key_version, created_at, updated_at, resource_version FROM secrets ORDER BY name
 `
 
 type ListSecretsRow struct {
@@ -2327,6 +2375,7 @@ type ListSecretsRow struct {
 	ValueKeyVersion pgtype.Int4        `db:"value_key_version" json:"value_key_version"`
 	CreatedAt       pgtype.Timestamptz `db:"created_at" json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `db:"updated_at" json:"updated_at"`
+	ResourceVersion int64              `db:"resource_version" json:"resource_version"`
 }
 
 func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
@@ -2352,6 +2401,7 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 			&i.ValueKeyVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2365,7 +2415,7 @@ func (q *Queries) ListSecrets(ctx context.Context) ([]ListSecretsRow, error) {
 
 const listServiceAccounts = `-- name: ListServiceAccounts :many
 
-SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at FROM service_accounts ORDER BY name
+SELECT id, name, display_name, project_id, metadata, spec, created_at, updated_at, resource_version FROM service_accounts ORDER BY name
 `
 
 // ── service accounts + groups (migration 0026) ───────────────────────────────
@@ -2387,6 +2437,7 @@ func (q *Queries) ListServiceAccounts(ctx context.Context) ([]ServiceAccount, er
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2460,7 +2511,7 @@ func (q *Queries) ListStoredSecretsForRotation(ctx context.Context) ([]ListStore
 
 const listTeams = `-- name: ListTeams :many
 
-SELECT id, name, display_name, metadata, spec, created_at, updated_at FROM teams ORDER BY name
+SELECT id, name, display_name, metadata, spec, created_at, updated_at, resource_version FROM teams ORDER BY name
 `
 
 // ── teams + projects (migration 0025) ────────────────────────────────────────
@@ -2481,6 +2532,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]Team, error) {
 			&i.Spec,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -2869,7 +2921,7 @@ func (q *Queries) UpdateSecretStored(ctx context.Context, arg UpdateSecretStored
 	return i, err
 }
 
-const upsertGroup = `-- name: UpsertGroup :exec
+const upsertGroup = `-- name: UpsertGroup :execrows
 INSERT INTO groups (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -2878,28 +2930,34 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $6::bigint IS NULL OR groups.resource_version = $6::bigint
 `
 
 type UpsertGroupParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertGroup(ctx context.Context, arg UpsertGroupParams) error {
-	_, err := q.db.Exec(ctx, upsertGroup,
+func (q *Queries) UpsertGroup(ctx context.Context, arg UpsertGroupParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertGroup,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertHost = `-- name: UpsertHost :exec
+const upsertHost = `-- name: UpsertHost :execrows
 INSERT INTO hosts (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -2908,28 +2966,34 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $6::bigint IS NULL OR hosts.resource_version = $6::bigint
 `
 
 type UpsertHostParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertHost(ctx context.Context, arg UpsertHostParams) error {
-	_, err := q.db.Exec(ctx, upsertHost,
+func (q *Queries) UpsertHost(ctx context.Context, arg UpsertHostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertHost,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertHostBinding = `-- name: UpsertHostBinding :exec
+const upsertHostBinding = `-- name: UpsertHostBinding :execrows
 INSERT INTO host_bindings (id, name, display_name, model_id, host_id, pricing_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -2941,21 +3005,23 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $9::bigint IS NULL OR host_bindings.resource_version = $9::bigint
 `
 
 type UpsertHostBindingParams struct {
-	ID          string      `db:"id" json:"id"`
-	Name        string      `db:"name" json:"name"`
-	DisplayName string      `db:"display_name" json:"display_name"`
-	ModelID     string      `db:"model_id" json:"model_id"`
-	HostID      string      `db:"host_id" json:"host_id"`
-	PricingID   pgtype.Text `db:"pricing_id" json:"pricing_id"`
-	Metadata    []byte      `db:"metadata" json:"metadata"`
-	Spec        []byte      `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	ModelID         string      `db:"model_id" json:"model_id"`
+	HostID          string      `db:"host_id" json:"host_id"`
+	PricingID       pgtype.Text `db:"pricing_id" json:"pricing_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertHostBinding(ctx context.Context, arg UpsertHostBindingParams) error {
-	_, err := q.db.Exec(ctx, upsertHostBinding,
+func (q *Queries) UpsertHostBinding(ctx context.Context, arg UpsertHostBindingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertHostBinding,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
@@ -2964,11 +3030,15 @@ func (q *Queries) UpsertHostBinding(ctx context.Context, arg UpsertHostBindingPa
 		arg.PricingID,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertModel = `-- name: UpsertModel :exec
+const upsertModel = `-- name: UpsertModel :execrows
 INSERT INTO models (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -2977,25 +3047,31 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $6::bigint IS NULL OR models.resource_version = $6::bigint
 `
 
 type UpsertModelParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) error {
-	_, err := q.db.Exec(ctx, upsertModel,
+func (q *Queries) UpsertModel(ctx context.Context, arg UpsertModelParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertModel,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertOverlay = `-- name: UpsertOverlay :exec
@@ -3017,7 +3093,7 @@ func (q *Queries) UpsertOverlay(ctx context.Context, arg UpsertOverlayParams) er
 	return err
 }
 
-const upsertPolicy = `-- name: UpsertPolicy :exec
+const upsertPolicy = `-- name: UpsertPolicy :execrows
 INSERT INTO policies (id, name, display_name, metadata, spec, models, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3027,30 +3103,36 @@ ON CONFLICT (id) DO UPDATE SET
     spec = EXCLUDED.spec,
     models = EXCLUDED.models,
     updated_at = NOW()
+WHERE $7::bigint IS NULL OR policies.resource_version = $7::bigint
 `
 
 type UpsertPolicyParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
-	Models      []byte `db:"models" json:"models"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	Models          []byte      `db:"models" json:"models"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) error {
-	_, err := q.db.Exec(ctx, upsertPolicy,
+func (q *Queries) UpsertPolicy(ctx context.Context, arg UpsertPolicyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertPolicy,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
 		arg.Models,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertPolicyBinding = `-- name: UpsertPolicyBinding :exec
+const upsertPolicyBinding = `-- name: UpsertPolicyBinding :execrows
 INSERT INTO policy_bindings (id, name, display_name, project_id, policy_id, priority, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3062,21 +3144,23 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $9::bigint IS NULL OR policy_bindings.resource_version = $9::bigint
 `
 
 type UpsertPolicyBindingParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	ProjectID   string `db:"project_id" json:"project_id"`
-	PolicyID    string `db:"policy_id" json:"policy_id"`
-	Priority    int32  `db:"priority" json:"priority"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	ProjectID       string      `db:"project_id" json:"project_id"`
+	PolicyID        string      `db:"policy_id" json:"policy_id"`
+	Priority        int32       `db:"priority" json:"priority"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertPolicyBinding(ctx context.Context, arg UpsertPolicyBindingParams) error {
-	_, err := q.db.Exec(ctx, upsertPolicyBinding,
+func (q *Queries) UpsertPolicyBinding(ctx context.Context, arg UpsertPolicyBindingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertPolicyBinding,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
@@ -3085,11 +3169,15 @@ func (q *Queries) UpsertPolicyBinding(ctx context.Context, arg UpsertPolicyBindi
 		arg.Priority,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertPricing = `-- name: UpsertPricing :exec
+const upsertPricing = `-- name: UpsertPricing :execrows
 INSERT INTO pricings (id, name, display_name, host_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3099,30 +3187,36 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $7::bigint IS NULL OR pricings.resource_version = $7::bigint
 `
 
 type UpsertPricingParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	HostID      string `db:"host_id" json:"host_id"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	HostID          string      `db:"host_id" json:"host_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertPricing(ctx context.Context, arg UpsertPricingParams) error {
-	_, err := q.db.Exec(ctx, upsertPricing,
+func (q *Queries) UpsertPricing(ctx context.Context, arg UpsertPricingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertPricing,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.HostID,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertProject = `-- name: UpsertProject :exec
+const upsertProject = `-- name: UpsertProject :execrows
 INSERT INTO projects (id, name, display_name, team_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3132,30 +3226,36 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $7::bigint IS NULL OR projects.resource_version = $7::bigint
 `
 
 type UpsertProjectParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	TeamID      string `db:"team_id" json:"team_id"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	TeamID          string      `db:"team_id" json:"team_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) error {
-	_, err := q.db.Exec(ctx, upsertProject,
+func (q *Queries) UpsertProject(ctx context.Context, arg UpsertProjectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertProject,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.TeamID,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertProvider = `-- name: UpsertProvider :exec
+const upsertProvider = `-- name: UpsertProvider :execrows
 INSERT INTO providers (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3164,28 +3264,37 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $6::bigint IS NULL OR providers.resource_version = $6::bigint
 `
 
 type UpsertProviderParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertProvider(ctx context.Context, arg UpsertProviderParams) error {
-	_, err := q.db.Exec(ctx, upsertProvider,
+// Every catalog upsert takes an optional expected_version: when set, an
+// existing row is only updated while its resource_version still matches,
+// and zero affected rows means the caller's copy is stale.
+func (q *Queries) UpsertProvider(ctx context.Context, arg UpsertProviderParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertProvider,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertRateLimit = `-- name: UpsertRateLimit :exec
+const upsertRateLimit = `-- name: UpsertRateLimit :execrows
 INSERT INTO rate_limits (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3194,28 +3303,34 @@ ON CONFLICT (id) DO UPDATE SET
     metadata = EXCLUDED.metadata,
     spec = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $6::bigint IS NULL OR rate_limits.resource_version = $6::bigint
 `
 
 type UpsertRateLimitParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertRateLimit(ctx context.Context, arg UpsertRateLimitParams) error {
-	_, err := q.db.Exec(ctx, upsertRateLimit,
+func (q *Queries) UpsertRateLimit(ctx context.Context, arg UpsertRateLimitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertRateLimit,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertRelayKey = `-- name: UpsertRelayKey :exec
+const upsertRelayKey = `-- name: UpsertRelayKey :execrows
 INSERT INTO relay_keys (id, name, display_name, key_hash, previous_key_hash, principal_sa_id, principal_user_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3228,6 +3343,7 @@ ON CONFLICT (id) DO UPDATE SET
     metadata   = EXCLUDED.metadata,
     spec       = EXCLUDED.spec,
     updated_at = NOW()
+WHERE $10::bigint IS NULL OR relay_keys.resource_version = $10::bigint
 `
 
 type UpsertRelayKeyParams struct {
@@ -3240,10 +3356,11 @@ type UpsertRelayKeyParams struct {
 	PrincipalUserID pgtype.Text `db:"principal_user_id" json:"principal_user_id"`
 	Metadata        []byte      `db:"metadata" json:"metadata"`
 	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) error {
-	_, err := q.db.Exec(ctx, upsertRelayKey,
+func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertRelayKey,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
@@ -3253,11 +3370,15 @@ func (q *Queries) UpsertRelayKey(ctx context.Context, arg UpsertRelayKeyParams) 
 		arg.PrincipalUserID,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertRole = `-- name: UpsertRole :exec
+const upsertRole = `-- name: UpsertRole :execrows
 INSERT INTO roles (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3266,28 +3387,34 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $6::bigint IS NULL OR roles.resource_version = $6::bigint
 `
 
 type UpsertRoleParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertRole(ctx context.Context, arg UpsertRoleParams) error {
-	_, err := q.db.Exec(ctx, upsertRole,
+func (q *Queries) UpsertRole(ctx context.Context, arg UpsertRoleParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertRole,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const upsertRoleBinding = `-- name: UpsertRoleBinding :exec
+const upsertRoleBinding = `-- name: UpsertRoleBinding :execrows
 INSERT INTO role_bindings (id, name, display_name, role_id, scope_kind, scope_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3299,21 +3426,23 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $9::bigint IS NULL OR role_bindings.resource_version = $9::bigint
 `
 
 type UpsertRoleBindingParams struct {
-	ID          string      `db:"id" json:"id"`
-	Name        string      `db:"name" json:"name"`
-	DisplayName string      `db:"display_name" json:"display_name"`
-	RoleID      string      `db:"role_id" json:"role_id"`
-	ScopeKind   string      `db:"scope_kind" json:"scope_kind"`
-	ScopeID     pgtype.Text `db:"scope_id" json:"scope_id"`
-	Metadata    []byte      `db:"metadata" json:"metadata"`
-	Spec        []byte      `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	RoleID          string      `db:"role_id" json:"role_id"`
+	ScopeKind       string      `db:"scope_kind" json:"scope_kind"`
+	ScopeID         pgtype.Text `db:"scope_id" json:"scope_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertRoleBinding(ctx context.Context, arg UpsertRoleBindingParams) error {
-	_, err := q.db.Exec(ctx, upsertRoleBinding,
+func (q *Queries) UpsertRoleBinding(ctx context.Context, arg UpsertRoleBindingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertRoleBinding,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
@@ -3322,8 +3451,12 @@ func (q *Queries) UpsertRoleBinding(ctx context.Context, arg UpsertRoleBindingPa
 		arg.ScopeID,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertSecret = `-- name: UpsertSecret :exec
@@ -3384,7 +3517,7 @@ func (q *Queries) UpsertSecretValue(ctx context.Context, arg UpsertSecretValuePa
 	return err
 }
 
-const upsertServiceAccount = `-- name: UpsertServiceAccount :exec
+const upsertServiceAccount = `-- name: UpsertServiceAccount :execrows
 INSERT INTO service_accounts (id, name, display_name, project_id, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3394,27 +3527,33 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $7::bigint IS NULL OR service_accounts.resource_version = $7::bigint
 `
 
 type UpsertServiceAccountParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	ProjectID   string `db:"project_id" json:"project_id"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	ProjectID       string      `db:"project_id" json:"project_id"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertServiceAccount(ctx context.Context, arg UpsertServiceAccountParams) error {
-	_, err := q.db.Exec(ctx, upsertServiceAccount,
+func (q *Queries) UpsertServiceAccount(ctx context.Context, arg UpsertServiceAccountParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertServiceAccount,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.ProjectID,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertSetting = `-- name: UpsertSetting :exec
@@ -3435,7 +3574,7 @@ func (q *Queries) UpsertSetting(ctx context.Context, arg UpsertSettingParams) er
 	return err
 }
 
-const upsertTeam = `-- name: UpsertTeam :exec
+const upsertTeam = `-- name: UpsertTeam :execrows
 INSERT INTO teams (id, name, display_name, metadata, spec, updated_at)
 VALUES ($1, $2, $3, $4, $5, NOW())
 ON CONFLICT (id) DO UPDATE SET
@@ -3444,25 +3583,31 @@ ON CONFLICT (id) DO UPDATE SET
     metadata     = EXCLUDED.metadata,
     spec         = EXCLUDED.spec,
     updated_at   = NOW()
+WHERE $6::bigint IS NULL OR teams.resource_version = $6::bigint
 `
 
 type UpsertTeamParams struct {
-	ID          string `db:"id" json:"id"`
-	Name        string `db:"name" json:"name"`
-	DisplayName string `db:"display_name" json:"display_name"`
-	Metadata    []byte `db:"metadata" json:"metadata"`
-	Spec        []byte `db:"spec" json:"spec"`
+	ID              string      `db:"id" json:"id"`
+	Name            string      `db:"name" json:"name"`
+	DisplayName     string      `db:"display_name" json:"display_name"`
+	Metadata        []byte      `db:"metadata" json:"metadata"`
+	Spec            []byte      `db:"spec" json:"spec"`
+	ExpectedVersion pgtype.Int8 `db:"expected_version" json:"expected_version"`
 }
 
-func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) error {
-	_, err := q.db.Exec(ctx, upsertTeam,
+func (q *Queries) UpsertTeam(ctx context.Context, arg UpsertTeamParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertTeam,
 		arg.ID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Metadata,
 		arg.Spec,
+		arg.ExpectedVersion,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertUser = `-- name: UpsertUser :exec

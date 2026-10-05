@@ -85,6 +85,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Policy, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -127,7 +128,7 @@ func (s *Store) Upsert(ctx context.Context, p *Policy) error {
 	defer tx.Rollback(ctx)
 	q := gen.New(tx)
 
-	if err := q.UpsertPolicy(ctx, params); err != nil {
+	if err := meta.StaleIfNoRows(q.UpsertPolicy(ctx, params)); err != nil {
 		return fmt.Errorf("policy.Upsert: policies: %w", err)
 	}
 	rateLimitID := pgtype.Text{}
@@ -182,6 +183,7 @@ func fromRow(r gen.ListPoliciesWithRateLimitRow) (*Policy, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -219,12 +221,17 @@ func toUpsertParams(p *Policy) (gen.UpsertPolicyParams, error) {
 			return gen.UpsertPolicyParams{}, fmt.Errorf("models: %w", err)
 		}
 	}
+	ver, ok, err := p.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertPolicyParams{}, err
+	}
 	return gen.UpsertPolicyParams{
-		ID:          p.Meta.ID,
-		Name:        p.Meta.Name,
-		DisplayName: p.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
-		Models:      modelsJSON,
+		ID:              p.Meta.ID,
+		Name:            p.Meta.Name,
+		DisplayName:     p.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		Models:          modelsJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }

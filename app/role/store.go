@@ -27,7 +27,7 @@ func (s *Store) List(ctx context.Context) ([]*Role, error) {
 	}
 	out := make([]*Role, 0, len(rows))
 	for _, r := range rows {
-		role, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+		role, err := fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 		if err != nil {
 			return nil, fmt.Errorf("role %s: %w", r.Name, err)
 		}
@@ -45,7 +45,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Role, error) {
 		}
 		return nil, fmt.Errorf("role.Get: %w", err)
 	}
-	return fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt)
+	return fromRow(r.ID, r.Name, r.DisplayName, r.Metadata, r.Spec, r.CreatedAt, r.UpdatedAt, r.ResourceVersion)
 }
 
 // Upsert expects Meta.ID set by the caller.
@@ -54,7 +54,7 @@ func (s *Store) Upsert(ctx context.Context, r *Role) error {
 	if err != nil {
 		return fmt.Errorf("role.Upsert: %w", err)
 	}
-	return s.q.UpsertRole(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertRole(ctx, params))
 }
 
 // Delete relies on the FK to cascade the role's bindings.
@@ -62,13 +62,14 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return s.q.DeleteRole(ctx, id)
 }
 
-func fromRow(id, name, displayName string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz) (*Role, error) {
+func fromRow(id, name, displayName string, metadata, spec []byte, createdAt, updatedAt pgtype.Timestamptz, version int64) (*Role, error) {
 	md, err := meta.UnmarshalJSONB(id, name, displayName, metadata)
 	if err != nil {
 		return nil, err
 	}
 	md.CreatedAt = createdAt.Time
 	md.UpdatedAt = updatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(version)
 	var sp Spec
 	if err := json.Unmarshal(spec, &sp); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -85,11 +86,16 @@ func toUpsertParams(r *Role) (gen.UpsertRoleParams, error) {
 	if err != nil {
 		return gen.UpsertRoleParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := r.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertRoleParams{}, err
+	}
 	return gen.UpsertRoleParams{
-		ID:          r.Meta.ID,
-		Name:        r.Meta.Name,
-		DisplayName: r.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
+		ID:              r.Meta.ID,
+		Name:            r.Meta.Name,
+		DisplayName:     r.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
 	}, nil
 }

@@ -65,7 +65,7 @@ func keepKeyServerFields(prev, next *key.Key) {
 // checkPrunedTenancy refuses pruning a team or project with rows still under
 // it, as the control API's delete does. Rows this run prunes too are deleted
 // explicitly, children first, so they are not in the way.
-func (b *builder) checkPrunedTenancy() error {
+func (b *builder) checkPrunedTenancy(ctx context.Context) error {
 	pruned := map[string]bool{}
 	for _, kind := range b.deletes {
 		for _, e := range kind {
@@ -73,6 +73,7 @@ func (b *builder) checkPrunedTenancy() error {
 		}
 	}
 	gone := func(kind, id string) bool { return pruned[kind+"/"+id] }
+	visible := func(kind string, m meta.Metadata) bool { return b.visible(ctx, kind, m.ID, m.Owner) }
 	under := project.Rows{
 		ServiceAccounts: b.rows.ServiceAccounts, Keys: b.rows.Keys, Policies: b.rows.Policies,
 		HostKeys: b.rows.HostKeys, RateLimits: b.rows.RateLimits, PolicyBindings: b.rows.PolicyBindings,
@@ -80,14 +81,15 @@ func (b *builder) checkPrunedTenancy() error {
 	for _, kind := range b.deletes {
 		for _, e := range kind {
 			var deps []string
+			var hidden int
 			switch e.Kind {
 			case "Team":
-				deps = project.OfTeam(e.ID, b.rows.Projects, gone)
+				deps, hidden = project.OfTeam(e.ID, b.rows.Projects, gone, visible)
 			case "Project":
-				deps = under.Dependents(e.ID, gone)
+				deps, hidden = under.Dependents(e.ID, gone, visible)
 			}
-			if len(deps) > 0 {
-				return &InvalidError{Kind: e.Kind, Name: e.Name, Err: &project.DependentsError{Rows: deps}}
+			if len(deps) > 0 || hidden > 0 {
+				return &InvalidError{Kind: e.Kind, Name: e.Name, Err: &project.DependentsError{Rows: deps, Hidden: hidden}}
 			}
 		}
 	}

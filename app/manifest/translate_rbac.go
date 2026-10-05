@@ -52,13 +52,13 @@ func toSubjects(name string, subjects []SubjectDTO, idx Resolver) ([]rolebinding
 		case rolebinding.SubjectUser:
 			id, ok := idx.UserID(sub.Name)
 			if !ok {
-				return nil, fmt.Errorf("binding %q: user %q not found", name, sub.Name)
+				return nil, refNotFound("binding %q: user %q not found", name, sub.Name)
 			}
 			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectUser, ID: id})
 		case rolebinding.SubjectServiceAccount:
 			id, ok := idx.ServiceAccountID(sub.Name)
 			if !ok {
-				return nil, fmt.Errorf("binding %q: service account %q not found", name, sub.Name)
+				return nil, refNotFound("binding %q: service account %q not found", name, sub.Name)
 			}
 			out = append(out, rolebinding.Subject{Kind: rolebinding.SubjectServiceAccount, ID: id})
 		default:
@@ -97,20 +97,20 @@ func fromSubjects(subjects []rolebinding.Subject, rev ReverseResolver) []Subject
 func ToRoleBinding(d RoleBindingDTO, idx Resolver) (*rolebinding.RoleBinding, error) {
 	roleID, ok := idx.RoleID(d.Spec.Role)
 	if !ok {
-		return nil, fmt.Errorf("rolebinding %q: role %q not found", d.Metadata.Name, d.Spec.Role)
+		return nil, refNotFound("rolebinding %q: role %q not found", d.Metadata.Name, d.Spec.Role)
 	}
 	scope := meta.Owner{Kind: d.Spec.Scope.Kind, ID: d.Spec.Scope.ref()}
 	switch scope.Kind {
 	case meta.OwnerTeam:
 		id, ok := idx.TeamID(scope.ID)
 		if !ok {
-			return nil, fmt.Errorf("rolebinding %q: team %q not found", d.Metadata.Name, scope.ID)
+			return nil, refNotFound("rolebinding %q: team %q not found", d.Metadata.Name, scope.ID)
 		}
 		scope.ID = id
 	case meta.OwnerProject:
 		id, ok := idx.ProjectID(scope.ID)
 		if !ok {
-			return nil, fmt.Errorf("rolebinding %q: project %q not found", d.Metadata.Name, scope.ID)
+			return nil, refNotFound("rolebinding %q: project %q not found", d.Metadata.Name, scope.ID)
 		}
 		scope.ID = id
 	}
@@ -167,11 +167,11 @@ func FromRoleBinding(b *rolebinding.RoleBinding, rev ReverseResolver) RoleBindin
 func ToPolicyBinding(d PolicyBindingDTO, idx Resolver) (*policybinding.PolicyBinding, error) {
 	projectID, ok := idx.ProjectID(d.Spec.Project)
 	if !ok {
-		return nil, fmt.Errorf("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
+		return nil, refNotFound("policybinding %q: project %q not found", d.Metadata.Name, d.Spec.Project)
 	}
 	policyID, ok := idx.PolicyID(d.Spec.Policy)
 	if !ok {
-		return nil, fmt.Errorf("policybinding %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
+		return nil, refNotFound("policybinding %q: policy %q not found", d.Metadata.Name, d.Spec.Policy)
 	}
 	subjects, err := toSubjects(d.Metadata.Name, d.Spec.Subjects, idx)
 	if err != nil {

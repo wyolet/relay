@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/wyolet/relay/app/authz"
 	"github.com/wyolet/relay/app/manifest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/refcheck"
@@ -95,6 +96,11 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 			}
 		}
 		if e.Action == ActionCreate || e.Action == ActionUpdate {
+			// Validation and the reference checks describe the stored row; one
+			// the caller may not see is refused before they run.
+			if found && !b.visible(ctx, k.Kind, k.Meta(prev).ID, k.Meta(prev).Owner) {
+				return &AuthzError{Entry: Entry{Kind: k.Kind, Name: name, plural: route.Plural}, Err: authz.ErrForbidden}
+			}
 			if err := validateRow(obj); err != nil {
 				return &InvalidError{Kind: k.Kind, Name: name, Err: err}
 			}
@@ -126,7 +132,10 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 	if b.opts.Prune {
 		for _, row := range k.Rows {
 			m := k.Meta(row)
-			if declared[m.Name] || !prunable(k.Kind, m.Name, m.Owner) || !b.selector.matches(m.Labels) {
+			// A row the caller may not see is not theirs to prune, nor to
+			// learn about from the checks a prune runs.
+			if declared[m.Name] || !prunable(k.Kind, m.Name, m.Owner) || !b.selector.matches(m.Labels) ||
+				!b.visible(ctx, k.Kind, m.ID, m.Owner) {
 				continue
 			}
 			if err := b.governs(settings.OpDelete, route.Singular, m.Owner); err != nil {
@@ -154,6 +163,12 @@ func validateRow(row any) error {
 		return nil
 	}
 	return v.Validate()
+}
+
+// visible reports whether the caller may see a stored row of the manifest
+// kind. Loaders and admins see every row.
+func (b *builder) visible(ctx context.Context, kind, id string, owner meta.Owner) bool {
+	return b.admin || refcheck.Visible(ctx, b.opts.Authz, KindRoutes[kind].Singular, id, owner)
 }
 
 // governs applies the governance:<kind> settings to a planned mutation. The

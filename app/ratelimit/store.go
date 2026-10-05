@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/internal/storage/gen"
 )
@@ -44,7 +45,7 @@ func (s *Store) Upsert(ctx context.Context, rl *RateLimit) error {
 	if err != nil {
 		return fmt.Errorf("ratelimit.Upsert: %w", err)
 	}
-	return s.q.UpsertRateLimit(ctx, params)
+	return meta.StaleIfNoRows(s.q.UpsertRateLimit(ctx, params))
 }
 
 // Get returns the RateLimit with the given id, or (nil, nil) if not found.
@@ -62,6 +63,7 @@ func (s *Store) Get(ctx context.Context, id string) (*RateLimit, error) {
 	}
 	m.CreatedAt = r.CreatedAt.Time
 	m.UpdatedAt = r.UpdatedAt.Time
+	m.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -81,6 +83,7 @@ func fromRow(r gen.ListRateLimitsRow) (*RateLimit, error) {
 	}
 	md.CreatedAt = r.CreatedAt.Time
 	md.UpdatedAt = r.UpdatedAt.Time
+	md.ResourceVersion = meta.FormatResourceVersion(r.ResourceVersion)
 	var spec Spec
 	if err := json.Unmarshal(r.Spec, &spec); err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
@@ -97,11 +100,16 @@ func toUpsertParams(rl *RateLimit) (gen.UpsertRateLimitParams, error) {
 	if err != nil {
 		return gen.UpsertRateLimitParams{}, fmt.Errorf("spec: %w", err)
 	}
+	ver, ok, err := rl.Meta.ExpectedVersion()
+	if err != nil {
+		return gen.UpsertRateLimitParams{}, err
+	}
 	return gen.UpsertRateLimitParams{
-		ID:          rl.Meta.ID,
-		Name:        rl.Meta.Name,
-		DisplayName: rl.Meta.DisplayName,
-		Metadata:    metaJSON,
-		Spec:        specJSON,
+		ID:              rl.Meta.ID,
+		Name:            rl.Meta.Name,
+		DisplayName:     rl.Meta.DisplayName,
+		Metadata:        metaJSON,
+		Spec:            specJSON,
+		ExpectedVersion: pgtype.Int8{Int64: ver, Valid: ok},
 	}, nil
 }
