@@ -195,6 +195,11 @@ func (s *canonicalToAnthropicStream) handleGenerationCompleted(data []byte) ([]b
 	if e.Status == v1.StatusIncomplete && e.FinishReason == "" {
 		stopReason = "pause_turn"
 	}
+	if e.Status == v1.StatusFailed && e.FinishReason == "" {
+		// canonical: status=failed with no finish_reason must not surface as end_turn
+		// (rule 11); refusal is the nearest non-success Anthropic stop_reason.
+		stopReason = "refusal"
+	}
 
 	outTokens := int64(0)
 	if len(e.Usage) > 0 {
