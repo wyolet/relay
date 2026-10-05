@@ -28,7 +28,8 @@ scrape_configs:
 
 The core RED-style metrics (Rate, Errors, Duration), plus the Relay-vs-upstream
 time split. All are labelled by `source` — the runner that handled the request:
-`pipeline`, `proxy`, `ws`, or `batch`.
+`pipeline`, `proxy`, `ws`, `batch`, or `count` (a count-tokens request answered by
+the upstream's counter).
 
 | Metric | Type | Labels | What it answers |
 | --- | --- | --- | --- |

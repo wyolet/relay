@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,15 +18,14 @@ func TestPipelineAdapter_NoCountPath_IsNotATokenCounter(t *testing.T) {
 	}
 }
 
-func TestCountTokens_PostsToCountPathWithAuth(t *testing.T) {
+func TestCountAdapter_PostsToCountPathWithAuth(t *testing.T) {
 	var gotPath, gotAuth, gotBeta, gotForwarded, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("x-api-key")
 		gotBeta = r.Header.Get("anthropic-version")
 		gotForwarded = r.Header.Get("anthropic-beta")
-		b := make([]byte, r.ContentLength)
-		_, _ = r.Body.Read(b)
+		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		_, _ = w.Write([]byte(`{"input_tokens":1234}`))
 	}))
@@ -48,9 +48,16 @@ func TestCountTokens_PostsToCountPathWithAuth(t *testing.T) {
 
 	hdr := http.Header{}
 	hdr.Set("anthropic-beta", "some-beta")
-	n, err := counter.CountTokens(t.Context(), srv.URL, "sk-test", []byte(`{"model":"m"}`), hdr, false)
+	hostPath := "/ignored"
+	resp, err := counter.CountAdapter().Call(t.Context(), srv.URL, &hostPath, "sk-test", []byte(`{"model":"m"}`), hdr, "m", false, false)
 	if err != nil {
-		t.Fatalf("CountTokens: %v", err)
+		t.Fatalf("Call: %v", err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	n, err := ParseTokenCount(resp.StatusCode, raw)
+	if err != nil {
+		t.Fatalf("ParseTokenCount: %v", err)
 	}
 
 	if n != 1234 {
@@ -73,16 +80,17 @@ func TestCountTokens_PostsToCountPathWithAuth(t *testing.T) {
 	}
 }
 
-// An upstream that rejects the count must surface as an error — never as a number the caller would take for a measurement.
-func TestCountTokens_UpstreamErrorIsReturned(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"bad model"}}`))
-	}))
-	defer srv.Close()
-
+// Counting consumes no tokens, so the pipeline must commit nothing against the caller's token meters.
+func TestCountAdapter_ExtractsNoTokens(t *testing.T) {
 	counter := (&Spec{Name: adapters.Anthropic, CountPath: "/count"}).Build().PipelineAdapter().(TokenCounter)
-	n, err := counter.CountTokens(t.Context(), srv.URL, "k", []byte(`{}`), nil, false)
+	if got := counter.CountAdapter().ExtractTokens([]byte(`{"input_tokens":50}`)); len(got) != 0 {
+		t.Fatalf("tokens = %v, want none", got)
+	}
+}
+
+// An upstream that rejects the count must surface as an error — never as a number the caller would take for a measurement.
+func TestParseTokenCount_UpstreamErrorIsReturned(t *testing.T) {
+	n, err := ParseTokenCount(http.StatusBadRequest, []byte(`{"error":{"message":"bad model"}}`))
 	if err == nil {
 		t.Fatalf("want an error, got count %d", n)
 	}
@@ -91,14 +99,8 @@ func TestCountTokens_UpstreamErrorIsReturned(t *testing.T) {
 	}
 }
 
-func TestCountTokens_UnparseableResponseIsAnError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"something_else":1}`))
-	}))
-	defer srv.Close()
-
-	counter := (&Spec{Name: adapters.Anthropic, CountPath: "/count"}).Build().PipelineAdapter().(TokenCounter)
-	if _, err := counter.CountTokens(t.Context(), srv.URL, "k", []byte(`{}`), nil, false); err == nil {
+func TestParseTokenCount_UnparseableResponseIsAnError(t *testing.T) {
+	if _, err := ParseTokenCount(http.StatusOK, []byte(`{"something_else":1}`)); err == nil {
 		t.Fatal("a response with no input_tokens must be an error")
 	}
 }

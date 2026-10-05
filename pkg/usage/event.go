@@ -25,7 +25,7 @@ import (
 type Event struct {
 	// Identity / trace
 	RequestID string    `json:"request_id"`
-	Source    string    `json:"source"` // "pipeline" | "proxy" | "ws" | "batch"
+	Source    string    `json:"source"` // "pipeline" | "proxy" | "ws" | "batch" | "count"
 	Timestamp time.Time `json:"ts"`
 
 	// Outcome

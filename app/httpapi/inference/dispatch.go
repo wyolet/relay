@@ -14,6 +14,7 @@ package inference
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,13 +92,7 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	lc := mintLifecycle(ctx, d.Catalog, sourceForMode(cls.Mode), cls.ClientIP)
 	lc.RequestedModel = in.ModelName
 	applyObsHeaders(lc, r.Header, d.TrustEventTime)
-	// The resolved client profile is a usage dimension; observers read it
-	// off the Context. Empty name = no profile, nothing recorded.
-	if profile.Name() != "" {
-		lc.Metadata["client"] = profile.Name()
-		applyAttributionHeaders(lc, profile, r.Header)
-		applySessionKey(lc, profile, r.Header)
-	}
+	applyProfile(lc, profile, r.Header)
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture
 	// gate (lc.PayloadLog) is set once routing resolves the opt-in.
@@ -105,27 +100,8 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
 
-	// Run the pre-flight phase (today: the inflight-gauge observer). Every
-	// path past this point must end in a Finalize — success and runner
-	// failures fire it themselves; pre-runner rejections go through
-	// fireUsageFailure — so pre-flight and post-flight stay paired.
-	if d.Lifecycle != nil {
-		if err := d.Lifecycle.RunPreFlight(ctx, lc, &lifecycle.PreFlightEvent{}); err != nil {
-			// In-flight cap reached → shed with a retriable 429 + Retry-After so
-			// OpenAI-shape clients back off instead of hammering a saturated pod.
-			// The slot was never acquired, so no release is owed. Any other
-			// pre-flight abort stays a 500.
-			if errors.Is(err, httpapi.ErrShed) {
-				d.fireUsageFailure(ctx, "shed", err.Error())
-				w.Header().Set("Retry-After", httpapi.RetryAfterShed)
-				writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
-					"relay is at capacity; retry shortly")
-				return
-			}
-			d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
-			writeAPIError(w, http.StatusInternalServerError, "server_error", "pre_flight_aborted", err.Error())
-			return
-		}
+	if !d.runPreFlight(ctx, w, lc) {
+		return
 	}
 
 	slog.Debug("inference: dispatch entry",
@@ -259,6 +235,30 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 
 	dispatchCanonical(d, w, r, in, plan, upstreamAdapter, inboundV1, upstreamV1)
+}
+
+// runPreFlight runs the lifecycle pre-flight phase (the in-flight cap among it) for a request whose lc is already on ctx. Every path past a true return must end in a Finalize — success and runner failures fire it themselves; pre-runner rejections go through fireUsageFailure — so pre-flight and post-flight stay paired. On false the response is written.
+func (d Deps) runPreFlight(ctx context.Context, w http.ResponseWriter, lc *lifecycle.Context) bool {
+	if d.Lifecycle == nil {
+		return true
+	}
+	err := d.Lifecycle.RunPreFlight(ctx, lc, &lifecycle.PreFlightEvent{})
+	if err == nil {
+		return true
+	}
+	// In-flight cap reached → shed with a retriable 429 + Retry-After so
+	// clients back off instead of hammering a saturated pod. The slot was
+	// never acquired, so no release is owed. Any other abort stays a 500.
+	if errors.Is(err, httpapi.ErrShed) {
+		d.fireUsageFailure(ctx, "shed", err.Error())
+		w.Header().Set("Retry-After", httpapi.RetryAfterShed)
+		writeAPIError(w, http.StatusTooManyRequests, "rate_limit_error", "overloaded",
+			"relay is at capacity; retry shortly")
+		return false
+	}
+	d.fireUsageFailure(ctx, "pre_flight_aborted", err.Error())
+	writeAPIError(w, http.StatusInternalServerError, "server_error", "pre_flight_aborted", err.Error())
+	return false
 }
 
 // runBytePass handles same-shape or byte-pass dispatch: forward the body
