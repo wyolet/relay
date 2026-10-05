@@ -101,6 +101,16 @@ func applyObsHeaders(lc *lifecycle.Context, h http.Header, trustEventTime bool) 
 	}
 }
 
+// applyProfile records the resolved client profile, a usage dimension, and what it identifies on the request. Empty name = no profile, nothing recorded.
+func applyProfile(lc *lifecycle.Context, p clientprofile.Profile, h http.Header) {
+	if p.Name() == "" {
+		return
+	}
+	lc.Metadata["client"] = p.Name()
+	applyAttributionHeaders(lc, p, h)
+	applySessionKey(lc, p, h)
+}
+
 // MaxAttributionValueBytes caps one recorded attribution value. The values
 // ride into every usage event, so a caller cannot inflate the record.
 const MaxAttributionValueBytes = 256
@@ -137,6 +147,9 @@ func applySessionKey(lc *lifecycle.Context, p clientprofile.Profile, h http.Head
 	}
 	lc.Metadata[tokencount.MetadataKeySession] = v
 }
+
+// sourceCount labels count-tokens requests, which run the generation pipeline against the counting endpoint, so observers can tell them from generations.
+const sourceCount = "count"
 
 // sourceForMode maps a request mode to its runner-source label.
 func sourceForMode(m Mode) string {
