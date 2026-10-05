@@ -37,7 +37,7 @@ func writeKeyPolicy(ctx context.Context, d Deps, rk *key.Key) error {
 	}
 	rk.Meta.Dirty = true
 	if err := d.Stores.Key.Upsert(ctx, rk); err != nil {
-		return huma.Error500InternalServerError(err.Error())
+		return mapWriteErr("key", rk.Meta.ID, err)
 	}
 	return nil
 }
@@ -53,7 +53,7 @@ func registerPolicyKeys(api huma.API, d Deps, protect huma.Middlewares) {
 			"is the common case).",
 		Tags:        []string{"policies"},
 		Middlewares: protect,
-		Errors:      []int{400, 401, 403, 404, 500},
+		Errors:      []int{400, 401, 403, 404, 409, 500},
 	}, func(ctx context.Context, in *policyKeyInput) (*policyKeyResponse, error) {
 		pol, err := d.Stores.Policy.Get(ctx, in.PolicyID)
 		if err != nil || pol == nil || !visibleTo(ctx, d.Authz, "policy", pol.Meta.ID, pol.Meta.Owner) {
