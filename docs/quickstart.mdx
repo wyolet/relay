@@ -34,8 +34,13 @@ keys for failover and higher effective rate limits.
       </Tab>
       <Tab title="docker compose">
         The lean relay image wired to its own Postgres + Valkey, with volumes
-        and env preconfigured. Save as `docker-compose.yml` and run
-        `docker compose up -d`. Volumes persist data across restarts.
+        and env preconfigured. Save as `docker-compose.yml`, set an admin
+        password, and start it. Volumes persist data across restarts.
+
+        ```bash
+        echo "RELAY_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> .env
+        docker compose up -d
+        ```
 
         ```yaml docker-compose.yml
         name: relay
@@ -99,17 +104,20 @@ keys for failover and higher effective rate limits.
               RELAY_CONTROL_PORT: "8081"
               RELAY_INFERENCE_API_URL: http://localhost:8080
               RELAY_COOKIE_SECURE: "false"
-              RELAY_ADMIN_PASSWORD: change-me-please   # admin UI login
+              RELAY_ADMIN_PASSWORD: ${RELAY_ADMIN_PASSWORD:?set RELAY_ADMIN_PASSWORD}   # admin UI login
               RELAY_MASTER_KEY: ""                     # set a stable value for production
               RELAY_ADMIN_TOKEN: ""                    # break-glass bearer (optional)
             ports:
-              - "8080:8080"   # inference API
-              - "8081:8081"   # admin UI + control API
+              - "${RELAY_BIND_ADDR:-127.0.0.1}:8080:8080"   # inference API
+              - "${RELAY_BIND_ADDR:-127.0.0.1}:8081:8081"   # admin UI + control API
         ```
 
-        Log in as **admin** / `change-me-please` (change `RELAY_ADMIN_PASSWORD`
-        before exposing it). Set a stable `RELAY_MASTER_KEY` for production — it
-        encrypts your stored provider keys.
+        Log in as **admin** with the `RELAY_ADMIN_PASSWORD` you set; Compose
+        refuses to start without one, and relay refuses published placeholders
+        such as `change-me`. The ports listen on `127.0.0.1` only — set
+        `RELAY_BIND_ADDR=0.0.0.0` in `.env` to reach them from other machines.
+        Set a stable `RELAY_MASTER_KEY` for production — it encrypts your
+        stored provider keys.
       </Tab>
     </Tabs>
 
