@@ -126,6 +126,43 @@ func TestEmitter_ConcurrentEmit(t *testing.T) {
 	}
 }
 
+func TestEmitter_TryEmitRefusesInsteadOfDropping(t *testing.T) {
+	block := make(chan struct{})
+	entered := make(chan struct{}, 16)
+	e := NewEmitter(EmitterOptions{QueueSize: 2}, &signalingBlockingSink{entered: entered, ch: block})
+	var once sync.Once
+	release := func() { once.Do(func() { close(block) }) }
+	t.Cleanup(func() {
+		release()
+		e.Close()
+	})
+
+	if e.Capacity() != 2 || e.Free() != 2 {
+		t.Fatalf("fresh emitter capacity = %d free = %d, want 2 and 2", e.Capacity(), e.Free())
+	}
+	// Park the drain goroutine in the sink so the queue only fills.
+	e.Emit(Event{RequestID: "parked"})
+	<-entered
+	if !e.TryEmit(Event{RequestID: "a"}) || e.Free() != 1 {
+		t.Fatalf("first TryEmit refused or free = %d, want accepted and 1", e.Free())
+	}
+	if !e.TryEmit(Event{RequestID: "b"}) || e.Free() != 0 {
+		t.Fatalf("second TryEmit refused or free = %d, want accepted and 0", e.Free())
+	}
+	if e.TryEmit(Event{RequestID: "c"}) {
+		t.Fatal("TryEmit accepted an event into a full queue")
+	}
+	if e.Dropped() != 0 {
+		t.Fatalf("a refused TryEmit counted %d drops, want 0", e.Dropped())
+	}
+
+	release()
+	e.Close()
+	if e.TryEmit(Event{RequestID: "late"}) {
+		t.Fatal("TryEmit accepted an event after Close")
+	}
+}
+
 func TestEmitter_CloseIsIdempotent(t *testing.T) {
 	e := NewEmitter(EmitterOptions{}, newTestSink(&bytes.Buffer{}))
 	e.Close()
