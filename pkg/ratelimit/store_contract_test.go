@@ -215,6 +215,32 @@ func runLimiterContractSuite(t *testing.T, name string, factory func(t *testing.
 			t.Fatalf("reserve for a different jti: %v", err)
 		}
 	})
+
+	// A token-meter rule rejects once committed usage exceeds its amount,
+	// whichever strategy it names.
+	for _, meter := range []string{"tokens", "tokens.output"} {
+		for _, s := range []Strategy{StrategySlidingWindow, StrategyTokenBucket, StrategyFixedWindow, StrategyLeakyBucket, StrategySessionWindow, ""} {
+			t.Run(name+"/TokenMeterEnforced/"+meter+"/"+string(s), func(t *testing.T) {
+				now := time.Date(2024, 1, 1, 0, 0, 30, 0, time.UTC)
+				l := factory(t, &now)
+				ctx := context.Background()
+				// Unique per case: the Redis factory shares one database across the suite.
+				scope := "tok-" + meter + "-" + string(s)
+				rule := Rule{Key: "policy:" + scope + ":rl:0:" + meter, Name: meter + " on " + scope, Meter: meter, Strategy: s, Amount: 10, Window: time.Hour}
+
+				res, err := l.Reserve(ctx, scope, []Rule{rule})
+				if err != nil {
+					t.Fatalf("first reserve: %v", err)
+				}
+				if err := l.Commit(ctx, res, Observations{Tokens: map[string]int64{"input": 500, "output": 500}}); err != nil {
+					t.Fatalf("commit: %v", err)
+				}
+				if _, err := l.Reserve(ctx, scope, []Rule{rule}); !errors.Is(err, ErrExceeded) {
+					t.Fatalf("reserve after 1000 tokens against amount 10: err = %v, want ErrExceeded", err)
+				}
+			})
+		}
+	}
 }
 
 func TestContractLimit_MemStore(t *testing.T) {

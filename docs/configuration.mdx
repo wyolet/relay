@@ -44,6 +44,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_CLUSTER_MODE` | `off` | `on` enables the Postgres `LISTEN` consumer so every pod's snapshot stays in sync. Turn `on` for any multi-pod deployment. |
 | `RELAY_INSTANCE_ID` | _(empty)_ | Stable pod/instance identity, surfaced in logs, metrics, and usage events (`extras.instance`). |
 | `RELAY_MAX_REQUEST_BYTES` | _(unlimited)_ | Reject inbound request bodies larger than this many bytes. |
+| `RELAY_BATCH_MAX_ITEMS` | `50000` | Most items one `POST /v1/batches` submission may carry; larger submissions get `400`. |
 | `RELAY_HEALTHZ_DEADLINE_MS` | `500` | Timeout for the `/healthz` dependency checks. |
 
 ### Streaming
@@ -51,6 +52,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `RELAY_STREAM_KEEPALIVE_S` | `15` | Seconds of upstream silence after which Relay emits the inbound wire shape's own no-op stream frame, so clients that abort on silence keep waiting. `0` disables it. |
+| `RELAY_STREAM_USAGE` | `on` | On a same-shape streamed request whose wire shape reports token usage only when asked (OpenAI Chat Completions `stream_options.include_usage`), Relay asks for it so token budgets and usage records see the tokens. If the caller did not ask, the extra usage-only chunk is removed from its stream; the other chunks carry `"usage": null`, as they do when a caller asks itself. `off` forwards the request unchanged. |
 | `RELAY_STREAM_IDLE_TIMEOUT_S` | `600` | Seconds of upstream silence after which Relay gives up on a streamed call. Streams have no total deadline — this is their only bound. Keep it above your client's own stream watchdog; `0` disables it. |
 
 ### Storage backends

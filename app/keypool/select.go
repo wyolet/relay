@@ -75,8 +75,9 @@ func (s *Selector) Pick(ctx context.Context, scope string, algo KeySelection, ke
 
 		switch rec.State {
 		case CircuitOpen:
-			if rec.Indefinite {
-				continue
+			if rec.Indefinite { // written before auth cooldowns were bounded
+				rec.Indefinite = false
+				rec.OpenUntil = rec.LastTransition.Add(authCooldowns[len(authCooldowns)-1])
 			}
 			if now.Before(rec.OpenUntil) {
 				continue

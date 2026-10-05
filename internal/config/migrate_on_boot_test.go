@@ -33,6 +33,30 @@ func TestMigrateOnBootDefaultsToTrue(t *testing.T) {
 	}
 }
 
+func TestStreamUsageDefaultsToOn(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want bool
+	}{
+		{"", true},
+		{"on", true},
+		{"off", false},
+	} {
+		t.Setenv("RELAY_STREAM_USAGE", tc.env)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("RELAY_STREAM_USAGE=%q: %v", tc.env, err)
+		}
+		if cfg.StreamUsage != tc.want {
+			t.Errorf("RELAY_STREAM_USAGE=%q → %v, want %v", tc.env, cfg.StreamUsage, tc.want)
+		}
+	}
+	t.Setenv("RELAY_STREAM_USAGE", "maybe")
+	if _, err := Load(); err == nil {
+		t.Error("an unparseable value was accepted")
+	}
+}
+
 // The pair is contradictory: the deployment asked for multi-user but every
 // authenticated caller is an admin.
 func TestSingleAuthzWithMultiUserWarns(t *testing.T) {

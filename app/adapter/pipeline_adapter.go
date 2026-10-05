@@ -115,16 +115,18 @@ func (a *specAdapter) ExtractTokens(body []byte) pkgusage.Tokens {
 }
 
 // Retryable classifies upstream HTTP responses for the pipeline retry loop.
-// Classification is uniform across specs: 401/403→auth, 429→rate-limit,
-// 500-599→server error. Any spec that needs different classification can
-// override by wrapping the returned pipeline.Adapter.
+// Classification is uniform across specs: 401→auth, 403→forbidden,
+// 429→rate-limit, 500-599→server error. Any spec that needs different
+// classification can override by wrapping the returned pipeline.Adapter.
 func (a *specAdapter) Retryable(resp *http.Response) (retry bool, kind keypool.FailureKind, retryAfter time.Duration) {
 	if resp == nil {
 		return false, 0, 0
 	}
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized:
 		return true, keypool.FailureAuth, 0
+	case resp.StatusCode == http.StatusForbidden:
+		return true, keypool.FailureForbidden, 0
 	case resp.StatusCode == http.StatusTooManyRequests:
 		ra := pipeline.RetryAfterHeader(resp.Header)
 		k := keypool.FailureRateLimitShort

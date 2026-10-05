@@ -90,6 +90,12 @@ type Config struct {
 	// StreamKeepAlive is the silence interval after which relay emits the inbound wire shape's own no-op SSE frame on a streamed response (RELAY_STREAM_KEEPALIVE_S, default 15s; 0 disables). Upstreams send nothing during long prompt processing or thinking, and coding-agent clients abort a stream after a few minutes without bytes.
 	StreamKeepAlive time.Duration
 
+	// StreamUsage makes same-shape streamed requests ask the upstream for token usage when the wire shape reports it only on request (RELAY_STREAM_USAGE, default on). The extra usage frame is removed from the caller's stream unless the caller asked for it.
+	StreamUsage bool
+
+	// BatchMaxItems caps the items in one batch submission (RELAY_BATCH_MAX_ITEMS, default 50000).
+	BatchMaxItems int
+
 	// StreamIdleTimeout ends a streamed upstream call that has sent no bytes for this long (RELAY_STREAM_IDLE_TIMEOUT_S, default 600s; 0 disables). Deliberately above the clients' own silence watchdogs so relay is never the first to give up. Streams have no total deadline; buffered calls do.
 	StreamIdleTimeout time.Duration
 
@@ -304,6 +310,12 @@ func Load() (*Config, error) {
 	// applied where the Admission is constructed.
 	cfg.MaxInflight = envInt("RELAY_MAX_INFLIGHT", 0)
 
+	if v, err := envPositiveInt("RELAY_BATCH_MAX_ITEMS", 50000); err != nil {
+		return nil, fmt.Errorf("RELAY_BATCH_MAX_ITEMS must be >= 1")
+	} else {
+		cfg.BatchMaxItems = v
+	}
+
 	if v, err := envPositiveInt("RELAY_UPSTREAM_MAX_IDLE_PER_HOST", 128); err != nil {
 		return nil, fmt.Errorf("RELAY_UPSTREAM_MAX_IDLE_PER_HOST must be >= 1")
 	} else {
@@ -315,6 +327,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("RELAY_STREAM_KEEPALIVE_S must be >= 0")
 	} else {
 		cfg.StreamKeepAlive = time.Duration(v) * time.Second
+	}
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("RELAY_STREAM_USAGE"))); v {
+	case "", "on", "1", "true":
+		cfg.StreamUsage = true
+	case "off", "0", "false":
+		cfg.StreamUsage = false
+	default:
+		return nil, fmt.Errorf(`RELAY_STREAM_USAGE must be "on" or "off", got %q`, v)
 	}
 	if v := envInt("RELAY_STREAM_IDLE_TIMEOUT_S", 600); v < 0 {
 		return nil, fmt.Errorf("RELAY_STREAM_IDLE_TIMEOUT_S must be >= 0")
