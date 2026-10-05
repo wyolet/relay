@@ -21,9 +21,10 @@ services:
       - valkey-data:/data
     # Published on the host so `make dev` (host-side go run) can reach it.
     # The full compose stack still talks to it as `valkey:6379` over the
-    # default network regardless of this mapping.
+    # default network regardless of this mapping. Passwordless, so loopback
+    # only unless RELAY_STORE_BIND_ADDR widens it.
     ports:
-      - "${RELAY_VALKEY_PORT:-6379}:6379"
+      - "${RELAY_STORE_BIND_ADDR:-127.0.0.1}:${RELAY_VALKEY_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
       interval: 3s
