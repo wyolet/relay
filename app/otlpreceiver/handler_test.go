@@ -1011,10 +1011,12 @@ func TestReasoningTokensAreChargedOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		reasoningRate float64
-		wantOutput    int64
+		// wantOutputCost and wantReasoningCost are the breakdown: with a reasoning meter the 64 reasoning tokens are charged there and the other 150 on output.
+		wantOutputCost    int64
+		wantReasoningCost int64
 	}{
-		{name: "rate sheet without a reasoning meter", wantOutput: 214},
-		{name: "rate sheet with a reasoning meter", reasoningRate: 15, wantOutput: 150},
+		{name: "rate sheet without a reasoning meter", wantOutputCost: 3_210_000},
+		{name: "rate sheet with a reasoning meter", reasoningRate: 15, wantOutputCost: 2_250_000, wantReasoningCost: 960_000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newFixtureWith(t, fixtureOptions{reasoningRate: tc.reasoningRate})
@@ -1022,11 +1024,15 @@ func TestReasoningTokensAreChargedOnce(t *testing.T) {
 				t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
 			}
 			ev := fx.events[0]
-			if ev.Tokens["output"] != tc.wantOutput || ev.Tokens["reasoning"] != 64 || ev.Tokens["input"] != 200 || ev.Tokens["cache_read"] != 600 {
-				t.Errorf("tokens = %v, want output %d reasoning 64 input 200 cache_read 600", ev.Tokens, tc.wantOutput)
+			// The stored counts mean the same whatever sheet prices them: output includes reasoning.
+			if ev.Tokens["output"] != 214 || ev.Tokens["reasoning"] != 64 || ev.Tokens["input"] != 200 || ev.Tokens["cache_read"] != 600 {
+				t.Errorf("tokens = %v, want output 214 reasoning 64 input 200 cache_read 600", ev.Tokens)
 			}
 			if ev.CostNanos == nil || *ev.CostNanos != wantCost {
 				t.Errorf("cost = %v (%v), want %d", ev.CostNanos, ev.CostBreakdown, wantCost)
+			}
+			if ev.CostBreakdown["tokens.output"] != tc.wantOutputCost || ev.CostBreakdown["tokens.reasoning"] != tc.wantReasoningCost {
+				t.Errorf("breakdown = %v, want output %d reasoning %d", ev.CostBreakdown, tc.wantOutputCost, tc.wantReasoningCost)
 			}
 		})
 	}

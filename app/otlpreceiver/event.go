@@ -1,6 +1,7 @@
 package otlpreceiver
 
 import (
+	"maps"
 	"net/http"
 	"time"
 
@@ -71,17 +72,23 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c report
 
 	m := resolveModel(snap, inf, hint)
 	ev.ModelID, ev.Model, ev.Provider, ev.Pricing = m.id, m.name, m.provider, m.pricingName
-	counts := inf.Tokens
-	// Telemetry counts reasoning tokens inside the output total. A rate sheet with a reasoning meter charges them there, so they leave the output count, as on a proxied call priced by that sheet; otherwise they would be charged twice.
-	if m.reasoningMetered && counts.Output >= counts.Reasoning {
-		counts.Output -= counts.Reasoning
-	}
-	ev.Tokens = tokens(counts)
-	if nanos, breakdown, ok := pricer.Price(m.pricingID, ev.Tokens); ok {
+	ev.Tokens = tokens(inf.Tokens)
+	if nanos, breakdown, ok := pricer.Price(m.pricingID, billable(ev.Tokens, m.reasoningMetered)); ok {
 		ev.CostNanos = &nanos
 		ev.CostBreakdown = breakdown
 	}
 	return ev
+}
+
+// billable returns the counts to price. Reasoning tokens are counted inside output, so a rate sheet that also meters reasoning would charge them twice; for such a sheet they are priced on the reasoning meter only. The stored counts are not changed.
+func billable(t sdkusage.Tokens, reasoningMetered bool) sdkusage.Tokens {
+	reasoning := t["reasoning"]
+	if !reasoningMetered || reasoning <= 0 || t["output"] < reasoning {
+		return t
+	}
+	priced := maps.Clone(t)
+	priced["output"] -= reasoning
+	return priced
 }
 
 // status is the event's HTTP status: the provider's when the telemetry carried it, otherwise 200 for a call that succeeded. A failed call with no status stays 0, which with its error kind makes it a log-only row.
