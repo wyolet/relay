@@ -34,10 +34,11 @@ type Config struct {
 	EventlogBackend string
 
 	// Connections
-	PGDSN      string
-	PGMaxConns int // RELAY_PG_MAX_CONNS; 0 = storage default (10)
-	PGMinConns int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
-	RedisAddr  string
+	PGDSN         string
+	PGMaxConns    int // RELAY_PG_MAX_CONNS; 0 = storage default (10)
+	PGMinConns    int // RELAY_PG_MIN_CONNS warm floor; 0 = storage default (2)
+	RedisAddr     string
+	RedisPassword string // RELAY_REDIS_PASSWORD; empty = no AUTH
 	// RedisPoolSize / RedisMinIdleConns tune the go-redis client pool.
 	// 0 = library defaults (pool 10×GOMAXPROCS, NO idle floor). A warm
 	// floor keeps connections pre-dialed so request bursts never pay
@@ -200,6 +201,7 @@ func Load() (*Config, error) {
 		cfg.PGMinConns = v
 	}
 	cfg.RedisAddr = os.Getenv("RELAY_REDIS_ADDR")
+	cfg.RedisPassword = os.Getenv("RELAY_REDIS_PASSWORD")
 	if v, err := envPositiveInt("RELAY_REDIS_POOL_SIZE", 0); err != nil {
 		return nil, fmt.Errorf("RELAY_REDIS_POOL_SIZE must be >= 1")
 	} else {

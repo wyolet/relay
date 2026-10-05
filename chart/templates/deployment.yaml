@@ -87,6 +87,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "relay.secretName" . }}
                   key: RELAY_PG_DSN
+            # Optional: an existingSecret without the key keeps Valkey passwordless.
+            - name: RELAY_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "relay.secretName" . }}
+                  key: RELAY_REDIS_PASSWORD
+                  optional: true
             {{- if or .Values.clickhouse.enabled .Values.external.chDsn }}
             - name: RELAY_CH_DSN
               valueFrom:

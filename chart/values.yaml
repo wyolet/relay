@@ -107,7 +107,8 @@ secrets:
   # creates no Secret and reads these keys from it:
   #   RELAY_MASTER_KEY, RELAY_ADMIN_TOKEN, RELAY_PG_DSN, RELAY_CH_DSN
   #   (and postgres-password / clickhouse-password if bundling those stores,
-  #    and RELAY_ADMIN_PASSWORD if auth.adminUser.enabled).
+  #    RELAY_ADMIN_PASSWORD if auth.adminUser.enabled, and optionally
+  #    RELAY_REDIS_PASSWORD for Valkey auth).
   existingSecret: ""
   # -- AES-GCM master key. base64-std of 32 random bytes:
   #   openssl rand -base64 32
@@ -180,12 +181,19 @@ clickhouse:
     limits:   { cpu: "2",  memory: 4Gi }
 
 # ----------------------------------------------------------------------------
-# Bundled Valkey — hot state + rate-limit counters. Passwordless by design
-# (relay reads only RELAY_REDIS_ADDR); lock down with the NetworkPolicy below.
+# Bundled Valkey — hot state, rate-limit counters, and control-plane sessions.
 # ----------------------------------------------------------------------------
 valkey:
   enabled: true
   image: valkey/valkey:8-alpine
+  auth:
+    # -- Require a password (requirepass); relay gets it as RELAY_REDIS_PASSWORD.
+    enabled: true
+    # -- Explicit password. Empty derives a stable one from secrets.masterKey
+    # (sha256), so no extra value is needed. With secrets.existingSecret, put
+    # RELAY_REDIS_PASSWORD in that Secret; without that key Valkey stays
+    # passwordless.
+    password: ""
   persistence:
     enabled: true
     size: 5Gi
@@ -202,6 +210,7 @@ external:
   pgDsn: ""        # postgres://user:pw@host:5432/relay?sslmode=require
   chDsn: ""        # clickhouse://user:pw@host:9000/relay
   redisAddr: ""    # host:6379
+  redisPassword: "" # AUTH password for redisAddr, if it requires one
 
 # ----------------------------------------------------------------------------
 # Relay pod/runtime.
@@ -290,9 +299,10 @@ gateway:
   control:
     host: ""                  # admin.relay.example.com -> control plane
 
-# NetworkPolicy restricting the data stores to relay pods only.
+# NetworkPolicy restricting the bundled data stores to relay pods only. Other
+# readers (e.g. a Grafana on ClickHouse) need an extraIngress entry below.
 networkPolicy:
-  enabled: false
+  enabled: true
   # Per-datastore extra ingress rules, appended verbatim to the generated
   # policy for that component ("postgresql" | "clickhouse" | "valkey").
   # The app decides who may read its datastores — e.g. a cluster Grafana:

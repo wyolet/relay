@@ -25,6 +25,7 @@ func openKV(bootCtx context.Context, cfg *config.Config) kv.Store {
 		}
 		rs, err := kv.NewRedis(bootCtx, kv.RedisConfig{
 			Addr:         cfg.RedisAddr,
+			Password:     cfg.RedisPassword,
 			PoolSize:     cfg.RedisPoolSize,
 			MinIdleConns: cfg.RedisMinIdleConns,
 		})

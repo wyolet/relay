@@ -26,6 +26,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_INFERENCE_API_URL` | _(standalone: `http://localhost:8080`)_ | Data-plane origin the admin UI calls (served via `/config.json`). Set to your public API URL in production. |
 | `RELAY_STATE_BACKEND` | `memory` | `memory` or `redis`. Use `redis` for multi-pod deployments. |
 | `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
+| `RELAY_REDIS_PASSWORD` | _(empty)_ | Password sent with `AUTH` to `RELAY_REDIS_ADDR`. Empty sends none. Valkey holds control-plane sessions, so give any Valkey reachable beyond the relay pods a password. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
 | `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML (rate limits, identity). |
 | `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. |
