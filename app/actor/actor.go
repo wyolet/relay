@@ -22,9 +22,9 @@ type Actor struct {
 	// a join key.
 	Username string
 
-	// SessionID is the opaque session token (when this actor came from a
-	// session lookup). Carried for audit + revocation. Empty for the
-	// admin-token bypass.
+	// SessionID identifies the session this actor came from, for audit
+	// correlation. It is derived from, never equal to, the session token: it
+	// is stored and shown to audit readers. Empty for the admin-token bypass.
 	SessionID string
 
 	// AdminToken is true when this actor came from the RELAY_ADMIN_TOKEN
