@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -43,19 +44,32 @@ const (
 	requestsTable = "payload_requests"
 )
 
-// Each distinct request-body piece once, shared by every request that
-// contains it. ReplacingMergeTree keeps the newest last_seen per hash; the
-// sink re-inserts a piece in use at least daily, so the last_seen TTL only
-// drops pieces no live request row references.
+// Each distinct request-body piece once per project, shared by every request
+// of that project that contains it; projects never share a row, so erasing
+// one cannot touch another's content. ReplacingMergeTree keeps the newest
+// last_seen per (project_id, hash); the sink re-inserts a piece in use at
+// least daily, so the last_seen TTL only drops pieces no live request row
+// references. The server stamps last_seen, so an erase can compare it with
+// its own start time whatever the writing pod's clock says.
 var createPiecesSQL = `CREATE TABLE IF NOT EXISTS payload_pieces (
+    project_id String         CODEC(ZSTD),
     hash       FixedString(16),
-    body       String    CODEC(ZSTD(3)),
-    last_seen  DateTime  CODEC(DoubleDelta)
+    body       String         CODEC(ZSTD(3)),
+    last_seen  DateTime64(3)  DEFAULT now64(3) CODEC(DoubleDelta)
 ) ENGINE = ReplacingMergeTree(last_seen)
-ORDER BY hash`
+ORDER BY (project_id, hash)`
+
+// piecesLayout and requestsLayout are the columns an earlier layout of each
+// table lacked or typed differently.
+var (
+	piecesLayout   = map[string]string{"project_id": "String", "last_seen": "DateTime64(3)"}
+	requestsLayout = map[string]string{"request_sha256": "FixedString(32)"}
+)
 
 // One row per request: the body's skeleton plus, per split field, its name,
 // kind, skeleton offset and how many entries of hashes it owns.
+// request_sha256 is the digest of the body as received; a read that does
+// not rebuild to it fails.
 var createRequestsSQL = `CREATE TABLE IF NOT EXISTS payload_requests (
     request_id          String                CODEC(ZSTD),
     ts                  DateTime64(9, 'UTC')  CODEC(DoubleDelta),
@@ -68,6 +82,7 @@ var createRequestsSQL = `CREATE TABLE IF NOT EXISTS payload_requests (
     field_offsets       Array(UInt32),
     field_counts        Array(UInt32),
     hashes              Array(FixedString(16)),
+    request_sha256      FixedString(32),
     response_body       String                CODEC(ZSTD(3)),
     request_truncated   UInt8,
     response_truncated  UInt8,
@@ -76,10 +91,10 @@ var createRequestsSQL = `CREATE TABLE IF NOT EXISTS payload_requests (
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, request_id)`
 
-var insertPiecesSQL = "INSERT INTO " + piecesTable + " (hash, body, last_seen)"
+var insertPiecesSQL = "INSERT INTO " + piecesTable + " (project_id, hash, body)"
 
 var insertRequestsSQL = "INSERT INTO " + requestsTable + ` (request_id, ts, project_id, principal_id, relay_key_hash,
-    skeleton, field_names, field_is_array, field_offsets, field_counts, hashes,
+    skeleton, field_names, field_is_array, field_offsets, field_counts, hashes, request_sha256,
     response_body, request_truncated, response_truncated)`
 
 // insertColumns is the column list insertBatch writes, in Append order.
@@ -95,9 +110,10 @@ var insertColumns = []string{
 var InsertSQL = "INSERT INTO " + chTable + " (" + strings.Join(insertColumns, ", ") + ")"
 
 // ensureSchema creates the tables if absent, adds the owner columns to an
-// older payload_logs, then verifies its columns match what insertBatch
-// writes. Anything else missing fails fast with an actionable error instead
-// of auto-dropping. All three tables exist in either write mode, so a reader
+// older payload_logs, recreates empty dedup tables of an earlier layout,
+// then verifies payload_logs' columns match what insertBatch writes.
+// Anything else missing fails fast with an actionable error instead of
+// auto-dropping. All three tables exist in either write mode, so a reader
 // finds rows whichever mode wrote them.
 func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
 	if err := conn.Exec(ctx, createTableSQL); err != nil {
@@ -112,29 +128,20 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 	if err := conn.Exec(ctx, addOwnerColumnsSQL); err != nil {
 		return fmt.Errorf("payload/clickhouse: add owner columns: %w", err)
 	}
-
-	rows, err := conn.Query(ctx,
-		"SELECT name FROM system.columns WHERE database = currentDatabase() AND table = ?", chTable)
-	if err != nil {
-		return fmt.Errorf("payload/clickhouse: describe %s: %w", chTable, err)
+	if err := replaceOutdated(ctx, conn, piecesTable, piecesLayout, createPiecesSQL); err != nil {
+		return err
 	}
-	defer rows.Close()
-
-	have := map[string]bool{}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return fmt.Errorf("payload/clickhouse: scan column: %w", err)
-		}
-		have[name] = true
-	}
-	if err := rows.Err(); err != nil {
+	if err := replaceOutdated(ctx, conn, requestsTable, requestsLayout, createRequestsSQL); err != nil {
 		return err
 	}
 
+	have, err := tableColumns(ctx, conn, chTable)
+	if err != nil {
+		return err
+	}
 	var missing []string
 	for _, c := range insertColumns {
-		if !have[c] {
+		if _, ok := have[c]; !ok {
 			missing = append(missing, c)
 		}
 	}
@@ -150,6 +157,62 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 		return err
 	}
 	return chttl.Apply(ctx, conn, piecesTable, "last_seen", piecesRetentionDays(retentionDays))
+}
+
+// replaceOutdated recreates table in the current layout when any column of
+// want is missing or has another type, as in a table from an earlier
+// layout. Only an empty table is dropped; one holding rows fails instead,
+// so no captured body is lost.
+func replaceOutdated(ctx context.Context, conn clickhouse.Conn, table string, want map[string]string, createSQL string) error {
+	have, err := tableColumns(ctx, conn, table)
+	if err != nil {
+		return err
+	}
+	var outdated []string
+	for col, typ := range want {
+		if have[col] != typ {
+			outdated = append(outdated, col+" "+typ)
+		}
+	}
+	if len(outdated) == 0 {
+		return nil
+	}
+	sort.Strings(outdated)
+	var n uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM "+table).Scan(&n); err != nil {
+		return fmt.Errorf("payload/clickhouse: count %s: %w", table, err)
+	}
+	if n > 0 {
+		return fmt.Errorf(
+			"payload/clickhouse: table %q holds %d rows in an earlier layout (needs columns: %s) — drop or rename it (or point at a fresh database) so relay can create the current schema",
+			table, n, strings.Join(outdated, ", "))
+	}
+	if err := conn.Exec(ctx, "DROP TABLE "+table+" SYNC"); err != nil {
+		return fmt.Errorf("payload/clickhouse: drop empty %s: %w", table, err)
+	}
+	if err := conn.Exec(ctx, createSQL); err != nil {
+		return fmt.Errorf("payload/clickhouse: recreate %s: %w", table, err)
+	}
+	return nil
+}
+
+// tableColumns maps each column of table to its type.
+func tableColumns(ctx context.Context, conn clickhouse.Conn, table string) (map[string]string, error) {
+	rows, err := conn.Query(ctx,
+		"SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ?", table)
+	if err != nil {
+		return nil, fmt.Errorf("payload/clickhouse: describe %s: %w", table, err)
+	}
+	defer rows.Close()
+	have := map[string]string{}
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return nil, fmt.Errorf("payload/clickhouse: scan column: %w", err)
+		}
+		have[name] = typ
+	}
+	return have, rows.Err()
 }
 
 // piecesRetentionDays outlives request rows by a day: a piece's last_seen is

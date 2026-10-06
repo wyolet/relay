@@ -25,6 +25,10 @@ import (
 // capture aged out). The HTTP layer maps it to 404 / "(not logged)".
 var ErrNotFound = errors.New("payload: record not found")
 
+// ErrIntegrity is returned by Reader.Get when a stored body no longer
+// matches the digest taken when it was written. The body is withheld.
+var ErrIntegrity = errors.New("payload: stored body fails its integrity check")
+
 // Record is one captured request/response pair, keyed by RequestID. Bodies
 // are stored raw; []byte marshals to base64 in JSON so file/object backends
 // are lossless for non-UTF8 content.

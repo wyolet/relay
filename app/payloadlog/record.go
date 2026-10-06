@@ -20,11 +20,18 @@ type (
 	// Reader is the read-side contract (Get by request_id), re-exported so
 	// the control plane imports just payloadlog.
 	Reader = payload.Reader
+
+	Eraser      = payload.Eraser
+	EraseFilter = payload.EraseFilter
+	EraseResult = payload.EraseResult
 )
 
 // ErrNotFound is re-exported so control handlers can map an absent capture
 // to 404 without importing pkg/payload directly.
 var ErrNotFound = payload.ErrNotFound
+
+// ErrEraseUnsupported is re-exported so the erase handler can answer 501.
+var ErrEraseUnsupported = payload.ErrEraseUnsupported
 
 // clip truncates b to max bytes, reporting whether it was cut. max <= 0
 // means no cap. The returned slice aliases b (no copy) — callers must not
