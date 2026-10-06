@@ -46,6 +46,11 @@ type Config struct {
 	// disk. When exceeded, the oldest are dropped and counted in Dropped().
 	// Default 256.
 	MaxSegments int
+
+	// Dedup makes the sink write request bodies as skeletons plus shared
+	// pieces (payload_requests + payload_pieces) instead of whole rows in
+	// payload_logs. Readers serve both regardless.
+	Dedup bool
 }
 
 func (c *Config) applyDefaults() {
@@ -80,6 +85,8 @@ var _ payload.Closer = (*Reader)(nil)
 type Sink struct {
 	*Reader
 	wal *segmentQueue
+	// recent is non-nil in dedup mode.
+	recent *recentPieces
 }
 
 // openConn parses the DSN, opens a pooled connection, pings it, and ensures
@@ -147,6 +154,9 @@ func New(cfg Config) (*Sink, error) {
 	}
 
 	s := &Sink{Reader: &Reader{conn: conn, log: slog.Default()}}
+	if cfg.Dedup {
+		s.recent = newRecentPieces(maxRecentPieces)
+	}
 
 	wal, err := newSegmentQueue(cfg.WALDir, cfg.MaxLines, cfg.MaxBytes,
 		cfg.FlushInterval, cfg.MaxSegments, s.log, s.insertBatch)
@@ -181,6 +191,9 @@ func (s *Sink) Dropped() uint64 { return s.wal.Dropped() }
 func (s *Sink) insertBatch(records []payload.Record) error {
 	if len(records) == 0 {
 		return nil
+	}
+	if s.recent != nil {
+		return s.insertDedup(records)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

@@ -27,6 +27,7 @@ data:
       {{- if eq .Values.relay.payloadLogging.backend "clickhouse" }}
       clickhouse:
         walDir: {{ .Values.relay.payloadLogging.walDir | quote }}
+        dedup: {{ .Values.relay.payloadLogging.dedup }}
       {{- end }}
   usage-logging.yaml: |
     apiVersion: relay.wyolet.dev/v1alpha2
