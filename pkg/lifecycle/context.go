@@ -99,8 +99,8 @@ type Context struct {
 	PricingName string
 
 	// PayloadLog opts this request into full request/response body capture
-	// by the payloadlog observer. Set at the inference entry from the
-	// routing Plan (Policy or RelayKey opt-in). When false, the payload
+	// by the payloadlog observer. Set at the inference entry: the governing
+	// policy's flag, else the credential's own. When false, the payload
 	// observer skips the request and its stream observer does not buffer.
 	PayloadLog bool
 

@@ -85,10 +85,6 @@ type Request struct {
 	// resolved) narrows the pool to system-owned keys.
 	UserID string
 
-	// PayloadLoggingEnabled is the caller's own opt-in for body capture;
-	// the matched Policy's flag is OR'd onto it.
-	PayloadLoggingEnabled bool
-
 	// SkipKeyCheck, when true, suppresses the Policy.HostKeyIDs → host
 	// coverage gate. Used by proxy mode: the caller brings their own
 	// upstream credentials, so the relay's keypool is irrelevant — only
@@ -121,12 +117,6 @@ type Plan struct {
 	// binding ref first, else the host-owned (model, host) cover). Resolved
 	// here so emit-time cost stamping costs zero extra lookups. Nil = unpriced.
 	Pricing *pricing.Pricing
-
-	// PayloadLoggingEnabled is the resolved opt-in for full request/response
-	// body capture: true when the matched Policy or the inbound Key
-	// sets PayloadLoggingEnabled. Read by the inference entry to flag the
-	// lifecycle Context so the payloadlog observer captures bodies.
-	PayloadLoggingEnabled bool
 
 	// UpstreamOverride, when non-empty, replaces Snapshot.Upstream() as
 	// the wire model name. Set only by declared-alias resolution: the
@@ -211,7 +201,6 @@ func (r *Resolver) Resolve(req Request) (*Plan, error) {
 		}
 		plan, err := r.resolvePolicyless(snap, models, snapMatch, pinHostID, req.UserID)
 		if err == nil && plan != nil {
-			plan.PayloadLoggingEnabled = req.PayloadLoggingEnabled
 			applyAlias(plan, alias, req)
 		}
 		return plan, err
@@ -324,15 +313,14 @@ candidates:
 	pr, _ := snap.PricingForBinding(chosenBnd)
 
 	plan := &Plan{
-		Model:                 chosen,
-		Snapshot:              snapMatch,
-		Policy:                pol,
-		HostBinding:           chosenBnd,
-		Host:                  h,
-		Provider:              providerSlug,
-		Keys:                  keys,
-		Pricing:               pr,
-		PayloadLoggingEnabled: pol.Spec.PayloadLoggingEnabled || req.PayloadLoggingEnabled,
+		Model:       chosen,
+		Snapshot:    snapMatch,
+		Policy:      pol,
+		HostBinding: chosenBnd,
+		Host:        h,
+		Provider:    providerSlug,
+		Keys:        keys,
+		Pricing:     pr,
 	}
 	applyAlias(plan, alias, req)
 	return plan, nil

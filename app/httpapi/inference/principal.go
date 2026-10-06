@@ -30,7 +30,7 @@ type Principal struct {
 	ServiceAccount               *serviceaccount.ServiceAccount
 	Policy                       *policy.Policy // nil → policy-less
 	PassthroughAllowed           bool
-	PayloadLogging               bool
+	PayloadLogging               bool // the credential's own flag; read through CapturesPayload
 
 	// TokenExp/TokenVer are the claims a token credential was admitted
 	// under, kept so a long-lived connection can re-check them without the
@@ -95,6 +95,16 @@ func keyUserEnabled(snap *appcatalog.Snapshot, k *key.Key) bool {
 		return true
 	}
 	return snap.UserEnabled(k.Spec.Principal.ID)
+}
+
+// CapturesPayload reports whether this principal's requests have their
+// bodies captured, the same answer on every runner. Nil (anonymous proxy
+// traffic) carries no opt-in and captures nothing.
+func (p *Principal) CapturesPayload() bool {
+	if p == nil {
+		return false
+	}
+	return policy.CapturesPayload(p.Policy, p.PayloadLogging)
 }
 
 // PolicyID returns the resolved policy's id, or "" for the policy-less

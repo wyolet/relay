@@ -105,10 +105,9 @@ type Spec struct {
 	// Enabled defaults to true when nil.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 
-	// PayloadLoggingEnabled opts every request authorized by this policy
-	// into full request/response body capture by the payloadlog observer.
-	// Off by default. A Key may also opt in independently; either
-	// being set enables capture for the request.
+	// PayloadLoggingEnabled decides whether the request/response bodies of
+	// every request this policy governs are captured, overriding the
+	// credential's own flag either way (see CapturesPayload). Off by default.
 	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
@@ -136,6 +135,16 @@ const (
 
 // IsEnabled returns true when Enabled is unset or explicitly true.
 func (p *Policy) IsEnabled() bool { return p.Spec.Enabled == nil || *p.Spec.Enabled }
+
+// CapturesPayload reports whether a request's bodies are captured. The
+// governing policy decides, in both directions; credentialOptIn counts only
+// when no policy governs. Nil governing means none does.
+func CapturesPayload(governing *Policy, credentialOptIn bool) bool {
+	if governing != nil {
+		return governing.Spec.PayloadLoggingEnabled
+	}
+	return credentialOptIn
+}
 
 // EffectiveKeySelection returns KeySelection or the prioritized default.
 func (p *Policy) EffectiveKeySelection() keypool.KeySelection {

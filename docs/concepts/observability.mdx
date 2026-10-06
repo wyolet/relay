@@ -224,7 +224,7 @@ Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the
 
 ### Message content
 
-Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches below must be on, and then the policy that governs the reporting credential decides: content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
+Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches below must be on, and then the policy that governs the reporting credential decides, as it does for [payload logging](#payload-logging): content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored: sending content is its opt-in, and the key's `payloadLoggingEnabled` is not read. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
 
 Relay tells the client. When an export carries content that is not stored because of the policy, because an operator switch is off, or because the call is [older than the payload retention](#old-calls), the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
 
@@ -256,7 +256,7 @@ Relay reads `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.
 - Each body is cut at the payload `maxBytes` and flagged `request_truncated` / `response_truncated`; a cut body is no longer valid JSON.
 - With the deduplicated ClickHouse store (`clickhouse.dedup: true`, under [Payload logging](#payload-logging)), each message, tool definition and instruction part of the request body is stored once. A message is the same bytes whether it came on a span or an event and whichever export carried it, so the second turn of a conversation adds only its new messages. A body cut at `maxBytes` is stored whole, so use `maxBytes: 0` with it. The response body is not deduplicated.
 - Content is stored once per call, also when it arrives after the usage event (`event_only` with spans exported first). `span_and_event` sends every message to Relay twice and stores it once, so prefer one of the other two.
-- The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings. Unlike a proxied request, where the policy or the key can opt in, the key's `payloadLoggingEnabled` has no effect on reported content.
+- The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings.
 - When the payload queue is over half full, content is dropped and the usage event is kept; `relay_otlp_content_total{outcome="dropped"}` counts it.
 - The content forms of earlier conventions (`gen_ai.prompt` / `gen_ai.completion` attributes, one event per message) are not stored. `@opentelemetry/instrumentation-openai` 0.20.0 emits the per-message events, so its content is not captured.
 
@@ -276,7 +276,7 @@ them to the matching log record (joined by request id). It's how you inspect
 exactly what a client sent and what the provider returned — invaluable for
 debugging integrations.
 
-It's **off by default** and gated at three levels. All must line up for a body
+It's **off by default** and gated at two levels. Both must line up for a body
 to be captured:
 
 <Steps>
@@ -285,14 +285,18 @@ to be captured:
     nothing is ever captured, regardless of the per-request flags below.
   </Step>
   <Step title="Per-request opt-in">
-    Then capture is enabled for a request when **either** its **policy** or its
-    **relay key** opts in — `payloadLoggingEnabled: true` on either one.
+    Then the **policy** that governs the request decides: its bodies are
+    captured when that policy has `payloadLoggingEnabled: true` and not
+    captured when it does not, whatever the relay key's own
+    `payloadLoggingEnabled` says. Only a key that no policy governs opts in
+    with its own flag. Anonymous proxy traffic has no relay key and is never
+    captured.
   </Step>
 </Steps>
 
-So you can turn capture on broadly (set it on a policy) or narrowly (set it on
-a single relay key you're debugging), while the global switch stays the master
-kill switch.
+The governing policy is the one inference resolves: the key's own policy, else its service account's, else the first of the project's policy bindings, in priority order, that names the caller. The rule is the same for normal and proxy-mode requests and for WebSocket frames. Batch items are not captured.
+
+To capture everything a policy governs, set the flag on that policy. To capture a single key's traffic, give that key a policy of its own with the flag set.
 
 ```bash
 # 1. Turn the observer on globally, pick a backend.
@@ -306,14 +310,17 @@ curl -X PUT http://localhost:8081/api/settings/payload-logging \
     "clickhouse": {}
   }'
 
-# 2. Opt a single key into capture.
-curl -X PUT http://localhost:8081/api/keys/by-id/<id> \
+# 2. Opt in on the policy that governs the traffic. PUT replaces the row,
+#    so send back the policy as read with GET, with the flag set.
+curl -X PUT http://localhost:8081/api/policies/by-id/<id> \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"spec": {"payloadLoggingEnabled": true}}'
+  -d '{"metadata": {...}, "spec": {..., "payloadLoggingEnabled": true}}'
 ```
 
-The write replaces the whole section; `retentionDays` and every backend block are required, also the ones not in use. To change one field, read the section with `GET /api/settings/payload-logging` and send its `value` back with the change.
+The settings write replaces the whole section; `retentionDays` and every backend block are required, also the ones not in use. To change one field, read the section with `GET /api/settings/payload-logging` and send its `value` back with the change.
+
+Earlier releases captured a request when either its policy or its key opted in. A key with `payloadLoggingEnabled: true` under a policy without it is no longer captured; set the flag on the policy, or give the key a policy of its own, to keep capturing it.
 
 ### Reading captured payloads
 

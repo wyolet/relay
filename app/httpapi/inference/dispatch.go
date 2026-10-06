@@ -96,7 +96,8 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	applyProfile(lc, profile, r.Header)
 	// Retain the inbound body for the payloadlog observer (a reference, not
 	// a copy — in.Body is already the fully-buffered request). The capture
-	// gate (lc.PayloadLog) is set once routing resolves the opt-in.
+	// gate (lc.PayloadLog) is set below from the principal: before the proxy
+	// hand-off, or once routing succeeds, so a routing rejection is not captured.
 	lc.RequestBody = in.Body
 	ctx = lifecycle.ContextWith(ctx, lc)
 	r = r.WithContext(ctx)
@@ -114,11 +115,9 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 		"body_bytes", len(in.Body),
 	)
 	if cls.Mode == ModeProxyAuthed || cls.Mode == ModeProxyAnonymous {
-		// Proxy bypasses routing.Resolve; the only opt-in surface is the
-		// authenticated principal (anonymous proxy has none).
-		if p := PrincipalFrom(ctx); p != nil {
-			lc.PayloadLog = p.PayloadLogging
-		}
+		// Set before handleProxy: its host resolution reads it to decide
+		// whether to tee the whole streamed body.
+		lc.PayloadLog = PrincipalFrom(ctx).CapturesPayload()
 		r.Body = io.NopCloser(bytes.NewReader(in.Body))
 		handleProxy(d, w, r, in.Inbound)
 		return
@@ -139,19 +138,18 @@ func Dispatch(d Deps, w http.ResponseWriter, r *http.Request, in DispatchInput) 
 	}
 
 	plan, err := d.Resolver.Resolve(routing.Request{
-		ModelName:             modelRef,
-		RawModelName:          in.ModelName,
-		Policy:                principal.Policy,
-		UserID:                principal.UserID,
-		PayloadLoggingEnabled: principal.PayloadLogging,
-		Snapshot:              SnapshotFrom(ctx),
+		ModelName:    modelRef,
+		RawModelName: in.ModelName,
+		Policy:       principal.Policy,
+		UserID:       principal.UserID,
+		Snapshot:     SnapshotFrom(ctx),
 	})
 	if err != nil {
 		d.fireUsageFailure(ctx, routingErrKind(err), err.Error())
 		mapRoutingErr(w, err, modelRef, principal.PolicyID())
 		return
 	}
-	lc.PayloadLog = plan.PayloadLoggingEnabled
+	lc.PayloadLog = principal.CapturesPayload()
 
 	inboundSpec := d.Specs.Spec(in.Inbound)
 	if inboundSpec == nil {

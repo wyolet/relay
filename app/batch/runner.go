@@ -86,12 +86,6 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 			}
 		}
 	}
-	// Payload logging is a per-key opt-in; a token-submitted batch has no key
-	// row to read it from and stays off.
-	payloadLogging := false
-	if rk, ok := snap.KeyByHash(relayKeyHash); ok && rk != nil {
-		payloadLogging = rk.Spec.PayloadLoggingEnabled
-	}
 	// A policy-less item draws on the submitter's own host keys, so the
 	// submitting user has to reach routing; a service-account submission
 	// leaves it empty and sees the system-owned pool only.
@@ -100,12 +94,11 @@ func (rn *Runner) Run(ctx context.Context, requestID, relayKeyHash, policyID str
 		userID = attr.PrincipalID
 	}
 	plan, err := rn.Resolver.Resolve(routing.Request{
-		ModelName:             modelName,
-		RawModelName:          modelName,
-		Policy:                pol,
-		UserID:                userID,
-		PayloadLoggingEnabled: payloadLogging,
-		Snapshot:              snap,
+		ModelName:    modelName,
+		RawModelName: modelName,
+		Policy:       pol,
+		UserID:       userID,
+		Snapshot:     snap,
 	})
 	if err != nil {
 		return 0, nil, fmt.Errorf("batch: route %q: %w", modelName, err)

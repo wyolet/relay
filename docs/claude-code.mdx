@@ -119,7 +119,7 @@ See [Usage & Logging](/concepts/observability) for reading it back.
 On the routed path, Relay emits the Anthropic shape's own `ping` frame while an upstream is silent, so a long generation doesn't trip the client's idle watchdog. The interval is 15 s by default (`RELAY_STREAM_KEEPALIVE_S`); see [Configuration](/configuration) for it and the matching upstream idle timeout.
 
 <Warning>
-Keep your relay key out of shared dotfiles and version control — treat the wrapper script or `settings.json` as secret-bearing. Payload capture records prompt and completion text; scope it to the keys you mean to debug.
+Keep your relay key out of shared dotfiles and version control — treat the wrapper script or `settings.json` as secret-bearing. Payload capture records prompt and completion text; scope it to the policies or keys you mean to debug.
 </Warning>
 
 ## Notes

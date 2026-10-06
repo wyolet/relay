@@ -94,8 +94,8 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 	if !h.capturesContent() {
 		return withheld{captureOff: len(with)}
 	}
-	// A policy that governs the reporter decides, over the client's choice to send content and over the key's own flag. With no policy, what the client sent is kept.
-	if governing != nil && !governing.Spec.PayloadLoggingEnabled {
+	// The rule proxied requests follow, with sending content as the reporter's opt-in in place of the key's flag: a governing policy decides, and with none what the client sent is kept.
+	if !policy.CapturesPayload(governing, true) {
 		contentTotal.WithLabelValues(contentPolicy).Add(float64(len(with)))
 		return withheld{byPolicy: len(with)}
 	}

@@ -83,8 +83,8 @@ type Spec struct {
 
 	// PayloadLoggingEnabled opts requests authenticated by this key into
 	// full request/response body capture by the payloadlog observer. Off
-	// by default. Independent of the policy-level flag — either enables
-	// capture.
+	// by default. Ignored while a policy governs the key: the policy's own
+	// flag decides then (policy.CapturesPayload).
 	PayloadLoggingEnabled bool `json:"payloadLoggingEnabled,omitempty" yaml:"payloadLoggingEnabled,omitempty"`
 }
 
