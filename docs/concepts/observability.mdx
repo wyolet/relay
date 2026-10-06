@@ -56,6 +56,14 @@ curl -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   "http://localhost:8081/api/usage/summary?model_id=<id>&since=24h"
 ```
 
+### Failed requests
+
+`error=true` matches events with a status of 400 or above or an `error_kind`. `error_count` in summaries and time series counts events with a status of 400 or above; time series split it into `errors_4xx` and `errors_5xx`. A request Relay rejected before calling a provider has status `0` and an `error_kind` naming why (`rate_limited`, `no_keys`, `model_not_found`, …): it is listed in the logs and left out of summaries.
+
+When the provider answered with an error status, the event has that status and `error_kind` `upstream_error`, whether Relay passed the response to the caller or returned it after every key failed. That includes a 4xx the request itself caused, such as an invalid parameter or a prompt over the context window; `status` tells the two apart. `error_message` is `upstream returned <status>`, or, when every key failed, the start of the provider's error body. The full body is kept only by [payload logging](#payload-logging). Other provider-side kinds are `upstream_unreachable` (no connection to the host), `timeout` and `client_canceled`. In proxy mode a request that failed before the provider answered (a refused connection, a TLS error) is recorded as `upstream_error` with status `0`.
+
+Events recorded by earlier releases are not rewritten. In them, a provider error status passed through to the caller has an empty `error_kind`, and a streamed one outside proxy mode has status `200`, so it is counted neither in `error_count` nor by `error=true`. From this release on, error counts for streaming traffic include those provider errors, and grouping by `error_kind` puts all passed-through provider errors under `upstream_error` instead of the empty kind.
+
 ### Where usage is stored
 
 The sink is selectable and hot-swappable via the control plane — no restart:
@@ -167,13 +175,13 @@ Instrumentations put different things in `error.type`: an exception class name, 
 
 | `error_kind` | When |
 | --- | --- |
-| `upstream_error` | The provider's HTTP status is known and is 400 or above. The status is in `status`. |
+| `upstream_error` | The provider's HTTP status is known and is 400 or above, with or without `error.type`. The status is in `status`. |
 | `timeout` | No status, and `error.type` names a timeout or an exceeded deadline. |
 | `client_canceled` | No status, and `error.type` names a cancellation. |
 | `upstream_unreachable` | No status, and `error.type` names a failed connection. |
 | `error` | Anything else, including `_OTHER` and class names such as `RateLimitError` that arrive without a status. |
 
-A call that succeeded has no `error_kind`. To see what clients actually sent, read `extras.reported_error_type`.
+A call with a status below 400 and no `error.type` has no `error_kind`. These are the kinds relayed requests use for the same failures; see [Failed requests](#failed-requests). To see what clients actually sent, read `extras.reported_error_type`.
 
 ### How a reported event differs from a proxied one
 

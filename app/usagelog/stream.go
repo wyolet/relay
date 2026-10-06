@@ -1,6 +1,8 @@
 package usagelog
 
 import (
+	"net/http"
+
 	"github.com/wyolet/relay/pkg/lifecycle"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -33,8 +35,7 @@ func (f *StreamUsageFactory) NewObserver(lc *lifecycle.Context) lifecycle.Stream
 
 // streamUsageObserver harvests usage for one streamed request incrementally:
 // it retains only the running canonical stream state + last usage-bearing
-// Summary (in summ), never the frames themselves. A streamed response that
-// began is a success (status 200) with no error.
+// Summary (in summ), never the frames themselves.
 type streamUsageObserver struct {
 	lc       *lifecycle.Context
 	pricer   *Pricer
@@ -51,7 +52,12 @@ func (o *streamUsageObserver) Observe(frame []byte) {
 
 func (o *streamUsageObserver) Result() (any, error) {
 	s := o.summ.Summary()
-	out := buildEventWithSummary(o.lc, 200, "", "", s.Tokens, string(s.FinishReason), o.pricer)
+	// The post-flight event never reaches a stream observer, so the status comes from what the runner stamped on the Context.
+	status := o.lc.ResponseStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	out := buildEventWithSummary(o.lc, status, "", "", s.Tokens, string(s.FinishReason), o.pricer)
 	stampInstance(out, o.instance)
 	return out, nil
 }
