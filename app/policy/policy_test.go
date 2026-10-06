@@ -178,3 +178,25 @@ func TestEffectiveKeySelection(t *testing.T) {
 		})
 	}
 }
+
+func TestCapturesPayload(t *testing.T) {
+	capturing, silent := fix("on"), fix("off")
+	capturing.Spec.PayloadLoggingEnabled = true
+	for _, tc := range []struct {
+		name      string
+		governing *Policy
+		credOptIn bool
+		want      bool
+	}{
+		{"policy on, credential off", capturing, false, true},
+		{"policy off, credential on", silent, true, false},
+		{"no policy, credential on", nil, true, true},
+		{"no policy, credential off", nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CapturesPayload(tc.governing, tc.credOptIn); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

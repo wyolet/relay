@@ -437,12 +437,11 @@ func resolveProxyModelJSON(body []byte, resolver *routing.Resolver, p *Principal
 
 func resolveProxyPlan(model string, resolver *routing.Resolver, p *Principal, snap *appcatalog.Snapshot) (*routing.Plan, error) {
 	plan, err := resolver.Resolve(routing.Request{
-		ModelName:             model,
-		Policy:                p.Policy,
-		UserID:                p.UserID,
-		PayloadLoggingEnabled: p.PayloadLogging,
-		SkipKeyCheck:          true,
-		Snapshot:              snap,
+		ModelName:    model,
+		Policy:       p.Policy,
+		UserID:       p.UserID,
+		SkipKeyCheck: true,
+		Snapshot:     snap,
 	})
 	if err != nil {
 		return nil, &errProxyHostResolve{Reason: "routing", Detail: "could not resolve host from policy + model", Model: model, Inner: err}
