@@ -73,9 +73,16 @@ the hosted, commercial providers (OpenAI, Anthropic, and the gateways in
 front of them). You point at them by adding your **own host keys** (which are
 user-owned) and granting models through **your policies**.
 
-A handful of **system-owned rate limits** also ship with the catalog. These
-configure the global admission pool — the relay-wide guardrails that protect
-the deployment as a whole, independent of any one customer's limits.
+A handful of **system-owned rate limits** ship with Relay itself, not with the
+catalog: `inference-api-proxy`, `inference-api-proxy-anonymous` (see
+[proxy mode](/concepts/proxy-mode)), `otlp-export` (see
+[observability](/concepts/observability)), `control-api`, and `inference-api`.
+Every boot creates the ones that do not exist yet and leaves an existing row
+exactly as it is, so edit or disable them through `/api/rate-limits` and the
+change survives restarts, upgrades, and catalog re-seeds. A deleted one comes
+back as shipped on the next boot; to switch one off, set `enabled: false`.
+To change what they start as on a new database, put a file defining them
+(same names, `owner.kind: system`) under `<RELAY_CONFIG_DIR>/ratelimits/`.
 
 ### Self-hosted upstreams
 

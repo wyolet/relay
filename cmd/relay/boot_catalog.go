@@ -8,7 +8,10 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/ratelimit"
+	"github.com/wyolet/relay/app/seed"
 	"github.com/wyolet/relay/app/settings"
+	relayconfig "github.com/wyolet/relay/config"
 	"github.com/wyolet/relay/internal/config"
 	storagemod "github.com/wyolet/relay/internal/storage"
 )
@@ -33,7 +36,27 @@ func catalogBootOptions(cfg *config.Config, st *storagemod.Storage) appcatalog.B
 		bootOpts.CatalogIndexURL = cfg.CatalogIndexURL
 		slog.Info("catalog: version pinned", "version", cfg.CatalogVersion)
 	}
+	bootOpts.SystemRateLimits = loadSystemRateLimits(cfg)
 	return bootOpts
+}
+
+// loadSystemRateLimits returns the system rate limit definitions the boot seeds: the ones shipped in the binary, each replaced by a definition of the same name under <config dir>/ratelimits when there is one.
+func loadSystemRateLimits(cfg *config.Config) []*ratelimit.RateLimit {
+	dir := filepath.Join(cfg.ConfigDir, "ratelimits")
+	defs, err := seed.LoadSystemRateLimits(relayconfig.SystemRateLimits, dir)
+	if err != nil {
+		slog.Error("system rate limits invalid", "err", err, "dir", dir)
+		os.Exit(1)
+	}
+	if len(defs.FromDir) > 0 {
+		slog.Info("system rate limits: definitions taken from the config directory; they apply only to rows that do not exist yet",
+			"dir", dir, "names", defs.FromDir)
+	}
+	if len(defs.Ignored) > 0 {
+		slog.Warn("system rate limits: documents in the config directory that are not a built-in system rate limit were not loaded; use `relay apply` for them",
+			"dir", dir, "documents", defs.Ignored)
+	}
+	return defs.Rows
 }
 
 func bootstrapCatalogStores(bootCtx context.Context, bootOpts appcatalog.BootstrapOptions) (*appcatalog.Catalog, *appcatalog.Stores) {

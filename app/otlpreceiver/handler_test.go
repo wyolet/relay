@@ -1115,28 +1115,29 @@ func TestExportRateLimit(t *testing.T) {
 	}
 }
 
-func TestExportRateLimitWithoutACatalogRow(t *testing.T) {
-	fx := newFixture(t)
+func TestExportRateLimitIsPerCredential(t *testing.T) {
+	fx := newFixtureWith(t, fixtureOptions{exportsPerMinute: 1})
 	// Not a model call, so nothing is recorded: only the request count matters here.
 	body := export(t, pbSpan(1, str("http.request.method", "POST")))
-	for i := range otlpreceiver.DefaultExportsPerMinute {
-		if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK {
-			t.Fatalf("export %d: status = %d, want 200 inside the built-in limit", i+1, rec.Code)
-		}
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK {
+		t.Fatalf("first export: status = %d, want 200", rec.Code)
 	}
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429 past the built-in limit", rec.Code)
+		t.Fatalf("status = %d, want 429 past the limit", rec.Code)
 	}
-	// The limit is per credential.
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, body, "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK {
 		t.Fatalf("another credential: status = %d, want 200", rec.Code)
 	}
 }
 
+// exportsPastTheShippedLimit is more exports than the shipped otlp-export row allows in its window.
+const exportsPastTheShippedLimit = 1300
+
 func TestDisabledExportRateLimitRowAppliesNoLimit(t *testing.T) {
 	fx := newFixtureWith(t, fixtureOptions{exportsPerMinute: 1, rateLimitDisabled: true})
-	for i := range 3 {
-		if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, str("http.request.method", "POST")))); rec.Code != http.StatusOK {
+	body := export(t, pbSpan(1, str("http.request.method", "POST")))
+	for i := range exportsPastTheShippedLimit {
+		if rec := fx.post(t, otlp.MediaTypeProtobuf, body); rec.Code != http.StatusOK {
 			t.Fatalf("export %d: status = %d, want 200 with the limit switched off", i+1, rec.Code)
 		}
 	}

@@ -18,17 +18,6 @@ const RateLimitName = "otlp-export"
 // rateLimitNamespace keeps the receiver's counters apart from other limits keyed by the same credential.
 const rateLimitNamespace = "otlp"
 
-// DefaultExportsPerMinute is the per-credential cap applied when the catalog holds no RateLimitName row.
-const DefaultExportsPerMinute = 1200
-
-// defaultRateLimit stands in for a missing RateLimitName row. System rate limits reach a database only when an operator seeds them, so most deployments have no row; a row, enabled or disabled, always wins over this.
-var defaultRateLimit = &apprl.RateLimit{Spec: apprl.Spec{Rules: []apprl.Rule{{
-	Meter:    apprl.MeterRequests,
-	Amount:   DefaultExportsPerMinute,
-	Window:   apprl.Window(time.Minute),
-	Strategy: apprl.StrategySlidingWindow,
-}}}}
-
 // rateLimited reserves one request for the reporter's credential and reports how long to wait when it is over the limit. A limiter that fails lets the export through: the limit protects the receiver, and telemetry lost to a kv outage is the worse outcome.
 func (h *Handler) rateLimited(ctx context.Context, snap *appcatalog.Snapshot, reporter *lifecycle.Context) (time.Duration, bool) {
 	if h.opts.Limiter == nil || snap == nil {
@@ -42,9 +31,10 @@ func (h *Handler) rateLimited(ctx context.Context, snap *appcatalog.Snapshot, re
 	if subject == "" {
 		return 0, false
 	}
+	// The snapshot holds enabled rows only, so a disabled row reads as absent and applies no limit.
 	rl, ok := snap.SystemRateLimitByName(RateLimitName)
 	if !ok {
-		rl = defaultRateLimit
+		return 0, false
 	}
 	rules := requestRules(apprl.ResolveWithScope(rateLimitNamespace, subject, rl))
 	if len(rules) == 0 {
