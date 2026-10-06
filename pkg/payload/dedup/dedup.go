@@ -11,8 +11,11 @@
 // as a single piece when it cannot, so a caller never stores something it
 // cannot read back.
 //
-// Out of scope: storage, and knowledge of wire shapes. Callers pass the
-// top-level field names to split.
+// The split rule knows no wire shape: every top-level array is split per
+// element, every other top-level value of at least minValuePiece bytes is
+// one piece, and the rest stays in the skeleton.
+//
+// Out of scope: storage.
 package dedup
 
 import (
@@ -22,10 +25,20 @@ import (
 	"fmt"
 )
 
-// Hash is the SHA-256 of a piece's bytes. A cryptographic hash because
-// pieces may be shared across owners: a constructible collision would let
-// one caller corrupt another's stored request.
-type Hash [sha256.Size]byte
+// minValuePiece is the smallest non-array top-level value stored as its own
+// piece; shorter values (model, flags, limits) cost less inline than a hash.
+const minValuePiece = 1024
+
+// Hash is the first 16 bytes of the SHA-256 of a piece's bytes. Pieces may
+// be shared across owners, so the hash must resist construction: an
+// accidental collision needs ~2^64 pieces, and corrupting another caller's
+// piece needs a second preimage (~2^128 work).
+type Hash [16]byte
+
+func hashOf(b []byte) Hash {
+	sum := sha256.Sum256(b)
+	return Hash(sum[:len(Hash{})])
+}
 
 // Piece is one unique content-addressed fragment of a body. Body aliases
 // the input passed to Split.
@@ -61,13 +74,11 @@ func (s Split) Whole() bool {
 	return len(s.Fields) == 1 && s.Fields[0].Name == ""
 }
 
-// SplitBody splits body. names selects the top-level fields to split: an
-// array value is split per element, any other value is one piece. A nil
-// names splits every top-level array. A body that is not a JSON object
-// (truncated, binary, an array) or that would not rebuild exactly is
-// returned as one piece.
-func SplitBody(body []byte, names []string) Split {
-	s, ok := split(body, names)
+// SplitBody splits body. A body that is not a JSON object (truncated,
+// binary, an array) or that would not rebuild exactly is returned as one
+// piece.
+func SplitBody(body []byte) Split {
+	s, ok := split(body)
 	if !ok {
 		return whole(body)
 	}
@@ -79,7 +90,7 @@ func SplitBody(body []byte, names []string) Split {
 }
 
 func whole(body []byte) Split {
-	h := Hash(sha256.Sum256(body))
+	h := hashOf(body)
 	return Split{
 		Fields: []Field{{Offset: 0, Hashes: []Hash{h}}},
 		Pieces: []Piece{{Hash: h, Body: body}},
@@ -97,27 +108,16 @@ func (s Split) lookup() func(Hash) ([]byte, bool) {
 	}
 }
 
-func split(body []byte, names []string) (Split, bool) {
+func split(body []byte) (Split, bool) {
 	members, ok := topLevelMembers(body)
 	if !ok {
 		return Split{}, false
-	}
-	want := func(key string, isArray bool) bool {
-		if names == nil {
-			return isArray
-		}
-		for _, n := range names {
-			if n == key {
-				return true
-			}
-		}
-		return false
 	}
 
 	var s Split
 	seen := map[Hash]bool{}
 	add := func(b []byte) Hash {
-		h := Hash(sha256.Sum256(b))
+		h := hashOf(b)
 		if !seen[h] {
 			seen[h] = true
 			s.Pieces = append(s.Pieces, Piece{Hash: h, Body: b})
@@ -129,7 +129,7 @@ func split(body []byte, names []string) (Split, bool) {
 	prev := 0
 	for _, m := range members {
 		isArray := body[m.valueStart] == '['
-		if !want(m.key, isArray) {
+		if !isArray && m.valueEnd-m.valueStart < minValuePiece {
 			continue
 		}
 		f := Field{Name: m.key, Array: isArray}

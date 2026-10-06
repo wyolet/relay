@@ -34,6 +34,21 @@ func TestDecodePayloadLogging_Retention(t *testing.T) {
 	}
 }
 
+func TestDecodePayloadLogging_Dedup(t *testing.T) {
+	for raw, want := range map[string]bool{
+		`{"backend":"clickhouse"}`:                             false,
+		`{"backend":"clickhouse","clickhouse":{"dedup":true}}`: true,
+	} {
+		v, err := decodePayloadLogging([]byte(raw))
+		if err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		if got := v.(*PayloadLogging).CH.Dedup; got != want {
+			t.Fatalf("decode %s: CH.Dedup = %v, want %v", raw, got, want)
+		}
+	}
+}
+
 func TestAdminOnly_RetentionSections(t *testing.T) {
 	for _, s := range []string{SectionAudit, SectionUsageLogging, SectionPayloadLogging} {
 		if !AdminOnly(s) {

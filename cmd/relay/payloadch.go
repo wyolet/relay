@@ -8,7 +8,7 @@ import (
 // payloadCHBoot carries the boot-time ClickHouse parameters for the payload
 // backend. The DSN reuses the relay's CH connection (RELAY_CH_DSN — the same
 // cluster the usage sink uses), so no credentials live in the hot-swappable
-// settings row; only safe knobs (retention/WAL) come from there.
+// settings row; only safe knobs (retention/WAL/dedup) come from there.
 type payloadCHBoot struct {
 	DSN    string
 	WALDir string // boot default; overridable per settings
@@ -21,6 +21,7 @@ func (b payloadCHBoot) config(s settings.PayloadLogging) chpayload.Config {
 		DSN:           b.DSN,
 		RetentionDays: s.RetentionDays,
 		WALDir:        b.WALDir,
+		Dedup:         s.CH.Dedup,
 	}
 	if s.CH.WALDir != "" {
 		cfg.WALDir = s.CH.WALDir

@@ -67,6 +67,11 @@ type PayloadClickHouse struct {
 	// WALDir overrides the local WAL segment directory; empty uses the
 	// boot default.
 	WALDir string `json:"walDir,omitempty"`
+
+	// Dedup stores each distinct message, tool list and system prompt once
+	// and request bodies as references to them. Rows written either way
+	// stay readable.
+	Dedup bool `json:"dedup"`
 }
 
 // Validate is enforced before any write. Only meaningful when Enabled —
@@ -144,7 +149,7 @@ func validateOptionalRef(field string, r secret.Ref) error {
 func init() {
 	Register(Section{
 		Name:        SectionPayloadLogging,
-		Description: "Request/response body capture sink config (toggle, backend file|s3|clickhouse, size cap, retention, S3 settings with secret-ref credentials, ClickHouse WAL override). retentionDays applies to clickhouse (0 = keep forever, absent = 30; shortening deletes older bodies). Hot-reloaded — changes take effect without a restart.",
+		Description: "Request/response body capture sink config (toggle, backend file|s3|clickhouse, size cap, retention, S3 settings with secret-ref credentials, ClickHouse WAL override and dedup). retentionDays applies to clickhouse (0 = keep forever, absent = 30; shortening deletes older bodies). clickhouse.dedup (default false) stores request bodies as references to shared pieces, written once; pair it with maxBytes 0. Hot-reloaded — changes take effect without a restart.",
 		Defaults: func() any {
 			// 4 MiB default: a large model response (long output + thinking)
 			// clears 1 MiB of plaintext easily, and the cap applies to the
