@@ -21,37 +21,55 @@ import (
 // no token key matched a rate. Callers must treat !ok as "unpriced", never
 // as a zero cost — a fabricated $0 is the silent-drop bug class. A genuine
 // zero (priced meters with zero counts) returns ok=true with total 0.
+//
+// Each token is charged once. Some keys count tokens that are also inside input or output (usage.Tokens lists them); when the sheet has a rate for such a part, the part is charged there and left out of the whole's charge. So a breakdown entry is rate × usage.Tokens.Billable for its key, which for input and output can be less than rate × the stored count. The tier still comes from the stored input count.
 func (p *Pricing) CostNanos(tokens usage.Tokens) (total int64, breakdown map[string]int64, ok bool) {
 	if p == nil || !p.IsEnabled() || len(tokens) == 0 {
 		return 0, nil, false
 	}
 	tier := int(tokens["input"])
-	for key, count := range tokens {
-		meter, known := MeterForUsageKey(key)
-		if !known {
-			continue
-		}
-		rate, found := p.RateFor(meter, tier)
+	for key := range tokens {
+		rate, found := p.rateForKey(key, tier)
 		if !found {
 			continue
 		}
+		count := p.billable(tokens, key, tier)
 		var n int64
 		switch rate.Unit {
 		case UnitPerMillion:
 			n = perMillionNanos(count, rateNanos(rate.Amount))
 		case UnitPerUnit:
 			n = count * rateNanos(rate.Amount)
-		default:
-			continue
 		}
 		if breakdown == nil {
 			breakdown = make(map[string]int64, len(tokens))
 		}
-		breakdown[string(meter)] += n
+		breakdown[string(rate.Meter)] += n
 		total += n
 		ok = true
 	}
 	return total, breakdown, ok
+}
+
+// rateForKey returns the rate that charges a usage key at the given tier, or false when the sheet does not charge that key.
+func (p *Pricing) rateForKey(key string, tier int) (*Rate, bool) {
+	meter, known := MeterForUsageKey(key)
+	if !known {
+		return nil, false
+	}
+	rate, found := p.RateFor(meter, tier)
+	if !found || (rate.Unit != UnitPerMillion && rate.Unit != UnitPerUnit) {
+		return nil, false
+	}
+	return rate, true
+}
+
+// billable is the count of a usage key this sheet charges at the key's own rate.
+func (p *Pricing) billable(tokens usage.Tokens, key string, tier int) int64 {
+	return tokens.Billable(key, func(part string) bool {
+		_, rated := p.rateForKey(part, tier)
+		return rated
+	})
 }
 
 // rateNanos converts a float rate Amount to integer nano-USD once, so all

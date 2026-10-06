@@ -24,18 +24,25 @@ func (b Binding) Cost(tokens usage.Tokens) (float64, bool) {
 // binding has no pricing at all (cost 0, unpriced nil). Tier axis = input
 // tokens. Surface unpriced rather than presenting cost as complete: an unpriced
 // meter is silently missing money otherwise, and a newly-priced meter type
-// would quietly deflate every estimate that ignored it.
+// would quietly deflate every estimate that ignored it. Each token is charged
+// once: a part with a rate of its own (see usage.Tokens) is left out of its
+// whole's charge.
 func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []string, ok bool) {
 	if len(b.Pricing) == 0 || len(tokens) == 0 {
 		return 0, nil, false
 	}
 	tier := int(tokens["input"])
+	hasRate := func(key string) bool {
+		_, ok := b.rateForKey(key, tier)
+		return ok
+	}
 	for key, count := range tokens {
 		if count == 0 {
 			continue
 		}
 		if meter, known := meterForUsageKey(key); known {
 			if rate, rated := rateFor(b.Pricing, meter, tier); rated {
+				count := tokens.Billable(key, hasRate)
 				switch rate.Unit {
 				case "per_million":
 					cost += float64(count) / 1_000_000 * rate.Amount
@@ -65,6 +72,19 @@ func (ic *IndexedCatalog) Cost(ref string, tokens usage.Tokens) (cost float64, u
 		return 0, nil, false
 	}
 	return b.CostBreakdown(tokens)
+}
+
+// rateForKey returns the rate that charges a usage key at the given tier, or false when the binding does not charge that key.
+func (b Binding) rateForKey(key string, tier int) (*Rate, bool) {
+	meter, known := meterForUsageKey(key)
+	if !known {
+		return nil, false
+	}
+	rate, found := rateFor(b.Pricing, meter, tier)
+	if !found || (rate.Unit != "per_million" && rate.Unit != "per_unit") {
+		return nil, false
+	}
+	return rate, true
 }
 
 func meterForUsageKey(k string) (string, bool) {

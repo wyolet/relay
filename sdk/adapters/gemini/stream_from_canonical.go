@@ -128,20 +128,7 @@ func (s *canonicalToGeminiStream) translate(chunk []byte) ([]byte, error) {
 			"modelVersion": s.model,
 		}
 		if len(e.Usage) > 0 {
-			um := map[string]int64{}
-			if v := e.Usage["input"]; v > 0 {
-				um["promptTokenCount"] = v
-			}
-			if v := e.Usage["output"]; v > 0 {
-				um["candidatesTokenCount"] = v
-			}
-			if v := e.Usage["cache_read"]; v > 0 {
-				um["cachedContentTokenCount"] = v
-			}
-			if v := e.Usage["reasoning"]; v > 0 {
-				um["thoughtsTokenCount"] = v
-			}
-			frame["usageMetadata"] = um
+			frame["usageMetadata"] = canonicalUsageToGemini(e.Usage)
 		}
 		b, err := json.Marshal(frame)
 		if err != nil {

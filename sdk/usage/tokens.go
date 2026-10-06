@@ -1,19 +1,51 @@
 // Package usage holds the pure wire shapes for usage reporting, token counts and upstream timing, shared by the public client and the server's usage records.
 package usage
 
-// Tokens is the universal token-count shape across providers.
-// Keys are convention-driven, not enforced. Common values:
+// Tokens is the universal token-count shape across providers. Keys are convention-driven, not enforced; every adapter fills the keys its provider reported with the same meaning:
 //
-//	input             prompt tokens (all providers)
-//	output            completion tokens (all providers)
-//	cache_creation    Anthropic prompt-cache write
-//	cache_read        Anthropic prompt-cache hit
-//	reasoning         OpenAI o-series + Anthropic extended thinking
-//	server_tool_use   Anthropic server-side tool calls
+//	input                   prompt tokens neither read from nor written to a prompt cache
+//	cache_read              prompt tokens read from a cache (not in input)
+//	cache_creation          prompt tokens written to a cache (not in input)
+//	output                  every generated token, reasoning included
+//	reasoning               part of output: reasoning tokens, when the provider reports them apart
+//	audio_output            part of output: audio tokens
+//	accepted_prediction     part of output: predicted-output tokens that appeared in the completion
+//	rejected_prediction     part of output: predicted-output tokens that did not
+//	audio_input             part of input: audio tokens
+//	server_tool_use_input   input tokens of server-side tool calls; not treated as part of another key
+//	server_tool_use_output  output tokens of server-side tool calls; not treated as part of another key
 //
-// Per-shape parsers fill whatever keys their provider returned. Sum over
-// the map gives a backward-compatible "total tokens" for legacy consumers.
+// A request's total is input + cache_read + cache_creation + output. A part is never added to its whole; Billable gives the count to charge once a part has a rate of its own.
 type Tokens map[string]int64
+
+// parts lists each key that is counted inside another, with the key that contains it.
+var parts = [...]struct{ part, whole string }{
+	{"reasoning", "output"},
+	{"audio_output", "output"},
+	{"accepted_prediction", "output"},
+	{"rejected_prediction", "output"},
+	{"audio_input", "input"},
+}
+
+// Billable returns the count of key to charge at key's own rate: the stored count less its parts that rated reports as charged at a rate of their own, so no token is charged twice. A part without a rate stays in its whole. The stored counts are not changed.
+//
+// When the rated parts add up to more than the whole they cannot be inside it (a provider that reports them apart), and nothing is deducted.
+func (t Tokens) Billable(key string, rated func(part string) bool) int64 {
+	count := t[key]
+	var deduct int64
+	for _, p := range parts {
+		if p.whole != key {
+			continue
+		}
+		if n := t[p.part]; n > 0 && rated(p.part) {
+			deduct += n
+		}
+	}
+	if deduct > count {
+		return count
+	}
+	return count - deduct
+}
 
 // Add adds other into t in place. Useful for streaming chunks where each
 // chunk emits a partial usage block.
@@ -28,7 +60,7 @@ func (t Tokens) Add(other Tokens) {
 //
 // NOT a token total for billing/usage reporting: some keys are
 // sub-breakdowns of a coarser one (e.g. reasoning ⊂ output), so Sum
-// double-counts them. A provider total_tokens is input + output.
+// double-counts them. See Tokens for the total.
 func (t Tokens) Sum() int64 {
 	var s int64
 	for _, v := range t {

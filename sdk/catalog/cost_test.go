@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -84,6 +85,22 @@ func TestCostBreakdown_TieredPricing(t *testing.T) {
 	}
 	if want := 6.0; cost != want {
 		t.Fatalf("tiered cost = %v, want %v", cost, want)
+	}
+}
+
+// Reasoning is counted inside output; with a reasoning rate it is charged there and not again at the output rate.
+func TestCostBreakdown_PartChargedOnce(t *testing.T) {
+	b := Binding{Pricing: []Rate{
+		{Meter: "tokens.output", Unit: "per_million", Amount: 1.2},
+		{Meter: "tokens.reasoning", Unit: "per_million", Amount: 4},
+	}}
+	cost, _, _ := b.CostBreakdown(usage.Tokens{"output": 3_000_000, "reasoning": 2_500_000})
+	if want := 0.5*1.2 + 2.5*4; math.Abs(cost-want) > 1e-9 {
+		t.Fatalf("cost = %v, want %v", cost, want)
+	}
+	cost, _, _ = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(usage.Tokens{"output": 3_000_000, "reasoning": 2_500_000})
+	if want := 3 * 1.2; math.Abs(cost-want) > 1e-9 {
+		t.Fatalf("without a reasoning rate: cost = %v, want %v", cost, want)
 	}
 }
 
