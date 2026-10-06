@@ -1,7 +1,6 @@
 package otlpreceiver
 
 import (
-	"slices"
 	"strings"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -26,8 +25,6 @@ type catalogModel struct {
 	provider    string
 	pricingID   string
 	pricingName string
-	// reasoningMetered reports a rate sheet that charges reasoning tokens on a meter of their own.
-	reasoningMetered bool
 }
 
 // resolveModel finds the catalog model a reported call ran on. The response model is tried before the request model because it names what actually served the call. Each is tried qualified by the hinted provider, then by the provider as reported, then bare, since a bare name may be served by more than one provider.
@@ -53,7 +50,6 @@ func resolveModel(snap *appcatalog.Snapshot, inf otlp.Inference, hint ProviderHi
 				out.provider, _ = snap.ProviderSlug(m.Meta.Owner.ID)
 				if p, ok := pricingFor(snap, m, hostID, hint.Host, out.provider); ok {
 					out.pricingID, out.pricingName = p.Meta.ID, p.Meta.Name
-					out.reasoningMetered = slices.ContainsFunc(p.Spec.Rates, func(r pricing.Rate) bool { return r.Meter == pricing.MeterTokensReasoning })
 				}
 				return out
 			}

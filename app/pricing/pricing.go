@@ -162,21 +162,19 @@ func (p *Pricing) RateFor(meter Meter, tokens int) (*Rate, bool) {
 // the conventional axis for context-length tiers across major providers.
 // Keys not mapped by MeterForUsageKey are silently skipped (unpriced
 // dimension). Returns 0 when Pricing is disabled or carries no rates.
+// Each token is charged once, as in CostNanos.
 func (p *Pricing) Cost(tokens usage.Tokens) float64 {
 	if p == nil || !p.IsEnabled() || len(tokens) == 0 {
 		return 0
 	}
 	tier := int(tokens["input"])
 	var total float64
-	for key, count := range tokens {
-		meter, ok := MeterForUsageKey(key)
+	for key := range tokens {
+		rate, ok := p.rateForKey(key, tier)
 		if !ok {
 			continue
 		}
-		rate, ok := p.RateFor(meter, tier)
-		if !ok {
-			continue
-		}
+		count := p.billable(tokens, key, tier)
 		switch rate.Unit {
 		case UnitPerMillion:
 			total += float64(count) / 1_000_000 * rate.Amount

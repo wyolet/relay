@@ -14,11 +14,11 @@ import (
 // Maps:
 //
 //	promptTokenCount - cachedContentTokenCount -> input
-//	candidatesTokenCount                       -> output
+//	candidatesTokenCount + thoughtsTokenCount  -> output
 //	cachedContentTokenCount                    -> cache_read
 //	thoughtsTokenCount                         -> reasoning
 //
-// Dimensions are orthogonal (input excludes cache_read). Returns nil when
+// Input excludes cache_read. Gemini counts thoughts apart from candidates, while canonical output includes reasoning (usage.Tokens), so output is their sum. Returns nil when
 // usageMetadata is absent or all counts are zero.
 func ExtractTokens(body []byte) usage.Tokens {
 	trimmed := bytes.TrimLeft(body, " \t\r\n")
@@ -64,8 +64,8 @@ func geminiUsageToTokens(u *usageMetadata) usage.Tokens {
 	if v := u.PromptTokenCount - cached; v > 0 {
 		t["input"] = int64(v)
 	}
-	if u.CandidatesTokenCount > 0 {
-		t["output"] = int64(u.CandidatesTokenCount)
+	if v := u.CandidatesTokenCount + u.ThoughtsTokenCount; v > 0 {
+		t["output"] = int64(v)
 	}
 	if u.CachedContentTokenCount > 0 {
 		t["cache_read"] = int64(u.CachedContentTokenCount)
@@ -77,4 +77,23 @@ func geminiUsageToTokens(u *usageMetadata) usage.Tokens {
 		return nil
 	}
 	return t
+}
+
+// canonicalUsageToGemini is the inverse of geminiUsageToTokens: candidates are the output tokens that are not thoughts.
+func canonicalUsageToGemini(t usage.Tokens) map[string]int64 {
+	um := map[string]int64{}
+	reasoning := t["reasoning"]
+	if v := t["input"]; v > 0 {
+		um["promptTokenCount"] = v
+	}
+	if v := t["output"] - reasoning; v > 0 {
+		um["candidatesTokenCount"] = v
+	}
+	if v := t["cache_read"]; v > 0 {
+		um["cachedContentTokenCount"] = v
+	}
+	if reasoning > 0 {
+		um["thoughtsTokenCount"] = reasoning
+	}
+	return um
 }

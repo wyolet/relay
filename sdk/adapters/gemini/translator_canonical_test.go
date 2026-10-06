@@ -432,7 +432,8 @@ func TestParseResponse_UsageMapping(t *testing.T) {
 	if resp.Usage["input"] != 80 {
 		t.Errorf("input: %d", resp.Usage["input"])
 	}
-	if resp.Usage["output"] != 50 {
+	// Gemini counts thoughts apart from candidates; canonical output includes them.
+	if resp.Usage["output"] != 80 {
 		t.Errorf("output: %d", resp.Usage["output"])
 	}
 	if resp.Usage["cache_read"] != 20 {
@@ -440,6 +441,25 @@ func TestParseResponse_UsageMapping(t *testing.T) {
 	}
 	if resp.Usage["reasoning"] != 30 {
 		t.Errorf("reasoning: %d", resp.Usage["reasoning"])
+	}
+}
+
+func TestUsageRoundTrip_ThoughtsStayApartFromCandidates(t *testing.T) {
+	resp, err := tr.ParseResponse([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","index":0}],
+		"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":50,"cachedContentTokenCount":20,"thoughtsTokenCount":30}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := tr.SerializeResponse(resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct{ UsageMetadata usageMetadata }
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if u := wire.UsageMetadata; u.CandidatesTokenCount != 50 || u.ThoughtsTokenCount != 30 {
+		t.Errorf("usageMetadata = %+v, want candidates 50 thoughts 30", u)
 	}
 }
 
@@ -517,7 +537,7 @@ func TestExtractTokens_StreamedSSEFinalUsage(t *testing.T) {
 				})...,
 			),
 			wantInput:  65,
-			wantOutput: 11,
+			wantOutput: 16,
 			wantCache:  25,
 			wantReason: 5,
 		},

@@ -158,20 +158,7 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 	// — rule 7: an adapter ignores keys it does not own.
 
 	if len(resp.Usage) > 0 {
-		um := map[string]int64{}
-		if v := resp.Usage["input"]; v > 0 {
-			um["promptTokenCount"] = v
-		}
-		if v := resp.Usage["output"]; v > 0 {
-			um["candidatesTokenCount"] = v
-		}
-		if v := resp.Usage["cache_read"]; v > 0 {
-			um["cachedContentTokenCount"] = v
-		}
-		if v := resp.Usage["reasoning"]; v > 0 {
-			um["thoughtsTokenCount"] = v
-		}
-		out["usageMetadata"] = um
+		out["usageMetadata"] = canonicalUsageToGemini(resp.Usage)
 	}
 
 	if resp.Model != "" {
