@@ -100,11 +100,14 @@ func identify(inf otlp.Inference, byResponse bool) (Call, bool) {
 type refusals struct {
 	noIdentity int64
 	future     int64
+	// expired counts calls that started before the usage store's retention window, retentionDays long.
+	expired       int64
+	retentionDays int
 	// repeated counts calls that appear more than once in the export. They are duplicates, not rejections.
 	repeated int64
 }
 
-func (r refusals) rejected() int64 { return r.noIdentity + r.future }
+func (r refusals) rejected() int64 { return r.noIdentity + r.future + r.expired }
 
 func (r refusals) message(sig signal) string {
 	var parts []string
@@ -118,6 +121,9 @@ func (r refusals) message(sig signal) string {
 	if r.future > 0 {
 		parts = append(parts, fmt.Sprintf("%d starting more than %d minutes in the future", r.future, int(maxClockSkew/time.Minute)))
 	}
+	if r.expired > 0 {
+		parts = append(parts, fmt.Sprintf("%d older than the usage retention of %d days", r.expired, r.retentionDays))
+	}
 	if len(parts) == 0 {
 		return ""
 	}
@@ -125,9 +131,11 @@ func (r refusals) message(sig signal) string {
 }
 
 // admit returns the calls that may be recorded, each once, and counts the rest.
-func admit(calls []otlp.Inference, byResponse bool, now time.Time) ([]reported, refusals) {
+func admit(calls []otlp.Inference, byResponse bool, now time.Time, usageRetention func() time.Duration) ([]reported, refusals) {
 	var refused refusals
 	latestStart := now.Add(maxClockSkew)
+	var earliestStart time.Time
+	earliestStart, refused.retentionDays = oldestKept(usageRetention, now)
 	inExport := make(map[Call]struct{}, len(calls))
 	accepted := make([]reported, 0, len(calls))
 	for _, inf := range calls {
@@ -139,6 +147,10 @@ func admit(calls []otlp.Inference, byResponse bool, now time.Time) ([]reported, 
 			continue
 		case inf.Start.After(latestStart):
 			refused.future++
+			continue
+		// The usage store deletes by age from the start time, so this row would be gone on arrival. A call with no start time is dated at receipt and never expired.
+		case !inf.Start.IsZero() && inf.Start.Before(earliestStart):
+			refused.expired++
 			continue
 		}
 		if _, seen := inExport[id]; seen {

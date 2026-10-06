@@ -58,6 +58,9 @@ type withheld struct {
 	captureOff int
 	// byPolicy counts calls whose content the reporter's policy does not store.
 	byPolicy int
+	// expired counts calls that started before the payload store's retention window, retentionDays long.
+	expired       int
+	retentionDays int
 }
 
 // message is the warning for the client, "" when all content sent was eligible to be stored.
@@ -66,10 +69,15 @@ func (w withheld) message() string {
 	if w.byPolicy > 0 {
 		n, why = w.byPolicy, "the policy of this credential does not allow storing message content"
 	}
+	advice := "It is safe to stop sending content"
+	if w.expired > 0 {
+		n, why = w.expired, "the calls are older than the content retention of "+strconv.Itoa(w.retentionDays)+" days"
+		advice = "It is safe to leave content out of calls that old"
+	}
 	if n == 0 {
 		return ""
 	}
-	return "message content of " + strconv.Itoa(n) + " model calls was not stored: " + why + ". It is safe to stop sending content; usage was recorded."
+	return "message content of " + strconv.Itoa(n) + " model calls was not stored: " + why + ". " + advice + "; usage was recorded."
 }
 
 // storeContent queues the reported message content of calls for the payload store, once per call, when the operator's switches are on and the reporter's policy allows it. Content is secondary to the usage row: when the payload queue lacks room it is dropped and counted rather than holding up the export, and left unmarked so a later report of the same call can still store it.
@@ -91,10 +99,29 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 		contentTotal.WithLabelValues(contentPolicy).Add(float64(len(with)))
 		return withheld{byPolicy: len(with)}
 	}
+	// The payload store deletes by age from the call's start, which may be a shorter window than the usage store's: such a call keeps its usage row and loses only its content.
+	var kept withheld
+	if oldest, days := oldestKept(h.opts.ContentRetention, received); !oldest.IsZero() {
+		current := with[:0]
+		for _, c := range with {
+			if !c.inf.Start.IsZero() && c.inf.Start.Before(oldest) {
+				kept.expired++
+				continue
+			}
+			current = append(current, c)
+		}
+		if with = current; kept.expired > 0 {
+			kept.retentionDays = days
+			contentTotal.WithLabelValues(contentExpired).Add(float64(kept.expired))
+		}
+		if len(with) == 0 {
+			return kept
+		}
+	}
 	queue := h.opts.Payloads
 	if sharedRoom(queue) <= 0 {
 		contentTotal.WithLabelValues(contentDropped).Add(float64(len(with)))
-		return withheld{}
+		return kept
 	}
 
 	ids := make([]Call, len(with))
@@ -119,7 +146,7 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 		contentTotal.WithLabelValues(contentDropped).Add(float64(len(unqueued)))
 		h.unmark(ctx, tenant, MarkerContent, unqueued, "otlp receiver: content stays marked as stored but was not queued")
 	}
-	return withheld{}
+	return kept
 }
 
 func (h *Handler) capturesContent() bool {

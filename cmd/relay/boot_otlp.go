@@ -2,6 +2,7 @@ package main
 
 import (
 	"log/slog"
+	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/otlpreceiver"
@@ -54,5 +55,36 @@ func buildOTLPReceiver(cfg *config.Config, cat *appcatalog.Catalog, usageCtl *us
 		Payloads:       payloadCtl.Emitter(),
 		InstanceID:     cfg.InstanceID,
 		MaxBodyBytes:   cfg.MaxRequestBytes,
+		UsageRetention: func() time.Duration {
+			applied, _ := usageCtl.Applied()
+			return days(usageRetentionDays(applied, cfg.EventlogBackend))
+		},
+		ContentRetention: func() time.Duration {
+			applied, _ := payloadCtl.Applied()
+			return days(payloadRetentionDays(applied))
+		},
 	})
 }
+
+// usageRetentionDays is how long the usage store built from s keeps an event, 0 for no limit. Only the backends that delete by age have one; envBackend names the backend when the section does not, as in usageBackendBuilder.
+func usageRetentionDays(s settings.UsageLogging, envBackend string) int {
+	backend := s.Backend
+	if backend == "" {
+		backend = envBackend
+	}
+	switch backend {
+	case "clickhouse", "postgres":
+		return s.RetentionDays
+	}
+	return 0
+}
+
+// payloadRetentionDays is how long the payload store built from s keeps a body, 0 for no limit. Only the clickhouse backend deletes by age.
+func payloadRetentionDays(s settings.PayloadLogging) int {
+	if s.Backend == "clickhouse" {
+		return s.RetentionDays
+	}
+	return 0
+}
+
+func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }

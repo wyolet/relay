@@ -77,8 +77,11 @@ type fixture struct {
 	phantomRoom int
 	// captureContent is the receiver's own content switch; payloads is the payload store behind it.
 	captureContent bool
-	payloads       *payloadStore
-	project        *project.Project
+	// usageRetention and contentRetention are how long the stores keep a record; zero keeps everything. Read per export, like the settings behind them.
+	usageRetention   time.Duration
+	contentRetention time.Duration
+	payloads         *payloadStore
+	project          *project.Project
 	// otherProject is the project of outsiderKey.
 	otherProject *project.Project
 	team         *team.Team
@@ -295,10 +298,12 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 			"acme.cloud": {Provider: "acme", Host: "a-reseller"},
 			"zeta_ai":    {Provider: "zeta"},
 		},
-		CaptureContent: func() bool { return fx.captureContent },
-		PayloadLog:     fx.payloads,
-		Payloads:       fx.payloads,
-		InstanceID:     "pod-a",
+		CaptureContent:   func() bool { return fx.captureContent },
+		UsageRetention:   func() time.Duration { return fx.usageRetention },
+		ContentRetention: func() time.Duration { return fx.contentRetention },
+		PayloadLog:       fx.payloads,
+		Payloads:         fx.payloads,
+		InstanceID:       "pod-a",
 	})
 	authenticated := func(next http.Handler) http.Handler {
 		return inference.ClassifyMiddleware()(inference.AuthenticateMiddleware(cat, nil)(next))
@@ -931,6 +936,124 @@ func TestStartTimes(t *testing.T) {
 		if ev.Timestamp.Before(before) || ev.Timestamp.After(time.Now()) {
 			t.Errorf("call without a start time stamped %v, want the time it was received", ev.Timestamp)
 		}
+	}
+}
+
+const day = 24 * time.Hour
+
+// startingAt moves a span to start at start and last a second.
+func startingAt(s *tracepb.Span, start time.Time) *tracepb.Span {
+	s.StartTimeUnixNano = uint64(start.UnixNano())
+	s.EndTimeUnixNano = uint64(start.Add(time.Second).UnixNano())
+	return s
+}
+
+func TestACallOlderThanTheUsageRetentionIsRejected(t *testing.T) {
+	fx := newFixture(t)
+	fx.usageRetention = 30 * day
+	now := time.Now()
+	unstamped := chatSpan(5, "acme-large")
+	unstamped.StartTimeUnixNano, unstamped.EndTimeUnixNano = 0, 0
+	export := func(t *testing.T) []byte {
+		return mustJSON(t,
+			startingAt(chatSpan(1, "acme-large"), now.Add(-45*day)),
+			startingAt(chatSpan(2, "acme-large"), now.Add(-29*day)),
+			// Inside the window by half an hour: the store would delete it within the hour, so it is refused too.
+			startingAt(chatSpan(3, "acme-large"), now.Add(-30*day+30*time.Minute)),
+			// Inside by two hours: kept.
+			startingAt(chatSpan(4, "acme-large"), now.Add(-30*day+2*time.Hour)),
+			unstamped,
+		)
+	}
+
+	rejectedBefore := otlpreceiver.RecordCount("spans", "rejected")
+	rec := fx.post(t, otlp.MediaTypeJSON, export(t))
+	rejected, message, _ := partialSuccess(t, rec)
+	if rec.Code != http.StatusOK || rejected != "2" {
+		t.Fatalf("status = %d body = %s, want two calls rejected", rec.Code, rec.Body)
+	}
+	if want := "model-call spans rejected: 2 older than the usage retention of 30 days"; message != want {
+		t.Errorf("message = %q, want %q", message, want)
+	}
+	// A call with no start time is dated at receipt, so it is never too old.
+	if got, want := fx.spanIDs(), spanIDsOf(2, 4, 5); !slices.Equal(got, want) {
+		t.Errorf("recorded spans = %v, want %v", got, want)
+	}
+	if got := otlpreceiver.RecordCount("spans", "rejected") - rejectedBefore; got != 2 {
+		t.Errorf("spans counted as rejected = %v, want 2", got)
+	}
+
+	// The setting is followed without a restart: once the store keeps everything, the same export is accepted whole.
+	fx.usageRetention = 0
+	rec = fx.post(t, otlp.MediaTypeJSON, export(t))
+	if rec.Code != http.StatusOK || rec.Body.String() != "{}" {
+		t.Fatalf("keep forever: status = %d body = %s, want the empty success", rec.Code, rec.Body)
+	}
+	if got, want := fx.spanIDs(), spanIDsOf(1, 2, 3, 4, 5); !slices.Equal(got, want) {
+		t.Errorf("recorded spans = %v, want %v", got, want)
+	}
+}
+
+func TestAnEventOlderThanTheUsageRetentionIsRejected(t *testing.T) {
+	fx := newFixture(t)
+	fx.usageRetention = 7 * day
+	old := chatEvent(1, "acme-large")
+	old.TimeUnixNano = uint64(time.Now().Add(-8 * day).UnixNano())
+	recent := chatEvent(2, "acme-large")
+	recent.TimeUnixNano = uint64(time.Now().Add(-time.Hour).UnixNano())
+	// The reasons an export's calls are refused for share the one message.
+	anonymous := detachedEvent("")
+	anonymous.TimeUnixNano = recent.TimeUnixNano
+
+	rejectedBefore := otlpreceiver.RecordCount("log_records", "rejected")
+	rec := fx.postLogs(t, otlp.MediaTypeJSON, logsJSON(t, old, recent, anonymous))
+	rejected, message, _ := partialSuccess(t, rec)
+	if rec.Code != http.StatusOK || rejected != "2" || len(fx.events) != 1 {
+		t.Fatalf("status = %d body = %s events = %d, want one recorded and two rejected", rec.Code, rec.Body, len(fx.events))
+	}
+	if want := "model-call log records rejected: 1 with neither span ids nor a response id; 1 older than the usage retention of 7 days"; message != want {
+		t.Errorf("message = %q, want %q", message, want)
+	}
+	if got := otlpreceiver.RecordCount("log_records", "rejected") - rejectedBefore; got != 2 {
+		t.Errorf("log records counted as rejected = %v, want 2", got)
+	}
+}
+
+func TestContentOlderThanThePayloadRetentionIsNotStored(t *testing.T) {
+	fx := capturing(t)
+	fx.usageRetention, fx.contentRetention = 90*day, 30*day
+	now := time.Now()
+	withContent := func(id byte, age time.Duration) *tracepb.Span {
+		return startingAt(pbSpan(id, contentAttrs(t, asText)...), now.Add(-age))
+	}
+	expiredBefore := otlpreceiver.ContentCount("expired")
+	rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t,
+		withContent(1, 45*day),
+		withContent(2, 30*day-30*time.Minute),
+		withContent(3, time.Hour),
+		// Older than the usage retention as well: rejected, and not part of the content warning.
+		withContent(4, 120*day),
+	))
+	rejected, message, _ := partialSuccess(t, rec)
+	// Three usage rows, whatever became of their content; only the newest call's content is kept.
+	if rec.Code != http.StatusOK || rejected != "1" || !slices.Equal(fx.spanIDs(), spanIDsOf(1, 2, 3)) {
+		t.Fatalf("status = %d body = %s recorded spans = %v, want three recorded and one rejected", rec.Code, rec.Body, fx.spanIDs())
+	}
+	if len(fx.payloads.records) != 1 || !strings.HasSuffix(fx.payloads.records[0].RequestID, spanIDsOf(3)[0]) {
+		t.Errorf("payload records = %+v, want only the recent call's", fx.payloads.records)
+	}
+	want := "model-call spans rejected: 1 older than the usage retention of 90 days. Also: message content of 2 model calls was not stored: the calls are older than the content retention of 30 days. It is safe to leave content out of calls that old; usage was recorded."
+	if message != want {
+		t.Errorf("message =\n%s\nwant\n%s", message, want)
+	}
+	if got := otlpreceiver.ContentCount("expired") - expiredBefore; got != 2 {
+		t.Errorf("content counted as expired = %v, want 2", got)
+	}
+
+	// A payload store that keeps everything takes content of any age the usage store accepts.
+	fx.contentRetention = 0
+	if rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, withContent(5, 45*day))); rec.Body.String() != "{}" || len(fx.payloads.records) != 2 {
+		t.Errorf("keep forever: body = %s payload records = %d, want the empty success and the content stored", rec.Body, len(fx.payloads.records))
 	}
 }
 

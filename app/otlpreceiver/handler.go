@@ -109,6 +109,24 @@ type Options struct {
 	InstanceID string
 	// MaxBodyBytes bounds a decompressed export body.
 	MaxBodyBytes int64
+	// UsageRetention and ContentRetention report how long the usage store and the payload store keep a record, counted from the call's start; zero or a nil func means no limit. Read per request. A call older than the usage retention is rejected, and content older than the content retention is not stored: the store would delete either on arrival.
+	UsageRetention   func() time.Duration
+	ContentRetention func() time.Duration
+}
+
+// retentionMargin is how much sooner than the store the receiver treats a call as expired, so a call is not accepted at the edge of the window and deleted within the hour.
+const retentionMargin = time.Hour
+
+// oldestKept returns the earliest start time a store with the given retention still keeps at now, less the margin, and the retention in whole days; the zero time when the store keeps everything.
+func oldestKept(retention func() time.Duration, now time.Time) (time.Time, int) {
+	if retention == nil {
+		return time.Time{}, 0
+	}
+	keep := retention()
+	if keep <= 0 {
+		return time.Time{}, 0
+	}
+	return now.Add(retentionMargin - keep), int(keep / (24 * time.Hour))
 }
 
 // Handler serves the OTLP/HTTP export endpoints. It expects the inference authentication middleware in front of it.
@@ -202,7 +220,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	}
 
 	now := time.Now()
-	accepted, refused := admit(calls, sig.responseIdentity, now)
+	accepted, refused := admit(calls, sig.responseIdentity, now, h.opts.UsageRetention)
 	var content withheld
 	if len(accepted) > 0 {
 		from := origin{instance: h.opts.InstanceID, clientIP: inference.ClassificationFrom(ctx).ClientIP}

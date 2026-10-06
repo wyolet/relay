@@ -146,10 +146,20 @@ Relay reads the [OpenTelemetry GenAI semantic conventions](https://github.com/op
 | `error_kind` | Relay's own classification of a failed call, in the values proxied requests use; see [Error kinds](#error-kinds). The `error.type` the client sent is kept in `extras.reported_error_type`. |
 | `finish_reason` | first value of `gen_ai.response.finish_reasons` |
 | `streamed`, time to first token | `gen_ai.request.stream`, `gen_ai.response.time_to_first_chunk` |
-| `ts`, `duration_ms` | the span's start and end. An event has no duration: `duration_ms` is `0` and `ts` is the record's time, or the time the SDK observed it. A start time in the past is accepted as reported, and [retention](#retention) counts from it: an event, and its content, reported with a `ts` older than the retention window is deleted by the store shortly after it arrives. |
+| `ts`, `duration_ms` | the span's start and end. An event has no duration: `duration_ms` is `0` and `ts` is the record's time, or the time the SDK observed it. A start time in the past is kept as reported, within the store's [retention](#retention): see [Old calls](#old-calls). A call with no start time is dated when Relay receives it. |
 | `extras` | `trace_id`, `span_id`, `response_id` (`gen_ai.response.id`), `session_id` (`gen_ai.conversation.id`), `service` (the resource's `service.name`), `operation`, `reported_provider` |
 
 A row is as complete as the instrumentation makes it. Three examples from current releases: `opentelemetry-instrumentation-openai-v2` 2.4b0 and `@opentelemetry/instrumentation-openai` 0.20.0 report neither cached nor reasoning tokens and do not mark a streamed call, so such a call is stored with all input at the uncached rate and `streamed: false`; `opentelemetry-instrumentation-google-genai` 1.2b0 reports all of them. Report one call and read it back with `GET /api/usage/events?source=otlp` before relying on the numbers.
+
+### Old calls
+
+Retention counts from a call's start time, so a store with a retention window would delete a call older than the window as soon as it arrived. Relay does not accept such data:
+
+- A call that started before the usage retention window (`retentionDays` of `usage-logging`, less an hour) is rejected and named in the partial-success message, for example `model-call spans rejected: 2 older than the usage retention of 30 days`. With `retentionDays: 0`, and with the `file` and `valkey` backends, which do not delete by age, a call of any age is accepted.
+- A call inside the usage window but older than the payload retention (`retentionDays` of `payload-logging` on the `clickhouse` backend, 30 by default) is recorded without its content, and the response says so.
+- Both follow the settings as they change, without a restart.
+
+To import history, set the usage retention to cover the imported dates first, and the payload retention too if the content matters.
 
 ### Error kinds
 
@@ -191,7 +201,7 @@ Telemetry names providers its own way, and often names the service that served t
 | Response | When | Exporter |
 | --- | --- | --- |
 | `200` | The export was accepted. An empty body means every model call in it was recorded or was a duplicate. | done |
-| `200` with `partialSuccess` | Some model calls were refused and the rest recorded: `rejectedSpans` / `rejectedLogRecords` counts those with no trace id and span id (for an event: nor a response id) or starting more than 5 minutes in the future; `errorMessage` says which. | logs it, does not resend |
+| `200` with `partialSuccess` | Some model calls were refused and the rest recorded: `rejectedSpans` / `rejectedLogRecords` counts those with no trace id and span id (for an event: nor a response id), starting more than 5 minutes in the future, or [older than the usage retention](#old-calls); `errorMessage` says which and how many. | logs it, does not resend |
 | `400` | The body does not decode, or the export reports more than 10,000 model calls. | drops the batch |
 | `200` with `partialSuccess.errorMessage` only | Everything was recorded, with a warning: the export carried [message content](#message-content) that Relay does not store. No record is counted as rejected. | logs it if it reads partial success |
 | `401` | Missing or invalid relay key. | drops the batch |
@@ -208,7 +218,7 @@ Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the
 
 Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches below must be on, and then the policy that governs the reporting credential decides: content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
 
-Relay tells the client. When an export carries content that is not stored because of the policy or because an operator switch is off, the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
+Relay tells the client. When an export carries content that is not stored because of the policy, because an operator switch is off, or because the call is [older than the payload retention](#old-calls), the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
 
 On the client, turn on content capture in the instrumentation. For the Python instrumentations:
 
