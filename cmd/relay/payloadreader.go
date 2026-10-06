@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -37,7 +38,10 @@ type payloadReaderResolver struct {
 	has     bool
 }
 
-var _ payloadlog.Reader = (*payloadReaderResolver)(nil)
+var (
+	_ payloadlog.Reader = (*payloadReaderResolver)(nil)
+	_ payloadlog.Eraser = (*payloadReaderResolver)(nil)
+)
 
 func newPayloadReaderResolver(src payloadlog.SettingsSource, resolver *secret.Registry, chBoot payloadCHBoot, log *slog.Logger) *payloadReaderResolver {
 	if log == nil {
@@ -52,6 +56,20 @@ func (p *payloadReaderResolver) Get(ctx context.Context, requestID string) (payl
 		return payloadlog.Record{}, err
 	}
 	return r.Get(ctx, requestID)
+}
+
+// Erase deletes captured bodies from the backend the live config names, or
+// reports payload.ErrEraseUnsupported when that backend cannot.
+func (p *payloadReaderResolver) Erase(ctx context.Context, f payloadlog.EraseFilter) (payloadlog.EraseResult, error) {
+	r, err := p.current(ctx)
+	if err != nil {
+		return payloadlog.EraseResult{}, err
+	}
+	e, ok := r.(payloadlog.Eraser)
+	if !ok {
+		return payloadlog.EraseResult{}, fmt.Errorf("%w (payload-logging backend %q)", payloadlog.ErrEraseUnsupported, cmp.Or(p.liveConfig().Backend, "file"))
+	}
+	return e.Erase(ctx, f)
 }
 
 // current returns the reader for the live config, rebuilding only when the

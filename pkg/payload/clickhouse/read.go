@@ -62,10 +62,11 @@ func (s *Reader) getWhole(ctx context.Context, requestID string) (payload.Record
 }
 
 // getDedup reads a payload_requests row and rebuilds its request body from
-// payload_pieces. A missing piece is an error, never a partial body.
+// payload_pieces. A missing piece or a body that does not match the row's
+// digest is an error, never a partial or altered body.
 func (s *Reader) getDedup(ctx context.Context, requestID string) (payload.Record, error) {
 	rows, err := s.conn.Query(ctx,
-		"SELECT request_id, ts, skeleton, field_names, field_is_array, field_offsets, field_counts, hashes, response_body, request_truncated, response_truncated, project_id, principal_id, relay_key_hash FROM "+
+		"SELECT request_id, ts, skeleton, field_names, field_is_array, field_offsets, field_counts, hashes, request_sha256, response_body, request_truncated, response_truncated, project_id, principal_id, relay_key_hash FROM "+
 			requestsTable+" WHERE request_id = ? ORDER BY ts DESC LIMIT 1",
 		requestID)
 	if err != nil {
@@ -83,6 +84,7 @@ func (s *Reader) getDedup(ctx context.Context, requestID string) (payload.Record
 	var (
 		r                   payload.Record
 		skeleton, respBody  string
+		digest              string
 		names, hashes       []string
 		isArray             []uint8
 		offsets, counts     []uint32
@@ -90,7 +92,7 @@ func (s *Reader) getDedup(ctx context.Context, requestID string) (payload.Record
 	)
 	if err := rows.Scan(
 		&r.RequestID, &r.Timestamp, &skeleton, &names, &isArray, &offsets, &counts, &hashes,
-		&respBody, &reqTrunc, &respTrunc, &r.ProjectID, &r.PrincipalID, &r.RelayKeyHash,
+		&digest, &respBody, &reqTrunc, &respTrunc, &r.ProjectID, &r.PrincipalID, &r.RelayKeyHash,
 	); err != nil {
 		return payload.Record{}, fmt.Errorf("payload/clickhouse: scan %s row: %w", requestsTable, err)
 	}
@@ -108,7 +110,7 @@ func (s *Reader) getDedup(ctx context.Context, requestID string) (payload.Record
 		s.log.Error("payload/clickhouse: request row unreadable", "request_id", requestID, "err", err)
 		return payload.Record{}, err
 	}
-	pieces, err := s.fetchPieces(ctx, requestID)
+	pieces, err := s.fetchPieces(ctx, requestID, r.ProjectID)
 	if err != nil {
 		return payload.Record{}, err
 	}
@@ -120,20 +122,24 @@ func (s *Reader) getDedup(ctx context.Context, requestID string) (payload.Record
 		s.log.Error("payload/clickhouse: rebuild request body", "request_id", requestID, "err", err)
 		return payload.Record{}, fmt.Errorf("payload/clickhouse: rebuild request body: %w", err)
 	}
+	if !bodyMatchesDigest(body, digest) {
+		s.log.Error("payload/clickhouse: rebuilt request body does not match its digest", "request_id", requestID)
+		return payload.Record{}, fmt.Errorf("%w: request %s", payload.ErrIntegrity, requestID)
+	}
 	if len(body) > 0 {
 		r.RequestBody = body
 	}
 	return r, nil
 }
 
-// fetchPieces loads the pieces of the row getDedup reads. The hash list is
-// read server-side so the query text stays small however many pieces a
-// body has.
-func (s *Reader) fetchPieces(ctx context.Context, requestID string) (map[dedup.Hash][]byte, error) {
+// fetchPieces loads the pieces of the row getDedup reads, from that row's
+// project only. The hash list is read server-side so the query text stays
+// small however many pieces a body has.
+func (s *Reader) fetchPieces(ctx context.Context, requestID, projectID string) (map[dedup.Hash][]byte, error) {
 	rows, err := s.conn.Query(ctx,
-		"SELECT hash, any(body) FROM "+piecesTable+" WHERE hash IN (SELECT arrayJoin(hashes) FROM (SELECT hashes FROM "+
+		"SELECT hash, any(body) FROM "+piecesTable+" WHERE project_id = ? AND hash IN (SELECT arrayJoin(hashes) FROM (SELECT hashes FROM "+
 			requestsTable+" WHERE request_id = ? ORDER BY ts DESC LIMIT 1)) GROUP BY hash",
-		requestID)
+		projectID, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("payload/clickhouse: get %s query: %w", piecesTable, err)
 	}

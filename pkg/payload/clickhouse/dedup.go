@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -14,30 +15,58 @@ import (
 // overflow only costs duplicate inserts, which ReplacingMergeTree collapses.
 const maxRecentPieces = 500_000
 
+// projectPiece is a piece as stored: pieces are deduplicated within a
+// project only.
+type projectPiece struct {
+	project string
+	dedup.Piece
+}
+
+type pieceKey struct {
+	project string
+	hash    dedup.Hash
+}
+
 // recentPieces maps each piece this sink wrote to the UTC day it wrote it.
 // A piece is re-inserted on its first sighting each day, which moves its
 // last_seen forward so the pieces TTL never drops one a live request row
 // references. Only insertBatch touches it, and the WAL serialises those calls.
 type recentPieces struct {
 	limit int
-	day   map[dedup.Hash]int32
+	// lastDelete is the payload_pieces delete mutation the set was last
+	// checked against.
+	lastDelete uint64
+	day        map[pieceKey]int32
 }
 
 func newRecentPieces(limit int) *recentPieces {
-	return &recentPieces{limit: limit, day: make(map[dedup.Hash]int32)}
+	return &recentPieces{limit: limit, day: make(map[pieceKey]int32)}
 }
 
-func (r *recentPieces) writtenOn(h dedup.Hash, day int32) bool {
-	d, ok := r.day[h]
+// forgetIfErased clears the set when a pieces delete ran since the last
+// check: it may have removed pieces the set says are already stored today.
+// Any change counts, not only an increase, so a recreated table or trimmed
+// mutation history also clears it.
+func (r *recentPieces) forgetIfErased(lastDelete uint64) {
+	if lastDelete != r.lastDelete {
+		r.forget()
+		r.lastDelete = lastDelete
+	}
+}
+
+func (r *recentPieces) forget() { clear(r.day) }
+
+func (r *recentPieces) writtenOn(project string, h dedup.Hash, day int32) bool {
+	d, ok := r.day[pieceKey{project, h}]
 	return ok && d == day
 }
 
-func (r *recentPieces) mark(pieces []dedup.Piece, day int32) {
+func (r *recentPieces) mark(pieces []projectPiece, day int32) {
 	if len(r.day)+len(pieces) > r.limit {
 		clear(r.day)
 	}
 	for _, p := range pieces {
-		r.day[p.Hash] = day
+		r.day[pieceKey{p.project, p.Hash}] = day
 	}
 }
 
@@ -50,27 +79,35 @@ func utcDay(t time.Time) int32 {
 // pieces, never a request row pointing at a missing piece. An error leaves
 // the WAL segment for retry, as in the whole-body path.
 func (s *Sink) insertDedup(records []payload.Record) error {
-	now := time.Now().UTC()
-	today := utcDay(now)
+	today := utcDay(time.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// An erase on any pod shows up here, before anything is skipped as
+	// already written. Not knowing only costs duplicate inserts.
+	if lastDelete, err := latestPiecesDelete(ctx, s.conn); err != nil {
+		s.log.Debug("payload/clickhouse: read pieces deletes; forgetting written pieces", "err", err)
+		s.recent.forget()
+	} else {
+		s.recent.forgetIfErased(lastDelete)
+	}
 
 	splits := make([]dedup.Split, len(records))
-	var fresh []dedup.Piece
-	queued := map[dedup.Hash]bool{}
+	var fresh []projectPiece
+	queued := map[pieceKey]bool{}
 	for i, r := range records {
 		if len(r.RequestBody) > 0 {
 			splits[i] = dedup.SplitBody(r.RequestBody)
 		}
 		for _, p := range splits[i].Pieces {
-			if queued[p.Hash] || s.recent.writtenOn(p.Hash, today) {
+			k := pieceKey{r.ProjectID, p.Hash}
+			if queued[k] || s.recent.writtenOn(r.ProjectID, p.Hash, today) {
 				continue
 			}
-			queued[p.Hash] = true
-			fresh = append(fresh, p)
+			queued[k] = true
+			fresh = append(fresh, projectPiece{r.ProjectID, p})
 		}
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 
 	if len(fresh) > 0 {
 		batch, err := s.conn.PrepareBatch(ctx, insertPiecesSQL)
@@ -78,7 +115,7 @@ func (s *Sink) insertDedup(records []payload.Record) error {
 			return fmt.Errorf("prepare pieces batch: %w", err)
 		}
 		for i := range fresh {
-			if err := batch.Append(fresh[i].Hash[:], string(fresh[i].Body), now); err != nil {
+			if err := batch.Append(fresh[i].project, fresh[i].Hash[:], string(fresh[i].Body)); err != nil {
 				return fmt.Errorf("append piece: %w", err)
 			}
 		}
@@ -105,8 +142,10 @@ func (s *Sink) insertDedup(records []payload.Record) error {
 
 // requestValues returns r's payload_requests column values in
 // insertRequestsSQL order. field_counts[i] is how many consecutive entries
-// of hashes belong to field i.
+// of hashes belong to field i; request_sha256 is taken over r.RequestBody
+// itself, not over anything derived from s.
 func requestValues(r payload.Record, s dedup.Split) []any {
+	digest := sha256.Sum256(r.RequestBody)
 	names := make([]string, len(s.Fields))
 	isArray := make([]uint8, len(s.Fields))
 	offsets := make([]uint32, len(s.Fields))
@@ -123,9 +162,15 @@ func requestValues(r payload.Record, s dedup.Split) []any {
 	}
 	return []any{
 		r.RequestID, r.Timestamp, r.ProjectID, r.PrincipalID, r.RelayKeyHash,
-		string(s.Skeleton), names, isArray, offsets, counts, hashes,
+		string(s.Skeleton), names, isArray, offsets, counts, hashes, digest[:],
 		string(r.ResponseBody), b2u8(r.RequestTruncated), b2u8(r.ResponseTruncated),
 	}
+}
+
+// bodyMatchesDigest reports whether body hashes to the stored request_sha256.
+func bodyMatchesDigest(body []byte, digest string) bool {
+	sum := sha256.Sum256(body)
+	return digest == string(sum[:])
 }
 
 var errCorruptRow = errors.New("payload/clickhouse: corrupt payload_requests row")

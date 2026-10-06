@@ -138,9 +138,22 @@ The response includes `request_body` and `response_body`, plus
 
 `retentionDays` sets how long the `clickhouse` backend keeps bodies: `30` by default, `0` to keep them forever. It is applied to the existing table whenever the section changes, the same way as usage retention. For `s3`, expire objects with a bucket lifecycle rule; the `file` backend is never pruned.
 
-Agent clients resend the whole conversation on every turn, so most of each request body repeats earlier ones. `clickhouse.dedup: true` (off by default) stores each distinct message, tool list, and large field such as a system prompt once, and each request as the rest of its body plus references to them. Bodies read back byte for byte; a body that is not a JSON object, including a truncated one, is stored whole. Rows written before switching either way stay readable. Pair it with `maxBytes: 0`, so the largest requests are not truncated and stored whole.
+Agent clients resend the whole conversation on every turn, so most of each request body repeats earlier ones. `clickhouse.dedup: true` (off by default) stores each distinct message, tool list, and large field such as a system prompt once, and each request as the rest of its body plus references to them. Bodies read back byte for byte; a body that is not a JSON object, including a truncated one, is stored whole. Rows written before switching either way stay readable. Pair it with `maxBytes: 0`, so the largest requests are not truncated and stored whole. Stored pieces are shared only between requests of the same project. Each request also stores the SHA-256 of its body as received; a body that does not rebuild to that digest is refused with an error rather than returned.
 
 The `s3` credentials (`s3.accessKey`, `s3.secretKey`) are secret references limited to this section: an env reference must name a variable starting with `RELAY_PAYLOAD_S3_` (for example `{"kind": "env", "env": "RELAY_PAYLOAD_S3_ACCESS_KEY"}`), and a stored reference must use an id starting with `payload-logging:`. Leave both empty to use the S3 client's ambient credentials (an IAM role, for example). `s3.useSSL` must be `true` unless `RELAY_COOKIE_SECURE=false`. Only an admin may change the `payload-logging` section. A stored section that breaks these rules is read as the default (capture off, `file` backend) and logged at startup; rename the variables and write the section again.
+
+### Erasing captured bodies
+
+An admin can delete the bodies captured for a project, for a principal (a user or service account), or for one principal within one project:
+
+```bash
+curl -X POST http://localhost:8081/api/logs/erase \
+  -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"projectId": "<project id>", "principalId": "<principal id>"}'
+```
+
+At least one of `projectId` and `principalId` is required. The response, `{"requests": N}`, counts the requests whose bodies were deleted. The call returns once ClickHouse has rewritten the data that held them, so they can no longer be read; ClickHouse deletes the replaced files from disk after `old_parts_lifetime` (8 minutes by default). Log records — tokens, cost, timing, ids — are kept. Bodies a relay has captured but not yet delivered to ClickHouse are not affected; repeat the call after the traffic has stopped. With `clickhouse.dedup`, a request of the same project that another relay stores at the moment the erase runs can be left pointing at a deleted piece: reading it fails with an error, never returns different bytes, until a later request of that project carries the piece again. Only the `clickhouse` backend supports erasure, and only for the backend `payload-logging` currently names; `file` and `s3` answer `501`.
 
 <Warning>
 Payloads contain prompts and completions — potentially sensitive data. Keep it
