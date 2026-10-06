@@ -21,14 +21,13 @@ import (
 
 // PolicyAllows reports whether m is reachable through pol over any of its
 // enabled bindings. Used to enumerate accessible models for inventory
-// endpoints. Single-shot; not optimised for tight loops. userID is the
-// calling user, which decides whether personal rows exist for the caller.
-func (r *Resolver) PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, userID string) bool {
+// endpoints. Single-shot; not optimised for tight loops.
+func (r *Resolver) PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model) bool {
 	if pol == nil || m == nil || !m.IsEnabled() || !pol.IsEnabled() {
 		return false
 	}
 	for _, hb := range snap.BindingsForModel(m.Meta.ID) {
-		if hb.IsEnabled() && r.PolicyAllowsBinding(snap, pol, m, hb, userID) {
+		if hb.IsEnabled() && r.PolicyAllowsBinding(snap, pol, m, hb) {
 			return true
 		}
 	}
@@ -39,12 +38,12 @@ func (r *Resolver) PolicyAllows(snap *appcatalog.Snapshot, pol *policy.Policy, m
 // hb: first the grant check, then the same key + tier gate Resolve applies
 // (a NoAuth host yields the anonymous key), so a listed binding is one the
 // caller can actually reach. Callers filter enabled bindings themselves.
-func (r *Resolver) PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, hb *binding.Binding, userID string) bool {
+func (r *Resolver) PolicyAllowsBinding(snap *appcatalog.Snapshot, pol *policy.Policy, m *model.Model, hb *binding.Binding) bool {
 	if snap == nil || pol == nil || m == nil || hb == nil || !pol.IsEnabled() {
 		return false
 	}
 	h, ok := snap.Host(hb.Spec.HostID)
-	if !ok || !r.personalRowsVisible(hb, h, userID) {
+	if !ok {
 		return false
 	}
 	var allowed bool
@@ -92,7 +91,7 @@ func (r *Resolver) PolicylessAllowsBinding(snap *appcatalog.Snapshot, m *model.M
 		return false
 	}
 	h, ok := snap.Host(hb.Spec.HostID)
-	if !ok || !r.personalRowsVisible(hb, h, userID) {
+	if !ok {
 		return false
 	}
 	return len(policylessKeys(snap, m, h, userID)) > 0

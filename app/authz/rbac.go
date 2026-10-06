@@ -19,6 +19,18 @@ var catalogKinds = map[string]bool{
 	"host-bindings": true, "pricings": true, "rate-limits": true,
 }
 
+// sharedCatalogKinds hold the rows that decide which upstream relay calls and
+// what it charges. No tenant owns one, so writing them takes a role binding;
+// owning the row grants nothing.
+var sharedCatalogKinds = map[string]bool{
+	"providers": true, "hosts": true, "models": true,
+	"host-bindings": true, "pricings": true,
+}
+
+// SharedCatalogKind reports whether kind (the singular handlers pass) is
+// shared catalog data that no user, team or project may own.
+func SharedCatalogKind(kind string) bool { return sharedCatalogKinds[plural(kind)] }
+
 // scopedKinds are the kinds whose lists are filtered row by row through
 // Visible. Asking for such a list is safe for any authenticated caller: what
 // comes back is what they may see, which for a caller with no binding at all
@@ -119,7 +131,7 @@ func (r RBAC) Authorize(ctx context.Context, action string, res Resource) error 
 		return nil
 	}
 	kind, verb := splitAction(action)
-	if res.Owner != nil && ownedBy(*res.Owner, a) {
+	if res.Owner != nil && ownedBy(*res.Owner, a) && !sharedCatalogKinds[kind] {
 		return nil // personal row: its owner holds every verb on it
 	}
 	if (verb == "get" || verb == "list") && catalogKinds[kind] &&

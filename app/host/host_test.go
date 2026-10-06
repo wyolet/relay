@@ -58,7 +58,27 @@ func TestValidate(t *testing.T) {
 		{
 			name: "provider owner rejected",
 			h:    func() *Host { h := fix("x"); h.Meta.Owner.Kind = meta.OwnerProvider; return h }(),
-			want: "owner.kind must be system, user, or empty",
+			want: "owner.kind must be system or omitted",
+		},
+		{
+			name: "user owner rejected",
+			h:    func() *Host { h := fix("x"); h.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: "u-1"}; return h }(),
+			want: "hosts are shared catalog data",
+		},
+		{
+			name: "id-less user owner rejected",
+			h:    func() *Host { h := fix("x"); h.Meta.Owner = meta.Owner{Kind: meta.OwnerUser}; return h }(),
+			want: "hosts are shared catalog data",
+		},
+		{
+			name: "team owner rejected",
+			h:    func() *Host { h := fix("x"); h.Meta.Owner = meta.Owner{Kind: meta.OwnerTeam, ID: "t-1"}; return h }(),
+			want: "hosts are shared catalog data",
+		},
+		{
+			name: "project owner rejected",
+			h:    func() *Host { h := fix("x"); h.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: "p-1"}; return h }(),
+			want: "hosts are shared catalog data",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,10 +90,12 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestHostValidate_UserOwnerAllowed(t *testing.T) {
-	h := fix("x")
-	h.Meta.Owner.Kind = meta.OwnerUser
-	if err := h.Validate(); err != nil {
-		t.Fatalf("user-owned host should validate, got %v", err)
+func TestHostValidate_DeploymentOwnersAllowed(t *testing.T) {
+	for _, kind := range []meta.OwnerKind{"", meta.OwnerSystem} {
+		h := fix("x")
+		h.Meta.Owner = meta.Owner{Kind: kind}
+		if err := h.Validate(); err != nil {
+			t.Fatalf("owner %q: %v", kind, err)
+		}
 	}
 }

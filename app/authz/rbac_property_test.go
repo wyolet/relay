@@ -49,6 +49,8 @@ var probes = []probe{
 	{"tokens", "mint"},
 	{"usage", "read"},
 	{"models", "update"},
+	{"hosts", "create"}, {"hosts", "update"},
+	{"host-bindings", "create"}, {"host-bindings", "delete"},
 }
 
 // world is one generated deployment plus the reference view of it the
@@ -475,7 +477,8 @@ func TestProperty_VisibleMatchesAuthorizeGet(t *testing.T) {
 }
 
 // A personal row answers every verb to its owner and — absent a binding at
-// the global scope its chain collapses to — to nobody else.
+// the global scope its chain collapses to — to nobody else. A shared catalog
+// kind has no personal rows: its owner is answered like anyone else.
 func TestProperty_PersonalRowsAreOwnerOnly(t *testing.T) {
 	forEachWorld(t, func(t *testing.T, w *world) {
 		rbac := w.rbac()
@@ -487,7 +490,7 @@ func TestProperty_PersonalRowsAreOwnerOnly(t *testing.T) {
 				for _, p := range probes {
 					err := rbac.Authorize(ctxOf(a), p.kind+"."+p.verb, resourceOf(p, o))
 					switch {
-					case a.UserID == owner:
+					case a.UserID == owner && !authz.SharedCatalogKind(authz.Singular(p.kind)):
 						if err != nil {
 							t.Fatalf("owner denied %s.%s on their own row: %v", p.kind, p.verb, err)
 						}

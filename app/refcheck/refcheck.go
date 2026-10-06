@@ -18,9 +18,7 @@ import (
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
@@ -64,7 +62,6 @@ type Lookup struct {
 	Policy         func(ctx context.Context, id string) *policy.Policy
 	RateLimit      func(ctx context.Context, id string) *ratelimit.RateLimit
 	HostKey        func(ctx context.Context, id string) *hostkey.HostKey
-	Host           func(ctx context.Context, id string) *host.Host
 	Project        func(ctx context.Context, id string) *project.Project
 	Team           func(ctx context.Context, id string) *team.Team
 	Role           func(ctx context.Context, id string) *role.Role
@@ -463,20 +460,4 @@ func (c Checker) PolicyBinding(ctx context.Context, pb *policybinding.PolicyBind
 		return err
 	}
 	return c.subjectsExist(ctx, pb.Spec.Subjects)
-}
-
-// HostBinding keeps a personal host personal: a binding owned by anyone but
-// the host's owner would carry it into that owner's routing.
-func (c Checker) HostBinding(ctx context.Context, b *binding.Binding) error {
-	if c.Rows.Host == nil {
-		return nil
-	}
-	h := c.Rows.Host(ctx, b.Spec.HostID)
-	if h == nil || h.Meta.Owner.Kind != meta.OwnerUser {
-		return nil
-	}
-	if b.Meta.Owner != h.Meta.Owner {
-		return badRequest("host %q is personal: only its owner may bind models to it", h.Meta.Name)
-	}
-	return nil
 }

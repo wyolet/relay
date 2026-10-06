@@ -42,7 +42,7 @@ func (h *Handler) rateLimited(ctx context.Context, snap *appcatalog.Snapshot, re
 	if subject == "" {
 		return 0, false
 	}
-	rl, ok := snap.RateLimitByName(RateLimitName)
+	rl, ok := snap.SystemRateLimitByName(RateLimitName)
 	if !ok {
 		rl = defaultRateLimit
 	}

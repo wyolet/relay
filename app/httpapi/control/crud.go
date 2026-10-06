@@ -77,6 +77,15 @@ type emptyResponse struct{}
 
 var errSlugNotFound = errors.New("not found")
 
+// refuseTenantOwner answers 400 when a body names a user, team or project
+// owner for a shared catalog kind.
+func refuseTenantOwner(singular string, o meta.Owner) error {
+	if !authz.SharedCatalogKind(singular) || !o.Tenant() {
+		return nil
+	}
+	return huma.Error400BadRequest(fmt.Sprintf("%s is shared catalog data and cannot be owned by a %s; omit metadata.owner", singular, o.Kind))
+}
+
 // registerKind installs the five CRUD operations for kind T on api. The
 // metaOf, validate, defaultOwnerKind, and resolveSlug closures supply
 // the kind-specific glue.
@@ -285,6 +294,9 @@ func registerKind[T any](
 			if m.Owner.Kind == "" && defaultOwnerKind != "" {
 				m.Owner.Kind = defaultOwnerKind
 			}
+			if err := refuseTenantOwner(singular, m.Owner); err != nil {
+				return nil, err
+			}
 			// Roles stay authorable as personal rows (license-gated); a team or
 			// group only ever names a shared scope.
 			if (singular == "team" || singular == "group") && m.Owner.Kind != meta.OwnerSystem {
@@ -362,6 +374,9 @@ func registerKind[T any](
 		// Early answer for a stale body; the store re-checks atomically.
 		if m.ResourceVersion != "" && m.ResourceVersion != metaOf(existing).ResourceVersion {
 			return nil, staleVersionError(singular, in.ID)
+		}
+		if err := refuseTenantOwner(singular, m.Owner); err != nil {
+			return nil, err
 		}
 		if mergeUpdate != nil {
 			mergeUpdate(existing, v)

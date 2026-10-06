@@ -370,7 +370,7 @@ func TestResolve_NoAuthHostInjectsAnonKey(t *testing.T) {
 	modID, polID := meta.NewID(), meta.NewID()
 
 	prov := &provider.Provider{Meta: meta.Metadata{ID: provID, Name: "ollama", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	h := &host.Host{Meta: meta.Metadata{ID: hostID, Name: "ollama-self", Owner: meta.Owner{Kind: meta.OwnerUser}}, Spec: host.Spec{BaseURL: "http://localhost:11434", NoAuth: true}}
+	h := &host.Host{Meta: meta.Metadata{ID: hostID, Name: "ollama-self", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: host.Spec{BaseURL: "http://localhost:11434", NoAuth: true}}
 	m := &model.Model{
 		Meta: meta.Metadata{ID: modID, Name: "qwen3", Owner: meta.Owner{Kind: meta.OwnerProvider, ID: provID}},
 		Spec: model.Spec{Snapshots: []model.Snapshot{mkSnap("qwen3")}, Pointer: slug.From("qwen3")},

@@ -46,7 +46,7 @@ edit it. There are two that matter day to day:
 | Owner | What it is | Editable? |
 | --- | --- | --- |
 | **System** | Seeded from the catalog — providers, hosts, models, their pricing — plus rows the admin token creates | Admins may edit via the API (catalog updates then skip the row) and delete a row nothing references |
-| **User** | Things you create — host keys, relay keys, your policies | Fully editable |
+| **User** | Things you create — host keys, relay keys, your policies and rate limits | Fully editable |
 
 This keeps the curated catalog stable: a catalog update can refresh a
 provider's models or pricing without clobbering edits, because the things
@@ -77,18 +77,19 @@ A handful of **system-owned rate limits** also ship with the catalog. These
 configure the global admission pool — the relay-wide guardrails that protect
 the deployment as a whole, independent of any one customer's limits.
 
-### What becomes user-owned
+### Self-hosted upstreams
 
-Self-hosted and local upstreams are different: there's no canonical "OpenAI"
-to curate. So **self-hostable hosts and models — Ollama and the like — are
-yours to create, edit, and configure** directly through the control plane.
-You define the host (its base URL and wire adapter), add the models you run,
-and bind them — all as user-owned resources.
+Self-hosted and local upstreams — Ollama and the like — are added through the
+control plane like any other catalog entry: define the host (its base URL),
+add the models you run, and bind them. Hosts, models, and host bindings are
+**shared catalog data**: no user, team, or project owns one, and under
+`RELAY_AUTHZ=rbac` creating or editing one takes the `admin` or
+`catalog-editor` role.
 
 <Note>
-Rule of thumb: if it's a commercial provider Relay ships knowledge of, it's
-system-owned and you consume it. If it's something you stand up yourself, you
-own it and you edit it.
+Rule of thumb: providers, hosts, models, host bindings, and pricing are the
+deployment's shared catalog, maintained by admins and catalog editors. Host
+keys, relay keys, policies, and rate limits can be your own.
 </Note>
 
 ## Editing the catalog locally

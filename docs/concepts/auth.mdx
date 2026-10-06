@@ -170,7 +170,11 @@ Four pieces, and one rule that connects them:
 Two rules need no binding at all:
 
 - **Personal rows.** A row owned by `{kind: user, id: <you>}` grants you every
-  verb on it.
+  verb on it. Keys, policies, host keys, and rate limits can be personal;
+  providers, hosts, models, host bindings, and pricings are shared catalog
+  data: no user, team, or project owns one, so writing one takes `admin` or
+  `catalog-editor`, and a request body that names such an owner for one is
+  refused with `400`.
 - **Catalog reads.** Providers, hosts, models, host bindings, pricings, and
   system rate limits are readable by any authenticated caller. Mutating them
   needs a binding (and still passes the governance settings).

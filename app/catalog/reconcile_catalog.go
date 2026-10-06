@@ -63,7 +63,7 @@ func deleteProvider(s *Snapshot, id string) {
 // ── Host ──────────────────────────────────────────────────────────────────
 
 func (c *Catalog) ApplyHostUpsert(h *host.Host) error {
-	if !h.IsEnabled() {
+	if !h.IsEnabled() || !notTenantOwned("host", h.Meta) {
 		return c.ApplyHostDelete(h.Meta.ID)
 	}
 	if err := h.Validate(); err != nil {

@@ -273,7 +273,7 @@ func registerCRUD(api huma.API, d Deps, protect huma.Middlewares) {
 		func(b *binding.Binding) error { return b.Validate() },
 		"",
 		listScanResolver(d.Stores.Binding, bmeta),
-		guardHostBinding(d),
+		nil,
 		nil,
 		nil,
 		d.refuseInUse,

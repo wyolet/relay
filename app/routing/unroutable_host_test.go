@@ -87,10 +87,10 @@ func TestResolve_SkipsHostWithoutBaseURL(t *testing.T) {
 		t.Fatal("proxy-mode resolve picked a host with no baseURL")
 	}
 
-	if !r.PolicyAllows(snap, pol, shared, "") {
+	if !r.PolicyAllows(snap, pol, shared) {
 		t.Fatal("PolicyAllows(shared) = false, want true")
 	}
-	if r.PolicyAllows(snap, pol, onlyUnset, "") {
+	if r.PolicyAllows(snap, pol, onlyUnset) {
 		t.Fatal("PolicyAllows(only-unset) = true; listing would advertise an unroutable model")
 	}
 	if r.PolicylessAllows(snap, onlyUnset, "", "") {

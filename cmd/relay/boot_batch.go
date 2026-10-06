@@ -18,11 +18,10 @@ import (
 
 func routingOptions(cfg *config.Config) []routing.Option {
 	// RBAC makes a credential's grants the whole access model, so a key whose
-	// policy does not resolve has no access rather than the shared pool's,
-	// and users are separate tenants whose personal hosts serve only them.
+	// policy does not resolve has no access rather than the shared pool's.
 	var routingOpts []routing.Option
 	if cfg.Authz == config.AuthzRBAC {
-		routingOpts = append(routingOpts, routing.RequirePolicy(), routing.PersonalRowsOwnerOnly())
+		routingOpts = append(routingOpts, routing.RequirePolicy())
 	}
 	return routingOpts
 }
