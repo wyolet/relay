@@ -21,6 +21,11 @@ type UsageLogging struct {
 	// "postgres", or "valkey".
 	Backend string `json:"backend"`
 
+	// RetentionDays bounds how long usage events are kept by the clickhouse
+	// and postgres backends; 0 keeps them forever. Applied to the existing
+	// table on change, so shortening it deletes history.
+	RetentionDays int `json:"retentionDays"`
+
 	File UsageFile       `json:"file"`
 	CH   UsageClickHouse `json:"clickhouse"`
 }
@@ -33,8 +38,7 @@ type UsageFile struct {
 // UsageClickHouse holds the safe-to-hot-swap CH knobs. The DSN reuses the
 // boot CH connection (bootstrap-tier), so no credentials live in this row.
 type UsageClickHouse struct {
-	RetentionDays int    `json:"retentionDays,omitempty"`
-	WALDir        string `json:"walDir,omitempty"`
+	WALDir string `json:"walDir,omitempty"`
 }
 
 // Validate enforces the backend enum + non-negative knobs.
@@ -44,8 +48,8 @@ func (u *UsageLogging) Validate() error {
 	default:
 		return fmt.Errorf("usage-logging: backend must be \"file\", \"clickhouse\", \"postgres\", or \"valkey\", got %q", u.Backend)
 	}
-	if u.CH.RetentionDays < 0 {
-		return fmt.Errorf("usage-logging: clickhouse.retentionDays must be >= 0")
+	if u.RetentionDays < 0 {
+		return fmt.Errorf("usage-logging: retentionDays must be >= 0")
 	}
 	return nil
 }
@@ -53,7 +57,7 @@ func (u *UsageLogging) Validate() error {
 func init() {
 	Register(Section{
 		Name:        SectionUsageLogging,
-		Description: "Log (usage) event backend selection (file|clickhouse|postgres|valkey) + ClickHouse retention/WAL knobs. DSNs are bootstrap config (env). Hot-reloaded — backend reroute takes effect without a restart (reroute is a clean break, not a data migration).",
+		Description: "Log (usage) event backend selection (file|clickhouse|postgres|valkey), retention, and ClickHouse WAL knob. retentionDays applies to clickhouse and postgres (0 = keep forever; shortening deletes older events). DSNs are bootstrap config (env). Hot-reloaded — backend reroute takes effect without a restart (reroute is a clean break, not a data migration). Admin only.",
 		// Empty backend = unset → the composition root falls back to the
 		// legacy RELAY_EVENTLOG_BACKEND env (interim, until the YAML→DB seed
 		// lands), then to "file". An explicit value here overrides env.

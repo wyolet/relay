@@ -24,8 +24,7 @@ metadata:
   name: usage-logging
 spec:
   backend: clickhouse
-  clickhouse:
-    retentionDays: 14
+  retentionDays: 14
 `
 	got, err := sectionsFromDocs(parseDocs(t, y))
 	if err != nil {
@@ -39,7 +38,7 @@ spec:
 	if err != nil {
 		t.Fatalf("decode seeded value: %v", err)
 	}
-	if v.Backend != "clickhouse" || v.CH.RetentionDays != 14 {
+	if v.Backend != "clickhouse" || v.RetentionDays != 14 {
 		t.Fatalf("seeded value mismatch: %+v", v)
 	}
 }

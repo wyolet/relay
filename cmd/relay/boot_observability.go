@@ -40,13 +40,12 @@ func buildUsageLog(listenerCtx context.Context, cfg *config.Config, cat *appcata
 		usageWALDir = "relay-usage-wal"
 	}
 	usageCtl := usagelog.NewController(cat, usageBackendBuilder(usageBackendBoot{
-		EnvBackend:      cfg.EventlogBackend,
-		CHDSN:           cfg.CHDSN,
-		PGDSN:           cfg.PGDSN,
-		KV:              kvStore,
-		FilePath:        usagePath,
-		WALDir:          usageWALDir,
-		CHRetentionDays: cfg.CHRetentionDays,
+		EnvBackend: cfg.EventlogBackend,
+		CHDSN:      cfg.CHDSN,
+		PGDSN:      cfg.PGDSN,
+		KV:         kvStore,
+		FilePath:   usagePath,
+		WALDir:     usageWALDir,
 	}), slog.Default())
 	usageReader := usageCtl.Reader()
 	// Emit-time cost: the usage producer prices each event's tokens against
@@ -66,9 +65,8 @@ func buildUsageLog(listenerCtx context.Context, cfg *config.Config, cat *appcata
 
 func payloadCHBootConfig(cfg *config.Config) payloadCHBoot {
 	return payloadCHBoot{
-		DSN:           cfg.CHDSN,
-		RetentionDays: 30, // payload bodies are bulkier + shorter-lived than usage rows
-		WALDir:        "relay-payload-wal",
+		DSN:    cfg.CHDSN,
+		WALDir: "relay-payload-wal",
 	}
 }
 

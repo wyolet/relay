@@ -38,7 +38,7 @@ type Config struct {
 	DSN string
 
 	// RetentionDays controls how long rows are kept by the daily prune job.
-	// <=0 disables pruning. Default 90.
+	// 0 keeps rows forever.
 	RetentionDays int
 
 	// BatchSize is the number of events to accumulate before flushing.
@@ -55,9 +55,6 @@ type Config struct {
 }
 
 func (c *Config) applyDefaults() {
-	if c.RetentionDays <= 0 {
-		c.RetentionDays = 90
-	}
 	if c.BatchSize <= 0 {
 		c.BatchSize = 500
 	}

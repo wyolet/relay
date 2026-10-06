@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/wyolet/relay/pkg/chttl"
 	"github.com/wyolet/relay/pkg/usage"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 )
@@ -23,7 +24,7 @@ type Config struct {
 	// DSN is the ClickHouse connection string (clickhouse://host:port/db).
 	DSN string
 
-	// RetentionDays controls the MergeTree TTL. Default 90.
+	// RetentionDays is the row TTL in days; 0 keeps rows forever.
 	RetentionDays int
 
 	// WALDir is the directory for WAL segment files.
@@ -44,9 +45,6 @@ type Config struct {
 }
 
 func (c *Config) applyDefaults() {
-	if c.RetentionDays <= 0 {
-		c.RetentionDays = 90
-	}
 	if c.MaxLines <= 0 {
 		c.MaxLines = 10_000
 	}
@@ -101,8 +99,7 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS usage_events (
     credential_id            String
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
-ORDER BY (ts, model_id, policy_id)
-TTL toDateTime(ts) + INTERVAL %d DAY`
+ORDER BY (ts, model_id, policy_id)`
 
 // expectedColumns is the column set insertBatch writes, in any order. Used
 // by ensureSchema to detect a pre-existing incompatible table.
@@ -158,7 +155,7 @@ var alterTableSQL = []string{
 // would make every insert fail forever. Rather than auto-drop (destructive),
 // fail fast with an actionable error so the operator resolves it.
 func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
-	if err := conn.Exec(ctx, fmt.Sprintf(createTableSQL, retentionDays)); err != nil {
+	if err := conn.Exec(ctx, createTableSQL); err != nil {
 		return fmt.Errorf("usage/clickhouse: create table: %w", err)
 	}
 
@@ -198,7 +195,7 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 			"usage/clickhouse: table %q exists with an incompatible schema (missing columns: %s) — drop or rename it (or point RELAY_CH_DSN at a fresh database) so relay can create the current schema",
 			chTable, strings.Join(missing, ", "))
 	}
-	return nil
+	return chttl.Apply(ctx, conn, chTable, "ts", retentionDays)
 }
 
 // Sink is the ClickHouse-backed implementation of usage.Sink, usage.Reader,

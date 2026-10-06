@@ -32,10 +32,18 @@ var secretScopes = map[string]secretScope{
 	SectionPayloadLogging: {envPrefixes: []string{"RELAY_PAYLOAD_S3_"}, storedPrefix: SectionPayloadLogging + ":"},
 }
 
+// retentionSections bound how long recorded history is kept. Shortening one
+// deletes history, and the audit log is the record of who did so, so writing
+// them takes an admin.
+var retentionSections = map[string]bool{
+	SectionAudit:        true,
+	SectionUsageLogging: true,
+}
+
 // AdminOnly reports whether writing section requires an admin caller.
 func AdminOnly(section string) bool {
 	_, ok := secretScopes[section]
-	return ok
+	return ok || retentionSections[section]
 }
 
 func checkSecretRef(section, field string, r secret.Ref) error {

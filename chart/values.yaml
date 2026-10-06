@@ -73,10 +73,16 @@ relay:
     enabled: true
     backend: clickhouse      # file | s3 | clickhouse
     maxBytes: 1048576        # per-body cap in bytes; 0 = unlimited
-    retentionDays: 30        # clickhouse MergeTree TTL (backend default if 0)
+    retentionDays: 30        # days bodies are kept (clickhouse); 0 = forever
     # Writable local WAL dir for the CH payload sink (emptyDir-backed;
     # readOnlyRootFs makes the relative default `relay-payload-wal` uncreatable).
     walDir: /var/lib/relay/payload-wal
+    # Store each distinct message/tool list/system prompt once (clickhouse);
+    # set maxBytes: 0 alongside it.
+    dedup: false
+  # -- Usage event retention, seeded into the usage-logging settings section.
+  usageLogging:
+    retentionDays: 0         # days usage events are kept; 0 = forever
   # -- CORS allowlist for the control API (comma-separated origins). Required if
   # the UI is served from a different origin than the control plane.
   controlAllowOrigins: ""
@@ -171,7 +177,6 @@ clickhouse:
     username: relay
     database: relay
     password: ""
-  retentionDays: "30"     # RELAY_CH_RETENTION_DAYS
   persistence:
     enabled: true
     size: 50Gi

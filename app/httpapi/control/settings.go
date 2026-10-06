@@ -35,7 +35,15 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 	})
 	registerSettingsSection[settings.PayloadLogging](api, d, protect, settings.Section{
 		Name:        settings.SectionPayloadLogging,
-		Description: "Request/response body capture sink config. Hot-reloaded — toggle, backend (file|s3), size cap, and S3 settings (with secret-ref credentials: env RELAY_PAYLOAD_S3_* or stored payload-logging:*; useSSL required) take effect without a restart. Admin only.",
+		Description: "Request/response body capture sink config. Hot-reloaded — toggle, backend (file|s3|clickhouse), size cap, retentionDays (clickhouse; 0 = keep forever, absent = 30), and S3 settings (with secret-ref credentials: env RELAY_PAYLOAD_S3_* or stored payload-logging:*; useSSL required) take effect without a restart. Admin only.",
+	})
+	registerSettingsSection[settings.UsageLogging](api, d, protect, settings.Section{
+		Name:        settings.SectionUsageLogging,
+		Description: "Usage event backend (file|clickhouse|postgres|valkey) and retentionDays (clickhouse and postgres; 0 = keep forever). A retention change is applied to the existing table; shortening it deletes older events. Hot-reloaded. Admin only.",
+	})
+	registerSettingsSection[settings.Audit](api, d, protect, settings.Section{
+		Name:        settings.SectionAudit,
+		Description: "Admin audit log retention. retentionDays bounds how long audit rows are kept (0 = keep forever). Hot-reloaded — the next hourly prune uses the new value. Admin only.",
 	})
 	registerSettingsSection[settings.Parsing](api, d, protect, settings.Section{
 		Name:        settings.SectionParsing,

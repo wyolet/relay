@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/wyolet/relay/pkg/secret"
@@ -28,6 +29,11 @@ type PayloadLogging struct {
 	// MaxBytes caps each stored body, measured on the DECODED plaintext
 	// (compressed upstream bodies are decoded before capture); 0 = unlimited.
 	MaxBytes int `json:"maxBytes"`
+
+	// RetentionDays bounds how long captured bodies are kept by the
+	// clickhouse backend; 0 keeps them forever. A stored row without the
+	// field decodes to DefaultPayloadRetentionDays, not to keep-forever.
+	RetentionDays int `json:"retentionDays"`
 
 	File PayloadFile       `json:"file"`
 	S3   PayloadS3         `json:"s3"`
@@ -58,11 +64,14 @@ type PayloadS3 struct {
 // usage sink uses), so no credentials live in this row. Only the per-backend
 // knobs that are safe to hot-swap live here.
 type PayloadClickHouse struct {
-	// RetentionDays overrides the MergeTree TTL; 0 uses the backend default.
-	RetentionDays int `json:"retentionDays,omitempty"`
 	// WALDir overrides the local WAL segment directory; empty uses the
 	// boot default.
 	WALDir string `json:"walDir,omitempty"`
+
+	// Dedup stores each distinct message, tool list and system prompt once
+	// and request bodies as references to them. Rows written either way
+	// stay readable.
+	Dedup bool `json:"dedup,omitempty"`
 }
 
 // Validate is enforced before any write. Only meaningful when Enabled —
@@ -71,6 +80,9 @@ type PayloadClickHouse struct {
 // transport are checked regardless: the log reader builds from this
 // section whatever the toggle says.
 func (p *PayloadLogging) Validate() error {
+	if p.RetentionDays < 0 {
+		return fmt.Errorf("payload-logging: retentionDays must be >= 0")
+	}
 	if err := validateOptionalRef("s3.accessKey", p.S3.AccessKey); err != nil {
 		return err
 	}
@@ -92,11 +104,7 @@ func (p *PayloadLogging) Validate() error {
 		}
 	case "clickhouse":
 		// DSN comes from the boot CH config (RELAY_CH_DSN), validated there;
-		// the operator is responsible for ensuring it's set. RetentionDays/
-		// WALDir are optional overrides with backend defaults.
-		if p.CH.RetentionDays < 0 {
-			return fmt.Errorf("payload-logging: clickhouse.retentionDays must be >= 0")
-		}
+		// the operator is responsible for ensuring it's set.
 	default:
 		return fmt.Errorf("payload-logging: backend must be \"file\", \"s3\", or \"clickhouse\", got %q", p.Backend)
 	}
@@ -104,6 +112,25 @@ func (p *PayloadLogging) Validate() error {
 		return fmt.Errorf("payload-logging: maxBytes must be >= 0")
 	}
 	return nil
+}
+
+// DefaultPayloadRetentionDays applies when payload-logging sets no
+// retentionDays.
+const DefaultPayloadRetentionDays = 30
+
+// decodePayloadLogging unmarshals onto the default retention, so a field
+// absent from the stored row keeps it.
+func decodePayloadLogging(raw []byte) (any, error) {
+	v := PayloadLogging{RetentionDays: DefaultPayloadRetentionDays}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("decode: %w", err)
+		}
+	}
+	if err := v.Validate(); err != nil {
+		return nil, err
+	}
+	return &v, nil
 }
 
 // validateOptionalRef allows an empty (zero) Ref — some S3 deployments use
@@ -122,14 +149,14 @@ func validateOptionalRef(field string, r secret.Ref) error {
 func init() {
 	Register(Section{
 		Name:        SectionPayloadLogging,
-		Description: "Request/response body capture sink config (toggle, backend file|s3|clickhouse, size cap, S3 settings with secret-ref credentials, ClickHouse retention/WAL overrides). Hot-reloaded — changes take effect without a restart.",
+		Description: "Request/response body capture sink config (toggle, backend file|s3|clickhouse, size cap, retention, S3 settings with secret-ref credentials, ClickHouse WAL override and dedup). retentionDays applies to clickhouse (0 = keep forever, absent = 30; shortening deletes older bodies). clickhouse.dedup (default false) stores request bodies as references to shared pieces, written once; pair it with maxBytes 0. Hot-reloaded — changes take effect without a restart.",
 		Defaults: func() any {
 			// 4 MiB default: a large model response (long output + thinking)
 			// clears 1 MiB of plaintext easily, and the cap applies to the
 			// DECODED body. 0 disables the cap — reasonable when the backend
 			// is s3; inline backends (file/clickhouse) should keep one.
-			return &PayloadLogging{Backend: "file", MaxBytes: 4 << 20, File: PayloadFile{Path: "relay-payloads.jsonl"}}
+			return &PayloadLogging{Backend: "file", MaxBytes: 4 << 20, RetentionDays: DefaultPayloadRetentionDays, File: PayloadFile{Path: "relay-payloads.jsonl"}}
 		},
-		Decode: decodeAndValidate[PayloadLogging, *PayloadLogging],
+		Decode: decodePayloadLogging,
 	})
 }

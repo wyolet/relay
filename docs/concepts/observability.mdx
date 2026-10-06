@@ -64,7 +64,7 @@ The sink is selectable and hot-swappable via the control plane — no restart:
 curl -X PUT http://localhost:8081/api/settings/usage-logging \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"backend": "clickhouse"}'
+  -d '{"backend": "clickhouse", "retentionDays": 0, "file": {}, "clickhouse": {}}'
 ```
 
 | Backend | Use |
@@ -73,6 +73,10 @@ curl -X PUT http://localhost:8081/api/settings/usage-logging \
 | `clickhouse` | Analytical store for high-volume, queryable history. |
 | `postgres` | Reuse your existing database. |
 | `valkey` | Redis-compatible, for short-lived recent history. |
+
+### Retention
+
+`retentionDays` in the `usage-logging` section sets how long usage events are kept by the `clickhouse` and `postgres` backends. `0` (the default) keeps them forever. On ClickHouse the value becomes the table's TTL and is applied to the existing table whenever the section changes; shortening it deletes older events in the background, and they cannot be recovered. Postgres deletes expired rows once a day. Only an admin may change this section.
 
 ## Reported usage (OpenTelemetry)
 
@@ -310,6 +314,10 @@ The response includes `request_body` and `response_body`, plus
 | `file` (default) | JSONL on disk. |
 | `s3` | Object storage — content-addressed blobs; credentials resolved from env or the encrypted store, never plaintext. |
 | `clickhouse` | Alongside ClickHouse usage events. |
+
+`retentionDays` sets how long the `clickhouse` backend keeps bodies: `30` by default, `0` to keep them forever. It is applied to the existing table whenever the section changes, the same way as usage retention. For `s3`, expire objects with a bucket lifecycle rule; the `file` backend is never pruned.
+
+Agent clients resend the whole conversation on every turn, so most of each request body repeats earlier ones. `clickhouse.dedup: true` (off by default) stores each distinct message, tool list, and large field such as a system prompt once, and each request as the rest of its body plus references to them. Bodies read back byte for byte; a body that is not a JSON object, including a truncated one, is stored whole. Rows written before switching either way stay readable. Pair it with `maxBytes: 0`, so the largest requests are not truncated and stored whole.
 
 The `s3` credentials (`s3.accessKey`, `s3.secretKey`) are secret references limited to this section: an env reference must name a variable starting with `RELAY_PAYLOAD_S3_` (for example `{"kind": "env", "env": "RELAY_PAYLOAD_S3_ACCESS_KEY"}`), and a stored reference must use an id starting with `payload-logging:`. Leave both empty to use the S3 client's ambient credentials (an IAM role, for example). `s3.useSSL` must be `true` unless `RELAY_COOKIE_SECURE=false`. Only an admin may change the `payload-logging` section. A stored section that breaks these rules is read as the default (capture off, `file` backend) and logged at startup; rename the variables and write the section again.
 
