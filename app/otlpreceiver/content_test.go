@@ -27,11 +27,18 @@ func structured(t *testing.T, v any) *commonpb.AnyValue {
 	case string:
 		return &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: x}}
 	case json.Number:
-		n, err := x.Int64()
-		if err != nil {
-			t.Fatalf("number %q is not an integer", x)
+		if n, err := x.Int64(); err == nil {
+			return &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: n}}
 		}
-		return &commonpb.AnyValue{Value: &commonpb.AnyValue_IntValue{IntValue: n}}
+		f, err := x.Float64()
+		if err != nil {
+			t.Fatalf("number %q: %v", x, err)
+		}
+		return &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: f}}
+	case bool:
+		return &commonpb.AnyValue{Value: &commonpb.AnyValue_BoolValue{BoolValue: x}}
+	case nil:
+		return &commonpb.AnyValue{}
 	case []any:
 		out := make([]*commonpb.AnyValue, len(x))
 		for i, e := range x {

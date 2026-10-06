@@ -51,7 +51,7 @@ func contentJSON(side map[string]any) []byte {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
-// structure returns a content value as structured data. Exporters put content on spans as JSON text and on events as structured values; decoding the text makes both store the same bytes. Text that is not a JSON array or object stays the string it is.
+// structure returns a content value as structured data. Exporters put content on spans as JSON text and on events as structured values; decoding the text makes both store the same bytes, so a store that keeps each distinct message once recognises a message whichever way it was reported. Text that is not a JSON array or object stays the string it is.
 func structure(v any) any {
 	s, ok := v.(string)
 	if !ok {
@@ -70,7 +70,28 @@ func structure(v any) any {
 	if _, err := dec.Token(); err != io.EOF {
 		return s
 	}
-	return out
+	return plainNumbers(out)
+}
+
+// plainNumbers rewrites the numbers of decoded JSON text that are written with a fraction or an exponent as floats, in place. A structured value carries such a number as a double, which encodes in the shortest form (1.0 as 1); the text form must come out the same.
+func plainNumbers(v any) any {
+	switch x := v.(type) {
+	case json.Number:
+		if strings.ContainsAny(string(x), ".eE") {
+			if f, err := x.Float64(); err == nil {
+				return f
+			}
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = plainNumbers(e)
+		}
+	case map[string]any:
+		for k, e := range x {
+			x[k] = plainNumbers(e)
+		}
+	}
+	return v
 }
 
 // clip cuts b to limit bytes and reports whether it did. limit <= 0 means no cap.

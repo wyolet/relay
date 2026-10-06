@@ -8,6 +8,7 @@
 package clickhouse
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -108,4 +109,81 @@ func TestIntegration_ReportedContentRoundTrip(t *testing.T) {
 	if !got.RequestTruncated || got.ResponseTruncated {
 		t.Errorf("truncation flags mismatch: %+v", got)
 	}
+}
+
+// reportedTurn reads one of the request bodies the telemetry receiver stores for two consecutive turns of a conversation. The receiver's own tests hold the files to what it builds.
+func reportedTurn(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile("testdata/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.TrimSuffix(b, []byte("\n"))
+}
+
+// Reported content names its arrays by telemetry attribute, not by a provider's request fields; the split knows no wire shape, so the second turn stores only its two new messages.
+func TestIntegration_ReportedContentIsDeduplicated(t *testing.T) {
+	dsn, conn := throwawayDatabase(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	turns := []payload.Record{
+		{
+			RequestID: "otlp-5b8efff798038103d269b633813fc60c-eee19b7ec3c1b174", Timestamp: now,
+			RequestBody:  reportedTurn(t, "reported_turn1_request.json"),
+			ResponseBody: []byte(`{"gen_ai.output.messages":[{"finish_reason":"tool_calls","parts":[{"arguments":{"city":"Tashkent","days":3,"min_confidence":1},"id":"call_1","name":"get_weather","type":"tool_call"}],"role":"assistant"}]}`),
+			ProjectID:    "p-1", PrincipalID: "sa-1", RelayKeyHash: "h-1",
+		},
+		{
+			RequestID: "otlp-5b8efff798038103d269b633813fc60c-eee19b7ec3c1b175", Timestamp: now.Add(time.Second),
+			RequestBody:  reportedTurn(t, "reported_turn2_request.json"),
+			ResponseBody: []byte(`{"gen_ai.output.messages":[{"finish_reason":"stop","parts":[{"content":"Friday in Tashkent will be clear, 31.5 degrees at most (met office).","type":"text"}],"role":"assistant"}]}`),
+			ProjectID:    "p-1", PrincipalID: "sa-1", RelayKeyHash: "h-1",
+		},
+	}
+
+	s, err := New(Config{DSN: dsn, WALDir: t.TempDir(), FlushInterval: 200 * time.Millisecond, Dedup: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// One flush per turn, as two exports minutes apart would arrive.
+	writeAll(t, s, turns[:1])
+	waitForRecord(t, s, turns[0].RequestID)
+	afterFirst := countRows(t, conn, "SELECT count() FROM payload_pieces")
+	writeAll(t, s, turns[1:])
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// One message, one instruction part and two tool definitions; then the two messages the second turn adds.
+	total := countRows(t, conn, "SELECT count() FROM payload_pieces")
+	if afterFirst != 4 || total != 6 {
+		t.Errorf("payload_pieces rows = %d after the first turn and %d after the second, want 4 and 6", afterFirst, total)
+	}
+	if n := countRows(t, conn, "SELECT count() FROM payload_requests"); n != 2 {
+		t.Errorf("payload_requests rows = %d, want 2", n)
+	}
+	if n := countRows(t, conn, "SELECT count() FROM payload_requests WHERE has(field_names, 'gen_ai.input.messages') AND has(field_names, 'gen_ai.tool.definitions') AND has(field_names, 'gen_ai.system_instructions') AND arrayAll(x -> x = 1, field_is_array)"); n != 2 {
+		t.Errorf("%d of 2 request rows split all three content arrays per element", n)
+	}
+
+	rdr, err := NewReader(Config{DSN: dsn})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer rdr.Close()
+	for _, want := range turns {
+		got, err := rdr.Get(ctx, want.RequestID)
+		if err != nil {
+			t.Fatalf("Get %s: %v", want.RequestID, err)
+		}
+		assertSameRecord(t, got, want)
+	}
+
+	whole := uint64(len(turns[0].RequestBody) + len(turns[1].RequestBody))
+	stored := countRows(t, conn, "SELECT sum(length(body)) FROM payload_pieces") + countRows(t, conn, "SELECT sum(length(skeleton)) FROM payload_requests")
+	if stored >= whole {
+		t.Errorf("deduplicated request bodies take %d bytes, the whole bodies %d", stored, whole)
+	}
+	t.Logf("two turns: request bodies %d bytes whole, %d bytes as skeletons and %d pieces (%d piece references)",
+		whole, stored, total, countRows(t, conn, "SELECT sum(length(hashes)) FROM payload_requests"))
 }
