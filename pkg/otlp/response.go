@@ -31,26 +31,30 @@ func (s Signal) rejectedField() string {
 	return "rejectedSpans"
 }
 
-// ExportResponse encodes the export response of signal (ExportTraceServiceResponse, ExportLogsServiceResponse) in mediaType. rejected > 0 makes it a partial success naming how many records were refused and why; otherwise the response is the empty success message.
+// ExportResponse encodes the export response of signal (ExportTraceServiceResponse, ExportLogsServiceResponse) in mediaType. rejected > 0 makes it a partial success naming how many records were refused and why. With nothing rejected, a message makes it a warning to the client about an export that was accepted in full, which OTLP carries as a partial success with a count of zero. With neither, the response is the empty success message.
 func ExportResponse(mediaType string, signal Signal, rejected int64, message string) []byte {
-	if mediaType == MediaTypeJSON {
-		if rejected <= 0 {
+	rejected = max(rejected, 0)
+	if rejected == 0 && message == "" {
+		if mediaType == MediaTypeJSON {
 			return []byte("{}")
 		}
-		// OTLP/JSON writes 64-bit integers as decimal strings.
-		b, _ := json.Marshal(map[string]any{"partialSuccess": map[string]any{
-			signal.rejectedField(): strconv.FormatInt(rejected, 10),
-			"errorMessage":         message,
-		}})
-		return b
-	}
-	if rejected <= 0 {
 		return nil
 	}
-	// Export<Signal>PartialSuccess{rejected = 1, error_message = 2} inside Export<Signal>ServiceResponse{partial_success = 1}.
+	if mediaType == MediaTypeJSON {
+		partial := map[string]any{"errorMessage": message}
+		if rejected > 0 {
+			// OTLP/JSON writes 64-bit integers as decimal strings.
+			partial[signal.rejectedField()] = strconv.FormatInt(rejected, 10)
+		}
+		b, _ := json.Marshal(map[string]any{"partialSuccess": partial})
+		return b
+	}
+	// Export<Signal>PartialSuccess{rejected = 1, error_message = 2} inside Export<Signal>ServiceResponse{partial_success = 1}. A zero count is the field's default and is left off the wire.
 	var partial []byte
-	partial = protowire.AppendTag(partial, 1, protowire.VarintType)
-	partial = protowire.AppendVarint(partial, uint64(rejected))
+	if rejected > 0 {
+		partial = protowire.AppendTag(partial, 1, protowire.VarintType)
+		partial = protowire.AppendVarint(partial, uint64(rejected))
+	}
 	if message != "" {
 		partial = protowire.AppendTag(partial, 2, protowire.BytesType)
 		partial = protowire.AppendString(partial, message)

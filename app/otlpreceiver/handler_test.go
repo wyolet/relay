@@ -140,6 +140,8 @@ type fixtureOptions struct {
 	policyCaptures *bool
 	// policyDisabled switches that policy off.
 	policyDisabled bool
+	// policyModels is that policy's model grant; empty grants every model.
+	policyModels []string
 	// keyCaptures sets the reporting key's own payload logging flag.
 	keyCaptures bool
 }
@@ -175,7 +177,7 @@ func newFixtureWith(t *testing.T, o fixtureOptions) *fixture {
 		enabled := !o.policyDisabled
 		governing := &policy.Policy{
 			Meta: meta.Metadata{ID: meta.NewID(), Name: "indexer-policy", Owner: meta.Owner{Kind: meta.OwnerProject, ID: fx.project.Meta.ID}},
-			Spec: policy.Spec{PayloadLoggingEnabled: *o.policyCaptures, Enabled: &enabled},
+			Spec: policy.Spec{PayloadLoggingEnabled: *o.policyCaptures, Enabled: &enabled, Models: o.policyModels},
 		}
 		policies = append(policies, governing)
 		fx.keyRow.Spec.PolicyID = governing.Meta.ID
@@ -624,11 +626,68 @@ func TestFailedCallIsALogOnlyRow(t *testing.T) {
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, failed, withStatus)); rec.Code != http.StatusOK || len(fx.events) != 2 {
 		t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
 	}
-	if ev := fx.events[0]; ev.Status != 0 || ev.ErrorKind != "rate_limit_exceeded" || !ev.LogOnly() || ev.CostNanos != nil {
-		t.Errorf("failed call without a status = %+v, want a log-only row", ev)
+	// The kind is relay's own; what the client called the error stays in the extras.
+	if ev := fx.events[0]; ev.Status != 0 || ev.ErrorKind != "error" || !ev.LogOnly() || ev.CostNanos != nil || ev.Extras["reported_error_type"] != "rate_limit_exceeded" {
+		t.Errorf("failed call without a status = %+v, want a log-only row of kind error", ev)
 	}
-	if ev := fx.events[1]; ev.Status != 429 || ev.ErrorKind != "rate_limit_exceeded" {
-		t.Errorf("failed call with a status = status %d kind %q", ev.Status, ev.ErrorKind)
+	if ev := fx.events[1]; ev.Status != 429 || ev.ErrorKind != "upstream_error" || ev.Extras["reported_error_type"] != "rate_limit_exceeded" {
+		t.Errorf("failed call with a status = status %d kind %q extras %v", ev.Status, ev.ErrorKind, ev.Extras)
+	}
+}
+
+func TestACallThatSucceededHasNoErrorKind(t *testing.T) {
+	fx := newFixture(t)
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large"))); rec.Code != http.StatusOK || len(fx.events) != 1 {
+		t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
+	}
+	if ev := fx.events[0]; ev.ErrorKind != "" || ev.Status != 200 {
+		t.Errorf("event = status %d kind %q", ev.Status, ev.ErrorKind)
+	}
+	if _, ok := fx.events[0].Extras["reported_error_type"]; ok {
+		t.Errorf("extras = %v, want no reported error type", fx.events[0].Extras)
+	}
+}
+
+func TestACredentialUnderADisabledPolicyMayNotReport(t *testing.T) {
+	yes := true
+	fx := newFixtureWith(t, fixtureOptions{policyCaptures: &yes, policyDisabled: true})
+	fx.captureContent, fx.payloads.enabled = true, true
+	for path, body := range map[string][]byte{
+		otlpreceiver.TracesPath: export(t, pbSpan(1, contentAttrs(t, asText)...)),
+		otlpreceiver.LogsPath:   logsExport(t, chatEvent(2, "acme-large")),
+	} {
+		rec := fx.postTo(t, path, otlp.MediaTypeProtobuf, body)
+		var refusal struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &refusal); err != nil {
+			t.Fatalf("%s: body %q: %v", path, rec.Body, err)
+		}
+		// The answer inference gives the same credential.
+		if rec.Code != http.StatusForbidden || refusal.Error.Code != "policy_disabled" {
+			t.Errorf("%s: status = %d code = %q, want 403 policy_disabled", path, rec.Code, refusal.Error.Code)
+		}
+	}
+	if len(fx.events) != 0 || len(fx.payloads.records) != 0 {
+		t.Errorf("recorded %d events and %d payloads from a credential that may not report", len(fx.events), len(fx.payloads.records))
+	}
+	// Refused before the body is read: a body that cannot be decoded gets the same answer.
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, []byte("not an export")); rec.Code != http.StatusForbidden {
+		t.Errorf("undecodable body: status = %d, want 403", rec.Code)
+	}
+	// Another key of the same project, under no policy, still reports.
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(3, "acme-large")), "Authorization", "Bearer "+siblingKey); rec.Code != http.StatusOK || len(fx.events) != 1 {
+		t.Errorf("key with no policy: status = %d events = %d", rec.Code, len(fx.events))
+	}
+}
+
+func TestAPolicyThatDoesNotGrantTheModelStillReports(t *testing.T) {
+	no := false
+	fx := newFixtureWith(t, fixtureOptions{policyCaptures: &no, policyModels: []string{"zeta"}})
+	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, chatSpan(1, "acme-large"))); rec.Code != http.StatusOK || len(fx.events) != 1 || fx.events[0].Model != "acme-large" {
+		t.Errorf("status = %d events = %d, want the call recorded although the policy grants another provider's models", rec.Code, len(fx.events))
 	}
 }
 
@@ -1066,8 +1125,8 @@ func TestErrorTypeCarryingTheHTTPStatusIsTheEventStatus(t *testing.T) {
 	if rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, failed)); rec.Code != http.StatusOK || len(fx.events) != 1 {
 		t.Fatalf("status = %d events = %d", rec.Code, len(fx.events))
 	}
-	if ev := fx.events[0]; ev.Status != 429 || ev.ErrorKind != "429" || ev.LogOnly() {
-		t.Errorf("event = status %d kind %q log-only %v, want a 429 row", ev.Status, ev.ErrorKind, ev.LogOnly())
+	if ev := fx.events[0]; ev.Status != 429 || ev.ErrorKind != "upstream_error" || ev.Extras["reported_error_type"] != "429" || ev.LogOnly() {
+		t.Errorf("event = status %d kind %q extras %v log-only %v, want a 429 row", ev.Status, ev.ErrorKind, ev.Extras, ev.LogOnly())
 	}
 }
 
@@ -1086,7 +1145,6 @@ func TestThePolicyOfTheReporterDecidesWhetherContentIsStored(t *testing.T) {
 		{name: "policy does not capture", opts: fixtureOptions{policyCaptures: &no}, wantByPolicy: true},
 		{name: "no policy: what the client sent is kept", opts: fixtureOptions{}, wantStored: true},
 		{name: "key flag set, policy does not capture", opts: fixtureOptions{policyCaptures: &no, keyCaptures: true}, wantByPolicy: true},
-		{name: "disabled policy that would capture", opts: fixtureOptions{policyCaptures: &yes, policyDisabled: true}, wantByPolicy: true},
 		{name: "policy captures, receiver switch off", opts: fixtureOptions{policyCaptures: &yes}, receiverOff: true},
 		{name: "policy captures, payload logging off", opts: fixtureOptions{policyCaptures: &yes}, payloadLoggingOff: true},
 	} {
@@ -1096,10 +1154,14 @@ func TestThePolicyOfTheReporterDecidesWhetherContentIsStored(t *testing.T) {
 			fx.payloads.enabled = !tc.payloadLoggingOff
 			byPolicy := otlpreceiver.ContentCount("policy")
 
-			rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, pbSpan(1, contentAttrs(t, asText)...)))
+			rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, pbSpan(1, contentAttrs(t, asText)...)))
 			// The usage row is recorded whatever happens to the content, and the export succeeds.
-			if rec.Code != http.StatusOK || rec.Body.Len() != 0 || len(fx.events) != 1 {
+			if rec.Code != http.StatusOK || len(fx.events) != 1 {
 				t.Fatalf("status = %d body = %q events = %d, want an accepted export and one usage row", rec.Code, rec.Body, len(fx.events))
+			}
+			// Stored content needs no word to the client; withheld content is answered with a warning, never a rejection.
+			if warned := rec.Body.String() != "{}"; warned == tc.wantStored {
+				t.Errorf("body = %s, want a warning only when the content was withheld", rec.Body)
 			}
 			if stored := len(fx.payloads.records) == 1; stored != tc.wantStored {
 				t.Errorf("payload records = %d, want stored = %v", len(fx.payloads.records), tc.wantStored)
@@ -1113,6 +1175,97 @@ func TestThePolicyOfTheReporterDecidesWhetherContentIsStored(t *testing.T) {
 			}
 		})
 	}
+}
+
+// partialSuccess decodes the body of an accepted JSON export.
+func partialSuccess(t *testing.T, rec *httptest.ResponseRecorder) (rejected, message string, present bool) {
+	t.Helper()
+	var got struct {
+		PartialSuccess *struct {
+			RejectedSpans      string `json:"rejectedSpans"`
+			RejectedLogRecords string `json:"rejectedLogRecords"`
+			ErrorMessage       string `json:"errorMessage"`
+		} `json:"partialSuccess"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %q: %v", rec.Body, err)
+	}
+	if got.PartialSuccess == nil {
+		return "", "", false
+	}
+	return got.PartialSuccess.RejectedSpans + got.PartialSuccess.RejectedLogRecords, got.PartialSuccess.ErrorMessage, true
+}
+
+func TestTheClientIsToldWhenItsContentWasNotStored(t *testing.T) {
+	no := false
+	withContent := func(t *testing.T, id byte) *tracepb.Span { return pbSpan(id, contentAttrs(t, asText)...) }
+
+	t.Run("policy does not store content", func(t *testing.T) {
+		fx := newFixtureWith(t, fixtureOptions{policyCaptures: &no})
+		fx.captureContent, fx.payloads.enabled = true, true
+		// Two calls with content and one without: the warning counts the two.
+		rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, withContent(t, 1), withContent(t, 2), chatSpan(3, "acme-large")))
+		rejected, message, present := partialSuccess(t, rec)
+		if rec.Code != http.StatusOK || !present || rejected != "" || len(fx.events) != 3 {
+			t.Fatalf("status = %d body = %s events = %d, want an accepted export with a warning and nothing rejected", rec.Code, rec.Body, len(fx.events))
+		}
+		want := "message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded."
+		if message != want {
+			t.Errorf("warning =\n%s\nwant\n%s", message, want)
+		}
+	})
+
+	t.Run("content capture is off", func(t *testing.T) {
+		fx := newFixture(t)
+		rec := fx.postLogs(t, otlp.MediaTypeJSON, logsJSON(t, pbEvent(1, contentAttrs(t, asStructure)...)))
+		rejected, message, present := partialSuccess(t, rec)
+		if rec.Code != http.StatusOK || !present || rejected != "" || !strings.Contains(message, "message content of 1 model calls was not stored: this server does not capture message content") {
+			t.Errorf("status = %d body = %s, want a warning that the server does not capture content", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("beside a rejection", func(t *testing.T) {
+		fx := newFixtureWith(t, fixtureOptions{policyCaptures: &no})
+		fx.captureContent, fx.payloads.enabled = true, true
+		anonymous := withContent(t, 2)
+		anonymous.SpanId = nil
+		rec := fx.post(t, otlp.MediaTypeJSON, mustJSON(t, withContent(t, 1), anonymous))
+		rejected, message, _ := partialSuccess(t, rec)
+		if rec.Code != http.StatusOK || rejected != "1" || len(fx.events) != 1 {
+			t.Fatalf("status = %d body = %s events = %d, want one call recorded and one rejected", rec.Code, rec.Body, len(fx.events))
+		}
+		if !strings.HasPrefix(message, "model-call spans rejected: 1 without a trace id or span id. Also: message content of 1 model calls was not stored") {
+			t.Errorf("message = %q, want the rejection and then the warning", message)
+		}
+	})
+
+	t.Run("in protobuf", func(t *testing.T) {
+		fx := newFixture(t)
+		rec := fx.post(t, otlp.MediaTypeProtobuf, export(t, withContent(t, 1)))
+		if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte("this server does not capture message content")) {
+			t.Errorf("status = %d body = %q, want the warning in the partial success message", rec.Code, rec.Body)
+		}
+	})
+
+	t.Run("not for what the client cannot change", func(t *testing.T) {
+		// A resend whose content is already stored, and content dropped because the payload queue is busy.
+		fx := capturing(t)
+		body := mustJSON(t, withContent(t, 1))
+		fx.post(t, otlp.MediaTypeJSON, body)
+		if rec := fx.post(t, otlp.MediaTypeJSON, body); rec.Body.String() != "{}" {
+			t.Errorf("resend: body = %s, want the empty success", rec.Body)
+		}
+		busy := capturing(t)
+		busy.payloads.capacity = 0
+		if rec := busy.post(t, otlp.MediaTypeJSON, body); rec.Body.String() != "{}" || len(busy.payloads.records) != 0 {
+			t.Errorf("busy payload queue: body = %s records = %d, want the empty success and nothing stored", rec.Body, len(busy.payloads.records))
+		}
+		// An export that carries no content says nothing either.
+		quiet := newFixture(t)
+		if rec := quiet.post(t, otlp.MediaTypeJSON, mustJSON(t, chatSpan(1, "acme-large"))); rec.Body.String() != "{}" {
+			t.Errorf("no content sent: body = %s", rec.Body)
+		}
+	})
 }
 
 func TestContentRefusedByPolicyCanBeStoredOnceThePolicyAllowsIt(t *testing.T) {

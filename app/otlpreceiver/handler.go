@@ -157,6 +157,14 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	reporter := lifecycle.NewContext("", Source, time.Time{})
 	inference.StampPrincipal(ctx, reporter)
 
+	// A disabled policy is access the operator switched off, so its credential may not report either. A credential with no policy, or one whose policy grants other models, still may: reporting needs a valid credential, not a route.
+	governing := inference.GoverningPolicy(ctx)
+	if governing != nil && !governing.IsEnabled() {
+		sig.result(resultPolicyDisabled).Inc()
+		inference.WritePolicyDisabled(w)
+		return
+	}
+
 	// Checked before the body is read, so a client over its limit costs one kv call and no decoding.
 	if wait, limited := h.rateLimited(ctx, snap, reporter); limited {
 		sig.result(resultRateLimited).Inc()
@@ -195,9 +203,11 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 
 	now := time.Now()
 	accepted, refused := admit(calls, sig.responseIdentity, now)
+	var content withheld
 	if len(accepted) > 0 {
 		from := origin{instance: h.opts.InstanceID, clientIP: inference.ClassificationFrom(ctx).ClientIP}
-		if !h.record(ctx, sig, snap, reporter, from, accepted, now) {
+		var queued bool
+		if queued, content = h.record(ctx, sig, snap, reporter, governing, from, accepted, now); !queued {
 			sig.result(resultBackpressure).Inc()
 			setRetryAfter(w, queueRetryAfter)
 			writeStatus(w, mediaType, http.StatusServiceUnavailable, otlp.StatusUnavailable, "usage queue is full; send the export again")
@@ -211,7 +221,15 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	sig.result(resultAccepted).Inc()
 	w.Header().Set("Content-Type", mediaType)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(otlp.ExportResponse(mediaType, sig.wire, refused.rejected(), refused.message(sig)))
+	// Content the operator does not keep is not a rejection: the export succeeded, and the message alone tells the client it can stop sending it.
+	message := refused.message(sig)
+	if warning := content.message(); warning != "" {
+		if message != "" {
+			message += ". Also: "
+		}
+		message += warning
+	}
+	_, _ = w.Write(otlp.ExportResponse(mediaType, sig.wire, refused.rejected(), message))
 }
 
 func writeStatus(w http.ResponseWriter, mediaType string, httpStatus int, code int32, message string) {

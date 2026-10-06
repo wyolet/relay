@@ -23,7 +23,7 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 		// through to a broader binding, or to the policy-less flow, would
 		// hand the caller more than the operator left switched on.
 		if !p.Policy.IsEnabled() {
-			writeForbidden(w, "policy_disabled", "policy is disabled")
+			WritePolicyDisabled(w)
 			return false
 		}
 		return true
@@ -76,6 +76,11 @@ func GoverningPolicy(ctx context.Context) *policy.Policy {
 	}
 	pol, _ := governingPolicy(snap, p)
 	return pol
+}
+
+// WritePolicyDisabled answers a caller whose governing policy is switched off: the 403 inference gives, for endpoints that find the policy with GoverningPolicy.
+func WritePolicyDisabled(w http.ResponseWriter) {
+	writeForbidden(w, "policy_disabled", "policy is disabled")
 }
 
 // policyOrDisabled resolves a policy id, falling back to the disabled row so

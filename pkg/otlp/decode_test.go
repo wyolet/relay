@@ -395,6 +395,31 @@ func TestExportResponse(t *testing.T) {
 	}
 }
 
+// A warning about an export accepted in full is a partial success with nothing rejected and a message.
+func TestExportResponseWarning(t *testing.T) {
+	var got struct {
+		PartialSuccess map[string]string `json:"partialSuccess"`
+	}
+	if err := json.Unmarshal(ExportResponse(MediaTypeJSON, SignalTraces, 0, "content not stored"), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"errorMessage": "content not stored"}; !reflect.DeepEqual(got.PartialSuccess, want) {
+		t.Errorf("json warning = %v, want %v", got.PartialSuccess, want)
+	}
+
+	b := ExportResponse(MediaTypeProtobuf, SignalLogs, 0, "content not stored")
+	num, typ, n := protowire.ConsumeTag(b)
+	if num != 1 || typ != protowire.BytesType {
+		t.Fatalf("outer tag = %d/%d", num, typ)
+	}
+	partial, _ := protowire.ConsumeBytes(b[n:])
+	num, _, n = protowire.ConsumeTag(partial)
+	msg, m := protowire.ConsumeString(partial[n:])
+	if num != 2 || msg != "content not stored" || n+m != len(partial) {
+		t.Errorf("partial success = field %d %q in %d bytes, want only the message", num, msg, len(partial))
+	}
+}
+
 func TestStatusBody(t *testing.T) {
 	var got struct {
 		Code    int32  `json:"code"`

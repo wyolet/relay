@@ -15,6 +15,7 @@ const (
 	resultUnsupported    = "unsupported_media"
 	resultRateLimited    = "rate_limited"
 	resultBackpressure   = "backpressure"
+	resultPolicyDisabled = "policy_disabled"
 
 	outcomeRecorded  = "recorded"
 	outcomeIgnored   = "ignored"
@@ -35,7 +36,7 @@ var exportsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "exports_total",
-	Help:      "OTLP export requests received, by signal (traces, logs) and result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
+	Help:      "OTLP export requests received, by signal (traces, logs) and result: accepted, disabled, bad_request, too_large, too_many_records, unsupported_media, policy_disabled (the credential's policy is switched off), rate_limited, or backpressure (the usage queue is half full or lacks room; the client is asked to resend).",
 }, []string{"signal", "result"})
 
 // spansTotal answers how much of what clients export becomes usage: spans that are not model calls are ignored by design, so a high ignored share is normal for clients that export whole traces.
@@ -59,7 +60,7 @@ var contentTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Namespace: metrics.Namespace,
 	Subsystem: "otlp",
 	Name:      "content_total",
-	Help:      "Reported model calls carrying message content while content capture is on, by outcome: stored (queued for the payload store), duplicate (content already stored for the call), dropped (the payload queue was half full or lacked room), or policy (the reporter's policy does not capture payloads, or is disabled).",
+	Help:      "Reported model calls carrying message content while content capture is on, by outcome: stored (queued for the payload store), duplicate (content already stored for the call), dropped (the payload queue was half full or lacked room), or policy (the reporter's policy does not capture payloads).",
 }, []string{"outcome"})
 
 // markerErrors counts kv failures of the duplicate check. A failed mark stores the calls anyway, so they may be stored again on a resend; a failed unmark leaves calls marked that were never queued, so a resend skips them.

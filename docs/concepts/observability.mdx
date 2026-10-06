@@ -93,7 +93,7 @@ The write replaces the whole section: a field left out takes its default, so thi
 
 ### Configure the exporter
 
-The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or token in the `Authorization` header; the key needs no policy. Calls are attributed to that key's project, team and principal, so give each reporting service a key of its own.
+The endpoints are on the inference port: `/otlp/v1/traces` and `/otlp/v1/logs`. The exporter authenticates like an inference client, with a relay key or token in the `Authorization` header. Any valid credential may report: one with no policy, and one whose policy does not grant the reported model, since reporting routes nothing. A credential that inference rejects as invalid (unknown, disabled, expired) cannot, and neither can one whose governing policy is disabled: the operator switched that access off, and the export is answered `403`. Calls are attributed to that key's project, team and principal, so give each reporting service a key of its own.
 
 ```bash
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
@@ -138,13 +138,28 @@ Relay reads the [OpenTelemetry GenAI semantic conventions](https://github.com/op
 | `requested_model`, `model` | `gen_ai.request.model`, `gen_ai.response.model`; the response model is tried first against the catalog |
 | `provider`, `pricing` | `gen_ai.provider.name` (earlier: `gen_ai.system`) and the catalog; see [Pricing](#pricing-and-provider-names) |
 | `tokens` | `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_creation.input_tokens` (or `cache_write.input_tokens`), `reasoning.output_tokens`, `audio.input_tokens`, `audio.output_tokens` (earlier: `prompt_tokens`, `completion_tokens`) |
-| `status`, `error_kind` | `http.response.status_code` and `error.type`. An `error.type` that is an HTTP error status (`"429"`) is used as the status. A failed call with no status is stored with status `0` and its `error_kind`: it is listed in the logs and left out of summaries, like a request Relay rejected before reaching a provider. |
+| `status` | `http.response.status_code`; an `error.type` that is an HTTP error status (`"429"`) is used when that is missing. A failed call with no status is stored with status `0`: it is listed in the logs and left out of summaries, like a request Relay rejected before reaching a provider. |
+| `error_kind` | Relay's own classification of a failed call, in the values proxied requests use; see [Error kinds](#error-kinds). The `error.type` the client sent is kept in `extras.reported_error_type`. |
 | `finish_reason` | first value of `gen_ai.response.finish_reasons` |
 | `streamed`, time to first token | `gen_ai.request.stream`, `gen_ai.response.time_to_first_chunk` |
 | `ts`, `duration_ms` | the span's start and end. An event has no duration: `duration_ms` is `0` and `ts` is the record's time, or the time the SDK observed it. |
 | `extras` | `trace_id`, `span_id`, `response_id` (`gen_ai.response.id`), `session_id` (`gen_ai.conversation.id`), `service` (the resource's `service.name`), `operation`, `reported_provider` |
 
 A row is as complete as the instrumentation makes it. Three examples from current releases: `opentelemetry-instrumentation-openai-v2` 2.4b0 and `@opentelemetry/instrumentation-openai` 0.20.0 report neither cached nor reasoning tokens and do not mark a streamed call, so such a call is stored with all input at the uncached rate and `streamed: false`; `opentelemetry-instrumentation-google-genai` 1.2b0 reports all of them. Report one call and read it back with `GET /api/usage/events?source=otlp` before relying on the numbers.
+
+### Error kinds
+
+Instrumentations put different things in `error.type`: an exception class name, a provider error code, an HTTP status. Relay does not store that as the kind, because filtering or grouping by `error_kind` would then not line up between reported and proxied events. A failed call gets one of five kinds:
+
+| `error_kind` | When |
+| --- | --- |
+| `upstream_error` | The provider's HTTP status is known and is 400 or above. The status is in `status`. |
+| `timeout` | No status, and `error.type` names a timeout or an exceeded deadline. |
+| `client_canceled` | No status, and `error.type` names a cancellation. |
+| `upstream_unreachable` | No status, and `error.type` names a failed connection. |
+| `error` | Anything else, including `_OTHER` and class names such as `RateLimitError` that arrive without a status. |
+
+A call that succeeded has no `error_kind`. To see what clients actually sent, read `extras.reported_error_type`.
 
 ### How a reported event differs from a proxied one
 
@@ -174,7 +189,9 @@ Telemetry names providers its own way, and often names the service that served t
 | `200` | The export was accepted. An empty body means every model call in it was recorded or was a duplicate. | done |
 | `200` with `partialSuccess` | Some model calls were refused and the rest recorded: `rejectedSpans` / `rejectedLogRecords` counts those with no trace id and span id (for an event: nor a response id) or starting more than 5 minutes in the future; `errorMessage` says which. | logs it, does not resend |
 | `400` | The body does not decode, or the export reports more than 10,000 model calls. | drops the batch |
+| `200` with `partialSuccess.errorMessage` only | Everything was recorded, with a warning: the export carried [message content](#message-content) that Relay does not store. No record is counted as rejected. | logs it if it reads partial success |
 | `401` | Missing or invalid relay key. | drops the batch |
+| `403` `policy_disabled` | The policy that governs the credential is disabled. The body is the one inference returns for that credential. | drops the batch |
 | `404` | The receiver is disabled, or the path is not served (`/otlp/v1/metrics`). | drops the batch |
 | `413` | The body is over 16 MiB after decompression (`RELAY_MAX_REQUEST_BYTES` when set). | drops the batch |
 | `415` | The `Content-Type` is neither `application/x-protobuf` nor `application/json`, or the `Content-Encoding` is not `gzip`. | drops the batch |
@@ -186,6 +203,8 @@ Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the
 ### Message content
 
 Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches below must be on, and then the policy that governs the reporting credential decides: content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
+
+Relay tells the client. When an export carries content that is not stored because of the policy or because an operator switch is off, the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
 
 On the client, turn on content capture in the instrumentation. For the Python instrumentations:
 
@@ -214,7 +233,7 @@ Relay reads `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.
 
 - Each body is cut at the payload `maxBytes` and flagged `request_truncated` / `response_truncated`; a cut body is no longer valid JSON.
 - Content is stored once per call, also when it arrives after the usage event (`event_only` with spans exported first). `span_and_event` sends every message to Relay twice and stores it once, so prefer one of the other two.
-- The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings. Unlike a proxied request, where the policy or the key can opt in, the key's `payloadLoggingEnabled` has no effect on reported content, and a disabled policy stores nothing.
+- The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings. Unlike a proxied request, where the policy or the key can opt in, the key's `payloadLoggingEnabled` has no effect on reported content.
 - When the payload queue is over half full, content is dropped and the usage event is kept; `relay_otlp_content_total{outcome="dropped"}` counts it.
 - The content forms of earlier conventions (`gen_ai.prompt` / `gen_ai.completion` attributes, one event per message) are not stored. `@opentelemetry/instrumentation-openai` 0.20.0 emits the per-message events, so its content is not captured.
 

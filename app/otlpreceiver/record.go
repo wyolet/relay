@@ -3,20 +3,21 @@ package otlpreceiver
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/httpapi/inference"
+	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
-// record queues one usage event per call not recorded before, then stores the content of the calls that carry any. It reports false when the usage queue could not take them all: the client must then send the export again, and whatever was queued this time is skipped as a duplicate.
-func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snapshot, reporter *lifecycle.Context, from origin, calls []reported, now time.Time) bool {
+// record queues one usage event per call not recorded before, then stores the content of the calls that carry any and reports how much of it was withheld. It reports false when the usage queue could not take them all: the client must then send the export again, and whatever was queued this time is skipped as a duplicate.
+func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snapshot, reporter *lifecycle.Context, governing *policy.Policy, from origin, calls []reported, now time.Time) (bool, withheld) {
 	queue := h.opts.Usage
 	// Refused before anything is marked when the export cannot fit. An export larger than the receiver's whole share never fits, so it is taken in parts across resends instead.
 	if room := sharedRoom(queue); room <= 0 || (room < len(calls) && len(calls) <= share(queue)) {
-		return false
+		return false, withheld{}
 	}
 
 	tenant := tenantOf(reporter)
@@ -43,19 +44,36 @@ func (h *Handler) record(ctx context.Context, sig signal, snap *appcatalog.Snaps
 		sig.records.WithLabelValues(outcomeRecorded).Inc()
 		recorded = append(recorded, c)
 	}
-	h.storeContent(ctx, tenant, reporter, recorded, now)
+	kept := h.storeContent(ctx, tenant, reporter, governing, recorded, now)
 	if len(unqueued) == 0 {
-		return true
+		return true, kept
 	}
 	h.unmark(ctx, tenant, MarkerUsage, unqueued, "otlp receiver: calls stay marked as recorded but were not queued")
-	return false
+	return false, withheld{}
+}
+
+// withheld counts the calls of one export whose content was not stored by the operator's decision, which the client is told so it can stop sending it. Content lost to a busy queue or skipped as a duplicate is not counted: the client can do nothing about either.
+type withheld struct {
+	// captureOff counts calls whose content arrived while content capture or payload logging was off.
+	captureOff int
+	// byPolicy counts calls whose content the reporter's policy does not store.
+	byPolicy int
+}
+
+// message is the warning for the client, "" when all content sent was eligible to be stored.
+func (w withheld) message() string {
+	n, why := w.captureOff, "this server does not capture message content"
+	if w.byPolicy > 0 {
+		n, why = w.byPolicy, "the policy of this credential does not allow storing message content"
+	}
+	if n == 0 {
+		return ""
+	}
+	return "message content of " + strconv.Itoa(n) + " model calls was not stored: " + why + ". It is safe to stop sending content; usage was recorded."
 }
 
 // storeContent queues the reported message content of calls for the payload store, once per call, when the operator's switches are on and the reporter's policy allows it. Content is secondary to the usage row: when the payload queue lacks room it is dropped and counted rather than holding up the export, and left unmarked so a later report of the same call can still store it.
-func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lifecycle.Context, calls []reported, received time.Time) {
-	if !h.capturesContent() {
-		return
-	}
+func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lifecycle.Context, governing *policy.Policy, calls []reported, received time.Time) withheld {
 	var with []reported
 	for _, c := range calls {
 		if !c.inf.Content.Empty() {
@@ -63,17 +81,20 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 		}
 	}
 	if len(with) == 0 {
-		return
+		return withheld{}
 	}
-	// A policy that governs the reporter decides, over the client's choice to send content and over the key's own flag. A disabled policy stores nothing. With no policy, what the client sent is kept.
-	if pol := inference.GoverningPolicy(ctx); pol != nil && (!pol.IsEnabled() || !pol.Spec.PayloadLoggingEnabled) {
+	if !h.capturesContent() {
+		return withheld{captureOff: len(with)}
+	}
+	// A policy that governs the reporter decides, over the client's choice to send content and over the key's own flag. With no policy, what the client sent is kept.
+	if governing != nil && !governing.Spec.PayloadLoggingEnabled {
 		contentTotal.WithLabelValues(contentPolicy).Add(float64(len(with)))
-		return
+		return withheld{byPolicy: len(with)}
 	}
 	queue := h.opts.Payloads
 	if sharedRoom(queue) <= 0 {
 		contentTotal.WithLabelValues(contentDropped).Add(float64(len(with)))
-		return
+		return withheld{}
 	}
 
 	ids := make([]Call, len(with))
@@ -98,6 +119,7 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 		contentTotal.WithLabelValues(contentDropped).Add(float64(len(unqueued)))
 		h.unmark(ctx, tenant, MarkerContent, unqueued, "otlp receiver: content stays marked as stored but was not queued")
 	}
+	return withheld{}
 }
 
 func (h *Handler) capturesContent() bool {

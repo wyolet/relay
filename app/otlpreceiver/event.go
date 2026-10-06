@@ -22,7 +22,9 @@ const (
 	ExtrasKeyService          = "service"
 	ExtrasKeyOperation        = "operation"
 	ExtrasKeyReportedProvider = "reported_provider"
-	extrasKeyClientIP         = "client_ip"
+	// ExtrasKeyReportedError holds the error type of a failed call as the client reported it; the event's error kind is relay's own classification of it.
+	ExtrasKeyReportedError = "reported_error_type"
+	extrasKeyClientIP      = "client_ip"
 )
 
 // origin is what the receiving relay knows about an export, as opposed to what the client reported in it.
@@ -42,7 +44,7 @@ func buildEvent(snap *appcatalog.Snapshot, reporter *lifecycle.Context, c report
 		DurationMs:     inf.Duration.Milliseconds(),
 		Streamed:       inf.Streamed,
 		FinishReason:   inf.FinishReason,
-		ErrorKind:      inf.ErrorType,
+		ErrorKind:      errorKind(inf),
 		RelayKeyHash:   reporter.RelayKeyHash,
 		RequestedModel: inf.RequestModel,
 		ProjectID:      reporter.ProjectID,
@@ -132,6 +134,7 @@ func extras(inf otlp.Inference, from origin) map[string]string {
 		ExtrasKeyService:              inf.Service,
 		ExtrasKeyOperation:            inf.Operation,
 		ExtrasKeyReportedProvider:     inf.Provider,
+		ExtrasKeyReportedError:        inf.ErrorType,
 		tokencount.MetadataKeySession: inf.ConversationID,
 		usagelog.ExtrasKeyInstance:    from.instance,
 		extrasKeyClientIP:             from.clientIP,

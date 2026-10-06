@@ -63,7 +63,7 @@ func TestGoverningPolicyFollowsTheInferenceOrder(t *testing.T) {
 }
 
 func TestGoverningPolicyRejectsNothing(t *testing.T) {
-	// Inference answers 403 to both of these; a reporter is still admitted.
+	// Inference answers 403 to both of these. The lookup itself admits both and leaves the answer to its caller.
 	t.Run("no policy", func(t *testing.T) {
 		f := newPrincipalFixture()
 		f.sa.Spec.PolicyID = ""
