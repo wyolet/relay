@@ -71,7 +71,7 @@ type PayloadClickHouse struct {
 	// Dedup stores each distinct message, tool list and system prompt once
 	// and request bodies as references to them. Rows written either way
 	// stay readable.
-	Dedup bool `json:"dedup"`
+	Dedup bool `json:"dedup,omitempty"`
 }
 
 // Validate is enforced before any write. Only meaningful when Enabled —
