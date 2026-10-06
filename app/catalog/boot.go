@@ -15,6 +15,7 @@ import (
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policy"
@@ -82,6 +83,9 @@ type BootstrapOptions struct {
 	// pod sharing the database, so pods booting together against an empty
 	// catalog seed it once. Nil runs unserialized: safe for one process only.
 	SeedLock func(ctx context.Context, fn func(context.Context) error) error
+
+	// SystemRateLimits are the system-owned rate limits the binary looks up by name. Every hydrate creates the ones with no row and leaves existing rows alone.
+	SystemRateLimits []*ratelimit.RateLimit
 }
 
 // Stores bundles the eight entity stores constructed by Bootstrap. Exposed
@@ -193,8 +197,8 @@ func (c *Catalog) Hydrate(ctx context.Context, stores *Stores, opts BootstrapOpt
 	if err := stores.HostKey.LoadKeyVersion(ctx); err != nil {
 		return nil, fmt.Errorf("catalog.Hydrate: load key version: %w", err)
 	}
-	if opts.CatalogVersion != "" || opts.AutoSeedDir != "" {
-		run := func(ctx context.Context) error { return seedCatalog(ctx, stores, opts) }
+	if opts.CatalogVersion != "" || opts.AutoSeedDir != "" || len(opts.SystemRateLimits) > 0 {
+		run := func(ctx context.Context) error { return seedRows(ctx, stores, opts) }
 		var err error
 		if opts.SeedLock != nil {
 			err = opts.SeedLock(ctx, run)
@@ -244,6 +248,23 @@ func Bootstrap(ctx context.Context, opts BootstrapOptions) (*Catalog, *Listener,
 		return nil, nil, nil, err
 	}
 	return cat, listener, stores, nil
+}
+
+// seedRows seeds the catalog when one is configured, then the system rate limits. The catalog goes first so its seed-if-empty decision never sees rows this boot wrote.
+func seedRows(ctx context.Context, stores *Stores, opts BootstrapOptions) error {
+	if opts.CatalogVersion != "" || opts.AutoSeedDir != "" {
+		if err := seedCatalog(ctx, stores, opts); err != nil {
+			return err
+		}
+	}
+	created, err := seed.CreateMissingSystemRateLimits(ctx, stores.RateLimit, opts.SystemRateLimits)
+	if err != nil {
+		return err
+	}
+	if len(created) > 0 {
+		slog.Info("catalog: created system rate limits", "names", created)
+	}
+	return nil
 }
 
 // seedCatalog decides whether the catalog needs seeding and seeds it: to the
@@ -416,6 +437,8 @@ func writeCatalogSource(ctx context.Context, stores *Stores, version string) err
 
 // isCatalogEmpty returns true when every catalog table has zero rows.
 // Cheap: just lists every store; bails on first non-empty result.
+// System-owned rate limits do not count: every boot creates them, so a
+// deployment that has only those still has no catalog.
 func isCatalogEmpty(ctx context.Context, s *Stores) (bool, error) {
 	provs, err := s.Provider.List(ctx)
 	if err != nil {
@@ -449,8 +472,10 @@ func isCatalogEmpty(ctx context.Context, s *Stores) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if len(rls) > 0 {
-		return false, nil
+	for _, rl := range rls {
+		if rl.Meta.Owner.Kind != meta.OwnerSystem {
+			return false, nil
+		}
 	}
 	pols, err := s.Policy.List(ctx)
 	if err != nil {

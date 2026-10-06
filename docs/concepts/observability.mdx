@@ -217,7 +217,7 @@ Telemetry names providers its own way, and often names the service that served t
 | `404` | The receiver is disabled, or the path is not served (`/otlp/v1/metrics`). | drops the batch |
 | `413` | The body is over 16 MiB after decompression (`RELAY_MAX_REQUEST_BYTES` when set). | drops the batch |
 | `415` | The `Content-Type` is neither `application/x-protobuf` nor `application/json`, or the `Content-Encoding` is not `gzip`. | drops the batch |
-| `429` + `Retry-After` | The credential is over the export rate limit: 1,200 export requests per minute, traces and logs together. A rate limit named `otlp-export` replaces the built-in value (`config/ratelimits/system.yaml` holds one, loaded with `relay seed --from config --apply`); disable it to apply none. | retries |
+| `429` + `Retry-After` | The credential is over the `otlp-export` rate limit, which ships at 1,200 export requests per minute, traces and logs together. Relay creates the row on boot when it is missing and never overwrites it; edit it through `/api/rate-limits`, or disable it to apply none. | retries |
 | `503` + `Retry-After` | The usage queue lacks room. Reported calls use the queue only while it is under half full, so they never crowd out the records of proxied traffic. | retries |
 
 Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the first attempt recorded is skipped as a duplicate. An exporter that exhausts its retries drops the batch, and that usage is lost.

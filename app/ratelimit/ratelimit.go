@@ -24,9 +24,9 @@ type RateLimit struct {
 	Spec Spec          `json:"spec"     yaml:"spec"`
 }
 
-// Spec carries the rule list and an enable flag.
+// Spec carries the rule list and an enable flag. Rules may be empty only while the rate limit is disabled; Validate enforces that.
 type Spec struct {
-	Rules   []Rule `json:"rules"             yaml:"rules"             validate:"required,min=1,dive"`
+	Rules   []Rule `json:"rules"             yaml:"rules"             validate:"dive"`
 	Enabled *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil = true
 }
 
@@ -117,11 +117,16 @@ func (r *RateLimit) IsEnabled() bool { return r.Spec.Enabled == nil || *r.Spec.E
 //   - Owner.Kind is required (any of system/provider/user).
 //   - Owner.Kind=provider requires Owner.ID (the Provider id).
 //
+// An enabled rate limit needs at least one rule. A disabled one may have none: the built-in rows an operator fills in before enabling ship that way.
+//
 // Cross-entity checks (provider-owned RLs reference an existing Provider;
 // system mirrors are unique per tier) live in the composition layer.
 func (r *RateLimit) Validate() error {
 	if err := meta.Validator.Struct(r); err != nil {
 		return err
+	}
+	if len(r.Spec.Rules) == 0 && r.IsEnabled() {
+		return fmt.Errorf("ratelimit %q: Rules: an enabled rate limit needs at least one rule", r.Meta.Name)
 	}
 	switch r.Meta.Owner.Kind {
 	case meta.OwnerSystem, meta.OwnerUser:

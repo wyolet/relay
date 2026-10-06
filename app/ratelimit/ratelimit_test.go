@@ -41,6 +41,15 @@ func TestValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("ok disabled with no rules", func(t *testing.T) {
+		r := fix("x", meta.OwnerSystem)
+		off := false
+		r.Spec.Rules, r.Spec.Enabled = nil, &off
+		if err := r.Validate(); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
+
 	for _, tc := range []struct {
 		name string
 		rl   *RateLimit

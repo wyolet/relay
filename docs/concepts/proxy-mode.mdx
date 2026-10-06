@@ -68,14 +68,24 @@ unchanged, with your `Authorization` reattached as the upstream credential.
 ### Authenticated vs anonymous
 
 - **Authenticated proxy** — include your relay key in `X-WR-API-Key`. The
-  request is attributed to that key and rate-limited under the
-  `inference-api-proxy` pool. If you omit `X-WR-Upstream-Host`, Relay reads
-  the `model` from the body and resolves the host from your relay key's
-  policy.
+  request is attributed to that key and rate-limited per key by the
+  `inference-api-proxy` rate limit, which ships disabled with no rules: add
+  rules and enable it to cap authenticated proxy traffic. If you omit
+  `X-WR-Upstream-Host`, Relay reads the `model` from the body and resolves
+  the host from your relay key's policy.
 - **Anonymous proxy** — omit the relay key. Allowed only when
-  `allowUnauthenticated` is on, rate-limited per client IP under
-  `inference-api-proxy-anonymous`, and **`X-WR-Upstream-Host` is required**
-  (there's no policy to infer the host from).
+  `allowUnauthenticated` is on, rate-limited per client IP by the
+  `inference-api-proxy-anonymous` rate limit, and **`X-WR-Upstream-Host` is
+  required** (there's no policy to infer the host from). It ships enabled at
+  60 requests, 5,000 tokens and 10 concurrent requests per client IP per
+  minute.
+
+Both rate limits are created on every boot when missing and are never
+overwritten once they exist; change them with
+`PUT /api/rate-limits/by-id/{id}`. Disabling one removes the limit, and a
+deleted one is recreated as shipped on the next boot. See
+[client IP](/reference/headers#client-ip-and-trusted-proxies) for how Relay
+finds the caller's address behind a load balancer.
 
 ## Discovering upstream hosts
 
@@ -93,6 +103,7 @@ curl http://localhost:8080/v1/proxy/hosts \
 | `400` | `X-WR-Proxy-Mode` has an invalid value, `Authorization` (upstream key) is missing, or `X-WR-Upstream-Host` is unknown / required-but-absent. |
 | `401` | Anonymous proxy request while `allowUnauthenticated` is off. |
 | `403` | Proxy mode is disabled (`enabled: false`). |
+| `429` + `Retry-After` | The key or client IP is over its proxy rate limit. |
 
 <Note>
 Proxy mode does no translation and no model rewriting — the body is forwarded

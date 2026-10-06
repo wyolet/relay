@@ -28,7 +28,7 @@ below matter when you move to a real (lean-image + managed-Postgres) deployment.
 | `RELAY_REDIS_ADDR` | _(empty)_ | Required when `RELAY_STATE_BACKEND=redis`. |
 | `RELAY_REDIS_PASSWORD` | _(empty)_ | Password sent with `AUTH` to `RELAY_REDIS_ADDR`. Empty sends none. Valkey holds control-plane sessions, so give any Valkey reachable beyond the relay pods a password. |
 | `RELAY_AUTO_SEED_IF_EMPTY` | _(empty)_ | When `1` and Postgres is empty, seed the catalog on boot. |
-| `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML (rate limits, identity). |
+| `RELAY_CONFIG_DIR` | `config` | Relay-internal YAML: users, settings, and under `ratelimits/` the starting values of the built-in rate limits (applied only when a row does not exist yet). |
 | `RELAY_CATALOG_DIR` | _(empty)_ | Local catalog data tree to auto-seed from. The standalone image bakes this in. Like a fetched release, it seeds catalog kinds only: host keys, relay keys, teams, projects, service accounts, groups, roles and bindings in it are skipped with a warning — load those with `relay seed --apply` or `relay apply`. |
 | `RELAY_CATALOG_VERSION` | _(empty)_ | Pin the seeded catalog to a published [relay-catalog](https://github.com/wyolet/relay-catalog) release tag (e.g. `v0.1.0`). On boot, if the stored catalog version differs, the release archive is fetched and re-seeded — no image rebuild needed. Re-seeds never overwrite your changes: operator-edited resources are skipped and overlays re-apply. |
 | `RELAY_CATALOG_URL` | _(GitHub archive)_ | Override the archive URL template used with `RELAY_CATALOG_VERSION` (`{version}` is substituted). Point at a mirror for airgapped deployments. |
