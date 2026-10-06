@@ -111,6 +111,9 @@ type Event struct {
 	Pricing       string           `json:"pricing,omitempty"`
 }
 
+// ErrorKindUpstream is the kind of an event whose provider answered with an error status (Status >= 400), whether relay passed the response through, gave up after trying every key, or was told about the call by a client.
+const ErrorKindUpstream = "upstream_error"
+
 // LogOnly reports whether the event records a request rejected before any
 // upstream was reached: status 0 with an ErrorKind set (routing denials,
 // auth/proxy gating, key-pool exhaustion). Such events stay visible in

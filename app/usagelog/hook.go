@@ -1,9 +1,11 @@
 package usagelog
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/wyolet/relay/pkg/lifecycle"
+	"github.com/wyolet/relay/pkg/usage"
 	sdkusage "github.com/wyolet/relay/sdk/usage"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
@@ -88,6 +90,13 @@ func buildEvent(lc *lifecycle.Context, status int, errKind, errMsg string, body 
 // observer (which harvests the Summary frame-by-frame) so both land the
 // identical Event regardless of stream vs buffered.
 func buildEventWithSummary(lc *lifecycle.Context, status int, errKind, errMsg string, tokens sdkusage.Tokens, finishReason string, pricer *Pricer) *Event {
+	// A runner that passes a provider's error response through to the caller reports only the status. The body is not summarized into the message: a validation error can quote the request, and the usage log is not gated by the payload-logging opt-in.
+	if errKind == "" && status >= 400 {
+		errKind = usage.ErrorKindUpstream
+		if errMsg == "" {
+			errMsg = "upstream returned " + strconv.Itoa(status)
+		}
+	}
 	out := Event{
 		RequestID:      lc.RequestID,
 		Source:         lc.Source,

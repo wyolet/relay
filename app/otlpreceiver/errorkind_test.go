@@ -21,6 +21,8 @@ func TestErrorKind(t *testing.T) {
 		{errorType: "RateLimitError", status: 429, want: "upstream_error"},
 		{errorType: "timeout", status: 504, want: "upstream_error"},
 		{errorType: "_OTHER", status: 500, want: "upstream_error"},
+		{errorType: "", status: 400, want: "upstream_error"},
+		{errorType: "", status: 503, want: "upstream_error"},
 
 		// No status: only the names every SDK shares are read.
 		{errorType: "timeout", want: "timeout"},
