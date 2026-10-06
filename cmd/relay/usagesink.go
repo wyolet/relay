@@ -21,13 +21,12 @@ import (
 // settings). EnvBackend is the legacy RELAY_EVENTLOG_BACKEND, honored only
 // as an interim fallback when the settings section is unset.
 type usageBackendBoot struct {
-	EnvBackend      string // legacy RELAY_EVENTLOG_BACKEND (interim fallback)
-	CHDSN           string
-	PGDSN           string
-	KV              kv.Store
-	FilePath        string
-	WALDir          string
-	CHRetentionDays int
+	EnvBackend string // legacy RELAY_EVENTLOG_BACKEND (interim fallback)
+	CHDSN      string
+	PGDSN      string
+	KV         kv.Store
+	FilePath   string
+	WALDir     string
 }
 
 // usageBackendBuilder returns the usagelog.BackendBuilder the Controller
@@ -45,21 +44,17 @@ func usageBackendBuilder(boot usageBackendBoot) usagelog.BackendBuilder {
 			if boot.CHDSN == "" {
 				return usagelog.Backend{}, fmt.Errorf("usagelog: clickhouse backend requires a CH DSN (RELAY_CH_DSN)")
 			}
-			retention := boot.CHRetentionDays
-			if cfg.CH.RetentionDays > 0 {
-				retention = cfg.CH.RetentionDays
-			}
 			walDir := boot.WALDir
 			if cfg.CH.WALDir != "" {
 				walDir = cfg.CH.WALDir
 			}
-			ch, err := chsink.New(chsink.Config{DSN: boot.CHDSN, RetentionDays: retention, WALDir: walDir})
+			ch, err := chsink.New(chsink.Config{DSN: boot.CHDSN, RetentionDays: cfg.RetentionDays, WALDir: walDir})
 			if err != nil {
 				return usagelog.Backend{}, err
 			}
 			return usagelog.Backend{Sink: ch, Reader: ch}, nil
 		case "postgres":
-			pg, err := pgsink.New(ctx, pgsink.Config{DSN: boot.PGDSN})
+			pg, err := pgsink.New(ctx, pgsink.Config{DSN: boot.PGDSN, RetentionDays: cfg.RetentionDays})
 			if err != nil {
 				return usagelog.Backend{}, err
 			}

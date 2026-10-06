@@ -61,6 +61,7 @@ The `audit` settings section holds `retentionDays` (default `365`). Rows
 older than the window are removed by an hourly pass; changing the setting
 takes effect on the next pass, without a restart. Set it to `0` to keep rows
 forever — appropriate when you archive the `audit_events` table yourself.
+Only an admin may change this section.
 
 ```bash
 curl -X PUT -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \

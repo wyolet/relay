@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+
+	"github.com/wyolet/relay/pkg/chttl"
 )
 
 const chTable = "payload_logs"
@@ -29,8 +31,7 @@ var createTableSQL = `CREATE TABLE IF NOT EXISTS payload_logs (
     INDEX idx_request_id request_id TYPE bloom_filter GRANULARITY 4
 ) ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
-ORDER BY (ts, request_id)
-TTL toDateTime(ts) + INTERVAL %d DAY`
+ORDER BY (ts, request_id)`
 
 const addOwnerColumnsSQL = `ALTER TABLE payload_logs
     ADD COLUMN IF NOT EXISTS project_id     String CODEC(ZSTD),
@@ -54,7 +55,7 @@ var InsertSQL = "INSERT INTO " + chTable + " (" + strings.Join(insertColumns, ",
 // Anything else missing fails fast with an actionable error instead of
 // auto-dropping.
 func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) error {
-	if err := conn.Exec(ctx, fmt.Sprintf(createTableSQL, retentionDays)); err != nil {
+	if err := conn.Exec(ctx, createTableSQL); err != nil {
 		return fmt.Errorf("payload/clickhouse: create table: %w", err)
 	}
 	if err := conn.Exec(ctx, addOwnerColumnsSQL); err != nil {
@@ -91,5 +92,5 @@ func ensureSchema(ctx context.Context, conn clickhouse.Conn, retentionDays int) 
 			"payload/clickhouse: table %q exists with an incompatible schema (missing columns: %s) — drop or rename it (or point at a fresh database) so relay can create the current schema",
 			chTable, strings.Join(missing, ", "))
 	}
-	return nil
+	return chttl.Apply(ctx, conn, chTable, "ts", retentionDays)
 }

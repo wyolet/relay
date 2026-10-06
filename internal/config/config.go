@@ -69,7 +69,6 @@ type Config struct {
 	MigrateOnBoot bool
 
 	// Behavior knobs
-	CHRetentionDays int
 	AutoSeedIfEmpty bool
 	ConfigDir       string
 	CatalogDir      string
@@ -261,11 +260,6 @@ func Load() (*Config, error) {
 	}
 
 	// --- Behavior knobs ---
-	if v, err := envPositiveInt("RELAY_CH_RETENTION_DAYS", 90); err != nil {
-		return nil, fmt.Errorf("RELAY_CH_RETENTION_DAYS must be >= 1")
-	} else {
-		cfg.CHRetentionDays = v
-	}
 	cfg.AutoSeedIfEmpty = os.Getenv("RELAY_AUTO_SEED_IF_EMPTY") == "1"
 
 	cfg.ConfigDir = os.Getenv("RELAY_CONFIG_DIR")

@@ -23,8 +23,16 @@ data:
       enabled: {{ .Values.relay.payloadLogging.enabled }}
       backend: {{ .Values.relay.payloadLogging.backend | quote }}
       maxBytes: {{ .Values.relay.payloadLogging.maxBytes | int }}
+      retentionDays: {{ .Values.relay.payloadLogging.retentionDays | int }}
       {{- if eq .Values.relay.payloadLogging.backend "clickhouse" }}
       clickhouse:
-        retentionDays: {{ .Values.relay.payloadLogging.retentionDays | int }}
         walDir: {{ .Values.relay.payloadLogging.walDir | quote }}
       {{- end }}
+  usage-logging.yaml: |
+    apiVersion: relay.wyolet.dev/v1alpha2
+    kind: Setting
+    metadata:
+      name: usage-logging
+    spec:
+      # backend stays unset here so RELAY_EVENTLOG_BACKEND keeps selecting it.
+      retentionDays: {{ .Values.relay.usageLogging.retentionDays | int }}

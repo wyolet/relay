@@ -27,7 +27,6 @@ data:
   {{- with .Values.relay.redisMinIdleConns }}
   RELAY_REDIS_MIN_IDLE_CONNS: {{ . | quote }}
   {{- end }}
-  RELAY_CH_RETENTION_DAYS: {{ .Values.clickhouse.retentionDays | quote }}
   RELAY_LOG_LEVEL: {{ .Values.relay.logLevel | quote }}
   RELAY_COOKIE_SECURE: {{ .Values.relay.cookieSecure | quote }}
   RELAY_HEALTHZ_DEADLINE_MS: {{ .Values.relay.healthzDeadlineMs | quote }}
