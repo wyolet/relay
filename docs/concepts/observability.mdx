@@ -146,7 +146,7 @@ Relay reads the [OpenTelemetry GenAI semantic conventions](https://github.com/op
 | `error_kind` | Relay's own classification of a failed call, in the values proxied requests use; see [Error kinds](#error-kinds). The `error.type` the client sent is kept in `extras.reported_error_type`. |
 | `finish_reason` | first value of `gen_ai.response.finish_reasons` |
 | `streamed`, time to first token | `gen_ai.request.stream`, `gen_ai.response.time_to_first_chunk` |
-| `ts`, `duration_ms` | the span's start and end. An event has no duration: `duration_ms` is `0` and `ts` is the record's time, or the time the SDK observed it. |
+| `ts`, `duration_ms` | the span's start and end. An event has no duration: `duration_ms` is `0` and `ts` is the record's time, or the time the SDK observed it. A start time in the past is accepted as reported, and [retention](#retention) counts from it: an event, and its content, reported with a `ts` older than the retention window is deleted by the store shortly after it arrives. |
 | `extras` | `trace_id`, `span_id`, `response_id` (`gen_ai.response.id`), `session_id` (`gen_ai.conversation.id`), `service` (the resource's `service.name`), `operation`, `reported_provider` |
 
 A row is as complete as the instrumentation makes it. Three examples from current releases: `opentelemetry-instrumentation-openai-v2` 2.4b0 and `@opentelemetry/instrumentation-openai` 0.20.0 report neither cached nor reasoning tokens and do not mark a streamed call, so such a call is stored with all input at the uncached rate and `streamed: false`; `opentelemetry-instrumentation-google-genai` 1.2b0 reports all of them. Report one call and read it back with `GET /api/usage/events?source=otlp` before relying on the numbers.
@@ -236,6 +236,7 @@ Relay reads `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.
 ```
 
 - Each body is cut at the payload `maxBytes` and flagged `request_truncated` / `response_truncated`; a cut body is no longer valid JSON.
+- With the deduplicated ClickHouse store (`clickhouse.dedup: true`, under [Payload logging](#payload-logging)), each message, tool definition and instruction part of the request body is stored once. A message is the same bytes whether it came on a span or an event and whichever export carried it, so the second turn of a conversation adds only its new messages. A body cut at `maxBytes` is stored whole, so use `maxBytes: 0` with it. The response body is not deduplicated.
 - Content is stored once per call, also when it arrives after the usage event (`event_only` with spans exported first). `span_and_event` sends every message to Relay twice and stores it once, so prefer one of the other two.
 - The governing policy is found as for inference: the key's policy, else its service account's, else the project's policy bindings. Unlike a proxied request, where the policy or the key can opt in, the key's `payloadLoggingEnabled` has no effect on reported content.
 - When the payload queue is over half full, content is dropped and the usage event is kept; `relay_otlp_content_total{outcome="dropped"}` counts it.
@@ -281,7 +282,7 @@ curl -X PUT http://localhost:8081/api/settings/payload-logging \
   -H "Authorization: Bearer $RELAY_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "enabled": true, "backend": "file", "maxBytes": 1048576,
+    "enabled": true, "backend": "file", "maxBytes": 1048576, "retentionDays": 30,
     "file": {"path": "relay-payloads.jsonl"},
     "s3": {"endpoint": "", "bucket": "", "useSSL": false, "accessKey": {"kind": ""}, "secretKey": {"kind": ""}},
     "clickhouse": {}
@@ -294,7 +295,7 @@ curl -X PUT http://localhost:8081/api/keys/by-id/<id> \
   -d '{"spec": {"payloadLoggingEnabled": true}}'
 ```
 
-The write replaces the whole section and every backend block is required, also the ones not in use. To change one field, read the section with `GET /api/settings/payload-logging` and send its `value` back with the change.
+The write replaces the whole section; `retentionDays` and every backend block are required, also the ones not in use. To change one field, read the section with `GET /api/settings/payload-logging` and send its `value` back with the change.
 
 ### Reading captured payloads
 
