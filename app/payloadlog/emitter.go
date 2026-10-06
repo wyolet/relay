@@ -80,6 +80,25 @@ func (e *Emitter) Emit(r Record) {
 	}
 }
 
+// TryEmit queues r like Emit but reports a full or closed queue instead of dropping: nothing is counted or logged, the caller decides what a refused Record means.
+func (e *Emitter) TryEmit(r Record) bool {
+	if e.stopped.Load() {
+		return false
+	}
+	select {
+	case e.queue <- r:
+		return true
+	default:
+		return false
+	}
+}
+
+// Free returns how many more Records the queue takes before Emit starts dropping. Concurrent emits make it a snapshot, not a reservation.
+func (e *Emitter) Free() int { return cap(e.queue) - len(e.queue) }
+
+// Capacity returns the queue's size.
+func (e *Emitter) Capacity() int { return cap(e.queue) }
+
 // Dropped returns the cumulative count of Records dropped due to a full
 // queue.
 func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }

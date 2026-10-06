@@ -54,6 +54,16 @@ func mintLifecycle(ctx context.Context, cat *appcatalog.Catalog, source, clientI
 	return lc
 }
 
+// StampPrincipal copies the authenticated caller's key hash, principal and tenancy onto lc, for handlers outside Dispatch that record events against the caller. A request with no principal leaves lc untouched.
+func StampPrincipal(ctx context.Context, lc *lifecycle.Context) {
+	p, snap := PrincipalFrom(ctx), SnapshotFrom(ctx)
+	if p == nil || snap == nil {
+		return
+	}
+	lc.RelayKeyHash = p.KeyHash
+	applyPrincipalIdentity(lc, snap, p)
+}
+
 // applyPrincipalIdentity fills the tenancy + principal fields from the
 // resolved Principal, resolving the three slugs against snapshot rows the
 // ids already point at. A user principal carries no slug: users are not in

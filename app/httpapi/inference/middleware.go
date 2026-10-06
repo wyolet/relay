@@ -100,29 +100,53 @@ func PrincipalMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(ht
 				return
 			}
 			snap := cat.Current()
-			var (
-				p  *Principal
-				k  *key.Key
-				ok bool
-			)
-			if looksLikeToken(cls.Key) {
-				if p, ok = tokenPrincipal(w, snap, tokens, cls.Key); !ok {
-					return
-				}
-			} else if p, k, ok = keyPrincipal(w, snap, cls.Key); !ok {
+			p, k, ok := authenticate(w, snap, tokens, cls.Key)
+			if !ok {
 				return
 			}
 			if !authorizePrincipal(w, snap, p, cls.Mode) {
 				return
 			}
-			ctx := WithSnapshot(r.Context(), snap)
-			if k != nil {
-				ctx = context.WithValue(ctx, ctxKeyT{}, k)
-			}
-			ctx = context.WithValue(ctx, ctxPrincipalT{}, p)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), snap, p, k)))
 		})
 	}
+}
+
+// AuthenticateMiddleware resolves who the caller is exactly as PrincipalMiddleware does, but resolves no policy: for endpoints that record what a caller reports and route nothing, where a credential without a policy is still a valid reporter. A credential is always required.
+func AuthenticateMiddleware(cat *appcatalog.Catalog, tokens *TokenVerifier) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cls := ClassificationFrom(r.Context())
+			if cls.Key == "" {
+				writeAuthErr(w, "missing relay key")
+				return
+			}
+			snap := cat.Current()
+			p, k, ok := authenticate(w, snap, tokens, cls.Key)
+			if !ok {
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), snap, p, k)))
+		})
+	}
+}
+
+// authenticate resolves a bearer, a key or a relay-minted token, to its principal. Reports false after writing the 401.
+func authenticate(w http.ResponseWriter, snap *appcatalog.Snapshot, tokens *TokenVerifier, bearer string) (*Principal, *key.Key, bool) {
+	if looksLikeToken(bearer) {
+		p, ok := tokenPrincipal(w, snap, tokens, bearer)
+		return p, nil, ok
+	}
+	return keyPrincipal(w, snap, bearer)
+}
+
+// withPrincipal stashes the resolved principal, its key when it has one, and the snapshot it resolved against.
+func withPrincipal(ctx context.Context, snap *appcatalog.Snapshot, p *Principal, k *key.Key) context.Context {
+	ctx = WithSnapshot(ctx, snap)
+	if k != nil {
+		ctx = context.WithValue(ctx, ctxKeyT{}, k)
+	}
+	return context.WithValue(ctx, ctxPrincipalT{}, p)
 }
 
 // authorizePrincipal resolves p's policy and applies the mode's credential gate. Shared by the HTTP edge and each WebSocket frame. Reports false after writing the response.

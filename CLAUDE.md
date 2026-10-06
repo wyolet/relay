@@ -113,6 +113,8 @@ app/                       — the application: domain + composition + handlers
   usagelog/                — lifecycle observer → bounded Emitter → usage Sink
   payloadlog/              — lifecycle observer → request/response payload store
   metricslog/              — lifecycle observer → Prometheus
+  otlpreceiver/            — OTLP/HTTP trace endpoint: model calls clients report
+                             → usage events (source="otlp"); records, never enforces
 
 pkg/                       — server-internal shared libs (NOT the SDK)
   ratelimit/               — Limiter (kv-backed Lua) + Rule + Reservation
@@ -130,6 +132,8 @@ pkg/                       — server-internal shared libs (NOT the SDK)
   payload/                 — request/response payload model (the /logs path)
   filter/                  — declarative allowlist query engine for list
                              endpoints (typed-accessor SOT). .tmp/design/filtering.md.
+  otlp/                    — OTLP/HTTP trace decoding + SpanMapper contract;
+                             one subpackage per telemetry convention (genai)
   crypto/                  — AES-GCM helpers (master-key)
   secret/                  — unified secret resolution: Ref{Kind,Env,ID,Path}
                              + Resolver/Registry/Writer. Built-in env + stored

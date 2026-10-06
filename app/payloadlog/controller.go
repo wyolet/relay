@@ -149,6 +149,13 @@ func (c *Controller) reconcile(ctx context.Context) {
 	c.log.Debug("payloadlog: reconciled", "backend", cfg.Backend, "max_bytes", cfg.MaxBytes)
 }
 
+// Applied returns the section the controller last applied, and false before the first reconcile.
+func (c *Controller) Applied() (settings.PayloadLogging, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.applied, c.hasApplied
+}
+
 func (c *Controller) current() settings.PayloadLogging {
 	v, ok := c.src.Setting(settings.SectionPayloadLogging)
 	if !ok {

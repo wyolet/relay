@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"context"
 	"net/http"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
@@ -15,30 +16,14 @@ import (
 // the response — when nothing resolves and the caller is not eligible for
 // the policy-less flow.
 func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principal) bool {
-	if p.Policy == nil && p.ServiceAccount != nil && p.ServiceAccount.Spec.PolicyID != "" {
-		if pol, ok := policyOrDisabled(snap, p.ServiceAccount.Spec.PolicyID); ok {
-			p.Policy = pol
-		}
-	}
 	var bindings []*policybinding.PolicyBinding
-	if p.Policy == nil && p.ProjectID != "" {
-		bindings = snap.PolicyBindingsForProject(p.ProjectID)
-		for _, b := range bindings {
-			if !bindingMatches(b, p.Subjects) {
-				continue
-			}
-			if pol, ok := policyOrDisabled(snap, b.Spec.PolicyID); ok {
-				p.Policy = pol
-				break
-			}
-		}
-	}
+	p.Policy, bindings = governingPolicy(snap, p)
 	if p.Policy != nil {
 		// A resolved-but-disabled policy is an answer, not a miss: falling
 		// through to a broader binding, or to the policy-less flow, would
 		// hand the caller more than the operator left switched on.
 		if !p.Policy.IsEnabled() {
-			writeForbidden(w, "policy_disabled", "policy is disabled")
+			WritePolicyDisabled(w)
 			return false
 		}
 		return true
@@ -56,6 +41,46 @@ func resolvePolicy(w http.ResponseWriter, snap *appcatalog.Snapshot, p *Principa
 	}
 	writeForbidden(w, "no_policy", "no policy is bound to this principal")
 	return false
+}
+
+// governingPolicy returns the policy that governs p: the one its credential carries, else the service account's override, else the first of the project's policy bindings, in (priority, name) order, that names one of p's subjects. A disabled policy is returned like an enabled one. bindings is the project's list when it was consulted.
+func governingPolicy(snap *appcatalog.Snapshot, p *Principal) (pol *policy.Policy, bindings []*policybinding.PolicyBinding) {
+	if p.Policy != nil {
+		return p.Policy, nil
+	}
+	if p.ServiceAccount != nil && p.ServiceAccount.Spec.PolicyID != "" {
+		if pol, ok := policyOrDisabled(snap, p.ServiceAccount.Spec.PolicyID); ok {
+			return pol, nil
+		}
+	}
+	if p.ProjectID == "" {
+		return nil, nil
+	}
+	bindings = snap.PolicyBindingsForProject(p.ProjectID)
+	for _, b := range bindings {
+		if !bindingMatches(b, p.Subjects) {
+			continue
+		}
+		if pol, ok := policyOrDisabled(snap, b.Spec.PolicyID); ok {
+			return pol, bindings
+		}
+	}
+	return nil, bindings
+}
+
+// GoverningPolicy returns the policy that governs the request's authenticated principal, resolved in the order inference resolves it, or nil when none does. It rejects nothing and writes no response, for endpoints behind AuthenticateMiddleware that accept a credential without a policy and still honour one that has it. A disabled policy is returned: it still governs.
+func GoverningPolicy(ctx context.Context) *policy.Policy {
+	p, snap := PrincipalFrom(ctx), SnapshotFrom(ctx)
+	if p == nil || snap == nil {
+		return nil
+	}
+	pol, _ := governingPolicy(snap, p)
+	return pol
+}
+
+// WritePolicyDisabled answers a caller whose governing policy is switched off: the 403 inference gives, for endpoints that find the policy with GoverningPolicy.
+func WritePolicyDisabled(w http.ResponseWriter) {
+	writeForbidden(w, "policy_disabled", "policy is disabled")
 }
 
 // policyOrDisabled resolves a policy id, falling back to the disabled row so

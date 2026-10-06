@@ -84,6 +84,25 @@ func (e *Emitter) Emit(ev Event) {
 	}
 }
 
+// TryEmit queues ev like Emit, but reports false instead of dropping it when the queue is full or the emitter is closed. For callers that can refuse their own input and have it sent again; nothing is counted as lost.
+func (e *Emitter) TryEmit(ev Event) bool {
+	if e.stopped.Load() {
+		return false
+	}
+	select {
+	case e.queue <- ev:
+		return true
+	default:
+		return false
+	}
+}
+
+// Free returns how many more events the queue takes before Emit starts dropping. Concurrent emits make it a snapshot, not a reservation.
+func (e *Emitter) Free() int { return cap(e.queue) - len(e.queue) }
+
+// Capacity returns the queue's size.
+func (e *Emitter) Capacity() int { return cap(e.queue) }
+
 // Dropped returns the cumulative count of events dropped due to a
 // full queue. Useful for /metrics scraping.
 func (e *Emitter) Dropped() uint64 { return e.dropped.Load() }

@@ -57,6 +57,10 @@ func registerSettings(api huma.API, d Deps, protect huma.Middlewares) {
 		Name:        settings.AuthOIDCSection,
 		Description: "Inbound OpenID Connect login for the control plane. Generic OIDC (issuer discovery + authorization-code flow); disabled by default. registration=open auto-provisions a user on first login. The client secret is referenced by env var name (RELAY_OIDC_* or WYOLET_OIDC_*), never stored here; the issuer must be https. Admin only.",
 	})
+	registerSettingsSection[settings.OTLPReceiver](api, d, protect, settings.Section{
+		Name:        settings.SectionOTLPReceiver,
+		Description: "OpenTelemetry receiver. When enabled, the inference listener accepts OTLP/HTTP exports at /otlp/v1/traces and /otlp/v1/logs and records the model calls they describe as usage events with source \"otlp\". Reported usage is self-declared: no policy grant and none of the rate limits of inference apply; export requests are capped per credential. captureContent also stores the message content clients report, in the payload store, while payload logging is enabled; for a credential governed by a policy, only when that policy has payloadLoggingEnabled. Both default off. Hot-reloaded.",
+	})
 	for _, gs := range settings.GovernanceSections {
 		registerSettingsSection[settings.Governance](api, d, protect, settings.Section{
 			Name:        gs,

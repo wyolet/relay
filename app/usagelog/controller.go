@@ -129,6 +129,13 @@ func (c *Controller) reconcile(ctx context.Context) {
 	c.log.Debug("usagelog: reconciled", "backend", cfg.Backend)
 }
 
+// Applied returns the section the live sink was built from, and false until the first backend is installed. It trails the stored setting while a changed section has not been built yet.
+func (c *Controller) Applied() (settings.UsageLogging, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.applied, c.has
+}
+
 func (c *Controller) current() settings.UsageLogging {
 	v, ok := c.src.Setting(settings.SectionUsageLogging)
 	if !ok {
