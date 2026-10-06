@@ -135,6 +135,16 @@ type Owner struct {
 	ID   string    `json:"id,omitempty"   yaml:"id,omitempty"`
 }
 
+// Tenant reports whether the owner is a user, team or project rather than
+// the deployment itself or its catalog.
+func (o Owner) Tenant() bool {
+	switch o.Kind {
+	case OwnerUser, OwnerTeam, OwnerProject:
+		return true
+	}
+	return false
+}
+
 // Icon describes a visual asset for a catalog entity (Provider, Host).
 // Path is relative — typically "/provider/anthropic.svg" — and the
 // frontend prefixes its own asset-base URL at render time. Relay does

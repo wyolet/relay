@@ -57,6 +57,20 @@ func TestValidate_OwnerMustBeHost(t *testing.T) {
 	}
 }
 
+// A pricing is shared catalog data: no user, team or project owns one.
+func TestValidate_TenantOwnersRefused(t *testing.T) {
+	for _, o := range []meta.Owner{
+		{Kind: meta.OwnerUser}, {Kind: meta.OwnerUser, ID: "u-1"},
+		{Kind: meta.OwnerTeam, ID: "t-1"}, {Kind: meta.OwnerProject, ID: "p-1"},
+	} {
+		p := valid()
+		p.Meta.Owner = o
+		if err := p.Validate(); err == nil {
+			t.Errorf("owner %+v accepted", o)
+		}
+	}
+}
+
 func TestValidate_DuplicateRate(t *testing.T) {
 	p := valid()
 	p.Spec.Rates = append(p.Spec.Rates, Rate{

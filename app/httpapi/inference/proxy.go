@@ -236,7 +236,7 @@ func resolveSystemRules(snap *appcatalog.Snapshot, bucketName, subject string) [
 	if subject == "" {
 		return nil
 	}
-	rl, ok := snap.RateLimitByName(bucketName)
+	rl, ok := snap.SystemRateLimitByName(bucketName)
 	if !ok {
 		return nil
 	}

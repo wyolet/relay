@@ -31,9 +31,6 @@ func refs(d Deps) refcheck.Checker {
 	if s.HostKey != nil {
 		c.Rows.HostKey = getOrNil(s.HostKey.Get)
 	}
-	if s.Host != nil {
-		c.Rows.Host = getOrNil(s.Host.Get)
-	}
 	if s.Project != nil {
 		c.Rows.Project = getOrNil(s.Project.Get)
 	}

@@ -56,9 +56,18 @@ func planKind[D any, T any](ctx context.Context, b *builder, k kindWiring[D, T])
 		m.ID = k.Names[name]
 		// A declared row is owned by apply, so it is not hand-edited.
 		m.Dirty = false
-		// A user owner with no id names nobody; resolve it the way CRUD
-		// create does. Cannot fail: only a supplied id is checked.
-		if m.Owner.Kind == meta.OwnerUser && m.Owner.ID == "" {
+		shared := authz.SharedCatalogKind(route.Singular)
+		switch {
+		case shared && m.Owner == (meta.Owner{Kind: meta.OwnerUser}):
+			// Catalog documents written before the shared-kind rule use an
+			// id-less user owner to mean "the operator's"; whoever applies
+			// them, that is the deployment.
+			m.Owner = meta.Owner{Kind: meta.OwnerSystem}
+		case shared && m.Owner.Tenant():
+			return &InvalidError{Kind: k.Kind, Name: name, Err: fmt.Errorf("%s is shared catalog data and cannot be owned by a %s", route.Singular, m.Owner.Kind)}
+		case m.Owner.Kind == meta.OwnerUser && m.Owner.ID == "":
+			// A user owner with no id names nobody; resolve it the way CRUD
+			// create does. Cannot fail: only a supplied id is checked.
 			_ = refcheck.StampOwnerID(ctx, &m.Owner)
 		}
 

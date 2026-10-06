@@ -64,6 +64,8 @@ func (b *Binding) Serves(snapshotName string) bool {
 // the binding-specific invariants:
 //   - Adapter defaults to OpenAI when omitted, then must be a valid upstream
 //     binding (the dispatch key — see adapters.UpstreamBindingNames).
+//   - The owner is never a user, team or project: a binding decides which
+//     host a model's traffic goes to, so it is shared catalog data.
 //
 // Cross-entity checks (ModelID/HostID/PricingID resolve; the (model, host)
 // pair is unique; Snapshots name real model snapshots) live in the catalog
@@ -74,6 +76,9 @@ func (b *Binding) Validate() error {
 	}
 	if err := meta.Validator.Struct(b); err != nil {
 		return err
+	}
+	if b.Meta.Owner.Tenant() {
+		return fmt.Errorf("binding %q: host bindings are shared catalog data: owner.kind cannot be %q", b.Meta.Name, b.Meta.Owner.Kind)
 	}
 	if !b.Spec.Adapter.UpstreamBinding() {
 		return fmt.Errorf("binding %q: adapter %q is not a valid upstream binding (want one of %v)",

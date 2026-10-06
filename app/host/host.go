@@ -145,21 +145,18 @@ func (s Spec) AllowsStrategy(strat string) bool {
 }
 
 // Validate runs intra-row rules via the shared meta.Validator and enforces
-// the Host-specific owner rule. A Host is normally system-defined
-// infrastructure (empty owner defaults to system), but it may also be
-// user-owned: some hosts are per-deployment (e.g. a self-hosted Ollama whose
-// baseURL only the operator knows), and user ownership is what lets the
-// operator edit them through the standard CRUD path. Governance still hard-
-// blocks edits/deletes on system-owned rows, so relaxing this does not expose
-// catalog-fixed hosts. Provider/host owner kinds remain nonsensical for a Host.
+// the Host owner rule: a Host is shared catalog data owned by the
+// deployment (system, or empty), never by a user, team or project. A host
+// names an endpoint the relay itself dials, so who may write one is decided
+// by roles alone.
 func (h *Host) Validate() error {
 	if err := meta.Validator.Struct(h); err != nil {
 		return err
 	}
 	switch h.Meta.Owner.Kind {
-	case "", meta.OwnerSystem, meta.OwnerUser:
+	case "", meta.OwnerSystem:
 	default:
-		return fmt.Errorf("host %q: owner.kind must be system, user, or empty, got %q", h.Meta.Name, h.Meta.Owner.Kind)
+		return fmt.Errorf("host %q: hosts are shared catalog data: owner.kind must be system or omitted, got %q", h.Meta.Name, h.Meta.Owner.Kind)
 	}
 	return nil
 }

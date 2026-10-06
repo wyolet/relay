@@ -103,6 +103,20 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// A model is shared catalog data: no user, team or project owns one.
+func TestValidate_TenantOwnersRefused(t *testing.T) {
+	for _, o := range []meta.Owner{
+		{Kind: meta.OwnerUser}, {Kind: meta.OwnerUser, ID: "u-1"},
+		{Kind: meta.OwnerTeam, ID: "t-1"}, {Kind: meta.OwnerProject, ID: "p-1"},
+	} {
+		m := fix("m1")
+		m.Meta.Owner = o
+		if err := m.Validate(); err == nil {
+			t.Errorf("owner %+v accepted", o)
+		}
+	}
+}
+
 func TestSnapshotUpstream(t *testing.T) {
 	cases := []struct {
 		name string

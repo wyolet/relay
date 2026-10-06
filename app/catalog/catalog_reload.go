@@ -3,12 +3,14 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/overlay"
 	"github.com/wyolet/relay/app/policybinding"
@@ -160,13 +162,13 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	}
 
 	enabledProvs := filter(provs, (*provider.Provider).IsEnabled)
-	enabledHosts := filter(hosts, (*host.Host).IsEnabled)
+	enabledHosts := filter(hosts, func(h *host.Host) bool { return h.IsEnabled() && notTenantOwned("host", h.Meta) })
 	enabledRKs := filter(rks, (*key.Key).IsEnabled)
 	enabledModels := filter(models, (*model.Model).IsEnabled)
 	enabledKeys := filter(hostKeys, (*hostkey.HostKey).IsEnabled)
 	enabledRLs := filter(rls, (*ratelimit.RateLimit).IsEnabled)
 	enabledPricings := filter(pricingsAll, (*pricing.Pricing).IsEnabled)
-	enabledBindings := filter(bindingsAll, (*binding.Binding).IsEnabled)
+	enabledBindings := filter(bindingsAll, func(b *binding.Binding) bool { return b.IsEnabled() && notTenantOwned("host binding", b.Meta) })
 	enabledTeams := filter(teams, (*team.Team).IsEnabled)
 	enabledProjects := filter(projects, (*project.Project).IsEnabled)
 	enabledSAs := filter(sas, (*serviceaccount.ServiceAccount).IsEnabled)
@@ -202,6 +204,19 @@ func (c *Catalog) reloadLocked(ctx context.Context) error {
 	c.snap.Store(snap)
 	c.markReady()
 	return nil
+}
+
+// notTenantOwned reports false, and logs, for a host or binding owned by a
+// user, team or project. Every write path refuses such an owner; a row
+// stored before that rule stays in Postgres for an admin to delete, but must
+// never route.
+func notTenantOwned(kind string, m meta.Metadata) bool {
+	if !m.Owner.Tenant() {
+		return true
+	}
+	slog.Error("catalog: "+kind+" owned by a "+string(m.Owner.Kind)+" excluded from routing; shared catalog rows cannot be personal, delete it",
+		"id", m.ID, "name", m.Name, "owner_kind", m.Owner.Kind, "owner_id", m.Owner.ID)
+	return false
 }
 
 // filter never compacts in place: a Lister may hand back a shared slice

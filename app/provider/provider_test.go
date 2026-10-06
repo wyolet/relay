@@ -50,6 +50,19 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// A provider is shared catalog data: no user, team or project owns one.
+func TestValidate_TenantOwnersRefused(t *testing.T) {
+	for _, o := range []meta.Owner{
+		{Kind: meta.OwnerUser}, {Kind: meta.OwnerUser, ID: "u-1"},
+		{Kind: meta.OwnerTeam, ID: "t-1"}, {Kind: meta.OwnerProject, ID: "p-1"},
+	} {
+		p := &Provider{Meta: meta.Metadata{Name: "acme", Owner: o}}
+		if err := p.Validate(); err == nil {
+			t.Errorf("owner %+v accepted", o)
+		}
+	}
+}
+
 func TestIsEnabled(t *testing.T) {
 	tru, fls := true, false
 	for _, tc := range []struct {

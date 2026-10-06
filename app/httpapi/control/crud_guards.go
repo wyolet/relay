@@ -7,7 +7,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/wyolet/relay/app/authz"
-	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -101,15 +100,6 @@ func guardRole(d Deps) mutationGuard[role.Role] {
 			return huma.Error403Forbidden(license.ErrRequired.Error())
 		}
 		return refErr(refs(d).Role(ctx, incoming))
-	}
-}
-
-func guardHostBinding(d Deps) mutationGuard[binding.Binding] {
-	return func(ctx context.Context, action string, _, incoming *binding.Binding) error {
-		if action == "delete" || incoming == nil {
-			return nil
-		}
-		return refErr(refs(d).HostBinding(ctx, incoming))
 	}
 }
 

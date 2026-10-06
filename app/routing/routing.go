@@ -165,20 +165,10 @@ type Resolver struct {
 	// requirePolicy refuses the policy-less flow outright, whatever the
 	// inference setting says. See RequirePolicy.
 	requirePolicy bool
-
-	// personalOwnerOnly hides personal hosts and bindings from everyone but
-	// their owner. See PersonalRowsOwnerOnly.
-	personalOwnerOnly bool
 }
 
 // Option configures a Resolver at composition time.
 type Option func(*Resolver)
-
-// PersonalRowsOwnerOnly makes a personal (user-owned) host or binding exist
-// only for its owner's requests. RBAC authorization wires it: there users
-// are distinct tenants. Under single-user authorization every caller is the
-// operator, whose personal rows stay shared with every credential.
-func PersonalRowsOwnerOnly() Option { return func(r *Resolver) { r.personalOwnerOnly = true } }
 
 // RequirePolicy refuses policy-less traffic whatever
 // settings.Inference.AllowMissingPolicy says. RBAC authorization wires it:
@@ -276,7 +266,7 @@ candidates:
 				continue
 			}
 			h, ok := snap.Host(hb.Spec.HostID)
-			if !ok || !r.personalRowsVisible(hb, h, req.UserID) {
+			if !ok {
 				continue
 			}
 			anyEnabledBnd = true
@@ -426,21 +416,6 @@ func tierAllowedKeys(snap *appcatalog.Snapshot, keys []*hostkey.HostKey, modelID
 	return out
 }
 
-// personalRowsVisible reports whether the binding and its host exist for
-// userID. Owner-only, a personal row serves only its owner: otherwise any
-// user could slot their own endpoint under every grant of a shared model.
-// Nil-safe: a nil Resolver shares personal rows.
-func (r *Resolver) personalRowsVisible(hb *binding.Binding, h *host.Host, userID string) bool {
-	if r == nil || !r.personalOwnerOnly {
-		return true
-	}
-	return ownerSees(hb.Meta.Owner, userID) && ownerSees(h.Meta.Owner, userID)
-}
-
-func ownerSees(o meta.Owner, userID string) bool {
-	return o.Kind != meta.OwnerUser || (o.ID != "" && o.ID == userID)
-}
-
 // isDeprecated reports whether m's lifecycle status excludes it from
 // wildcard grants by default. Both "deprecated" and "sunset" qualify;
 // "active" (or unset) does not.
@@ -515,7 +490,7 @@ func (r *Resolver) resolvePolicyless(snap *appcatalog.Snapshot, models []*model.
 				continue
 			}
 			h, ok := snap.Host(hb.Spec.HostID)
-			if !ok || !r.personalRowsVisible(hb, h, userID) {
+			if !ok {
 				continue
 			}
 			anyEnabledBnd = true

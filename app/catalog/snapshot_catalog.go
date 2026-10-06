@@ -6,6 +6,7 @@ import (
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
+	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
 	"github.com/wyolet/relay/app/pricing"
@@ -181,12 +182,15 @@ func (s *Snapshot) RateLimit(id string) (*ratelimit.RateLimit, bool) {
 	return r, ok
 }
 
-// RateLimitByName returns the enabled RateLimit with this slug, or
-// false. Used by proxy-mode dispatch to look up the system-owned
-// inference-api-proxy / inference-api-proxy-anonymous buckets.
-func (s *Snapshot) RateLimitByName(name string) (*ratelimit.RateLimit, bool) {
+// SystemRateLimitByName returns the enabled system-owned RateLimit with this
+// slug, or false. A row of that name owned by anyone else is never a system
+// limit: the binary's buckets are looked up by name alone.
+func (s *Snapshot) SystemRateLimitByName(name string) (*ratelimit.RateLimit, bool) {
 	r, ok := s.rateLimitsByName[name]
-	return r, ok
+	if !ok || r.Meta.Owner.Kind != meta.OwnerSystem {
+		return nil, false
+	}
+	return r, true
 }
 
 // Hosts returns all enabled Host rows. Stable order by slug. Used by

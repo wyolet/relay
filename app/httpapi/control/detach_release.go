@@ -71,7 +71,7 @@ func (d Deps) release(ctx context.Context, it referenceItem, t detachTarget) (*r
 		}.apply(ctx, d, it)
 	case "host-binding":
 		return rowEdit[binding.Binding]{
-			plural: "host-bindings", store: s.Binding, validate: (*binding.Binding).Validate, guard: guardHostBinding(d),
+			plural: "host-bindings", store: s.Binding, validate: (*binding.Binding).Validate,
 			metaOf: func(b *binding.Binding) *meta.Metadata { return &b.Meta },
 			drop:   func(b *binding.Binding) bool { return clearID(&b.Spec.PricingID, t.id) },
 		}.apply(ctx, d, it)

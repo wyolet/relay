@@ -28,6 +28,9 @@ import (
 	"github.com/wyolet/relay/pkg/slug"
 )
 
+// anyMode is a Resolver with default options, for checks every mode shares.
+var anyMode *Resolver
+
 // tenantedSnapshot builds a snapshot that actually holds the team and project
 // a project-owned row needs, so an ownership rule can be tested without the
 // row being dropped for a missing parent first.
@@ -277,7 +280,7 @@ func TestPolicyAllowsMatchesResolve(t *testing.T) {
 			for round := 0; round < 40; round++ {
 				snap, caller, models := randomGrantCatalog(r)
 				for _, m := range models {
-					listed := anyMode.PolicyAllows(snap, caller, m, "")
+					listed := anyMode.PolicyAllows(snap, caller, m)
 					_, err := (&Resolver{}).Resolve(Request{
 						ModelName: m.Spec.Snapshots[0].Name, Policy: caller, Snapshot: snap,
 					})
@@ -479,7 +482,7 @@ func TestResolve_DeprecatedGrantMatrix(t *testing.T) {
 					t.Fatalf("Resolve: %v", err)
 				}
 				// The listing agrees with the flow in every cell.
-				if got, want := anyMode.PolicyAllows(snap, caller, f.model, ""), tc.wantErr == nil; got != want {
+				if got, want := anyMode.PolicyAllows(snap, caller, f.model), tc.wantErr == nil; got != want {
 					t.Errorf("PolicyAllows = %v, want %v", got, want)
 				}
 			})
@@ -575,7 +578,7 @@ func TestTierGate_MatrixAcrossResolutionAndListing(t *testing.T) {
 			if !tc.grant && !errors.Is(err, ErrNoKeys) {
 				t.Errorf("Resolve err = %v, want ErrNoKeys", err)
 			}
-			if got := anyMode.PolicyAllows(snap, caller, f.model, ""); got != tc.grant {
+			if got := anyMode.PolicyAllows(snap, caller, f.model); got != tc.grant {
 				t.Errorf("PolicyAllows = %v, want %v", got, tc.grant)
 			}
 			if got := anyMode.PolicylessAllows(snap, f.model, "", ""); got != tc.grant {
@@ -620,7 +623,7 @@ func TestTierGate_KeyStillServesTheModelItsTierGrants(t *testing.T) {
 	if _, err := (&Resolver{}).Resolve(Request{ModelName: "other", Policy: caller, Snapshot: snap}); err != nil {
 		t.Fatalf("the model the tier does grant is unreachable: %v", err)
 	}
-	if !anyMode.PolicyAllows(snap, caller, other, "") {
+	if !anyMode.PolicyAllows(snap, caller, other) {
 		t.Error("PolicyAllows hides the model the tier grants")
 	}
 }
@@ -743,10 +746,10 @@ func TestPolicyAllows_NilInputs(t *testing.T) {
 		[]*policy.Policy{f.tierA}, nil, []*model.Model{f.model},
 		[]*hostkey.HostKey{f.keyA}, nil, nil, []*binding.Binding{f.bindingA})
 
-	if anyMode.PolicyAllows(snap, nil, f.model, "") {
+	if anyMode.PolicyAllows(snap, nil, f.model) {
 		t.Error("a nil policy grants something")
 	}
-	if anyMode.PolicyAllows(snap, f.tierA, nil, "") {
+	if anyMode.PolicyAllows(snap, f.tierA, nil) {
 		t.Error("a nil model is reachable")
 	}
 	if anyMode.PolicylessAllows(snap, nil, "", "") {

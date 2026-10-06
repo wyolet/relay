@@ -74,7 +74,6 @@ func (b *builder) planCatalog(ctx context.Context, provDocs []*manifest.Provider
 		Kind: "HostBinding", Docs: bndDocs, Names: b.idx.Bindings, Rows: b.rows.Bindings,
 		To: manifest.ToHostBinding, Meta: func(x *binding.Binding) *meta.Metadata { return &x.Meta },
 		Upsert: s.HostBinding.Upsert, Delete: s.HostBinding.Delete,
-		Check: refsFor(b, refcheck.Checker.HostBinding),
 	}); err != nil {
 		return err
 	}
