@@ -1,0 +1,6 @@
+// Package modelroutes reads and edits a model-routes file: one TOML file listing the models a consumer's picker shows, in order, and the route each one takes (a catalog host, a base URL, an auth hint, an adapter override). Everything about a model itself (wire name, window, pricing, capabilities) comes from the catalog release the file pins, never from the file.
+//
+// Resolve joins the file with a catalog into one Entry per listed model and reports every problem at once. Add, Remove and SetCatalog are line edits: untouched lines, comments and order survive byte for byte, an edit whose result does not parse back to exactly the intended change is refused, and layouts a line edit cannot change safely (an inline or multi-line [models]) are refused rather than rewritten. Diff reports what moving the pin would change for the listed models only.
+//
+// Out of scope: credentials (auth is a hint; the consumer maps route names to secrets), fetching catalogs (sdk/catalogsource), validating adapter names against any registry, and relay itself, which never reads this file.
+package modelroutes

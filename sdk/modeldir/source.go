@@ -1,26 +1,42 @@
 package modeldir
 
 import (
-	"context"
+	"net/http"
 
-	"github.com/wyolet/relay/sdk/catalog"
+	"github.com/wyolet/relay/sdk/catalogsource"
 )
 
 // Source yields a full catalog that Add and Refresh pick models from. It is never merged into Load.
-type Source interface {
-	Catalog(ctx context.Context) (*catalog.IndexedCatalog, error)
+type Source = catalogsource.Source
+
+// ReleaseOption configures Release.
+type ReleaseOption = catalogsource.ReleaseOption
+
+const (
+	// Channel is catalogsource.Channel.
+	Channel = catalogsource.Channel
+	// DefaultIndexURL is catalogsource.DefaultIndexURL.
+	DefaultIndexURL = catalogsource.DefaultIndexURL
+	// DefaultDownloadURL is catalogsource.DefaultDownloadURL.
+	DefaultDownloadURL = catalogsource.DefaultDownloadURL
+)
+
+// Embedded is catalogsource.Embedded.
+func Embedded() Source { return catalogsource.Embedded() }
+
+// File is catalogsource.File.
+func File(path string) Source { return catalogsource.File(path) }
+
+// Release is catalogsource.Release.
+func Release(tag, cacheDir string, opts ...ReleaseOption) Source {
+	return catalogsource.Release(tag, cacheDir, opts...)
 }
 
-type sourceFunc func(ctx context.Context) (*catalog.IndexedCatalog, error)
+// WithIndexURL is catalogsource.WithIndexURL.
+func WithIndexURL(url string) ReleaseOption { return catalogsource.WithIndexURL(url) }
 
-func (f sourceFunc) Catalog(ctx context.Context) (*catalog.IndexedCatalog, error) { return f(ctx) }
+// WithDownloadURL is catalogsource.WithDownloadURL.
+func WithDownloadURL(base string) ReleaseOption { return catalogsource.WithDownloadURL(base) }
 
-// Embedded is the catalog compiled into this SDK version.
-func Embedded() Source {
-	return sourceFunc(func(context.Context) (*catalog.IndexedCatalog, error) { return catalog.Load() })
-}
-
-// File is a local catalog JSON file, gzip or plain, as cmd/catalog-embed writes it.
-func File(path string) Source {
-	return sourceFunc(func(context.Context) (*catalog.IndexedCatalog, error) { return catalog.LoadFile(path) })
-}
+// WithHTTPClient is catalogsource.WithHTTPClient.
+func WithHTTPClient(c *http.Client) ReleaseOption { return catalogsource.WithHTTPClient(c) }
