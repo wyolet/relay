@@ -34,9 +34,6 @@ func TestStoreAnswerSendsContentWithoutTheOptIn(t *testing.T) {
 	c := newCollector(t)
 	answering(c, ContentStore)
 	e := newTestEmitter(t, c, WithContent(false))
-	if e.SendsContent() {
-		t.Fatal("SendsContent before any answer = true, want the opt-in (false)")
-	}
 	waitForAnswer(t, e)
 	if !e.SendsContent() {
 		t.Fatal("SendsContent after \"store\" = false")
@@ -58,10 +55,7 @@ func TestDropAnswerWithholdsContentDespiteTheOptIn(t *testing.T) {
 	c := newCollector(t)
 	answering(c, ContentDrop)
 	e := newTestEmitter(t, c, WithContent(true))
-	// Unknown answer and an opted-in client: content is built, then withheld at export once relay says drop.
-	if !e.SendsContent() {
-		t.Fatal("SendsContent before any answer = false, want the opt-in (true)")
-	}
+	// Content built before the answer arrived is withheld at export once relay says drop.
 	e.Record(withContent(call("m")))
 	if err := e.Flush(context.Background()); err != nil {
 		t.Fatal(err)
@@ -130,5 +124,76 @@ func TestFailedProbeIsNotRepeatedPerBatch(t *testing.T) {
 	e.learn(context.Background())
 	if !e.answerFresh() || !e.SendsContent() {
 		t.Error("a failed probe must be cached and leave the opt-in in charge")
+	}
+}
+
+func TestAnswerIsLearnedAtNew(t *testing.T) {
+	c := newCollector(t)
+	answering(c, ContentStore)
+	e := newTestEmitter(t, c, WithContent(false))
+	waitForAnswer(t, e)
+	if !e.SendsContent() {
+		t.Error("SendsContent = false, want relay's \"store\" before any call")
+	}
+	if seen := c.seen(); len(seen) != 1 || seen[0].path != "/otlp/v1/logs" {
+		t.Errorf("requests = %v, want only the probe", seen)
+	}
+}
+
+func TestStaleAnswerDecidesWhileItIsRefreshed(t *testing.T) {
+	for _, tc := range []struct {
+		last  string
+		optIn bool
+	}{
+		{last: ContentDrop, optIn: true},
+		{last: ContentStore, optIn: false},
+	} {
+		t.Run(tc.last, func(t *testing.T) {
+			want := tc.last == ContentStore
+			c := newCollector(t)
+			release := make(chan struct{})
+			c.respond = func(path string, n int, w http.ResponseWriter) bool {
+				// The probe New sends answers at once; the refresh hangs until released.
+				if n > 1 {
+					<-release
+				}
+				w.Header().Set(HeaderContentCapture, tc.last)
+				w.WriteHeader(http.StatusOK)
+				return true
+			}
+			e := newTestEmitter(t, c, WithContent(tc.optIn))
+			waitForAnswer(t, e)
+			e.answer.Store(&contentAnswer{value: tc.last, at: time.Now().Add(-time.Hour)})
+			if got := e.SendsContent(); got != want {
+				t.Errorf("SendsContent on an expired %q = %v, want %v", tc.last, got, want)
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for len(c.seen()) < 2 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if len(c.seen()) < 2 {
+				t.Fatal("no refresh was sent")
+			}
+			if got := e.SendsContent(); got != want {
+				t.Errorf("SendsContent while refreshing %q = %v, want %v", tc.last, got, want)
+			}
+			close(release)
+			waitForAnswer(t, e)
+		})
+	}
+}
+
+func TestFailedRefreshKeepsTheLastAnswer(t *testing.T) {
+	c := newCollector(t)
+	c.respond = func(path string, n int, w http.ResponseWriter) bool {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return true
+	}
+	e := newTestEmitter(t, c, WithContent(true))
+	waitForAnswer(t, e)
+	e.answer.Store(&contentAnswer{value: ContentDrop, at: time.Now().Add(-time.Hour)})
+	e.learn(context.Background())
+	if !e.answerFresh() || e.SendsContent() {
+		t.Error("a failed refresh must keep \"drop\" and restart the cache window")
 	}
 }

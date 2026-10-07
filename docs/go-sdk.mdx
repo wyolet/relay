@@ -77,7 +77,7 @@ c, err := client.ForMode("gpt-4o", client.WithMode(client.ModeTelemetry), client
 A process that exits right after its calls must send what is queued first:
 
 - `e.Flush(ctx)` exports every call recorded so far and returns the first export error.
-- `e.Close(ctx)` does the same and stops the emitter; calls recorded afterwards are dropped.
+- `e.Close(ctx)` does the same and stops the emitter; calls recorded afterwards are dropped. When `ctx` ends first, the export in flight is abandoned, the calls still queued are dropped and counted, and the emitter stops all the same.
 - `c.Close()` closes the emitter `ForMode` built for the client. An emitter you passed with `WithEmitter` is yours to close. `c.Telemetry()` returns the client's emitter either way.
 
 ### Content
@@ -90,7 +90,7 @@ The policy that governs your relay key decides whether Relay stores message cont
 | `drop` | no, also with your opt-in |
 | `client`, or no header (another OTLP backend) | when you opted in |
 
-The answer is cached for five minutes. The SDK learns it before its first export with an empty logs export, and every export refreshes it. Until it arrives your opt-in decides, so with a `store` answer the calls made before the first answer carry no content. Content is copied from the request only when it may be sent; under `drop` it is never built.
+The emitter asks as soon as it is built, with an empty logs export, and every export refreshes the answer. An answer older than five minutes is asked again, and the last one keeps deciding until the new one arrives; a failed request keeps it too. Before the first answer your opt-in decides, so with a `store` answer and no opt-in, a call made within that first round trip carries no content. Content is copied from the request only when it may be sent; under `drop` it is never built.
 
 Content travels on the logs signal as one `gen_ai.client.inference.operation.details` event per call, with the same trace and span id as the call's span: `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.definitions` and `gen_ai.output.messages`, in the conventions' message schema. Opaque provider data (reasoning signatures, encrypted reasoning), citations, image detail hints, file names and MCP server headers are not sent.
 

@@ -19,9 +19,14 @@ type Emitter struct {
 	closed  bool
 	queue   chan *record
 	flushes chan flushRequest
-	stops   chan flushRequest
 	probes  chan struct{}
-	done    chan struct{}
+	// stop is closed by Close; done is closed when run has returned, after setting closeErr.
+	stop     chan struct{}
+	done     chan struct{}
+	closeErr error
+	// ctx bounds every export; Close cancels it when its own ctx ends first, so a hanging server cannot keep run alive.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	dropped atomic.Uint64
 	warning atomic.Pointer[string]
@@ -63,10 +68,13 @@ func New(opts ...Option) *Emitter {
 	e.scope = scope{Name: sdkModule + "/telemetry", Version: version}
 	e.queue = make(chan *record, e.cfg.queueSize)
 	e.flushes = make(chan flushRequest)
-	e.stops = make(chan flushRequest)
 	e.probes = make(chan struct{}, 1)
+	e.stop = make(chan struct{})
 	e.done = make(chan struct{})
+	e.ctx, e.cancel = context.WithCancel(context.Background())
 	go e.run()
+	// Learning starts now, so relay's answer is usually known before the first call decides on its content.
+	e.learnSoon()
 	return e
 }
 
@@ -113,7 +121,7 @@ func (e *Emitter) Flush(ctx context.Context) error {
 	return e.request(ctx, e.flushes)
 }
 
-// Close exports what is queued, then stops the Emitter; later calls are dropped. It returns when the queue is sent or ctx ends, with the first export error or the configuration error.
+// Close exports what is queued, then stops the Emitter; later calls are dropped. It returns when the queue is sent, with the first export error, or when ctx ends: then the export in flight is abandoned, what is still queued is dropped and counted, and the export goroutine exits all the same.
 func (e *Emitter) Close(ctx context.Context) error {
 	if e.configErr != nil {
 		return e.configErr
@@ -124,8 +132,15 @@ func (e *Emitter) Close(ctx context.Context) error {
 		return nil
 	}
 	e.closed = true
+	close(e.stop)
 	e.mu.Unlock()
-	return e.request(ctx, e.stops)
+	select {
+	case <-e.done:
+		return e.closeErr
+	case <-ctx.Done():
+		e.cancel()
+		return ctx.Err()
+	}
 }
 
 func (e *Emitter) request(ctx context.Context, to chan flushRequest) error {
@@ -148,6 +163,7 @@ func (e *Emitter) request(ctx context.Context, to chan flushRequest) error {
 // run is the export goroutine: it batches queued calls and exports a batch when it is full, when the interval passes, and on Flush and Close.
 func (e *Emitter) run() {
 	defer close(e.done)
+	defer e.cancel()
 	ticker := time.NewTicker(e.cfg.batchInterval)
 	defer ticker.Stop()
 	batch := make([]*record, 0, e.cfg.batchSize)
@@ -155,25 +171,38 @@ func (e *Emitter) run() {
 		select {
 		case r := <-e.queue:
 			if batch = append(batch, r); len(batch) >= e.cfg.batchSize {
-				_ = e.export(context.Background(), batch)
+				_ = e.export(e.ctx, batch)
 				batch = batch[:0]
 			}
 		case <-ticker.C:
 			if len(batch) > 0 {
-				_ = e.export(context.Background(), batch)
+				_ = e.export(e.ctx, batch)
 				batch = batch[:0]
 			}
 		case <-e.probes:
 			if !e.answerFresh() {
-				e.learn(context.Background())
+				e.learn(e.ctx)
 			}
 		case req := <-e.flushes:
-			req.done <- e.drain(req.ctx, batch)
+			ctx, stop := e.bounded(req.ctx)
+			req.done <- e.drain(ctx, batch)
+			stop()
 			batch = batch[:0]
-		case req := <-e.stops:
-			req.done <- e.drain(req.ctx, batch)
+		case <-e.stop:
+			// The final drain runs under the emitter's own context: Close waits for it until its ctx ends, then cancels it, so the drain is as long as Close lets it be.
+			e.closeErr = e.drain(e.ctx, batch)
 			return
 		}
+	}
+}
+
+// bounded returns ctx, also cancelled when Close gives up on the emitter.
+func (e *Emitter) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	unregister := context.AfterFunc(e.ctx, cancel)
+	return ctx, func() {
+		unregister()
+		cancel()
 	}
 }
 

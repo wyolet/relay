@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -207,6 +208,39 @@ func TestRecordAfterCloseIsDropped(t *testing.T) {
 	}
 	if err := e.Flush(context.Background()); err != nil {
 		t.Errorf("Flush after Close = %v", err)
+	}
+}
+
+func TestCloseWithAnExpiredContextStopsTheExportGoroutine(t *testing.T) {
+	c := newCollector(t)
+	release := make(chan struct{})
+	c.respond = func(path string, n int, w http.ResponseWriter) bool {
+		<-release
+		return false
+	}
+	defer close(release)
+	e := newTestEmitter(t, c, WithBatch(1, time.Hour))
+	e.Record(call("m"))
+	e.Record(call("m"))
+	// The export goroutine is now stuck on the hanging server.
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := e.Close(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("Close = %v, want the context's error", err)
+	}
+	select {
+	case <-e.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the export goroutine is still running while the server hangs")
+	}
+	if e.Dropped() != 2 {
+		t.Errorf("Dropped = %d, want both calls Close gave up on", e.Dropped())
+	}
+	e.Record(call("m"))
+	if e.Dropped() != 3 {
+		t.Errorf("Dropped = %d, want the call after Close counted", e.Dropped())
 	}
 }
 

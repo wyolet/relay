@@ -22,20 +22,19 @@ type contentAnswer struct {
 	at    time.Time
 }
 
-// SendsContent reports whether the content of a call recorded now would be sent, so a caller builds Content only then. Relay's answer decides when it gave one within the cache window: "store" sends even without the client's opt-in, "drop" never sends. Otherwise the opt-in (WithContent or the environment) decides.
+// SendsContent reports whether the content of a call recorded now would be sent, so a caller builds Content only then. Relay's last answer decides: "store" sends even without the client's opt-in, "drop" never sends. An answer older than the cache window still decides while a fresh one is learned. Otherwise (never learned, "client", or a server that does not answer) the opt-in (WithContent or the environment) decides.
 func (e *Emitter) SendsContent() bool {
 	if e.configErr != nil {
 		return false
 	}
-	if a := e.answer.Load(); a != nil && time.Since(a.at) < e.answerTTL {
+	e.learnSoon()
+	if a := e.answer.Load(); a != nil {
 		switch a.value {
 		case ContentStore:
 			return true
 		case ContentDrop:
 			return false
 		}
-	} else {
-		e.learnSoon()
 	}
 	return *e.cfg.content
 }
@@ -56,7 +55,7 @@ func (e *Emitter) learnSoon() {
 	}
 }
 
-// learn sends an empty logs export, a valid OTLP request that records nothing, to read the answer from its response. A failed probe is cached like an absent header, so an unreachable server is not probed per batch; the next successful export replaces it.
+// learn sends an empty logs export, a valid OTLP request that records nothing, to read the answer from its response. A failed probe keeps the last answer, or none when there was none, and restarts the cache window, so an unreachable server is not probed per batch; the next successful export replaces it.
 func (e *Emitter) learn(ctx context.Context) {
 	body, err := gzipJSON(exportLogs{ResourceLogs: []resourceLogs{}})
 	if err != nil {
@@ -64,7 +63,11 @@ func (e *Emitter) learn(ctx context.Context) {
 	}
 	status, header, err := e.send(ctx, logsPath, body)
 	if err != nil || status/100 != 2 {
-		e.answer.Store(&contentAnswer{at: time.Now()})
+		kept := contentAnswer{at: time.Now()}
+		if last := e.answer.Load(); last != nil {
+			kept.value = last.value
+		}
+		e.answer.Store(&kept)
 		return
 	}
 	e.learnFrom(header)
