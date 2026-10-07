@@ -19,6 +19,7 @@
               "introduction",
               "quickstart",
               "clients",
+              "go-sdk",
               "claude-code",
               "codex",
               "opencode",

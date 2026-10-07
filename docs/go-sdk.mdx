@@ -1,0 +1,104 @@
+---
+title: "Go SDK: proxy, telemetry and direct calls"
+description: "Choose whether a call goes through Relay, goes to the provider and is reported to Relay, or goes to the provider alone"
+---
+
+The Go SDK (`github.com/wyolet/relay/sdk`) takes one canonical request and sends it either through Relay or straight to a provider. `client.ForMode` picks the path from one switch:
+
+| Mode | The call goes to | Relay records it | Message content |
+| --- | --- | --- | --- |
+| `proxy` | Relay, with your relay key | yes, as a proxied request | kept when Relay's [payload logging](/concepts/observability#payload-logging) applies |
+| `telemetry` | the provider, with your provider key | yes, reported over OTLP with your relay key | sent when Relay asks for it, or when you opt in and no policy decides; see [Content](#content) |
+| `direct` | the provider, with your provider key | no | never sent |
+
+Telemetry cannot be on in `proxy` mode, so a call is never counted twice.
+
+```go
+c, err := client.ForMode("gpt-4o")
+if err != nil {
+	log.Fatal(err)
+}
+defer c.Close() // in telemetry mode, sends the calls still queued
+
+resp, err := c.Generate(ctx, &v1.Request{
+	Input: []v1.Item{&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "Hello"}}}},
+})
+```
+
+## Choosing the mode
+
+The mode is, in order:
+
+1. `client.WithMode(client.ModeTelemetry)` (or `ModeProxy`, `ModeDirect`).
+2. `WR_MODE` = `proxy`, `telemetry` or `direct`.
+3. `proxy` when `WR_BASE_URL` and `WR_API_KEY` are set, else `direct`. Telemetry is never chosen by default.
+
+In `proxy` mode the client sends every call to `WR_BASE_URL` with `WR_API_KEY`, and the model reference passed to `ForMode` is the model Relay resolves. In `telemetry` and `direct` mode the reference is resolved against the catalog embedded in the SDK, like `client.For`, and the call goes to that host.
+
+## Environment
+
+| Variable | Used by | Meaning |
+| --- | --- | --- |
+| `WR_MODE` | `ForMode` | `proxy`, `telemetry` or `direct` |
+| `WR_BASE_URL`, `WR_API_KEY` | proxy, telemetry | Relay's inference URL and a relay key. Telemetry exports to `WR_BASE_URL` + `/otlp` with this key. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (then `GOOGLE_API_KEY`) | telemetry, direct | The provider key, chosen by the resolved binding's adapter. `client.WithProviderKey` overrides it; use it for OpenAI-compatible hosts other than OpenAI. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` | telemetry | Export to another OTLP/HTTP backend instead. When the endpoint comes from here, `WR_API_KEY` is not sent; put credentials in the headers variable. |
+| `OTEL_SERVICE_NAME` | telemetry | The `service.name` of the reports. |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | telemetry | `true` (or `span_only`, `event_only`, `span_and_event`) opts in to sending message content. |
+
+Missing configuration does not panic: it is returned by the first `Generate` or `GenerateStream`.
+
+## Telemetry mode
+
+Each call becomes one OpenTelemetry span in the [GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai), exported as OTLP/HTTP JSON with gzip. Token counts come from the SDK's own translators, the same counts Relay stores for a proxied call, including cache reads and writes, reasoning and audio, and streams. A call made through `client.For` or `ForMode` also carries `wyolet.relay.host`, the catalog host it was resolved to, so Relay [prices it at that host](/concepts/observability#pricing-and-provider-names).
+
+Reporting never slows or fails a call. Calls wait in a queue of 2,048 and are exported in batches of up to 512, every 5 seconds. When the queue is full a call is dropped; an export that fails is retried up to three times (on `429`, `502`, `503`, `504` and network errors, honouring `Retry-After`, 30 seconds at most) and then dropped. `Dropped()` counts what was lost and `LastWarning()` returns the last message Relay sent back in a partial success.
+
+A stream is reported when it ends: at `io.EOF`, on a read error, or when it is closed. A stream closed before its last event is reported with the usage seen so far, `error.type` `client_canceled` and finish reason `error`.
+
+To share one emitter between clients, or to send reports elsewhere, build it yourself:
+
+```go
+e := telemetry.New(
+	telemetry.WithEndpoint("https://relay.example.com/otlp"),
+	telemetry.WithAPIKey(os.Getenv("WR_API_KEY")),
+	telemetry.WithServiceName("indexer"),
+)
+defer e.Close(context.Background())
+
+c, err := client.ForMode("gpt-4o", client.WithMode(client.ModeTelemetry), client.WithEmitter(e))
+// or, without ForMode: client.For("gpt-4o", key, client.WithClient(client.WithTelemetry(e)))
+```
+
+`WithTelemetry` on a client built by `client.Relay` or `client.RelayWS` is a configuration error returned by the first call.
+
+### Flush and Close
+
+A process that exits right after its calls must send what is queued first:
+
+- `e.Flush(ctx)` exports every call recorded so far and returns the first export error.
+- `e.Close(ctx)` does the same and stops the emitter; calls recorded afterwards are dropped.
+- `c.Close()` closes the emitter `ForMode` built for the client. An emitter you passed with `WithEmitter` is yours to close. `c.Telemetry()` returns the client's emitter either way.
+
+### Content
+
+The policy that governs your relay key decides whether Relay stores message content; your opt-in decides only when no policy governs the key, and nothing is stored while Relay's [content capture](/concepts/observability#message-content) is off. Relay answers every accepted export with the `X-WR-Content-Capture` header, and the SDK follows it:
+
+| Answer | Content is sent |
+| --- | --- |
+| `store` | yes, also without your opt-in |
+| `drop` | no, also with your opt-in |
+| `client`, or no header (another OTLP backend) | when you opted in |
+
+The answer is cached for five minutes. The SDK learns it before its first export with an empty logs export, and every export refreshes it. Until it arrives your opt-in decides, so with a `store` answer the calls made before the first answer carry no content. Content is copied from the request only when it may be sent; under `drop` it is never built.
+
+Content travels on the logs signal as one `gen_ai.client.inference.operation.details` event per call, with the same trace and span id as the call's span: `gen_ai.system_instructions`, `gen_ai.input.messages`, `gen_ai.tool.definitions` and `gen_ai.output.messages`, in the conventions' message schema. Opaque provider data (reasoning signatures, encrypted reasoning), citations, image detail hints, file names and MCP server headers are not sent.
+
+### Traces and conversations
+
+```go
+ctx = telemetry.ContextWithTraceparent(ctx, r.Header.Get("traceparent")) // the call joins this trace
+ctx = telemetry.ContextWithConversation(ctx, sessionID)                // gen_ai.conversation.id
+```
+
+Without a traceparent, each call starts a trace of its own.

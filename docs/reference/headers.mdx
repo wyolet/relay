@@ -37,6 +37,7 @@ Anthropic SDK at Relay, just set its API key — it lands in `Authorization` or
 | --- | --- |
 | `X-Relay-Request-ID` | Set on every response: the ID Relay generated for this request. It is the `request_id` for `GET /logs/{request_id}`. |
 | `X-Request-ID` | Your `X-Request-ID`, echoed when you sent a valid one. |
+| `X-WR-Content-Capture` | On accepted OTLP exports (`/otlp/v1/traces`, `/otlp/v1/logs`): `store`, `drop` or `client`, whether Relay stores the message content this credential reports. See [Message content](/concepts/observability#message-content). |
 
 Relay forwards the upstream provider's response headers through to you, minus
 hop-by-hop headers. On cross-shape translated responses, `Content-Length` and
