@@ -1,9 +1,10 @@
-package modeldir
+package catalogsource
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/wyolet/relay/sdk/catalog"
 )
 
 // releaseServer serves a channel index and one release's asset, counting hits per path.
@@ -69,6 +73,7 @@ func sha256Hex(data []byte) string {
 }
 
 func TestReleaseLatestAndCache(t *testing.T) {
+	withEmbedded(t, "")
 	asset := gzipped(t, catalogJSON(t, fixtureCatalog("relay-catalog@"+Channel)))
 	rs := newReleaseServer(t, "v0.1.10", asset, strings.ToUpper(sha256Hex(asset)))
 	cache := t.TempDir()
@@ -106,14 +111,74 @@ func TestReleaseLatestAndCache(t *testing.T) {
 	if rs.count("/index.yaml") != 2 || rs.total() != 4 {
 		t.Fatalf("latest again: hits = %d, want one more index fetch and no download", rs.total())
 	}
+}
 
-	m, err := Add(ctx, t.TempDir(), "gpt-5.5-2026-04-23", Release("v0.1.10", cache, rs.options()...), AddOptions{})
-	if err != nil || m.Source.Catalog != "v0.1.10" {
-		t.Fatalf("Add from release = %+v, %v", m, err)
+// withEmbedded stands in an embed that carries tag, for the length of the test.
+func withEmbedded(t *testing.T, tag string) {
+	t.Helper()
+	prevLoad, prevVersion := loadEmbedded, embeddedVersion
+	loadEmbedded = func() (*catalog.IndexedCatalog, error) { return catalog.Index(fixtureCatalog(tag)) }
+	embeddedVersion = func() string { return tag }
+	t.Cleanup(func() { loadEmbedded, embeddedVersion = prevLoad, prevVersion })
+}
+
+func TestReleaseServesEmbeddedTag(t *testing.T) {
+	withEmbedded(t, "v0.1.10")
+	asset := gzipped(t, catalogJSON(t, fixtureCatalog("x")))
+	rs := newReleaseServer(t, "v0.1.10", asset, sha256Hex(asset))
+	cache := t.TempDir()
+	ctx := context.Background()
+
+	ic, err := Release("v0.1.10", cache, rs.options()...).Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.total() != 0 || ic.Catalog.Version != "v0.1.10" {
+		t.Fatalf("pinned embedded tag: hits = %d, version = %q", rs.total(), ic.Catalog.Version)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "v0.1.10")); err == nil {
+		t.Fatal("embedded tag written to the cache")
+	}
+	if _, err := Release("", cache, rs.options()...).Catalog(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rs.count("/index.yaml") != 1 || rs.total() != 1 {
+		t.Fatalf("latest == embedded: hits = %d, want only the index", rs.total())
+	}
+}
+
+func TestReleasePinFailsWhenContextEnds(t *testing.T) {
+	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(stalled.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := Release("v0.1.11", t.TempDir(), WithDownloadURL(stalled.URL), WithHTTPClient(stalled.Client())).Catalog(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "v0.1.11") {
+		t.Fatalf("err = %v, want a deadline error naming the tag", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("returned after %s, want soon after ctx expired", elapsed)
+	}
+}
+
+func TestReleaseTag(t *testing.T) {
+	for version, want := range map[string]string{
+		"v0.1.10":                 "v0.1.10",
+		"relay-catalog@v1alpha2":  "",
+		"":                        "",
+		"../v0.1.10":              "",
+		"relay-catalog@v0.1.10/x": "",
+	} {
+		if got := releaseTag(version); got != want {
+			t.Errorf("releaseTag(%q) = %q, want %q", version, got, want)
+		}
 	}
 }
 
 func TestReleaseRejectsBadAsset(t *testing.T) {
+	withEmbedded(t, "")
 	asset := gzipped(t, catalogJSON(t, fixtureCatalog("x")))
 	cases := map[string]*releaseServer{
 		"sha mismatch":    newReleaseServer(t, "v0.1.10", asset, sha256Hex([]byte("other"))),

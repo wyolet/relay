@@ -1,10 +1,14 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// ErrNotFound marks a ref that matches no model, as opposed to an invalid or ambiguous one.
+var ErrNotFound = errors.New("not found")
 
 // IndexedCatalog is a loaded catalog with O(1) resolution maps.
 type IndexedCatalog struct {
@@ -165,7 +169,7 @@ func (ic *IndexedCatalog) Resolve(ref string) (Binding, Host, error) {
 			}
 		}
 	}
-	return Binding{}, Host{}, fmt.Errorf("catalog: model %q not found", ref)
+	return Binding{}, Host{}, fmt.Errorf("catalog: model %q %w", ref, ErrNotFound)
 }
 
 // ResolveModelSlug maps a ref to the unique model slug (Binding.MetadataName),
@@ -203,7 +207,7 @@ func (ic *IndexedCatalog) ResolveModelSlug(ref string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("catalog: model %q not found", ref)
+	return "", fmt.Errorf("catalog: model %q %w", ref, ErrNotFound)
 }
 
 func (ic *IndexedCatalog) slugAt(l loc) string {
@@ -220,7 +224,7 @@ func (ic *IndexedCatalog) uniqueSlug(key string, locs []loc) (string, error) {
 		slug = s
 	}
 	if slug == "" {
-		return "", fmt.Errorf("catalog: model %q not found", key)
+		return "", fmt.Errorf("catalog: model %q %w", key, ErrNotFound)
 	}
 	return slug, nil
 }
@@ -228,7 +232,7 @@ func (ic *IndexedCatalog) uniqueSlug(key string, locs []loc) (string, error) {
 func (ic *IndexedCatalog) pick(key string, locs []loc) (Binding, Host, error) {
 	switch len(locs) {
 	case 0:
-		return Binding{}, Host{}, fmt.Errorf("catalog: model %q not found", key)
+		return Binding{}, Host{}, fmt.Errorf("catalog: model %q %w", key, ErrNotFound)
 	case 1:
 		return ic.at(locs[0])
 	default:

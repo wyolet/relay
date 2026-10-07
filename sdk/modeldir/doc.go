@@ -4,5 +4,5 @@
 //
 // Files are written atomically with a fixed key order and no timestamps, so a refresh that changes nothing leaves the directory byte-identical.
 //
-// Out of scope: routing across hosts (a file carries one host's rate sheet, the one in pricedBy), host base URLs, merging the directory with any other catalog, and signature checks on release assets beyond sha256 over HTTPS. sdk/catalog stays fetch-free; all network and file writes live here.
+// Out of scope: routing across hosts (a file carries one host's rate sheet, the one in pricedBy), host base URLs, merging the directory with any other catalog, and signature checks on release assets beyond sha256 over HTTPS. Sources are sdk/catalogsource's, re-exported here; sdk/catalog stays fetch-free.
 package modeldir

@@ -2,7 +2,7 @@
 //
 // Usage:
 //
-//	catalog-embed [-o path] [dir]
+//	catalog-embed [-o path] [-version tag] [dir]
 //
 // dir defaults to $RELAY_CATALOG_DIR or ../relay-catalog/data.
 
@@ -24,10 +24,12 @@ import (
 )
 
 func main() {
-	var out string
+	var out, version string
 	flag.StringVar(&out, "o", filepath.Join("sdk", "catalog", "catalog.json"), "output path")
+	// sdk/catalogsource serves a pinned tag from the embed instead of fetching it when this matches, so it must be the tag dir is checked out at.
+	flag.StringVar(&version, "version", "", "relay-catalog release tag of dir, recorded as the catalog version (default: the schema label)")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: catalog-embed [-o path] [dir]")
+		fmt.Fprintln(os.Stderr, "usage: catalog-embed [-o path] [-version tag] [dir]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -54,6 +56,9 @@ func main() {
 	if err := catalogembed.ValidateAdapters(cat); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if version != "" {
+		cat.Version = version
 	}
 
 	data, err := catalogembed.MarshalJSON(cat)

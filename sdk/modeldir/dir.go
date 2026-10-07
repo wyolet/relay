@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/wyolet/relay/sdk/catalog"
+	"github.com/wyolet/relay/sdk/internal/atomicfile"
 )
 
 const fileExt = ".yaml"
@@ -104,31 +105,8 @@ func writeModelFile(dir string, m Model) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(modelPath(dir, m.Name), data)
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	dir, base := filepath.Split(path)
-	if dir == "" {
-		dir = "."
-	}
-	tmp, err := os.CreateTemp(dir, "."+base+".*.tmp")
-	if err != nil {
+	if err := atomicfile.Write(modelPath(dir, m.Name), data, 0o644); err != nil {
 		return fmt.Errorf("modeldir: %w", err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("modeldir: write %s: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("modeldir: write %s: %w", path, err)
-	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
-		return fmt.Errorf("modeldir: write %s: %w", path, err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return fmt.Errorf("modeldir: write %s: %w", path, err)
 	}
 	return nil
 }
