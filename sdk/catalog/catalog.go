@@ -76,34 +76,35 @@ type ProviderInfo struct {
 }
 
 // Capabilities mirrors app/model.Capabilities (same json tags) so the embed can
-// carry it by a plain json round-trip without the SDK importing app/.
+// carry it by a plain json round-trip without the SDK importing app/. The yaml
+// tags keep the same keys in sdk/modeldir model files.
 type Capabilities struct {
-	UnsupportedParams []string `json:"unsupportedParams,omitempty"`
-	Chat              bool     `json:"chat,omitempty"`
-	Embeddings        bool     `json:"embeddings,omitempty"`
-	Streaming         bool     `json:"streaming,omitempty"`
-	Tools             bool     `json:"tools,omitempty"`
-	ParallelTools     bool     `json:"parallelTools,omitempty"`
-	Vision            bool     `json:"vision,omitempty"`
-	Audio             bool     `json:"audio,omitempty"`
-	PromptCache       bool     `json:"promptCache,omitempty"`
-	Reasoning         bool     `json:"reasoning,omitempty"`
-	JSONMode          bool     `json:"jsonMode,omitempty"`
-	StructuredOutputs bool     `json:"structuredOutputs,omitempty"`
-	Batch             bool     `json:"batch,omitempty"`
-	ComputerUse       bool     `json:"computerUse,omitempty"`
-	WebSearch         bool     `json:"webSearch,omitempty"`
-	FileInput         bool     `json:"fileInput,omitempty"`
-	AudioInput        bool     `json:"audioInput,omitempty"`
-	AudioOutput       bool     `json:"audioOutput,omitempty"`
-	SystemMessages    bool     `json:"systemMessages,omitempty"`
-	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"`
+	UnsupportedParams []string `json:"unsupportedParams,omitempty" yaml:"unsupportedParams,omitempty"`
+	Chat              bool     `json:"chat,omitempty" yaml:"chat,omitempty"`
+	Embeddings        bool     `json:"embeddings,omitempty" yaml:"embeddings,omitempty"`
+	Streaming         bool     `json:"streaming,omitempty" yaml:"streaming,omitempty"`
+	Tools             bool     `json:"tools,omitempty" yaml:"tools,omitempty"`
+	ParallelTools     bool     `json:"parallelTools,omitempty" yaml:"parallelTools,omitempty"`
+	Vision            bool     `json:"vision,omitempty" yaml:"vision,omitempty"`
+	Audio             bool     `json:"audio,omitempty" yaml:"audio,omitempty"`
+	PromptCache       bool     `json:"promptCache,omitempty" yaml:"promptCache,omitempty"`
+	Reasoning         bool     `json:"reasoning,omitempty" yaml:"reasoning,omitempty"`
+	JSONMode          bool     `json:"jsonMode,omitempty" yaml:"jsonMode,omitempty"`
+	StructuredOutputs bool     `json:"structuredOutputs,omitempty" yaml:"structuredOutputs,omitempty"`
+	Batch             bool     `json:"batch,omitempty" yaml:"batch,omitempty"`
+	ComputerUse       bool     `json:"computerUse,omitempty" yaml:"computerUse,omitempty"`
+	WebSearch         bool     `json:"webSearch,omitempty" yaml:"webSearch,omitempty"`
+	FileInput         bool     `json:"fileInput,omitempty" yaml:"fileInput,omitempty"`
+	AudioInput        bool     `json:"audioInput,omitempty" yaml:"audioInput,omitempty"`
+	AudioOutput       bool     `json:"audioOutput,omitempty" yaml:"audioOutput,omitempty"`
+	SystemMessages    bool     `json:"systemMessages,omitempty" yaml:"systemMessages,omitempty"`
+	AssistantPrefill  bool     `json:"assistantPrefill,omitempty" yaml:"assistantPrefill,omitempty"`
 }
 
 // Modalities mirrors app/model.Modalities.
 type Modalities struct {
-	Input  []string `json:"input,omitempty"`
-	Output []string `json:"output,omitempty"`
+	Input  []string `json:"input,omitempty" yaml:"input,omitempty"`
+	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
 }
 
 // Binding is one callable (snapshot, host) pair with wire metadata. Featured
@@ -139,8 +140,8 @@ type Binding struct {
 
 // Rate is one priced meter on a binding.
 type Rate struct {
-	Meter       string  `json:"meter"`
-	Unit        string  `json:"unit"`
-	Amount      float64 `json:"amount"`
-	AboveTokens int     `json:"aboveTokens,omitempty"`
+	Meter       string  `json:"meter" yaml:"meter"`
+	Unit        string  `json:"unit" yaml:"unit"`
+	Amount      float64 `json:"amount" yaml:"amount"`
+	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty"`
 }
