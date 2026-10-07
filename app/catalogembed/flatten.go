@@ -25,6 +25,7 @@ func flatten(snap *catalog.Snapshot, at time.Time) *sdkcatalog.Catalog {
 		hostEntry := sdkcatalog.Host{
 			Name:          h.Meta.Name,
 			BaseURL:       h.Spec.BaseURL,
+			Path:          h.Spec.Path,
 			DisplayName:   h.Meta.DisplayName,
 			Description:   h.Meta.Description,
 			HomepageURL:   h.Spec.HomepageURL,

@@ -187,6 +187,59 @@ func TestFor_StreamCost(t *testing.T) {
 	}
 }
 
+// The request path follows relay's host semantics: no host path → adapter
+// default, a set path → verbatim ("" appends nothing to BaseURL), and a
+// caller base URL override → adapter default again.
+func TestFor_HostPath(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cases := []struct {
+		name     string
+		adapter  string
+		baseURL  string
+		hostPath *string
+		opts     []TargetOption
+		want     string
+	}{
+		{"responses default", "openai_responses", srv.URL, nil, nil, "/v1/responses"},
+		{"host path verbatim", "openai_responses", srv.URL, ptr("/backend/responses"), nil, "/backend/responses"},
+		{"empty host path appends nothing", "openai", srv.URL + "/deploy/chat", ptr(""), nil, "/deploy/chat"},
+		{"host path beats pathFn", "gemini", srv.URL, ptr("/custom"), nil, "/custom"},
+		{"base URL override drops host path", "openai", "http://unused.example", ptr("/custom"),
+			[]TargetOption{WithBaseURL(srv.URL)}, "/v1/chat/completions"},
+		{"WithPath beats host path", "openai", srv.URL, ptr("/custom"),
+			[]TargetOption{WithClient(WithPath("/explicit"))}, "/explicit"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target, err := targetFromBinding(
+				catalog.Binding{MetadataName: "m", Adapter: tc.adapter, Name: "m"},
+				catalog.Host{Name: "h", BaseURL: tc.baseURL, Path: tc.hostPath},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, o := range tc.opts {
+				if err := o(&target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gotPath = ""
+			// Only the request path matters; the empty reply fails to parse.
+			_, _ = target.client("k").Generate(context.Background(), sampleReq())
+			if gotPath != tc.want {
+				t.Fatalf("path = %q, want %q", gotPath, tc.want)
+			}
+		})
+	}
+}
+
 func TestWithAdapterName(t *testing.T) {
 	cat := testCatalog(t)
 	target, err := targetFromBinding(

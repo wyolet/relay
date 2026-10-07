@@ -22,9 +22,11 @@ type Catalog struct {
 // Host is one upstream serving endpoint and its model bindings. The display
 // fields are operator-set metadata for catalog UIs; they do not affect routing.
 type Host struct {
-	Name    string    `json:"name"`
-	BaseURL string    `json:"baseURL"`
-	Models  []Binding `json:"models"`
+	Name    string `json:"name"`
+	BaseURL string `json:"baseURL"`
+	// Path overrides the adapter's default request path, with relay's host semantics: nil keeps the default, a set value is used verbatim, and "" means BaseURL is the complete endpoint.
+	Path   *string   `json:"path,omitempty"`
+	Models []Binding `json:"models"`
 
 	DisplayName   string `json:"displayName,omitempty"`
 	Description   string `json:"description,omitempty"`
