@@ -29,13 +29,13 @@ var adapters = map[string]Adapter{
 		provider:   "openai",
 		keyEnv:     []string{EnvOpenAIKey},
 	},
-	// openai_responses speaks the OpenAI Responses API (/responses) — the wire
-	// the Codex/ChatGPT subscription backend uses. Name matches the catalog
+	// openai_responses speaks the OpenAI Responses API, the wire the
+	// Codex/ChatGPT subscription backend also uses. Name matches the catalog
 	// binding adapter so For() resolves it too. The translator forces
 	// store:false (no server-side persistence).
 	"openai_responses": {
 		translator: openai.ResponsesTranslator{},
-		path:       "/responses",
+		path:       "/v1/responses",
 		auth:       Auth{Header: "Authorization", Scheme: "Bearer"},
 		provider:   "openai",
 		keyEnv:     []string{EnvOpenAIKey},

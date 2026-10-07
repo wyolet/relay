@@ -180,12 +180,14 @@ func OpenAI(baseURL, apiKey string, opts ...Option) *Client {
 	return newFromAdapter(adapters["openai"], baseURL, apiKey, opts...)
 }
 
-// OpenAIResponses targets the OpenAI Responses API (`/responses`) directly, the
-// same wire the Codex/ChatGPT subscription backend speaks. Point baseURL at the
-// host (e.g. https://chatgpt.com/backend-api/codex). Bypasses relay. Empty
-// apiKey falls back to OPENAI_API_KEY; for OAuth, pass a placeholder + WithAuth
-// (Auth{}) and supply the bearer via WithHTTPClient. The Responses translator
-// always sends store:false, so no server-side persistence is requested.
+// OpenAIResponses targets the OpenAI Responses API (POST {baseURL}/v1/responses)
+// directly. Point baseURL at the vendor root (e.g. https://api.openai.com).
+// Backends that serve the same wire without a /v1 segment, such as the
+// Codex/ChatGPT subscription backend (https://chatgpt.com/backend-api/codex),
+// need WithPath("/responses"). Bypasses relay. Empty apiKey falls back to
+// OPENAI_API_KEY; for OAuth, pass a placeholder + WithAuth(Auth{}) and supply
+// the bearer via WithHTTPClient. The Responses translator always sends
+// store:false, so no server-side persistence is requested.
 func OpenAIResponses(baseURL, apiKey string, opts ...Option) *Client {
 	if apiKey == "" {
 		apiKey = os.Getenv(EnvOpenAIKey)

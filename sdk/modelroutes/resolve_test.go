@@ -20,22 +20,23 @@ func TestResolve(t *testing.T) {
 	type want struct {
 		key, model, host, wire string
 		cataloged              bool
-		adapter, baseURL       string
+		adapter, baseURL, path string
 	}
+	// gpt-5-5's route sets url, so the openai host's path is dropped.
 	wants := []want{
-		{"claude-opus-5-5", "claude-opus-5-5", "anthropic", "claude-opus-5-5", true, "anthropic", "https://anthropic.example"},
-		{"opus-work", "claude-opus-5-5", "anthropic", "claude-opus-5-5", true, "anthropic", "https://anthropic.example"},
-		{"gpt-5-5", "gpt-5-5", "openai", "gpt-5.5", true, "codex", "https://codex.example"},
-		{"glm-5-3", "glm-5-3", "openrouter", "z-ai/glm-5-3", true, "openai", "https://relay.example"},
-		{"qwen3.8:27b", "qwen3.8:27b", "", "qwen3.8:27b", false, "openai", "https://ollama.example"},
+		{"claude-opus-5-5", "claude-opus-5-5", "anthropic", "claude-opus-5-5", true, "anthropic", "https://anthropic.example", "/custom/messages"},
+		{"opus-work", "claude-opus-5-5", "anthropic", "claude-opus-5-5", true, "anthropic", "https://anthropic.example", "/custom/messages"},
+		{"gpt-5-5", "gpt-5-5", "openai", "gpt-5.5", true, "codex", "https://codex.example", ""},
+		{"glm-5-3", "glm-5-3", "openrouter", "z-ai/glm-5-3", true, "openai", "https://relay.example", ""},
+		{"qwen3.8:27b", "qwen3.8:27b", "", "qwen3.8:27b", false, "openai", "https://ollama.example", ""},
 	}
 	if len(entries) != len(wants) {
 		t.Fatalf("entries = %+v", entries)
 	}
 	for i, w := range wants {
 		e := entries[i]
-		adapter, baseURL := e.Endpoint()
-		got := want{e.Key, e.Model, e.Host.Name, e.WireName(), e.Cataloged, adapter, baseURL}
+		adapter, baseURL, path := e.Endpoint()
+		got := want{e.Key, e.Model, e.Host.Name, e.WireName(), e.Cataloged, adapter, baseURL, path}
 		if got != w {
 			t.Errorf("entry %d = %+v, want %+v", i, got, w)
 		}
@@ -67,8 +68,8 @@ cloud = { host = "ollama-cloud", adapter = "openai", passthrough = true }
 		t.Fatalf("catalog hit = %+v", hit)
 	}
 	miss := entries[1]
-	if adapter, baseURL := miss.Endpoint(); miss.Cataloged || miss.Binding.Name != "" || adapter != "openai" || baseURL != "https://ollama-cloud.example" {
-		t.Fatalf("catalog miss = %+v (endpoint %s %s)", miss, adapter, baseURL)
+	if adapter, baseURL, path := miss.Endpoint(); miss.Cataloged || miss.Binding.Name != "" || adapter != "openai" || baseURL != "https://ollama-cloud.example" || path != "" {
+		t.Fatalf("catalog miss = %+v (endpoint %s %s %q)", miss, adapter, baseURL, path)
 	}
 	if miss.WireName() != "qwen-next" {
 		t.Fatalf("catalog miss wire name = %q, want the ref verbatim", miss.WireName())

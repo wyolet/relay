@@ -16,6 +16,7 @@ import (
 // potentially stale if pointed at a genuinely different upstream.
 type Target struct {
 	baseURL    string
+	hostPath   *string // catalog host path; nil = adapter default, set = verbatim ("" appends nothing)
 	adapter    Adapter
 	upstream   string
 	binding    catalog.Binding
@@ -28,8 +29,14 @@ func targetFromBinding(b catalog.Binding, h catalog.Host) (Target, error) {
 	if !ok {
 		return Target{}, fmt.Errorf("relay client: unknown adapter %q", b.Adapter)
 	}
+	var hostPath *string
+	if h.Path != nil {
+		p := *h.Path
+		hostPath = &p
+	}
 	return Target{
 		baseURL:  strings.TrimRight(h.BaseURL, "/"),
+		hostPath: hostPath,
 		adapter:  a,
 		upstream: b.Name,
 		binding:  b,
@@ -37,8 +44,10 @@ func targetFromBinding(b catalog.Binding, h catalog.Host) (Target, error) {
 	}, nil
 }
 
+// withBaseURL drops the host path: it describes the catalog host's layout, which another server need not share.
 func (t Target) withBaseURL(url string) Target {
 	t.baseURL = strings.TrimRight(url, "/")
+	t.hostPath = nil
 	return t
 }
 
@@ -65,6 +74,10 @@ func (t Target) client(apiKey string, opts ...Option) *Client {
 		target:    t,
 	}
 	t.adapter.apply(c)
+	if t.hostPath != nil {
+		c.path = *t.hostPath
+		c.pathFn = nil
+	}
 	for _, o := range t.clientOpts {
 		o(c)
 	}

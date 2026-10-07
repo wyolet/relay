@@ -12,7 +12,9 @@ import (
 type TargetOption func(*Target) error
 
 // WithBaseURL overrides the resolved host base URL (proxy/gateway). Adapter
-// and auth are unchanged.
+// and auth are unchanged; the request path becomes the adapter's default even
+// when the catalog host sets its own path. Add WithClient(WithPath(...)) for
+// another layout.
 func WithBaseURL(url string) TargetOption {
 	return func(t *Target) error {
 		*t = t.withBaseURL(url)
@@ -20,7 +22,9 @@ func WithBaseURL(url string) TargetOption {
 	}
 }
 
-// WithAdapterName swaps the whole wire bundle (translator + path + auth).
+// WithAdapterName swaps the whole wire bundle (translator + path + auth). A
+// path the catalog host sets still wins over the new adapter's default, as on
+// relay's server.
 func WithAdapterName(name string) TargetOption {
 	return func(t *Target) error {
 		updated, err := t.withAdapterName(name)

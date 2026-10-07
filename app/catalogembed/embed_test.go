@@ -253,6 +253,100 @@ spec:
 	}
 }
 
+// Host path must survive manifest → embed JSON → SDK load with nil, "" and a
+// set value kept distinct, since each means something different to a client.
+func TestCompose_HostPathRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "providers", "acme", "provider.yaml"), `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Provider
+metadata:
+  name: acme
+spec:
+  enabled: true
+`)
+	write(filepath.Join(dir, "models", "rocket.yaml"), `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Model
+metadata:
+  name: rocket
+  owner:
+    kind: provider
+    id: acme
+spec:
+  enabled: true
+  pointer: rocket-1
+  snapshots:
+    - name: rocket-1
+`)
+	hostPaths := map[string]string{
+		"default-path": "",
+		"empty-path":   "  path: \"\"\n",
+		"custom-path":  "  path: /backend/responses\n",
+	}
+	for name, pathLine := range hostPaths {
+		write(filepath.Join(dir, "hosts", name, "host.yaml"), `apiVersion: relay.wyolet.dev/v1alpha2
+kind: Host
+metadata:
+  name: `+name+`
+spec:
+  baseURL: https://`+name+`.example
+`+pathLine+`  enabled: true
+`)
+		write(filepath.Join(dir, "bindings", "rocket-"+name+".yaml"), `apiVersion: relay.wyolet.dev/v1alpha2
+kind: HostBinding
+metadata:
+  name: rocket-`+name+`
+  owner:
+    kind: system
+spec:
+  model: rocket
+  host: `+name+`
+  adapter: openai
+`)
+	}
+
+	docs, err := manifest.LoadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed, err := Compose(docs, time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := MarshalJSON(composed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := sdkcatalog.LoadBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*string{}
+	for _, h := range loaded.Catalog.Hosts {
+		got[h.Name] = h.Path
+	}
+	if len(got) != len(hostPaths) {
+		t.Fatalf("hosts = %v, want %d", got, len(hostPaths))
+	}
+	if p := got["default-path"]; p != nil {
+		t.Errorf("default-path: Path = %q, want nil", *p)
+	}
+	if p := got["empty-path"]; p == nil || *p != "" {
+		t.Errorf("empty-path: Path = %v, want explicit \"\"", p)
+	}
+	if p := got["custom-path"]; p == nil || *p != "/backend/responses" {
+		t.Errorf("custom-path: Path = %v, want /backend/responses", p)
+	}
+}
+
 func TestValidateAdapters_RejectsUnknownAdapter(t *testing.T) {
 	cat := &sdkcatalog.Catalog{
 		Hosts: []sdkcatalog.Host{{

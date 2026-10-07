@@ -12,7 +12,9 @@ func rate(meter string, amount float64) catalog.Rate {
 	return catalog.Rate{Meter: meter, Unit: "per_million", Amount: amount}
 }
 
-// fixtureCatalog serves claude at its author's host and through an aggregator, gpt at its author's host, and glm only at hosts that are not its author's, so a hostless route has to fall back to the featured one.
+func strPtr(s string) *string { return &s }
+
+// fixtureCatalog serves claude at its author's host and through an aggregator, gpt at its author's host, and glm only at hosts that are not its author's, so a hostless route has to fall back to the featured one. The anthropic and openai hosts set their own request path.
 func fixtureCatalog(version string) *catalog.Catalog {
 	return &catalog.Catalog{
 		Version: version,
@@ -23,11 +25,11 @@ func fixtureCatalog(version string) *catalog.Catalog {
 				{Name: "z-ai/glm-5-3", MetadataName: "glm-5-3", Adapter: "openai", Providers: []string{"zhipu"}, Featured: true,
 					Pricing: []catalog.Rate{rate("tokens.input", 0.6), rate("tokens.output", 2.2)}},
 			}},
-			{Name: "anthropic", BaseURL: "https://anthropic.example", Models: []catalog.Binding{
+			{Name: "anthropic", BaseURL: "https://anthropic.example", Path: strPtr("/custom/messages"), Models: []catalog.Binding{
 				{Name: "claude-opus-5-5", MetadataName: "claude-opus-5-5", Adapter: "anthropic", Providers: []string{"anthropic"},
 					Pricing: []catalog.Rate{rate("tokens.input", 5), rate("tokens.output", 25)}},
 			}},
-			{Name: "openai", BaseURL: "https://openai.example/v1", Models: []catalog.Binding{
+			{Name: "openai", BaseURL: "https://openai.example", Path: strPtr("/backend/responses"), Models: []catalog.Binding{
 				{Name: "gpt-5.5", MetadataName: "gpt-5-5", Adapter: "openai_responses", Providers: []string{"openai"},
 					Pricing: []catalog.Rate{rate("tokens.input", 1.25), rate("tokens.output", 10)}},
 			}},
