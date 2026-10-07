@@ -17,6 +17,7 @@ func TestSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 	fidelity.Check(t, body,
 		map[string]string{
 			"ModelConfig.Reasoning.BudgetTokens": `"budget_tokens":2345`,
+			"ModelConfig.Reasoning.Effort":       `"output_config":{"effort":"medium"}`,
 			"Tools.Choice.Mode":                  `"type":"tool"`,
 			"Tools.Choice.FunctionName":          `"name":"fidelity_tool"`,
 			"Tools.Parallel":                     `"disable_parallel_tool_use":true`,
@@ -33,7 +34,6 @@ func TestSerializeRequest_CanonicalFieldFidelity(t *testing.T) {
 			"ModelConfig.Sampling.Seed":             "no seed parameter",
 			"ModelConfig.Sampling.FrequencyPenalty": "no frequency penalty",
 			"ModelConfig.Sampling.PresencePenalty":  "no presence penalty",
-			"ModelConfig.Reasoning.Effort":          "an explicit budget selects manual thinking; effort has no field",
 			"ModelConfig.Reasoning.Summary":         "display is set only for adaptive thinking",
 			// The fixture forces a tool choice, which wins over structured
 			// output; the forced-tool path has its own tests.

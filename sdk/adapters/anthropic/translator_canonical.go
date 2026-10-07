@@ -60,6 +60,11 @@ type anthropicCanonReq struct {
 	Stream        bool                    `json:"stream,omitempty"`
 	Metadata      *anthropicCanonMetadata `json:"metadata,omitempty"`
 	Thinking      *anthropicCanonThinking `json:"thinking,omitempty"`
+	OutputConfig  *anthropicOutputConfig  `json:"output_config,omitempty"`
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort,omitempty"` // low | medium | high | xhigh | max
 }
 
 type anthropicCanonMsg struct {
