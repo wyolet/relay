@@ -50,6 +50,12 @@ const (
 	// HeaderTokenCount is a response header naming how an input-token count was arrived at: "exact" from the upstream's own counter, "calibrated" from the ratio relay measured on this session's or model's traffic, "estimated" from bytes alone. A caller that cares about precision can tell the three apart.
 	HeaderTokenCount = "X-WR-Token-Count"
 
+	// HeaderContentCapture is the OTLP receiver's response header saying whether it stores the message content of this credential's calls, so a reporting client neither withholds what a policy wants nor uploads what relay drops.
+	HeaderContentCapture = "X-WR-Content-Capture"
+	ContentCaptureStore  = "store"  // the governing policy stores content
+	ContentCaptureDrop   = "drop"   // the governing policy or an operator switch does not
+	ContentCaptureClient = "client" // no policy governs; the client's opt-in decides
+
 	// HeaderShouldRetry tells the caller whether retrying this exact request can succeed. Some SDKs trust it over their own status heuristics, so relay emits it on every error it writes rather than leaving a forwarded upstream error as the only response that carries one.
 	HeaderShouldRetry = "X-Should-Retry"
 )
