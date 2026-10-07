@@ -16,6 +16,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wyolet/relay/sdk/telemetry"
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
@@ -46,6 +48,10 @@ type Client struct {
 	syncTimeout time.Duration                          // WR_TIMEOUT; applies to Generate only, never streams
 	pathFn      func(model string, stream bool) string // per-call path (Gemini); overrides path when set
 	target      Target                                 // set by For(); zero for Relay/manual constructors
+
+	telemetry     *telemetry.Emitter // nil = calls are not reported
+	ownsTelemetry bool               // Close closes the emitter (ForMode built it)
+	providerName  string             // telemetry provider name when no catalog binding names one
 }
 
 // Option configures a Client. Options apply over the preset defaults.
@@ -99,8 +105,16 @@ func New(translator v1.Translator, baseURL, path, apiKey string, opts ...Option)
 
 // Close releases the client's transport. For the default HTTP transport
 // it is a no-op; for a WebSocket client (RelayWS) it closes the
-// connection. Safe to call once when done with the client.
-func (c *Client) Close() error { return c.transport.Close() }
+// connection. A telemetry emitter that ForMode built for the client is
+// closed too, which waits for its queued calls to be exported. Safe to
+// call once when done with the client.
+func (c *Client) Close() error {
+	err := c.transport.Close()
+	if c.ownsTelemetry {
+		err = errors.Join(err, c.telemetry.Close(context.Background()))
+	}
+	return err
+}
 
 // Relay targets a relay server's canonical endpoint (POST /v1/generate). The
 // primary use: full key pooling, routing, limits, and observability.
@@ -148,7 +162,11 @@ func newRelayClient(path, baseURL, relayKey string, opts ...Option) *Client {
 	if len(missing) > 0 {
 		missErr = fmt.Errorf("relay client: missing config — set %s or pass explicitly", strings.Join(missing, " and "))
 	}
-	c.configErr = errors.Join(missErr, envErr)
+	var telemetryErr error
+	if c.telemetry != nil {
+		telemetryErr = errTelemetryThroughRelay
+	}
+	c.configErr = errors.Join(missErr, envErr, telemetryErr)
 	return c
 }
 

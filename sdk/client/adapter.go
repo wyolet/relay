@@ -15,6 +15,10 @@ type Adapter struct {
 	pathFn      func(model string, stream bool) string
 	auth        Auth
 	defaultOpts []Option
+	// provider is the telemetry provider name of a client built without the catalog, in the GenAI conventions' vocabulary.
+	provider string
+	// keyEnv lists the env vars holding the vendor's key, in precedence order.
+	keyEnv []string
 }
 
 var adapters = map[string]Adapter{
@@ -22,6 +26,8 @@ var adapters = map[string]Adapter{
 		translator: openai.CCTranslator{},
 		path:       "/v1/chat/completions",
 		auth:       Auth{Header: "Authorization", Scheme: "Bearer"},
+		provider:   "openai",
+		keyEnv:     []string{EnvOpenAIKey},
 	},
 	// openai_responses speaks the OpenAI Responses API (/responses) — the wire
 	// the Codex/ChatGPT subscription backend uses. Name matches the catalog
@@ -31,6 +37,8 @@ var adapters = map[string]Adapter{
 		translator: openai.ResponsesTranslator{},
 		path:       "/responses",
 		auth:       Auth{Header: "Authorization", Scheme: "Bearer"},
+		provider:   "openai",
+		keyEnv:     []string{EnvOpenAIKey},
 	},
 	"anthropic": {
 		translator: anthropic.AnthropicTranslator{},
@@ -39,11 +47,15 @@ var adapters = map[string]Adapter{
 		defaultOpts: []Option{
 			WithHeader("anthropic-version", "2023-06-01"),
 		},
+		provider: "anthropic",
+		keyEnv:   []string{EnvAnthropicKey},
 	},
 	"gemini": {
 		translator: gemini.GeminiTranslator{},
 		pathFn:     geminiPath,
 		auth:       Auth{Header: "x-goog-api-key"},
+		provider:   "gcp.gemini",
+		keyEnv:     []string{EnvGeminiKey, EnvGoogleKey},
 	},
 }
 
@@ -76,6 +88,7 @@ func (a Adapter) apply(c *Client) {
 	c.path = a.path
 	c.pathFn = a.pathFn
 	c.auth = a.auth
+	c.providerName = a.provider
 	for _, o := range a.defaultOpts {
 		o(c)
 	}
