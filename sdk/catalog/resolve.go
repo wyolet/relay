@@ -32,6 +32,12 @@ type aliasPattern struct {
 	l              loc
 }
 
+// Index builds resolution indexes over a catalog assembled in memory. The
+// IndexedCatalog keeps c by pointer; c must not change afterwards.
+func Index(c *Catalog) (*IndexedCatalog, error) {
+	return indexCatalog(c)
+}
+
 func indexCatalog(c *Catalog) (*IndexedCatalog, error) {
 	if c == nil {
 		return nil, fmt.Errorf("catalog: nil catalog")
