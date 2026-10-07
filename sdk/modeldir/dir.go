@@ -116,7 +116,7 @@ func writeFileAtomic(path string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("modeldir: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("modeldir: write %s: %w", path, err)
