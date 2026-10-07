@@ -1,6 +1,6 @@
 // Package genai maps spans and events that follow the OpenTelemetry GenAI semantic conventions to otlp.Inference records.
 //
-// The conventions are still in development status and have renamed attributes between releases, so each field is read from its current name first and then from the names earlier releases used. Only records for a model call are mapped: the inference span and the inference details event. Agent, workflow, tool, retrieval and memory spans are left alone, because an agent span repeats the token usage of the model calls beneath it. Message content is passed through as reported. The metrics signal, the per-message events of earlier releases, and provider-specific attributes are out of scope.
+// The conventions are still in development status and have renamed attributes between releases, so each field is read from its current name first and then from the names earlier releases used. Only records for a model call are mapped: the inference span and the inference details event. Agent, workflow, tool, retrieval and memory spans are left alone, because an agent span repeats the token usage of the model calls beneath it. Message content is passed through as reported. Beside the conventions' attributes, relay's own wyolet.relay.host is read: the catalog host relay's SDK resolved the call to. The metrics signal, the per-message events of earlier releases, and provider-specific attributes are out of scope.
 package genai
 
 import (
@@ -31,6 +31,9 @@ var (
 	attrReasoningTokens = []string{"gen_ai.usage.reasoning.output_tokens"}
 	attrAudioInput      = []string{"gen_ai.usage.audio.input_tokens"}
 	attrAudioOutput     = []string{"gen_ai.usage.audio.output_tokens"}
+
+	// attrRelayHost is relay's own attribute, not a convention one: the SDK sets it to the catalog host a call was resolved to.
+	attrRelayHost = []string{"wyolet.relay.host"}
 
 	attrErrorType  = []string{"error.type"}
 	attrHTTPStatus = []string{"http.response.status_code"}
@@ -138,6 +141,7 @@ func inference(a, resource otlp.Attrs) (otlp.Inference, bool) {
 		ResponseModel:  responseModel,
 		ResponseID:     a.Str(attrResponseID...),
 		ConversationID: a.Str(attrConversation...),
+		Host:           a.Str(attrRelayHost...),
 		ErrorType:      a.Str(attrErrorType...),
 		Tokens: otlp.TokenCounts{
 			Input:       nonNegative(input),

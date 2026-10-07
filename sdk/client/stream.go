@@ -31,6 +31,7 @@ type Stream struct {
 	binding catalog.Binding
 	priced  bool
 	usage   usage.Tokens
+	report  *report // nil unless telemetry is on
 
 	// Timing, tracked as the caller drains via Recv. Offsets from start
 	// (the GenerateStream call), surfaced through Timing() in the exact
@@ -72,15 +73,18 @@ func (s *Stream) Recv() (*Event, error) {
 						s.usage = ev.Usage
 					}
 				}
+				s.report.observe(event, data)
 				return &Event{Type: event, Data: append([]byte(nil), data...)}, nil
 			}
 			continue
 		}
 		if !s.sc.Scan() {
 			if err := s.sc.Err(); err != nil {
+				s.report.streamEnded(s, err, false)
 				return nil, err
 			}
 			s.end = time.Since(s.start)
+			s.report.streamEnded(s, nil, false)
 			return nil, io.EOF
 		}
 		raw := append(append([]byte(nil), s.sc.Bytes()...), '\n', '\n')
@@ -96,8 +100,11 @@ func (s *Stream) Recv() (*Event, error) {
 	}
 }
 
-// Close releases the underlying response body.
-func (s *Stream) Close() error { return s.body.Close() }
+// Close releases the underlying response body. With telemetry on, a stream closed before it ended is recorded with the usage seen so far.
+func (s *Stream) Close() error {
+	s.report.streamEnded(s, nil, true)
+	return s.body.Close()
+}
 
 // Cost returns total cost from the target's pricing rate sheet after the
 // stream's terminal usage event has been received. ok is false for relay

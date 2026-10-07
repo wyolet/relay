@@ -48,7 +48,7 @@ func resolveModel(snap *appcatalog.Snapshot, inf otlp.Inference, hint ProviderHi
 			if m, hostID, ok := lookup(snap, ref); ok {
 				out := catalogModel{id: m.Meta.ID, name: m.Meta.Name}
 				out.provider, _ = snap.ProviderSlug(m.Meta.Owner.ID)
-				if p, ok := pricingFor(snap, m, hostID, hint.Host, out.provider); ok {
+				if p, ok := pricingFor(snap, m, hostID, inf.Host, hint.Host, out.provider); ok {
 					out.pricingID, out.pricingName = p.Meta.ID, p.Meta.Name
 				}
 				return out
@@ -73,9 +73,9 @@ func lookup(snap *appcatalog.Snapshot, ref string) (*model.Model, string, bool) 
 	return nil, "", false
 }
 
-// pricingFor picks the rate sheet for a call relay did not route, so no binding was chosen for it: the host the reference pinned, else the hinted host, else the provider's own host for its model, else the first enabled binding that has pricing.
-func pricingFor(snap *appcatalog.Snapshot, m *model.Model, pinnedHostID, hintedHost, providerSlug string) (*pricing.Pricing, bool) {
-	var own, first *pricing.Pricing
+// pricingFor picks the rate sheet for a call relay did not route, so no binding was chosen for it: the host the reference pinned, else the host the client reported, else the hinted host, else the provider's own host for its model, else the first enabled binding that has pricing. A host slug with no priced binding for the model falls through to the next.
+func pricingFor(snap *appcatalog.Snapshot, m *model.Model, pinnedHostID, reportedHost, hintedHost, providerSlug string) (*pricing.Pricing, bool) {
+	var hinted, own, first *pricing.Pricing
 	for _, b := range snap.BindingsForModel(m.Meta.ID) {
 		if !b.IsEnabled() {
 			continue
@@ -91,8 +91,11 @@ func pricingFor(snap *appcatalog.Snapshot, m *model.Model, pinnedHostID, hintedH
 			continue
 		}
 		hostSlug, _ := snap.HostSlug(b.Spec.HostID)
-		if hostSlug != "" && hostSlug == hintedHost {
+		if hostSlug != "" && hostSlug == reportedHost {
 			return p, true
+		}
+		if hinted == nil && hostSlug != "" && hostSlug == hintedHost {
+			hinted = p
 		}
 		if own == nil && hostSlug != "" && hostSlug == providerSlug {
 			own = p
@@ -101,7 +104,10 @@ func pricingFor(snap *appcatalog.Snapshot, m *model.Model, pinnedHostID, hintedH
 			first = p
 		}
 	}
-	if own != nil {
+	switch {
+	case hinted != nil:
+		return hinted, true
+	case own != nil:
 		return own, true
 	}
 	return first, first != nil

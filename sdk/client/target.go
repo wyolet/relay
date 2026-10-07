@@ -19,6 +19,7 @@ type Target struct {
 	adapter    Adapter
 	upstream   string
 	binding    catalog.Binding
+	host       string // catalog host slug; reported to telemetry so relay prices at that host
 	clientOpts []Option
 }
 
@@ -32,6 +33,7 @@ func targetFromBinding(b catalog.Binding, h catalog.Host) (Target, error) {
 		adapter:  a,
 		upstream: b.Name,
 		binding:  b,
+		host:     h.Name,
 	}, nil
 }
 

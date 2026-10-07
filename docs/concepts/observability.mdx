@@ -140,6 +140,8 @@ trace.set_tracer_provider(provider)
 OpenAIInstrumentor().instrument()
 ```
 
+The [Go SDK](/go-sdk) reports the calls it makes to a provider itself in its `telemetry` mode, with no OpenTelemetry SDK in the application.
+
 Traces are enough for usage. Export logs as well only when the instrumentation reports model calls as events (`OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true` in the Python instrumentations) and you want [message content](#message-content) from them. The JSON exporters (`opentelemetry-exporter-otlp-json-http` in Python, `@opentelemetry/exporter-trace-otlp-http` and `@opentelemetry/exporter-logs-otlp-http` in Node.js) work the same way.
 
 ### What is recorded
@@ -155,7 +157,7 @@ Relay reads the [OpenTelemetry GenAI semantic conventions](https://github.com/op
 | --- | --- |
 | `requested_model`, `model` | `gen_ai.request.model`, `gen_ai.response.model`; the response model is tried first against the catalog |
 | `provider`, `pricing` | `gen_ai.provider.name` (earlier: `gen_ai.system`) and the catalog; see [Pricing](#pricing-and-provider-names) |
-| `tokens` | `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_creation.input_tokens` (or `cache_write.input_tokens`), `reasoning.output_tokens`, `audio.input_tokens`, `audio.output_tokens` (earlier: `prompt_tokens`, `completion_tokens`) |
+| `tokens` | `gen_ai.usage.input_tokens`, `output_tokens`, `cache_read.input_tokens`, `cache_write.input_tokens`, `reasoning.output_tokens`, `audio.input_tokens`, `audio.output_tokens` (earlier: `prompt_tokens`, `completion_tokens`, `cache_creation.input_tokens`) |
 | `status` | `http.response.status_code`; an `error.type` that is an HTTP error status (`"429"`) is used when that is missing. A failed call with no status is stored with status `0`: it is listed in the logs and left out of summaries, like a request Relay rejected before reaching a provider. |
 | `error_kind` | Relay's own classification of a failed call, in the values proxied requests use; see [Error kinds](#error-kinds). The `error.type` the client sent is kept in `extras.reported_error_type`. |
 | `finish_reason` | first value of `gen_ai.response.finish_reasons` |
@@ -208,7 +210,7 @@ An event emitted outside any span is identified by `gen_ai.response.id` instead 
 
 Cost is computed when the reported model resolves to a catalog model, at the time the event is recorded. The model name is looked up qualified by the reported provider, then on its own; names and aliases match as they do for inference. A model the catalog does not know is stored unpriced, which is not a cost of zero: `unpriced` in a summary counts such events.
 
-Telemetry names providers its own way, and often names the service that served the call. Relay maps the names that differ from the catalog's: `gcp.gemini` and `gemini` to provider `google`, `azure.ai.openai` to `openai`, `x_ai` to `xai`, `mistral_ai` to `mistral`, `moonshot_ai` to `moonshot`. Because Relay did not route the call, it picks the rate sheet in this order: the host the mapped name stands for, the provider's own host, then the first host that has pricing for the model. `aws.bedrock` and `gcp.vertex_ai` have no catalog host, so their calls are priced at the model provider's own rates. The chosen rate sheet is in the event's `pricing` field.
+Telemetry names providers its own way, and often names the service that served the call. Relay maps the names that differ from the catalog's: `gcp.gemini` and `gemini` to provider `google`, `azure.ai.openai` to `openai`, `x_ai` to `xai`, `mistral_ai` to `mistral`, `moonshot_ai` to `moonshot`. Because Relay did not route the call, it picks the rate sheet in this order: a host pinned by the model reference (`model@host`), the host named by the `wyolet.relay.host` attribute, the host the mapped name stands for, the provider's own host, then the first host that has pricing for the model. `wyolet.relay.host` is Relay's own attribute, not a convention one: the [Go SDK](/go-sdk) sets it to the catalog host it resolved the call to, so the call is priced where it was made. A host with no rate sheet for the model is skipped. `aws.bedrock` and `gcp.vertex_ai` have no catalog host, so their calls are priced at the model provider's own rates. The chosen rate sheet is in the event's `pricing` field.
 
 ### Limits and responses
 
@@ -233,6 +235,16 @@ Exporters retry `429` and `503` with backoff, and a resend is safe: whatever the
 Content is stored only when the client sends it and Relay is set to keep it. Sending it is a request; the operator decides. Both operator switches below must be on, and then the policy that governs the reporting credential decides, as it does for [payload logging](#payload-logging): content is stored when that policy has `payloadLoggingEnabled: true` and dropped when it does not, whatever the key's own flag says. A credential that no policy governs has what it sends stored: sending content is its opt-in, and the key's `payloadLoggingEnabled` is not read. A client behind a policy that does not capture is uploading content Relay drops, so turn capture off in its instrumentation; `relay_otlp_content_total{outcome="policy"}` counts those calls.
 
 Relay tells the client. When an export carries content that is not stored because of the policy, because an operator switch is off, or because the call is [older than the payload retention](#old-calls), the `200` response is a partial success with nothing rejected and a message such as `message content of 2 model calls was not stored: the policy of this credential does not allow storing message content. It is safe to stop sending content; usage was recorded.` Whether the application sees it depends on its exporter: the Node.js exporters log partial success through the diagnostics logger (`diag.setLogger(...)` at warn level), and the Python exporters (1.45.0) do not read it. Content skipped as a duplicate or dropped by a busy queue produces no message.
+
+A client can also ask before it sends content. Every export Relay accepts, an empty one included (`{"resourceLogs":[]}` on `/otlp/v1/logs`), is answered with the `X-WR-Content-Capture` header for the credential that sent it:
+
+| Value | When | What the client should do |
+| --- | --- | --- |
+| `store` | Both operator switches are on and the governing policy has `payloadLoggingEnabled: true`. | send content |
+| `drop` | An operator switch is off, or the governing policy does not store content. | leave content out |
+| `client` | Both switches are on and no policy governs the credential. | follow its own opt-in |
+
+The answer covers the credential as a whole; content of a call older than the payload retention is still not stored. The [Go SDK](/go-sdk) follows this header.
 
 On the client, turn on content capture in the instrumentation. For the Python instrumentations:
 

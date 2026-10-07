@@ -45,6 +45,8 @@ type Inference struct {
 	ResponseID     string
 	ConversationID string
 	FinishReason   string
+	// Host is the catalog host slug the client says served the call, from relay's own wyolet.relay.host attribute; empty from clients that do not know the catalog.
+	Host string
 
 	Streamed         bool
 	TimeToFirstChunk time.Duration

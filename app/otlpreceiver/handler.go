@@ -11,6 +11,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/httpapi/inference"
 	"github.com/wyolet/relay/app/usagelog"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 	"github.com/wyolet/relay/pkg/otlp"
 	"github.com/wyolet/relay/pkg/payload"
@@ -238,6 +239,7 @@ func (h *Handler) serve(w http.ResponseWriter, r *http.Request, sig signal) {
 	sig.records.WithLabelValues(outcomeRejected).Add(float64(refused.rejected()))
 	sig.result(resultAccepted).Inc()
 	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set(httpheader.HeaderContentCapture, h.contentCapture(governing))
 	w.WriteHeader(http.StatusOK)
 	// Content the operator does not keep is not a rejection: the export succeeded, and the message alone tells the client it can stop sending it.
 	message := refused.message(sig)

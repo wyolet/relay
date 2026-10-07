@@ -19,23 +19,29 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*Response, erro
 		ctx, cancel = context.WithTimeout(ctx, c.syncTimeout)
 		defer cancel()
 	}
-	resp, err := c.roundTrip(ctx, req, v1.OutputModeSync)
+	rep := c.startReport(ctx, time.Now(), false)
+	resp, err := c.roundTrip(ctx, req, v1.OutputModeSync, rep)
 	if err != nil {
+		rep.failed(0, err)
 		return nil, err
 	}
 	defer resp.body.Close()
 
 	body, err := io.ReadAll(resp.body)
 	if err != nil {
+		rep.failed(resp.status, err)
 		return nil, fmt.Errorf("%s: read body: %w", c.host(), err)
 	}
 	if resp.status/100 != 2 {
+		rep.failed(resp.status, nil)
 		return nil, parseAPIError(c.host(), resp.status, body)
 	}
 	wire, err := c.translator.ParseResponse(body)
 	if err != nil {
+		rep.failed(resp.status, err)
 		return nil, err
 	}
+	rep.succeeded(resp.status, wire)
 	return c.wrapResponse(wire), nil
 }
 
@@ -44,15 +50,19 @@ func (c *Client) Generate(ctx context.Context, req *v1.Request) (*Response, erro
 // to stream.
 func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, error) {
 	start := time.Now() // anchor for Timing() offsets, like relay's request-accept
-	resp, err := c.roundTrip(ctx, req, v1.OutputModeStream)
+	rep := c.startReport(ctx, start, true)
+	resp, err := c.roundTrip(ctx, req, v1.OutputModeStream, rep)
 	if err != nil {
+		rep.failed(0, err)
 		return nil, err
 	}
 	if resp.status/100 != 2 {
 		body, _ := io.ReadAll(resp.body)
 		_ = resp.body.Close()
+		rep.failed(resp.status, nil)
 		return nil, parseAPIError(c.host(), resp.status, body)
 	}
+	rep.streamStarted(resp.status)
 	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	sc.Split(splitSSEFrames)
@@ -61,6 +71,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 		sc:      sc,
 		toCanon: c.translator.NewToCanonicalStream(),
 		start:   start,
+		report:  rep,
 	}), nil
 }
 
@@ -83,9 +94,14 @@ func (c *Client) wrapStream(s *Stream) *Stream {
 
 // roundTrip serializes the request (translator-owned) and hands the bytes
 // to the transport. The caller's request is not mutated.
-func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*rtResponse, error) {
+func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string, rep *report) (*rtResponse, error) {
 	if c.configErr != nil {
 		return nil, c.configErr
+	}
+	if c.telemetry != nil {
+		if err := c.telemetry.Err(); err != nil {
+			return nil, err
+		}
 	}
 	r := *req // shallow copy: don't mutate the caller's request
 	r.OutputMode = mode
@@ -111,6 +127,7 @@ func (c *Client) roundTrip(ctx context.Context, req *v1.Request, mode string) (*
 		}
 		path = c.pathFn(model, mode == v1.OutputModeStream)
 	}
+	rep.requestSent(req, r.Model)
 	return c.transport.roundTrip(ctx, c, path, body)
 }
 

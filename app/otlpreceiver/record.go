@@ -9,6 +9,7 @@ import (
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/policy"
+	"github.com/wyolet/relay/pkg/httpheader"
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
@@ -152,6 +153,19 @@ func (h *Handler) storeContent(ctx context.Context, tenant string, reporter *lif
 func (h *Handler) capturesContent() bool {
 	o := h.opts
 	return o.CaptureContent != nil && o.PayloadLog != nil && o.Payloads != nil && o.CaptureContent() && o.PayloadLog.Enabled()
+}
+
+// contentCapture is the answer to the reporter's question whether content it sends is stored, by the rule storeContent applies: switches off or a policy that does not store drops it, a policy that stores keeps it, and with no policy the client's choice stands.
+func (h *Handler) contentCapture(governing *policy.Policy) string {
+	switch {
+	case !h.capturesContent():
+		return httpheader.ContentCaptureDrop
+	case governing == nil:
+		return httpheader.ContentCaptureClient
+	case policy.CapturesPayload(governing, false):
+		return httpheader.ContentCaptureStore
+	}
+	return httpheader.ContentCaptureDrop
 }
 
 // mark reports which calls have not had kind stored before. A failing store answers "none had": storing a call twice is the smaller harm than losing it.
