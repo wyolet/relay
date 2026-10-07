@@ -154,8 +154,9 @@ func TestReleasePinFailsWhenContextEnds(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := Release("v0.1.11", t.TempDir(), WithDownloadURL(stalled.URL), WithHTTPClient(stalled.Client())).Catalog(ctx)
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "v0.1.11") {
+	// A tag the embedded catalog can never carry, so the fetch path is exercised.
+	_, err := Release("v0.0.0-unembedded", t.TempDir(), WithDownloadURL(stalled.URL), WithHTTPClient(stalled.Client())).Catalog(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "v0.0.0-unembedded") {
 		t.Fatalf("err = %v, want a deadline error naming the tag", err)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
