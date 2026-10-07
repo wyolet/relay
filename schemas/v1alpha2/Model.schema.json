@@ -24,6 +24,9 @@
         "computerUse": {
           "type": "boolean"
         },
+        "defaultReasoningEffort": {
+          "type": "string"
+        },
         "embeddings": {
           "type": "boolean"
         },
@@ -41,6 +44,15 @@
         },
         "reasoning": {
           "type": "boolean"
+        },
+        "reasoningEfforts": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "streaming": {
           "type": "boolean"

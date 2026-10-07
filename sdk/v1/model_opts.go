@@ -25,7 +25,7 @@ type SamplingParams struct {
 }
 
 // ReasoningConfig controls reasoning effort.
-// Effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh".
+// Effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max".
 // Summary: "auto" | "concise" | "detailed".
 type ReasoningConfig struct {
 	Effort       string `json:"effort,omitempty"`

@@ -12,6 +12,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/wyolet/relay/app/meta"
@@ -157,7 +158,16 @@ type Capabilities struct {
 	AudioOutput       bool     `json:"audioOutput,omitempty"       yaml:"audioOutput,omitempty"`
 	SystemMessages    bool     `json:"systemMessages,omitempty"    yaml:"systemMessages,omitempty"`
 	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"  yaml:"assistantPrefill,omitempty"`
+
+	// ReasoningEfforts lists the effort levels the model accepts, ordered
+	// low→high, from ReasoningEffortLevels. Empty means the model has no
+	// effort control. Both fields require Reasoning.
+	ReasoningEfforts       []string `json:"reasoningEfforts,omitempty"       yaml:"reasoningEfforts,omitempty"`
+	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty" yaml:"defaultReasoningEffort,omitempty"`
 }
+
+// ReasoningEffortLevels is the canonical effort set, ordered low→high.
+var ReasoningEffortLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
 
 // Modalities lists input/output media types ("text", "image", "audio", ...).
 type Modalities struct {
@@ -190,6 +200,8 @@ func (m *Model) IsEnabled() bool { return m.Spec.Enabled == nil || *m.Spec.Enabl
 //     Models always belong to a Provider.
 //   - Snapshot names are unique within the model and Pointer must name
 //     one of them.
+//   - Reasoning effort levels are known, unique, ordered low→high, and
+//     only set on reasoning models; the default is one of them.
 //
 // Cross-entity checks (Owner.ID resolves to a real Provider; Deprecation.
 // Replacement resolves to a real Model; snapshot-name uniqueness across
@@ -217,7 +229,45 @@ func (m *Model) Validate() error {
 	if _, ok := snaps[lower(m.Spec.Pointer)]; !ok {
 		return fmt.Errorf("model %q: pointer %q does not match any snapshot", m.Meta.Name, m.Spec.Pointer)
 	}
+	if err := m.validateReasoningEfforts(); err != nil {
+		return err
+	}
 	return m.validateAliases(snapSlugs)
+}
+
+// validateReasoningEfforts enforces that the effort list holds known levels
+// in strictly ascending canonical order, the default is one of them, and
+// neither is set on a model without reasoning.
+func (m *Model) validateReasoningEfforts() error {
+	c := m.Spec.Capabilities
+	if len(c.ReasoningEfforts) == 0 && c.DefaultReasoningEffort == "" {
+		return nil
+	}
+	if !c.Reasoning {
+		return fmt.Errorf("model %q: reasoningEfforts/defaultReasoningEffort require capabilities.reasoning", m.Meta.Name)
+	}
+	prev := -1
+	seen := make(map[string]struct{}, len(c.ReasoningEfforts))
+	for _, e := range c.ReasoningEfforts {
+		rank := slices.Index(ReasoningEffortLevels, e)
+		if rank < 0 {
+			return fmt.Errorf("model %q: unknown reasoning effort %q (want one of %s)", m.Meta.Name, e, strings.Join(ReasoningEffortLevels, ", "))
+		}
+		if _, dup := seen[e]; dup {
+			return fmt.Errorf("model %q: duplicate reasoning effort %q", m.Meta.Name, e)
+		}
+		seen[e] = struct{}{}
+		if rank < prev {
+			return fmt.Errorf("model %q: reasoning effort %q out of order — reasoningEfforts must be ordered low to high", m.Meta.Name, e)
+		}
+		prev = rank
+	}
+	if c.DefaultReasoningEffort != "" {
+		if _, ok := seen[c.DefaultReasoningEffort]; !ok {
+			return fmt.Errorf("model %q: defaultReasoningEffort %q is not in reasoningEfforts", m.Meta.Name, c.DefaultReasoningEffort)
+		}
+	}
+	return nil
 }
 
 // validateAliases enforces the alias rules: at most one '*', patterns

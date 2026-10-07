@@ -64,6 +64,9 @@ type Capabilities struct {
 	AudioOutput       bool     `json:"audioOutput,omitempty"`
 	SystemMessages    bool     `json:"systemMessages,omitempty"`
 	AssistantPrefill  bool     `json:"assistantPrefill,omitempty"`
+
+	ReasoningEfforts       []string `json:"reasoningEfforts,omitempty"`
+	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty"`
 }
 
 // Modalities mirrors catalog.Modalities (convertible).

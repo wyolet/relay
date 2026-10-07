@@ -99,6 +99,11 @@ type Capabilities struct {
 	AudioOutput       bool     `json:"audioOutput,omitempty" yaml:"audioOutput,omitempty"`
 	SystemMessages    bool     `json:"systemMessages,omitempty" yaml:"systemMessages,omitempty"`
 	AssistantPrefill  bool     `json:"assistantPrefill,omitempty" yaml:"assistantPrefill,omitempty"`
+
+	// ReasoningEfforts are the accepted v1.ReasoningConfig.Effort values,
+	// ordered low→high; empty means the model has no effort control.
+	ReasoningEfforts       []string `json:"reasoningEfforts,omitempty" yaml:"reasoningEfforts,omitempty"`
+	DefaultReasoningEffort string   `json:"defaultReasoningEffort,omitempty" yaml:"defaultReasoningEffort,omitempty"`
 }
 
 // Modalities mirrors app/model.Modalities.

@@ -180,6 +180,52 @@ func TestValidateAliases(t *testing.T) {
 	})
 }
 
+func TestValidateReasoningEfforts(t *testing.T) {
+	withEfforts := func(reasoning bool, def string, efforts ...string) *Model {
+		m := fix("thinker")
+		m.Spec.Capabilities.Reasoning = reasoning
+		m.Spec.Capabilities.ReasoningEfforts = efforts
+		m.Spec.Capabilities.DefaultReasoningEffort = def
+		return m
+	}
+	for _, tc := range []struct {
+		name string
+		m    *Model
+	}{
+		{"unset on non-reasoning model", withEfforts(false, "")},
+		{"list without default", withEfforts(true, "", "low", "medium", "high")},
+		{"full set with default", withEfforts(true, "high", "none", "minimal", "low", "medium", "high", "xhigh", "max")},
+		{"gaps allowed", withEfforts(true, "max", "low", "max")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.m.Validate(); err != nil {
+				t.Fatalf("unexpected: %v", err)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		m    *Model
+		want string
+	}{
+		{"unknown value", withEfforts(true, "", "low", "turbo"), "unknown reasoning effort \"turbo\""},
+		{"case sensitive", withEfforts(true, "", "Low"), "unknown reasoning effort"},
+		{"duplicate", withEfforts(true, "", "low", "low"), "duplicate reasoning effort \"low\""},
+		{"out of order", withEfforts(true, "", "high", "low"), "\"low\" out of order"},
+		{"default not in list", withEfforts(true, "max", "low", "high"), "defaultReasoningEffort \"max\" is not in reasoningEfforts"},
+		{"default without list", withEfforts(true, "high"), "is not in reasoningEfforts"},
+		{"list without reasoning", withEfforts(false, "", "low"), "require capabilities.reasoning"},
+		{"default without reasoning", withEfforts(false, "low"), "require capabilities.reasoning"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.m.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 func TestAliasPattern(t *testing.T) {
 	for _, tc := range []struct {
 		alias     string
