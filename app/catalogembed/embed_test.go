@@ -3,6 +3,7 @@ package catalogembed
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -154,6 +155,9 @@ spec:
     chat: true
     tools: true
     vision: true
+    reasoning: true
+    reasoningEfforts: [low, medium, high, max]
+    defaultReasoningEffort: high
   modalities:
     input: [text, image]
     output: [text]
@@ -225,6 +229,9 @@ spec:
 	}
 	if !mi.Capabilities.Vision || !mi.Capabilities.Tools || !mi.Capabilities.Chat {
 		t.Fatalf("capabilities not carried: %+v", mi.Capabilities)
+	}
+	if got := mi.Capabilities.ReasoningEfforts; !slices.Equal(got, []string{"low", "medium", "high", "max"}) || mi.Capabilities.DefaultReasoningEffort != "high" {
+		t.Fatalf("reasoning efforts not carried: %v default %q", got, mi.Capabilities.DefaultReasoningEffort)
 	}
 	if mi.ContextWindowTotal != 200000 || mi.MaxOutputTokens != 8192 || mi.KnowledgeCutoff != "2026-01" {
 		t.Fatalf("numeric metadata wrong: %+v", mi)
