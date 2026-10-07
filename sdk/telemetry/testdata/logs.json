@@ -1,0 +1,509 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "billing"
+            }
+          }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": {
+            "name": "github.com/wyolet/relay/sdk/telemetry"
+          },
+          "logRecords": [
+            {
+              "timeUnixNano": "1791365400000000000",
+              "observedTimeUnixNano": "1791365402000000000",
+              "severityNumber": 5,
+              "eventName": "gen_ai.client.inference.operation.details",
+              "traceId": "0af7651916cd43dd8448eb211c80319c",
+              "spanId": "00f067aa0ba902b7",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "gpt-4o"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.stream",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "gpt-4o-2024-08-06"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "chatcmpl-1"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "stop"
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.response.time_to_first_chunk",
+                  "value": {
+                    "doubleValue": 0.25
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "conv_1"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "api.openai.com"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "1200"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "300"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "1024"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.reasoning.output_tokens",
+                  "value": {
+                    "intValue": "128"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.audio.input_tokens",
+                  "value": {
+                    "intValue": "40"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.audio.output_tokens",
+                  "value": {
+                    "intValue": "16"
+                  }
+                },
+                {
+                  "key": "wyolet.relay.host",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "content",
+                                "value": {
+                                  "stringValue": "Answer briefly."
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "text"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "Weather in Paris?"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "iVBORw0KGgo="
+                                              }
+                                            },
+                                            {
+                                              "key": "mime_type",
+                                              "value": {
+                                                "stringValue": "image/png"
+                                              }
+                                            },
+                                            {
+                                              "key": "modality",
+                                              "value": {
+                                                "stringValue": "image"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "blob"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "user"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "Need the tool."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "reasoning"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "arguments",
+                                              "value": {
+                                                "kvlistValue": {
+                                                  "values": [
+                                                    {
+                                                      "key": "city",
+                                                      "value": {
+                                                        "stringValue": "Paris"
+                                                      }
+                                                    },
+                                                    {
+                                                      "key": "days",
+                                                      "value": {
+                                                        "intValue": "2"
+                                                      }
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            },
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "call_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "name",
+                                              "value": {
+                                                "stringValue": "get_weather"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "id",
+                                              "value": {
+                                                "stringValue": "call_1"
+                                              }
+                                            },
+                                            {
+                                              "key": "response",
+                                              "value": {
+                                                "stringValue": "rainy, 14°C"
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "tool_call_response"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "tool"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.definitions",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "description",
+                                "value": {
+                                  "stringValue": "Current weather"
+                                }
+                              },
+                              {
+                                "key": "name",
+                                "value": {
+                                  "stringValue": "get_weather"
+                                }
+                              },
+                              {
+                                "key": "parameters",
+                                "value": {
+                                  "kvlistValue": {
+                                    "values": [
+                                      {
+                                        "key": "properties",
+                                        "value": {
+                                          "kvlistValue": {
+                                            "values": [
+                                              {
+                                                "key": "city",
+                                                "value": {
+                                                  "kvlistValue": {
+                                                    "values": [
+                                                      {
+                                                        "key": "type",
+                                                        "value": {
+                                                          "stringValue": "string"
+                                                        }
+                                                      }
+                                                    ]
+                                                  }
+                                                }
+                                              }
+                                            ]
+                                          }
+                                        }
+                                      },
+                                      {
+                                        "key": "type",
+                                        "value": {
+                                          "stringValue": "object"
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "type",
+                                "value": {
+                                  "stringValue": "function"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "kvlistValue": {
+                            "values": [
+                              {
+                                "key": "finish_reason",
+                                "value": {
+                                  "stringValue": "stop"
+                                }
+                              },
+                              {
+                                "key": "parts",
+                                "value": {
+                                  "arrayValue": {
+                                    "values": [
+                                      {
+                                        "kvlistValue": {
+                                          "values": [
+                                            {
+                                              "key": "content",
+                                              "value": {
+                                                "stringValue": "Rainy, 14°C."
+                                              }
+                                            },
+                                            {
+                                              "key": "type",
+                                              "value": {
+                                                "stringValue": "text"
+                                              }
+                                            }
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              {
+                                "key": "role",
+                                "value": {
+                                  "stringValue": "assistant"
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
