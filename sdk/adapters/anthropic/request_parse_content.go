@@ -39,6 +39,8 @@ func anthropicMessagesToCanonical(raws []json.RawMessage) ([]v1.Item, error) {
 		case "system":
 			// Mid-conversation system message (role:system inside the messages
 			// array, distinct from the top-level system field) — kept positional.
+			// canonical: per-message output_config dropped — canonical effort is
+			// request-level only; an effort-only system message parses to nothing.
 			parts, err := anthropicContentToCanonicalParts(msg.Content)
 			if err != nil {
 				return nil, err

@@ -349,6 +349,123 @@ func TestAnthropicSerializeRequest_ThinkingExplicitBudget(t *testing.T) {
 	}
 }
 
+// Canonical Effort rides output_config.effort verbatim and parses back to the
+// same value. minimal and none are not Anthropic levels but still pass through:
+// per-model support is catalog data, so the upstream's 400 surfaces them.
+func TestAnthropicReasoningEffortRoundTrip(t *testing.T) {
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max", "minimal", "none"} {
+		t.Run(effort, func(t *testing.T) {
+			req := &v1.Request{
+				Model:      v1.ModelRefs{"claude-opus-5-5"},
+				OutputMode: v1.OutputModeSync,
+				ModelConfig: map[string]*v1.ModelOpts{
+					"claude-opus-5-5": {Reasoning: &v1.ReasoningConfig{Effort: effort}},
+				},
+				Input: []v1.Item{
+					&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}},
+				},
+			}
+			out, err := (AnthropicTranslator{}).SerializeRequest(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := decodeMap(t, out)
+			oc, ok := m["output_config"].(map[string]any)
+			if !ok || oc["effort"] != effort {
+				t.Errorf("output_config: %v, want effort %q", m["output_config"], effort)
+			}
+			if thinking, _ := m["thinking"].(map[string]any); thinking["type"] != "adaptive" {
+				t.Errorf("thinking: %v, want adaptive", m["thinking"])
+			}
+
+			back, err := (AnthropicTranslator{}).ParseRequest(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rc := back.ModelConfig["claude-opus-5-5"].Reasoning
+			if rc == nil || rc.Effort != effort {
+				t.Errorf("round-trip Reasoning: %+v, want Effort %q", rc, effort)
+			}
+		})
+	}
+}
+
+// An explicit budget keeps manual thinking and still carries effort — Opus 4.5
+// takes both.
+func TestAnthropicReasoningEffortWithBudget(t *testing.T) {
+	budget := 3000
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-opus-4-5-20251101"},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			"claude-opus-4-5-20251101": {Reasoning: &v1.ReasoningConfig{Effort: "medium", BudgetTokens: &budget}},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := decodeMap(t, out)
+	thinking := m["thinking"].(map[string]any)
+	if thinking["type"] != "enabled" || int(thinking["budget_tokens"].(float64)) != 3000 {
+		t.Errorf("thinking: %v, want enabled with budget 3000", thinking)
+	}
+	if oc, _ := m["output_config"].(map[string]any); oc["effort"] != "medium" {
+		t.Errorf("output_config: %v, want effort medium", m["output_config"])
+	}
+
+	back, err := (AnthropicTranslator{}).ParseRequest(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := back.ModelConfig["claude-opus-4-5-20251101"].Reasoning
+	if rc == nil || rc.Effort != "medium" || rc.BudgetTokens == nil || *rc.BudgetTokens != 3000 {
+		t.Errorf("round-trip Reasoning: %+v, want Effort medium + budget 3000", rc)
+	}
+}
+
+// Reasoning without Effort emits no output_config.
+func TestAnthropicSerializeRequest_NoEffortNoOutputConfig(t *testing.T) {
+	req := &v1.Request{
+		Model:      v1.ModelRefs{"claude-opus-4-8"},
+		OutputMode: v1.OutputModeSync,
+		ModelConfig: map[string]*v1.ModelOpts{
+			"claude-opus-4-8": {Reasoning: &v1.ReasoningConfig{Summary: "auto"}},
+		},
+		Input: []v1.Item{
+			&v1.Message{Role: v1.RoleUser, Content: []v1.Part{&v1.TextPart{Text: "think"}}},
+		},
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "output_config") {
+		t.Errorf("output_config must be absent without Effort: %s", out)
+	}
+}
+
+// Effort works without thinking on the wire, so output_config.effort alone
+// parses to a ReasoningConfig.
+func TestAnthropicParseRequest_EffortWithoutThinking(t *testing.T) {
+	body := []byte(`{
+		"model": "claude-opus-5-5", "max_tokens": 1024,
+		"output_config": {"effort": "low"},
+		"messages": [{"role": "user", "content": "hi"}]
+	}`)
+	req, err := (AnthropicTranslator{}).ParseRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc := req.ModelConfig["claude-opus-5-5"].Reasoning
+	if rc == nil || rc.Effort != "low" || rc.BudgetTokens != nil {
+		t.Errorf("Reasoning: %+v, want Effort low and no budget", rc)
+	}
+}
+
 // Empty-text thinking blocks (the 4.7+/Sonnet 5/Fable 5 default under display
 // "omitted") must survive ParseResponse as Reasoning items carrying the
 // signature — same-model replay echoes them back verbatim.

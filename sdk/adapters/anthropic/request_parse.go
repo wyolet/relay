@@ -25,6 +25,7 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		Stream        bool              `json:"stream"`
 		Metadata      json.RawMessage   `json:"metadata"`
 		Thinking      json.RawMessage   `json:"thinking"`
+		OutputConfig  json.RawMessage   `json:"output_config"`
 	}
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("anthropic parse_request: %w", err)
@@ -113,7 +114,6 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 		var thinking struct {
 			Type         string `json:"type"`
 			BudgetTokens int    `json:"budget_tokens"`
-			Effort       string `json:"effort"`
 			Display      string `json:"display"`
 		}
 		if err := json.Unmarshal(wire.Thinking, &thinking); err == nil {
@@ -123,15 +123,12 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 				if thinking.BudgetTokens > 0 {
 					rc.BudgetTokens = &thinking.BudgetTokens
 				}
-				if thinking.Effort != "" {
-					rc.Effort = thinking.Effort
-				}
 				opts.Reasoning = rc
 				hasOpts = true
 			case "adaptive":
 				// Adaptive round-trips as a budget-less ReasoningConfig; display
 				// "summarized" surfaces as the canonical Summary request.
-				rc := &v1.ReasoningConfig{Effort: thinking.Effort}
+				rc := &v1.ReasoningConfig{}
 				if thinking.Display == "summarized" {
 					rc.Summary = "auto"
 				}
@@ -139,6 +136,19 @@ func (AnthropicTranslator) ParseRequest(body []byte) (*v1.Request, error) {
 				hasOpts = true
 			}
 		}
+	}
+
+	// output_config.effort → Reasoning.Effort. Effort applies with or without
+	// a thinking block, so it alone opens a ReasoningConfig.
+	var outputConfig struct {
+		Effort string `json:"effort"`
+	}
+	if len(wire.OutputConfig) > 0 && json.Unmarshal(wire.OutputConfig, &outputConfig) == nil && outputConfig.Effort != "" {
+		if opts.Reasoning == nil {
+			opts.Reasoning = &v1.ReasoningConfig{}
+		}
+		opts.Reasoning.Effort = outputConfig.Effort
+		hasOpts = true
 	}
 
 	if hasOpts {

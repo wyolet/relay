@@ -94,6 +94,11 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 		}
 		if opts.Reasoning != nil {
 			rc := opts.Reasoning
+			// Effort passes verbatim: which levels a model accepts is catalog
+			// data, so an unsupported value surfaces as the upstream's 400.
+			if rc.Effort != "" {
+				out.OutputConfig = &anthropicOutputConfig{Effort: rc.Effort}
+			}
 			if rc.BudgetTokens != nil && *rc.BudgetTokens > 0 {
 				// Explicit budget → legacy manual extended thinking. This is the
 				// escape hatch for pre-4.6 models, which reject type "adaptive";
@@ -112,11 +117,10 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 				// the thinking text.
 			} else {
 				// No explicit budget → adaptive thinking, the only mode the
-				// 4.7+/Sonnet 5/Fable 5 family accepts (budget_tokens 400s there).
-				// Anthropic has no effort knob on the wire, so canonical Effort maps
-				// to adaptive and the model self-calibrates depth. Summary requested
-				// → display "summarized" (the family's default "omitted" streams
-				// thinking blocks with empty text).
+				// 4.7+/Sonnet 5/Fable 5 family accepts (budget_tokens 400s there);
+				// depth follows output_config.effort. Summary requested → display
+				// "summarized" (the family's default "omitted" streams thinking
+				// blocks with empty text).
 				t := &anthropicCanonThinking{Type: "adaptive"}
 				if rc.Summary != "" {
 					t.Display = "summarized"
@@ -126,8 +130,6 @@ func (AnthropicTranslator) SerializeRequest(req *v1.Request) ([]byte, error) {
 			// canonical: Temperature/TopP/TopK dropped when reasoning is set —
 			// Anthropic rejects custom sampling alongside a thinking block.
 			out.Temperature, out.TopP, out.TopK = nil, nil, nil
-			// canonical: Reasoning.Effort reduced to adaptive thinking — the
-			// model self-calibrates depth; the effort level itself has no field.
 		}
 
 		// Structured output via forced-tool trick. Anthropic has no native
