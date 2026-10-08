@@ -177,7 +177,7 @@ func TestResolvingAHostKeyEnvRefPutsItBackInTheSnapshot(t *testing.T) {
 	if err := os.Setenv(envName, "sk-now-resolvable"); err != nil {
 		t.Fatalf("setenv: %v", err)
 	}
-	t.Cleanup(func() { os.Unsetenv(envName) })
+	t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	if err := st.stores.HostKey.Upsert(context.Background(), hk); err != nil {
 		t.Fatalf("touch host key: %v", err)
 	}

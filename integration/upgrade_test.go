@@ -125,7 +125,7 @@ func (u *upgradeDB) seedRoute(t *testing.T, hostKeyOwner meta.Owner) string {
 	if err := os.Setenv(envName, "sk-upstream"); err != nil {
 		t.Fatalf("setenv: %v", err)
 	}
-	t.Cleanup(func() { os.Unsetenv(envName) })
+	t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: hostKeyOwner},
 		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName}},

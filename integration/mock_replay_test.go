@@ -256,7 +256,7 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	if err := os.Setenv(envName, hostKeyValue); err != nil {
 		s.t.Fatalf("setenv: %v", err)
 	}
-	s.t.Cleanup(func() { os.Unsetenv(envName) })
+	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
