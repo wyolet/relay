@@ -23,6 +23,7 @@ import (
 	appcatalog "github.com/wyolet/relay/app/catalog"
 	"github.com/wyolet/relay/app/user"
 	"github.com/wyolet/relay/pkg/ids"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // pickAuthorizer maps the stack's authz mode onto a concrete authorizer.
@@ -75,14 +76,16 @@ func (u *userSession) doAs(method, path, body, contentType string) (int, []byte)
 	return resp.StatusCode, raw
 }
 
-// seedLogin creates a user row with a real bcrypt password.
+// seedLogin creates a user row with a real bcrypt password. It hashes at
+// bcrypt's minimum cost: the cost lives in the hash, so every login verifies
+// cheaply too, where the production cost runs ~0.6s per hash under -race.
 func (s *stack) seedLogin(t *testing.T, username, password string) string {
 	t.Helper()
-	hash, err := user.HashPassword(password)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	if err != nil {
 		t.Fatalf("hash password: %v", err)
 	}
-	u := &user.User{ID: ids.New(), Username: username, PasswordHash: hash}
+	u := &user.User{ID: ids.New(), Username: username, PasswordHash: string(hash)}
 	if err := s.users.Upsert(context.Background(), u); err != nil {
 		t.Fatalf("seed user %q: %v", username, err)
 	}
