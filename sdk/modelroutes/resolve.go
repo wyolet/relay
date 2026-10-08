@@ -110,7 +110,7 @@ func routeProblems(r Route, ic *catalog.IndexedCatalog) []error {
 	if r.Host == "" && r.URL == "" {
 		errs = append(errs, errors.New("needs a host or a url"))
 	}
-	if r.Host != "" {
+	if r.Host != "" && ic != nil {
 		if _, ok := catalogHost(ic, r.Host); !ok {
 			errs = append(errs, fmt.Errorf("unknown catalog host %q", r.Host))
 		}
