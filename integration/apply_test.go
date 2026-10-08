@@ -280,6 +280,7 @@ func TestIntegration_ApplyPrune(t *testing.T) {
 // otherwise refuse the delete, and the rate limit would leave a dangling
 // binding behind.
 func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	seedBuiltinRoles(t, st)
@@ -297,10 +298,14 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 	mustUpsert(t, st.stores.Host.Upsert(ctx, h), "host")
 	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "acme-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, tier), "tier policy")
-	t.Setenv("PRUNE_DETACH_KEY", "sk-prune")
+	pruneEnv := uniqueEnvName("HK_")
+	if err := os.Setenv(pruneEnv, "sk-prune"); err != nil {
+		t.Fatalf("setenv: %v", err)
+	}
+	t.Cleanup(func() { os.Unsetenv(pruneEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned, Labels: managed},
-		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "PRUNE_DETACH_KEY"}},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "host key")
 	rl := &ratelimit.RateLimit{
@@ -943,6 +948,7 @@ func TestApplyReportsOutOfScopeRowsAsForbidden(t *testing.T) {
 // Every exported document has to satisfy the schema the export's own
 // $schema directive points editors at.
 func TestExportedDocumentsMatchTheirPublishedSchema(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	seedBuiltinRoles(t, st)
 	st.seedHappyPath(newDiscardUpstream(t), "sk-mock-upstream-key")

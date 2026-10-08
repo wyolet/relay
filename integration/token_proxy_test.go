@@ -17,6 +17,7 @@ import (
 // reach of a token entirely, revoked or not, so its jti denylist need not
 // ride the proxy reservation.
 func TestIntegration_TokensCannotUseProxyMode(t *testing.T) {
+	t.Parallel()
 	f := newTokenFixture(t)
 	f.enableProxyMode(false)
 	hostSlug, _ := f.seedProxyHost(f.upstream.URL)
