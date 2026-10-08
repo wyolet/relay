@@ -39,6 +39,7 @@ import (
 // a real upstream wire shape — the first thing that's broken would be
 // dispatch picking the wrong Spec or pipeline.Adapter mis-forwarding.
 func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
+	t.Parallel()
 	mockURL := os.Getenv("RELAY_MOCK_BASE_URL")
 	if mockURL == "" {
 		mockURL = "https://openai-mock.wyolet.dev"
@@ -137,6 +138,7 @@ func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
 // bodies + tool-call wire shape correctly. Compares the full streamed
 // response bytes against a direct curl to the mock.
 func TestMockReplay_StreamingWithParallelTools(t *testing.T) {
+	t.Parallel()
 	mockURL := os.Getenv("RELAY_MOCK_BASE_URL")
 	if mockURL == "" {
 		mockURL = "https://openai-mock.wyolet.dev"
@@ -250,15 +252,17 @@ func (s *stack) seedHappyPathForModel(upstreamURL, hostKeyValue, modelName strin
 	}
 	mustUpsert(s.t, s.stores.Policy.Upsert(ctx, hostTier), "host-tier")
 
-	if err := os.Setenv("MOCK_HOSTKEY_VAL", hostKeyValue); err != nil {
+	envName := uniqueEnvName("HK_")
+	if err := os.Setenv(envName, hostKeyValue); err != nil {
 		s.t.Fatalf("setenv: %v", err)
 	}
+	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "mock-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
 			PolicyID:  hostTier.Meta.ID,
-			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "MOCK_HOSTKEY_VAL"},
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}
 	mustUpsert(s.t, s.stores.HostKey.Upsert(ctx, hk), "hostkey")

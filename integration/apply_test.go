@@ -145,6 +145,7 @@ func (r applyResp) changed(kind, name string) []string {
 }
 
 func TestIntegration_ApplyPlanActions(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -219,6 +220,7 @@ func TestIntegration_ApplyPlanActions(t *testing.T) {
 }
 
 func TestIntegration_ApplyPrune(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -278,6 +280,7 @@ func TestIntegration_ApplyPrune(t *testing.T) {
 // otherwise refuse the delete, and the rate limit would leave a dangling
 // binding behind.
 func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	seedBuiltinRoles(t, st)
@@ -295,10 +298,14 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 	mustUpsert(t, st.stores.Host.Upsert(ctx, h), "host")
 	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "acme-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, tier), "tier policy")
-	t.Setenv("PRUNE_DETACH_KEY", "sk-prune")
+	pruneEnv := uniqueEnvName("HK_")
+	if err := os.Setenv(pruneEnv, "sk-prune"); err != nil {
+		t.Fatalf("setenv: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv(pruneEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned, Labels: managed},
-		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "PRUNE_DETACH_KEY"}},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "host key")
 	rl := &ratelimit.RateLimit{
@@ -344,6 +351,7 @@ func (d denyAll) Authorize(_ context.Context, _ string, res authz.Resource) erro
 }
 
 func TestIntegration_ApplyAuthorizationIsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	docs := parseBundle(t, bundle)
@@ -367,6 +375,7 @@ func TestIntegration_ApplyAuthorizationIsAllOrNothing(t *testing.T) {
 }
 
 func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	docs := parseBundle(t, bundle)
@@ -406,6 +415,7 @@ func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
 // The boot seed and an apply of the same directory must converge on the
 // same rows — they are one loader.
 func TestIntegration_SeedMatchesApply(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)
@@ -459,6 +469,7 @@ func TestIntegration_SeedMatchesApply(t *testing.T) {
 }
 
 func TestIntegration_ExportRoundTripsThroughApply(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	seedBuiltinRoles(t, st)
 	if code, _, raw := st.applyBundle(bundle+globalBinding, ""); code != http.StatusOK {
@@ -530,6 +541,7 @@ func TestIntegration_ExportRoundTripsThroughApply(t *testing.T) {
 }
 
 func TestIntegration_ExportScopeAndKinds(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	if code, _, raw := st.applyBundle(bundle, ""); code != http.StatusOK {
 		t.Fatalf("seed bundle: %d %s", code, raw)
@@ -668,6 +680,7 @@ spec:
 // the boot options drop them, and `relay seed --apply` (no such option) still
 // applies every kind.
 func TestIntegration_BootSeedRefusesTenancyKinds(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)
@@ -788,6 +801,7 @@ spec: {}
 // the boot loader runs as the deployment itself, with no actor to be denied.
 // TestIntegration_SeedAppliesAnOwnerChange pins that.
 func TestIntegration_SeedAppliesAnOwnerChange(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)
@@ -869,6 +883,7 @@ spec:
 `
 
 func TestApplyRefusesAHostKeyOnAPolicyItsHostDoesNotOwn(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 
 	code, _, raw := st.applyBundle(hostKeyOnAForeignPolicy, "dryRun=true")
@@ -893,6 +908,7 @@ func TestApplyRefusesAHostKeyOnAPolicyItsHostDoesNotOwn(t *testing.T) {
 // under a green result. Naming a row the caller supplied itself leaks
 // nothing.
 func TestApplyReportsOutOfScopeRowsAsForbidden(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 
@@ -932,6 +948,7 @@ func TestApplyReportsOutOfScopeRowsAsForbidden(t *testing.T) {
 // Every exported document has to satisfy the schema the export's own
 // $schema directive points editors at.
 func TestExportedDocumentsMatchTheirPublishedSchema(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	seedBuiltinRoles(t, st)
 	st.seedHappyPath(newDiscardUpstream(t), "sk-mock-upstream-key")

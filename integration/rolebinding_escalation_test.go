@@ -12,6 +12,7 @@ import (
 // hold — binding the built-in `admin` at their own team would make them the
 // deployment's admin. The same rule applies through apply.
 func TestIntegration_RoleBindingEscalation(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 	teamA := st.mkTeam(t, "alpha")

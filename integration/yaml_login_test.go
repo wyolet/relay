@@ -34,6 +34,7 @@ func yamlLoginStack(t *testing.T, mode string) (*stack, func() int) {
 // Disabling the user row locks out the YAML fallback too: the YAML file is
 // a bootstrap credential, not a way around the operator's switch.
 func TestIntegration_DisabledUserCannotLogInThroughYAML(t *testing.T) {
+	t.Parallel()
 	st, login := yamlLoginStack(t, "")
 	ctx := context.Background()
 	row, err := st.users.ByUsername(ctx, "yamlop")
@@ -52,6 +53,7 @@ func TestIntegration_DisabledUserCannotLogInThroughYAML(t *testing.T) {
 // Under RBAC a session must carry a real user id: a YAML user whose row is
 // gone would act under a slug no binding or owner names.
 func TestIntegration_RBACYAMLUserWithoutRowGetsNoSession(t *testing.T) {
+	t.Parallel()
 	st, login := yamlLoginStack(t, "rbac")
 	ctx := context.Background()
 	row, err := st.users.ByUsername(ctx, "yamlop")

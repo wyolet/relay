@@ -30,6 +30,7 @@ import (
 // A key whose owner names its user by the YAML slug (the username) is that
 // user's key, not an orphan to re-parent onto a generated account.
 func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.DB(t)
 	p := testPool(t, dsn)
 	ctx := context.Background()
@@ -105,6 +106,7 @@ func TestIntegration_BackfillMatchesUsernameOwners(t *testing.T) {
 // Only a token_version change has to reach the snapshot; every other column
 // on users would rebuild it for nothing.
 func TestIntegration_UsersNotifyOnlyOnTokenVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	p := storagetest.Pool(t)
 
@@ -140,6 +142,7 @@ func TestIntegration_UsersNotifyOnlyOnTokenVersion(t *testing.T) {
 // current and pre-rotation hash: two rows claiming one hash would hand one
 // key the other's traffic.
 func TestIntegration_KeyHashCannotBeClaimedTwice(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	projectID, saID := st.seedProjectAndAccount("hash-guard")
@@ -180,6 +183,7 @@ func TestIntegration_KeyHashCannotBeClaimedTwice(t *testing.T) {
 // A rule added to a built-in role in a release has to reach a deployment
 // that already seeded that role.
 func TestIntegration_BuiltinRolesUpsertChangedRules(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	seeded := seedBuiltinRoles(t, st)
@@ -209,6 +213,7 @@ func TestIntegration_BuiltinRolesUpsertChangedRules(t *testing.T) {
 // A refusal must not name the row it refused: the plan is withheld from a
 // caller who may not write it, and the reason would leak the same state.
 func TestIntegration_ApplyForbiddenBodyIsGeneric(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	seedBuiltinRoles(t, st)
 	password := "correct-horse"
@@ -238,6 +243,7 @@ func TestIntegration_ApplyForbiddenBodyIsGeneric(t *testing.T) {
 // A rotation replaces the stored hash; without the dirty flag the next apply
 // of the manifest that declared the key writes the old hash back.
 func TestIntegration_KeyRotateMarksTheRowDirty(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	projectID, saID := st.seedProjectAndAccount("rotate-dirty")
@@ -268,6 +274,7 @@ func TestIntegration_KeyRotateMarksTheRowDirty(t *testing.T) {
 // filtered on provenance alone would ship a bundle missing the tenancy the
 // operator authored.
 func TestIntegration_ExportIncludesSystemOwnedTenancy(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	st.mkTeam(t, "platform")
 	if code, raw := st.adminDo(http.MethodPost, "/api/groups",

@@ -12,6 +12,7 @@ import (
 // configuration, so each is recorded even though it is a read; the counts
 // view is not.
 func TestIntegration_BulkReadsAreAudited(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 	for _, path := range []string{"/api/debug/snapshot?detail=counts", "/api/export", "/api/debug/snapshot?detail=full"} {
 		if code, raw := s.adminDo(http.MethodGet, path, ""); code != http.StatusOK {

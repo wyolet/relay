@@ -71,6 +71,7 @@ func seedBuiltinRoles(t *testing.T, st *stack) map[string]*role.Role {
 }
 
 func TestIntegration_BuiltinRoleSeed(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -127,6 +128,7 @@ func TestIntegration_BuiltinRoleSeed(t *testing.T) {
 }
 
 func TestIntegration_BindingCRUD(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	roles := seedBuiltinRoles(t, st)
@@ -266,6 +268,7 @@ func TestIntegration_BindingCRUD(t *testing.T) {
 }
 
 func TestIntegration_BindingCascades(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	roles := seedBuiltinRoles(t, st)
@@ -417,6 +420,7 @@ spec:
 `
 
 func TestIntegration_SeedRBAC(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	pool := testPool(t, st.dsn)
 	ctx := context.Background()

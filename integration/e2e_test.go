@@ -75,6 +75,13 @@ import (
 	relayv1 "github.com/wyolet/relay/sdk/v1"
 )
 
+// uniqueEnvName returns a process-unique env var name. Each call produces a
+// distinct name, so parallel tests that use os.Setenv don't interfere.
+func uniqueEnvName(prefix string) string {
+	id := strings.ToUpper(strings.ReplaceAll(ids.New(), "-", ""))
+	return prefix + id[:16]
+}
+
 // stack is the in-process relay under test: a control listener, an
 // inference listener, the live catalog, and the stores used to seed it.
 type stack struct {
@@ -315,15 +322,17 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	// Use stored-mode for the host key so we get a cleartext Value
 	// round-tripped through the encryption + the snapshot. The
 	// integration is the point.
-	if err := os.Setenv("E2E_HOSTKEY_VAL", hostKeyValue); err != nil {
+	envName := uniqueEnvName("HK_")
+	if err := os.Setenv(envName, hostKeyValue); err != nil {
 		s.t.Fatalf("setenv: %v", err)
 	}
+	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
 			PolicyID:  hostTier.Meta.ID,
-			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"},
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}
 	mustUpsert(s.t, s.stores.HostKey.Upsert(ctx, hk), "hostkey")
@@ -381,6 +390,7 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 // end-to-end: caller → relay key auth → routing → adapter dispatch →
 // mock upstream → response stream → post-flight token extraction.
 func TestE2E_ChatCompletions(t *testing.T) {
+	t.Parallel()
 	// Mock upstream. Records the inbound request so we can assert
 	// the relay forwarded the right URL, auth, and body.
 	captured := newCapturedRequest()
@@ -465,6 +475,7 @@ func TestE2E_ChatCompletions(t *testing.T) {
 // for an exact alias (whatever the caller's spelling), the caller's raw
 // string for a wildcard match.
 func TestE2E_AliasModel(t *testing.T) {
+	t.Parallel()
 	captured := newCapturedRequest()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured.record(r)
@@ -522,6 +533,7 @@ func TestE2E_AliasModel(t *testing.T) {
 // merges into the live snapshot via NOTIFY, routes traffic, and SURVIVES
 // a template re-seed — while un-overridden template changes flow through.
 func TestE2E_OverlaySurvivesReseed(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -634,6 +646,7 @@ func TestE2E_OverlaySurvivesReseed(t *testing.T) {
 // TestE2E_KeyAuth_RejectsBadBearer confirms the inference plane
 // rejects unauthenticated traffic before any routing or upstream call.
 func TestE2E_KeyAuth_RejectsBadBearer(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Errorf("upstream should NOT be hit on a 401 path")
 		http.Error(w, "test bug", http.StatusInternalServerError)
@@ -680,6 +693,7 @@ func TestE2E_KeyAuth_RejectsBadBearer(t *testing.T) {
 // behavior is out of scope here; needs its own PR to set up the
 // matching mock Anthropic upstream for the cross-shape happy path.
 func TestE2E_AdapterMismatch(t *testing.T) {
+	t.Parallel()
 	t.Skip("PR #173 enabled cross-shape translation; this test predates that and needs rewriting against the new behavior")
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Errorf("upstream should NOT be hit on an adapter-mismatch 400 path")
@@ -701,10 +715,12 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 	hostTier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "h1-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: hst.Meta.ID}}}
 	mustUpsert(t, st.stores.Policy.Upsert(ctx, hostTier), "host-tier")
 
-	_ = os.Setenv("E2E_HOSTKEY_VAL", "sk-mock")
+	mismatchEnv := uniqueEnvName("HK_")
+	_ = os.Setenv(mismatchEnv, "sk-mock")
+	t.Cleanup(func() { _ = os.Unsetenv(mismatchEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "hk1", Owner: meta.Owner{Kind: meta.OwnerUser}},
-		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: hostTier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "E2E_HOSTKEY_VAL"}},
+		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: hostTier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: mismatchEnv}},
 	}
 	mustUpsert(t, st.stores.HostKey.Upsert(ctx, hk), "hostkey")
 
@@ -877,6 +893,7 @@ func (s *stack) seedUser(username string) string {
 // schema registry registers under one synthesised name and the $ref
 // gets emitted under another, leaving references unresolvable.
 func TestE2E_OpenAPI_AllRefsResolve(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	for _, tc := range []struct {
 		name string
@@ -964,6 +981,7 @@ func strconvI(i int) string { return fmt.Sprintf("%d", i) }
 // proxy-mode section and confirms the catalog cache picks up the
 // change via NOTIFY.
 func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	const path = "/settings/proxy-mode"
 
@@ -1119,6 +1137,7 @@ func (s *stack) enableProxyMode(allowAnon bool) {
 // TestE2E_ProxyMode_Authed exercises X-WR-Proxy-Mode + X-WR-API-Key.
 // Caller's Authorization is forwarded verbatim; relay does NOT swap it.
 func TestE2E_ProxyMode_Authed(t *testing.T) {
+	t.Parallel()
 	captured := newCapturedRequest()
 	const mockResponse = `{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":7,"output_tokens":2}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1180,6 +1199,7 @@ func TestE2E_ProxyMode_Authed(t *testing.T) {
 // re-derived against current ClassifyMiddleware behavior — out of scope
 // for the rot-fix PR.
 func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
+	t.Parallel()
 	t.Skip("ClassifyMiddleware response code semantics changed; test needs updating against current behavior")
 	captured := newCapturedRequest()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1229,6 +1249,7 @@ func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
 // TestE2E_ProxyMode_UnknownHostSlug confirms a bogus X-WR-Upstream-Host
 // rejects at 400 without hitting any upstream.
 func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Errorf("upstream must NOT be hit on unknown-slug rejection")
 	}))
@@ -1279,6 +1300,7 @@ func (r catSnapReader) snap(ctx context.Context) *appcatalog.Snapshot {
 // the new plaintext authenticates, the old one stops, and the key's
 // policy binding survives the rotation.
 func TestE2E_KeyRotate(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-rot","object":"chat.completion","model":"test-model","choices":[],"usage":{}}`)

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -120,10 +121,14 @@ func (u *upgradeDB) seedRoute(t *testing.T, hostKeyOwner meta.Owner) string {
 	mustUpsert(t, u.stores.Host.Upsert(ctx, h), "host")
 	tier := &policy.Policy{Meta: meta.Metadata{ID: ids.New(), Name: "acme-api-tier", Owner: meta.Owner{Kind: meta.OwnerHost, ID: h.Meta.ID}}}
 	mustUpsert(t, u.stores.Policy.Upsert(ctx, tier), "tier policy")
-	t.Setenv("UPGRADE_TEST_HOST_KEY", "sk-upstream")
+	envName := uniqueEnvName("HK_")
+	if err := os.Setenv(envName, "sk-upstream"); err != nil {
+		t.Fatalf("setenv: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: hostKeyOwner},
-		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: "UPGRADE_TEST_HOST_KEY"}},
+		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName}},
 	}
 	mustUpsert(t, u.stores.HostKey.Upsert(ctx, hk), "host key")
 	md := &model.Model{
@@ -175,6 +180,7 @@ func authenticate(t *testing.T, cat *appcatalog.Catalog, plaintext string) (int,
 // migration parks it in the legacy project, and it must keep serving exactly
 // as before: under the inference setting in single mode, refused under rbac.
 func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
+	t.Parallel()
 	u := newUpgradeDB(t)
 	modelName := u.seedRoute(t, meta.Owner{Kind: meta.OwnerSystem})
 	u.insertPreTenancyKey(t, "rk_ci_plaintext")
@@ -201,6 +207,7 @@ func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
 // resolved its policy through its service account or a policy binding must
 // carry that same policy after a rollback, not turn policy-less.
 func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.DB(t)
 	st, err := storagemod.Open(context.Background(), dsn)
 	if err != nil {
@@ -295,6 +302,7 @@ func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
 // created. Nobody owns such a row, so the upgrade hands it to the system: a
 // shared host key has to stay in the pool policy-less callers draw from.
 func TestUpgradeHandsOwnerlessUserRowsToTheSystem(t *testing.T) {
+	t.Parallel()
 	u := newUpgradeDB(t)
 	ctx := context.Background()
 	adminOwned := meta.Owner{Kind: meta.OwnerUser}

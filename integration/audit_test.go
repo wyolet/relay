@@ -54,6 +54,7 @@ func (s *stack) waitForAuditRows(n int) []audit.Event {
 }
 
 func TestAudit_MutationsRecordedAndFiltered(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 
 	code, raw := s.adminDo(http.MethodPost, "/api/teams", `{"metadata":{"name":"audited","displayName":"Audited Team"},"spec":{}}`)
@@ -122,6 +123,7 @@ func TestAudit_MutationsRecordedAndFiltered(t *testing.T) {
 }
 
 func TestAudit_KeysetPagination(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 
 	const n = 5
@@ -159,6 +161,7 @@ func TestAudit_KeysetPagination(t *testing.T) {
 }
 
 func TestAudit_RetentionPruneRemovesOnlyExpiredRows(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 	ctx := context.Background()
 

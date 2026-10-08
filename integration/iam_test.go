@@ -76,6 +76,7 @@ type tenancyRow struct {
 }
 
 func TestIntegration_TeamProjectCRUD(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 
 	code, raw := st.adminDo(http.MethodPost, "/api/teams",
@@ -177,6 +178,7 @@ spec: {}
 `
 
 func TestIntegration_SeedTenancy(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	pool := testPool(t, st.dsn)
 	dir := t.TempDir()
@@ -291,6 +293,7 @@ func (s *stack) seedProjectAndAccount(name string) (projectID, saID string) {
 }
 
 func TestIntegration_KeyCreateAndRotate(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	projectID, saID := st.seedProjectAndAccount("ml-search")
 
@@ -391,6 +394,7 @@ func TestIntegration_KeyCreateAndRotate(t *testing.T) {
 }
 
 func TestIntegration_KeyFilters(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	_, saID := st.seedProjectAndAccount("filters")
 
@@ -433,6 +437,7 @@ func TestIntegration_KeyFilters(t *testing.T) {
 }
 
 func TestIntegration_Groups(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -529,6 +534,7 @@ spec:
 `
 
 func TestIntegration_SeedSubjects(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	pool := testPool(t, st.dsn)
 	ctx := context.Background()
@@ -577,6 +583,7 @@ func TestIntegration_SeedSubjects(t *testing.T) {
 // that predate it: one key owned by a real user, one whose owner carries
 // no id.
 func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.DB(t)
 	p := testPool(t, dsn)
 	ctx := context.Background()
@@ -703,6 +710,7 @@ func TestIntegration_KeyPrincipalBackfill(t *testing.T) {
 // the owner to the uuid, or the row's principal and owner disagree and every
 // later write (PUT, rotate) and every catalog apply of it fails.
 func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	userID := ids.New()
@@ -770,6 +778,7 @@ func TestIntegration_SlugOwnedKeyBackfill(t *testing.T) {
 // UNIQUE constraint. An operator who already has a team called `system` keeps
 // it, and the generated project hangs off that id.
 func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.EmptyDB(t)
 	ctx := context.Background()
 
@@ -823,6 +832,7 @@ func TestIntegration_KeyPrincipalBackfillReusesAnExistingSystemTeam(t *testing.T
 // and pins that the down migration puts those owners back into the shape an
 // older binary understands.
 func TestIntegration_Migration25DownRewritesTenantOwners(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.DB(t)
 	ctx := context.Background()
 	p := testPool(t, dsn)

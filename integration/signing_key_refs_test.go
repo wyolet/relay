@@ -14,6 +14,7 @@ import (
 // The token signing-key refs are written only by rotation: no settings write
 // may point one at a secret the caller chose, or they could sign tokens.
 func TestIntegration_SettingsWriteCannotRepointSigningKeys(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	foreign := ids.New()
 	body := `{"enabled":true,"defaultTTL":3600000000000,"maxTTL":86400000000000,` +
