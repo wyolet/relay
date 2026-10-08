@@ -326,7 +326,7 @@ func (s *stack) seedHappyPath(upstreamURL, hostKeyValue string) string {
 	if err := os.Setenv(envName, hostKeyValue); err != nil {
 		s.t.Fatalf("setenv: %v", err)
 	}
-	s.t.Cleanup(func() { os.Unsetenv(envName) })
+	s.t.Cleanup(func() { _ = os.Unsetenv(envName) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "test-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
@@ -717,7 +717,7 @@ func TestE2E_AdapterMismatch(t *testing.T) {
 
 	mismatchEnv := uniqueEnvName("HK_")
 	_ = os.Setenv(mismatchEnv, "sk-mock")
-	t.Cleanup(func() { os.Unsetenv(mismatchEnv) })
+	t.Cleanup(func() { _ = os.Unsetenv(mismatchEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "hk1", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{HostID: hst.Meta.ID, PolicyID: hostTier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: mismatchEnv}},

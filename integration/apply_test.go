@@ -302,7 +302,7 @@ func TestIntegration_ApplyPruneDetachesHostKeysAndRateLimits(t *testing.T) {
 	if err := os.Setenv(pruneEnv, "sk-prune"); err != nil {
 		t.Fatalf("setenv: %v", err)
 	}
-	t.Cleanup(func() { os.Unsetenv(pruneEnv) })
+	t.Cleanup(func() { _ = os.Unsetenv(pruneEnv) })
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "acme-key", Owner: owned, Labels: managed},
 		Spec: hostkey.Spec{HostID: h.Meta.ID, PolicyID: tier.Meta.ID, ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: pruneEnv}},
