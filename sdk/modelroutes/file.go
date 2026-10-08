@@ -37,6 +37,10 @@ type Route struct {
 	Adapter string
 	// Passthrough lets the route carry models the catalog does not list; such a model goes upstream under its ref verbatim.
 	Passthrough bool
+	// Account is the identity a consumer matches a login against, such as an email. Opaque to the SDK.
+	Account string
+	// DisplayName is a human label for the route.
+	DisplayName string
 }
 
 // ModelRoute is one [models] entry.
@@ -57,6 +61,8 @@ type routeTOML struct {
 	Auth        string `toml:"auth"`
 	Adapter     string `toml:"adapter"`
 	Passthrough bool   `toml:"passthrough"`
+	Account     string `toml:"account"`
+	DisplayName string `toml:"displayName"`
 }
 
 type fileTOML struct {
@@ -96,7 +102,7 @@ func parse(data []byte, path string) (*File, error) {
 	var p problems
 	for _, name := range tableKeys(md, "routes") {
 		r := raw.Routes[name]
-		f.Routes = append(f.Routes, Route{Name: name, Host: r.Host, URL: r.URL, Auth: r.Auth, Adapter: r.Adapter, Passthrough: r.Passthrough})
+		f.Routes = append(f.Routes, Route{Name: name, Host: r.Host, URL: r.URL, Auth: r.Auth, Adapter: r.Adapter, Passthrough: r.Passthrough, Account: r.Account, DisplayName: r.DisplayName})
 	}
 	for _, key := range tableKeys(md, "models") {
 		at := position{"models", key}

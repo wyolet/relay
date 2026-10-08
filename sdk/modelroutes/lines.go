@@ -21,6 +21,7 @@ type srcLine struct {
 	eol   string // "\n", "\r\n", or "" for an unterminated last line
 	kind  lineKind
 	table []string // the table in force; for a header, the table it opens
+	array bool     // a [[array]] header, which decodes to the same path as [table]
 	key   string   // first key segment of a key line
 	value any      // decoded value of a key line
 }
@@ -75,7 +76,7 @@ func scanLines(data []byte) []srcLine {
 		}
 		if trimmed[0] == '[' {
 			table = headerPath(doc)
-			l.kind, l.table = lineHeader, table
+			l.kind, l.table, l.array = lineHeader, table, strings.HasPrefix(trimmed, "[[")
 			continue
 		}
 		if len(doc) != 1 {

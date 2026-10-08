@@ -60,6 +60,27 @@ beta.route = "b"
 	}
 }
 
+func TestParseAccountAndDisplayName(t *testing.T) {
+	f, err := Parse([]byte(`catalog = "v1"
+[routes]
+inline = { host = "anthropic", account = "dev@example.com", displayName = "Claude (dev)" }
+[routes.table]
+url = "https://t.example"
+account = "ops@example.com"
+displayName = "Ops box"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Route{
+		{Name: "inline", Host: "anthropic", Account: "dev@example.com", DisplayName: "Claude (dev)"},
+		{Name: "table", URL: "https://t.example", Account: "ops@example.com", DisplayName: "Ops box"},
+	}
+	if !slices.Equal(f.Routes, want) {
+		t.Fatalf("routes = %+v", f.Routes)
+	}
+}
+
 func TestParseReportsEveryProblem(t *testing.T) {
 	_, err := Parse([]byte(`catalog = "v1"
 colour = "red"
