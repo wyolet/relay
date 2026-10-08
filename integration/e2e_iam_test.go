@@ -47,7 +47,7 @@ func TestOperatorWalk(t *testing.T) {
 // control plane is hostkey_test.go's.
 func walkUnresolvedHostKey(t *testing.T) {
 	f := newTokenFixture(t)
-	broken := f.seedUnresolvableHostKey(t)
+	broken, _ := f.seedUnresolvableHostKey(t)
 
 	if code, raw := f.adminDo(http.MethodPost, "/api/reload", ""); code != http.StatusOK {
 		t.Fatalf("POST /api/reload with an unresolvable host key = %d: %s", code, raw)

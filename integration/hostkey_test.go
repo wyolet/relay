@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,6 @@ import (
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/pkg/ids"
 )
-
-// envRefEnvVar is deliberately never set while the row is being read.
-const envRefEnvVar = "RELAY_INTEGRATION_UNSET_HOSTKEY"
 
 // newDiscardUpstream stands in for a provider these tests never call: the
 // happy-path seed needs a host base URL, not a working one.
@@ -84,8 +82,9 @@ func (s *stack) waitForHostKey(t *testing.T, id string) *hostkey.HostKey {
 }
 
 // seedUnresolvableHostKey adds an env-ref host key pointing at a variable
-// that is not set, alongside the happy path's working one.
-func (s *stack) seedUnresolvableHostKey(t *testing.T) *hostkey.HostKey {
+// that is not set, alongside the happy path's working one. Returns the key
+// and the env var name, so the caller can set it later to repair the ref.
+func (s *stack) seedUnresolvableHostKey(t *testing.T) (*hostkey.HostKey, string) {
 	t.Helper()
 	ctx := context.Background()
 	snap := s.cat.Current()
@@ -97,12 +96,13 @@ func (s *stack) seedUnresolvableHostKey(t *testing.T) *hostkey.HostKey {
 	if !ok {
 		t.Fatal("the host tier policy is missing")
 	}
+	envName := uniqueEnvName("HK_UNSET_")
 	hk := &hostkey.HostKey{
 		Meta: meta.Metadata{ID: ids.New(), Name: "broken-hostkey", Owner: meta.Owner{Kind: meta.OwnerUser}},
 		Spec: hostkey.Spec{
 			HostID:    hst.Meta.ID,
 			PolicyID:  tier.Meta.ID,
-			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envRefEnvVar},
+			ValueFrom: hostkey.ValueFrom{Kind: hostkey.ValueKindEnv, Env: envName},
 		},
 	}
 	gen := s.cat.Current().Generation()
@@ -110,13 +110,15 @@ func (s *stack) seedUnresolvableHostKey(t *testing.T) *hostkey.HostKey {
 		t.Fatalf("seed host key: %v", err)
 	}
 	s.waitForReload(t, gen)
-	return hk
+	return hk, envName
 }
 
 func TestUnresolvableHostKeyStaysReadableAndOutOfTheSnapshot(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	st.seedHappyPath(newDiscardUpstream(t), "sk-mock-upstream-key")
-	id := st.seedUnresolvableHostKey(t).Meta.ID
+	hk, envName := st.seedUnresolvableHostKey(t)
+	id := hk.Meta.ID
 
 	// It lists, and says why it is broken rather than pretending it works.
 	code, raw := st.adminDo(http.MethodGet, "/api/host-keys/"+id, "")
@@ -130,7 +132,7 @@ func TestUnresolvableHostKeyStaysReadableAndOutOfTheSnapshot(t *testing.T) {
 	if row.Status.Unresolved == nil {
 		t.Fatalf("the row reports no unresolved status: %s", raw)
 	}
-	if !strings.Contains(row.Status.Unresolved.Reason, envRefEnvVar) {
+	if !strings.Contains(row.Status.Unresolved.Reason, envName) {
 		t.Errorf("unresolved reason = %q, want it to name the missing variable", row.Status.Unresolved.Reason)
 	}
 
@@ -160,9 +162,10 @@ func TestUnresolvableHostKeyStaysReadableAndOutOfTheSnapshot(t *testing.T) {
 // Once the variable is set the key resolves, and the next rebuild picks it
 // up — the operator does not have to recreate the row.
 func TestResolvingAHostKeyEnvRefPutsItBackInTheSnapshot(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	st.seedHappyPath(newDiscardUpstream(t), "sk-mock-upstream-key")
-	hk := st.seedUnresolvableHostKey(t)
+	hk, envName := st.seedUnresolvableHostKey(t)
 	id := hk.Meta.ID
 	if _, ok := st.cat.Current().HostKey(id); ok {
 		t.Fatal("the unresolvable host key reached the snapshot")
@@ -171,7 +174,10 @@ func TestResolvingAHostKeyEnvRefPutsItBackInTheSnapshot(t *testing.T) {
 	// Setting the variable changes nothing on its own — the value is read at
 	// snapshot build, so the operator's next write to the row is what picks
 	// it up.
-	t.Setenv(envRefEnvVar, "sk-now-resolvable")
+	if err := os.Setenv(envName, "sk-now-resolvable"); err != nil {
+		t.Fatalf("setenv: %v", err)
+	}
+	t.Cleanup(func() { os.Unsetenv(envName) })
 	if err := st.stores.HostKey.Upsert(context.Background(), hk); err != nil {
 		t.Fatalf("touch host key: %v", err)
 	}

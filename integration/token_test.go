@@ -134,6 +134,7 @@ func (f *tokenFixture) waitForRejection(bearer string, within time.Duration) (in
 }
 
 func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
+	t.Parallel()
 	f := newTokenFixture(t)
 	us := f.login(t, f.username, f.password)
 
@@ -152,6 +153,7 @@ func TestMintedTokenAuthenticatesAnInferenceRequest(t *testing.T) {
 // revoke-all bumps the user's token version. The bump reaches the data plane
 // over NOTIFY, so the promise is a bound, not an instant.
 func TestRevokeAllInvalidatesTokensWithinTwoSeconds(t *testing.T) {
+	t.Parallel()
 	f := newTokenFixture(t)
 	us := f.login(t, f.username, f.password)
 
@@ -179,6 +181,7 @@ func TestRevokeAllInvalidatesTokensWithinTwoSeconds(t *testing.T) {
 // Disabling an account has to close every door it opened: the tokens it
 // already holds, minting new ones, and logging back in.
 func TestDisablingAUserRevokesTokensAndRefusesMintAndLogin(t *testing.T) {
+	t.Parallel()
 	f := newTokenFixture(t)
 	us := f.login(t, f.username, f.password)
 

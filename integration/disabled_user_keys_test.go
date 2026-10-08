@@ -11,6 +11,7 @@ import (
 // A personal key acts as its user: disabling the user stops the key, and
 // re-enabling brings it back.
 func TestIntegration_DisabledUsersPersonalKeysStopWorking(t *testing.T) {
+	t.Parallel()
 	f := newTokenFixture(t)
 	const keyPlain = "rk_test_secret_value_e2e" // seedHappyPath's personal key
 	owner, err := f.users.ByUsername(t.Context(), "e2e-owner")
