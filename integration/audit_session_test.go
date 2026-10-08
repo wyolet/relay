@@ -98,6 +98,7 @@ func stringLeaves(v any, out *[]string) {
 }
 
 func TestAudit_SessionIDDoesNotAuthenticate(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 	token, ev, raw := auditedSession(t, s, "auditee")
 
@@ -139,6 +140,7 @@ func TestAudit_SessionIDDoesNotAuthenticate(t *testing.T) {
 // A row stored before the fix holds the raw token; the migration must turn it
 // into the same id the session layer now stamps, and leave such ids alone.
 func TestAudit_SessionIDMigrationReplacesStoredTokens(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 	token, ev, _ := auditedSession(t, s, "legacy")
 

@@ -27,6 +27,7 @@ import (
 // all. The embedded catalog is the shipped data the repo carries, rebuilt
 // here as manifest documents and seeded through the boot path.
 func TestIntegration_EmbeddedCatalogSeedsCleanly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	pool := storagetest.Pool(t)
 

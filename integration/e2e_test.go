@@ -877,6 +877,7 @@ func (s *stack) seedUser(username string) string {
 // schema registry registers under one synthesised name and the $ref
 // gets emitted under another, leaving references unresolvable.
 func TestE2E_OpenAPI_AllRefsResolve(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	for _, tc := range []struct {
 		name string
@@ -964,6 +965,7 @@ func strconvI(i int) string { return fmt.Sprintf("%d", i) }
 // proxy-mode section and confirms the catalog cache picks up the
 // change via NOTIFY.
 func TestE2E_Settings_ProxyMode_RoundTrip(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	const path = "/settings/proxy-mode"
 
@@ -1119,6 +1121,7 @@ func (s *stack) enableProxyMode(allowAnon bool) {
 // TestE2E_ProxyMode_Authed exercises X-WR-Proxy-Mode + X-WR-API-Key.
 // Caller's Authorization is forwarded verbatim; relay does NOT swap it.
 func TestE2E_ProxyMode_Authed(t *testing.T) {
+	t.Parallel()
 	captured := newCapturedRequest()
 	const mockResponse = `{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":7,"output_tokens":2}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1180,6 +1183,7 @@ func TestE2E_ProxyMode_Authed(t *testing.T) {
 // re-derived against current ClassifyMiddleware behavior — out of scope
 // for the rot-fix PR.
 func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
+	t.Parallel()
 	t.Skip("ClassifyMiddleware response code semantics changed; test needs updating against current behavior")
 	captured := newCapturedRequest()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1229,6 +1233,7 @@ func TestE2E_ProxyMode_AnonymousRequiresFlag(t *testing.T) {
 // TestE2E_ProxyMode_UnknownHostSlug confirms a bogus X-WR-Upstream-Host
 // rejects at 400 without hitting any upstream.
 func TestE2E_ProxyMode_UnknownHostSlug(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Errorf("upstream must NOT be hit on unknown-slug rejection")
 	}))

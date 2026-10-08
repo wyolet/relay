@@ -14,6 +14,7 @@ import (
 // editor holding the row from before the apply gets a 409 instead of
 // silently reverting it. A no-op re-apply writes nothing and keeps it.
 func TestIntegration_ApplyMovesResourceVersion(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 

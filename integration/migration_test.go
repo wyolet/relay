@@ -84,6 +84,7 @@ func insertKeyWithoutPrincipal(t *testing.T, dsn, name string) {
 // name: two keys whose names share a long prefix must not land on one
 // principal, which would let either key spend the other's grants.
 func TestMigrationGivesLongKeyNamesDistinctServiceAccounts(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.EmptyDB(t)
 	m := migrator(t, dsn)
 	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
@@ -135,6 +136,7 @@ func TestMigrationGivesLongKeyNamesDistinctServiceAccounts(t *testing.T) {
 // `migrate down` has to land on exactly the version asked for, and bringing
 // the schema back up has to reach head from there.
 func TestMigrateDownToATargetThenUpReachesHead(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.EmptyDB(t)
 	head := storagetest.LatestVersion(t)
 	if head <= 25 {
@@ -170,6 +172,7 @@ func TestMigrateDownToATargetThenUpReachesHead(t *testing.T) {
 // A target above the current version would run the up-migrations the
 // operator is trying to undo; it is refused and the schema is left alone.
 func TestMigrateDownRefusesATargetAboveTheSchemaVersion(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.EmptyDB(t)
 	head := storagetest.LatestVersion(t)
 	if err := storagemod.MigrateTo(dsn, 25); err != nil {
@@ -192,6 +195,7 @@ func TestMigrateDownRefusesATargetAboveTheSchemaVersion(t *testing.T) {
 // migrate refuses it. Forcing the version clears the flag so the next boot
 // migrates again; a version with no migration is refused.
 func TestMigrateForceClearsADirtySchema(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.EmptyDB(t)
 	head := storagetest.LatestVersion(t)
 	if err := storagemod.MigrateTo(dsn, 25); err != nil {
@@ -232,6 +236,7 @@ func TestMigrateForceClearsADirtySchema(t *testing.T) {
 // A pod restarting mid-rollback must not re-apply the migrations the
 // operator just unwound.
 func TestBootWithMigrationsOffLeavesTheSchemaVersion(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.EmptyDB(t)
 	head := storagetest.LatestVersion(t)
 	if err := storagemod.MigrateTo(dsn, 25); err != nil {
