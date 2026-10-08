@@ -151,6 +151,7 @@ func (s *stack) mkServiceAccount(t *testing.T, name, projectID string) string {
 }
 
 func TestIntegration_RBACEnforcement(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 	if err := st.cat.Reload(context.Background()); err != nil {
@@ -339,6 +340,7 @@ func TestIntegration_RBACEnforcement(t *testing.T) {
 // must still carry the seeded row's UUID, because every id-keyed surface
 // downstream (key principals, owner ids, subjects) rejects a slug.
 func TestIntegration_YAMLLoginCarriesTheRowUUID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	yaml := "apiVersion: relay.wyolet.dev/v1\nkind: User\nmetadata:\n  name: bootstrap-admin\n" +
 		"spec:\n  username: bootadmin\n  email: bootadmin@example.test\n" +

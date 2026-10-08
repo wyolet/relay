@@ -66,6 +66,7 @@ func newTenantPair(t *testing.T) tenantPair {
 // Writing through /apply takes system.apply at the row's scope: holding a
 // row's own verbs (or owning it personally) is not enough.
 func TestIntegration_ApplyNeedsSystemApply(t *testing.T) {
+	t.Parallel()
 	p := newTenantPair(t)
 	roles := seedBuiltinRoles(t, p.st)
 	devID := p.st.seedLogin(t, "dev", "pw-dev")
@@ -98,6 +99,7 @@ func TestIntegration_ApplyNeedsSystemApply(t *testing.T) {
 // A bundle runs the reference rules a POST runs: another tenant's host key,
 // service account, or policy is out of reach whichever write path names it.
 func TestIntegration_ApplyRefusesForeignReferences(t *testing.T) {
+	t.Parallel()
 	p := newTenantPair(t)
 	caller := p.st.login(t, "mallory", "pw-mallory")
 	header := "apiVersion: relay.wyolet.dev/v1alpha2\n"

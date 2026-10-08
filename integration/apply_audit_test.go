@@ -12,6 +12,7 @@ import (
 // own entry under the verb it was authorized with — and a dry run, which
 // writes nothing, leaves no row.
 func TestIntegration_ApplyAuditsEachChange(t *testing.T) {
+	t.Parallel()
 	s := newStack(t)
 	if code, _, raw := s.applyBundle(bundle, "dryRun=true"); code != http.StatusOK {
 		t.Fatalf("dry run: %d %s", code, raw)

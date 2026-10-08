@@ -14,6 +14,7 @@ import (
 // The admin token names no user, so what it creates — through CRUD or
 // apply — is shared infrastructure, not a personal row belonging to nobody.
 func TestIntegration_AdminTokenCreatesSystemRows(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -58,6 +59,7 @@ spec: {}
 // so a catalog reseed keeps it. A non-admin can neither edit nor delete one;
 // an admin may delete one nothing references.
 func TestIntegration_SystemRowEditsAreAdminOnly(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 

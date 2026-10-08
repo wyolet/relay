@@ -13,6 +13,7 @@ import (
 // an empty 200 rather than 403, and a project-bound developer must be able
 // to read the team their project belongs to.
 func TestIntegration_ScopedListsAndParentTeamReads(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 	teamA := st.mkTeam(t, "alpha")
@@ -55,6 +56,7 @@ func TestIntegration_ScopedListsAndParentTeamReads(t *testing.T) {
 // create keys there, and the key then carries the project. Someone outside
 // the project is still refused.
 func TestIntegration_PersonalKeyOnAProjectPolicy(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 	teamA := st.mkTeam(t, "alpha")

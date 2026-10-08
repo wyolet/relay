@@ -12,6 +12,7 @@ import (
 // A session carries the roles it logged in with, so changing a user's roles
 // or disabling them must end the sessions they already hold.
 func TestIntegration_RoleChangeAndDisableEndLiveSessions(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	spare := st.seedLogin(t, "spare-admin", "pw-spare")
 	if u, _ := st.users.Get(t.Context(), spare); u != nil {

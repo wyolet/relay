@@ -145,6 +145,7 @@ func (r applyResp) changed(kind, name string) []string {
 }
 
 func TestIntegration_ApplyPlanActions(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -219,6 +220,7 @@ func TestIntegration_ApplyPlanActions(t *testing.T) {
 }
 
 func TestIntegration_ApplyPrune(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 
@@ -344,6 +346,7 @@ func (d denyAll) Authorize(_ context.Context, _ string, res authz.Resource) erro
 }
 
 func TestIntegration_ApplyAuthorizationIsAllOrNothing(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	docs := parseBundle(t, bundle)
@@ -367,6 +370,7 @@ func TestIntegration_ApplyAuthorizationIsAllOrNothing(t *testing.T) {
 }
 
 func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	docs := parseBundle(t, bundle)
@@ -406,6 +410,7 @@ func TestIntegration_ApplyPartialStoreFailureReportsWhatLanded(t *testing.T) {
 // The boot seed and an apply of the same directory must converge on the
 // same rows — they are one loader.
 func TestIntegration_SeedMatchesApply(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)
@@ -459,6 +464,7 @@ func TestIntegration_SeedMatchesApply(t *testing.T) {
 }
 
 func TestIntegration_ExportRoundTripsThroughApply(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	seedBuiltinRoles(t, st)
 	if code, _, raw := st.applyBundle(bundle+globalBinding, ""); code != http.StatusOK {
@@ -530,6 +536,7 @@ func TestIntegration_ExportRoundTripsThroughApply(t *testing.T) {
 }
 
 func TestIntegration_ExportScopeAndKinds(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	if code, _, raw := st.applyBundle(bundle, ""); code != http.StatusOK {
 		t.Fatalf("seed bundle: %d %s", code, raw)
@@ -668,6 +675,7 @@ spec:
 // the boot options drop them, and `relay seed --apply` (no such option) still
 // applies every kind.
 func TestIntegration_BootSeedRefusesTenancyKinds(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)
@@ -788,6 +796,7 @@ spec: {}
 // the boot loader runs as the deployment itself, with no actor to be denied.
 // TestIntegration_SeedAppliesAnOwnerChange pins that.
 func TestIntegration_SeedAppliesAnOwnerChange(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 	ctx := context.Background()
 	pool := testPool(t, st.dsn)
@@ -869,6 +878,7 @@ spec:
 `
 
 func TestApplyRefusesAHostKeyOnAPolicyItsHostDoesNotOwn(t *testing.T) {
+	t.Parallel()
 	st := newStack(t)
 
 	code, _, raw := st.applyBundle(hostKeyOnAForeignPolicy, "dryRun=true")
@@ -893,6 +903,7 @@ func TestApplyRefusesAHostKeyOnAPolicyItsHostDoesNotOwn(t *testing.T) {
 // under a green result. Naming a row the caller supplied itself leaks
 // nothing.
 func TestApplyReportsOutOfScopeRowsAsForbidden(t *testing.T) {
+	t.Parallel()
 	st := newStackAuthz(t, "rbac")
 	roles := seedBuiltinRoles(t, st)
 

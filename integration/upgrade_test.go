@@ -201,6 +201,7 @@ func TestUpgradedKeyWithoutPolicyKeepsPolicylessAccess(t *testing.T) {
 // resolved its policy through its service account or a policy binding must
 // carry that same policy after a rollback, not turn policy-less.
 func TestRollbackWritesTheResolvedPolicyOntoEachKey(t *testing.T) {
+	t.Parallel()
 	dsn := storagetest.DB(t)
 	st, err := storagemod.Open(context.Background(), dsn)
 	if err != nil {
