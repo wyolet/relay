@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"cmp"
 	"encoding/json"
 	"strings"
 
@@ -90,21 +91,19 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 		runToolUses = runToolUses[:0]
 	}
 
+	var toolResultErr error
 	flushToolResults := func() {
 		if len(pendingToolResults) == 0 {
 			return
 		}
 		blocks := make([]map[string]any, 0, len(pendingToolResults))
 		for _, fco := range pendingToolResults {
-			// Media-carrying results (image parts in fco.Content) emit a block
-			// array in part order; text-only results stay a plain string. When
-			// Content holds the full part list (anthropic parse keeps text
-			// there too), Output duplicates the text — prefer the parts.
+			// Media-carrying results (image or document parts in fco.Content) emit a block array in part order; text-only results stay a plain string. When Content holds the full part list (anthropic parse keeps text there too), Output duplicates the text — prefer the parts.
 			hasMedia := false
 			for _, p := range fco.Content {
-				if _, ok := p.(*v1.ImagePart); ok {
+				switch p.(type) {
+				case *v1.ImagePart, *v1.FilePart:
 					hasMedia = true
-					break
 				}
 			}
 			var content any
@@ -120,6 +119,13 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 						}
 					case *v1.ImagePart:
 						contentBlocks = append(contentBlocks, canonicalImageURLToAnthropicBlock(p.ImageURL))
+					case *v1.FilePart:
+						b, err := canonicalPartToAnthropicBlock(p)
+						if err != nil {
+							toolResultErr = cmp.Or(toolResultErr, err)
+							continue
+						}
+						contentBlocks = append(contentBlocks, b)
 					}
 				}
 				if !hasText && fco.Output != "" {
@@ -267,6 +273,9 @@ func canonicalItemsToAnthropic(items []v1.Item, cacheTTL string) ([]anthropicCan
 	// rejects when thinking is enabled; mid-history thinking-only runs (broken
 	// by a user turn) ARE emitted above.
 	flushToolResults()
+	if toolResultErr != nil {
+		return nil, "", toolResultErr
+	}
 	msgs = append(msgs, pendingSystem...)
 
 	return msgs, strings.Join(systemParts, "\n"), nil

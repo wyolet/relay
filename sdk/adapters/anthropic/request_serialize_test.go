@@ -1197,3 +1197,36 @@ func TestAnthropicToolResultImage_RoundTrip(t *testing.T) {
 		t.Fatalf("tool result text lost at serialize: %s", out)
 	}
 }
+
+// A document block inside a tool_result (e.g. a file read returning a PDF) survives anthropic→canonical→anthropic.
+func TestAnthropicToolResultDocument_RoundTrip(t *testing.T) {
+	body := `{
+		"model": "claude-sonnet-5",
+		"max_tokens": 100,
+		"messages": [
+			{"role": "user", "content": "read a.pdf"},
+			{"role": "assistant", "content": [
+				{"type": "tool_use", "id": "toolu_doc", "name": "fs_read", "input": {"path": "a.pdf"}}
+			]},
+			{"role": "user", "content": [
+				{"type": "tool_result", "tool_use_id": "toolu_doc", "content": [
+					{"type": "text", "text": "here it is"},
+					{"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}}
+				]}
+			]}
+		]
+	}`
+	req, err := (AnthropicTranslator{}).ParseRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out, err := (AnthropicTranslator{}).SerializeRequest(req)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	for _, want := range []string{`"type":"document"`, `"data":"JVBERi0="`, "here it is"} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("%s lost at serialize: %s", want, out)
+		}
+	}
+}
