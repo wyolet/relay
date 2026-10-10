@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
+	"github.com/wyolet/relay/sdk/internal/sse"
 	"github.com/wyolet/relay/sdk/usage"
 )
 
@@ -29,12 +30,8 @@ func ExtractTokens(body []byte) usage.Tokens {
 		return extractTokensObject(trimmed)
 	}
 	var last usage.Tokens
-	for _, line := range bytes.Split(body, []byte("\n")) {
-		line = bytes.TrimSpace(line)
-		if !bytes.HasPrefix(line, []byte("data:")) {
-			continue
-		}
-		payload := bytes.TrimSpace(line[len("data:"):])
+	for sc := sse.NewScanner(body); sc.Next(); {
+		payload := bytes.TrimSpace(sc.Data())
 		if len(payload) == 0 || payload[0] != '{' {
 			continue
 		}
