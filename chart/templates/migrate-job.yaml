@@ -32,6 +32,8 @@ spec:
       initContainers:
         - name: wait-for-postgres
           image: busybox:1.38
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           command: ["sh", "-c"]

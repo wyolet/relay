@@ -105,6 +105,7 @@ spec:
             {{- toYaml .Values.clickhouse.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           volumeMounts:
@@ -113,10 +114,23 @@ spec:
             - name: config
               mountPath: /etc/clickhouse-server/config.d/system-logs.xml
               subPath: system-logs.xml
+            # The entrypoint writes the CLICKHOUSE_USER definition here on every start.
+            - name: users
+              mountPath: /etc/clickhouse-server/users.d
+            - name: logs
+              mountPath: /var/log/clickhouse-server
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: config
           configMap:
             name: {{ $ch }}-config
+        - name: users
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
         {{- if not .Values.clickhouse.persistence.enabled }}
         - name: data
           emptyDir: {}
