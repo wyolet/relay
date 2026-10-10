@@ -6,6 +6,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	apphost "github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
@@ -30,10 +31,14 @@ func proxyPinCatalog(t *testing.T) (*catalog.Catalog, *apphost.Host, *apphost.Ho
 	keyedOnly := &policy.Policy{Meta: meta.Metadata{ID: keyedPolID, Name: "keyed-only", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policy.Spec{Models: []string{"acme/test-model@acme"}, HostKeyIDs: []string{hkID}}}
 	local := &policy.Policy{Meta: meta.Metadata{ID: localPolID, Name: "local", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policy.Spec{Models: []string{"acme/test-model@local-llm"}}}
 	wildcard := &policy.Policy{Meta: meta.Metadata{ID: meta.NewID(), Name: "wildcard", Owner: meta.Owner{Kind: meta.OwnerSystem}}, Spec: policy.Spec{HostKeyIDs: []string{hkID}}}
-	cat := catalog.New(provListD{prov}, hostListD{keyed, keyless}, polListD{keyedOnly, local, wildcard}, modListD{m}, keyListD{hk}, rlListD{}, rkListD{}, rcListD{}, bndListD{onKeyed, onKeyless})
-	if err := cat.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	cat := catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     []*apphost.Host{keyed, keyless},
+		Policies:  []*policy.Policy{keyedOnly, local, wildcard},
+		Models:    []*model.Model{m},
+		HostKeys:  []*hostkey.HostKey{hk},
+		Bindings:  []*binding.Binding{onKeyed, onKeyless},
+	}.Load(t)
 	return cat, keyed, keyless
 }
 

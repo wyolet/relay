@@ -13,6 +13,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
@@ -76,10 +77,16 @@ func meteredCountCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *P
 		Meta: meta.Metadata{ID: meta.NewID(), Name: "rk", Owner: meta.Owner{Kind: meta.OwnerSystem}},
 		Spec: key.Spec{PolicyID: polID, KeyHash: "meteredhash"},
 	}
-	cat := catalog.New(provListD{prov}, hostListD{h}, polListD{pol}, modListD{m}, keyListD{hk}, rlListD{rl}, rkListD{k}, rcListD{}, bndListD{b})
-	if err := cat.Reload(t.Context()); err != nil {
-		t.Fatalf("catalog reload: %v", err)
-	}
+	cat := catalogtest.Catalog{
+		Providers:  []*provider.Provider{prov},
+		Hosts:      []*host.Host{h},
+		Policies:   []*policy.Policy{pol},
+		Models:     []*model.Model{m},
+		HostKeys:   []*hostkey.HostKey{hk},
+		RateLimits: []*ratelimit.RateLimit{rl},
+		Keys:       []*key.Key{k},
+		Bindings:   []*binding.Binding{b},
+	}.Load(t)
 	snapPol, ok := cat.Current().Policy(polID)
 	if !ok {
 		t.Fatal("policy missing from snapshot")
@@ -90,8 +97,7 @@ func meteredCountCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *P
 func countingDeps(t *testing.T, cat *catalog.Catalog) Deps {
 	t.Helper()
 	d := buildRunnableDeps(t, cat)
-	d.Specs = countingRegistry()
-	d.Adapters = d.Specs.AdapterMap()
+	useSpecs(&d, countingRegistry())
 	d.Profiles = profileRegistry(newCountProfile())
 	return d
 }
@@ -218,20 +224,16 @@ func TestCountTokens_RevokedTokenRefused(t *testing.T) {
 	}
 	f := newPrincipalFixture()
 	cat.UseTenancy(
-		stubList[team.Team]{f.team}, stubList[project.Project]{f.project},
-		stubList[serviceaccount.ServiceAccount]{f.sa}, stubList[group.Group]{f.group},
-		stubList[role.Role]{}, stubList[rolebinding.RoleBinding]{},
-		stubList[policybinding.PolicyBinding]{boundTo(f, "bind-user", 10, pol.Meta.ID, "user:"+f.user)},
+		catalogtest.Rows[team.Team]{f.team}, catalogtest.Rows[project.Project]{f.project},
+		catalogtest.Rows[serviceaccount.ServiceAccount]{f.sa}, catalogtest.Rows[group.Group]{f.group},
+		catalogtest.Rows[role.Role]{}, catalogtest.Rows[rolebinding.RoleBinding]{},
+		catalogtest.Rows[policybinding.PolicyBinding]{boundTo(f, "bind-user", 10, pol.Meta.ID, "user:"+f.user)},
 	)
 	cat.UseTokenVersions(f.versions)
 	if err := cat.Reload(ctx); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	h := *cat.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: up.URL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, up.URL)
 
 	mem := kv.NewMem()
 	t.Cleanup(func() { _ = mem.Close() })
@@ -239,12 +241,10 @@ func TestCountTokens_RevokedTokenRefused(t *testing.T) {
 	exact := buildDeps(t, cat)
 	exact.Pipeline = &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}
 	exact.Tokens = f.tokens
-	exact.Specs = countingRegistry()
-	exact.Adapters = exact.Specs.AdapterMap()
+	useSpecs(&exact, countingRegistry())
 	exact.Profiles = profileRegistry(newCountProfile())
 	estimate := exact
-	estimate.Specs = buildTestRegistry() // no counting endpoint: the answer is local
-	estimate.Adapters = estimate.Specs.AdapterMap()
+	useSpecs(&estimate, buildTestRegistry()) // no counting endpoint: the answer is local
 
 	jti := ""
 	tok := f.mint(t, func(c *crypto.TokenClaims) { jti = c.Jti })

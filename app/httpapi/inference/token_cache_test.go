@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appcatalog "github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/pkg/crypto"
@@ -145,7 +146,7 @@ func TestCacheDoesNotPinTheSnapshotItResolvedAgainst(t *testing.T) {
 	collected := make(chan struct{})
 
 	func() {
-		snap := appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		snap := catalogtest.Catalog{}.Snapshot()
 		runtime.SetFinalizer(snap, func(*appcatalog.Snapshot) { close(collected) })
 		ent.setSubjects(snap, []string{"user:u-1"})
 	}()
@@ -156,7 +157,7 @@ func TestCacheDoesNotPinTheSnapshotItResolvedAgainst(t *testing.T) {
 		select {
 		case <-collected:
 			// The entry still knows which view it was built from.
-			next := appcatalog.Build(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			next := catalogtest.Catalog{}.Snapshot()
 			if _, ok := ent.subjectsFor(next); ok {
 				t.Fatal("subjects survived into a different snapshot generation")
 			}

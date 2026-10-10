@@ -13,7 +13,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/proxy"
@@ -55,11 +54,7 @@ func governedCaptureCases() []captureCase {
 func captureCatalog(t *testing.T, upstreamURL string, c captureCase) *catalog.Catalog {
 	t.Helper()
 	cat, pr := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	h := *cat.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: upstreamURL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, upstreamURL)
 	k := *pr.Key
 	userID := meta.NewID()
 	k.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: userID}

@@ -8,6 +8,7 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
+	"github.com/wyolet/relay/app/catalog/catalogtest"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
@@ -31,15 +32,12 @@ func snapWithBindings(m *model.Model, bindings []*binding.Binding) *catalog.Snap
 			Spec: host.Spec{BaseURL: "http://x.example"},
 		})
 	}
-	snap := catalog.Build(
-		[]*provider.Provider{prov},
-		hosts,
-		nil, nil,
-		[]*model.Model{m},
-		nil, nil, nil,
-		bindings,
-	)
-	return snap
+	return catalogtest.Catalog{
+		Providers: []*provider.Provider{prov},
+		Hosts:     hosts,
+		Models:    []*model.Model{m},
+		Bindings:  bindings,
+	}.Snapshot()
 }
 
 // makeModelWithSnap builds a Model + catalog snapshot with the given bindings.

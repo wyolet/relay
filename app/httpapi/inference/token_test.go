@@ -391,15 +391,7 @@ func equalStrings(got, want []string) bool {
 // signedWith mints a token for the fixture's user under priv, naming kid.
 func signedWith(t *testing.T, f principalFixture, priv ed25519.PrivateKey, kid string) string {
 	t.Helper()
-	tok, err := crypto.SignToken(priv, kid, crypto.TokenClaims{
-		Iss: crypto.TokenIssuer, Sub: "user:" + f.user, Prj: f.project.Meta.ID,
-		Ver: 1, Jti: meta.NewID(), Iat: time.Now().Unix(),
-		Exp: time.Now().Add(time.Hour).Unix(),
-	})
-	if err != nil {
-		t.Fatalf("sign: %v", err)
-	}
-	return tok
+	return mintToken(t, priv, kid, f.user, f.project.Meta.ID, nil)
 }
 
 func TestSigningKeyRotationKeepsThePreviousKeyLive(t *testing.T) {

@@ -1,9 +1,7 @@
 package inference
 
 import (
-	"context"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,37 +10,7 @@ import (
 
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/host"
-	"github.com/wyolet/relay/app/keypool"
-	"github.com/wyolet/relay/app/pipeline"
-	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/pkg/kv"
-	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
-
-// catSnapReader adapts *catalog.Catalog to policy.SnapshotReader (mirrors
-// cmd/relay's catalogSnapReader, which lives in the composition root).
-type catSnapReader struct{ cat *catalog.Catalog }
-
-func (r catSnapReader) Policy(_ context.Context, id string) (*policy.Policy, bool) {
-	return r.cat.Current().Policy(id)
-}
-func (r catSnapReader) RateLimit(_ context.Context, id string) (*ratelimit.RateLimit, bool) {
-	return r.cat.Current().RateLimit(id)
-}
-
-// buildRunnableDeps is buildDeps with a fully-wired pipeline (policy service
-// over kv.Mem) so tests can complete a real upstream round-trip.
-func buildRunnableDeps(t *testing.T, cat *catalog.Catalog) Deps {
-	t.Helper()
-	d := buildDeps(t, cat)
-	mem := kv.NewMem()
-	t.Cleanup(func() { _ = mem.Close() })
-	svc := policy.NewService(catSnapReader{cat: cat}, keypool.New(mem, slog.Default(), nil, nil), pkgratelimit.New(mem, slog.Default(), nil))
-	d.Pipeline = &pipeline.Pipeline{Policy: svc, Logger: slog.Default()}
-	return d
-}
 
 // aliasDispatchCatalog rebuilds the standard dispatch fixture so the host
 // points at the given upstream URL with NoAuth (anonymous key — no secret
@@ -51,16 +19,7 @@ func aliasDispatchCatalog(t *testing.T, upstreamURL string) (*catalog.Catalog, *
 	t.Helper()
 	cat, pr := buildDispatchCatalog(t, "groq", adapters.OpenAI)
 	snap := cat.Current()
-
-	hosts := snap.Hosts()
-	if len(hosts) != 1 {
-		t.Fatalf("fixture hosts: %d", len(hosts))
-	}
-	h := *hosts[0]
-	h.Spec = host.Spec{BaseURL: upstreamURL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, upstreamURL)
 
 	models := snap.ModelsByName("test-model")
 	if len(models) != 1 {

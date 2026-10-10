@@ -14,7 +14,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/sdk/adapters/openai"
 )
 
@@ -50,11 +49,7 @@ func streamUsageDispatch(t *testing.T, requestUsage bool, body string) (upstream
 	t.Helper()
 	up, received := usageOptInUpstream(t)
 	cat, rk := buildDispatchCatalog(t, "openai", adapters.OpenAI)
-	h := *cat.Current().Hosts()[0]
-	h.Spec = host.Spec{BaseURL: up.URL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatalf("host upsert: %v", err)
-	}
+	pointHostAt(t, cat, up.URL)
 	d := buildRunnableDeps(t, cat)
 	reg := adapter.NewRegistry((&adapter.Spec{
 		Name:          adapters.OpenAI,
@@ -64,8 +59,7 @@ func streamUsageDispatch(t *testing.T, requestUsage bool, body string) (upstream
 		ExtractTokens: openai.ExtractTokens,
 		StreamUsage:   &adapter.StreamUsageOptIn{Request: openai.RequestStreamUsage, IsUsageFrame: openai.IsUsageOnlyChunk},
 	}).Build())
-	d.Specs = reg
-	d.Adapters = reg.AdapterMap()
+	useSpecs(&d, reg)
 	d.RequestStreamUsage = requestUsage
 
 	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil), rk)

@@ -10,7 +10,6 @@ import (
 
 	"github.com/wyolet/relay/app/adapter"
 	"github.com/wyolet/relay/app/adapters"
-	apphost "github.com/wyolet/relay/app/host"
 	pkggemini "github.com/wyolet/relay/sdk/adapters/gemini"
 	pkgopenai "github.com/wyolet/relay/sdk/adapters/openai"
 )
@@ -54,19 +53,14 @@ func TestDispatch_WildcardAliasModelStaysOnePathSegment(t *testing.T) {
 
 	cat, pr := buildDispatchCatalog(t, "pathmodel", adapters.Gemini)
 	snap := cat.Current()
-	h := *snap.Hosts()[0]
-	h.Spec = apphost.Spec{BaseURL: up.URL, NoAuth: true}
-	if err := cat.ApplyHostUpsert(&h); err != nil {
-		t.Fatal(err)
-	}
+	pointHostAt(t, cat, up.URL)
 	m := *snap.ModelsByName("test-model")[0]
 	m.Spec.Aliases = []string{"gem-v[*]"}
 	if err := cat.ApplyModelUpsert(&m); err != nil {
 		t.Fatal(err)
 	}
 	d := buildRunnableDeps(t, cat)
-	d.Specs = pathModelRegistry()
-	d.Adapters = d.Specs.AdapterMap()
+	useSpecs(&d, pathModelRegistry())
 
 	raw := "gem-v-2/../../../v1beta/files?pageSize=3&z="
 	r := withNormalContext(httptest.NewRequest(http.MethodPost, "/openai/v1/chat/completions", nil), pr)

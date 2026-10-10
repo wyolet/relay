@@ -460,23 +460,7 @@ func hotPathTokens(t testing.TB, projectID, userID string) (*TokenVerifier, func
 	v.SetKey(pub)
 	return v, func(t testing.TB, mutate func(*crypto.TokenClaims)) string {
 		t.Helper()
-		claims := crypto.TokenClaims{
-			Iss: crypto.TokenIssuer,
-			Sub: "user:" + userID,
-			Prj: projectID,
-			Ver: 1,
-			Jti: meta.NewID(),
-			Iat: time.Now().Unix(),
-			Exp: time.Now().Add(time.Hour).Unix(),
-		}
-		if mutate != nil {
-			mutate(&claims)
-		}
-		tok, err := crypto.SignToken(priv, "", claims)
-		if err != nil {
-			t.Fatalf("sign token: %v", err)
-		}
-		return tok
+		return mintToken(t, priv, "", userID, projectID, mutate)
 	}
 }
 
