@@ -395,7 +395,7 @@ func TestAnthropicSerializeResponse_MaxTokens(t *testing.T) {
 	}
 }
 
-// ---- A-3 regression: stop_sequence in Extensions (fix: ParseResponse surfaces it) ----
+// ---- stop_sequence in Extensions ----
 
 // TestParseResponse_StopSequenceInExtensions verifies that a matched stop_sequence
 // is surfaced in Response.Extensions["stop_sequence"].

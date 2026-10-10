@@ -35,7 +35,7 @@ import (
 // snapshot name matches), forwards to the mock. Mock matches the body
 // against the fixture and replays the recorded 200 response verbatim.
 //
-// This test exercises the post-PR-4 dispatch pipeline end-to-end against
+// This test exercises the dispatch pipeline end-to-end against
 // a real upstream wire shape — the first thing that's broken would be
 // dispatch picking the wrong Spec or pipeline.Adapter mis-forwarding.
 func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
@@ -134,7 +134,7 @@ func TestMockReplay_OpenAIChatCompletions(t *testing.T) {
 // Fixture default: /tmp/fixbody-parallel.json extracted from
 // session-1779156057-87325-4.jsonl fixture #10 in the openai-mini corpus.
 //
-// Validates: relay's PR 4 byte-pass dispatch handles streaming + complex
+// Validates: relay's byte-pass dispatch handles streaming + complex
 // bodies + tool-call wire shape correctly. Compares the full streamed
 // response bytes against a direct curl to the mock.
 func TestMockReplay_StreamingWithParallelTools(t *testing.T) {

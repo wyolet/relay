@@ -1,5 +1,5 @@
-// Bug-reproduction tests. Each asserts the correct wire behavior and is
-// skipped until the bug it reproduces is fixed, so the suite stays green.
+// Serializing requests that carry thinking. A test skipped with "known bug"
+// asserts the correct wire behaviour and is unskipped with its fix.
 
 package anthropic
 
@@ -10,7 +10,7 @@ import (
 	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
-// Audit P1 tracker #12 (#370 follow-up): replaying a prior assistant turn that
+// Replaying a prior assistant turn that
 // contained thinking + visible text + a tool call must serialize to ONE
 // Anthropic assistant message whose content leads with the signed thinking
 // block and carries the tool_use in the same message.
@@ -21,12 +21,11 @@ import (
 // own sync/streaming path hands back to a canonical client, and what the
 // client replays verbatim on the next turn of a tool loop.
 //
-// Today the assistant Message consumes pendingThinking (msg1 = [thinking,
-// text]) and the trailing FunctionCall is flushed into a SECOND assistant
-// message (msg2 = [tool_use] with no thinking). Anthropic rejects that with
+// Flushing the trailing FunctionCall into a SECOND assistant message
+// (msg2 = [tool_use] with no thinking) is what Anthropic rejects with
 // "messages.N.content.0.type: Expected thinking or redacted_thinking, but
-// found tool_use" whenever thinking is enabled, so every canonical-inbound
-// tool loop 400s on turn two when turn one had visible text beside the call.
+// found tool_use" whenever thinking is enabled, so a canonical-inbound tool
+// loop would 400 on turn two when turn one had visible text beside the call.
 func TestAnthropicSerializeRequest_ThinkingTextToolUseReplay_SingleAssistantMessage(t *testing.T) {
 	const model = "claude-fable-5"
 
@@ -115,7 +114,7 @@ func TestAnthropicSerializeRequest_ThinkingTextToolUseReplay_SingleAssistantMess
 	}
 }
 
-// Audit P2 (DECISION #3): a canonical request with thinking enabled AND a
+// A canonical request with thinking enabled AND a
 // structured-output format must not serialize to a body that combines an
 // enabled/adaptive thinking block with a forced tool_choice — Anthropic
 // rejects forced tool choice (type "tool"/"any") whenever thinking is on

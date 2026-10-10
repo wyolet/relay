@@ -1,5 +1,5 @@
-// Bug-reproduction tests. Each asserts the correct wire behavior and is
-// skipped until the bug it reproduces is fixed, so the suite stays green.
+// A test skipped with "known bug" asserts the correct wire behaviour and is
+// unskipped with its fix.
 
 package openai
 
@@ -11,7 +11,7 @@ import (
 	"github.com/wyolet/relay/sdk/usage"
 )
 
-// Audit P3 (DECISION #4): cache_creation tokens must remain visible in the
+// Cache_creation tokens must remain visible in the
 // client-facing usage payload. An Anthropic upstream reports cache-writes as
 // a separate meter (canonical "cache_creation", billed at 1.25x-2x the input
 // rate); when that response is egressed through the CC or Responses shape,

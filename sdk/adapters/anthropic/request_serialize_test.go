@@ -649,7 +649,7 @@ func TestAnthropicSerializeRequest_DeveloperRoleBecomesSystem(t *testing.T) {
 	}
 }
 
-// ---- A-2 regression: disable_parallel_tool_use (fix: pass tc.Parallel not nil) ----
+// ---- disable_parallel_tool_use ----
 
 func boolPtr(v bool) *bool { return &v }
 

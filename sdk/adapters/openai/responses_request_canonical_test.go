@@ -478,7 +478,7 @@ func TestResponsesSerializeRequest_MissingModel(t *testing.T) {
 
 // --- ParseResponse ---
 
-// R-5: reasoning.summary is mapped to the Responses wire request field.
+// reasoning.summary is mapped to the Responses wire request field.
 func TestResponsesSerializeRequest_ReasoningSummary(t *testing.T) {
 	req := &v1.Request{
 		Model: v1.ModelRefs{"o3"},
@@ -509,10 +509,7 @@ func TestResponsesSerializeRequest_ReasoningSummary(t *testing.T) {
 	}
 }
 
-// R-3 also needs splitSSEFrames — it's already defined in translator_responses.go
-// but the test uses ParseResponsesSSEChunk which is in the same package.
-
-// --- Hosted-tool raw passthrough (PR2) ---
+// --- Hosted-tool raw passthrough ---
 
 // TestResponsesParseRequest_HostedToolDefNoError locks the request-side fix:
 // a hosted-tool definition must not 400 the request; the function tool alongside
@@ -634,7 +631,7 @@ func TestResponsesSerializeRequest_HostedToolChoiceObject(t *testing.T) {
 	}
 }
 
-// --- P1 request-config fidelity (PR4) ---
+// --- request-config fidelity ---
 
 // TestResponsesParseRequest_VerbosityReasoningSummaryDescription locks the inbound
 // mapping of text.verbosity, reasoning.summary, and text.format.json_schema.description

@@ -487,7 +487,7 @@ func TestResponsesRoundTrip_Response(t *testing.T) {
 
 // --- NewToCanonicalStream (Responses → canonical) ---
 
-// R-1: encrypted_content round-trips through ProviderData.
+// encrypted_content round-trips through ProviderData.
 func TestResponsesParseResponse_EncryptedContentRoundTrip(t *testing.T) {
 	body := mustJSON(map[string]any{
 		"id":            "resp_enc",

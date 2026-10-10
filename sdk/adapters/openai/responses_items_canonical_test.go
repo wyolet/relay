@@ -51,7 +51,7 @@ func TestResponsesItemFromCanonical_RoleDrivenTextType(t *testing.T) {
 
 // --- ParseRequest ---
 
-// R-4: file_citation annotations are preserved as v1.RawAnnotation and round-trip.
+// file_citation annotations are preserved as v1.RawAnnotation and round-trip.
 func TestResponsesAnnotation_FileCitationPreserved(t *testing.T) {
 	body := mustJSON(map[string]any{
 		"id":         "resp_fc",

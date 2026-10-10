@@ -7,7 +7,7 @@ import (
 
 // forwardHeaders must strip the relay credential and all relay-internal
 // control headers before the inbound headers are handed to the adapter for
-// the upstream call. This is the leak A4 guards: for upstreams whose auth
+// the upstream call. For upstreams whose auth
 // header is not Authorization (Anthropic x-api-key, Gemini x-goog-api-key),
 // an un-stripped inbound Authorization / X-Api-Key / X-WR-* would otherwise
 // ride along to the provider.

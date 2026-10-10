@@ -287,7 +287,7 @@ func TestAnthropicToCanonical_MaxTokensStream(t *testing.T) {
 	}
 }
 
-// ---- A-1 regression: streaming thinking signature (fix: signature_delta accumulation) ----
+// ---- streaming thinking signature (signature_delta accumulation) ----
 
 // thinkingStreamChunks builds a minimal Anthropic stream with thinking_delta +
 // signature_delta so we can verify the completed Reasoning.ProviderData.

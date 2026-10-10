@@ -375,7 +375,7 @@ func TestCCRoundTrip_Response(t *testing.T) {
 
 // --- NewToCanonicalStream ---
 
-// CC-2: URL-citation annotations are mapped to OutputTextPart.Annotations.
+// URL-citation annotations are mapped to OutputTextPart.Annotations.
 func TestCCParseResponse_URLCitationAnnotation(t *testing.T) {
 	body := mustJSON(map[string]any{
 		"id":      "chatcmpl-ann",
@@ -427,7 +427,7 @@ func TestCCParseResponse_URLCitationAnnotation(t *testing.T) {
 	}
 }
 
-// CC-3: audio + prediction token details are mapped in ccUsageToCanonical.
+// Audio + prediction token details are mapped in ccUsageToCanonical.
 func TestCCUsageToCanonical_AllFields(t *testing.T) {
 	u := &Usage{
 		PromptTokens:     120,
@@ -461,7 +461,7 @@ func TestCCUsageToCanonical_AllFields(t *testing.T) {
 	}
 }
 
-// CC-5: SerializeResponse returns an OpenAI error body when resp.Error is set.
+// SerializeResponse returns an OpenAI error body when resp.Error is set.
 func TestCCSerializeResponse_ErrorBody(t *testing.T) {
 	resp := &v1.Response{
 		ID:    "resp_err",
