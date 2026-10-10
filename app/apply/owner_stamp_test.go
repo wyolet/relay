@@ -25,20 +25,13 @@ func TestApplyStampsAnIDlessUserOwner(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &builder{rows: &Rows{}, admin: true}
-			b.idx = newIndex(b.rows)
 			d := rateLimitDoc("ci-limit")
 			d.Metadata.Owner.Kind = meta.OwnerUser
-			var written []*ratelimit.RateLimit
-			err := planKind(tc.ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
+			written, err := planOne(tc.ctx, b, kindWiring[manifest.RateLimitDTO, ratelimit.RateLimit]{
 				Kind: "RateLimit", Docs: []*manifest.RateLimitDTO{d},
 				Names: map[string]string{"ci-limit": meta.NewID()},
 				To:    manifest.ToRateLimit,
 				Meta:  func(x *ratelimit.RateLimit) *meta.Metadata { return &x.Meta },
-				Upsert: func(_ context.Context, x *ratelimit.RateLimit) error {
-					written = append(written, x)
-					return nil
-				},
-				Delete: func(context.Context, string) error { return nil },
 			})
 			if err != nil {
 				t.Fatalf("plan: %v", err)
@@ -51,8 +44,8 @@ func TestApplyStampsAnIDlessUserOwner(t *testing.T) {
 					t.Fatalf("write: %v", err)
 				}
 			}
-			if len(written) != 1 || written[0].Meta.Owner != tc.want {
-				t.Fatalf("written = %+v, want one row owned by %+v", written, tc.want)
+			if len(*written) != 1 || (*written)[0].Meta.Owner != tc.want {
+				t.Fatalf("written = %+v, want one row owned by %+v", *written, tc.want)
 			}
 		})
 	}

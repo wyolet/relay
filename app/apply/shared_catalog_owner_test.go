@@ -23,14 +23,11 @@ func hostDoc(name string, owner manifest.WireOwner) *manifest.HostDTO {
 
 func planHost(ctx context.Context, admin bool, d *manifest.HostDTO) ([]Entry, error) {
 	b := &builder{rows: &Rows{}, admin: admin}
-	b.idx = newIndex(b.rows)
-	err := planKind(ctx, b, kindWiring[manifest.HostDTO, host.Host]{
+	_, err := planOne(ctx, b, kindWiring[manifest.HostDTO, host.Host]{
 		Kind: "Host", Docs: []*manifest.HostDTO{d},
-		Names:  map[string]string{d.Metadata.Name: meta.NewID()},
-		To:     manifest.ToHost,
-		Meta:   func(x *host.Host) *meta.Metadata { return &x.Meta },
-		Upsert: func(context.Context, *host.Host) error { return nil },
-		Delete: func(context.Context, string) error { return nil },
+		Names: map[string]string{d.Metadata.Name: meta.NewID()},
+		To:    manifest.ToHost,
+		Meta:  func(x *host.Host) *meta.Metadata { return &x.Meta },
 	})
 	return b.entries, err
 }
@@ -88,11 +85,10 @@ func TestApplyRefusesTenantOwnedHostBinding(t *testing.T) {
 		{Kind: meta.OwnerProject, ID: meta.NewID()},
 	} {
 		b := &builder{rows: &Rows{}}
-		b.idx = newIndex(b.rows)
 		d := &manifest.HostBindingDTO{APIVersion: manifest.APIVersion, Kind: "HostBinding"}
 		d.Metadata.Name = "m-on-box"
 		d.Metadata.Owner = owner
-		err := planKind(session, b, kindWiring[manifest.HostBindingDTO, binding.Binding]{
+		_, err := planOne(session, b, kindWiring[manifest.HostBindingDTO, binding.Binding]{
 			Kind: "HostBinding", Docs: []*manifest.HostBindingDTO{d},
 			Names: map[string]string{d.Metadata.Name: meta.NewID()},
 			// The owner rule is what is under test, not name resolution.
@@ -102,9 +98,7 @@ func TestApplyRefusesTenantOwnedHostBinding(t *testing.T) {
 					Spec: binding.Spec{ModelID: meta.NewID(), HostID: meta.NewID()},
 				}, nil
 			},
-			Meta:   func(x *binding.Binding) *meta.Metadata { return &x.Meta },
-			Upsert: func(context.Context, *binding.Binding) error { return nil },
-			Delete: func(context.Context, string) error { return nil },
+			Meta: func(x *binding.Binding) *meta.Metadata { return &x.Meta },
 		})
 		var inv *InvalidError
 		if !errors.As(err, &inv) {
