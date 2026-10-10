@@ -70,7 +70,6 @@ var allowedDrops = map[string][]allowedDrop{
 		annotated("canonical: Message.ProviderData dropped — Responses", userMsg+".provider_data"),
 		annotated("canonical: text_citation annotations dropped", assistMsg+".content[output_text].annotations[text_citation].*"),
 		annotated("canonical: FilePart.MediaType dropped — a Responses", userMsg+".content[input_file*].media_type"),
-		carriable("a Responses reasoning item carries raw reasoning as content[].reasoning_text; responsesItemFromCanonical never writes Reasoning.Content", reasoning+".content"),
 		annotated("canonical: BudgetTokens has no Responses wire equivalent", opts+".reasoning.budget_tokens"),
 		annotated("canonical: Seed has no Responses wire equivalent", opts+".sampling.seed"),
 		annotated("canonical: FrequencyPenalty has no Responses wire equivalent", opts+".sampling.frequency_penalty"),

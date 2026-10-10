@@ -32,6 +32,7 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 	// The completed item's status is passed through as is: an item cut short stays incomplete, and one the source sent without a status gets none.
 	var done struct {
 		Status       ResponsesStatus `json:"status"`
+		Content      string          `json:"content"`
 		ProviderData json.RawMessage `json:"provider_data"`
 	}
 	if len(evHeader.Item) > 0 {
@@ -155,6 +156,9 @@ func (s *canonicalToResponsesStream) itemDoneFrames(data []byte) ([]ResponsesSSE
 			ID:      itemID,
 			Status:  done.Status,
 			Summary: []ResponsesSummaryText{{Text: st.textBuf}},
+		}
+		if done.Content != "" {
+			finalR.Content = []ResponsesReasoningText{{Text: done.Content}}
 		}
 		// Same-vendor round trip: encrypted_content rides provider_data, as in responsesItemFromCanonical.
 		var pd struct {

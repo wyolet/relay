@@ -60,6 +60,10 @@ func responsesItemToCanonical(item ResponsesItem) (v1.Item, error) {
 		for _, s := range v.Summary {
 			r.Summary = append(r.Summary, v1.SummaryText{Text: s.Text})
 		}
+		// Canonical content is one string, so parts concatenate the same way the stream's reasoning_text deltas do across content_index.
+		for _, c := range v.Content {
+			r.Content += c.Text
+		}
 		// R-1: store encrypted_content + item id in ProviderData for same-vendor round-trip.
 		if v.EncryptedContent != "" {
 			type reasoningProviderData struct {
@@ -222,6 +226,9 @@ func responsesItemFromCanonical(item v1.Item, custom *responsesCustomLowering) R
 		}
 		for _, s := range v.Summary {
 			r.Summary = append(r.Summary, ResponsesSummaryText{Text: s.Text})
+		}
+		if v.Content != "" {
+			r.Content = []ResponsesReasoningText{{Text: v.Content}}
 		}
 		// R-1: restore encrypted_content from ProviderData for same-vendor round-trip.
 		if len(v.ProviderData) > 0 {

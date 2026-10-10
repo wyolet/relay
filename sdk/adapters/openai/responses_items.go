@@ -171,12 +171,27 @@ func (s ResponsesSummaryText) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire{Type: "summary_text", Text: s.Text})
 }
 
+// ResponsesReasoningText is one element of a ResponsesReasoning item's content array: raw reasoning text, as opposed to the summary.
+type ResponsesReasoningText struct {
+	Text string `json:"text"`
+}
+
+// MarshalJSON emits the discriminator; "reasoning_text" is the only valid content part type on a reasoning item.
+func (c ResponsesReasoningText) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	return json.Marshal(wire{Type: "reasoning_text", Text: c.Text})
+}
+
 // ResponsesReasoning is an output item representing the model's reasoning steps.
 type ResponsesReasoning struct {
-	ID               string                 `json:"id,omitempty"`
-	Summary          []ResponsesSummaryText `json:"summary,omitempty"`
-	EncryptedContent string                 `json:"encrypted_content,omitempty"`
-	Status           ResponsesStatus        `json:"status,omitempty"`
+	ID               string                   `json:"id,omitempty"`
+	Summary          []ResponsesSummaryText   `json:"summary,omitempty"`
+	Content          []ResponsesReasoningText `json:"content,omitempty"`
+	EncryptedContent string                   `json:"encrypted_content,omitempty"`
+	Status           ResponsesStatus          `json:"status,omitempty"`
 }
 
 func (*ResponsesReasoning) isResponsesItem()                     {}
@@ -184,11 +199,12 @@ func (*ResponsesReasoning) ResponsesItemType() ResponsesItemType { return Respon
 
 func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type             ResponsesItemType      `json:"type"`
-		ID               string                 `json:"id,omitempty"`
-		Summary          []ResponsesSummaryText `json:"summary"`
-		EncryptedContent string                 `json:"encrypted_content,omitempty"`
-		Status           ResponsesStatus        `json:"status,omitempty"`
+		Type             ResponsesItemType        `json:"type"`
+		ID               string                   `json:"id,omitempty"`
+		Summary          []ResponsesSummaryText   `json:"summary"`
+		Content          []ResponsesReasoningText `json:"content,omitempty"`
+		EncryptedContent string                   `json:"encrypted_content,omitempty"`
+		Status           ResponsesStatus          `json:"status,omitempty"`
 	}
 	// summary is REQUIRED on a reasoning item (the Responses API rejects one
 	// without it: "Missing required parameter input[N].summary"). A reasoning
@@ -204,6 +220,7 @@ func (r *ResponsesReasoning) MarshalJSON() ([]byte, error) {
 		Type:             ResponsesItemTypeReasoning,
 		ID:               r.ID,
 		Summary:          summary,
+		Content:          r.Content,
 		EncryptedContent: r.EncryptedContent,
 		Status:           r.Status,
 	})
