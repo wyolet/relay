@@ -1,6 +1,10 @@
 package openai
 
-import "bytes"
+import (
+	"bytes"
+
+	"github.com/wyolet/relay/sdk/internal/sse"
+)
 
 // ResponsesSSEFrame is one Responses API server-sent event ready for the wire:
 // an event name plus the JSON-marshaled event payload. Both fields are required
@@ -28,15 +32,12 @@ func (f ResponsesSSEFrame) Bytes() []byte {
 
 // ParseResponsesSSEChunk extracts event and data from a raw SSE chunk (one frame,
 // the bytes between two blank-line separators with the trailing \n\n
-// reattached by the caller).
+// reattached by the caller). Multi-line data is joined with "\n". A chunk
+// holding several events yields the first, since a frame ends at its first blank line.
 func ParseResponsesSSEChunk(chunk []byte) (event string, data []byte, ok bool) {
-	lines := bytes.Split(bytes.TrimRight(chunk, "\n"), []byte("\n"))
-	for _, line := range lines {
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event = string(bytes.TrimSpace(line[6:]))
-		} else if bytes.HasPrefix(line, []byte("data:")) {
-			data = bytes.TrimSpace(line[5:])
-		}
+	sc := sse.NewScanner(chunk)
+	if !sc.Next() {
+		return "", nil, false
 	}
-	return event, data, len(data) > 0
+	return string(sc.Event()), sc.Data(), true
 }
