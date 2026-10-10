@@ -8,22 +8,15 @@ import (
 	"github.com/wyolet/relay/app/adapters"
 	"github.com/wyolet/relay/app/binding"
 	"github.com/wyolet/relay/app/catalog"
-	"github.com/wyolet/relay/app/group"
 	"github.com/wyolet/relay/app/host"
 	"github.com/wyolet/relay/app/hostkey"
 	"github.com/wyolet/relay/app/key"
 	"github.com/wyolet/relay/app/meta"
 	"github.com/wyolet/relay/app/model"
 	"github.com/wyolet/relay/app/policy"
-	"github.com/wyolet/relay/app/policybinding"
 	"github.com/wyolet/relay/app/pricing"
-	"github.com/wyolet/relay/app/project"
 	"github.com/wyolet/relay/app/provider"
 	"github.com/wyolet/relay/app/ratelimit"
-	"github.com/wyolet/relay/app/role"
-	"github.com/wyolet/relay/app/rolebinding"
-	"github.com/wyolet/relay/app/serviceaccount"
-	"github.com/wyolet/relay/app/team"
 	"github.com/wyolet/relay/pkg/slug"
 )
 
@@ -133,43 +126,6 @@ func TestResolve_NoKeysAnywhereStillAnswersNoKeys(t *testing.T) {
 type lister[T any] []*T
 
 func (l lister[T]) List(context.Context) ([]*T, error) { return l, nil }
-
-// A policy-less request draws only on system- or user-owned host keys.
-// A project's credential is reachable only through that project's policy,
-// which is what holds the spend inside its limits and attribution — so the
-// key here is live and its project present, and it is still not a candidate.
-func TestResolvePolicyless_SkipsProjectOwnedKeys(t *testing.T) {
-	f := newTwoHostParts()
-	tm := &team.Team{Meta: meta.Metadata{ID: meta.NewID(), Name: "platform", Owner: meta.Owner{Kind: meta.OwnerSystem}}}
-	proj := &project.Project{
-		Meta: meta.Metadata{ID: meta.NewID(), Name: "ml"},
-		Spec: project.Spec{TeamID: tm.Meta.ID},
-	}
-	proj.StampOwner()
-	f.keyA.Meta.Owner = meta.Owner{Kind: meta.OwnerProject, ID: proj.Meta.ID}
-
-	c := catalog.New(
-		lister[provider.Provider]{f.provider}, lister[host.Host]{f.hostRowA},
-		lister[policy.Policy]{f.tierA}, lister[model.Model]{f.model},
-		lister[hostkey.HostKey]{f.keyA}, lister[ratelimit.RateLimit]{},
-		lister[key.Key]{}, lister[pricing.Pricing]{}, lister[binding.Binding]{f.bindingA},
-	)
-	c.UseTenancy(lister[team.Team]{tm}, lister[project.Project]{proj},
-		lister[serviceaccount.ServiceAccount]{}, lister[group.Group]{},
-		lister[role.Role]{}, lister[rolebinding.RoleBinding]{}, lister[policybinding.PolicyBinding]{})
-	if err := c.Reload(context.Background()); err != nil {
-		t.Fatalf("reload: %v", err)
-	}
-	snap := c.Current()
-	if _, ok := snap.HostKey(f.keyA.Meta.ID); !ok {
-		t.Fatal("the project-owned key was dropped before the pool filter could be tested")
-	}
-
-	_, err := (&Resolver{}).resolvePolicyless(snap, []*model.Model{f.model}, &f.model.Spec.Snapshots[0], "", "")
-	if !errors.Is(err, ErrNoKeys) {
-		t.Fatalf("err = %v, want ErrNoKeys — a project key must not serve policy-less traffic", err)
-	}
-}
 
 // The tier gate applies to the policy-less pool too: a key whose
 // host tier does not grant the model is not a usable candidate.
@@ -455,30 +411,8 @@ func TestPolicylessAllows_MatchesTheFlowThatServesIt(t *testing.T) {
 	if anyMode.PolicylessAllows(shared, f.model, "not-a-registered-shape", "") {
 		t.Error("the adapter filter is ignored")
 	}
-
-	// A user-owned key is listed to its owner and to nobody else, matching
-	// which of them the flow would actually serve.
-	owned := newTwoHostParts()
-	owner := meta.NewID()
-	owned.keyA.Meta.Owner = meta.Owner{Kind: meta.OwnerUser, ID: owner}
-	personal := catalog.Build(
-		[]*provider.Provider{owned.provider},
-		[]*host.Host{owned.hostRowA},
-		[]*policy.Policy{owned.tierA}, nil,
-		[]*model.Model{owned.model},
-		[]*hostkey.HostKey{owned.keyA}, nil, nil,
-		[]*binding.Binding{owned.bindingA},
-	)
-	for _, tc := range []struct {
-		caller string
-		want   bool
-	}{{caller: owner, want: true}, {caller: meta.NewID()}, {caller: ""}} {
-		listed := anyMode.PolicylessAllows(personal, owned.model, "", tc.caller)
-		_, err := (&Resolver{}).resolvePolicyless(personal, []*model.Model{owned.model}, &owned.model.Spec.Snapshots[0], "", tc.caller)
-		if served := err == nil; listed != tc.want || served != tc.want {
-			t.Errorf("caller %q: listed=%v served=%v, want %v for both (err %v)", tc.caller, listed, served, tc.want, err)
-		}
-	}
+	// Which owners' keys are in the pool, for listing and flow alike, is
+	// TestResolvePolicyless_KeyPoolScope.
 }
 
 // BenchmarkResolveTwoBindings covers the candidate walk that key selection
