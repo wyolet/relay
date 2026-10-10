@@ -33,8 +33,8 @@ type Spec struct {
 }
 
 // Rate is one priced meter. AboveTokens=0 is the base tier; AboveTokens>0 is
-// the rate charged once the request's billable token count exceeds that
-// threshold. The billing-time picker walks rates for the meter and applies
+// the rate charged once the request's prompt length (usage.Tokens.PromptTokens)
+// reaches that threshold. The billing-time picker walks rates for the meter and applies
 // the largest qualifying threshold. Amount 0 is valid: a free meter (e.g.
 // an embedding model's output tokens) is an explicit zero rate, not a
 // missing one. ServiceTier empty is the base rate; set, the rate applies only
@@ -177,8 +177,9 @@ func (p *Pricing) rateInServiceTier(meter Meter, tokens int, serviceTier string)
 }
 
 // Cost computes the total cost (in Spec.Currency units, typically USD)
-// for the given Tokens map. Tier selection uses the input token count —
-// the conventional axis for context-length tiers across major providers.
+// for the given Tokens map. Tier selection uses the prompt length
+// (usage.Tokens.PromptTokens) — the axis providers price context-length
+// tiers by.
 // Keys not mapped by MeterForUsageKey are silently skipped (unpriced
 // dimension). Returns 0 when Pricing is disabled or carries no rates.
 // Each token is charged once, as in CostNanos. Prices at the base rates.
@@ -192,7 +193,7 @@ func (p *Pricing) CostForServiceTier(tokens usage.Tokens, serviceTier string) fl
 	if p == nil || !p.IsEnabled() || len(tokens) == 0 {
 		return 0
 	}
-	tier := int(tokens["input"])
+	tier := int(tokens.PromptTokens())
 	var total float64
 	for key := range tokens {
 		rate, ok := p.rateForKey(key, tier, serviceTier)

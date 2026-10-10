@@ -51,7 +51,7 @@ type ModelHost struct {
 	Tiers []PriceTier
 }
 
-// PriceTier is one above-threshold rate row: what a request pays once its billable input passes AboveTokens. Every meter the host prices is repeated here at its tier value, because a consumer reads a tier as a complete price rather than a patch on the base one. The cache fields follow ModelHost's nil rule.
+// PriceTier is one above-threshold rate row: what a request pays once its prompt length, cache reads and writes included, reaches AboveTokens. Every meter the host prices is repeated here at its tier value, because a consumer reads a tier as a complete price rather than a patch on the base one. The cache fields follow ModelHost's nil rule.
 type PriceTier struct {
 	AboveTokens          int
 	InputUSDPerMtok      float64
