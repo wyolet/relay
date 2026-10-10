@@ -3,6 +3,7 @@ package pipeline_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -596,37 +597,54 @@ func TestNonRetryable_4xx_PassesThrough(t *testing.T) {
 	}
 }
 
-func TestAllKeysExhausted_Returns503Sentinel(t *testing.T) {
+// Every attempt failing retryably ends in ErrAllKeysExhausted with no result,
+// after min(keys, MaxAttempts) upstream calls; MaxAttempts 0 means three.
+func TestAllKeysExhausted_StopsAtMaxAttempts(t *testing.T) {
 	t.Parallel()
 
-	key1 := makeKey("h1", "sk-1")
-	key2 := makeKey("h2", "sk-2")
+	for _, tc := range []struct {
+		name        string
+		keys        int
+		maxAttempts int
+		wantCalls   int32
+	}{
+		{name: "every key tried", keys: 2, maxAttempts: 2, wantCalls: 2},
+		{name: "capped below the key count", keys: 3, maxAttempts: 1, wantCalls: 1},
+		{name: "unset defaults to three", keys: 4, maxAttempts: 0, wantCalls: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var keys []*hostkey.HostKey
+			for i := 1; i <= tc.keys; i++ {
+				keys = append(keys, makeKey(fmt.Sprintf("h%d", i), fmt.Sprintf("sk-%d", i)))
+			}
+			adp := &fakeAdapter{
+				callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
+					return errResp(500), nil
+				},
+				retryFn: func(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
+					return true, keypool.FailureServerError, 0
+				},
+			}
 
-	adp := &fakeAdapter{
-		callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
-			return errResp(500), nil
-		},
-		retryFn: func(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
-			return true, keypool.FailureServerError, 0
-		},
-	}
-
-	p := newPipeline()
-	res, err := p.Run(context.Background(), &pipeline.Request{
-		Adapter:     adp,
-		Keys:        []*hostkey.HostKey{key1, key2},
-		Policy:      makePolicy(),
-		MaxAttempts: 2,
-	})
-	if res != nil {
-		drainResult(t, res)
-		t.Fatal("expected nil result")
-	}
-	if !errors.Is(err, pipeline.ErrAllKeysExhausted) {
-		t.Errorf("err = %v, want ErrAllKeysExhausted", err)
-	}
-	if adp.callCount.Load() != 2 {
-		t.Errorf("callCount = %d, want 2", adp.callCount.Load())
+			p := newPipeline()
+			res, err := p.Run(context.Background(), &pipeline.Request{
+				Adapter:     adp,
+				Keys:        keys,
+				Policy:      makePolicy(),
+				MaxAttempts: tc.maxAttempts,
+			})
+			if res != nil {
+				drainResult(t, res)
+				t.Fatal("expected nil result")
+			}
+			if !errors.Is(err, pipeline.ErrAllKeysExhausted) {
+				t.Errorf("err = %v, want ErrAllKeysExhausted", err)
+			}
+			if got := adp.callCount.Load(); got != tc.wantCalls {
+				t.Errorf("callCount = %d, want %d", got, tc.wantCalls)
+			}
+		})
 	}
 }
 
@@ -716,39 +734,6 @@ func TestAdapterMissing_ReturnsErr(t *testing.T) {
 	})
 	if !errors.Is(err, pipeline.ErrAdapterMissing) {
 		t.Errorf("err = %v, want ErrAdapterMissing", err)
-	}
-}
-
-func TestMaxAttempts_Capped(t *testing.T) {
-	t.Parallel()
-
-	keys := []*hostkey.HostKey{
-		makeKey("h1", "sk-1"),
-		makeKey("h2", "sk-2"),
-		makeKey("h3", "sk-3"),
-	}
-
-	adp := &fakeAdapter{
-		callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
-			return errResp(500), nil
-		},
-		retryFn: func(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
-			return true, keypool.FailureServerError, 0
-		},
-	}
-
-	p := newPipeline()
-	_, err := p.Run(context.Background(), &pipeline.Request{
-		Adapter:     adp,
-		Keys:        keys,
-		Policy:      makePolicy(),
-		MaxAttempts: 1,
-	})
-	if !errors.Is(err, pipeline.ErrAllKeysExhausted) {
-		t.Errorf("err = %v, want ErrAllKeysExhausted", err)
-	}
-	if adp.callCount.Load() != 1 {
-		t.Errorf("callCount = %d, want 1 (MaxAttempts=1)", adp.callCount.Load())
 	}
 }
 
@@ -848,41 +833,6 @@ func channelFromWG(wg *sync.WaitGroup) <-chan struct{} {
 		close(ch)
 	}()
 	return ch
-}
-
-func TestMaxAttempts_DefaultsToThree(t *testing.T) {
-	t.Parallel()
-
-	// 4 keys; first 3 always fail. Default MaxAttempts=3 should cap at 3.
-	keys := []*hostkey.HostKey{
-		makeKey("h1", "sk-1"),
-		makeKey("h2", "sk-2"),
-		makeKey("h3", "sk-3"),
-		makeKey("h4", "sk-4"), // must never be reached
-	}
-
-	adp := &fakeAdapter{
-		callFn: func(_ context.Context, _, _ string, _ []byte, _ http.Header) (*http.Response, error) {
-			return errResp(500), nil
-		},
-		retryFn: func(resp *http.Response) (bool, keypool.FailureKind, time.Duration) {
-			return true, keypool.FailureServerError, 0
-		},
-	}
-
-	p := newPipeline()
-	_, err := p.Run(context.Background(), &pipeline.Request{
-		Adapter:     adp,
-		Keys:        keys,
-		Policy:      makePolicy(),
-		MaxAttempts: 0, // must default to 3
-	})
-	if !errors.Is(err, pipeline.ErrAllKeysExhausted) {
-		t.Errorf("err = %v, want ErrAllKeysExhausted", err)
-	}
-	if adp.callCount.Load() != 3 {
-		t.Errorf("callCount = %d, want 3 (defaultMaxAttempts)", adp.callCount.Load())
-	}
 }
 
 // TestOAuthFlag_DerivedFromKeyKind verifies the pipeline tells the adapter
