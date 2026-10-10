@@ -49,6 +49,16 @@ func (t Tokens) Billable(key string, rated func(part string) bool) int64 {
 	return count - deduct
 }
 
+// WholeOf returns the key that counts part inside it, or false when part is not counted inside another key.
+func WholeOf(part string) (string, bool) {
+	for _, p := range parts {
+		if p.part == part {
+			return p.whole, true
+		}
+	}
+	return "", false
+}
+
 // PromptTokens returns the request's prompt length: input + cache_read + cache_creation. Context-length price tiers are chosen by it, since providers count cache reads and writes toward the threshold.
 func (t Tokens) PromptTokens() int64 {
 	return t["input"] + t["cache_read"] + t["cache_creation"]

@@ -39,14 +39,14 @@ func TestCostBreakdown_ReportsUnpricedMeters(t *testing.T) {
 			{Meter: "tokens.output", Unit: "per_million", Amount: 15.0},
 		},
 	}
-	// reasoning is a known meter this binding doesn't price; "mystery" is
+	// cache_read is a known meter this binding doesn't price; "mystery" is
 	// outside the catalog vocabulary entirely. Both must surface, and neither
 	// may contribute to cost.
 	cost, unpriced, ok := b.CostBreakdown(usage.Tokens{
-		"input":     1_000_000,
-		"output":    100_000,
-		"reasoning": 50_000,
-		"mystery":   9,
+		"input":      1_000_000,
+		"output":     100_000,
+		"cache_read": 50_000,
+		"mystery":    9,
 	})
 	if !ok {
 		t.Fatal("expected priced binding")
@@ -54,8 +54,56 @@ func TestCostBreakdown_ReportsUnpricedMeters(t *testing.T) {
 	if want := 3.0 + 1.5; cost != want {
 		t.Fatalf("cost = %v, want %v (unpriced meters must not add)", cost, want)
 	}
-	if got := strings.Join(unpriced, ","); got != "mystery,reasoning" {
-		t.Fatalf("unpriced = %q, want %q", got, "mystery,reasoning")
+	if got := strings.Join(unpriced, ","); got != "cache_read,mystery" {
+		t.Fatalf("unpriced = %q, want %q", got, "cache_read,mystery")
+	}
+}
+
+// A part without a rate of its own is billed inside its whole, so it is unpriced only when the whole is.
+func TestCostBreakdown_PartWithoutRate(t *testing.T) {
+	b := Binding{Pricing: []Rate{
+		{Meter: "tokens.input", Unit: "per_million", Amount: 3.0},
+		{Meter: "tokens.output", Unit: "per_million", Amount: 15.0},
+	}}
+	cost, unpriced, ok := b.CostBreakdown(usage.Tokens{"input": 1_000_000, "audio_input": 200_000, "output": 100_000, "reasoning": 50_000})
+	if !ok || len(unpriced) != 0 || math.Abs(cost-(3.0+1.5)) > 1e-12 {
+		t.Fatalf("whole priced: cost=%v unpriced=%v ok=%v, want 4.5 and none unpriced", cost, unpriced, ok)
+	}
+	cost, unpriced, ok = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(usage.Tokens{"input": 1_000_000, "output": 100_000, "reasoning": 50_000})
+	if !ok || math.Abs(cost-3.0) > 1e-12 {
+		t.Fatalf("whole unpriced: cost=%v ok=%v, want 3", cost, ok)
+	}
+	if got := strings.Join(unpriced, ","); got != "output,reasoning" {
+		t.Fatalf("whole unpriced: unpriced = %q, want %q", got, "output,reasoning")
+	}
+}
+
+// Unrated parts that do not fit inside their whole were reported apart from it and went uncharged.
+func TestCostBreakdown_PartWithoutRateOutsideWhole(t *testing.T) {
+	b := Binding{Pricing: []Rate{
+		{Meter: "tokens.input", Unit: "per_million", Amount: 3.0},
+		{Meter: "tokens.output", Unit: "per_million", Amount: 15.0},
+	}}
+	cases := []struct {
+		name     string
+		tokens   usage.Tokens
+		cost     float64
+		unpriced string
+	}{
+		{"whole is 0", usage.Tokens{"input": 1_000_000, "reasoning": 50_000}, 3.0, "reasoning"},
+		{"part exceeds whole", usage.Tokens{"input": 1_000_000, "output": 100_000, "reasoning": 150_000}, 3.0 + 1.5, "reasoning"},
+		{"parts together exceed whole", usage.Tokens{"input": 1_000_000, "output": 100_000, "reasoning": 60_000, "audio_output": 60_000}, 3.0 + 1.5, "audio_output,reasoning"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cost, unpriced, ok := b.CostBreakdown(tc.tokens)
+			if !ok || math.Abs(cost-tc.cost) > 1e-12 {
+				t.Fatalf("cost=%v ok=%v, want %v", cost, ok, tc.cost)
+			}
+			if got := strings.Join(unpriced, ","); got != tc.unpriced {
+				t.Fatalf("unpriced = %q, want %q", got, tc.unpriced)
+			}
+		})
 	}
 }
 
@@ -131,9 +179,9 @@ func TestBindingCost_CacheCreation1h(t *testing.T) {
 	if want := 3*1.25 + 1*2.0; math.Abs(cost-want) > 1e-9 || len(unpriced) != 0 {
 		t.Fatalf("with a 1h rate: cost = %v unpriced = %v, want %v", cost, unpriced, want)
 	}
-	cost, _, _ = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(tokens)
-	if want := 4 * 1.25; math.Abs(cost-want) > 1e-9 {
-		t.Fatalf("without a 1h rate: cost = %v, want %v", cost, want)
+	cost, unpriced, _ = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(tokens)
+	if want := 4 * 1.25; math.Abs(cost-want) > 1e-9 || len(unpriced) != 0 {
+		t.Fatalf("without a 1h rate: cost = %v unpriced = %v, want %v", cost, unpriced, want)
 	}
 }
 
@@ -143,13 +191,13 @@ func TestCostBreakdown_PartChargedOnce(t *testing.T) {
 		{Meter: "tokens.output", Unit: "per_million", Amount: 1.2},
 		{Meter: "tokens.reasoning", Unit: "per_million", Amount: 4},
 	}}
-	cost, _, _ := b.CostBreakdown(usage.Tokens{"output": 3_000_000, "reasoning": 2_500_000})
-	if want := 0.5*1.2 + 2.5*4; math.Abs(cost-want) > 1e-9 {
-		t.Fatalf("cost = %v, want %v", cost, want)
+	cost, unpriced, _ := b.CostBreakdown(usage.Tokens{"output": 3_000_000, "reasoning": 2_500_000})
+	if want := 0.5*1.2 + 2.5*4; math.Abs(cost-want) > 1e-9 || len(unpriced) != 0 {
+		t.Fatalf("cost = %v unpriced = %v, want %v", cost, unpriced, want)
 	}
-	cost, _, _ = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(usage.Tokens{"output": 3_000_000, "reasoning": 2_500_000})
-	if want := 3 * 1.2; math.Abs(cost-want) > 1e-9 {
-		t.Fatalf("without a reasoning rate: cost = %v, want %v", cost, want)
+	cost, unpriced, _ = Binding{Pricing: b.Pricing[:1]}.CostBreakdown(usage.Tokens{"output": 3_000_000, "reasoning": 2_500_000})
+	if want := 3 * 1.2; math.Abs(cost-want) > 1e-9 || len(unpriced) != 0 {
+		t.Fatalf("without a reasoning rate: cost = %v unpriced = %v, want %v", cost, unpriced, want)
 	}
 }
 

@@ -34,7 +34,10 @@ func (b Binding) CostForServiceTier(tokens usage.Tokens, serviceTier string) (fl
 // meter is silently missing money otherwise, and a newly-priced meter type
 // would quietly deflate every estimate that ignored it. Each token is charged
 // once: a part with a rate of its own (see usage.Tokens) is left out of its
-// whole's charge. Prices at the base rates; see CostBreakdownForServiceTier.
+// whole's charge. A part without a rate of its own is billed inside its whole,
+// so it is listed unpriced only when the whole is unpriced too or the part's
+// tokens do not fit inside the whole's count. Prices at the base rates; see
+// CostBreakdownForServiceTier.
 func (b Binding) CostBreakdown(tokens usage.Tokens) (cost float64, unpriced []string, ok bool) {
 	return b.CostBreakdownForServiceTier(tokens, "")
 }
@@ -70,10 +73,28 @@ func (b Binding) CostBreakdownForServiceTier(tokens usage.Tokens, serviceTier st
 				// unknown unit: fall through to unpriced rather than $0
 			}
 		}
+		if billedInWhole(tokens, key, hasRate) {
+			continue
+		}
 		unpriced = append(unpriced, key)
 	}
 	sort.Strings(unpriced)
 	return cost, unpriced, true
+}
+
+// billedInWhole reports whether part, which has no rate of its own, was charged inside its whole: the whole is priced and its count holds every unrated part. Unrated parts that outgrow the whole were reported apart from it and went uncharged.
+func billedInWhole(tokens usage.Tokens, part string, hasRate func(string) bool) bool {
+	whole, isPart := usage.WholeOf(part)
+	if !isPart || !hasRate(whole) {
+		return false
+	}
+	var unrated int64
+	for key, n := range tokens {
+		if w, ok := usage.WholeOf(key); ok && w == whole && n > 0 && !hasRate(key) {
+			unrated += n
+		}
+	}
+	return tokens[whole] > 0 && unrated <= tokens[whole]
 }
 
 // Cost resolves ref to a binding and prices tokens against it — the one-call

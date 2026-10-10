@@ -72,6 +72,19 @@ func TestTokensPromptTokens(t *testing.T) {
 	}
 }
 
+func TestWholeOf(t *testing.T) {
+	for part, want := range map[string]string{"reasoning": "output", "audio_input": "input", "cache_creation_1h": "cache_creation"} {
+		if got, ok := WholeOf(part); !ok || got != want {
+			t.Errorf("WholeOf(%q) = %q, %v, want %q, true", part, got, ok, want)
+		}
+	}
+	for _, key := range []string{"output", "cache_read", "server_tool_use_input", "mystery"} {
+		if got, ok := WholeOf(key); ok {
+			t.Errorf("WholeOf(%q) = %q, true, want false", key, got)
+		}
+	}
+}
+
 // A provider that reports a part outside its whole shows it by a part larger than the whole; deducting would erase the charge for the whole's own tokens.
 func TestTokensBillable_PartsLargerThanWhole(t *testing.T) {
 	tokens := Tokens{"output": 498, "reasoning": 95_305}
