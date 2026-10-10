@@ -3,7 +3,6 @@ package policy
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -21,7 +20,7 @@ import (
 	pkgratelimit "github.com/wyolet/relay/pkg/ratelimit"
 )
 
-func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // acquireFixture wires a Service over a real in-memory limiter and selector
 // with one host key whose tier policy carries rules.

@@ -2,7 +2,6 @@ package keypool
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -32,7 +31,7 @@ func newSel(t *testing.T, clock func() time.Time) (*Selector, *kv.Mem) {
 }
 
 func noopLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }
 
 func key(name, hash string) *hostkey.HostKey {

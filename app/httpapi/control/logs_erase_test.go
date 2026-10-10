@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -39,7 +38,7 @@ func (f *fakeEraser) Erase(_ context.Context, ef payloadlog.EraseFilter) (payloa
 func newEraseHarness(t *testing.T, inner authz.Authorizer, pr payloadlog.Reader) (http.Handler, *auditSink, *audit.Emitter) {
 	t.Helper()
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	r := chi.NewRouter()
 	r.Use(withTestActor("X-Test-Actor", scopeActors))
 	r.Use(audit.Middleware(em, nil))

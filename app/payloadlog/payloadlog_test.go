@@ -12,7 +12,7 @@ import (
 	"github.com/wyolet/relay/pkg/lifecycle"
 )
 
-func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // memSink is an in-memory Sink for observer tests.
 type memSink struct {

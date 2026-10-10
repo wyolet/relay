@@ -3,7 +3,6 @@ package policy
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -49,7 +48,7 @@ func reserveFixture(t testing.TB, rules ...appratelimit.Rule) (*Service, *kvtest
 		pol.Spec.RateLimitID = rl.Meta.ID
 	}
 	store := recordingMem(t)
-	return NewService(reserveSnap{pol: pol, rl: rl}, nil, pkgratelimit.New(store, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)), store, pol
+	return NewService(reserveSnap{pol: pol, rl: rl}, nil, pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil)), store, pol
 }
 
 // TestReserveInbound_TokenWithNoRules pins the hot-path invariant: a token

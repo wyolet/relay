@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -139,7 +138,7 @@ func newTokenFixture(t *testing.T, audits ...audit.Event) tokenFixture {
 func audited(t *testing.T, a *actor.Actor, fn func(ctx context.Context)) []audit.Event {
 	t.Helper()
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	h := audit.Middleware(em, nil)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		fn(actor.WithActor(r.Context(), a))
 	}))

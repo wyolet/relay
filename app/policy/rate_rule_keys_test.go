@@ -2,7 +2,6 @@ package policy
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -56,7 +55,7 @@ func TestReserveInbound_PerModelBindingsGetDistinctBuckets(t *testing.T) {
 	store := recordingMem(t)
 	svc := NewService(
 		multiRLSnap{pol: pol, rls: map[string]*appratelimit.RateLimit{"rl-a": rlA, "rl-b": rlB}},
-		nil, pkgratelimit.New(store, slog.New(slog.NewTextHandler(io.Discard, nil)), nil))
+		nil, pkgratelimit.New(store, slog.New(slog.DiscardHandler), nil))
 
 	ctx := context.Background()
 	if _, err := svc.ReserveInbound(ctx, InboundInput{

@@ -2,7 +2,6 @@ package usagelog
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"runtime"
 	"sync"
@@ -26,7 +25,7 @@ func TestEmitterEmitConcurrentWithCloseDoesNotPanic(t *testing.T) {
 	for trial := 0; trial < trials; trial++ {
 		e := NewEmitter(EmitterOptions{
 			QueueSize: 64,
-			Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Logger:    slog.New(slog.DiscardHandler),
 		})
 
 		var (

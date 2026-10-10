@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -113,10 +112,10 @@ func mountDeps(t *testing.T) Deps {
 		Catalog:       cat,
 		Stores:        stores,
 		UsageReader:   &fakeUsageReader{},
-		Audit:         audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Audit:         audit.NewEmitter(sink, slog.New(slog.DiscardHandler)),
 		AuditReader:   fakeAuditReader{},
 		PayloadReader: fakePayloadReader{},
-		Selector:      keypool.New(kvStore, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil),
+		Selector:      keypool.New(kvStore, slog.New(slog.DiscardHandler), nil, nil),
 		HostHealth:    fakeHostHealth{},
 	}
 }

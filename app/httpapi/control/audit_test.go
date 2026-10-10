@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +57,7 @@ func (s *auditSink) all() []audit.Event {
 func newAuditHarness(t *testing.T, inner authz.Authorizer, seed ...*scopedThing) (http.Handler, *auditSink, *audit.Emitter) {
 	t.Helper()
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	tmeta := func(v *scopedThing) *meta.Metadata { return &v.Meta }
 	store := &memStore[scopedThing]{metaOf: tmeta, items: map[string]*scopedThing{}}
 	for _, it := range seed {
@@ -187,7 +186,7 @@ func newAuthAuditHarness(t *testing.T) (http.Handler, *auditSink, *audit.Emitter
 	}
 
 	sink := &auditSink{}
-	em := audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	em := audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	kvStore := kv.NewMem()
 	t.Cleanup(func() { _ = kvStore.Close() })
 	sessions := session.New(kvStore, false, "sess:")
@@ -304,7 +303,7 @@ func (execOnlyDBTX) CopyFrom(context.Context, pgx.Identifier, []string, pgx.Copy
 func TestAuditSettingsUpdateRecordsSectionPath(t *testing.T) {
 	deps := mountDeps(t)
 	sink := &auditSink{}
-	deps.Audit = audit.NewEmitter(sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	deps.Audit = audit.NewEmitter(sink, slog.New(slog.DiscardHandler))
 	deps.Stores.Settings = settings.NewStore(gen.New(execOnlyDBTX{}))
 
 	r := chi.NewRouter()

@@ -2,7 +2,6 @@ package usagelog
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -128,4 +127,4 @@ func TestController_KeepsPreviousOnBuildError(t *testing.T) {
 	}
 }
 
-func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }

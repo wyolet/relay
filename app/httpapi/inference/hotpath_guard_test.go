@@ -7,7 +7,6 @@ package inference
 import (
 	"context"
 	"crypto/ed25519"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -466,7 +465,7 @@ func hotPathTokens(t testing.TB, projectID, userID string) (*TokenVerifier, func
 
 // quietLogger keeps the limiter and the key pool from writing to the test
 // output; both dereference their logger unconditionally.
-func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+func quietLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // --- the guards ----------------------------------------------------------
 

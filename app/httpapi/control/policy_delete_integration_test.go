@@ -10,7 +10,6 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -115,7 +114,7 @@ func newPolicyDeleteFixture(t *testing.T) (policyDeleteFixture, context.Context)
 	deps.Users = f.users
 	deps.Catalog = cat
 	deps.Authz = audit.Authorizer{Inner: testRBAC()}
-	f.emitter = audit.NewEmitter(f.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	f.emitter = audit.NewEmitter(f.sink, slog.New(slog.DiscardHandler))
 	deps.Audit = f.emitter
 	r := chi.NewRouter()
 	// X-Test-User signs the request in as alice, a user with no binding in
