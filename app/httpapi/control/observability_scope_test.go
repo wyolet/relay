@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -344,5 +345,52 @@ func TestScopeOfLogsIsNotGrantedByAUsageOnlyRole(t *testing.T) {
 	}
 	if logsSc.unrestricted || len(logsSc.projectIDs) != 0 {
 		t.Fatalf("logs scope = %+v, want empty (viewer role has no logs grant)", logsSc)
+	}
+}
+
+// Events without principal and project columns carry only a key hash; a
+// caller still reads their own through the current and pre-rotation hashes of
+// their own key rows, and no other principal's.
+func TestScopeOfCoversHashOnlyEventsByOwnKeyHash(t *testing.T) {
+	yes := true
+	k := &key.Key{Meta: meta.Metadata{ID: ids.New(), Name: "alice-key",
+		Owner: meta.Owner{Kind: meta.OwnerUser, ID: "u-alice"}}}
+	k.Spec.Enabled = &yes
+	k.Spec.KeyHash = "hash-alice-now"
+	k.Spec.PreviousKeyHash = "hash-alice-old"
+	k.Spec.Principal = key.Principal{Kind: key.PrincipalUser, ID: "u-alice"}
+
+	cat := appcatalog.New(
+		tokenList[provider.Provider]{}, tokenList[host.Host]{}, tokenList[policy.Policy]{},
+		tokenList[model.Model]{}, tokenList[hostkey.HostKey]{}, tokenList[ratelimit.RateLimit]{},
+		tokenList[key.Key]{k}, tokenList[pricing.Pricing]{}, tokenList[binding.Binding]{},
+	)
+	if err := cat.Reload(context.Background()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	ctx := actor.WithActor(context.Background(), scopeActors["alice"])
+	sc, err := scopeOf(ctx, testRBAC(), cat, "usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"hash-alice-now", "hash-alice-old"} {
+		if !slices.Contains(sc.keyHashes, want) {
+			t.Fatalf("keyHashes = %v, want %s in it", sc.keyHashes, want)
+		}
+	}
+	if !sc.allows(usagelog.Event{RequestID: "r-1", RelayKeyHash: "hash-alice-old"}) {
+		t.Fatalf("scope %+v rejects the caller's own pre-upgrade event", sc)
+	}
+	if sc.allows(usagelog.Event{RequestID: "r-2", RelayKeyHash: "hash-bob"}) {
+		t.Fatalf("scope %+v admits a foreign key hash", sc)
+	}
+
+	var q usagelog.EventQuery
+	if !scopeEventQuery(&q, sc) {
+		t.Fatal("scopeEventQuery refused a scope that matches events")
+	}
+	if len(q.ScopeRelayKeyHash) != 2 {
+		t.Fatalf("query hashes = %v, want both of the caller's", q.ScopeRelayKeyHash)
 	}
 }

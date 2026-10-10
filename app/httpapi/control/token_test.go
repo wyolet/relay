@@ -8,10 +8,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/wyolet/relay/app/actor"
 	"github.com/wyolet/relay/app/audit"
@@ -439,4 +444,60 @@ func mintBody(project, ttl string) *mintTokenInput {
 	in.Body.Project = project
 	in.Body.TTL = ttl
 	return in
+}
+
+// A rotation must not strand the tokens minted before it: revoke-by-value
+// verifies against the retired key as well as the live one.
+func TestTokenRevokeByValuePreviousKey(t *testing.T) {
+	f := newTokenFixture(t)
+	ctx := actor.WithActor(context.Background(), &actor.Actor{UserID: f.userID, Username: "alice"})
+
+	minted, err := mintToken(ctx, f.deps, mintBody(f.project.Meta.Name, "30m"))
+	if err != nil {
+		t.Fatalf("mintToken: %v", err)
+	}
+	retired := f.signer.PublicKey()
+
+	next := make([]byte, ed25519.SeedSize)
+	for i := range next {
+		next[i] = byte(200 - i)
+	}
+	f.signer.SetSeed(next)
+	f.signer.SetPreviousPublicKey(retired)
+
+	if _, err := revokeTokenByValue(ctx, f.deps, minted.Body.Token); err != nil {
+		t.Fatalf("revokeTokenByValue after a rotation: %v", err)
+	}
+	f.denylist.mu.Lock()
+	defer f.denylist.mu.Unlock()
+	if _, ok := f.denylist.entries[policy.RevokedKey(f.team.Meta.ID, minted.Body.JTI)]; !ok {
+		t.Fatalf("no denylist entry written; entries = %v", f.denylist.entries)
+	}
+}
+
+// The generated OpenAPI is what a client codegen believes: a status the
+// handler can return but the operation does not declare is a response the
+// client has no type for.
+func TestTokenOperationsDeclareTheirErrorStatuses(t *testing.T) {
+	api := humachi.New(chi.NewRouter(), huma.DefaultConfig("token-errors-test", "0"))
+	registerTokens(api, Deps{Authz: authz.AlwaysAllowAuthenticated{}}, nil)
+	paths := api.OpenAPI().Paths
+
+	for _, tc := range []struct {
+		path  string
+		codes []int
+	}{
+		{"/auth/token", []int{429, 500}},
+		{"/auth/token/revoke", []int{400, 500}},
+	} {
+		item := paths[tc.path]
+		if item == nil || item.Post == nil {
+			t.Fatalf("no POST operation at %s", tc.path)
+		}
+		for _, code := range tc.codes {
+			if _, ok := item.Post.Responses[strconv.Itoa(code)]; !ok {
+				t.Errorf("POST %s does not declare %d", tc.path, code)
+			}
+		}
+	}
 }
