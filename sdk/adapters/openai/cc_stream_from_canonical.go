@@ -197,10 +197,11 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 			fr = "content_filter"
 		}
 		finalChunk := ChatStreamChunk{
-			ID:      s.responseID,
-			Object:  "chat.completion.chunk",
-			Created: s.created,
-			Model:   s.model,
+			ID:          s.responseID,
+			Object:      "chat.completion.chunk",
+			Created:     s.created,
+			Model:       s.model,
+			ServiceTier: ev.ServiceTier,
 			Choices: []StreamChoice{{
 				Index:        0,
 				Delta:        StreamDelta{},

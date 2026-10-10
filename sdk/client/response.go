@@ -18,5 +18,5 @@ func (r *Response) Cost() (float64, bool) {
 	if r == nil || !r.priced {
 		return 0, false
 	}
-	return r.binding.Cost(r.Usage)
+	return r.binding.CostForServiceTier(r.Usage, r.ServiceTier)
 }

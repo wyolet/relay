@@ -28,10 +28,11 @@ type Stream struct {
 	toCanon func([]byte) ([]byte, error)
 	pending [][]byte // canonical frames produced from one upstream frame, not yet returned
 
-	binding catalog.Binding
-	priced  bool
-	usage   usage.Tokens
-	report  *report // nil unless telemetry is on
+	binding     catalog.Binding
+	priced      bool
+	usage       usage.Tokens
+	serviceTier string
+	report      *report // nil unless telemetry is on
 
 	// Timing, tracked as the caller drains via Recv. Offsets from start
 	// (the GenerateStream call), surfaced through Timing() in the exact
@@ -71,6 +72,7 @@ func (s *Stream) Recv() (*Event, error) {
 					var ev v1.GenerationCompletedEvent
 					if json.Unmarshal(data, &ev) == nil && len(ev.Usage) > 0 {
 						s.usage = ev.Usage
+						s.serviceTier = ev.ServiceTier
 					}
 				}
 				s.report.observe(event, data)
@@ -113,7 +115,7 @@ func (s *Stream) Cost() (float64, bool) {
 	if !s.priced || len(s.usage) == 0 {
 		return 0, false
 	}
-	return s.binding.Cost(s.usage)
+	return s.binding.CostForServiceTier(s.usage, s.serviceTier)
 }
 
 // StreamTiming is the client-side timing of one streamed generation, in the

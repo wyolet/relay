@@ -40,6 +40,7 @@ type Rate struct {
 	Unit        string  `json:"unit"`
 	Amount      float64 `json:"amount"`
 	AboveTokens int     `json:"aboveTokens,omitempty"`
+	ServiceTier string  `json:"serviceTier,omitempty"`
 }
 
 // Capabilities mirrors catalog.Capabilities field-for-field (convertible).

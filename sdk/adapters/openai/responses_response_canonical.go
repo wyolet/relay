@@ -25,10 +25,11 @@ func (ResponsesTranslator) ParseResponse(body []byte) (*v1.Response, error) {
 // per the OpenAI spec.
 func (ResponsesTranslator) SerializeResponse(resp *v1.Response, req *v1.Request) ([]byte, error) {
 	rresp := &ResponsesResponse{
-		ID:        resp.ID,
-		Object:    "response",
-		CreatedAt: resp.CreatedAt,
-		Model:     resp.Model,
+		ID:          resp.ID,
+		Object:      "response",
+		CreatedAt:   resp.CreatedAt,
+		Model:       resp.Model,
+		ServiceTier: resp.ServiceTier,
 	}
 	if rresp.CreatedAt == 0 {
 		rresp.CreatedAt = time.Now().Unix()
@@ -97,11 +98,12 @@ func parseStreamTerminalResponse(data []byte) (*ResponsesResponse, error) {
 // responsesResponseToCanonical converts a *ResponsesResponse to canonical *v1.Response.
 func responsesResponseToCanonical(resp *ResponsesResponse) *v1.Response {
 	cr := &v1.Response{
-		ID:        resp.ID,
-		Object:    "response",
-		CreatedAt: resp.CreatedAt,
-		Model:     resp.Model,
-		Status:    v1.Status(resp.Status),
+		ID:          resp.ID,
+		Object:      "response",
+		CreatedAt:   resp.CreatedAt,
+		Model:       resp.Model,
+		Status:      v1.Status(resp.Status),
+		ServiceTier: resp.ServiceTier,
 	}
 	cr.FinishReason = responsesCanonicalFinishReason(resp)
 

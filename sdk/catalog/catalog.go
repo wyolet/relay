@@ -145,10 +145,13 @@ type Binding struct {
 	Aliases []string `json:"aliases,omitempty"`
 }
 
-// Rate is one priced meter on a binding.
+// Rate is one priced meter on a binding. ServiceTier empty is the base rate;
+// set, the rate applies only to responses the upstream reports as served in
+// that tier (see Binding.CostBreakdownForServiceTier).
 type Rate struct {
 	Meter       string  `json:"meter" yaml:"meter"`
 	Unit        string  `json:"unit" yaml:"unit"`
 	Amount      float64 `json:"amount" yaml:"amount"`
 	AboveTokens int     `json:"aboveTokens,omitempty" yaml:"aboveTokens,omitempty"`
+	ServiceTier string  `json:"serviceTier,omitempty" yaml:"serviceTier,omitempty"`
 }

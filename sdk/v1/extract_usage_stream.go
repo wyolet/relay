@@ -51,7 +51,7 @@ func (s *StreamSummarizer) Observe(frame []byte) {
 		}
 		canon = c
 	}
-	if sum := harvestSummaryFromCanonicalSSE(canon); len(sum.Tokens) > 0 || sum.FinishReason != "" {
+	if sum := harvestSummaryFromCanonicalSSE(canon); !sum.isEmpty() {
 		s.found = sum
 	}
 }

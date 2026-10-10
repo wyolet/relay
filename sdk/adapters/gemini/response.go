@@ -161,6 +161,8 @@ func (GeminiTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]b
 	if len(resp.Usage) > 0 {
 		out["usageMetadata"] = canonicalUsageToGemini(resp.Usage)
 	}
+	// canonical: service_tier dropped — generateContent has no field naming the
+	// lane that served a response.
 
 	if resp.Model != "" {
 		out["modelVersion"] = resp.Model

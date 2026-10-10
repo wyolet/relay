@@ -205,11 +205,12 @@ func (s *canonicalToResponsesStream) translate(chunk []byte) ([]byte, error) {
 		}
 
 		finalResp := &ResponsesResponse{
-			ID:        s.responseID,
-			Object:    "response",
-			CreatedAt: s.created,
-			Model:     s.model,
-			Output:    append([]ResponsesItem{}, s.closedItems...),
+			ID:          s.responseID,
+			Object:      "response",
+			CreatedAt:   s.created,
+			Model:       s.model,
+			Output:      append([]ResponsesItem{}, s.closedItems...),
+			ServiceTier: ev.ServiceTier,
 		}
 		finalResp.Status, finalResp.IncompleteDetails = canonicalResponsesStatus(ev.Status, ev.FinishReason, ev.IncompleteDetails)
 		// The refusal text already streamed as output_text deltas; the terminal

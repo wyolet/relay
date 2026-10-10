@@ -75,6 +75,24 @@ cloud  = { host = "ollama-cloud", adapter = "openai", passthrough = true }
 	}
 }
 
+func TestPriceChanges_ServiceTierRatesKeptApart(t *testing.T) {
+	priority := rate("tokens.input", 10)
+	priority.ServiceTier = "priority"
+	before := []catalog.Rate{rate("tokens.input", 5), priority}
+	raised := priority
+	raised.Amount = 12
+	after := []catalog.Rate{rate("tokens.input", 5), raised}
+
+	got := priceChanges(before, after)
+	want := []string{"tokens.input (priority) 10 per_million → 12 per_million"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("changes = %q, want %q", got, want)
+	}
+	if same := priceChanges(before, before); len(same) != 0 {
+		t.Fatalf("unchanged rates: %q", same)
+	}
+}
+
 func changeLines(changes []Change) string {
 	var b strings.Builder
 	for _, c := range changes {

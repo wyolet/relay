@@ -139,11 +139,12 @@ func capabilityChanges(a, b catalog.Capabilities) []string {
 	return parts
 }
 
-// priceChanges matches rates by meter and tier threshold, in the order they first appear.
+// priceChanges matches rates by meter, tier threshold and service tier, in the order they first appear.
 func priceChanges(a, b []catalog.Rate) []string {
 	type tier struct {
-		meter string
-		above int
+		meter       string
+		above       int
+		serviceTier string
 	}
 	var order []tier
 	before, after := map[tier]catalog.Rate{}, map[tier]catalog.Rate{}
@@ -152,7 +153,7 @@ func priceChanges(a, b []catalog.Rate) []string {
 		into  map[tier]catalog.Rate
 	}{{a, before}, {b, after}} {
 		for _, r := range side.rates {
-			t := tier{r.Meter, r.AboveTokens}
+			t := tier{r.Meter, r.AboveTokens, r.ServiceTier}
 			if _, seen := before[t]; !seen {
 				if _, seen := after[t]; !seen {
 					order = append(order, t)
@@ -169,6 +170,9 @@ func priceChanges(a, b []catalog.Rate) []string {
 			continue
 		}
 		label := t.meter
+		if t.serviceTier != "" {
+			label += " (" + t.serviceTier + ")"
+		}
 		if t.above > 0 {
 			label += " above " + strconv.Itoa(t.above)
 		}

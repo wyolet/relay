@@ -29,6 +29,11 @@ type Response struct {
 	// Tokens.Sum() over the whole map, which would double-count them.
 	Usage usage.Tokens `json:"usage,omitempty"`
 
+	// ServiceTier is the upstream's own name for the capacity lane that
+	// served the request (e.g. "priority", "flex"), verbatim; empty when the
+	// upstream reports none. Pricing selects tier-specific rates by it.
+	ServiceTier string `json:"service_tier,omitempty"`
+
 	Error             *Error             `json:"error,omitempty"`
 	IncompleteDetails *IncompleteDetails `json:"incomplete_details,omitempty"`
 
