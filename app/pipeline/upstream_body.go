@@ -7,6 +7,7 @@ import (
 	"time"
 
 	sdkusage "github.com/wyolet/relay/sdk/usage"
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // drainTimeout bounds how long post-flight keeps reading an upstream response
@@ -80,6 +81,22 @@ func drainTail(s *readState, call *upstreamCall) bool {
 	defer t.Stop()
 	_, _ = io.Copy(io.Discard, io.LimitReader(s, maxDrainBytes))
 	return s.eof
+}
+
+// countSSEFrames counts the blank-line-terminated SSE frames in body; a
+// trailing unterminated frame (or a body that is not SSE) counts as none.
+func countSSEFrames(body []byte) int {
+	frames := 0
+	for {
+		n, frame, _ := v1.SplitSSEFrames(body, false)
+		if n == 0 {
+			return frames
+		}
+		if frame != nil {
+			frames++
+		}
+		body = body[n:]
+	}
 }
 
 // withUnreportedFloor returns the tokens to charge a response that ended

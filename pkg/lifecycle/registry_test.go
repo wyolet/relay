@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -435,6 +436,24 @@ func TestStreamSession_WriteReframesCRLF(t *testing.T) {
 		if f.obs.frames[i] != w {
 			t.Fatalf("frame %d: got %q want %q", i, f.obs.frames[i], w)
 		}
+	}
+}
+
+// CR-only and mixed line endings reframe the same, written one byte at a time.
+func TestStreamSession_WriteReframesCRAndMixed(t *testing.T) {
+	r := New()
+	f := &recordingFactory{}
+	r.RegisterStreamObserver(f)
+
+	sess := r.NewStreamSession(NewContext("r", "test", time.Now()))
+	for _, c := range []byte("event: a\rdata: 1\r\revent: b\r\ndata: 2\n\r\ndata: 3\r\r\n") {
+		_, _ = sess.Write([]byte{c})
+	}
+	sess.Finish()
+
+	want := []string{"event: a\ndata: 1", "event: b\ndata: 2", "data: 3"}
+	if !reflect.DeepEqual(f.obs.frames, want) {
+		t.Fatalf("frames: got %q want %q", f.obs.frames, want)
 	}
 }
 

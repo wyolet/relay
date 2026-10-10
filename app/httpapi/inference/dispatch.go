@@ -513,7 +513,7 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 	sbufp := scannerBufPool.Get().(*[]byte)
 	defer scannerBufPool.Put(sbufp)
 	scanner.Buffer(*sbufp, 1024*1024)
-	scanner.Split(splitSSEChunks)
+	scanner.Split(v1.SplitSSEFrames)
 
 	var sess *lifecycle.StreamSession
 	var lc *lifecycle.Context
@@ -555,8 +555,8 @@ func streamCanonical(d Deps, w io.Writer, r *http.Request, body io.ReadCloser, e
 	for scanner.Scan() {
 		// The raw upstream frame is observed via the pipeline tee (into the
 		// session), not here — see above. We only translate + forward it.
-		chunk := append([]byte(nil), scanner.Bytes()...)
-		chunk = append(chunk, '\n', '\n')
+		frame := v1.NormalizeSSELineEnds(scanner.Bytes())
+		chunk := append(append(make([]byte, 0, len(frame)+2), frame...), '\n', '\n')
 
 		var out []byte
 		if toCanon != nil {
@@ -791,19 +791,4 @@ func splitCanonFrames(b []byte) [][]byte {
 		b = b[idx+2:]
 	}
 	return frames
-}
-
-// splitSSEChunks is a bufio.SplitFunc that splits on the SSE event
-// terminator "\n\n". Returned tokens omit the terminator.
-func splitSSEChunks(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.Index(data, []byte("\n\n")); i >= 0 {
-		return i + 2, data[:i], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }

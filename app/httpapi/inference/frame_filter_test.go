@@ -7,8 +7,20 @@ import (
 )
 
 func TestFrameDropWriterSplitWrites(t *testing.T) {
-	stream := "data: a\n\ndata: DROP\r\n\r\ndata: b\n\ndata: DROP\n\ndata: [DONE]\n\ntrailing"
-	want := "data: a\n\ndata: b\n\ndata: [DONE]\n\ntrailing"
+	checkFrameDrop(t,
+		"data: a\n\ndata: DROP\r\n\r\ndata: b\n\ndata: DROP\n\ndata: [DONE]\n\ntrailing",
+		"data: a\n\ndata: b\n\ndata: [DONE]\n\ntrailing")
+}
+
+func TestFrameDropWriterSplitWritesCRAndMixedEndings(t *testing.T) {
+	checkFrameDrop(t,
+		"data: a\r\rdata: DROP\r\rdata: b\n\r\ndata: DROP\r\n\ndata: c\r\n\r\ndata: DROP\r\n\r\ndata: [DONE]\r\r",
+		"data: a\r\rdata: b\n\r\ndata: c\r\n\r\ndata: [DONE]\r\r")
+}
+
+// checkFrameDrop writes stream through a frameDropWriter in every write size and expects want byte for byte.
+func checkFrameDrop(t *testing.T, stream, want string) {
+	t.Helper()
 	drop := func(f []byte) bool { return bytes.Contains(f, []byte("DROP")) }
 
 	for size := 1; size <= len(stream); size++ {

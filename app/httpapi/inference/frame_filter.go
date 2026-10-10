@@ -1,9 +1,10 @@
 package inference
 
 import (
-	"bytes"
 	"io"
 	"net/http"
+
+	v1 "github.com/wyolet/relay/sdk/v1"
 )
 
 // maxHeldFrameBytes bounds the partial frame frameDropWriter holds back. Output
@@ -19,22 +20,34 @@ type frameDropWriter struct {
 	w    io.Writer
 	drop func(frame []byte) bool
 	held []byte
+	// droppedCR: a dropped frame ended the held bytes on a CR, so an LF opening the next Write is the rest of its CRLF.
+	droppedCR bool
 }
 
 func (f *frameDropWriter) Write(p []byte) (int, error) {
 	f.held = append(f.held, p...)
+	if f.droppedCR && len(f.held) > 0 && f.held[0] == '\n' {
+		f.held = f.held[:copy(f.held, f.held[1:])]
+	}
+	f.droppedCR = false
 	kept, pos := 0, 0 // f.held[kept:pos] is complete frames not yet written
 	for {
-		i, sep := nextFrameEnd(f.held[pos:])
-		if i < 0 {
+		n, frame, _ := v1.SplitSSEFrames(f.held[pos:], false)
+		if n == 0 {
 			break
 		}
-		end := pos + i + sep
-		if f.drop(f.held[pos : pos+i]) {
-			if err := f.write(f.held[kept:pos]); err != nil {
+		end := pos + n
+		if frame != nil && f.drop(v1.NormalizeSSELineEnds(frame)) {
+			// Blank lines before the frame end the previous one; they stay.
+			start := pos
+			for f.held[start] == '\n' || f.held[start] == '\r' {
+				start++
+			}
+			if err := f.write(f.held[kept:start]); err != nil {
 				return 0, err
 			}
 			kept = end
+			f.droppedCR = end == len(f.held) && f.held[end-1] == '\r'
 		}
 		pos = end
 	}
@@ -68,14 +81,4 @@ func (f *frameDropWriter) Flush() {
 	if fl, ok := f.w.(http.Flusher); ok {
 		fl.Flush()
 	}
-}
-
-// nextFrameEnd returns the length of the first SSE frame in b and the length
-// of its separator ("\n\n" or "\r\n\r\n"), or -1 when b holds no full frame.
-func nextFrameEnd(b []byte) (int, int) {
-	i, sep := bytes.Index(b, []byte("\n\n")), 2
-	if j := bytes.Index(b, []byte("\r\n\r\n")); j >= 0 && (i < 0 || j < i) {
-		i, sep = j, 4
-	}
-	return i, sep
 }

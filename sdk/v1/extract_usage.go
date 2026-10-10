@@ -93,11 +93,11 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 	// state (chunk reassembly, item accounting) stays consistent.
 	sc := bufio.NewScanner(bytes.NewReader(body))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	sc.Split(splitSSEFrames)
+	sc.Split(SplitSSEFrames)
 
 	var found Summary
 	for sc.Scan() {
-		frame := sc.Bytes()
+		frame := NormalizeSSELineEnds(sc.Bytes())
 		if len(frame) == 0 {
 			continue
 		}
@@ -125,11 +125,11 @@ func extractSummaryFromSSE(tr Translator, body []byte) Summary {
 func harvestSummaryFromCanonicalSSE(canon []byte) Summary {
 	sc := bufio.NewScanner(bytes.NewReader(canon))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	sc.Split(splitSSEFrames)
+	sc.Split(SplitSSEFrames)
 
 	var found Summary
 	for sc.Scan() {
-		frame := sc.Bytes()
+		frame := NormalizeSSELineEnds(sc.Bytes())
 		if len(frame) == 0 {
 			continue
 		}
@@ -177,20 +177,4 @@ func looksLikeSSE(body []byte) bool {
 	head = bytes.TrimLeft(head, " \t\r\n\xef\xbb\xbf")
 	return bytes.HasPrefix(head, []byte("event:")) ||
 		bytes.HasPrefix(head, []byte("data:"))
-}
-
-// splitSSEFrames is a bufio.Scanner SplitFunc that splits on the
-// blank-line frame separator ("\n\n"). Each token is one SSE event
-// (event: + data: lines), trailing separator stripped.
-func splitSSEFrames(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.Index(data, []byte("\n\n")); i >= 0 {
-		return i + 2, data[:i], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }

@@ -65,7 +65,7 @@ func (c *Client) GenerateStream(ctx context.Context, req *v1.Request) (*Stream, 
 	rep.streamStarted(resp.status)
 	sc := bufio.NewScanner(resp.body)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	sc.Split(splitSSEFrames)
+	sc.Split(v1.SplitSSEFrames)
 	return c.wrapStream(&Stream{
 		body:    resp.body,
 		sc:      sc,

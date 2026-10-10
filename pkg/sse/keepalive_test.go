@@ -102,3 +102,23 @@ func TestKeepAlive_ContextCancelStopsLoop(t *testing.T) {
 		t.Fatalf("keepalive frames after context cancel = %d, want 0", got)
 	}
 }
+
+func TestEndsFrame(t *testing.T) {
+	for in, want := range map[string]bool{
+		"data: x\n\n":     true,
+		"data: x\r\n\r\n": true,
+		"data: x\r\r":     true,
+		"data: x\r\n\n":   true,
+		"data: x\n\r":     true,
+		"data: x\r\r\n":   true,
+		"data: x\r\n\r":   true,
+		"data: x":         false,
+		"data: x\n":       false,
+		"data: x\r\n":     false,
+		"data: x\r":       false,
+	} {
+		if got := endsFrame([]byte(in)); got != want {
+			t.Errorf("endsFrame(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

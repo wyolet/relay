@@ -639,7 +639,7 @@ func (p *Pipeline) runPostFlight(
 	if !complete {
 		frames := sessFrames
 		if body != nil {
-			frames = bytes.Count(body, []byte("\n\n"))
+			frames = countSSEFrames(body)
 		}
 		limitTokens = withUnreportedFloor(tokens, len(req.Body), frames)
 	}
