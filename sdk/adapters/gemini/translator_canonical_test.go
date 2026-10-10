@@ -388,7 +388,7 @@ func TestParseResponse_MaxTokens_Incomplete(t *testing.T) {
 	if resp.FinishReason != v1.FinishReasonLength {
 		t.Errorf("finishReason: %s", resp.FinishReason)
 	}
-	if resp.IncompleteDetails == nil || resp.IncompleteDetails.Reason != "max_tokens" {
+	if resp.IncompleteDetails == nil || resp.IncompleteDetails.Reason != "max_output_tokens" {
 		t.Errorf("incompleteDetails: %+v", resp.IncompleteDetails)
 	}
 }

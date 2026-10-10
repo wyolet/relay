@@ -60,6 +60,10 @@ const (
 	// FinishReasonRefusal: refusal is a stop reason, not a part type.
 	// The refusal text appears in a normal message item's text content.
 	FinishReasonRefusal FinishReason = "refusal"
+	// FinishReasonOther: the upstream stopped for a reason canonical has no
+	// value for. It always pairs with a non-completed status; the raw reason
+	// rides IncompleteDetails.Reason so the same vendor can write it back.
+	FinishReasonOther FinishReason = "other"
 )
 
 // Item is a sealed interface for elements of the Input or Output array.

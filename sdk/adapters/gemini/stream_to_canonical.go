@@ -88,8 +88,8 @@ func (s *geminiToCanonicalStream) translate(chunk []byte) ([]byte, error) {
 			// The blocked-prompt frame is the whole stream; without a terminal
 			// event it would end as a silent empty success.
 			out = append(out, s.closeCurrentItem()...)
-			status, finish, _ := promptBlocked()
-			out = append(out, s.completedFrame(status, finish, gr.UsageMetadata)...)
+			status, finish, incomplete := promptBlocked()
+			out = append(out, s.completedFrame(status, finish, incomplete, gr.UsageMetadata)...)
 		}
 		return out, nil
 	}
@@ -269,16 +269,17 @@ func (s *geminiToCanonicalStream) closeCurrentItem() []byte {
 }
 
 func (s *geminiToCanonicalStream) emitCompletion(finishReason string, um *usageMetadata) []byte {
-	status, finish, _ := geminiFinishReasonToCanonical(finishReason, s.sawFunctionCall)
-	return s.completedFrame(status, finish, um)
+	status, finish, incomplete := geminiFinishReasonToCanonical(finishReason, s.sawFunctionCall)
+	return s.completedFrame(status, finish, incomplete, um)
 }
 
-func (s *geminiToCanonicalStream) completedFrame(status v1.Status, finish v1.FinishReason, um *usageMetadata) []byte {
+func (s *geminiToCanonicalStream) completedFrame(status v1.Status, finish v1.FinishReason, incomplete *v1.IncompleteDetails, um *usageMetadata) []byte {
 	gen := v1.GenerationCompletedEvent{
-		ID:           s.responseID,
-		Status:       status,
-		FinishReason: finish,
-		Usage:        geminiUsageToTokens(um),
+		ID:                s.responseID,
+		Status:            status,
+		FinishReason:      finish,
+		Usage:             geminiUsageToTokens(um),
+		IncompleteDetails: incomplete,
 	}
 	completedData, _ := json.Marshal(gen)
 	return marshalCanonFrames([]v1.SSEFrame{{Event: v1.EventGenerationCompleted, Data: completedData}})

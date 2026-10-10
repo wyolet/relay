@@ -86,7 +86,8 @@ func TestResponsesParseResponse_FinishReasonFromStatus(t *testing.T) {
 		{"tool calls", "completed", "", true, v1.FinishReasonToolCalls},
 		{"truncated", "incomplete", "max_output_tokens", false, v1.FinishReasonLength},
 		{"content filter", "incomplete", "content_filter", false, v1.FinishReasonContentFilter},
-		{"incomplete unknown reason", "incomplete", "", false, v1.FinishReasonLength},
+		{"incomplete without reason", "incomplete", "", false, v1.FinishReasonOther},
+		{"incomplete unknown reason", "incomplete", "new_reason", false, v1.FinishReasonOther},
 		{"failed has no finish_reason", "failed", "", false, v1.FinishReason("")},
 	}
 	for _, tc := range cases {
@@ -113,17 +114,21 @@ func TestResponsesSerializeResponse_StatusFromFinishReason(t *testing.T) {
 		name       string
 		fr         v1.FinishReason
 		status     v1.Status
+		inc        *v1.IncompleteDetails
 		wantStatus string
 		wantReason string
 	}{
-		{"length", v1.FinishReasonLength, v1.StatusIncomplete, "incomplete", "max_output_tokens"},
-		{"content_filter", v1.FinishReasonContentFilter, v1.StatusCompleted, "incomplete", "content_filter"},
-		{"stop", v1.FinishReasonStop, v1.StatusCompleted, "completed", ""},
+		{"length", v1.FinishReasonLength, v1.StatusIncomplete, nil, "incomplete", "max_output_tokens"},
+		{"content_filter", v1.FinishReasonContentFilter, v1.StatusCompleted, nil, "incomplete", "content_filter"},
+		{"stop", v1.FinishReasonStop, v1.StatusCompleted, nil, "completed", ""},
+		{"other own reason", v1.FinishReasonOther, v1.StatusIncomplete, &v1.IncompleteDetails{Reason: "new_reason"}, "incomplete", "new_reason"},
+		{"other foreign reason", v1.FinishReasonOther, v1.StatusIncomplete, &v1.IncompleteDetails{Reason: "anthropic:new_reason"}, "incomplete", "anthropic:new_reason"},
+		{"other without details", v1.FinishReasonOther, v1.StatusCompleted, nil, "incomplete", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := (ResponsesTranslator{}).SerializeResponse(
-				&v1.Response{ID: "r", Model: "gpt-5", Status: tc.status, FinishReason: tc.fr}, nil)
+				&v1.Response{ID: "r", Model: "gpt-5", Status: tc.status, FinishReason: tc.fr, IncompleteDetails: tc.inc}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

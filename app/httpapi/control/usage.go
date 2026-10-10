@@ -117,7 +117,7 @@ type UsageFilterInput struct {
 	ModelID      []string `query:"model_id" doc:"Match any of the given Model.metadata.id values."`
 	HostID       []string `query:"host_id" doc:"Match any of the given Host.metadata.id values."`
 	Source       []string `query:"source" doc:"Match any of \"pipeline\" | \"proxy\" | \"ws\" | \"batch\"."`
-	FinishReason []string `query:"finish_reason" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\"."`
+	FinishReason []string `query:"finish_reason" doc:"Match any of \"stop\" | \"length\" | \"tool_calls\" | \"content_filter\" | \"refusal\" | \"other\"."`
 	ErrorKind    []string `query:"error_kind" doc:"Match any of the given error_kind values."`
 	StatusMin    int      `query:"status_min" doc:"Minimum HTTP status to include."`
 	StatusMax    int      `query:"status_max" doc:"Maximum HTTP status to include."`

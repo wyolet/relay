@@ -113,6 +113,8 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 		// CC has no refusal finish_reason: the wire signals it with
 		// message.refusal + "stop", set below.
 		finishReason = "stop"
+	case v1.FinishReasonOther:
+		finishReason = ccFinishReasonForOther(resp.IncompleteDetails)
 	default:
 		finishReason = "stop"
 	}
@@ -181,7 +183,7 @@ func (CCTranslator) SerializeResponse(resp *v1.Response, _ *v1.Request) ([]byte,
 	}
 	msg.ToolCalls = toolCalls
 
-	if raw, ok := resp.Extensions[extFinishReason]; ok && resp.FinishReason == "" {
+	if raw, ok := resp.Extensions[extFinishReason]; ok && (resp.FinishReason == "" || resp.FinishReason == v1.FinishReasonOther) {
 		// An unrecognised upstream finish_reason goes back out verbatim rather
 		// than defaulting to "stop".
 		var s string
@@ -229,10 +231,21 @@ func ccFinishReasonToCanonical(reason string) (v1.Status, v1.FinishReason, *v1.I
 	case "content_filter":
 		return v1.StatusCompleted, v1.FinishReasonContentFilter, nil
 	default:
-		// Canonical has no "other" finish_reason. An incomplete status with no
-		// fabricated finish keeps an unknown reason from reading as a clean stop.
-		return v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: ccUnknownFinishPrefix + reason}
+		return v1.StatusIncomplete, v1.FinishReasonOther, &v1.IncompleteDetails{Reason: ccUnknownFinishPrefix + reason}
 	}
+}
+
+// ccFinishReasonForOther writes a CC upstream's own unknown finish_reason back
+// verbatim. Any other upstream's gets content_filter: CC's enum has no
+// "other", and content_filter is its one non-success value that does not
+// claim truncation.
+func ccFinishReasonForOther(inc *v1.IncompleteDetails) string {
+	if inc != nil {
+		if raw, ok := strings.CutPrefix(inc.Reason, ccUnknownFinishPrefix); ok && raw != "" {
+			return raw
+		}
+	}
+	return "content_filter"
 }
 
 // ccChoiceToCanonicalOutput converts a CC Choice to canonical []v1.Item.

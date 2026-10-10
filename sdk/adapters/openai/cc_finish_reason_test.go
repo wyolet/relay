@@ -29,16 +29,15 @@ func TestCCParseResponse_LegacyFunctionCallFinish(t *testing.T) {
 	}
 }
 
-// An unknown finish_reason must not read as a clean stop (rule 11): the
-// status turns incomplete, no finish_reason is fabricated, and the raw value
-// is kept.
+// An unknown finish_reason must not read as a clean stop (rule 11): it parses
+// to incomplete/other and the raw value is kept.
 func TestCCParseResponse_UnknownFinishNotSuccess(t *testing.T) {
 	resp, err := (CCTranslator{}).ParseResponse(ccFinishBody("new_reason"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Status != v1.StatusIncomplete || resp.FinishReason == v1.FinishReasonStop {
-		t.Errorf("status/finish = %q/%q, want incomplete and not stop", resp.Status, resp.FinishReason)
+	if resp.Status != v1.StatusIncomplete || resp.FinishReason != v1.FinishReasonOther {
+		t.Errorf("status/finish = %q/%q, want incomplete/other", resp.Status, resp.FinishReason)
 	}
 	if resp.IncompleteDetails == nil || resp.IncompleteDetails.Reason != "openai:new_reason" {
 		t.Errorf("incomplete_details = %+v", resp.IncompleteDetails)
@@ -96,7 +95,40 @@ func TestCCStream_LegacyFunctionCallFinish(t *testing.T) {
 
 func TestCCStream_UnknownFinishNotSuccess(t *testing.T) {
 	ev := ccStreamCompleted(t, "new_reason")
-	if ev.Status != v1.StatusIncomplete || ev.FinishReason == v1.FinishReasonStop {
-		t.Errorf("status/finish = %q/%q, want incomplete and not stop", ev.Status, ev.FinishReason)
+	if ev.Status != v1.StatusIncomplete || ev.FinishReason != v1.FinishReasonOther {
+		t.Errorf("status/finish = %q/%q, want incomplete/other", ev.Status, ev.FinishReason)
+	}
+	if ev.IncompleteDetails == nil || ev.IncompleteDetails.Reason != "openai:new_reason" {
+		t.Errorf("incomplete_details = %+v, want the raw reason", ev.IncompleteDetails)
+	}
+}
+
+// canonical other → CC finish_reason, buffered and streamed. Only a CC
+// upstream's own raw reason is written back; nothing becomes "stop".
+func TestCCSerialize_OtherFinishReason(t *testing.T) {
+	cases := []struct {
+		name string
+		inc  *v1.IncompleteDetails
+		want string
+	}{
+		{"own raw reason", &v1.IncompleteDetails{Reason: "openai:new_reason"}, "new_reason"},
+		{"foreign raw reason", &v1.IncompleteDetails{Reason: "anthropic:new_reason"}, "content_filter"},
+		{"unprefixed reason", &v1.IncompleteDetails{Reason: "new_reason"}, "content_filter"},
+		{"no details", nil, "content_filter"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &v1.Response{ID: "c1", Status: v1.StatusIncomplete, FinishReason: v1.FinishReasonOther, IncompleteDetails: tc.inc}
+			out, err := (CCTranslator{}).SerializeResponse(resp, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := decodeMap(t, out)["choices"].([]any)[0].(map[string]any)["finish_reason"]; got != tc.want {
+				t.Errorf("buffered finish_reason = %v, want %s", got, tc.want)
+			}
+			if got := canonicalFinishReasonToCC(v1.FinishReasonOther, tc.inc); got != tc.want {
+				t.Errorf("stream finish_reason = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

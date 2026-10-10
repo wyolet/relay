@@ -54,9 +54,7 @@ func anthropicStopReasonToCanonical(reason string) (v1.Status, v1.FinishReason, 
 	case "pause_turn":
 		return v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: "pause_turn"}
 	default:
-		// Canonical has no "other" finish_reason. An incomplete status with no
-		// fabricated finish keeps an unknown reason from reading as a clean stop.
-		return v1.StatusIncomplete, "", &v1.IncompleteDetails{Reason: unknownStopReasonPrefix + reason}
+		return v1.StatusIncomplete, v1.FinishReasonOther, &v1.IncompleteDetails{Reason: unknownStopReasonPrefix + reason}
 	}
 }
 
@@ -96,6 +94,10 @@ func canonicalFinishReasonToAnthropicStr(reason v1.FinishReason) string {
 	case v1.FinishReasonRefusal:
 		return "refusal"
 	case v1.FinishReasonContentFilter:
+		return "refusal"
+	case v1.FinishReasonOther:
+		// Another wire's unknown reason: refusal is the one terminal non-success
+		// stop_reason; max_tokens and pause_turn would invite a continuation.
 		return "refusal"
 	default:
 		return "end_turn"

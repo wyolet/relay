@@ -153,11 +153,18 @@ func responsesCanonicalFinishReason(resp *ResponsesResponse) v1.FinishReason {
 		}
 		return v1.FinishReasonStop
 	case ResponsesStatusIncomplete:
-		if resp.IncompleteDetails != nil && resp.IncompleteDetails.Reason == "content_filter" {
-			return v1.FinishReasonContentFilter
+		var reason string
+		if resp.IncompleteDetails != nil {
+			reason = resp.IncompleteDetails.Reason
 		}
-		// max_output_tokens or any other incomplete reason → truncated.
-		return v1.FinishReasonLength
+		switch reason {
+		case "content_filter":
+			return v1.FinishReasonContentFilter
+		case "max_output_tokens":
+			return v1.FinishReasonLength
+		}
+		// The raw reason is kept verbatim in IncompleteDetails.
+		return v1.FinishReasonOther
 	default:
 		// failed / cancelled / queued / in_progress: not a clean stop. The
 		// signal rides Status + Error; do not fabricate a finish_reason.
@@ -184,6 +191,15 @@ func canonicalResponsesStatus(status v1.Status, fr v1.FinishReason, inc *v1.Inco
 			reason = inc.Reason
 		}
 		return ResponsesStatusIncomplete, &ResponsesIncompleteDetails{Reason: reason}
+	case v1.FinishReasonOther:
+		// status=incomplete carries the non-success; Responses' reason enum has
+		// no generic value, so the raw one (vendor-prefixed when foreign) goes
+		// out as is.
+		var id *ResponsesIncompleteDetails
+		if inc != nil {
+			id = &ResponsesIncompleteDetails{Reason: inc.Reason}
+		}
+		return ResponsesStatusIncomplete, id
 	}
 	// stop / tool_calls / refusal / empty: honor an explicit non-completed
 	// canonical status (failed/cancelled/queued from a Responses-native

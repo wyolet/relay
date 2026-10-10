@@ -190,7 +190,7 @@ func (s *canonicalToCCStream) translate(chunk []byte) ([]byte, error) {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return nil, fmt.Errorf("cc from_canonical stream: generation.completed: %w", err)
 		}
-		fr := canonicalFinishReasonToCC(ev.FinishReason)
+		fr := canonicalFinishReasonToCC(ev.FinishReason, ev.IncompleteDetails)
 		if ev.FinishReason == "" && (ev.Status == v1.StatusFailed || ev.Status == v1.StatusIncomplete) {
 			// canonical: status=failed/incomplete with no finish_reason must not surface
 			// as a clean stop (rule 11); content_filter is CC's nearest non-success signal.
@@ -246,7 +246,7 @@ func ccSSEDataFrame(data []byte) []byte {
 
 // canonicalFinishReasonToCC maps a streamed canonical FinishReason to a CC
 // finish_reason string.
-func canonicalFinishReasonToCC(fr v1.FinishReason) string {
+func canonicalFinishReasonToCC(fr v1.FinishReason, inc *v1.IncompleteDetails) string {
 	switch fr {
 	case v1.FinishReasonStop:
 		return "stop"
@@ -261,6 +261,8 @@ func canonicalFinishReasonToCC(fr v1.FinishReason) string {
 		// went out as content deltas, so delta.refusal is no longer available.
 		// "stop" would read as success; content_filter is CC's block signal.
 		return "content_filter"
+	case v1.FinishReasonOther:
+		return ccFinishReasonForOther(inc)
 	default:
 		return "stop"
 	}
